@@ -16,7 +16,6 @@ use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
 use layoutng_style::style::computed_style::ComputedStyle;
 use layoutng_style::style::computed_style_constants::{PseudoId, ScrollbarGutter};
 
-use super::super::custom_scrollbar::CustomScrollbar;
 use super::super::layout_box::LayoutBox;
 use super::super::layout_node_metadata::{Element, Node};
 use super::super::layout_object::LayoutObject;
@@ -32,9 +31,20 @@ use super::super::scrollbar_mode::mojom::blink::ScrollbarMode;
 use super::super::scrollbar_orientation::ScrollbarOrientation;
 use super::super::scrollbar_theme_metrics::ScrollbarThemeThickness;
 use super::super::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
+use std::cell::Cell;
 
 // Source: core/paint/paint_layer_scrollable_area.cc:145.
 const kResizerControlExpandRatioForTouch: i32 = 2;
+
+/// Source PaintLayerScrollableArea::Resize, cc:2442-2515. Layout computes
+/// typed used-size mutations; Page publishes them through the existing inline
+/// CSS declaration owner and completes the requested style/layout lifecycle.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeResizePlan {
+    pub node_id: u64,
+    pub width_px: Option<i32>,
+    pub height_px: Option<i32>,
+}
 
 // Source: core/paint/paint_layer_scrollable_area.h:66.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +242,25 @@ fn ScrollbarStyleSource(box_: &LayoutBox) -> *mut LayoutObject {
     layout_box
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum NativeScrollbarActivityKind {
+    Added,
+    Removed,
+    Scrolled,
+    // Source: core/scroll/scrollable_area.cc:168-180 and
+    // core/scroll/mac_scrollbar_animator_impl.mm:198-218. These remain
+    // distinct from Scrolled: wheel kPhaseMayBegin reveals the scrollbar
+    // before any offset changes and defers its fade-out until wheel end.
+    FadeInDeferred,
+    FadeOutIfNeeded,
+    MouseEntered,
+    MouseExited,
+}
+pub struct NativeScrollbarActivity {
+    pub scrollbar: foundation::Persistent<Scrollbar>,
+    pub area: CompositorElementId,
+    pub kind: NativeScrollbarActivityKind,
+}
 // The source's GC owner has no paint-layer base in this extracted package.
 #[repr(C)]
 pub struct PaintLayerScrollableArea {
@@ -242,7 +271,14 @@ pub struct PaintLayerScrollableArea {
     has_vertical_scrollbar_: bool,
     horizontal_scrollbar_: Member<Scrollbar>,
     vertical_scrollbar_: Member<Scrollbar>,
+    // Pending hypothetical source owners survive only across the embedding's
+    // synchronous style-publication/layout retry, never as pseudo cache entries.
+    hypothetical_horizontal_style_owner_: Cell<Member<Scrollbar>>,
+    hypothetical_vertical_style_owner_: Cell<Member<Scrollbar>>,
     scroll_corner_client_: Member<ScrollCornerDisplayItemClient>,
+    scroll_corner_:
+        Cell<Member<super::super::layout_custom_scrollbar_part::LayoutCustomScrollbarPart>>,
+    scroll_corner_style_pending_: Cell<bool>,
     scrolling_background_client_: Member<ScrollingBackgroundDisplayItemClient>,
     box_: Member<LayoutBox>,
     scroll_offset_: ScrollOffset,
@@ -251,6 +287,19 @@ pub struct PaintLayerScrollableArea {
     // ScrollableArea owner; Scrollbar::ShouldParticipateInHitTesting reads it
     // instead of Paint inferring overlay visibility from clip behavior.
     scrollbars_hidden_if_overlay_: bool,
+    // Source: MacScrollbarAnimatorV2 / OverlayScrollbarAnimatorMac. The
+    // animator is owned by ScrollableArea and its opacity outlives individual
+    // Paint/cc adapters. Track alpha remains zero until hover support is wired;
+    // scrolling shows only the native overlay thumb.
+    mac_horizontal_thumb_alpha_: f32,
+    mac_vertical_thumb_alpha_: f32,
+    mac_horizontal_track_alpha_: f32,
+    mac_vertical_track_alpha_: f32,
+    mac_horizontal_thumb_width_: Option<i32>,
+    mac_vertical_thumb_width_: Option<i32>,
+    uses_composited_scrolling_: bool,
+    mouse_over_scrollbar_: bool,
+    scrollbar_captured_: bool,
     has_been_disposed_: bool,
     needs_scroll_offset_clamp_: bool,
     // Source: core/paint/paint_layer_scrollable_area.h:849-851.
@@ -272,6 +321,18 @@ pub struct PaintLayerScrollableArea {
     // Source: core/paint/paint_layer_scrollable_area.h. The scroll owner keeps
     // the anchor state; Layout only queues its end-of-frame adjustment.
     scroll_anchor_: ScrollAnchor,
+    pending_history_restore_: Option<NativePendingHistoryRestore>,
+    // Frame-owned VisualViewport geometry crosses only as these raw facts.
+    // ShouldSupplyScrollbarsForVisualViewport retains the source decision.
+    visual_viewport_scrollability_: Option<(bool, bool, bool)>,
+    // ScrollableArea::RareData source owner, never reconstructed by Page.
+    snap_container_data_: Option<scroll_snap::scroll_snap_data::SnapContainerData>,
+    targeted_snap_area_id_: Option<scroll_snap::ElementId>,
+    scrollsnapchanging_target_ids_: Option<scroll_snap::scroll_snap_data::TargetSnapAreaElementIds>,
+    scrollsnapchange_target_ids_: Option<scroll_snap::scroll_snap_data::TargetSnapAreaElementIds>,
+    snapped_query_target_ids_: Option<scroll_snap::scroll_snap_data::TargetSnapAreaElementIds>,
+    snap_target_removal_pending_: bool,
+    registered_view_: foundation::WeakMember<super::super::layout_view::LayoutView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,13 +351,26 @@ impl PaintLayerScrollableArea {
             has_vertical_scrollbar_: false,
             horizontal_scrollbar_: Member::default(),
             vertical_scrollbar_: Member::default(),
+            hypothetical_horizontal_style_owner_: Cell::new(Member::default()),
+            hypothetical_vertical_style_owner_: Cell::new(Member::default()),
             scroll_corner_client_: Member::default(),
+            scroll_corner_: Cell::new(Member::default()),
+            scroll_corner_style_pending_: Cell::new(false),
             scrolling_background_client_: Member::default(),
             box_: Member::from_ptr(box_),
             scroll_offset_: ScrollOffset::default(),
             text_overflow_snapshot_: Member::default(),
             // Source: core/scroll/scrollable_area.cc:119.
             scrollbars_hidden_if_overlay_: true,
+            mac_horizontal_thumb_alpha_: 0.0,
+            mac_vertical_thumb_alpha_: 0.0,
+            mac_horizontal_track_alpha_: 0.0,
+            mac_vertical_track_alpha_: 0.0,
+            mac_horizontal_thumb_width_: None,
+            mac_vertical_thumb_width_: None,
+            uses_composited_scrolling_: false,
+            mouse_over_scrollbar_: false,
+            scrollbar_captured_: false,
             has_been_disposed_: false,
             needs_scroll_offset_clamp_: false,
             in_resize_mode_: false,
@@ -308,6 +382,15 @@ impl PaintLayerScrollableArea {
             pending_after_style_change_old_style_: Member::default(),
             positioning_overflow_controls_in_prepaint_: false,
             scroll_anchor_: ScrollAnchor::default(),
+            pending_history_restore_: None,
+            visual_viewport_scrollability_: None,
+            snap_container_data_: None,
+            targeted_snap_area_id_: None,
+            scrollsnapchanging_target_ids_: None,
+            scrollsnapchange_target_ids_: None,
+            snapped_query_target_ids_: None,
+            snap_target_removal_pending_: false,
+            registered_view_: foundation::WeakMember::default(),
         };
         // Source: core/paint/paint_layer_scrollable_area.cc:170-176.
         let element = DynamicTo::<Element>(box_.GetNode());
@@ -408,6 +491,10 @@ impl PaintLayerScrollableArea {
 
     pub fn GetLayoutBox(&self) -> *mut LayoutBox {
         self.box_.Get()
+    }
+
+    pub fn GetScrollAnchor(&mut self) -> &mut ScrollAnchor {
+        &mut self.scroll_anchor_
     }
 
     pub fn NotifyScrollAnchorBeforeLayout(&mut self) {
@@ -515,7 +602,7 @@ impl PaintLayerScrollableArea {
                 return true;
             }
         }
-        if box_.CanvasDrawElementEnabledForLayout() && box_.IsInCanvasSubtree() {
+        if box_.CanvasDrawElementEnabledForLayout() && box_.InputCanvasLayoutSubtree() {
             return true;
         }
         false
@@ -573,20 +660,141 @@ impl PaintLayerScrollableArea {
     // The FrameView owns scroll events, intersection-observer deltas and the
     // remaining host notifications; the source owner still performs the
     // source early return, property invalidation and offset commit here.
-    pub(crate) fn UpdateScrollOffset(&mut self, offset: ScrollOffset) {
+    pub(crate) fn UpdateScrollOffset(
+        &mut self,
+        offset: ScrollOffset,
+        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    ) {
         if self.has_been_disposed_ || self.scroll_offset_ == offset {
             return;
         }
+        let old_offset = self.scroll_offset_;
         unsafe { &mut *self.GetLayoutBox() }.SetNeedsPaintPropertyUpdate();
         self.scroll_offset_ = offset;
         let minimum = self.MinimumScrollOffset();
         let horizontal = self.HorizontalScrollbar();
         if !horizontal.is_null() {
-            unsafe { &mut *horizontal }.OffsetDidChange(offset.x() - minimum.x());
+            unsafe { &mut *horizontal }
+                .OffsetDidChangeWithType(offset.x() - minimum.x(), scroll_type);
         }
         let vertical = self.VerticalScrollbar();
         if !vertical.is_null() {
-            unsafe { &mut *vertical }.OffsetDidChange(offset.y() - minimum.y());
+            unsafe { &mut *vertical }
+                .OffsetDidChangeWithType(offset.y() - minimum.y(), scroll_type);
+        }
+        let explicit = scroll_type
+            == layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kUser
+            || scroll_type
+                == layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic
+            || scroll_type
+                == layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor;
+        if explicit {
+            self.DidChangeUserVisibleScrollOffset(ScrollOffset::new(
+                offset.x() - old_offset.x(),
+                offset.y() - old_offset.y(),
+            ));
+        }
+    }
+
+    // Source: core/scroll/mac_scrollbar_animator_impl.mm:190-196 and
+    // ui/native_theme/scrollbar_animator_mac.cc:118-154.
+    fn DidChangeUserVisibleScrollOffset(&mut self, delta: ScrollOffset) {
+        for (changed, scrollbar) in [
+            (delta.x() != 0., self.HorizontalScrollbar()),
+            (delta.y() != 0., self.VerticalScrollbar()),
+        ] {
+            if changed {
+                self.EmitScrollbarActivity(scrollbar, NativeScrollbarActivityKind::Scrolled);
+            }
+        }
+    }
+    fn EmitScrollbarActivity(&self, scrollbar: *mut Scrollbar, kind: NativeScrollbarActivityKind) {
+        let Some(bar) = (unsafe { scrollbar.as_ref() }) else {
+            return;
+        };
+        if bar.IsCustomScrollbar() || !bar.ThemeMetrics().uses_macos_painted_scrollbars {
+            return;
+        }
+        if let Some(view) = unsafe { self.registered_view_.Get().as_ref() } {
+            view.ScrollbarActivityQueue()
+                .borrow_mut()
+                .push(NativeScrollbarActivity {
+                    scrollbar: foundation::Persistent::from_ptr(scrollbar),
+                    area: self.GetScrollElementId(),
+                    kind,
+                });
+        }
+    }
+
+    fn HasMacOverlayScrollbarAnimator(scrollbar: *mut Scrollbar) -> bool {
+        let Some(bar) = (unsafe { scrollbar.as_ref() }) else {
+            return false;
+        };
+        // MacScrollbarImplV2 creates OverlayScrollbarAnimatorMac only for a
+        // registered macOS overlay scrollbar. Custom scrollbars are not
+        // registered with ScrollbarThemeMac.
+        !bar.IsCustomScrollbar()
+            && bar.ThemeMetrics().uses_macos_painted_scrollbars
+            && bar.IsOverlayScrollbar()
+    }
+
+    // Source: core/scroll/scrollable_area.cc:168-180 and
+    // core/scroll/mac_scrollbar_animator_impl.mm:198-218.
+    pub fn FadeInScrollbarIfExists(&self, horizontal: bool, vertical: bool) -> bool {
+        if self.HasBeenDisposed() {
+            return false;
+        }
+        let mut did_fade_in_and_begin_deferring_fade_out = false;
+        for (requested, scrollbar) in [
+            (horizontal, self.HorizontalScrollbar()),
+            (vertical, self.VerticalScrollbar()),
+        ] {
+            if requested && Self::HasMacOverlayScrollbarAnimator(scrollbar) {
+                self.EmitScrollbarActivity(scrollbar, NativeScrollbarActivityKind::FadeInDeferred);
+                did_fade_in_and_begin_deferring_fade_out = true;
+            }
+        }
+        did_fade_in_and_begin_deferring_fade_out
+    }
+
+    pub fn FadeOutScrollbarIfNeeded(&self) {
+        if self.HasBeenDisposed() {
+            return;
+        }
+        for scrollbar in [self.HorizontalScrollbar(), self.VerticalScrollbar()] {
+            if Self::HasMacOverlayScrollbarAnimator(scrollbar) {
+                self.EmitScrollbarActivity(scrollbar, NativeScrollbarActivityKind::FadeOutIfNeeded);
+            }
+        }
+    }
+
+    pub fn ScrollbarPaintedOpacity(&self, orientation: ScrollbarOrientation) -> f32 {
+        let theme = unsafe { &*self.GetLayoutBox() }.ScrollbarThemeForLayout();
+        if !theme.uses_macos_painted_scrollbars {
+            return 1.0;
+        }
+        match orientation {
+            ScrollbarOrientation::kHorizontalScrollbar => self.mac_horizontal_thumb_alpha_,
+            ScrollbarOrientation::kVerticalScrollbar => self.mac_vertical_thumb_alpha_,
+        }
+    }
+
+    pub fn ScrollbarPaintedThumbWidth(&self, scrollbar: &Scrollbar) -> i32 {
+        if !scrollbar.ThemeMetrics().uses_macos_painted_scrollbars {
+            return scrollbar.ScrollbarThickness();
+        }
+        let animated = if scrollbar.Orientation() == ScrollbarOrientation::kHorizontalScrollbar {
+            self.mac_horizontal_thumb_width_
+        } else {
+            self.mac_vertical_thumb_width_
+        };
+        if let Some(width) = animated {
+            return width;
+        }
+        match scrollbar.CSSScrollbarWidth() {
+            EScrollbarWidth::kNone => 0,
+            EScrollbarWidth::kThin => 10,
+            EScrollbarWidth::kAuto => 12,
         }
     }
 
@@ -598,7 +806,10 @@ impl PaintLayerScrollableArea {
     // offset instead of restoring the pre-adjustment compositor value.
     pub(crate) fn SetScrollOffsetFromAnchoring(&mut self, offset: ScrollOffset) {
         let before = self.GetScrollOffset();
-        self.UpdateScrollOffset(offset);
+        self.UpdateScrollOffset(
+            offset,
+            layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kAnchoring,
+        );
         if self.GetScrollOffset() == before {
             return;
         }
@@ -689,7 +900,7 @@ impl PaintLayerScrollableArea {
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:303-365.
-    fn CornerRect(&self) -> gfx::Rect {
+    pub fn CornerRect(&self) -> gfx::Rect {
         let vertical = self.VerticalScrollbar();
         let horizontal = self.HorizontalScrollbar();
         let has_custom_scrollbar = (!vertical.is_null()
@@ -858,8 +1069,7 @@ impl PaintLayerScrollableArea {
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:2179-2194.
-    // CustomScrollbar part positioning remains with that unsupported subtype;
-    // the base Scrollbar frame is the canonical geometry exported to Paint.
+    // Custom parts share the same native frame and canonical FragmentData.
     pub fn PositionOverflowControls(&mut self) {
         self.PositionOverflowControlsForPhase(false);
     }
@@ -880,12 +1090,17 @@ impl PaintLayerScrollableArea {
         let vertical = self.VerticalScrollbar();
         if !vertical.is_null() {
             let rect = self.RectForVerticalScrollbar();
-            unsafe { &mut *vertical }.SetFrameRect(&rect);
+            unsafe { &*vertical }.SetFrameRect(&rect);
+            unsafe { &*vertical }.PositionCustomScrollbarParts();
         }
         let horizontal = self.HorizontalScrollbar();
         if !horizontal.is_null() {
             let rect = self.RectForHorizontalScrollbar();
-            unsafe { &mut *horizontal }.SetFrameRect(&rect);
+            unsafe { &*horizontal }.SetFrameRect(&rect);
+            unsafe { &*horizontal }.PositionCustomScrollbarParts();
+        }
+        if let Some(corner) = unsafe { self.scroll_corner_.get().Get().as_mut() } {
+            corner.SetPartFrameRect(&self.ScrollCornerRect());
         }
         self.positioning_overflow_controls_in_prepaint_ = false;
     }
@@ -1025,6 +1240,61 @@ impl PaintLayerScrollableArea {
 
     pub fn SetInResizeMode(&mut self, in_resize_mode: bool) {
         self.in_resize_mode_ = in_resize_mode;
+    }
+
+    // Source paint_layer_scrollable_area.cc:2442-2515. The FrameView
+    // conversion is completed by the embedding before this native owner runs.
+    pub fn PlanResizeInContainingFrame(
+        &self,
+        point: gfx::Point,
+        position_to_size: &gfx::Transform,
+    ) -> Option<NativeResizePlan> {
+        let box_ = unsafe { self.GetLayoutBox().as_ref() }?;
+        let node = unsafe { box_.GetNode().as_ref() }?;
+        if !self.InResizeMode() || !box_.CanResize() {
+            return None;
+        }
+        assert!(node.IsElementNode());
+        let zoom = box_.StyleRef().EffectiveZoom();
+        let mut current = box_.StitchedSize();
+        current.ScaleFloat(1.0 / zoom);
+        let local = gfx::point_conversions::ToRoundedPoint(
+            position_to_size.ProjectPoint(gfx::PointF::new(point.x() as f32, point.y() as f32)),
+        );
+        let corner = self.CornerRect().size();
+        let width = LayoutUnit::from_signed((local.x() as f32 / zoom) as i32)
+            .max(LayoutUnit::from_f32(corner.width() as f32 / zoom));
+        let height = LayoutUnit::from_signed((local.y() as f32 / zoom) as i32)
+            .max(LayoutUnit::from_f32(corner.height() as f32 / zoom));
+        let difference = PhysicalSize::new(width - current.width, height - current.height);
+        let border_box = box_.StyleRef().BoxSizing() == foundation::EBoxSizing::kBorderBox;
+        let border_padding = box_.BorderOutsets() + box_.PaddingOutsets();
+        let resize = box_.StyleRef().UsedResize();
+        let base_width = box_.StitchedSize().width
+            - if border_box {
+                LayoutUnit::default()
+            } else {
+                border_padding.HorizontalSum()
+            };
+        let base_height = box_.StitchedSize().height
+            - if border_box {
+                LayoutUnit::default()
+            } else {
+                border_padding.VerticalSum()
+            };
+        Some(NativeResizePlan {
+            node_id: node.InputId(),
+            width_px: (resize != foundation::EResize::kVertical
+                && difference.width != LayoutUnit::default())
+            .then(|| {
+                (LayoutUnit::from_f32(base_width.ToFloat() / zoom) + difference.width).Round()
+            }),
+            height_px: (resize != foundation::EResize::kHorizontal
+                && difference.height != LayoutUnit::default())
+            .then(|| {
+                (LayoutUnit::from_f32(base_height.ToFloat() / zoom) + difference.height).Round()
+            }),
+        })
     }
 
     pub fn Size(&self) -> PhysicalSize {
@@ -1304,14 +1574,17 @@ impl PaintLayerScrollableArea {
             .StyleRef()
             .HasCustomScrollbarStyle(element.cast::<layoutng_style::style::forward::Element>())
         {
-            let background_style = unsafe { &*style_source }
-                .StyleRef()
-                .GetCachedPseudoElementStyleWithoutArgument(PseudoId::kPseudoIdScrollbar);
-            return CustomScrollbar::HypotheticalScrollbarThickness(
-                orientation,
-                background_style,
-                *box_.ScrollbarThemeForLayout(),
-            );
+            let owner = if orientation == ScrollbarOrientation::kHorizontalScrollbar {
+                &self.hypothetical_horizontal_style_owner_
+            } else {
+                &self.hypothetical_vertical_style_owner_
+            };
+            if owner.get().Get().is_null() {
+                owner.set(Member::from_ptr(self.CreateScrollbar(orientation)));
+            }
+            // A fresh source owner requests the uncached background style.
+            // Page resolves its typed pending publication before exposing layout.
+            return unsafe { &*owner.get().Get() }.ScrollbarThickness();
         }
 
         let theme = box_.ScrollbarThemeForLayout();
@@ -1324,11 +1597,9 @@ impl PaintLayerScrollableArea {
         )
     }
 
-    // Source: core/paint/paint_layer_scrollable_area.cc:1421-1467. Custom
-    // resizer/corner pseudo-object ownership and the Page overlay-theme cache
-    // remain outside this extracted package; the scrollbar existence,
-    // reconstruction, style notification and represented invalidation branches
-    // run at the same post-style-change lifecycle point.
+    // Source: core/paint/paint_layer_scrollable_area.cc:1421-1467. Scrollbar
+    // existence, reconstruction, corner ownership, style notification and
+    // invalidation run at the same post-style-change lifecycle point.
     pub fn UpdateAfterStyleChange(&mut self, old_style: *const ComputedStyle) {
         if unsafe { &*self.GetLayoutBox() }
             .InputOwnerForLayout()
@@ -1374,6 +1645,7 @@ impl PaintLayerScrollableArea {
             }
         }
 
+        self.UpdateScrollCornerStyle();
         let style = unsafe { &*self.GetLayoutBox() }.StyleRef();
         if old_style.is_null()
             || self.UsedColorSchemeScrollbarsChanged(old_style)
@@ -1503,6 +1775,30 @@ impl PaintLayerScrollableArea {
         &self,
         orientation: ScrollbarOrientation,
     ) -> bool {
+        if let Some((active, horizontal, vertical)) = self.visual_viewport_scrollability_ {
+            let box_ = unsafe { &*self.GetLayoutBox() };
+            if !box_.IsGlobalRootScroller()
+                || box_
+                    .ViewportGeometryForLayout()
+                    .visual_viewport_supplies_scrollbars
+                || !box_.ScrollbarThemeForLayout().uses_overlay_scrollbars
+            {
+                return false;
+            }
+            let style_source = ScrollbarStyleSource(box_);
+            let element = ElementForScrollStart(box_);
+            if unsafe { &*style_source }
+                .StyleRef()
+                .HasCustomScrollbarStyle(element.cast::<layoutng_style::style::forward::Element>())
+            {
+                return false;
+            }
+            return active
+                && match orientation {
+                    ScrollbarOrientation::kHorizontalScrollbar => horizontal,
+                    ScrollbarOrientation::kVerticalScrollbar => vertical,
+                };
+        }
         let viewport = unsafe { &*self.GetLayoutBox() }.ViewportGeometryForLayout();
         match orientation {
             ScrollbarOrientation::kHorizontalScrollbar => {
@@ -1515,6 +1811,14 @@ impl PaintLayerScrollableArea {
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:2874-2895.
+    pub fn SetVisualViewportScrollability(
+        &mut self,
+        active: bool,
+        horizontal: bool,
+        vertical: bool,
+    ) {
+        self.visual_viewport_scrollability_ = Some((active, horizontal, vertical));
+    }
     pub fn DidUpdateVisualViewport(&mut self) {
         self.scroll_anchor_.Clear();
         let mut needs_horizontal_scrollbar = false;
@@ -1582,9 +1886,10 @@ impl PaintLayerScrollableArea {
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:1029,1033-1043.
-    // Snap/sticky queueing at 1030-1031 remains a FrameView callback; source
-    // freeze, reconstruction and dimension ordering stays on this owner.
+    // Native snap queue retains the FrameView update order; sticky updates
+    // remain a separate translated lifecycle stage.
     pub fn UpdateAfterLayout(&mut self) {
+        self.EnqueueForSnapUpdateIfNeeded();
         let freeze_state = unsafe { &*self.GetLayoutBox() }.GetScrollbarFreezeState();
         let horizontal_frozen =
             !freeze_state.is_null() && unsafe { &*freeze_state }.IsHorizontalScrollbarFrozen();
@@ -1621,6 +1926,7 @@ impl PaintLayerScrollableArea {
             self.SetHasHorizontalScrollbar(needs_horizontal_scrollbar);
             self.SetHasVerticalScrollbar(needs_vertical_scrollbar);
             self.UpdateScrollOrigin();
+            self.UpdateScrollCornerStyle();
             // Chromium's proprietary overflow:overlay controls never consume a
             // layout gutter. Only a non-overlay scrollbar change invalidates
             // intrinsic inline contributions and refreshes layout dimensions.
@@ -1827,7 +2133,10 @@ impl PaintLayerScrollableArea {
         // owner synchronized on every clamp; only the immutable Paint input
         // and property invalidation need the stronger geometry-change gate.
         // cpp: paint_layer_scrollable_area.cc:1238-1250
-        self.UpdateScrollOffset(offset);
+        self.UpdateScrollOffset(
+            offset,
+            layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kClamping,
+        );
         if geometry_changed {
             let box_ = unsafe { &mut *self.GetLayoutBox() };
             box_.SetNeedsPaintPropertyUpdate();
@@ -2030,10 +2339,15 @@ impl PaintLayerScrollableArea {
     fn SetHasHorizontalScrollbarInManager(&mut self, has_scrollbar: bool) {
         if has_scrollbar {
             if self.horizontal_scrollbar_.Get().is_null() {
+                self.mac_horizontal_thumb_alpha_ = 0.0;
                 self.horizontal_scrollbar_ = Member::from_ptr(
                     self.CreateScrollbar(ScrollbarOrientation::kHorizontalScrollbar),
                 );
             }
+            self.EmitScrollbarActivity(
+                self.horizontal_scrollbar_.Get(),
+                NativeScrollbarActivityKind::Added,
+            );
             self.has_horizontal_scrollbar_ = true;
         } else {
             self.has_horizontal_scrollbar_ = false;
@@ -2048,10 +2362,15 @@ impl PaintLayerScrollableArea {
     fn SetHasVerticalScrollbarInManager(&mut self, has_scrollbar: bool) {
         if has_scrollbar {
             if self.vertical_scrollbar_.Get().is_null() {
+                self.mac_vertical_thumb_alpha_ = 0.0;
                 self.vertical_scrollbar_ = Member::from_ptr(
                     self.CreateScrollbar(ScrollbarOrientation::kVerticalScrollbar),
                 );
             }
+            self.EmitScrollbarActivity(
+                self.vertical_scrollbar_.Get(),
+                NativeScrollbarActivityKind::Added,
+            );
             self.has_vertical_scrollbar_ = true;
         } else {
             self.has_vertical_scrollbar_ = false;
@@ -2072,7 +2391,7 @@ impl PaintLayerScrollableArea {
 
     // Source: core/scroll/scrollable_area.cc:786-826 and
     // core/paint/paint_layer_scrollable_area.cc:3328-3330.
-    fn SetScrollbarNeedsPaintInvalidation(&mut self, orientation: ScrollbarOrientation) {
+    pub(crate) fn SetScrollbarNeedsPaintInvalidation(&mut self, orientation: ScrollbarOrientation) {
         let scrollbar = match orientation {
             ScrollbarOrientation::kHorizontalScrollbar => self.horizontal_scrollbar_.Get(),
             ScrollbarOrientation::kVerticalScrollbar => self.vertical_scrollbar_.Get(),
@@ -2137,12 +2456,15 @@ impl PaintLayerScrollableArea {
             return;
         }
         self.SetScrollbarNeedsPaintInvalidation(orientation);
+        self.EmitScrollbarActivity(scrollbar, NativeScrollbarActivityKind::Removed);
         unsafe { &mut *scrollbar }.DisconnectFromScrollableArea();
         match orientation {
             ScrollbarOrientation::kHorizontalScrollbar => {
+                self.mac_horizontal_thumb_alpha_ = 0.0;
                 self.horizontal_scrollbar_ = Member::default()
             }
             ScrollbarOrientation::kVerticalScrollbar => {
+                self.mac_vertical_thumb_alpha_ = 0.0;
                 self.vertical_scrollbar_ = Member::default()
             }
         }
@@ -2175,10 +2497,11 @@ impl PaintLayerScrollableArea {
             self.SetScrollbarNeedsPaintInvalidation(ScrollbarOrientation::kVerticalScrollbar);
             self.SetHasVerticalScrollbarInManager(false);
         }
+        self.UpdateScrollCornerStyle();
         self.SetScrollCornerNeedsPaintInvalidation();
     }
 
-    fn CreateScrollbar(&mut self, orientation: ScrollbarOrientation) -> *mut Scrollbar {
+    fn CreateScrollbar(&self, orientation: ScrollbarOrientation) -> *mut Scrollbar {
         let minimum = self.MinimumScrollOffset();
         let offset = self.GetScrollOffset();
         let current_pos = if orientation == ScrollbarOrientation::kHorizontalScrollbar {
@@ -2196,8 +2519,8 @@ impl PaintLayerScrollableArea {
         let css_scrollbar_width = unsafe { &*style_source }.StyleRef().UsedScrollbarWidth();
         let thickness =
             ScrollbarThemeThickness(box_.ScrollbarThemeForLayout(), css_scrollbar_width);
-        MakeGarbageCollected(Scrollbar::new(
-            self as *mut _,
+        let scrollbar = MakeGarbageCollected(Scrollbar::new(
+            self as *const Self as *mut Self,
             orientation,
             style_source,
             is_custom,
@@ -2206,7 +2529,8 @@ impl PaintLayerScrollableArea {
             css_scrollbar_width,
             thickness,
             current_pos,
-        ))
+        ));
+        scrollbar
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:2008-2022.
@@ -2276,10 +2600,20 @@ impl PaintLayerScrollableArea {
         self.text_overflow_snapshot_.Get()
     }
 
+    pub(crate) fn UserScrollDisposalQueue(
+        &self,
+    ) -> Option<std::rc::Rc<std::cell::RefCell<Vec<(usize, foundation::CompositorElementId)>>>>
+    {
+        unsafe { self.registered_view_.Get().as_ref() }.map(|view| view.ScrollAreaDisposalQueue())
+    }
     pub fn Dispose(&mut self) {
         if self.HasBeenDisposed() {
             return;
         }
+        if let Some(view) = unsafe { self.registered_view_.Get().as_ref() } {
+            view.UnregisterScrollableArea(self);
+        }
+        self.registered_view_ = foundation::WeakMember::default();
         self.scroll_anchor_.Dispose();
         // Source: core/paint/paint_layer_scrollable_area.cc:218-220.
         let element = DynamicTo::<Element>(unsafe { &*self.GetLayoutBox() }.GetNode());
@@ -2291,18 +2625,33 @@ impl PaintLayerScrollableArea {
         self.has_vertical_scrollbar_ = false;
         self.DestroyScrollbar(ScrollbarOrientation::kHorizontalScrollbar);
         self.DestroyScrollbar(ScrollbarOrientation::kVerticalScrollbar);
+        for owner in [
+            &self.hypothetical_horizontal_style_owner_,
+            &self.hypothetical_vertical_style_owner_,
+        ] {
+            if let Some(scrollbar) = unsafe { owner.get().Get().as_mut() } {
+                scrollbar.DisconnectFromScrollableArea();
+            }
+            owner.set(Member::default());
+        }
         self.scroll_corner_client_ = Member::default();
+        self.scroll_corner_.set(Member::default());
         self.scrolling_background_client_ = Member::default();
         self.box_ = Member::default();
+        self.RemovePendingSnapUpdate();
         self.has_been_disposed_ = true;
     }
 
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.box_);
+        visitor.Trace(&self.registered_view_);
         visitor.Trace(&self.text_overflow_snapshot_);
         visitor.Trace(&self.horizontal_scrollbar_);
         visitor.Trace(&self.vertical_scrollbar_);
         visitor.Trace(&self.scroll_corner_client_);
+        visitor.Trace(&self.scroll_corner_.get());
+        visitor.Trace(&self.hypothetical_horizontal_style_owner_.get());
+        visitor.Trace(&self.hypothetical_vertical_style_owner_.get());
         visitor.Trace(&self.scrolling_background_client_);
         visitor.Trace(&self.pending_after_style_change_old_style_);
     }
@@ -2435,5 +2784,409 @@ mod viewport_unit_scrollbar_tests {
         assert!(RectContainsPoint(resizer, &gfx::Point::new(85, 45)));
         assert!(RectContainsPoint(resizer, &gfx::Point::new(99, 59)));
         assert!(!RectContainsPoint(resizer, &gfx::Point::new(100, 60)));
+    }
+}
+
+/// Read-only native overflow-control result. Page supplies identity aliases
+/// without exposing an Interaction result or retaining a copied geometry tree.
+#[derive(Clone, Copy)]
+pub enum OverflowControlHit {
+    None,
+    Resizer,
+    Scrollbar(*mut Scrollbar),
+    Corner,
+}
+impl PaintLayerScrollableArea {
+    // Source: core/paint/paint_layer_scrollable_area.cc:2243-2280.
+    pub fn HitTestOverflowControls(&self, local_point: &gfx::Point) -> OverflowControlHit {
+        if !self.HasOverflowControls() {
+            return OverflowControlHit::None;
+        }
+        if unsafe { &*self.GetLayoutBox() }.CanResize()
+            && RectContainsPoint(
+                self.ResizerCornerRect(ResizerHitTestType::kResizerForPointer),
+                local_point,
+            )
+        {
+            return OverflowControlHit::Resizer;
+        }
+        let vertical = self.VerticalScrollbar();
+        if self.HasVerticalScrollbar()
+            && !vertical.is_null()
+            && unsafe { &*vertical }.ShouldParticipateInHitTesting()
+            && RectContainsPoint(self.RectForVerticalScrollbar(), local_point)
+        {
+            return OverflowControlHit::Scrollbar(vertical);
+        }
+        let horizontal = self.HorizontalScrollbar();
+        if self.HasHorizontalScrollbar()
+            && !horizontal.is_null()
+            && unsafe { &*horizontal }.ShouldParticipateInHitTesting()
+            && RectContainsPoint(self.RectForHorizontalScrollbar(), local_point)
+        {
+            return OverflowControlHit::Scrollbar(horizontal);
+        }
+        if !self.scroll_corner_.get().Get().is_null()
+            && RectContainsPoint(self.ScrollCornerRect(), local_point)
+        {
+            return OverflowControlHit::Corner;
+        }
+        OverflowControlHit::None
+    }
+    pub fn ScrollCornerStyle(&self) -> Option<&ComputedStyle> {
+        unsafe { self.scroll_corner_.get().Get().as_ref() }.map(|corner| corner.StyleRef())
+    }
+    // cpp: paint_layer_scrollable_area.cc:2215-2241. Layout publishes a typed
+    // request; the embedding resolves Style and returns the exact owner here.
+    pub fn UpdateScrollCornerStyle(&mut self) {
+        if self.ScrollCornerStyleSource().is_none() {
+            self.scroll_corner_.set(Member::default());
+            self.scroll_corner_style_pending_.set(false);
+        } else {
+            self.scroll_corner_style_pending_.set(true);
+        }
+    }
+    pub fn ScrollCornerStyleSource(&self) -> Option<*mut LayoutObject> {
+        if !self.NeedsScrollCorner() {
+            return None;
+        }
+        let box_ = unsafe { &*self.GetLayoutBox() };
+        let source = ScrollbarStyleSource(box_);
+        (box_.IsScrollContainer() && !unsafe { &*source }.StyleRef().UsesStandardScrollbarStyle())
+            .then_some(source)
+    }
+    pub fn ScrollCornerStyleUpdatePending(&self) -> bool {
+        self.scroll_corner_style_pending_.get()
+    }
+    pub fn PublishScrollCornerStyle(&self, style: *const ComputedStyle) {
+        if style.is_null() {
+            self.scroll_corner_.set(Member::default());
+        } else if let Some(corner) = unsafe { self.scroll_corner_.get().Get().as_mut() } {
+            corner.SetStyle(style);
+        } else {
+            self.scroll_corner_
+                .set(Member::from_ptr(MakeGarbageCollected(
+                    super::super::layout_custom_scrollbar_part::LayoutCustomScrollbarPart::new(
+                        std::ptr::null_mut(),
+                        super::super::scrollbar_part::ScrollbarPart::kNoPart,
+                        style,
+                    ),
+                )));
+        }
+        if let Some(corner) = unsafe { self.scroll_corner_.get().Get().as_mut() } {
+            corner.SetPartFrameRect(&self.ScrollCornerRect());
+        }
+        self.scroll_corner_style_pending_.set(false);
+    }
+    pub fn HypotheticalScrollbarStyleOwners(&self) -> [*mut Scrollbar; 2] {
+        [
+            self.hypothetical_horizontal_style_owner_.get().Get(),
+            self.hypothetical_vertical_style_owner_.get().Get(),
+        ]
+    }
+    // cpp: custom_scrollbar.cc:195-205; the actual area/layout owners retain
+    // their invalidation decisions, while Page observes only the retry effect.
+    pub fn CustomScrollbarThicknessChanged(&mut self) {
+        self.hypothetical_scrollbar_thicknesses_are_valid_ = false;
+        let box_ = unsafe { &mut *self.GetLayoutBox() };
+        box_.SetChildNeedsLayout();
+        box_.SetNeedsLayout(b"Scrollbar changed\0".as_ptr().cast());
+        self.SetScrollCornerNeedsPaintInvalidation();
+    }
+}
+
+#[path = "snap_coordinator.rs"]
+mod native_snap;
+pub use native_snap::{
+    NativeLayoutSnapPlan, NativePageScrollCommand, NativePageScrollRequest,
+    NativePendingSnapTarget, NativeSnapAnimationState, NativeSnapError,
+    NativeSnapTargetNotification, NativeUserSnapScrollKind,
+};
+
+impl PaintLayerScrollableArea {
+    // paint_layer_scrollable_area.cc:179-181, after allocation gives `this` its
+    // original stable address (Rust's source constructor returns by value).
+    pub(crate) fn RegisterWithFrameView(&mut self) {
+        let view = unsafe { &*self.GetLayoutBox() }
+            .InputOwnerForLayout()
+            .InputLayoutView();
+        if let Some(view) = unsafe { view.as_ref() } {
+            view.RegisterScrollableArea(self);
+            self.registered_view_ = foundation::WeakMember::from_ptr(view as *const _ as *mut _);
+        }
+    }
+}
+
+impl PaintLayerScrollableArea {
+    pub fn PublishMacScrollbarAnimation(
+        &mut self,
+        horizontal: bool,
+        thumb: f32,
+        track: f32,
+        width: i32,
+        thumb_dirty: bool,
+        track_dirty: bool,
+        hidden: Option<bool>,
+    ) -> bool {
+        if self.HasBeenDisposed() {
+            return false;
+        }
+        let orientation = if horizontal {
+            ScrollbarOrientation::kHorizontalScrollbar
+        } else {
+            ScrollbarOrientation::kVerticalScrollbar
+        };
+        if horizontal {
+            self.mac_horizontal_thumb_alpha_ = thumb;
+            self.mac_horizontal_track_alpha_ = track;
+            self.mac_horizontal_thumb_width_ = Some(width);
+        } else {
+            self.mac_vertical_thumb_alpha_ = thumb;
+            self.mac_vertical_track_alpha_ = track;
+            self.mac_vertical_thumb_width_ = Some(width);
+        }
+        if thumb_dirty || track_dirty {
+            self.SetScrollbarNeedsPaintInvalidation(orientation);
+        }
+        if let Some(hidden) = hidden {
+            self.SetScrollbarsHiddenIfOverlayFromOwner(hidden);
+        }
+        thumb_dirty || track_dirty || hidden.is_some()
+    }
+    pub fn ScrollbarPaintedTrackOpacity(&self, orientation: ScrollbarOrientation) -> f32 {
+        if !unsafe { &*self.GetLayoutBox() }
+            .ScrollbarThemeForLayout()
+            .uses_macos_painted_scrollbars
+        {
+            return 1.;
+        }
+        if orientation == ScrollbarOrientation::kHorizontalScrollbar {
+            self.mac_horizontal_track_alpha_
+        } else {
+            self.mac_vertical_track_alpha_
+        }
+    }
+}
+
+impl PaintLayerScrollableArea {
+    // PLSA.cc:2798-2808; updated from the actual PAC scroll-node membership
+    // in the same commit, before source animation/visibility work resumes.
+    pub fn PublishUsesCompositedScrolling(&mut self, value: bool) {
+        self.uses_composited_scrolling_ = value;
+    }
+    pub fn UsesCompositedScrolling(&self) -> bool {
+        self.uses_composited_scrolling_
+    }
+    pub fn SetScrollbarMouseOver(&mut self, value: bool) {
+        self.mouse_over_scrollbar_ = value;
+    }
+    pub fn SetScrollbarCaptured(&mut self, value: bool) {
+        self.scrollbar_captured_ = value;
+    }
+    pub fn MouseOverScrollbar(&self) -> bool {
+        self.mouse_over_scrollbar_
+    }
+    pub fn ScrollbarCaptured(&self) -> bool {
+        self.scrollbar_captured_
+    }
+    pub fn UsesCompositedOverlayScrollbars(&self) -> bool {
+        if !unsafe { &*self.GetLayoutBox() }
+            .ScrollbarThemeForLayout()
+            .uses_overlay_scrollbars
+        {
+            return false;
+        }
+        if !foundation::RuntimeEnabledFeatures::RasterInducingScrollEnabled()
+            && !self.UsesCompositedScrolling()
+        {
+            return false;
+        }
+        [self.HorizontalScrollbar(), self.VerticalScrollbar()]
+            .into_iter()
+            .any(|p| {
+                unsafe { p.as_ref() }.is_some_and(|bar| {
+                    (self.ScrollsOverflow() && bar.TotalSize() > bar.VisibleSize()
+                        || self.ShouldSupplyScrollbarsForVisualViewport(bar.Orientation()))
+                        && !bar.IsCustomScrollbar()
+                        && !(unsafe { &*self.GetLayoutBox() }
+                            .InputOwnerForLayout()
+                            .InputCanvasDrawElementEnabled()
+                            && unsafe { &*self.GetLayoutBox() }
+                                .InputOwnerForLayout()
+                                .InputCanvasLayoutSubtree())
+                })
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum NativeScrollbarInteraction {
+    Entered,
+    Exited,
+    Captured,
+    Released,
+}
+pub struct NativeOverlayVisibilityUpdate {
+    pub stop_timer: bool,
+    pub schedule_after_us: Option<u64>,
+}
+impl PaintLayerScrollableArea {
+    // ScrollableArea.cc:682-715,961-1002. Theme/area eligibility is evaluated
+    // here against the live source owner; Page only schedules the decided timer.
+    pub fn HandleScrollbarInteraction(
+        &mut self,
+        event: NativeScrollbarInteraction,
+        is_popup: bool,
+    ) -> NativeOverlayVisibilityUpdate {
+        use NativeScrollbarInteraction::*;
+        match event {
+            Entered => self.mouse_over_scrollbar_ = true,
+            Exited => self.mouse_over_scrollbar_ = false,
+            Captured => self.scrollbar_captured_ = true,
+            Released => self.scrollbar_captured_ = false,
+        }
+        let mut update = NativeOverlayVisibilityUpdate {
+            stop_timer: false,
+            schedule_after_us: None,
+        };
+        if !matches!(event, Exited)
+            || (self.HasOverlayScrollbars() && !self.ScrollbarsHiddenIfOverlay())
+        {
+            update = self.ShowNonMacOverlayScrollbars(is_popup);
+        }
+        if matches!(event, Entered | Captured) {
+            update.stop_timer = true;
+            update.schedule_after_us = None;
+        }
+        update
+    }
+    pub fn NotifyMacScrollbarMouseInteraction(&self, scrollbar: *mut Scrollbar, entered: bool) {
+        self.EmitScrollbarActivity(
+            scrollbar,
+            if entered {
+                NativeScrollbarActivityKind::MouseEntered
+            } else {
+                NativeScrollbarActivityKind::MouseExited
+            },
+        );
+    }
+    fn ShowNonMacOverlayScrollbars(&mut self, is_popup: bool) -> NativeOverlayVisibilityUpdate {
+        let mut update = NativeOverlayVisibilityUpdate {
+            stop_timer: false,
+            schedule_after_us: None,
+        };
+        let theme = unsafe { &*self.GetLayoutBox() }.ScrollbarThemeForLayout();
+        if !theme.uses_overlay_scrollbars
+            || theme.uses_macos_painted_scrollbars
+            || self.UsesCompositedOverlayScrollbars()
+        {
+            return update;
+        }
+        self.SetScrollbarsHiddenIfOverlayFromOwner(false);
+        use foundation::scrollbar_theme_settings::ScrollbarThemeSettings as Settings;
+        if Settings::MockScrollbarsEnabled() || !Settings::ScrollbarAnimationsEnabled() || is_popup
+        {
+            return update;
+        }
+        if !self.scrollbar_captured_ && !self.mouse_over_scrollbar_ {
+            // WebThemeEngineDefault.cc:241-247 and ui/native_theme/
+            // overlay_scrollbar_constants.cc:12-20.
+            update.schedule_after_us = Some(if Settings::FluentScrollbarsEnabled() {
+                850_000
+            } else {
+                700_000
+            });
+        }
+        update
+    }
+    pub fn FadeOverlayScrollbarsTimerFired(&mut self) {
+        if !self.UsesCompositedOverlayScrollbars() {
+            self.SetScrollbarsHiddenIfOverlayFromOwner(true);
+        }
+    }
+}
+
+impl PaintLayerScrollableArea {
+    pub fn SnappedQueryTargetIds(
+        &self,
+    ) -> Option<scroll_snap::scroll_snap_data::TargetSnapAreaElementIds> {
+        self.snapped_query_target_ids_
+    }
+}
+
+/// PLSA.h:620-629,cc:246-262. Copied source HistoryItem view-state fields
+/// needed by this scroller; visual viewport scale remains on its own owner.
+#[derive(Clone, Debug)]
+pub struct NativePendingHistoryRestore {
+    pub scroll_offset: ScrollOffset,
+    pub anchor_selector: String,
+    pub anchor_offset: gfx::PointF,
+    pub scroll_behavior: layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior,
+}
+impl PaintLayerScrollableArea {
+    pub fn SetPendingHistoryRestoreScrollOffset(
+        &mut self,
+        state: NativePendingHistoryRestore,
+        should_restore_scroll: bool,
+    ) {
+        if should_restore_scroll {
+            self.pending_history_restore_ = Some(state);
+        }
+    }
+    pub fn HasPendingHistoryRestoreScrollOffset(&self) -> bool {
+        self.pending_history_restore_.is_some()
+    }
+    pub fn PendingHistoryRestore(&self) -> Option<&NativePendingHistoryRestore> {
+        self.pending_history_restore_.as_ref()
+    }
+    pub fn PendingHistoryRestoreNeedsSelectorQuery(&self) -> bool {
+        let Some(pending) = self.pending_history_restore_.as_ref() else {
+            return false;
+        };
+        let box_ = unsafe { &*self.GetLayoutBox() };
+        box_.StyleRef().OverflowAnchor() != foundation::EOverflowAnchor::kNone
+            && !box_.IsPrintingForLayout()
+            && self
+                .scroll_anchor_
+                .RestoreNeedsSelectorQuery(&pending.anchor_selector)
+    }
+    pub fn ApplyPendingHistoryRestoreScrollOffset(
+        &mut self,
+        candidates: &[*mut LayoutObject],
+    ) -> Option<NativePageScrollRequest> {
+        let pending = self.pending_history_restore_.as_ref()?.clone();
+        let box_ = unsafe { &*self.GetLayoutBox() };
+        let area = self as *mut Self;
+        let restore = box_.StyleRef().OverflowAnchor() != foundation::EOverflowAnchor::kNone
+            && !box_.IsPrintingForLayout()
+            && unsafe { &mut (*area).scroll_anchor_ }.RestoreAnchor(
+                unsafe { &mut *area },
+                &pending.anchor_selector,
+                pending.anchor_offset,
+                candidates,
+            );
+        let request = if restore {
+            None
+        } else {
+            let mut request = self.ProgrammaticScrollRequest(
+                pending.scroll_offset,
+                scroll_snap::scroll_source_type::ScrollSourceType::kStationaryScroll,
+                foundation::RuntimeEnabledFeatures::FractionalScrollOffsetsEnabled(),
+            );
+            use layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior;
+            let behavior = if pending.scroll_behavior == ScrollBehavior::kAuto {
+                self.ScrollBehaviorStyle()
+            } else {
+                pending.scroll_behavior
+            };
+            request.behavior = if behavior == ScrollBehavior::kSmooth {
+                ScrollBehavior::kSmooth
+            } else {
+                ScrollBehavior::kInstant
+            };
+            Some(request)
+        };
+        self.pending_history_restore_ = None;
+        request
     }
 }

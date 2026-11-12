@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 #[cfg(test)]
-extern crate layoutng_replaced as _;
+extern crate layout_algo_replaced as _;
 
 pub mod dom_bindings;
 mod url_record;
@@ -129,7 +129,7 @@ mod tests {
                         return HostResult {
                             handled: false,
                             ..Default::default()
-                        }
+                        };
                     }
                 }
                 return HostResult::default();
@@ -173,3 +173,5 @@ mod tests {
         assert!(window.Succeeded(), "{:?}", window.exception);
     }
 }
+
+pub mod form_validation;

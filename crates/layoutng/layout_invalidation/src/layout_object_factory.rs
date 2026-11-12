@@ -83,6 +83,13 @@ pub(crate) fn CreateLayoutObject(
         return MakeGarbageCollected(LayoutBlockFlow::new(container)) as *mut LayoutObject;
     }
     let element_data = unsafe { &*element }.InputElementData().as_ref();
+    // VTTCueBox::CreateLayoutObject (vtt_cue_box.cc142-153). Region cues
+    // keep the ordinary HTMLDivElement path; other cues always construct the
+    // standard block-flow selected by their original source owner.
+    if element_data.is_some_and(|data| data.vtt_cue_box_block_flow) {
+        let container = unsafe { &mut (*element).container };
+        return MakeGarbageCollected(LayoutBlockFlow::new(container)) as *mut LayoutObject;
+    }
     if element_data.is_some_and(|data| data.text_control_inner_editor) {
         return require(factories.forms, "forms", node);
     }
@@ -116,6 +123,10 @@ pub(crate) fn CreateLayoutObject(
         | NodeKind::kSvgHiddenContainer
         | NodeKind::kSvgResourceClipper
         | NodeKind::kSvgResourceMasker
+        | NodeKind::kSvgResourceGradient
+        | NodeKind::kSvgResourcePattern
+        | NodeKind::kSvgResourceFilter
+        | NodeKind::kSvgResourceMarker
         | NodeKind::kSvgForeignObject
         | NodeKind::kSvgText
         | NodeKind::kSvgInline

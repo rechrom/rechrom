@@ -38,6 +38,7 @@ pub(super) fn refresh_retained_scroll_geometry(
             algorithms: engine.algorithms_,
             objects: engine.objects_,
             boundary: engine.boundary_,
+            shape_coverage: engine.shape_coverage_,
         };
         assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
         let reuse = engine

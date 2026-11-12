@@ -218,6 +218,8 @@ struct REExecContext {
     capture_count: i32,
     is_unicode: BOOL,
     interrupt_counter: i32,
+    // Optional embedder backtrack limit; zero preserves official unlimited execution.
+    backtracks_remaining: u32,
     opaque: *mut c_void,
     stack_buf: *mut StackElem,
     stack_size: usize,
@@ -328,6 +330,11 @@ unsafe fn lre_exec_backtrack(
         }};
     }
     macro_rules! no_match{($dispatch:lifetime)=>{{
+  // Blink ScriptRegexp's native limit counts actual backtracking, not timer polls.
+  if (*s).backtracks_remaining != 0 {
+   (*s).backtracks_remaining -= 1;
+   if (*s).backtracks_remaining == 0 { return 0; }
+  }
   loop{
    if bp==(*s).stack_buf{return 0;}
    while sp>bp{*capture.add((*sp.sub(2)).val as usize)=(*sp.sub(1)).ptr;sp=sp.sub(2);}
@@ -728,6 +735,21 @@ pub unsafe fn lre_exec(
     cbuf_type: i32,
     opaque: *mut c_void,
 ) -> i32 {
+    lre_exec_with_backtrack_limit(capture, bc_buf, cbuf, cindex, clen, cbuf_type, opaque, 0)
+}
+/// Execute the existing native regexp with a backtracking limit. A limit of
+/// zero retains official QuickJS behavior. Exhaustion is a failed match, as in
+/// V8 RegExp::NewWithBacktrackLimit used by Blink ScriptRegexp.
+pub unsafe fn lre_exec_with_backtrack_limit(
+    capture: *mut *mut u8,
+    bc_buf: *const u8,
+    cbuf: *const u8,
+    cindex: i32,
+    clen: i32,
+    cbuf_type: i32,
+    opaque: *mut c_void,
+    backtrack_limit: u32,
+) -> i32 {
     let re_flags = lre_get_flags(bc_buf);
     let is_unicode = (re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS) != 0) as i32;
     let mut s = REExecContext {
@@ -737,6 +759,7 @@ pub unsafe fn lre_exec(
         capture_count: *bc_buf.add(RE_HEADER_CAPTURE_COUNT) as i32,
         is_unicode,
         interrupt_counter: INTERRUPT_COUNTER_INIT,
+        backtracks_remaining: backtrack_limit,
         opaque,
         stack_buf: ptr::null_mut(),
         stack_size: 32,

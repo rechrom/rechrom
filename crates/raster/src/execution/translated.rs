@@ -5,7 +5,13 @@
 //! replay vocabulary is returned as an error; there is no alternate receiver.
 
 use super::{backend::*, *};
+#[path = "drag_image.rs"]
+mod drag_image;
+pub use drag_image::{ResizeAndOrientDragImage, ResizeDragImageBitmap, ScaleCachedDragImage};
+#[path = "canvas_2d.rs"]
+mod canvas_2d;
 use crate::convert::{resources, ToSkia};
+pub use canvas_2d::Canvas2DRasterBackendFactory;
 use compositor_core::{
     adapter::{
         display_item_list::DisplayCanvas,
@@ -13,11 +19,12 @@ use compositor_core::{
         picture_layer_impl::PictureRasterSource,
     },
     runtime::paint::{
-        ContentDisplayItemList, CpuPaintCanvas, CpuPaintColorFilter, CpuPaintFlags, CpuPaintOp,
-        CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader, RasterPlaybackParams,
+        ContentDisplayItemList, CpuDrawImage, CpuDynamicRangeLimit, CpuFilterQuality,
+        CpuPaintCanvas, CpuPaintColorFilter, CpuPaintFlags, CpuPaintImage, CpuPaintOp,
+        CpuPaintOpBuffer, CpuPaintOpRef, CpuPaintRecord, CpuPaintShader, CpuScopedRasterResult,
+        PaintRecord, RasterPlaybackParams,
     },
 };
-#[cfg(any(test, feature = "artifact_test_support"))]
 use paint::paint_engine::PaintArtifact;
 use raster_commands::commands::{
     self as command, CommandKind, DrawCommand, FontSmoothing, ImageInterpolationQuality,
@@ -33,8 +40,9 @@ use skia::{
         SkFontTypes::SkFontHinting,
         SkPathTypes::{SkPathDirection, SkPathFillType},
         SkSamplingOptions::{SkCubicResampler, SkFilterMode, SkMipmapMode, SkSamplingOptions},
-        SkSize::SkISize,
-        SkSurfaceProps::SkSurfaceProps,
+        SkScalar::{SK_ScalarNearlyZero, SkScalarNearlyEqual},
+        SkSize::{SkISize, SkSize},
+        SkSurfaceProps::{SkPixelGeometry, SkSurfaceProps},
         SkTileMode::SkTileMode,
     },
     include::effects::SkGradient::{
@@ -46,12 +54,13 @@ use skia::{
         SkBlendMode::SkBlendMode,
         SkCanvas::SrcRectConstraint,
         SkColor::SkColor4f,
+        SkColorSpace::{SkColorSpace, SkNamedGamut, SkNamedTransferFn},
         SkConvertPixels::SkConvertPixels,
         SkFont::{Edging, SkFont},
         SkImageFilter::SkImageFilter,
         SkImageInfo::SkImageInfo,
         SkM44::SkM44,
-        SkMatrix::SkMatrix,
+        SkMatrix::{ScaleToFit, SkMatrix},
         SkPaint::{Cap, Join, SkPaint, Style},
         SkPath::SkPath,
         SkPathBuilder::SkPathBuilder,
@@ -60,6 +69,7 @@ use skia::{
         SkPoint::SkPoint,
         SkRRect::SkRRect,
         SkRect::SkRect,
+        SkTextBlob::SkTextBlobBuilder,
     },
     src::shaders::SkEmptyShader::Empty as EmptyShader,
     src::shaders::SkPictureShader::CachedImageInfo,
@@ -276,17 +286,13 @@ mod exact_system_font {
         face_index: u32,
         resolved_family: &str,
         size: f32,
-        arguments: &SkFontArguments,
     ) -> Option<skia::src::core::SkTypeface::SkTypefaceRef> {
         let matches = |font: CTFontRef| {
             [b"name", b"head", b"maxp", b"cmap"]
                 .iter()
                 .all(|tag| table_matches(font, bytes, face_index, *tag))
         };
-        let finish = |font: CTFontRef| {
-            let base = unsafe { SkMakeTypefaceFromCTFont(font) }?;
-            unsafe { base.makeClone(arguments) }
-        };
+        let finish = |font: CTFontRef| unsafe { SkMakeTypefaceFromCTFont(font) };
 
         // CoreText intentionally rejects direct requests for dot-prefixed
         // system UI PostScript names. Chromium retains the CTFont returned by
@@ -480,41 +486,117 @@ fn create_raster_typeface(
     if face.bytes.is_empty() {
         return Err(io::Error::other("translated glyph font has no bytes"));
     }
-    let coordinates = variations
-        .iter()
-        .map(|axis| Coordinate {
-            axis: axis.tag,
-            value: axis.value,
-        })
-        .collect::<Vec<_>>();
-    let coordinate_count = i32::try_from(coordinates.len())
-        .map_err(|_| io::Error::other("translated glyph variation count overflow"))?;
-    let mut arguments = SkFontArguments::new();
-    arguments.setCollectionIndex(0);
-    arguments.setVariationDesignPosition(VariationPosition {
-        coordinates: coordinates.as_ptr(),
-        coordinateCount: coordinate_count,
-    });
-    if let Some(typeface) = exact_system_font::make(
+    let base = if let Some(typeface) = exact_system_font::make(
         face.bytes,
         face.face_index,
         face.resolved_family,
         item.font_size as f32,
-        &arguments,
     ) {
-        return Ok(typeface);
-    }
-    let font_data = standalone_font_data(face.bytes, face.face_index)?;
-    let stream: core::pin::Pin<Box<dyn skia::src::core::SkStream::SkStreamAsset>> = unsafe {
-        skia::src::core::SkStream::SkMemoryStream::MakeCopy(font_data.as_ptr(), font_data.len())
+        typeface
+    } else {
+        let font_data = standalone_font_data(face.bytes, face.face_index)?;
+        let stream: core::pin::Pin<Box<dyn skia::src::core::SkStream::SkStreamAsset>> = unsafe {
+            skia::src::core::SkStream::SkMemoryStream::MakeCopy(font_data.as_ptr(), font_data.len())
+        };
+        let stream = unsafe {
+            skia::src::core::SkStream::TransferableStreamAsset::from_transferable_stream(stream)
+        };
+        let mut arguments = SkFontArguments::new();
+        arguments.setCollectionIndex(0);
+        unsafe {
+            skia::src::ports::SkTypeface_mac_ct::SkTypeface_Mac::MakeFromStream(stream, &arguments)
+        }
+        .ok_or_else(|| io::Error::other("translated CoreText typeface creation failed"))?
     };
-    let stream = unsafe {
-        skia::src::core::SkStream::TransferableStreamAsset::from_transferable_stream(stream)
-    };
-    unsafe {
-        skia::src::ports::SkTypeface_mac_ct::SkTypeface_Mac::MakeFromStream(stream, &arguments)
+
+    // FontPlatformDataFromCTFont starts with the unvaried typeface, reads its
+    // complete design position, updates requested axes, then clones it. Besides
+    // preserving unspecified axes, the clone path carries Skia's CoreText opsz
+    // workaround; constructing a stream typeface with partial arguments skips
+    // that path and can rasterize a different optical-size instance on macOS.
+    let axis_count = base.getVariationDesignPosition(&mut []);
+    if axis_count <= 0 || variations.is_empty() {
+        return Ok(base);
     }
-    .ok_or_else(|| io::Error::other("translated CoreText typeface creation failed"))
+    let axis_count = usize::try_from(axis_count)
+        .map_err(|_| io::Error::other("translated glyph variation count overflow"))?;
+    let mut coordinates = vec![
+        Coordinate {
+            axis: 0,
+            value: 0.0
+        };
+        axis_count
+    ];
+    if base.getVariationDesignPosition(&mut coordinates) != axis_count as i32 {
+        return Ok(base);
+    }
+    let mut changed = false;
+    for coordinate in &mut coordinates {
+        if let Some(requested) = variations.iter().find(|axis| axis.tag == coordinate.axis) {
+            if coordinate.value != requested.value {
+                coordinate.value = requested.value;
+                changed = true;
+            }
+        }
+    }
+    if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+        && (item.font_size - 14.0).abs() < 0.01
+        && (face.resolved_family.contains("Mona Sans") || face.family.contains("Mona Sans"))
+    {
+        let values = coordinates
+            .iter()
+            .map(|coordinate| (coordinate.axis, coordinate.value))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "FONT_RASTER_BASE_VARIATIONS family={:?} requested={:?} configured={:?} changed={}",
+            face.resolved_family, variations, values, changed
+        );
+    }
+    if !changed {
+        return Ok(base);
+    }
+    let coordinate_count = i32::try_from(coordinates.len())
+        .map_err(|_| io::Error::other("translated glyph variation count overflow"))?;
+    let mut arguments = SkFontArguments::new();
+    arguments.setVariationDesignPosition(VariationPosition {
+        coordinates: coordinates.as_ptr(),
+        coordinateCount: coordinate_count,
+    });
+    let cloned = unsafe { base.makeClone(&arguments) }
+        .ok_or_else(|| io::Error::other("translated CoreText variation clone failed"))?;
+    if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+        && (item.font_size - 14.0).abs() < 0.01
+        && (face.resolved_family.contains("Mona Sans") || face.family.contains("Mona Sans"))
+    {
+        let clone_axis_count = cloned.getVariationDesignPosition(&mut []);
+        let mut clone_coordinates = if clone_axis_count > 0 {
+            vec![
+                Coordinate {
+                    axis: 0,
+                    value: 0.0
+                };
+                clone_axis_count as usize
+            ]
+        } else {
+            Vec::new()
+        };
+        if clone_axis_count > 0 {
+            cloned.getVariationDesignPosition(&mut clone_coordinates);
+        }
+        let base_values = coordinates
+            .iter()
+            .map(|coordinate| (coordinate.axis, coordinate.value))
+            .collect::<Vec<_>>();
+        let clone_values = clone_coordinates
+            .iter()
+            .map(|coordinate| (coordinate.axis, coordinate.value))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "FONT_RASTER_VARIATIONS family={:?} requested={:?} base={:?} clone={:?}",
+            face.resolved_family, variations, base_values, clone_values
+        );
+    }
+    Ok(cloned)
 }
 
 #[cfg(target_vendor = "apple")]
@@ -531,6 +613,22 @@ fn raster_typeface(
         .fonts
         .get(item.font_face_index as usize)
         .ok_or_else(|| io::Error::other("translated glyph font index is outside resources"))?;
+    if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+        && (item.font_size - 14.0).abs() < 0.01
+        && item.text_blob_origin.y < 60.0
+    {
+        eprintln!(
+            "FONT_RASTER_FACE blob=({:.4},{:.4}) index={} family={:?} resolved={:?} weight={} bytes={} variations={:?}",
+            item.text_blob_origin.x,
+            item.text_blob_origin.y,
+            item.font_face_index,
+            face.family,
+            face.resolved_family,
+            face.weight,
+            face.bytes.len(),
+            item.font_variations
+        );
+    }
     if let Some(cache) = cache {
         return cache.GetOrCreate(item, face);
     }
@@ -580,11 +678,19 @@ fn ConfigureAppleFont(font: &mut SkFont, smoothing: FontSmoothing) {
 /// acquire a dependency on Raster or Skia.
 #[cfg(target_vendor = "apple")]
 #[derive(Default)]
-pub struct SkiaFontBackendFactory;
+pub struct SkiaFontBackendFactory {
+    // FontEngine is Document-scoped, while Chromium's FontPlatformData cache
+    // survives Document replacement. Keep the platform backend cache on this
+    // Page-domain factory so navigation neither copies the same multi-megabyte
+    // system fonts nor constructs another retained CoreText/Skia typeface.
+    // Bound it like Chromium's purgeable font cache so unrelated web fonts do
+    // not accumulate for the lifetime of a tab.
+    backends: std::sync::Mutex<std::collections::VecDeque<Arc<SkiaFontBackend>>>,
+}
 
 #[cfg(target_vendor = "apple")]
 struct SkiaFontBackend {
-    bytes: Arc<[u8]>,
+    bytes: font_engine::SharedFontBytes,
     face_index: u32,
     resolved_family: Arc<str>,
     variations: Vec<font_engine::FontVariation>,
@@ -626,7 +732,7 @@ impl SkiaFontBackend {
     }
 
     fn New(
-        bytes: Arc<[u8]>,
+        bytes: font_engine::SharedFontBytes,
         face_index: u32,
         resolved_family: Arc<str>,
         variations: Vec<font_engine::FontVariation>,
@@ -685,7 +791,7 @@ impl SkiaFontBackend {
 impl font_engine::FontBackendFactory for SkiaFontBackendFactory {
     fn Create(
         &self,
-        bytes: &[u8],
+        bytes: &font_engine::SharedFontBytes,
         face_index: u32,
         variations: &[font_engine::FontVariation],
         _resolved_family: &str,
@@ -693,12 +799,29 @@ impl font_engine::FontBackendFactory for SkiaFontBackendFactory {
         _weight: f64,
         _italic: bool,
     ) -> Arc<dyn font_engine::FontBackend> {
-        Arc::new(SkiaFontBackend::New(
-            Arc::from(bytes),
+        const CAPACITY: usize = 128;
+        let mut backends = self.backends.lock().expect("font backend cache poisoned");
+        if let Some(index) = backends.iter().position(|backend| {
+            font_engine::SharedFontBytes::ptr_eq(&backend.bytes, bytes)
+                && backend.face_index == face_index
+                && backend.resolved_family.as_ref() == _resolved_family
+                && backend.variations == variations
+        }) {
+            let backend = backends.remove(index).expect("font backend cache index");
+            backends.push_back(backend.clone());
+            return backend;
+        }
+        let backend = Arc::new(SkiaFontBackend::New(
+            bytes.clone(),
             face_index,
             Arc::from(_resolved_family),
             variations.to_vec(),
-        ))
+        ));
+        if backends.len() == CAPACITY {
+            backends.pop_front();
+        }
+        backends.push_back(backend.clone());
+        backend
     }
 }
 
@@ -763,7 +886,29 @@ impl font_engine::FontBackend for SkiaFontBackend {
         synthetic_italic: bool,
     ) -> f32 {
         let font = self.Font(size, synthetic_bold, synthetic_italic);
-        unsafe { font.getWidth(glyph) }.expect("Skia glyph width must be available")
+        // Chromium skia_text_metrics.cc:17-35 reads the cached strike, not
+        // SkFont's convenience width path.
+        unsafe { font.makeStrikeRef() }
+            .expect("Skia shaping strike must be available")
+            .getWidth(glyph)
+    }
+
+    fn GlyphAdvancesForShaping(
+        &self,
+        glyphs: &[u16],
+        size: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+        advances: &mut [f32],
+    ) {
+        assert_eq!(glyphs.len(), advances.len());
+        let font = self.Font(size, synthetic_bold, synthetic_italic);
+        // Chromium skia_text_metrics.cc:38-72 and harfbuzz_face.cc:254-269:
+        // resolve the entire HarfBuzz request against one strike before its
+        // widths are converted in place to 16.16 positions.
+        unsafe { font.makeStrikeRef() }
+            .expect("Skia shaping strike must be available")
+            .getWidths(glyphs, advances);
     }
 
     fn WithVariations(
@@ -834,6 +979,108 @@ fn pixel_format(format: SharedImageFormat) -> io::Result<PixelFormat> {
     ))
 }
 
+/// Source: cc/raster/raster_buffer_provider.cc:68-72 and
+/// skia/ext/legacy_display_globals.cc:61-73. TileManager's LCD eligibility is
+/// surface metadata: unknown geometry disables LCD masks, while eligible
+/// playback uses Chromium's default horizontal RGB display geometry.
+fn raster_surface_props(use_lcd_text: bool) -> SkSurfaceProps {
+    let geometry = if use_lcd_text {
+        SkPixelGeometry::kRGB_H_SkPixelGeometry
+    } else {
+        SkPixelGeometry::kUnknown_SkPixelGeometry
+    };
+    SkSurfaceProps::with_flags(0, geometry)
+}
+
+/// Source: ui/gfx/color_space.cc:711-786 and
+/// cc/raster/raster_buffer_provider.cc:62-66. The compositor-selected target
+/// color space is allocation metadata and reaches the wrapped Skia surface.
+fn target_color_space(color_space: &RasterColorSpace) -> io::Result<Option<Arc<SkColorSpace>>> {
+    if !color_space.IsValid()
+        || color_space.matrix != ColorMatrixId::Rgb
+        || color_space.range != ColorRangeId::Full
+    {
+        return Ok(None);
+    }
+    if color_space.primaries == ColorPrimaryId::Bt709
+        && color_space.transfer == ColorTransferId::Srgb
+    {
+        return Ok(Some(SkColorSpace::MakeSRGB()));
+    }
+    if color_space.primaries == ColorPrimaryId::Bt709
+        && matches!(
+            color_space.transfer,
+            ColorTransferId::Linear | ColorTransferId::LinearHdr
+        )
+    {
+        return Ok(Some(SkColorSpace::MakeSRGBLinear()));
+    }
+
+    // gfx::ColorSpace intentionally uses these rounded coefficients instead
+    // of SkNamedTransferFn::kSRGB for non-BT709 spaces.
+    let mut transfer = skia::modules::skcms::src::skcms_public::skcms_TransferFunction {
+        g: 2.4,
+        a: 0.947867345704,
+        b: 0.052132654296,
+        c: 0.077399380805,
+        d: 0.040449937172,
+        e: 0.,
+        f: 0.,
+    };
+    match color_space.transfer {
+        ColorTransferId::Srgb => {}
+        ColorTransferId::Linear | ColorTransferId::LinearHdr => {
+            transfer = SkNamedTransferFn::kLinear;
+        }
+        ColorTransferId::Bt709 => transfer = SkNamedTransferFn::kRec709,
+        ColorTransferId::Bt2020_10 => transfer = SkNamedTransferFn::kRec2020_10bit,
+        ColorTransferId::Bt2020_12 => transfer = SkNamedTransferFn::kRec2020_12bit,
+        ColorTransferId::Pq => {
+            let reference_white = if color_space.transfer_params[0] > 0. {
+                color_space.transfer_params[0]
+            } else {
+                203.
+            };
+            skia::modules::skcms::skcms::skcms_TransferFunction_makePQ(
+                &mut transfer,
+                reference_white,
+            );
+        }
+        ColorTransferId::Hlg => {
+            let reference_white = if color_space.transfer_params[0] > 0. {
+                color_space.transfer_params[0]
+            } else {
+                203.
+            };
+            let peak_white = if color_space.transfer_params[1] > 0. {
+                color_space.transfer_params[1]
+            } else {
+                1000.
+            };
+            let system_gamma = if color_space.transfer_params[2] > 0. {
+                color_space.transfer_params[2]
+            } else {
+                1.2
+            };
+            skia::modules::skcms::skcms::skcms_TransferFunction_makeHLG(
+                &mut transfer,
+                reference_white,
+                peak_white,
+                system_gamma,
+            );
+        }
+        _ => return Ok(None),
+    }
+    let gamut = match color_space.primaries {
+        ColorPrimaryId::Bt709 => &SkNamedGamut::kSRGB,
+        ColorPrimaryId::P3 => &SkNamedGamut::kDisplayP3,
+        ColorPrimaryId::Bt2020 => &SkNamedGamut::kRec2020,
+        ColorPrimaryId::AdobeRgb => &SkNamedGamut::kAdobeRGB,
+        _ => return Ok(None),
+    };
+    Ok(SkColorSpace::MakeRGB(&transfer, gamut))
+}
+
 fn rect(value: command::PaintRect) -> SkRect {
     SkRect::MakeLTRB(
         value.x as f32,
@@ -858,6 +1105,34 @@ fn color(value: command::Color) -> SkColor4f {
         fG: value.green,
         fB: value.blue,
         fA: value.alpha,
+    }
+}
+
+fn forced_dark_background_color(value: command::Color) -> command::Color {
+    let filtered = paint::paint_auto_dark_mode::InvertColorIfEnabled(
+        true,
+        layoutng_assembly::internal::layout_input_types::Color::default(),
+        layoutng_assembly::internal::layout_input_types::Color {
+            red: value.red,
+            green: value.green,
+            blue: value.blue,
+            alpha: value.alpha,
+        },
+        paint::paint_auto_dark_mode::ElementRole::kBackground,
+    );
+    command::Color {
+        red: filtered.red,
+        green: filtered.green,
+        blue: filtered.blue,
+        alpha: filtered.alpha,
+    }
+}
+
+fn gradient_stop_color(shader: &command::PaintShader, value: command::Color) -> command::Color {
+    if shader.apply_dark_mode {
+        forced_dark_background_color(value)
+    } else {
+        value
     }
 }
 
@@ -985,6 +1260,45 @@ fn rrect(bounds: command::PaintRect, radii: command::PaintCornerRadii) -> SkRRec
         ],
     );
     value
+}
+
+// Source: third_party/blink/renderer/platform/graphics/graphics_context.cc:789-826.
+// A simple double rounded rectangle is pixel-equivalent to a centered rounded-
+// rectangle stroke. Chromium takes that path both for speed and to avoid the
+// doubled antialias coverage of independently filled inner/outer boundaries.
+fn simple_drrect_stroke(outer: &SkRRect, inner: &SkRRect) -> Option<(SkRRect, f32)> {
+    let nearly_equal = |a: f32, b: f32| {
+        let finite_or_zero = |value: f32| if value.is_finite() { value } else { 0.0 };
+        SkScalarNearlyEqual(finite_or_zero(a), finite_or_zero(b), SK_ScalarNearlyZero)
+    };
+    let outer_rect = outer.rect();
+    let inner_rect = inner.rect();
+    let stroke_x = inner_rect.x() - outer_rect.x();
+    let stroke_y = inner_rect.y() - outer_rect.y();
+    if !nearly_equal(stroke_x / stroke_y, 1.0)
+        || !nearly_equal(stroke_x, outer_rect.right() - inner_rect.right())
+        || !nearly_equal(stroke_y, outer_rect.bottom() - inner_rect.bottom())
+    {
+        return None;
+    }
+    for (outer_radius, inner_radius) in outer.all_radii().iter().zip(inner.all_radii()) {
+        if outer_radius.fX == 0.0
+            && outer_radius.fY == 0.0
+            && inner_radius.fX == 0.0
+            && inner_radius.fY == 0.0
+        {
+            continue;
+        }
+        if !nearly_equal(outer_radius.fX, outer_radius.fY)
+            || !nearly_equal(inner_radius.fX, inner_radius.fY)
+            || !nearly_equal(outer_radius.fX, inner_radius.fX + stroke_x)
+        {
+            return None;
+        }
+    }
+    let mut stroke_rrect = *outer;
+    stroke_rrect.inset(stroke_x * 0.5, stroke_x * 0.5);
+    Some((stroke_rrect, stroke_x))
 }
 
 fn converted_rrect(value: &compositor_core::adapter::geometry::RRectF) -> SkRRect {
@@ -1116,7 +1430,7 @@ fn gradient_shader(
     let colors = shader
         .stops
         .iter()
-        .map(|stop| color(stop.color))
+        .map(|stop| color(gradient_stop_color(shader, stop.color)))
         .collect::<Vec<_>>();
     let positions = shader
         .stops
@@ -2015,6 +2329,7 @@ fn translated_reflection_mask_filter(
                             tile_rect: layer.tile_rect,
                             resource_id: layer.resource_id,
                             image_interpolation_quality: layer.image_interpolation_quality,
+                            dynamic_range_limit: layer.dynamic_range_limit,
                             repeat_x: layer.repeat_x,
                             repeat_y: layer.repeat_y,
                             tile_spacing: layer.tile_spacing,
@@ -2329,6 +2644,193 @@ fn image_sampling(quality: ImageInterpolationQuality) -> SkSamplingOptions {
             SkSamplingOptions::with_filter_mipmap(SkFilterMode::kLinear, SkMipmapMode::kLinear)
         }
     }
+}
+
+// Source: cc/tiles/software_image_decode_cache.cc:134-150 and
+// cc/paint/scoped_raster_flags.cc:40-57. Pattern shaders are decoded through
+// SoftwareImageDecodeCache during raster playback. The cache keeps nearest
+// neighbor for pixelated content and caps every other decoded image at kLow,
+// because decode/mip preprocessing has already selected the source allocation.
+fn software_decoded_image_sampling(quality: ImageInterpolationQuality) -> SkSamplingOptions {
+    match quality {
+        ImageInterpolationQuality::kNone => SkSamplingOptions::with_filter(SkFilterMode::kNearest),
+        ImageInterpolationQuality::kLow | ImageInterpolationQuality::kMedium => {
+            SkSamplingOptions::with_filter(SkFilterMode::kLinear)
+        }
+    }
+}
+
+// Source: cc/paint/paint_flags.cc:172-207. DecodedDrawImage normally returns
+// kLow after software-cache preprocessing, but retain the full typed contract.
+fn decoded_image_sampling(quality: CpuFilterQuality) -> SkSamplingOptions {
+    match quality {
+        CpuFilterQuality::kNone => SkSamplingOptions::with_filter(SkFilterMode::kNearest),
+        CpuFilterQuality::kLow => SkSamplingOptions::with_filter(SkFilterMode::kLinear),
+        CpuFilterQuality::kMedium => {
+            SkSamplingOptions::with_filter_mipmap(SkFilterMode::kLinear, SkMipmapMode::kLinear)
+        }
+        CpuFilterQuality::kHigh => SkSamplingOptions::with_cubic(SkCubicResampler::CatmullRom()),
+    }
+}
+
+// Source: cc/paint/paint_op.cc:1455-1464 and draw_image.cc:14-27. This only
+// constructs the provider request. Mip selection belongs to ImageDecodeCache.
+fn provider_draw_image(
+    command: &DrawCommand,
+    record: &PaintRecord,
+    local_to_device: &SkM44,
+) -> Option<CpuDrawImage> {
+    if !command.source_rect.x.is_finite()
+        || !command.source_rect.y.is_finite()
+        || !command.source_rect.width.is_finite()
+        || !command.source_rect.height.is_finite()
+        || !command.rect.x.is_finite()
+        || !command.rect.y.is_finite()
+        || !command.rect.width.is_finite()
+        || !command.rect.height.is_finite()
+        || command.source_rect.width <= 0.
+        || command.source_rect.height <= 0.
+    {
+        return None;
+    }
+    let image = CpuPaintImage::FromPaintResource(record, command.resource_id).ok()?;
+    let source_left = command.source_rect.x.floor() as i32;
+    let source_top = command.source_rect.y.floor() as i32;
+    let source_right = (command.source_rect.x + command.source_rect.width).ceil() as i32;
+    let source_bottom = (command.source_rect.y + command.source_rect.height).ceil() as i32;
+    let source_rect = Rect::FromBounds(source_left, source_top, source_right, source_bottom);
+
+    // Source paint_op.cc:1455-1464 and draw_image.cc:14-25. Keep the Skia
+    // composition and decomposition operations intact: this also preserves the
+    // source behavior for rotation, skew, and perspective matrices.
+    let matrix = SkM44::concat(
+        local_to_device,
+        &SkM44::RectToRect(&rect(command.source_rect), &rect(command.rect)),
+    );
+    let mut extracted_scale = SkSize::Make(matrix.rc(0, 0), matrix.rc(1, 1));
+    let mut matrix_is_decomposable = true;
+    let matrix33 = matrix.asM33();
+    if matrix33.getType() & SkMatrix::kAffine_Mask != 0 {
+        if !matrix33.decomposeScale(Some(&mut extracted_scale), None) {
+            extracted_scale.set(1., 1.);
+            matrix_is_decomposable = false;
+        }
+    }
+    let scale = compositor_core::adapter::geometry::Vector2dF::new(
+        extracted_scale.width(),
+        extracted_scale.height(),
+    );
+    let filter_quality = match command.image_interpolation_quality {
+        ImageInterpolationQuality::kNone => CpuFilterQuality::kNone,
+        ImageInterpolationQuality::kLow => CpuFilterQuality::kLow,
+        ImageInterpolationQuality::kMedium => CpuFilterQuality::kMedium,
+    };
+    Some(CpuDrawImage {
+        image,
+        source_rect,
+        filter_quality,
+        use_dark_mode: command.use_dark_mode_for_image,
+        dynamic_range_limit: CpuDynamicRangeLimit::new(
+            command.dynamic_range_limit.standard_mix,
+            command.dynamic_range_limit.constrained_high_mix,
+        ),
+        scale,
+        matrix_is_decomposable,
+        frame_index: compositor_core::adapter::image_animation::kDefaultFrameIndex,
+        target: None,
+    })
+}
+
+// Source: cc/paint/paint_shader.cc:437-493. Image shaders ask the provider for
+// the complete image under CTM * shader-local-matrix; unlike DrawImageRect,
+// their source rectangle is not the destination clip.
+fn provider_pattern_draw_image(
+    command: &DrawCommand,
+    record: &PaintRecord,
+    local_to_device: &SkM44,
+    tile_rect: command::PaintRect,
+) -> Option<CpuDrawImage> {
+    let image = CpuPaintImage::FromPaintResource(record, command.resource_id).ok()?;
+    let size = image.0.size();
+    if size.width() <= 0
+        || size.height() <= 0
+        || command.source_rect.x != 0.
+        || command.source_rect.y != 0.
+        || command.source_rect.width != f64::from(size.width())
+        || command.source_rect.height != f64::from(size.height())
+        || tile_rect.width <= 0.
+        || tile_rect.height <= 0.
+    {
+        return None;
+    }
+
+    let mut shader_local = SkM44::default();
+    shader_local.preTranslate(tile_rect.x as f32, tile_rect.y as f32, 0.);
+    shader_local.preScale(
+        (tile_rect.width / command.source_rect.width) as f32,
+        (tile_rect.height / command.source_rect.height) as f32,
+    );
+    let mut total_image_matrix = shader_local;
+    total_image_matrix.preConcat(local_to_device);
+
+    let mut scale = compositor_core::adapter::geometry::Vector2dF::new(
+        total_image_matrix.rc(0, 0),
+        total_image_matrix.rc(1, 1),
+    );
+    let mut matrix_is_decomposable = true;
+    let matrix33 = total_image_matrix.asM33();
+    if matrix33.getType() & SkMatrix::kAffine_Mask != 0 {
+        let mut extracted = SkSize::Make(scale.x(), scale.y());
+        if matrix33.decomposeScale(Some(&mut extracted), None) {
+            scale = compositor_core::adapter::geometry::Vector2dF::new(
+                extracted.width(),
+                extracted.height(),
+            );
+        } else {
+            scale = compositor_core::adapter::geometry::Vector2dF::new(1., 1.);
+            matrix_is_decomposable = false;
+        }
+    }
+    let filter_quality = match command.image_interpolation_quality {
+        ImageInterpolationQuality::kNone => CpuFilterQuality::kNone,
+        ImageInterpolationQuality::kLow => CpuFilterQuality::kLow,
+        ImageInterpolationQuality::kMedium => CpuFilterQuality::kMedium,
+    };
+    Some(CpuDrawImage {
+        image,
+        source_rect: Rect::new(0, 0, size.width(), size.height()),
+        filter_quality,
+        use_dark_mode: command.use_dark_mode_for_image,
+        dynamic_range_limit: CpuDynamicRangeLimit::new(
+            command.dynamic_range_limit.standard_mix,
+            command.dynamic_range_limit.constrained_high_mix,
+        ),
+        scale,
+        matrix_is_decomposable,
+        frame_index: compositor_core::adapter::image_animation::kDefaultFrameIndex,
+        target: None,
+    })
+}
+
+// Source: cc/paint/paint_shader.cc:459-464. The decoded allocation may be
+// scaled relative to the PaintImage; compensate in the shader local matrix.
+fn decoded_pattern_local_matrix(
+    tile_rect: command::PaintRect,
+    source_rect: command::PaintRect,
+    adjustment: compositor_core::adapter::geometry::SizeF,
+) -> io::Result<SkMatrix> {
+    if adjustment.width() <= 0. || adjustment.height() <= 0. {
+        return Err(io::Error::other(
+            "decoded image shader has an invalid scale adjustment",
+        ));
+    }
+    let mut local = SkMatrix::Translate(tile_rect.x as f32, tile_rect.y as f32);
+    local.preScale(
+        (tile_rect.width / source_rect.width) as f32,
+        (tile_rect.height / source_rect.height) as f32,
+    );
+    local.preScale(1. / adjustment.width(), 1. / adjustment.height());
+    Ok(local)
 }
 
 fn translated_reference_filter(
@@ -3139,7 +3641,16 @@ fn command_paint(item: &DrawCommand, stroke: bool) -> SkPaint {
     let mut paint = SkPaint::default();
     paint.setColor4f(&color(item.color), None);
     paint.setAntiAlias(item.antialias);
-    paint.setBlendMode(css_blend(item.blend_mode));
+    paint.setBlendMode(if item.source_overwrite {
+        SkBlendMode::kSrc
+    } else {
+        css_blend(item.blend_mode)
+    });
+    if item.apply_srgb_to_linear_color_filter {
+        paint.setColorFilter(Some(
+            skia::src::effects::colorfilters::SkColorSpaceXformColorFilter::SRGBToLinearGamma(),
+        ));
+    }
     if stroke {
         paint.setStyle(Style::kStroke_Style);
         paint.setStrokeWidth(item.stroke_width as f32);
@@ -3155,11 +3666,17 @@ fn command_paint(item: &DrawCommand, stroke: bool) -> SkPaint {
             command::SvgStrokeLineJoin::kMiter => Join::kMiter_Join,
         });
         if !item.dash_intervals.is_empty() {
-            let intervals = item
+            let mut intervals = item
                 .dash_intervals
                 .iter()
                 .map(|value| *value as f32)
                 .collect::<Vec<_>>();
+            // Source: third_party/blink/renderer/platform/geometry/
+            // stroke_data.cc:35-50. SVG repeats an odd-length dash list so
+            // the Skia path effect always receives alternating on/off pairs.
+            if !intervals.len().is_multiple_of(2) {
+                intervals.extend_from_within(..);
+            }
             paint.setPathEffect(skia::src::effects::SkDashPathEffect::Make(
                 &intervals,
                 item.dash_offset as f32,
@@ -3374,6 +3891,14 @@ struct TranslatedCanvas<'target, 'pixels> {
     // one temporary layer because overlapping primitives then blend
     // differently.
     opacity: f32,
+    trace_pixel: Option<(i32, i32, i32, i32)>,
+    trace_op_index: usize,
+    canvas_snapshots: Option<
+        &'target std::collections::BTreeMap<
+            u32,
+            canvas::child_paint_record::CanvasSnapshotReplacement,
+        >,
+    >,
 }
 
 impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
@@ -3386,7 +3911,26 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             mask_stack: Vec::new(),
             nearest,
             opacity,
+            trace_pixel: None,
+            trace_op_index: 0,
+            canvas_snapshots: None,
         }
+    }
+
+    fn with_trace_pixel(mut self, global_x: i32, global_y: i32, x: i32, y: i32) -> Self {
+        self.trace_pixel = Some((global_x, global_y, x, y));
+        self
+    }
+
+    fn traced_pixel(&mut self) -> Option<[u8; 4]> {
+        let (_, _, x, y) = self.trace_pixel?;
+        let mut pixel = [0; 4];
+        let info = SkImageInfo::MakeN32Premul(1, 1);
+        self.target
+            .read_pixels(&info, &mut pixel, 4, x, y)
+            .ok()
+            .filter(|copied| *copied)
+            .map(|_| pixel)
     }
 
     fn with_typeface_cache(mut self, cache: &'target TypefaceCache) -> Self {
@@ -3410,6 +3954,274 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             .get_or_insert_with(|| io::Error::new(io::ErrorKind::Unsupported, message.into()));
     }
 
+    // Source: cc/paint/paint_op.cc:1448-1505. The provider owns all decode and
+    // mip decisions; replay consumes only the returned allocation metadata.
+    fn draw_provider_image_rect(
+        &mut self,
+        command: &DrawCommand,
+        record: &PaintRecord,
+        provider: &mut dyn compositor_core::runtime::paint::CpuImageProvider<SkRegion>,
+    ) -> io::Result<bool> {
+        let Some(draw_image) = provider_draw_image(command, record, &self.target.local_to_device())
+        else {
+            return Ok(false);
+        };
+        let lease = match provider.GetRasterContent(&draw_image) {
+            CpuScopedRasterResult::Decoded(lease) => lease,
+            // Deferred records are outside this ordinary bitmap slice. Preserve
+            // their existing direct replay until their record path is wired.
+            CpuScopedRasterResult::Record(_) => return Ok(false),
+            CpuScopedRasterResult::Unavailable => return Ok(true),
+        };
+        let size = lease.size();
+        if size.width() <= 0 || size.height() <= 0 {
+            return Err(io::Error::other("decoded software image is empty"));
+        }
+        let color_type = if *lease.format()
+            == compositor_core::adapter::resource_types::SinglePlaneFormat::RGBA_8888
+        {
+            SkColorType::kRGBA_8888_SkColorType
+        } else if *lease.format()
+            == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+        {
+            SkColorType::kBGRA_8888_SkColorType
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "decoded software image format is not an N32 format",
+            ));
+        };
+        let expected_len = lease
+            .row_bytes()
+            .checked_mul(size.height() as usize)
+            .ok_or_else(|| io::Error::other("decoded software image allocation overflow"))?;
+        if lease.row_bytes() < size.width() as usize * 4 || lease.pixels().len() < expected_len {
+            return Err(io::Error::other(
+                "decoded software image allocation does not match its dimensions",
+            ));
+        }
+        let info = SkImageInfo::Make(
+            size.width(),
+            size.height(),
+            color_type,
+            SkAlphaType::kPremul_SkAlphaType,
+        );
+        let pixmap = SkPixmap::new(&info, lease.pixels().as_ptr(), lease.row_bytes());
+        // The image borrows lease pixels only for this synchronous draw and is
+        // explicitly dropped before the typed lease leaves scope.
+        let image = unsafe {
+            skia::src::image::SkImage_RasterFactories::RasterFromPixmap(
+                &pixmap,
+                None,
+                std::ptr::null_mut(),
+            )
+        }
+        .ok_or_else(|| io::Error::other("decoded software image allocation failed"))?;
+        // PlaybackImageProvider returns eager PaintImages at their authored
+        // quality. When that quality requests mip filtering, Chromium's raster
+        // SkImage carries/creates the mip chain before DrawImageRect samples it.
+        // RasterFromPixmap is only a borrowed level-zero view, so materialize
+        // the same immutable mipmapped image while the typed lease is alive.
+        let image = if lease.filter_quality() == CpuFilterQuality::kMedium && !image.hasMipmaps() {
+            unsafe { image.withDefaultMipmaps() }.map_err(|error| {
+                raster_error("decoded software image mipmap build failed", error)
+            })?
+        } else {
+            image
+        };
+        let offset = lease.src_rect_offset();
+        let adjustment = lease.scale_adjustment();
+        let adjusted_source = SkRect::MakeXYWH(
+            (command.source_rect.x as f32 + offset.x()) * adjustment.width(),
+            (command.source_rect.y as f32 + offset.y()) * adjustment.height(),
+            command.source_rect.width as f32 * adjustment.width(),
+            command.source_rect.height as f32 * adjustment.height(),
+        );
+        // A source rectangle containing the complete allocation has no subset
+        // boundary to enforce. Route it through DrawImage's fast constraint so
+        // filtered samples clamp to the allocation edge. This also preserves
+        // mipmaps when present; a strict full-image draw would otherwise both
+        // discard mips and apply half coverage at the outer texel centers.
+        let source_contains_image = adjusted_source.x() <= 0.0
+            && adjusted_source.y() <= 0.0
+            && adjusted_source.right() >= size.width() as f32
+            && adjusted_source.bottom() >= size.height() as f32;
+        let mut paint = SkPaint::default();
+        paint.setAlphaf(command.flags_alpha);
+        paint.setAntiAlias(command.antialias);
+        paint.setBlendMode(css_blend(command.blend_mode));
+        let sampling = decoded_image_sampling(lease.filter_quality());
+        let draw = if source_contains_image {
+            // A whole-image draw maps src to dst on the Canvas, then samples
+            // the image at its natural dimensions with edge clamping.
+            self.target.save();
+            self.target.concat(&SkMatrix::RectToRect(
+                &adjusted_source,
+                &rect(command.rect),
+                ScaleToFit::kFill_ScaleToFit,
+            ));
+            let natural_destination = SkRect::MakeWH(size.width() as f32, size.height() as f32);
+            let draw = unsafe {
+                self.target.draw_image_rect(
+                    &image,
+                    None,
+                    &natural_destination,
+                    &sampling,
+                    Some(&paint),
+                    SrcRectConstraint::kFast_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated provider drawImage failed", error));
+            let restore = self.target.restore().map_err(|error| {
+                raster_error("translated provider drawImage restore failed", error)
+            });
+            draw.and(restore)
+        } else {
+            unsafe {
+                self.target.draw_image_rect(
+                    &image,
+                    Some(&adjusted_source),
+                    &rect(command.rect),
+                    &sampling,
+                    Some(&paint),
+                    SrcRectConstraint::kStrict_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated provider drawImageRect failed", error))
+        };
+        drop(image);
+        draw.map(|_| true)
+    }
+
+    // Source: cc/paint/scoped_raster_flags.cc:17-57 and
+    // cc/paint/paint_shader.cc:437-493. Decode an image shader through the same
+    // provider as ordinary image ops, then rebuild it with provider-selected
+    // quality and inverse allocation scale.
+    fn draw_provider_tiled_image(
+        &mut self,
+        command: &DrawCommand,
+        record: &PaintRecord,
+        provider: &mut dyn compositor_core::runtime::paint::CpuImageProvider<SkRegion>,
+    ) -> io::Result<bool> {
+        let tile_rect = if command.tile_rect.width > 0. && command.tile_rect.height > 0. {
+            command.tile_rect
+        } else {
+            command::PaintRect {
+                x: command.source_rect.x * command.tile_scale.x + command.tile_phase.x,
+                y: command.source_rect.y * command.tile_scale.y + command.tile_phase.y,
+                width: command.source_rect.width * command.tile_scale.x,
+                height: command.source_rect.height * command.tile_scale.y,
+            }
+        };
+        if command.tile_spacing.width != 0. || command.tile_spacing.height != 0. {
+            return Ok(false);
+        }
+        // Source: box_painter_base.cc DrawTiledBackground and
+        // OptimizeToSingleTileDraw. A no-repeat bitmap whose one tile covers
+        // the destination is replayed as DrawImageRect, not as an image
+        // shader. Besides avoiding shader-edge filtering, this preserves the
+        // software decode cache's adjusted source rectangle exactly.
+        if !command.repeat_x && !command.repeat_y {
+            let mut single = command.clone();
+            single.r#type = CommandKind::kDrawImageRect;
+            single.rect = tile_rect;
+            self.target.save();
+            self.target
+                .clip_rect(&rect(command.rect), SkClipOp::kIntersect, false);
+            let draw = self.draw_provider_image_rect(&single, record, provider);
+            let restore = self
+                .target
+                .restore()
+                .map_err(|error| raster_error("single image tile clip restore failed", error));
+            return draw.and_then(|drawn| restore.map(|()| drawn));
+        }
+        let Some(draw_image) =
+            provider_pattern_draw_image(command, record, &self.target.local_to_device(), tile_rect)
+        else {
+            return Ok(false);
+        };
+        let lease = match provider.GetRasterContent(&draw_image) {
+            CpuScopedRasterResult::Decoded(lease) => lease,
+            CpuScopedRasterResult::Record(_) => return Ok(false),
+            CpuScopedRasterResult::Unavailable => return Ok(true),
+        };
+        let size = lease.size();
+        if size.width() <= 0 || size.height() <= 0 {
+            return Err(io::Error::other("decoded image shader allocation is empty"));
+        }
+        let color_type = if *lease.format()
+            == compositor_core::adapter::resource_types::SinglePlaneFormat::RGBA_8888
+        {
+            SkColorType::kRGBA_8888_SkColorType
+        } else if *lease.format()
+            == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+        {
+            SkColorType::kBGRA_8888_SkColorType
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "decoded image shader format is not an N32 format",
+            ));
+        };
+        let expected_len = lease
+            .row_bytes()
+            .checked_mul(size.height() as usize)
+            .ok_or_else(|| io::Error::other("decoded image shader allocation overflow"))?;
+        if lease.row_bytes() < size.width() as usize * 4 || lease.pixels().len() < expected_len {
+            return Err(io::Error::other(
+                "decoded image shader allocation does not match its dimensions",
+            ));
+        }
+        let info = SkImageInfo::Make(
+            size.width(),
+            size.height(),
+            color_type,
+            SkAlphaType::kPremul_SkAlphaType,
+        );
+        let pixmap = SkPixmap::new(&info, lease.pixels().as_ptr(), lease.row_bytes());
+        let image = unsafe {
+            skia::src::image::SkImage_RasterFactories::RasterFromPixmap(
+                &pixmap,
+                None,
+                std::ptr::null_mut(),
+            )
+        }
+        .ok_or_else(|| io::Error::other("decoded image shader allocation failed"))?;
+        let image = if lease.filter_quality() == CpuFilterQuality::kMedium && !image.hasMipmaps() {
+            unsafe { image.withDefaultMipmaps() }
+                .map_err(|error| raster_error("decoded image shader mipmap build failed", error))?
+        } else {
+            image
+        };
+        let local =
+            decoded_pattern_local_matrix(tile_rect, command.source_rect, lease.scale_adjustment())?;
+        let shader = image
+            .makeShaderWithMatrix(
+                if command.repeat_x {
+                    SkTileMode::kRepeat
+                } else {
+                    SkTileMode::kClamp
+                },
+                if command.repeat_y {
+                    SkTileMode::kRepeat
+                } else {
+                    SkTileMode::kClamp
+                },
+                &decoded_image_sampling(lease.filter_quality()),
+                &local,
+            )
+            .ok_or_else(|| io::Error::other("decoded image pattern shader failed"))?;
+        let mut paint = SkPaint::default();
+        paint.setAlphaf(command.flags_alpha);
+        paint.setAntiAlias(command.antialias);
+        paint.setBlendMode(css_blend(command.blend_mode));
+        paint.setShader(Some(shader));
+        let draw = unsafe { self.target.draw_rect(&rect(command.rect), &paint) }
+            .map_err(|error| raster_error("decoded image pattern draw failed", error));
+        drop(image);
+        draw.map(|_| true)
+    }
+
     /// Replay Paint's canonical filter value before the browser-neutral command
     /// projection. A flat PaintRecord (notably an SVG document image) has no
     /// compositor Effect traversal, but it still consumes the exact operations
@@ -3419,7 +4231,75 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         item: &paint::paint_engine::DisplayItem,
         resources: &ResourceContext<'_>,
         alpha: f32,
+        record: Option<&PaintRecord>,
+        params: Option<&mut RasterPlaybackParams<'_, SkRegion>>,
     ) {
+        if item.r#type == paint::paint_engine::DisplayItemType::kCustomData {
+            if let Err(error) = self.replay_canvas_custom_data(item.custom_data_id) {
+                self.error.get_or_insert(error);
+            }
+            return;
+        }
+        if item.r#type == paint::paint_engine::DisplayItemType::kSaveLayerFilter
+            && !item.text_shadow_filters.is_empty()
+        {
+            if self.error.is_some() {
+                return;
+            }
+            let matrix = self.target.local_to_device();
+            let scale_x = matrix.rc(0, 0).hypot(matrix.rc(0, 1));
+            let scale_y = matrix.rc(1, 0).hypot(matrix.rc(1, 1));
+            let branches: Vec<_> = item
+                .text_shadow_filters
+                .iter()
+                .map(|shadow| {
+                    skia::src::effects::imagefilters::SkDropShadowImageFilter::DropShadowOnly(
+                        matrix.rc(0, 0) * shadow.offset.x as f32
+                            + matrix.rc(0, 1) * shadow.offset.y as f32,
+                        matrix.rc(1, 0) * shadow.offset.x as f32
+                            + matrix.rc(1, 1) * shadow.offset.y as f32,
+                        shadow.blur_radius as f32 * 0.5 * scale_x,
+                        shadow.blur_radius as f32 * 0.5 * scale_y,
+                        SkColor4f {
+                            fR: shadow.color.red,
+                            fG: shadow.color.green,
+                            fB: shadow.color.blue,
+                            fA: shadow.color.alpha,
+                        },
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .collect();
+            if branches.iter().any(Option::is_none) {
+                self.fail("translated text-shadow branch filter failed");
+                return;
+            }
+            let filter = if branches.len() == 1 {
+                branches[0].clone()
+            } else {
+                skia::src::effects::imagefilters::SkMergeImageFilter::Merge(Some(&branches), None)
+            };
+            let Some(filter) = filter else {
+                self.fail("translated text-shadow merge filter failed");
+                return;
+            };
+            let mut paint = SkPaint::default();
+            paint.setAlphaf(alpha * item.opacity);
+            paint.setImageFilter(Some(filter));
+            if let Err(error) = self
+                .target
+                .save_layer(None, Some(&paint))
+                .map(|_| self.depth += 1)
+            {
+                self.error.get_or_insert(raster_error(
+                    "translated text-shadow saveLayer failed",
+                    error,
+                ));
+            }
+            return;
+        }
         let mut command = item.to_skia();
         command.flags_alpha = alpha;
         command.color.alpha *= alpha;
@@ -3432,6 +4312,30 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         if item.r#type != paint::paint_engine::DisplayItemType::kSaveLayerFilter
             || item.canonical_filters.is_empty()
         {
+            if command.image_orientation == ImageOrientation::kDefault {
+                let provider_result = record.zip(params).and_then(|(record, params)| {
+                    params
+                        .image_provider
+                        .as_deref_mut()
+                        .and_then(|provider| match command.r#type {
+                            CommandKind::kDrawImageRect => {
+                                Some(self.draw_provider_image_rect(&command, record, provider))
+                            }
+                            CommandKind::kDrawTiledImage => {
+                                Some(self.draw_provider_tiled_image(&command, record, provider))
+                            }
+                            _ => None,
+                        })
+                });
+                match provider_result {
+                    Some(Ok(true)) => return,
+                    Some(Err(error)) => {
+                        self.error.get_or_insert(error);
+                        return;
+                    }
+                    Some(Ok(false)) | None => {}
+                }
+            }
             self.execute(&command, resources);
             return;
         }
@@ -3533,7 +4437,10 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         let Some(image) = raster_image(item, resources)? else {
             return Ok(());
         };
-        let sampling = image_sampling(item.image_interpolation_quality);
+        // Source: PaintShader::CreateDecodedImage and ScopedRasterFlags.
+        // Image patterns receive the decoded cache's replay quality, not the
+        // pre-decode Blink interpolation quality carried by the display item.
+        let sampling = software_decoded_image_sampling(item.image_interpolation_quality);
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             let matrix = self.target.local_to_device();
             eprintln!(
@@ -3557,15 +4464,52 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         paint.setAlphaf(item.flags_alpha);
         paint.setAntiAlias(antialias);
         paint.setBlendMode(blend);
+        let full_image = item.source_rect.x == 0.
+            && item.source_rect.y == 0.
+            && item.source_rect.width == image.width() as f64
+            && item.source_rect.height == image.height() as f64;
+        if !item.repeat_x
+            && !item.repeat_y
+            && item.tile_spacing.width == 0.
+            && item.tile_spacing.height == 0.
+            && full_image
+        {
+            // Source: SkCanvas::drawImageRect and
+            // BoxPainterBase::OptimizeToSingleTileDraw. A complete, singular
+            // bitmap has no subset boundary. Draw it through the whole-image
+            // overload so filtered samples clamp to the allocation edge;
+            // strict subset playback would apply half coverage to texels that
+            // touch a CSS mask's top or left edge.
+            self.target.save();
+            self.target
+                .clip_rect(&rect(item.rect), SkClipOp::kIntersect, false);
+            self.target.concat(&SkMatrix::RectToRect(
+                &rect(item.source_rect),
+                &rect(tile_rect),
+                ScaleToFit::kFill_ScaleToFit,
+            ));
+            let natural_destination = SkRect::MakeWH(image.width() as f32, image.height() as f32);
+            let draw = unsafe {
+                self.target.draw_image_rect(
+                    &image,
+                    None,
+                    &natural_destination,
+                    &sampling,
+                    Some(&paint),
+                    SrcRectConstraint::kFast_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated whole tiled image draw failed", error));
+            let restore = self.target.restore().map_err(|error| {
+                raster_error("translated whole tiled image restore failed", error)
+            });
+            return draw.and(restore);
+        }
         // Source: blink Image::DrawPattern/CreatePatternShader. A complete
         // image with no spacing is retained by one image shader; Skia owns the
         // repeat phase and samples across tile boundaries in a single draw.
         // Besides matching Chromium's DPR-scaled sampling, this avoids one
         // drawImageRect per visible background tile.
-        let full_image = item.source_rect.x == 0.
-            && item.source_rect.y == 0.
-            && item.source_rect.width == image.width() as f64
-            && item.source_rect.height == image.height() as f64;
         if item.repeat_x
             && item.repeat_y
             && item.tile_spacing.width == 0.
@@ -3726,6 +4670,8 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                         miter_limit: primitive.stroke_miter_limit,
                         antialias: primitive.antialias,
                         non_scaling_stroke: primitive.non_scaling_stroke,
+                        apply_srgb_to_linear_color_filter: primitive
+                            .apply_srgb_to_linear_color_filter,
                         ..Default::default()
                     };
                     if primitive.fill_server.is_some()
@@ -3772,6 +4718,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                             source_rect: image.source,
                             resource_id: image.resource_id,
                             image_interpolation_quality: image.image_interpolation_quality,
+                            dynamic_range_limit: image.dynamic_range_limit,
                             ..Default::default()
                         },
                         resources,
@@ -3862,13 +4809,14 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             .ok_or_else(|| io::Error::other("SVG pattern allocation overflow"))?;
         let mut pixels = vec![0; length];
         {
-            let mut target = RasterTarget::new(
+            let mut target = RasterTarget::new_with_color_space(
                 &mut pixels,
                 width,
                 height,
                 row_bytes,
                 PixelFormat::Rgba8888,
-                None,
+                tile.imageInfo.refColorSpace(),
+                Some(&tile.props),
             )
             .map_err(|error| raster_error("SVG pattern target failed", error))?;
             target.set_matrix(&tile.matrixForDraw);
@@ -3884,13 +4832,10 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 .finish()
                 .map_err(|error| raster_error("SVG pattern finish failed", error))?;
         }
-        let info = SkImageInfo::MakeWithColorSpace(
-            width,
-            height,
-            SkColorType::kRGBA_8888_SkColorType,
-            SkAlphaType::kPremul_SkAlphaType,
-            None,
-        );
+        // Source: SkPictureShader::CachedImageInfo::makeImage/rasterShader.
+        // Reuse the exact color space, alpha type, and surface identity chosen
+        // for the tile instead of discarding them after record replay.
+        let info = tile.imageInfo.clone();
         let pixmap = SkPixmap::new(&info, pixels.as_ptr(), row_bytes);
         let image =
             unsafe { skia::src::image::SkImage_RasterFactories::RasterFromPixmapCopy(&pixmap) }
@@ -3900,6 +4845,10 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             .invert()
             .ok_or_else(|| io::Error::other("SVG pattern tile matrix is singular"))?;
         let shader_matrix = SkMatrix::Concat(&local, &image_to_record);
+        // Source: LayoutSVGResourcePattern::ApplyShader explicitly selects
+        // PaintFlags::FilterQuality::kLow after installing the PaintRecord
+        // shader. PaintShader::GetSkShader maps that quality to linear image
+        // sampling for SkPictureShader's raster tile.
         image
             .makeShaderWithMatrix(
                 SkTileMode::kRepeat,
@@ -4026,13 +4975,14 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         pixels.try_reserve_exact(length).map_err(io::Error::other)?;
         pixels.resize(length, 0);
         {
-            let mut target = RasterTarget::new(
+            let mut target = RasterTarget::new_with_color_space(
                 &mut pixels,
                 width,
                 height,
                 row_bytes,
                 PixelFormat::Rgba8888,
-                None,
+                tile.imageInfo.refColorSpace(),
+                Some(&tile.props),
             )
             .map_err(|error| raster_error("translated record shader target failed", error))?;
             target.set_matrix(&tile.matrixForDraw);
@@ -4045,13 +4995,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 .finish()
                 .map_err(|error| raster_error("translated record shader finish failed", error))?;
         }
-        let info = SkImageInfo::MakeWithColorSpace(
-            width,
-            height,
-            SkColorType::kRGBA_8888_SkColorType,
-            SkAlphaType::kPremul_SkAlphaType,
-            None,
-        );
+        let info = tile.imageInfo.clone();
         let pixmap = SkPixmap::new(&info, pixels.as_ptr(), row_bytes);
         let image =
             unsafe { skia::src::image::SkImage_RasterFactories::RasterFromPixmapCopy(&pixmap) }
@@ -4393,7 +5337,9 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                             tile_rect: layer.tile_rect,
                             resource_id: layer.resource_id,
                             image_interpolation_quality: layer.image_interpolation_quality,
+                            dynamic_range_limit: layer.dynamic_range_limit,
                             image_orientation: layer.image_orientation,
+                            use_dark_mode_for_image: layer.use_dark_mode_for_image,
                             repeat_x: layer.repeat_x,
                             repeat_y: layer.repeat_y,
                             tile_scale: layer.tile_scale,
@@ -4457,6 +5403,118 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         draw.and(restore_mask).and(restore_content)
     }
 
+    /// Source: third_party/blink/renderer/core/paint/text_painter.cc:574-620
+    /// (`TextPainter::ClipDecorationLine`) and
+    /// third_party/blink/renderer/platform/fonts/font.cc:193-210
+    /// (`Font::GetTextIntercepts`).
+    ///
+    /// Paint retains the already-shaped fallback runs. Replay resolves their
+    /// exact faces, asks Skia for ink intersections in the decoration stripe,
+    /// then applies Chromium's dilated difference clips.
+    fn begin_decoration_ink_clip(
+        &mut self,
+        item: &DrawCommand,
+        resources: &ResourceContext<'_>,
+    ) -> io::Result<bool> {
+        if !item.is_text_decoration
+            || item.skip_ink == command::TextDecorationSkipInk::kNone
+            || item.decoration_ink_runs.is_empty()
+        {
+            return Ok(false);
+        }
+        let Some(bounds) = item.decoration_ink_bounds else {
+            return Ok(false);
+        };
+        // Ignore intersections smaller than 0.5px by insetting the geometry
+        // bounds vertically by 0.5px, exactly as Blink does before querying.
+        let stripe_top = bounds.y + 0.5;
+        let stripe_bottom = bounds.y + bounds.height - 0.5;
+        let scale = item.decoration_text_fit_scale;
+        if !stripe_top.is_finite()
+            || !stripe_bottom.is_finite()
+            || !item.decoration_ink_baseline.is_finite()
+            || !item.decoration_text_origin.x.is_finite()
+            || !item.decoration_text_origin.y.is_finite()
+            || !scale.is_finite()
+            || scale <= 0.0
+        {
+            return Ok(false);
+        }
+        let upper = (stripe_top - item.decoration_ink_baseline) as f32;
+        let lower = (stripe_bottom - item.decoration_ink_baseline) as f32;
+        let primary_baseline = item.decoration_ink_baseline - item.decoration_text_origin.y;
+        let dilation = item.decoration_thickness.min(13.0).max(0.0);
+        let mut clips = Vec::new();
+        for run in &item.decoration_ink_runs {
+            if run.glyphs.is_empty() || run.glyphs.iter().any(|glyph| glyph.canvas_rotation != 0) {
+                // ShapeResultBloberizer excludes rotated/upright vertical
+                // blobs from intercepts. The first connected path is the
+                // horizontal HTML path; runs remain sufficient for extension.
+                continue;
+            }
+            let typeface_item = DrawCommand {
+                font_face_index: run.font_face_index,
+                font_variations: run.font_variations.clone(),
+                font_size: run.font_size,
+                ..Default::default()
+            };
+            let typeface = raster_typeface(&typeface_item, resources, self.typeface_cache)?;
+            let mut font = SkFont::with_size(Some(typeface), run.font_size as f32);
+            font.setEmbolden(run.synthetic_bold);
+            font.setSkewX(if run.synthetic_italic { -0.25 } else { 0.0 });
+            #[cfg(target_vendor = "apple")]
+            ConfigureAppleFont(&mut font, FontSmoothing::kAuto);
+            #[cfg(not(target_vendor = "apple"))]
+            {
+                font.setSubpixel(true);
+                font.setEdging(Edging::kAntiAlias);
+            }
+            let glyphs = run
+                .glyphs
+                .iter()
+                .map(|glyph| {
+                    u16::try_from(glyph.id)
+                        .map_err(|_| io::Error::other("text-decoration glyph id exceeds u16"))
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            let positions = run
+                .glyphs
+                .iter()
+                .map(|glyph| SkPoint {
+                    fX: glyph.offset.x as f32,
+                    fY: (glyph.offset.y + run.baseline - primary_baseline) as f32,
+                })
+                .collect::<Vec<_>>();
+            let intervals = unsafe { font.getIntercepts(&glyphs, &positions, upper, lower, None) }
+                .map_err(|error| {
+                    raster_error("translated text-decoration intercepts failed", error)
+                })?;
+            for interval in intervals.chunks_exact(2) {
+                let left =
+                    item.decoration_text_origin.x + f64::from(interval[0]) * scale - dilation;
+                let right =
+                    item.decoration_text_origin.x + f64::from(interval[1]) * scale + dilation;
+                if left.is_finite() && right.is_finite() && right > left {
+                    clips.push(command::PaintRect {
+                        x: left,
+                        y: stripe_top - 1.0,
+                        width: right - left,
+                        height: stripe_bottom - stripe_top + 2.0,
+                    });
+                }
+            }
+        }
+        if clips.is_empty() {
+            return Ok(false);
+        }
+        self.target.save();
+        for clip in clips {
+            self.target
+                .clip_rect(&rect(clip), SkClipOp::kDifference, false);
+        }
+        Ok(true)
+    }
+
     fn execute(&mut self, item: &DrawCommand, resources: &ResourceContext<'_>) {
         if self.error.is_some() {
             return;
@@ -4482,6 +5540,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 | CommandKind::kSaveLayerDstIn
                 | CommandKind::kBeginMask
                 | CommandKind::kEndMask
+                | CommandKind::kCustomData
         );
         let filtered = (is_draw && (self.opacity < 1. || self.nearest)).then(|| {
             let mut filtered = item.clone();
@@ -4518,6 +5577,13 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             filtered
         });
         let item = filtered.as_ref().unwrap_or(item);
+        let ink_clip = match self.begin_decoration_ink_clip(item, resources) {
+            Ok(clipped) => clipped,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
         let result = match item.r#type {
             CommandKind::kSave => {
                 self.target.save();
@@ -4573,6 +5639,9 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             }
             CommandKind::kBeginMask => self.begin_mask(item),
             CommandKind::kEndMask => self.end_mask(resources),
+            CommandKind::kCustomData => Err(io::Error::other(
+                "CustomData must use its native id before command projection",
+            )),
             CommandKind::kDrawMask => self.draw_mask_layers(&item.mask_layers, resources),
             CommandKind::kSaveLayerFilter => (|| -> io::Result<()> {
                 let matrix = self.target.local_to_device();
@@ -4629,13 +5698,21 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                     .map_err(|error| raster_error("translated drawRRect failed", error))
             },
             CommandKind::kDrawDoubleRoundedRect => unsafe {
-                self.target
-                    .draw_drrect(
-                        &rrect(item.rect, item.corner_radii),
-                        &rrect(item.inner_rect, item.inner_corner_radii),
-                        &command_paint(item, false),
-                    )
-                    .map_err(|error| raster_error("translated drawDRRect failed", error))
+                let outer = rrect(item.rect, item.corner_radii);
+                let inner = rrect(item.inner_rect, item.inner_corner_radii);
+                let mut paint = command_paint(item, false);
+                if let Some((stroke_rrect, stroke_width)) = simple_drrect_stroke(&outer, &inner) {
+                    // Source: graphics_context.cc:847-861.
+                    paint.setStyle(Style::kStroke_Style);
+                    paint.setStrokeWidth(stroke_width);
+                    self.target
+                        .draw_rrect(&stroke_rrect, &paint)
+                        .map_err(|error| raster_error("translated stroked DRRect failed", error))
+                } else {
+                    self.target
+                        .draw_drrect(&outer, &inner, &paint)
+                        .map_err(|error| raster_error("translated drawDRRect failed", error))
+                }
             },
             CommandKind::kDrawEllipse | CommandKind::kStrokeEllipse => (|| -> io::Result<()> {
                 let paint = self.command_paint_with_shader(
@@ -4755,23 +5832,47 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                         fY: glyph.offset.y as f32,
                     })
                     .collect::<Vec<_>>();
+                let glyph_count = i32::try_from(glyphs.len())
+                    .map_err(|_| io::Error::other("translated glyph run exceeds i32"))?;
+                let horizontal_positions = positions.iter().all(|position| position.fY == 0.0);
+                let horizontal_offsets = horizontal_positions.then(|| {
+                    positions
+                        .iter()
+                        .map(|position| position.fX)
+                        .collect::<Vec<_>>()
+                });
+                let mut blob_builder = SkTextBlobBuilder::new();
+                unsafe {
+                    if let Some(offsets) = horizontal_offsets.as_ref() {
+                        let buffer = blob_builder.allocRunPosH(&font, glyph_count, 0.0, None);
+                        std::ptr::copy_nonoverlapping(glyphs.as_ptr(), buffer.glyphs, glyphs.len());
+                        std::ptr::copy_nonoverlapping(offsets.as_ptr(), buffer.pos, offsets.len());
+                    } else {
+                        let buffer = blob_builder.allocRunPos(&font, glyph_count, None);
+                        std::ptr::copy_nonoverlapping(glyphs.as_ptr(), buffer.glyphs, glyphs.len());
+                        std::ptr::copy_nonoverlapping(
+                            positions.as_ptr(),
+                            buffer.points(),
+                            positions.len(),
+                        );
+                    }
+                }
+                let blob = unsafe { blob_builder.make() };
                 let mut paint = command_paint(item, item.stroke_glyphs);
                 if item.stroke_glyphs {
                     paint.setStrokeWidth((item.font_size as f32 * 0.03).max(0.5));
                 }
                 unsafe {
-                    self.target.draw_glyphs(
-                        &glyphs,
-                        &positions,
+                    self.target.draw_text_blob(
+                        &blob,
                         SkPoint {
                             fX: item.text_blob_origin.x as f32,
                             fY: item.text_blob_origin.y as f32,
                         },
-                        &font,
                         &paint,
                     )
                 }
-                .map_err(|error| raster_error("translated drawGlyphs failed", error))
+                .map_err(|error| raster_error("translated drawTextBlob failed", error))
             })(),
             CommandKind::kStrokeLine => unsafe {
                 self.target
@@ -4800,6 +5901,14 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 io::ErrorKind::Unsupported,
                 format!("translated Skia replay for {other:?} is not connected"),
             )),
+        };
+        let result = if ink_clip {
+            let restore = self.target.restore().map_err(|error| {
+                raster_error("translated text-decoration clip restore failed", error)
+            });
+            result.and(restore)
+        } else {
+            result
         };
         if let Err(error) = result {
             self.error.get_or_insert(error);
@@ -4914,10 +6023,101 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
             if self.error.is_some() {
                 break;
             }
+            let trace_before = self.traced_pixel();
+            let trace_label = match &item.op {
+                FoldedOp::Borrowed(CpuPaintOpRef::PaintRecord { .. }) => "PaintRecord",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::Atom(_))) => "Atom",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawRect(..))) => {
+                    "DrawRect"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawRRect(..))) => {
+                    "DrawRRect"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawDRRect { .. })) => {
+                    "DrawDRRect"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawPath { .. })) => {
+                    "DrawPath"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::Save)) => "Save",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::Restore)) => "Restore",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::SaveLayer { .. })) => {
+                    "SaveLayer"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::SaveLayerAlpha {
+                    ..
+                })) => "SaveLayerAlpha",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::SaveLayerFilters {
+                    ..
+                })) => "SaveLayerFilters",
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::ClipRect { .. })) => {
+                    "ClipRect"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::ClipRRect(..))) => {
+                    "ClipRRect"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::ClipPath { .. })) => {
+                    "ClipPath"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawRecord(_))) => {
+                    "DrawRecord"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawColor { .. })) => {
+                    "DrawColor"
+                }
+                FoldedOp::Borrowed(CpuPaintOpRef::Converted(_)) => "ConvertedOther",
+                FoldedOp::OwnedDrawColor { .. } => "OwnedDrawColor",
+            };
+            let trace_index = self.trace_op_index;
+            self.trace_op_index += 1;
             let draw_alpha = item.alpha * self.opacity;
             match item.op {
                 FoldedOp::Borrowed(CpuPaintOpRef::PaintRecord { op, record }) => {
-                    self.execute_display_item(op, &resources(record.artifact()), item.alpha);
+                    if self.trace_pixel.is_some() {
+                        let command = op.to_skia();
+                        let matrix = self.target.local_to_device();
+                        eprintln!(
+                            "raster-op-detail op={trace_index} display={:?} command={:?} node={} phase={:?} rect={:?} inner_rect={:?} color=({:.9},{:.9},{:.9},{:.9}) flags_alpha={:.9} opacity={:.9} offset=({:.6},{:.6}) blur={:.6} spread={:.6} inset={} opaque_background={} antialias={} radii={:?} inner_radii={:?} blend={:?} matrix=[{:.9},{:.9},{:.9};{:.9},{:.9},{:.9};{:.9},{:.9},{:.9}]",
+                            op.r#type,
+                            command.r#type,
+                            op.node_id,
+                            op.phase,
+                            command.rect,
+                            command.inner_rect,
+                            command.color.red,
+                            command.color.green,
+                            command.color.blue,
+                            command.color.alpha,
+                            command.flags_alpha,
+                            command.opacity,
+                            command.shadow_offset.x,
+                            command.shadow_offset.y,
+                            command.blur_radius,
+                            command.spread,
+                            command.inset,
+                            command.shadow_has_opaque_background,
+                            command.antialias,
+                            command.corner_radii,
+                            command.inner_corner_radii,
+                            command.blend_mode,
+                            matrix.rc(0, 0),
+                            matrix.rc(0, 1),
+                            matrix.rc(0, 3),
+                            matrix.rc(1, 0),
+                            matrix.rc(1, 1),
+                            matrix.rc(1, 3),
+                            matrix.rc(3, 0),
+                            matrix.rc(3, 1),
+                            matrix.rc(3, 3),
+                        );
+                    }
+                    self.execute_display_item(
+                        op,
+                        &resources(record.artifact()),
+                        item.alpha,
+                        Some(record),
+                        Some(&mut *params),
+                    );
                 }
                 FoldedOp::Borrowed(CpuPaintOpRef::Converted(op)) => match op {
                     CpuPaintOp::Atom(source) => {
@@ -4925,6 +6125,8 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                             source.op(),
                             &resources(source.record().artifact()),
                             item.alpha,
+                            Some(source.record()),
+                            Some(&mut *params),
                         );
                     }
                     CpuPaintOp::DrawRect(value, flags) => {
@@ -4976,6 +6178,7 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                         image_interpolation_quality: layer
                                             .image_interpolation_quality
                                             .to_skia(),
+                                        dynamic_range_limit: layer.dynamic_range_limit.to_skia(),
                                         repeat_x: layer.repeat_x,
                                         repeat_y: layer.repeat_y,
                                         tile_scale: layer.tile_scale.to_skia(),
@@ -4997,6 +6200,22 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                 if self.nearest {
                                     command.image_interpolation_quality =
                                         ImageInterpolationQuality::kNone;
+                                }
+                                let provider_result =
+                                    params.image_provider.as_deref_mut().map(|provider| {
+                                        self.draw_provider_tiled_image(
+                                            &command,
+                                            source.record(),
+                                            provider,
+                                        )
+                                    });
+                                match provider_result {
+                                    Some(Ok(true)) => continue,
+                                    Some(Err(error)) => {
+                                        self.error.get_or_insert(error);
+                                        continue;
+                                    }
+                                    Some(Ok(false)) | None => {}
                                 }
                                 if let Err(error) = self.draw_tiled_image(
                                     &command,
@@ -5079,20 +6298,25 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                             self.looped_shape(outer, Some(inner), flags, draw_alpha);
                             continue;
                         }
-                        let paint = match converted_paint(flags, draw_alpha) {
+                        let mut paint = match converted_paint(flags, draw_alpha) {
                             Ok(paint) => paint,
                             Err(error) => {
                                 self.error.get_or_insert(error);
                                 continue;
                             }
                         };
-                        if let Err(error) = unsafe {
-                            self.target.draw_drrect(
-                                &converted_rrect(outer),
-                                &converted_rrect(inner),
-                                &paint,
-                            )
-                        } {
+                        let outer = converted_rrect(outer);
+                        let inner = converted_rrect(inner);
+                        let result = if let Some((stroke_rrect, stroke_width)) =
+                            simple_drrect_stroke(&outer, &inner)
+                        {
+                            paint.setStyle(Style::kStroke_Style);
+                            paint.setStrokeWidth(stroke_width);
+                            unsafe { self.target.draw_rrect(&stroke_rrect, &paint) }
+                        } else {
+                            unsafe { self.target.draw_drrect(&outer, &inner, &paint) }
+                        };
+                        if let Err(error) = result {
                             self.error.get_or_insert(raster_error(
                                 "translated converted drawDRRect failed",
                                 error,
@@ -5338,6 +6562,11 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                                 .get_or_insert(raster_error("translated clear failed", error));
                         }
                     }
+                    CpuPaintOp::CustomData(id) => {
+                        if let Err(error) = self.replay_canvas_custom_data(*id) {
+                            self.error.get_or_insert(error);
+                        }
+                    }
                     CpuPaintOp::Noop => {}
                 },
                 FoldedOp::OwnedDrawColor { color: value } => {
@@ -5351,6 +6580,15 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
                         self.error
                             .get_or_insert(raster_error("translated folded color failed", error));
                     }
+                }
+            }
+            let trace_after = self.traced_pixel();
+            if trace_before != trace_after {
+                if let Some((global_x, global_y, x, y)) = self.trace_pixel {
+                    eprintln!(
+                        "raster-pixel global=({global_x},{global_y}) device=({x},{y}) op={trace_index} kind={trace_label} depth={} before={trace_before:?} after={trace_after:?}",
+                        self.depth
+                    );
                 }
             }
         }
@@ -5390,12 +6628,21 @@ pub fn ReplayDisplayItemListIntoTranslatedTarget(
     replay.finish_replay()
 }
 
-#[cfg(any(test, feature = "artifact_test_support"))]
 fn rasterize_paint_artifact(
     list: &PaintArtifact,
     width: u32,
     height: u32,
     scale: f64,
+    transparent: bool,
+) -> io::Result<Vec<u8>> {
+    rasterize_paint_artifact_xy(list, width, height, (scale, scale), transparent)
+}
+
+fn rasterize_paint_artifact_xy(
+    list: &PaintArtifact,
+    width: u32,
+    height: u32,
+    scale: (f64, f64),
     transparent: bool,
 ) -> io::Result<Vec<u8>> {
     let row_bytes = (width as usize)
@@ -5427,12 +6674,12 @@ fn rasterize_paint_artifact(
             )
             .map_err(|error| raster_error("translated paint artifact clear failed", error))?;
     }
-    target.scale(scale as f32, scale as f32);
+    target.scale(scale.0 as f32, scale.1 as f32);
     let command_resources = resources(list);
     let replay_result = {
         let mut canvas = TranslatedCanvas::new(&mut target, false, 1.);
         for item in list.items.iter() {
-            canvas.execute_display_item(item, &command_resources, 1.0);
+            canvas.execute_display_item(item, &command_resources, 1.0, None, None);
         }
         canvas.unwind_to_depth(0);
         canvas.finish_replay()
@@ -5514,6 +6761,38 @@ fn PrepareRasterPlayback(
 }
 
 impl RasterBackend for TranslatedSkiaBackend {
+    fn RasterLinkDragImage(
+        &self,
+        size: (i32, i32),
+        scale: f32,
+        text: &[((f32, f32), font_engine::plain_text_painter::PlainTextPaint)],
+    ) -> io::Result<Option<image_resource::ImmutableImageBitmap>> {
+        drag_image::RasterLinkDragImage(&self.typeface_cache, size, scale, text)
+    }
+
+    fn RasterDragImage(
+        &self,
+        record: &compositor_core::engine::ImmutablePaintRecord,
+        layout_size: (f64, f64),
+        paint_offset: (f64, f64),
+        scale: f32,
+        opacity: f32,
+        snapshots: &std::collections::BTreeMap<
+            u32,
+            canvas::child_paint_record::CanvasSnapshotReplacement,
+        >,
+    ) -> io::Result<Option<image_resource::ImmutableImageBitmap>> {
+        drag_image::RasterDragImage(
+            self,
+            record,
+            layout_size,
+            paint_offset,
+            scale,
+            opacity,
+            snapshots,
+        )
+    }
+
     fn Raster(
         &self,
         request: PlatformRasterPlayback<'_, '_>,
@@ -5521,19 +6800,64 @@ impl RasterBackend for TranslatedSkiaBackend {
     ) -> io::Result<()> {
         let size = target.size();
         let format = pixel_format(target.format())?;
+        let color_space = target_color_space(target.color_space())?;
         let row_bytes = target.row_bytes();
-        let mut target = RasterTarget::new(
+        let surface_props = raster_surface_props(request.use_lcd_text);
+        let mut target = RasterTarget::new_with_color_space(
             target.pixels_mut(),
             size.width(),
             size.height(),
             row_bytes,
             format,
-            None,
+            color_space,
+            Some(&surface_props),
         )
         .map_err(|error| raster_error("translated raster target creation failed", error))?;
+        target.set_raster_phase_origin(request.content_rect.x, request.content_rect.y);
         let replay_result = (|| -> io::Result<()> {
+            let trace = std::env::var("RECHROM_TRACE_RASTER_PIXEL")
+                .ok()
+                .and_then(|value| {
+                    let (x, y) = value.split_once(',')?;
+                    Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+                })
+                .filter(|(x, y)| {
+                    *x >= request.content_rect.x
+                        && *x < request.content_rect.right()
+                        && *y >= request.content_rect.y
+                        && *y < request.content_rect.bottom()
+                })
+                .or_else(|| {
+                    let value = std::env::var("RECHROM_TRACE_RASTER_DEVICE_PIXEL").ok()?;
+                    let mut values = value.split(',');
+                    let device_x = values.next()?.parse::<i32>().ok()?;
+                    let device_y = values.next()?.parse::<i32>().ok()?;
+                    let content_x = values.next()?.parse::<i32>().ok()?;
+                    if values.next().is_some()
+                        || request.content_rect.x != content_x
+                        || device_x < 0
+                        || device_y < 0
+                        || device_x >= request.content_rect.width
+                        || device_y >= request.content_rect.height
+                    {
+                        return None;
+                    }
+                    Some((
+                        request.content_rect.x + device_x,
+                        request.content_rect.y + device_y,
+                    ))
+                });
             let mut canvas = TranslatedCanvas::new(&mut target, false, 1.)
                 .with_typeface_cache(&self.typeface_cache);
+            if let Some((x, y)) = trace {
+                let device_x = x - request.content_rect.x;
+                let device_y = y - request.content_rect.y;
+                eprintln!(
+                    "raster-pixel-target global=({x},{y}) device=({device_x},{device_y}) content={:?} invalid={:?} transform={:?}",
+                    request.content_rect, request.invalid_content_rect, request.raster_transform
+                );
+                canvas = canvas.with_trace_pixel(x, y, device_x, device_y);
+            }
             let source = request.source;
             PrepareRasterPlayback(
                 &mut canvas,
@@ -5575,6 +6899,113 @@ impl RasterBackend for TranslatedSkiaBackend {
 #[cfg(all(test, target_vendor = "apple"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_backend_factory_reuses_a_shared_face_across_documents() {
+        let bytes = font_engine::SharedFontBytes::from(
+            include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf").as_slice(),
+        );
+        let factory = SkiaFontBackendFactory::default();
+        let create = || {
+            font_engine::FontBackendFactory::Create(
+                &factory,
+                &bytes,
+                0,
+                &[],
+                "Roboto",
+                "Roboto",
+                400.0,
+                false,
+            )
+        };
+
+        let first = create();
+        let second = create();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn svg_gradient_dark_mode_filters_stops_only_when_the_resolved_use_enables_it() {
+        let white = command::Color {
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            alpha: 0.5,
+        };
+        let mut shader = command::PaintShader::default();
+        assert_eq!(gradient_stop_color(&shader, white), white);
+
+        shader.apply_dark_mode = true;
+        let filtered = gradient_stop_color(&shader, white);
+        assert!((filtered.red - 18.0 / 255.0).abs() < 0.00001);
+        assert!((filtered.green - 18.0 / 255.0).abs() < 0.00001);
+        assert!((filtered.blue - 18.0 / 255.0).abs() < 0.00001);
+        assert_eq!(filtered.alpha, 0.5);
+    }
+
+    #[test]
+    fn target_color_space_matches_gfx_srgb_and_display_p3() {
+        let srgb = target_color_space(&RasterColorSpace::CreateSRGB())
+            .unwrap()
+            .unwrap();
+        assert!(SkColorSpace::Equals(
+            Some(srgb.as_ref()),
+            Some(SkColorSpace::MakeSRGB().as_ref())
+        ));
+
+        let p3 = target_color_space(&RasterColorSpace::CreateDisplayP3())
+            .unwrap()
+            .unwrap();
+        assert!(!SkColorSpace::Equals(
+            Some(p3.as_ref()),
+            Some(SkColorSpace::MakeSRGB().as_ref())
+        ));
+        assert!(target_color_space(&RasterColorSpace::default())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn raster_surface_props_follow_chromium_lcd_selection() {
+        assert_eq!(
+            raster_surface_props(false).pixelGeometry(),
+            SkPixelGeometry::kUnknown_SkPixelGeometry
+        );
+        assert_eq!(
+            raster_surface_props(true).pixelGeometry(),
+            SkPixelGeometry::kRGB_H_SkPixelGeometry
+        );
+    }
+
+    #[test]
+    fn odd_svg_dash_list_repeats_before_creating_the_path_effect() {
+        let mut command = DrawCommand::default();
+        command.dash_intervals = vec![10.0];
+        let paint = command_paint(&command, true);
+        assert!(paint.getPathEffect().is_some());
+    }
+
+    #[test]
+    fn simple_drrect_matches_chromium_stroked_rrect_conversion() {
+        let outer = SkRRect::MakeRectXY(&SkRect::MakeWH(24.0, 24.0), 12.0, 12.0);
+        let inner = SkRRect::MakeRectXY(&SkRect::MakeLTRB(1.0, 1.0, 23.0, 23.0), 11.0, 11.0);
+        let (stroke, width) = simple_drrect_stroke(&outer, &inner).unwrap();
+        assert_eq!(width, 1.0);
+        assert_eq!(*stroke.rect(), SkRect::MakeLTRB(0.5, 0.5, 23.5, 23.5));
+        assert_eq!(stroke.getSimpleRadii(), SkPoint::make(11.5, 11.5));
+    }
+
+    #[test]
+    fn simple_drrect_rejects_unequal_sides_and_constrained_corner_radii() {
+        let outer = SkRRect::MakeRectXY(&SkRect::MakeWH(24.0, 24.0), 12.0, 12.0);
+        let unequal_inner =
+            SkRRect::MakeRectXY(&SkRect::MakeLTRB(1.0, 1.0, 22.0, 23.0), 11.0, 11.0);
+        assert!(simple_drrect_stroke(&outer, &unequal_inner).is_none());
+
+        let constrained_inner =
+            SkRRect::MakeRectXY(&SkRect::MakeLTRB(1.0, 1.0, 23.0, 23.0), 11.0, 10.0);
+        assert!(simple_drrect_stroke(&outer, &constrained_inner).is_none());
+    }
 
     #[test]
     fn apple_font_configuration_matches_blink_defaults() {
@@ -5705,6 +7136,59 @@ mod tests {
     }
 
     #[test]
+    fn software_decoded_pattern_sampling_matches_decode_cache_cap() {
+        let none = software_decoded_image_sampling(ImageInterpolationQuality::kNone);
+        assert_eq!(none.filter(), SkFilterMode::kNearest);
+        assert_eq!(none.mipmap(), SkMipmapMode::kNone);
+
+        let low = software_decoded_image_sampling(ImageInterpolationQuality::kLow);
+        assert_eq!(low.filter(), SkFilterMode::kLinear);
+        assert_eq!(low.mipmap(), SkMipmapMode::kNone);
+
+        let medium = software_decoded_image_sampling(ImageInterpolationQuality::kMedium);
+        assert_eq!(medium.filter(), SkFilterMode::kLinear);
+        assert_eq!(medium.mipmap(), SkMipmapMode::kNone);
+    }
+
+    #[test]
+    fn decoded_pattern_matrix_applies_inverse_provider_scale() {
+        let matrix = decoded_pattern_local_matrix(
+            command::PaintRect {
+                x: 7.0,
+                y: 11.0,
+                width: 164.0,
+                height: 41.0,
+            },
+            command::PaintRect {
+                width: 82.0,
+                height: 82.0,
+                ..Default::default()
+            },
+            compositor_core::adapter::geometry::SizeF::new(0.5, 0.25),
+        )
+        .expect("valid decoded shader matrix");
+
+        assert_eq!(matrix.rc(0, 0), 4.0);
+        assert_eq!(matrix.rc(1, 1), 2.0);
+        assert_eq!(matrix.rc(0, 2), 7.0);
+        assert_eq!(matrix.rc(1, 2), 11.0);
+        assert!(decoded_pattern_local_matrix(
+            command::PaintRect {
+                width: 10.0,
+                height: 10.0,
+                ..Default::default()
+            },
+            command::PaintRect {
+                width: 10.0,
+                height: 10.0,
+                ..Default::default()
+            },
+            compositor_core::adapter::geometry::SizeF::new(0.0, 1.0),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn svg_primitive_crop_intersects_the_filter_region() {
         assert_eq!(
             svg_filter_crop(
@@ -5768,6 +7252,7 @@ mod tests {
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
             reference_graph: Some(Arc::new(SvgFilterGraph {
+                resource_node_id: 0,
                 id: "offset".into(),
                 filter_units: SvgFilterUnits::kUserSpaceOnUse,
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -5852,6 +7337,7 @@ mod tests {
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
             reference_graph: Some(Arc::new(SvgFilterGraph {
+                resource_node_id: 0,
                 id: "linear-output".into(),
                 filter_units: SvgFilterUnits::kUserSpaceOnUse,
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -5919,6 +7405,7 @@ mod tests {
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
             reference_graph: Some(Arc::new(SvgFilterGraph {
+                resource_node_id: 0,
                 id: "fixed-srgb-image".into(),
                 filter_units: SvgFilterUnits::kUserSpaceOnUse,
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -5966,6 +7453,77 @@ mod tests {
         )
         .expect("translated reference filter");
         assert!(!linear_rgb, "FEImage ignores color-interpolation-filters");
+    }
+
+    #[test]
+    fn text_shadow_layer_filters_the_merged_source_alpha_once() {
+        use layoutng_assembly::internal::{
+            layout_input::{Offset, PaintShadow},
+            layout_input_types::Color,
+        };
+        use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact, PaintRect};
+
+        let artifact = PaintArtifact {
+            items: Arc::new(vec![
+                DisplayItem {
+                    r#type: DisplayItemType::kSaveLayerFilter,
+                    text_shadow_filters: vec![PaintShadow {
+                        offset: Offset { x: 4.0, y: 0.0 },
+                        color: Color {
+                            red: 1.0,
+                            alpha: 0.5,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    rect: PaintRect {
+                        x: 2.0,
+                        y: 2.0,
+                        width: 4.0,
+                        height: 4.0,
+                    },
+                    color: Color {
+                        alpha: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                DisplayItem {
+                    r#type: DisplayItemType::kDrawRect,
+                    rect: PaintRect {
+                        x: 4.0,
+                        y: 2.0,
+                        width: 4.0,
+                        height: 4.0,
+                    },
+                    color: Color {
+                        alpha: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                DisplayItem {
+                    r#type: DisplayItemType::kRestore,
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        let pixels = rasterize_paint_artifact(&artifact, 16, 10, 1.0, true)
+            .expect("text-shadow layer replay");
+        let alpha = |x: usize, y: usize| pixels[(y * 16 + x) * 4 + 3];
+
+        assert_eq!(alpha(2, 3), 0, "shadow-only filter must omit its source");
+        assert!(matches!(alpha(6, 3), 127 | 128));
+        assert_eq!(
+            alpha(8, 3),
+            alpha(6, 3),
+            "overlapping decoration shapes must merge before the shadow filter"
+        );
     }
 
     #[test]
@@ -6018,6 +7576,7 @@ mod tests {
         let reference = PaintFilterOperation {
             r#type: PaintFilterType::kReference,
             reference_graph: Some(Arc::new(SvgFilterGraph {
+                resource_node_id: 0,
                 id: "arithmetic-validation".into(),
                 filter_units: SvgFilterUnits::kUserSpaceOnUse,
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -6125,6 +7684,7 @@ mod tests {
             let operation = PaintFilterOperation {
                 r#type: PaintFilterType::kReference,
                 reference_graph: Some(Arc::new(SvgFilterGraph {
+                    resource_node_id: 0,
                     id: "displacement-taint".into(),
                     filter_units: SvgFilterUnits::kUserSpaceOnUse,
                     primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -6328,6 +7888,7 @@ mod tests {
             let reference = PaintFilterOperation {
                 r#type: PaintFilterType::kReference,
                 reference_graph: Some(Arc::new(SvgFilterGraph {
+                    resource_node_id: 0,
                     id: "extended-effect".into(),
                     filter_units: SvgFilterUnits::kUserSpaceOnUse,
                     primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -6541,6 +8102,240 @@ mod tests {
     }
 
     #[test]
+    fn production_tile_preparation_preserves_picture_phase_at_deep_scrolls() {
+        const TILE_WIDTH: usize = 96;
+        const TILE_HEIGHT: usize = 64;
+        let draw = |target: &mut RasterTarget<'_>, origin_x: i32, origin_y: i32| {
+            let boundary = SkRRect::MakeRectXY(
+                &SkRect::MakeLTRB(
+                    origin_x as f32 + 8.5,
+                    origin_y as f32 + 8.5,
+                    origin_x as f32 + 87.5,
+                    origin_y as f32 + 55.5,
+                ),
+                7.5,
+                7.5,
+            );
+            let mut fill = SkPaint::default();
+            fill.setColor4f(
+                &SkColor4f {
+                    fR: 1.0,
+                    fG: 1.0,
+                    fB: 1.0,
+                    fA: 1.0,
+                },
+                None,
+            );
+            fill.setAntiAlias(true);
+            let mut border = SkPaint::default();
+            border.setColor4f(
+                &SkColor4f {
+                    fR: 210.0 / 255.0,
+                    fG: 217.0 / 255.0,
+                    fB: 212.0 / 255.0,
+                    fA: 1.0,
+                },
+                None,
+            );
+            border.setAntiAlias(true);
+            border.setStyle(Style::kStroke_Style);
+            border.setStrokeWidth(1.0);
+            unsafe {
+                target.draw_rrect(&boundary, &fill).unwrap();
+                target.draw_rrect(&boundary, &border).unwrap();
+            }
+        };
+
+        for (origin_x, origin_y) in [(0, 0), (128, 256), (508, 2540), (128, 6700)] {
+            let full_width = origin_x as usize + TILE_WIDTH;
+            let full_height = origin_y as usize + TILE_HEIGHT;
+            let mut full = vec![0; full_width * full_height * 4];
+            let mut full_target = RasterTarget::new(
+                &mut full,
+                full_width as i32,
+                full_height as i32,
+                full_width * 4,
+                PixelFormat::Bgra8888,
+                None,
+            )
+            .unwrap();
+            draw(&mut full_target, origin_x, origin_y);
+            full_target.finish().unwrap();
+
+            let mut compact = vec![0; TILE_WIDTH * TILE_HEIGHT * 4];
+            let mut compact_target = RasterTarget::new(
+                &mut compact,
+                TILE_WIDTH as i32,
+                TILE_HEIGHT as i32,
+                TILE_WIDTH * 4,
+                PixelFormat::Bgra8888,
+                None,
+            )
+            .unwrap();
+            compact_target.set_raster_phase_origin(origin_x, origin_y);
+            {
+                let content = Rect::new(origin_x, origin_y, TILE_WIDTH as i32, TILE_HEIGHT as i32);
+                let mut canvas = TranslatedCanvas::new(&mut compact_target, false, 1.0);
+                PrepareRasterPlayback(&mut canvas, &content, &content, false).unwrap();
+                draw(canvas.target, origin_x, origin_y);
+                canvas.unwind_to_depth(0);
+                canvas.finish_replay().unwrap();
+            }
+            compact_target.finish().unwrap();
+
+            for y in 0..TILE_HEIGHT {
+                let full_start = ((origin_y as usize + y) * full_width + origin_x as usize) * 4;
+                let compact_start = y * TILE_WIDTH * 4;
+                assert_eq!(
+                    &compact[compact_start..compact_start + TILE_WIDTH * 4],
+                    &full[full_start..full_start + TILE_WIDTH * 4],
+                    "production playback phase mismatch at ({origin_x}, {origin_y}), row {y}"
+                );
+            }
+        }
+
+        // Exercise the production preparation path at every integer vertical
+        // tile origin in the captured 7047px GitHub layer. Reuse the two
+        // allocations so this is exhaustive without turning into an allocation
+        // or full-surface-clear benchmark.
+        {
+            const ORIGIN_X: i32 = 128;
+            const MAX_SCROLL_Y: i32 = 7047;
+            const FULL_WIDTH: usize = ORIGIN_X as usize + TILE_WIDTH;
+            const FULL_HEIGHT: usize = MAX_SCROLL_Y as usize + TILE_HEIGHT;
+            let info = SkImageInfo::MakeN32Premul(TILE_WIDTH as i32, TILE_HEIGHT as i32);
+            let mut full_pixels = vec![0; FULL_WIDTH * FULL_HEIGHT * 4];
+            let mut full = RasterTarget::new(
+                &mut full_pixels,
+                FULL_WIDTH as i32,
+                FULL_HEIGHT as i32,
+                FULL_WIDTH * 4,
+                PixelFormat::Bgra8888,
+                None,
+            )
+            .unwrap();
+            let mut compact_pixels = vec![0; TILE_WIDTH * TILE_HEIGHT * 4];
+            let mut compact = RasterTarget::new(
+                &mut compact_pixels,
+                TILE_WIDTH as i32,
+                TILE_HEIGHT as i32,
+                TILE_WIDTH * 4,
+                PixelFormat::Bgra8888,
+                None,
+            )
+            .unwrap();
+            let mut full_tile = vec![0; TILE_WIDTH * TILE_HEIGHT * 4];
+            let mut compact_tile = vec![0; TILE_WIDTH * TILE_HEIGHT * 4];
+
+            for origin_y in 0..=MAX_SCROLL_Y {
+                full.set_matrix(SkMatrix::I());
+                let save = full.save();
+                full.clip_rect(
+                    &SkRect::MakeXYWH(
+                        ORIGIN_X as f32,
+                        origin_y as f32,
+                        TILE_WIDTH as f32,
+                        TILE_HEIGHT as f32,
+                    ),
+                    SkClipOp::kIntersect,
+                    false,
+                );
+                full.clear(0).unwrap();
+                full.restore_to_count(save).unwrap();
+                draw(&mut full, ORIGIN_X, origin_y);
+                assert!(full
+                    .read_pixels(&info, &mut full_tile, TILE_WIDTH * 4, ORIGIN_X, origin_y,)
+                    .unwrap());
+
+                compact.set_matrix(SkMatrix::I());
+                compact.set_raster_phase_origin(ORIGIN_X, origin_y);
+                compact.clear(0).unwrap();
+                {
+                    let content =
+                        Rect::new(ORIGIN_X, origin_y, TILE_WIDTH as i32, TILE_HEIGHT as i32);
+                    let mut canvas = TranslatedCanvas::new(&mut compact, false, 1.0);
+                    PrepareRasterPlayback(&mut canvas, &content, &content, false).unwrap();
+                    draw(canvas.target, ORIGIN_X, origin_y);
+                    canvas.unwind_to_depth(0);
+                    canvas.finish_replay().unwrap();
+                }
+                assert!(compact
+                    .read_pixels(&info, &mut compact_tile, TILE_WIDTH * 4, 0, 0)
+                    .unwrap());
+                assert_eq!(
+                    compact_tile, full_tile,
+                    "production playback phase mismatch at GitHub scroll origin y={origin_y}"
+                );
+            }
+
+            compact.finish().unwrap();
+            full.finish().unwrap();
+        }
+
+        // Production playback of the actual GitHub y=2600 tile. Chrome's
+        // captured source pixel is straight RGBA (222,226,224,115), which is
+        // premultiplied BGRA [101,102,100,115]. This includes RasterSource's
+        // tile clip plus the record's independent -526px translation.
+        const GITHUB_WIDTH: usize = 256;
+        const GITHUB_HEIGHT: usize = 256;
+        let mut github = vec![0; GITHUB_WIDTH * GITHUB_HEIGHT * 4];
+        let mut github_target = RasterTarget::new(
+            &mut github,
+            GITHUB_WIDTH as i32,
+            GITHUB_HEIGHT as i32,
+            GITHUB_WIDTH * 4,
+            PixelFormat::Bgra8888,
+            None,
+        )
+        .unwrap();
+        github_target.set_raster_phase_origin(508, 2540);
+        {
+            let content = Rect::new(508, 2540, GITHUB_WIDTH as i32, GITHUB_HEIGHT as i32);
+            let mut canvas = TranslatedCanvas::new(&mut github_target, false, 1.0);
+            PrepareRasterPlayback(&mut canvas, &content, &content, false).unwrap();
+            canvas.target.translate(0.0, -526.0);
+            let boundary =
+                SkRRect::MakeRectXY(&SkRect::MakeLTRB(211.5, 2886.5, 557.5, 3111.5), 7.5, 7.5);
+            let mut fill = SkPaint::default();
+            fill.setColor4f(
+                &SkColor4f {
+                    fR: 1.0,
+                    fG: 1.0,
+                    fB: 1.0,
+                    fA: 1.0,
+                },
+                None,
+            );
+            fill.setAntiAlias(true);
+            let mut border = SkPaint::default();
+            border.setColor4f(
+                &SkColor4f {
+                    fR: 210.0 / 255.0,
+                    fG: 217.0 / 255.0,
+                    fB: 212.0 / 255.0,
+                    fA: 1.0,
+                },
+                None,
+            );
+            border.setAntiAlias(true);
+            border.setStyle(Style::kStroke_Style);
+            border.setStrokeWidth(1.0);
+            unsafe {
+                canvas.target.draw_rrect(&boundary, &fill).unwrap();
+                canvas.target.draw_rrect(&boundary, &border).unwrap();
+            }
+            canvas.unwind_to_depth(0);
+            canvas.finish_replay().unwrap();
+        }
+        github_target.finish().unwrap();
+        let github_pixel = (43 * GITHUB_WIDTH + 47) * 4;
+        assert_eq!(
+            &github[github_pixel..github_pixel + 4],
+            &[101, 102, 100, 115]
+        );
+    }
+
+    #[test]
     fn partial_transparent_playback_preserves_clean_pixels() {
         let mut pixels = vec![u8::MAX; 8 * 8 * 4];
         let mut target = RasterTarget::new(&mut pixels, 8, 8, 8 * 4, PixelFormat::Rgba8888, None)
@@ -6622,6 +8417,106 @@ mod tests {
     }
 
     #[test]
+    fn decoration_skip_ink_clips_descenders_from_all_fallback_runs() {
+        static FONT: &[u8] = include_bytes!("../../../../assets/fonts/Roboto-Regular.ttf");
+        let render = |skip_ink| {
+            let mut pixels = vec![0; 128 * 112 * 4];
+            let mut target =
+                RasterTarget::new(&mut pixels, 128, 112, 128 * 4, PixelFormat::Rgba8888, None)
+                    .expect("decoration target");
+            {
+                let resources = ResourceContext {
+                    resources: Some(command::ResourceCatalog {
+                        fonts: vec![command::FontFace {
+                            family: "Roboto",
+                            resolved_family: "Roboto",
+                            weight: 400.,
+                            italic: false,
+                            bytes: FONT,
+                            bytes_owner: None,
+                            face_index: 0,
+                            variations: Vec::new(),
+                        }]
+                        .into(),
+                        images: Vec::new(),
+                    }),
+                };
+                let descender_run = |x| command::TextInkSkipRun {
+                    font_face_index: 0,
+                    font_size: 64.0,
+                    baseline: 64.0,
+                    // Roboto's lowercase p. Glyph IDs and positions are the
+                    // already-shaped paint input, not raster-time text.
+                    glyphs: vec![command::PaintGlyph {
+                        id: 84,
+                        offset: command::Offset { x, y: 0.0 },
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                let mut canvas = TranslatedCanvas::new(&mut target, false, 1.0);
+                canvas.execute(
+                    &DrawCommand {
+                        r#type: CommandKind::kDrawRect,
+                        rect: command::PaintRect {
+                            x: 0.0,
+                            y: 90.0,
+                            width: 128.0,
+                            height: 1.0,
+                        },
+                        color: command::Color {
+                            red: 0.0,
+                            green: 0.0,
+                            blue: 0.0,
+                            alpha: 1.0,
+                        },
+                        antialias: false,
+                        is_text_decoration: true,
+                        decoration_thickness: 1.0,
+                        skip_ink,
+                        decoration_ink_bounds: Some(command::PaintRect {
+                            x: 0.0,
+                            y: 90.0,
+                            width: 128.0,
+                            height: 1.0,
+                        }),
+                        decoration_ink_baseline: 88.0,
+                        decoration_text_origin: command::Offset { x: 16.0, y: 24.0 },
+                        decoration_text_fit_scale: 1.0,
+                        // Two selected-face runs exercise the fallback-run
+                        // loop even though this fixture uses one font file.
+                        decoration_ink_runs: vec![descender_run(0.0), descender_run(48.0)],
+                        ..Default::default()
+                    },
+                    &resources,
+                );
+                canvas.finish_replay().expect("finish decoration replay");
+            }
+            target.finish().expect("finish decoration target");
+            pixels
+        };
+
+        let unbroken = render(command::TextDecorationSkipInk::kNone);
+        let skipped = render(command::TextDecorationSkipInk::kAuto);
+        let covered = |pixels: &[u8]| pixels.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
+        assert_eq!(covered(&unbroken), 128);
+        assert!(
+            covered(&skipped) < covered(&unbroken),
+            "descender intercepts must create gaps in the decoration"
+        );
+        assert_ne!(
+            &unbroken[(90 * 128 + 25) * 4..(90 * 128 + 25) * 4 + 4],
+            &skipped[(90 * 128 + 25) * 4..(90 * 128 + 25) * 4 + 4],
+            "first fallback run must clip its descender"
+        );
+        assert_ne!(
+            &unbroken[(90 * 128 + 73) * 4..(90 * 128 + 73) * 4 + 4],
+            &skipped[(90 * 128 + 73) * 4..(90 * 128 + 73) * 4 + 4],
+            "second fallback run must clip its descender"
+        );
+    }
+
+    #[test]
     fn command_color_matrix_variants_build_filters() {
         let mut values = vec![0.0; 20];
         values[0] = 1.0;
@@ -6643,6 +8538,21 @@ mod tests {
                 .expect("explicit command color matrix")
                 .is_some());
         }
+    }
+
+    #[test]
+    fn svg_mask_linear_rgb_command_installs_srgb_to_linear_color_filter() {
+        assert!(command_paint(&DrawCommand::default(), false)
+            .getColorFilter()
+            .is_none());
+        let filtered = command_paint(
+            &DrawCommand {
+                apply_srgb_to_linear_color_filter: true,
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(filtered.getColorFilter().is_some());
     }
 
     #[test]
@@ -6695,4 +8605,188 @@ mod tests {
                 .is_some());
         }
     }
+}
+
+/// Image::AsSkBitmapForCurrentFrame with display orientation. Existing bitmap
+/// bytes are retained directly when no conversion is needed; SVG recordings
+/// enter this same canonical Canvas receiver through RasterizeDocumentImageBitmap.
+pub fn ImageBitmapRespectingOrientation(
+    image: &image_resource::PaintImage,
+) -> io::Result<image_resource::ImmutableImageBitmap> {
+    use image_resource::{ImageOrientation as SourceOrientation, PaintImageAlphaType};
+    let source = image
+        .BitmapPixels()
+        .ok_or_else(|| io::Error::other("bitmap conversion requires bitmap producer"))?;
+    if image.orientation == SourceOrientation::kDefault
+        && image.alpha_type == PaintImageAlphaType::Unpremultiplied
+    {
+        return Ok(image_resource::ImmutableImageBitmap {
+            width: image.width,
+            height: image.height,
+            rgba8: source.clone(),
+        });
+    }
+    let row_bytes = image.width as usize * 4;
+    let mut straight = if image.alpha_type == PaintImageAlphaType::Premultiplied {
+        let source_info = SkImageInfo::MakeWithColorSpace(
+            image.width as i32,
+            image.height as i32,
+            SkColorType::kRGBA_8888_SkColorType,
+            SkAlphaType::kPremul_SkAlphaType,
+            None,
+        );
+        let target_info = SkImageInfo::MakeWithColorSpace(
+            image.width as i32,
+            image.height as i32,
+            SkColorType::kRGBA_8888_SkColorType,
+            SkAlphaType::kUnpremul_SkAlphaType,
+            None,
+        );
+        let mut pixels = vec![0; source.len()];
+        let converted = unsafe {
+            SkConvertPixels(
+                &target_info,
+                pixels.as_mut_ptr(),
+                row_bytes,
+                &source_info,
+                source.as_ptr(),
+                row_bytes,
+            )
+        }
+        .map_err(|error| raster_error("cursor image alpha conversion failed", error))?;
+        if !converted {
+            return Err(io::Error::other(
+                "cursor image alpha conversion rejected its layout",
+            ));
+        }
+        pixels
+    } else {
+        source.as_ref().clone()
+    };
+    let orientation = match image.orientation {
+        SourceOrientation::kDefault => ImageOrientation::kDefault,
+        SourceOrientation::kFlipHorizontal => ImageOrientation::kFlipHorizontal,
+        SourceOrientation::kRotate180 => ImageOrientation::kRotate180,
+        SourceOrientation::kFlipVertical => ImageOrientation::kFlipVertical,
+        SourceOrientation::kTranspose => ImageOrientation::kTranspose,
+        SourceOrientation::kRotate90 => ImageOrientation::kRotate90,
+        SourceOrientation::kTransverse => ImageOrientation::kTransverse,
+        SourceOrientation::kRotate270 => ImageOrientation::kRotate270,
+    };
+    let (pixels, width, height) = orient_image_pixels(
+        std::mem::take(&mut straight),
+        image.width as usize,
+        image.height as usize,
+        orientation,
+    )?;
+    Ok(image_resource::ImmutableImageBitmap {
+        width: width as u32,
+        height: height as u32,
+        rgba8: Arc::new(pixels),
+    })
+}
+
+/// SVGImageForContainer's immutable current-frame paint record is replayed by
+/// the normal raster owner. Cursor selection never owns a Canvas or raster loop.
+pub fn RasterizeDocumentImageBitmap(
+    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    width: u32,
+    height: u32,
+) -> io::Result<image_resource::ImmutableImageBitmap> {
+    let scale = (
+        if record.record_size.width == 0 {
+            1.0
+        } else {
+            f64::from(width) / f64::from(record.record_size.width)
+        },
+        if record.record_size.height == 0 {
+            1.0
+        } else {
+            f64::from(height) / f64::from(record.record_size.height)
+        },
+    );
+    let pixels = rasterize_paint_artifact_xy(&record.artifact, width, height, scale, true)?;
+    ImageBitmapRespectingOrientation(&image_resource::PaintImage {
+        width,
+        height,
+        alpha_type: image_resource::PaintImageAlphaType::Premultiplied,
+        content: image_resource::PaintImageContent::Bitmap(Arc::new(pixels)),
+        ..Default::default()
+    })
+}
+
+/// Image::ResizeAndOrientImage's SVG PaintImage branch. Rasterize the original
+/// scalable record directly at its clamped output size; never allocate an
+/// intrinsic/container-sized intermediate bitmap. The final image paint's
+/// opacity applies once to the completed record, not once per display item.
+pub fn RasterizeDocumentDragImage(
+    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    source_size: (u32, u32),
+    scale: (f32, f32),
+    opacity: f32,
+) -> io::Result<Option<image_resource::ImmutableImageBitmap>> {
+    let width = (source_size.0 as f32 * scale.0) as u32;
+    let height = (source_size.1 as f32 * scale.1) as u32;
+    if width == 0 || height == 0 || record.record_size.width == 0 || record.record_size.height == 0
+    {
+        return Ok(None);
+    }
+    let pixels = rasterize_paint_artifact_xy(
+        &record.artifact,
+        width,
+        height,
+        (
+            f64::from(width) / f64::from(record.record_size.width),
+            f64::from(height) / f64::from(record.record_size.height),
+        ),
+        true,
+    )?;
+    // Reuse the original source Canvas image paint for its quantized opacity;
+    // the intermediate is already clamped, never the full source container.
+    ResizeAndOrientDragImage(
+        &image_resource::PaintImage {
+            width,
+            height,
+            alpha_type: image_resource::PaintImageAlphaType::Premultiplied,
+            content: image_resource::PaintImageContent::Bitmap(Arc::new(pixels)),
+            ..Default::default()
+        },
+        true,
+        (1., 1.),
+        opacity,
+        false,
+    )
+}
+
+/// Cached SVG drag image: preserve Create's current-frame bitmap until the
+/// following source ImageOperations resize, including its premultiplied alpha.
+pub fn ScaleDocumentDragImage(
+    record: &paint::paint_engine::DocumentPaintArtifactRecord,
+    size: (u32, u32),
+    scale: f32,
+) -> io::Result<Option<image_resource::ImmutableImageBitmap>> {
+    if size.0 == 0 || size.1 == 0 || record.record_size.width == 0 || record.record_size.height == 0
+    {
+        return Ok(None);
+    }
+    let pixels = rasterize_paint_artifact_xy(
+        &record.artifact,
+        size.0,
+        size.1,
+        (
+            f64::from(size.0) / f64::from(record.record_size.width),
+            f64::from(size.1) / f64::from(record.record_size.height),
+        ),
+        true,
+    )?;
+    drag_image::ScaleDragPixels(
+        &image_resource::ImmutableImageBitmap {
+            width: size.0,
+            height: size.1,
+            rgba8: Arc::new(pixels),
+        },
+        image_resource::PaintImageAlphaType::Premultiplied,
+        scale,
+        false,
+    )
 }

@@ -22,6 +22,7 @@ pub use clip_text_outline::{
 pub use shared_font_bytes::SharedFontBytes;
 pub mod text;
 pub mod text_shaper;
+pub use text::implementation::word_break_iterator::{kTextBreakDone, WordBreakIterator};
 
 pub use text::implementation::hyphenation::{Hyphenation, HyphenationBackend};
 pub use text::implementation::hyphenation_services::{
@@ -140,3 +141,6 @@ pub fn AcceptDecodedWebFont(bytes: Vec<u8>) -> std::io::Result<std::sync::Arc<[u
         }
     }
 }
+
+pub mod plain_text_painter;
+pub mod string_truncator;

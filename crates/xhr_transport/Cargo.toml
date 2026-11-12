@@ -4,4 +4,5 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+resource = { path = "../resource" }
 http_transport = { path = "../http_transport" }

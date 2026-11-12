@@ -10,6 +10,13 @@ use super::{
 use crate::cc::layers::recording_source::RecordingSource;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartialRasterFullReplay {
+    pub outer: Rect,
+    pub inner: Rect,
+    pub replay_rect: Rect,
+}
+
 pub trait RecordingDisplayItemList<I>: Send + Sync {
     fn bounds(&self) -> Option<Rect>;
     fn NeedsAdditionalInvalidationForLCDText(&self, old: &Self) -> bool;

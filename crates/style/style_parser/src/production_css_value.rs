@@ -37,6 +37,42 @@ pub enum Unavailable {}
 // The parsed and computed style computed image values share one typed URL owner.
 pub use layoutng_style::css::css_url_data::{CSSUrlData, ProductionURL};
 
+// cpp: core/css/css_cursor_image_value.h:38-62; .cc:39-73.
+#[derive(Clone)]
+pub struct CSSCursorImageValue {
+    pub image_value: Rc<Value>,
+    pub hot_spot: foundation::Point,
+    pub hot_spot_specified: bool,
+}
+impl CSSValueSubclass for CSSCursorImageValue {
+    fn CustomCSSText(&self) -> String {
+        let image = self.image_value.CssText().Utf8();
+        if self.hot_spot_specified {
+            String::from(format!("{} {} {}", image, self.hot_spot.x(), self.hot_spot.y()).as_str())
+        } else {
+            String::from(image.as_str())
+        }
+    }
+    fn Equals(&self, other: &Self) -> bool {
+        self.hot_spot_specified == other.hot_spot_specified
+            && (!self.hot_spot_specified || self.hot_spot == other.hot_spot)
+            && self.image_value == other.image_value
+    }
+}
+pub fn cursor_image(
+    image_value: Rc<Value>,
+    hot_spot_specified: bool,
+    hot_spot: foundation::Point,
+) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kCursorImageClass(
+        CSSCursorImageValue {
+            image_value,
+            hot_spot_specified,
+            hot_spot,
+        },
+    )))
+}
+
 // cpp: css_identifier_value.h:43-57; css_identifier_value.cc:30-42
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CSSIdentifierValue(pub CSSValueID);
@@ -51,24 +87,6 @@ impl CSSValueSubclass for CSSIdentifierValue {
 impl CSSValueCustomHash for CSSIdentifierValue {
     fn CustomHash(&self) -> u32 {
         self.0 as u32
-    }
-}
-// cpp: css_numeric_literal_value.cc:222-323,397-412
-impl CSSValueSubclass for CSSNumericLiteralValue {
-    fn CustomCSSText(&self) -> String {
-        crate::media_query_exp::MediaQueryExpSerialization::CssText(self)
-    }
-    fn Equals(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-impl CSSValueCustomHash for CSSNumericLiteralValue {
-    fn CustomHash(&self) -> u32 {
-        let bits = self.DoubleValue().to_bits();
-        HashInts(
-            self.GetType() as u32,
-            HashInts((bits >> 32) as u32, bits as u32),
-        )
     }
 }
 // cpp: css_color.h:25-38; platform/graphics/color.cc:891-902,1022-1109.
@@ -185,9 +203,8 @@ pub struct CSSLightDarkValuePair {
 
 // cpp: css_color_mix_value.h:20-78; css_color_mix_value.cc:14-67.
 // Percentages remain typed CSS values so normalization happens at computed
-// value time. The production parser currently admits the default Oklab family
-// used by html.css; explicit interpolation spaces remain an honest parser
-// boundary until their computed style Color conversions are retained.
+// value time. The interpolation space and hue method are retained verbatim for
+// computed-value color conversion.
 pub struct CSSColorMixValue {
     pub color1: Rc<Value>,
     pub color2: Rc<Value>,
@@ -256,6 +273,35 @@ impl CSSValueSubclass for CSSColorMixValue {
     fn CustomCSSText(&self) -> String {
         let (percentage1, percentage2) = self.PercentageValuesForSerialization();
         let mut text = String::from("color-mix(");
+        text.push_str("in ");
+        text.push_str(match self.color_interpolation_space {
+            ColorSpace::kSRGB => "srgb",
+            ColorSpace::kSRGBLinear => "srgb-linear",
+            ColorSpace::kDisplayP3 => "display-p3",
+            ColorSpace::kHSL => "hsl",
+            ColorSpace::kHWB => "hwb",
+            ColorSpace::kA98RGB => "a98-rgb",
+            ColorSpace::kProPhotoRGB => "prophoto-rgb",
+            ColorSpace::kRec2020 => "rec2020",
+            ColorSpace::kLab => "lab",
+            ColorSpace::kLch => "lch",
+            ColorSpace::kOklab => "oklab",
+            ColorSpace::kOklch => "oklch",
+            ColorSpace::kXYZD50 => "xyz-d50",
+            ColorSpace::kXYZD65 => "xyz-d65",
+            _ => "oklab",
+        });
+        if Color::ColorSpaceHasHue(self.color_interpolation_space)
+            && self.hue_interpolation_method != HueInterpolationMethod::kShorter
+        {
+            text.push_str(match self.hue_interpolation_method {
+                HueInterpolationMethod::kShorter => " shorter hue",
+                HueInterpolationMethod::kLonger => " longer hue",
+                HueInterpolationMethod::kIncreasing => " increasing hue",
+                HueInterpolationMethod::kDecreasing => " decreasing hue",
+            });
+        }
+        text.push_str(", ");
         text.push_str(&self.color1.CssText().Utf8());
         if let Some(value) = percentage1 {
             text.push_str(" ");
@@ -300,6 +346,8 @@ pub fn color_mix(
     color2: Rc<Value>,
     percentage1: Option<Rc<Value>>,
     percentage2: Option<Rc<Value>>,
+    color_interpolation_space: ColorSpace,
+    hue_interpolation_method: HueInterpolationMethod,
 ) -> Rc<Value> {
     Rc::new(Value::new(CSSValuePayload::kColorMixClass(
         CSSColorMixValue {
@@ -307,8 +355,8 @@ pub fn color_mix(
             color2,
             percentage1,
             percentage2,
-            color_interpolation_space: ColorSpace::kOklab,
-            hue_interpolation_method: HueInterpolationMethod::kShorter,
+            color_interpolation_space,
+            hue_interpolation_method,
         },
     )))
 }
@@ -450,6 +498,9 @@ pub use grid_values::CSSGridTemplateAreasValue;
 pub struct CSSCustomIdentValue {
     pub name: foundation::AtomicString,
     pub property: CSSPropertyID,
+    // CSSCustomIdentValue(const ScopedCSSName&) preserves the original weak
+    // TreeScope identity. It does not populate a parsed name with a new scope.
+    pub tree_scope: foundation::WeakMember<foundation::TreeScope>,
 }
 impl CSSValueSubclass for CSSCustomIdentValue {
     fn CustomCSSText(&self) -> String {
@@ -463,7 +514,9 @@ impl CSSValueSubclass for CSSCustomIdentValue {
         }
     }
     fn Equals(&self, other: &Self) -> bool {
-        self.property == other.property && self.name == other.name
+        self.property == other.property
+            && self.name == other.name
+            && self.tree_scope == other.tree_scope
     }
 }
 impl CSSValueCustomHash for CSSCustomIdentValue {
@@ -493,11 +546,22 @@ pub fn custom_ident(name: &String, property: CSSPropertyID) -> Rc<Value> {
             foundation::AtomicString::default()
         },
         property,
+        tree_scope: foundation::WeakMember::default(),
     }));
     value
         .StateMut()
         .SetNeedsTreeScopePopulation(property == CSSPropertyID::kInvalid);
     Rc::new(value)
+}
+/// CSSCustomIdentValue(const ScopedCSSName&), css_custom_ident_value.cc:36-39.
+pub fn scoped_custom_ident(name: &foundation::ScopedCSSName) -> Rc<Value> {
+    Rc::new(Value::new(CSSValuePayload::kCustomIdentClass(
+        CSSCustomIdentValue {
+            name: name.GetName().clone(),
+            property: CSSPropertyID::kInvalid,
+            tree_scope: foundation::WeakMember::from_ptr(name.GetTreeScope().cast_mut()),
+        },
+    )))
 }
 // cpp: css_counter_content_value.h:42-119; .cc:14-70.
 // The document-root production path has no bound TreeScope. Keep the names
@@ -1565,6 +1629,7 @@ pub struct CSSUnparsedDeclarationValue {
     pub data: Rc<CSSVariableData>,
     pub mode: crate::css_parser_mode::CSSParserMode,
     pub base_url: ProductionURL,
+    pub resource_fetch_restriction: crate::css_resource_fetch_restriction::ResourceFetchRestriction,
 }
 impl CSSValueSubclass for CSSUnparsedDeclarationValue {
     fn CustomCSSText(&self) -> String {
@@ -1618,11 +1683,25 @@ pub fn unparsed_with_base(
     mode: crate::css_parser_mode::CSSParserMode,
     base_url: ProductionURL,
 ) -> Rc<Value> {
+    unparsed_with_context(
+        data,
+        mode,
+        base_url,
+        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
+    )
+}
+pub fn unparsed_with_context(
+    data: CSSVariableData,
+    mode: crate::css_parser_mode::CSSParserMode,
+    base_url: ProductionURL,
+    resource_fetch_restriction: crate::css_resource_fetch_restriction::ResourceFetchRestriction,
+) -> Rc<Value> {
     Rc::new(Value::new(CSSValuePayload::kUnparsedDeclarationClass(
         CSSUnparsedDeclarationValue {
             data: Rc::new(data),
             mode,
             base_url,
+            resource_fetch_restriction,
         },
     )))
 }
@@ -1716,9 +1795,9 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSBasicShapeRectValue = crate::production_effects_value::CSSBasicShapeRectValue;
     type CSSBasicShapeXYWHValue = crate::production_effects_value::CSSBasicShapeXYWHValue;
     type CSSPathValue = crate::production_effects_value::CSSPathValue;
-    type CSSShapeValue = UnavailableCSSValue;
+    type CSSShapeValue = crate::production_shape_value::CSSShapeValue;
     type CSSImageValue = CSSImageValue;
-    type CSSCursorImageValue = UnavailableCSSValue;
+    type CSSCursorImageValue = CSSCursorImageValue;
     type CSSCrossfadeValue = UnavailableCSSValue;
     type CSSPaintValue = UnavailableCSSValue;
     type CSSLinearGradientValue = CSSLinearGradientValue;
@@ -1767,7 +1846,7 @@ impl CSSValueDispatch for ProductionCSSValueDispatch {
     type CSSSuperellipseValue = crate::production_corner_value::CSSSuperellipseValue;
     type CSSSymbolsValue = UnavailableCSSValue;
     type CSSTriggerAttachmentValue = CSSTriggerAttachmentValue;
-    type CSSRepeatValue = UnavailableCSSValue;
+    type CSSRepeatValue = crate::production_repeat_value::CSSRepeatValue;
     type CSSValueList = CSSValueList;
     type CSSFunctionValue = CSSFunctionValue;
     type CSSImageSetValue = CSSImageSetValue;
@@ -1950,6 +2029,28 @@ impl CSSValueList {
             separator,
             scoped: std::cell::OnceCell::new(),
         }
+    }
+    // Source css_value_list.cc:35-39,98-117. Copies retain CSSValue owners.
+    pub fn Copy(&self) -> Self {
+        Self::new(self.values.clone(), self.separator)
+    }
+    pub fn HasValue(&self, value: &Value) -> bool {
+        self.values.iter().any(|item| item.as_ref() == value)
+    }
+    pub fn Append(&mut self, value: Rc<Value>) {
+        self.values.push(value);
+    }
+    // css_value_list.h:54-58; css_value_list.cc:65-72.
+    pub fn length(&self) -> usize {
+        self.values.len()
+    }
+    pub fn Item(&self, index: usize) -> &Rc<Value> {
+        &self.values[index]
+    }
+    pub fn RemoveAll(&mut self, value: &Value) -> bool {
+        let previous_length = self.values.len();
+        self.values.retain(|candidate| candidate.as_ref() != value);
+        self.values.len() != previous_length
     }
 }
 impl CSSValueSubclass for CSSValueList {
@@ -2267,9 +2368,34 @@ pub fn alternate(function_id: CSSValueID, aliases: Vec<Rc<Value>>) -> Rc<Value> 
     )))
 }
 
+/// PropertySetCSSStyleDeclaration's concrete retained mutable-set owner.
+/// The CSSOM facade and editing share this exact Rc and CSSValue allocations.
+pub struct ProductionCSSStyleDeclaration {
+    execution_context:
+        Option<Rc<crate::production_css_execution_context::ProductionCSSExecutionContext>>,
+    pub(crate) properties:
+        Rc<std::cell::RefCell<MutableCSSPropertyValueSet<ProductionCSSValueDispatch>>>,
+}
+impl ProductionCSSStyleDeclaration {
+    pub fn GetExecutionContext(
+        &self,
+    ) -> Option<Rc<crate::production_css_execution_context::ProductionCSSExecutionContext>> {
+        self.execution_context
+            .as_ref()
+            .filter(|context| !context.IsContextDestroyed())
+            .cloned()
+    }
+    pub fn PropertySetOwner(
+        &self,
+    ) -> Rc<std::cell::RefCell<MutableCSSPropertyValueSet<ProductionCSSValueDispatch>>> {
+        self.properties.clone()
+    }
+}
+
 impl CSSPropertyValueSetBackend for ProductionCSSValueDispatch {
-    type CSSStyleDeclaration = Unavailable;
-    type ExecutionContext = Unavailable;
+    type CSSStyleDeclaration = ProductionCSSStyleDeclaration;
+    type ExecutionContext =
+        Rc<crate::production_css_execution_context::ProductionCSSExecutionContext>;
 
     fn ShorthandForProperty(id: CSSPropertyID) -> Vec<CSSPropertyID> {
         style_model::property_metadata::ShorthandFor(id).to_vec()
@@ -2283,37 +2409,40 @@ impl CSSPropertyValueSetBackend for ProductionCSSValueDispatch {
             .IsInSameLogicalPropertyGroupWithDifferentMappingLogic(b)
     }
 
-    fn SerializeShorthand(_set: &CSSPropertyValueSet<Self>, _id: CSSPropertyID) -> String {
-        panic!("production CSS declaration serialization is unavailable")
+    fn SerializeShorthand(set: &CSSPropertyValueSet<Self>, id: CSSPropertyID) -> String {
+        crate::style_property_serializer::StylePropertySerializer::new(set).SerializeShorthand(id)
     }
 
-    fn AsText(_set: &CSSPropertyValueSet<Self>) -> String {
-        panic!("production CSS declaration text serialization is unavailable")
+    fn AsText(set: &CSSPropertyValueSet<Self>) -> String {
+        crate::style_property_serializer::StylePropertySerializer::new(set).AsText()
     }
 
     fn CreateIdentifier(id: CSSValueID) -> Rc<CSSValue<Self>> {
         identifier(id)
     }
 
-    fn DeclarationPropertyValueSet(
-        _style: &Self::CSSStyleDeclaration,
-    ) -> Option<&CSSPropertyValueSet<Self>> {
-        panic!("production CSS declaration property access is unavailable")
+    fn DeclarationWithPropertyValueSet<R>(
+        style: &Self::CSSStyleDeclaration,
+        read: impl FnOnce(Option<&CSSPropertyValueSet<Self>>) -> R,
+    ) -> R {
+        let set = style.properties.borrow();
+        read(Some(&set))
     }
-
     fn DeclarationPropertyMatches(
-        _style: &Self::CSSStyleDeclaration,
-        _id: CSSPropertyID,
-        _value: &CSSValue<Self>,
+        style: &Self::CSSStyleDeclaration,
+        id: CSSPropertyID,
+        value: &CSSValue<Self>,
     ) -> bool {
-        panic!("production CSS declaration matching is unavailable")
+        style.properties.borrow().PropertyMatches(id, value)
     }
-
     fn NewCSSStyleDeclaration(
-        _context: Option<&Self::ExecutionContext>,
-        _set: &MutableCSSPropertyValueSet<Self>,
+        context: Option<&Self::ExecutionContext>,
+        set: Rc<std::cell::RefCell<MutableCSSPropertyValueSet<Self>>>,
     ) -> Rc<Self::CSSStyleDeclaration> {
-        panic!("production CSS declaration construction is unavailable")
+        Rc::new(ProductionCSSStyleDeclaration {
+            properties: set,
+            execution_context: context.cloned(),
+        })
     }
 }
 

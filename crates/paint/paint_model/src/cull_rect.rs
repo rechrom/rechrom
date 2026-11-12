@@ -555,8 +555,8 @@ pub fn LocalPixelDistanceToExpand(is_small_scroller: bool, expansion_ratio: f64)
 
 /// Source: `cull_rect.cc:158-244`.
 ///
-/// Coordinates are in scrolling-content space. Property-tree mapping back to
-/// root space remains the updater's responsibility.
+/// Coordinates are in scrolling-content space and remain there when retained
+/// on FragmentData; callers map only while crossing a property-state boundary.
 pub fn ApplyScrollExpansion(
     container_rect: PaintRect,
     contents_rect: PaintRect,
@@ -799,6 +799,7 @@ mod tests {
             lifecycle: Default::default(),
             id: 1,
             owner_client_id: 1,
+            owner_node_id: 0,
             parent: root.transform.scroll.clone(),
             overflow_clip: Some(overflow_clip.clone()),
             container_rect: container,

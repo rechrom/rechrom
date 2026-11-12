@@ -31,7 +31,7 @@ pub(super) fn ExportBoxInkOverflow(fragment: &PhysicalBoxFragment, paint: &mut P
     }
     if !fragment.GetLayoutObject().is_null() {
         let scrolled = fragment.PixelSnappedScrolledContentOffset();
-        paint.hit_test_scrolled_content_offset = Offset {
+        paint.pixel_snapped_scrolled_content_offset = Offset {
             x: scrolled.x() as f64,
             y: scrolled.y() as f64,
         };

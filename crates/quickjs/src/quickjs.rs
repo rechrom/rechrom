@@ -13,6 +13,7 @@ use core::{
 include!("quickjs_malloc.rs");
 include!("quickjs_types.rs");
 include!("quickjs_execution_types.rs");
+include!("quickjs_continuation_data.rs");
 include!("quickjs_atoms.rs");
 include!("quickjs_mp.rs");
 include!("quickjs_classes.rs");
@@ -170,6 +171,7 @@ include!("quickjs_compiler_debug_module.rs");
 include!("quickjs_parser_debug_dump_token.rs");
 include!("quickjs_memory_usage.rs");
 include!("quickjs_public_exports.rs");
+include!("quickjs_structured_clone.rs");
 include!("quickjs_dormant_intrinsics.rs");
 include!("quickjs_dormant_objects.rs");
 #[cfg(test)]
@@ -189,3 +191,5 @@ mod full_runtime_tests;
 #[cfg(test)]
 #[path = "../tests/quickjs_force_gc_differential.rs"]
 mod force_gc_tests;
+
+include!("quickjs_exception_message.rs");

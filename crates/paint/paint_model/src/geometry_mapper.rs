@@ -591,18 +591,21 @@ pub fn ResolveLocalTransformAroundReferenceBox(
     // FragmentPaintPropertyTreeBuilder::UpdateForPaintOffsetTranslation
     //
     // Blink puts the rounded portion in PaintOffsetTranslation and retains
-    // the residual as the Transform node's local paint offset. This flat
-    // replay matrix has no separate parent node, so use their exact sum here.
-    // Rounding again would discard subpixel accumulation (for example moving
-    // a transformed box at x=623.5 to x=624).
+    // the residual in the transform node's local coordinate space. This flat
+    // replay matrix has no separate origin field, so apply the transform
+    // around the full local pivot. In particular an identity transform must
+    // remain identity: leaving the residual only on the leading translation
+    // would apply it once here and again in the recorded drawing coordinates.
+    // Rounding the pivot would instead discard subpixel accumulation.
+    let pivot = Offset {
+        x: parent_space_offset.x + local_origin.x,
+        y: parent_space_offset.y + local_origin.y,
+    };
     MultiplyTransforms(
-        &TranslationTransform(
-            parent_space_offset.x + local_origin.x,
-            parent_space_offset.y + local_origin.y,
-        ),
+        &TranslationTransform(pivot.x, pivot.y),
         &MultiplyTransforms(
             &resolved_transform,
-            &TranslationTransform(-local_origin.x, -local_origin.y),
+            &TranslationTransform(-pivot.x, -pivot.y),
         ),
     )
 }
@@ -615,4 +618,76 @@ pub fn MapRectToRoot(rect: PaintRect, transforms: &[TransformMatrix]) -> Option<
 // cpp: paint/geometry_mapper.h:234-238
 pub fn MapRectFromRoot(rect: PaintRect, transforms: &[TransformMatrix]) -> Option<PaintRect> {
     MapRectWithTransforms(rect, transforms, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_near(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn identity_local_transform_does_not_repeat_fractional_paint_offset() {
+        let matrix = ResolveLocalTransformAroundReferenceBox(
+            &PaintTransform::from_matrix(&TransformMatrix::default()),
+            Offset {
+                x: 0.453125,
+                y: 0.3125,
+            },
+            TransformReferenceRect {
+                offset: Offset::default(),
+                size: Size {
+                    width: 84.4375,
+                    height: 67.0,
+                },
+            },
+            None,
+        );
+
+        assert_eq!(matrix, TransformMatrix::default());
+    }
+
+    #[test]
+    fn nonidentity_local_transform_keeps_fractional_offset_in_its_pivot() {
+        let mut scale = TransformMatrix::default();
+        scale.values[0] = 2.0;
+        scale.values[5] = 3.0;
+        let matrix = ResolveLocalTransformAroundReferenceBox(
+            &PaintTransform::from_matrix(&scale),
+            Offset { x: 0.25, y: 0.5 },
+            TransformReferenceRect {
+                offset: Offset::default(),
+                size: Size {
+                    width: 100.0,
+                    height: 50.0,
+                },
+            },
+            Some(&PaintTransformOrigin {
+                pixels: Offset { x: 10.0, y: 20.0 },
+                percentages: Offset::default(),
+                z: 0.0,
+            }),
+        );
+        let pivot = Offset { x: 10.25, y: 20.5 };
+        let mapped_pivot = MapPointWithTransform(pivot, &matrix, false).unwrap();
+        assert_near(mapped_pivot.x, pivot.x);
+        assert_near(mapped_pivot.y, pivot.y);
+
+        let mapped = MapPointWithTransform(
+            Offset {
+                x: pivot.x + 4.0,
+                y: pivot.y + 5.0,
+            },
+            &matrix,
+            false,
+        )
+        .unwrap();
+        assert_near(mapped.x, pivot.x + 8.0);
+        assert_near(mapped.y, pivot.y + 15.0);
+    }
 }

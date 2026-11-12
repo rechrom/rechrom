@@ -25,6 +25,14 @@ pub trait FontFallbackSource {
     fn WillUseFontData(&self, _text: &[u16], _fallback: bool) {}
     fn Trace(&self, _visitor: &mut Visitor<'_>) {}
     fn ReportMissing(&self, _text: &[u16], _priority: FontFallbackPriority) {}
+    /// Generation of the live fallback answer set used by shaping. Chromium
+    /// normally changes Font/SimpleFontData identity when FontCache answers
+    /// change. A source that updates contextual ranks in place must expose the
+    /// equivalent generation so a provisional .notdef result cannot survive
+    /// in NGShapeCache after the host answer arrives.
+    fn ShapeCacheRevision(&self) -> u64 {
+        0
+    }
     /// Query-specific ranks without platform I/O. None uses the caller's
     /// static catalog; a missing rank excludes a host face from this query.
     /// usize::MAX keeps caller-owned fallback eligible under metadata ranking.
@@ -46,6 +54,7 @@ pub struct Font {
     fallback_fonts_: Vec<Member<SimpleFontData>>,
     fallback_metadata_: Vec<FontFallbackMetadata>,
     font_group_length_: usize,
+    can_shape_word_by_word_: std::cell::Cell<Option<bool>>,
     fallback_source_: Option<Rc<dyn FontFallbackSource>>,
 }
 
@@ -59,6 +68,7 @@ impl Default for Font {
             fallback_fonts_: Vec::new(),
             fallback_metadata_: Vec::new(),
             font_group_length_: 0,
+            can_shape_word_by_word_: std::cell::Cell::new(None),
             fallback_source_: None,
         }
     }
@@ -95,6 +105,7 @@ impl Font {
             fallback_fonts_: vec![member],
             fallback_metadata_: vec![FontFallbackMetadata::default()],
             font_group_length_: 1,
+            can_shape_word_by_word_: std::cell::Cell::new(None),
             fallback_source_: None,
         }
     }
@@ -152,6 +163,7 @@ impl Font {
             fallback_fonts_: fallback_fonts,
             fallback_metadata_: fallback_metadata.to_vec(),
             font_group_length_: font_group_length,
+            can_shape_word_by_word_: std::cell::Cell::new(None),
             fallback_source_: None,
         }
     }
@@ -174,6 +186,7 @@ impl Font {
             primary_font_: Member::from_ptr(primary_font.cast_mut()),
             fallback_metadata_: fallback_metadata.to_vec(),
             font_group_length_: font_group_length,
+            can_shape_word_by_word_: std::cell::Cell::new(None),
             fallback_source_: Some(source),
             ..Self::default()
         }
@@ -182,6 +195,7 @@ impl Font {
     pub fn CloneWithDescription(&self, description: FontDescription) -> Self {
         let mut result = self.clone();
         result.font_description_ = description;
+        result.can_shape_word_by_word_.set(None);
         result
     }
 
@@ -212,6 +226,12 @@ impl Font {
         if let Some(source) = &self.fallback_source_ {
             source.ReportMissing(text, priority);
         }
+    }
+
+    pub fn ShapeCacheRevision(&self) -> u64 {
+        self.fallback_source_
+            .as_ref()
+            .map_or(0, |source| source.ShapeCacheRevision())
     }
 
     pub(crate) fn SystemFallbackRanks(
@@ -406,11 +426,45 @@ impl Font {
 
     // cpp: font_engine/fonts/font_services.cc:97-101
     pub fn CanShapeWordByWord(&self) -> bool {
-        false
+        // FontFallbackList::ComputeCanShapeWordByWord, cc264-286.
+        if let Some(value) = self.can_shape_word_by_word_.get() {
+            return value;
+        }
+        let features = self.font_description_.GetTypesettingFeatures();
+        let value = if features == 0 {
+            true
+        } else {
+            let mut primary = self.PrimaryFont();
+            let mut load_custom = true;
+            for index in 0..self.FontGroupLength() {
+                let candidate = self.FontDataAt(index);
+                let Some(data) = (unsafe { candidate.as_ref() }) else {
+                    break;
+                };
+                if !data.IsLoadingFallback() {
+                    primary = candidate;
+                    break;
+                }
+                if load_custom {
+                    load_custom = false;
+                    if let Some(custom) = data.GetCustomFontData() {
+                        custom.BeginLoadIfNeeded();
+                    }
+                }
+            }
+            unsafe { primary.as_ref() }.is_some_and(|primary| {
+                !primary
+                    .PlatformData()
+                    .HasSpaceInLigaturesOrKerning(features)
+            })
+        };
+        self.can_shape_word_by_word_.set(Some(value));
+        value
     }
 
-    // cpp: font_engine/fonts/font_services.cc:103-109
-    pub fn SetCanShapeWordByWordForTesting(&mut self, _value: bool) {}
+    pub fn SetCanShapeWordByWordForTesting(&mut self, value: bool) {
+        self.can_shape_word_by_word_.set(Some(value));
+    }
     pub fn NullifyPrimaryFontForTesting(&mut self) {
         self.primary_font_.Clear();
     }

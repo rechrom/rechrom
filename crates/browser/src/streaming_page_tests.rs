@@ -50,8 +50,11 @@ impl URLLoader for Loader {
         )))
     }
 }
-struct Client(Rc<Cell<usize>>);
+struct Client(Rc<Cell<usize>>, crate::page::PageChromeState);
 impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: crate::page::EventHandlerChromeEffect) {
+        self.1.Apply(effect);
+    }
     fn DidFinishLoad(&mut self) {
         self.0.set(self.0.get() + 1);
     }
@@ -77,7 +80,10 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
         crate::CreateBrowserConstraints(320, 200),
         scripts,
-        Some(Rc::new(RefCell::new(Client(finished.clone())))),
+        Some(Rc::new(RefCell::new(Client(
+            finished.clone(),
+            Default::default(),
+        )))),
     );
     (page, body, resources, finished)
 }
@@ -196,7 +202,10 @@ fn module_graph_waits_yield_frames_and_async_defer_order_matches_browser_rules()
         let (mut page, body, resources, finished) = create(true);
         let wakes = compilation_wakes(&mut page);
         body.borrow_mut().extend([response(), URLLoadEvent::Data(br#"<body><p id=early>Early</p>
-            <script>globalThis.order=[]; document.addEventListener('DOMContentLoaded',()=>order.push('dom'));</script>
+            <script>globalThis.order=[];
+              document.addEventListener('DOMContentLoaded',()=>order.push('dom:'+document.readyState));
+              window.addEventListener('load',()=>order.push('load:'+document.readyState));
+            </script>
             <script type=module>import {x} from './dep.js'; order.push('module:'+x);</script>
             <script defer src='./defer.js'></script>
             <script async type=module>order.push('async');</script>
@@ -239,7 +248,7 @@ fn module_graph_waits_yield_frames_and_async_defer_order_matches_browser_rules()
         finish(&mut page);
         assert!(has_id(&page, "late"));
         assert_eq!(finished.get(), 1);
-        assert_script(&mut page, "if(JSON.stringify(order)!=='[\"async\",\"module:7\",\"defer\",\"second-inline\",\"dom\"]') throw Error(order);");
+        assert_script(&mut page, "if(JSON.stringify(order)!=='[\"async\",\"module:7\",\"defer\",\"second-inline\",\"dom:interactive\",\"load:complete\"]' || document.readyState!=='complete') throw Error(order+' '+document.readyState);");
     });
 }
 #[test]

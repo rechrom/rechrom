@@ -243,6 +243,7 @@ version = "0.0.1"
 dependencies = [
  "animation",
  "browser_tracing",
+ "canvas",
  "compositor",
  "cssom",
  "decode",
@@ -250,12 +251,17 @@ dependencies = [
  "document_image",
  "document_loader",
  "dom",
+ "event_loop",
  "executor",
+ "fileapi",
  "font_engine",
+ "getrandom 0.4.3",
  "html",
+ "icu_bidi",
  "image_decoder",
  "image_resource",
  "interaction",
+ "intersection_observer",
  "javascript",
  "layout_algo_block",
  "layout_algo_flex",
@@ -272,15 +278,21 @@ dependencies = [
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
+ "navigation_history",
  "open",
  "page_mutation",
  "paint",
+ "paint_skia",
  "raster",
  "renderer",
  "renderer_skia",
+ "resize_observer",
  "resource",
+ "scroll_animation",
+ "serde_json",
  "style",
  "url",
+ "url_formatter",
  "url_loader",
  "viz",
  "web_font",
@@ -378,6 +390,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas"
+version = "0.0.1"
+dependencies = [
+ "layoutng_foundation",
+]
+
+[[package]]
 name = "cc"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -457,6 +476,7 @@ name = "compositor"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "compositor_animation",
  "compositor_draw",
  "compositor_frame",
@@ -468,8 +488,13 @@ dependencies = [
  "compositor_tile",
  "compositor_tree",
  "getrandom 0.4.3",
+ "image_decoder",
+ "layoutng_assembly",
  "layoutng_foundation",
  "paint",
+ "paint_model",
+ "paint_skia",
+ "scroll_animation",
  "serde_json",
  "skia",
 ]
@@ -481,6 +506,7 @@ dependencies = [
  "browser_tracing",
  "compositor_scheduler",
  "compositor_tree",
+ "scroll_animation",
 ]
 
 [[package]]
@@ -510,6 +536,7 @@ dependencies = [
  "compositor_animation",
  "compositor_scheduler",
  "compositor_tree",
+ "scroll_snap",
 ]
 
 [[package]]
@@ -546,6 +573,7 @@ dependencies = [
  "compositor_draw",
  "compositor_tile",
  "compositor_tree",
+ "scroll_animation",
 ]
 
 [[package]]
@@ -564,6 +592,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "paint_model",
+ "scroll_snap",
 ]
 
 [[package]]
@@ -858,6 +887,7 @@ dependencies = [
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
+ "layoutng_style",
  "paint",
  "style",
 ]
@@ -870,7 +900,10 @@ dependencies = [
  "cssom",
  "decode",
  "dom",
+ "fetch_policy",
+ "fileapi",
  "font_engine",
+ "getrandom 0.4.3",
  "html",
  "image_decoder",
  "image_resource",
@@ -878,9 +911,12 @@ dependencies = [
  "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
+ "navigation_history",
  "page_mutation",
  "resource",
  "style",
+ "style_parser",
+ "url",
  "url_loader",
 ]
 
@@ -888,18 +924,29 @@ dependencies = [
 name = "dom"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
  "browser_tracing",
+ "canvas",
  "css_parser",
  "cssom",
+ "fileapi",
  "font_engine",
+ "getrandom 0.4.3",
  "html",
  "image_resource",
+ "intersection_observer",
  "layout_algo_block",
  "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_style",
+ "navigation_history",
+ "resize_observer",
+ "sfv",
+ "sha2",
  "style",
+ "style_parser",
+ "url",
 ]
 
 [[package]]
@@ -1026,6 +1073,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1048,6 +1104,9 @@ version = "0.0.1"
 [[package]]
 name = "executor"
 version = "0.0.1"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "exr"
@@ -1087,6 +1146,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fetch_policy"
+version = "0.0.1"
+dependencies = [
+ "layoutng_foundation",
+ "url",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1101,6 +1168,14 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "fileapi"
+version = "0.0.1"
+dependencies = [
+ "encoding_rs",
+ "layoutng_foundation",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -1303,6 +1378,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu_webgl"
+version = "0.0.1"
+dependencies = [
+ "canvas",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1387,6 +1469,7 @@ dependencies = [
  "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
+ "xml",
 ]
 
 [[package]]
@@ -1430,12 +1513,14 @@ dependencies = [
  "brotli",
  "browser_tracing",
  "bytes",
+ "fetch_policy",
  "flate2",
  "h2",
  "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "layoutng_foundation",
  "percent-encoding",
  "rustls",
  "rustls-rustcrypto",
@@ -1491,8 +1576,6 @@ dependencies = [
 [[package]]
 name = "hyper-util"
 version = "0.1.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1828,9 +1911,11 @@ dependencies = [
 name = "image_decoder"
 version = "0.0.1"
 dependencies = [
+ "cc",
  "crabby-avif",
  "image",
  "image_resource",
+ "pkg-config",
  "rav1d",
  "zune-jpeg",
 ]
@@ -1862,11 +1947,94 @@ dependencies = [
 name = "interaction"
 version = "0.0.1"
 dependencies = [
+ "base64 0.22.1",
+ "cssom",
  "dom",
+ "fileapi",
+ "font_engine",
  "html",
+ "image_resource",
+ "interaction_default",
+ "interaction_dispatch",
+ "interaction_hit_test",
+ "interaction_input",
+ "interaction_scroll",
  "layoutng_assembly",
  "layoutng_foundation",
+ "layoutng_style",
+ "navigation_history",
  "paint",
+ "url",
+]
+
+[[package]]
+name = "interaction_default"
+version = "0.0.1"
+dependencies = [
+ "font_engine",
+ "icu_bidi",
+ "image_resource",
+ "interaction_dispatch",
+ "interaction_input",
+ "intersection_observer",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "navigation_history",
+ "resize_observer",
+ "style_model",
+ "url",
+]
+
+[[package]]
+name = "interaction_dispatch"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "fileapi",
+ "interaction_input",
+ "layoutng_foundation",
+ "navigation_history",
+ "url",
+]
+
+[[package]]
+name = "interaction_hit_test"
+version = "0.0.1"
+dependencies = [
+ "interaction_input",
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "paint",
+]
+
+[[package]]
+name = "interaction_input"
+version = "0.0.1"
+dependencies = [
+ "foundation",
+ "layoutng_foundation",
+]
+
+[[package]]
+name = "interaction_scroll"
+version = "0.0.1"
+dependencies = [
+ "interaction_dispatch",
+ "interaction_hit_test",
+ "interaction_input",
+ "layoutng_foundation",
+ "scroll_animation",
+ "scroll_snap",
+]
+
+[[package]]
+name = "intersection_observer"
+version = "0.0.1"
+dependencies = [
+ "layoutng_foundation",
 ]
 
 [[package]]
@@ -1899,6 +2067,7 @@ dependencies = [
  "icu_locale",
  "icu_plurals",
  "icu_provider",
+ "layoutng_foundation",
  "quickjs",
  "unicode-segmentation",
  "writeable",
@@ -2123,6 +2292,7 @@ name = "layout_algo_replaced"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
  "layoutng_geometry",
@@ -2175,9 +2345,11 @@ name = "layout_fragment"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "font_engine",
  "image_resource",
  "layoutng_foundation",
+ "scroll_snap",
 ]
 
 [[package]]
@@ -2201,13 +2373,18 @@ name = "layoutng"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "font_engine",
+ "image_resource",
+ "intersection_observer",
  "layout_commit",
  "layout_invalidation",
  "layout_reuse",
  "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
+ "resize_observer",
+ "scroll_snap",
  "skia",
 ]
 
@@ -2216,10 +2393,12 @@ name = "layoutng_assembly"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "cssom",
  "font_engine",
  "icu_bidi",
  "image_resource",
+ "intersection_observer",
  "layout_algo_custom",
  "layout_algo_mathml",
  "layout_commit",
@@ -2229,6 +2408,8 @@ dependencies = [
  "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
+ "resize_observer",
+ "scroll_snap",
  "skia",
 ]
 
@@ -2240,6 +2421,7 @@ dependencies = [
  "foundation",
  "icu_bidi",
  "smallvec",
+ "url",
 ]
 
 [[package]]
@@ -2414,6 +2596,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigation_history"
+version = "0.0.1"
+dependencies = [
+ "fileapi",
+ "getrandom 0.4.3",
+ "sha2",
+]
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2441,6 +2632,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "net_filename"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "icu_bidi",
+ "url",
 ]
 
 [[package]]
@@ -2816,6 +3016,8 @@ dependencies = [
  "html",
  "interaction",
  "javascript",
+ "layoutng_foundation",
+ "navigation_history",
  "resource",
  "style",
  "url",
@@ -2867,6 +3069,7 @@ dependencies = [
  "dom",
  "image_resource",
  "layoutng_assembly",
+ "layoutng_style",
 ]
 
 [[package]]
@@ -2875,6 +3078,7 @@ version = "0.0.1"
 dependencies = [
  "animation",
  "browser_tracing",
+ "canvas",
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
@@ -2915,6 +3119,9 @@ dependencies = [
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "scroll_snap",
  "serde_json",
 ]
 
@@ -2923,6 +3130,7 @@ name = "paint_record"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "font_engine",
  "image_resource",
  "layoutng_assembly",
@@ -2941,6 +3149,18 @@ version = "0.0.1"
 dependencies = [
  "layoutng_assembly",
  "paint_model",
+]
+
+[[package]]
+name = "paint_skia"
+version = "0.0.1"
+dependencies = [
+ "layoutng_assembly",
+ "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
+ "paint_model",
+ "skia",
 ]
 
 [[package]]
@@ -3147,6 +3367,8 @@ dependencies = [
  "image_resource",
  "layoutng_assembly",
  "layoutng_foundation",
+ "layoutng_geometry",
+ "layoutng_style",
  "paint_model",
  "paint_reuse",
 ]
@@ -3300,6 +3522,7 @@ dependencies = [
 name = "raster"
 version = "0.0.1"
 dependencies = [
+ "canvas",
  "compositor",
  "font_engine",
  "image_resource",
@@ -3368,12 +3591,17 @@ dependencies = [
  "dom",
  "event_loop",
  "executor",
+ "fileapi",
+ "icu_bidi",
  "image_decoder",
  "image_resource",
  "interaction",
  "javascript",
  "layoutng_assembly",
  "layoutng_foundation",
+ "libc",
+ "navigation_history",
+ "net_filename",
  "page_mutation",
  "paint",
  "png",
@@ -3381,11 +3609,16 @@ dependencies = [
  "renderer",
  "renderer_skia",
  "serde_json",
+ "smithay-clipboard",
  "softbuffer",
  "url",
  "url_loader",
  "viz",
+ "wayland-backend",
+ "wayland-client",
  "winit",
+ "x11-dl",
+ "x11rb",
  "xhr_transport",
 ]
 
@@ -3417,6 +3650,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.27"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.27"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "renderer"
 version = "0.0.1"
 dependencies = [
@@ -3443,13 +3692,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "resize_observer"
+version = "0.0.1"
+
+[[package]]
 name = "resource"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "decode",
+ "fetch_policy",
  "image_decoder",
  "image_resource",
+ "layoutng_foundation",
  "url_loader",
 ]
 
@@ -3659,6 +3914,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "scroll_animation"
+version = "0.0.1"
+dependencies = [
+ "scroll_snap",
+]
+
+[[package]]
+name = "scroll_snap"
+version = "0.0.1"
+
+[[package]]
 name = "sec1"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3722,6 +3988,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sfv"
+version = "0.15.0"
+dependencies = [
+ "base64 0.22.1",
+ "indexmap",
+ "ref-cast",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3776,6 +4051,9 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "libc",
+ "objc2 0.5.2",
+ "objc2-foundation 0.2.2",
+ "objc2-metal",
 ]
 
 [[package]]
@@ -3813,6 +4091,15 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-scanner",
  "xkeysym",
+]
+
+[[package]]
+name = "smithay-clipboard"
+version = "0.7.2"
+dependencies = [
+ "libc",
+ "smithay-client-toolkit",
+ "wayland-backend",
 ]
 
 [[package]]
@@ -4343,10 +4630,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "url_formatter"
+version = "0.0.1"
+dependencies = [
+ "icu_bidi",
+]
+
+[[package]]
 name = "url_loader"
 version = "0.0.1"
 dependencies = [
+ "fileapi",
  "http_transport",
+ "navigation_history",
 ]
 
 [[package]]
@@ -4600,6 +4896,7 @@ name = "webapi"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "canvas",
  "css_parser",
  "cssom",
  "dom",
@@ -4611,12 +4908,22 @@ dependencies = [
  "layout_algo_replaced",
  "layoutng_assembly",
  "layoutng_foundation",
+ "navigation_history",
  "paint",
  "percent-encoding",
  "skia",
  "style",
  "url",
+ "webgl",
  "xhr_transport",
+]
+
+[[package]]
+name = "webgl"
+version = "0.0.1"
+dependencies = [
+ "canvas",
+ "gpu_webgl",
 ]
 
 [[package]]
@@ -4869,6 +5176,7 @@ name = "xhr_transport"
 version = "0.0.1"
 dependencies = [
  "http_transport",
+ "resource",
 ]
 
 [[package]]
@@ -4889,6 +5197,10 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+
+[[package]]
+name = "xml"
+version = "1.4.0"
 
 [[package]]
 name = "yoke"

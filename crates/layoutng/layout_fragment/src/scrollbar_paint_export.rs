@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::internal::layout_scrollable_area::ResizerHitTestType;
+use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 
 // Package-boundary projection of the source overflow-control state from
 // core/paint/paint_layer_scrollable_area.cc:2141-2184,2283-2308 and the
@@ -50,6 +51,8 @@ pub(super) fn ExportScrollbarPaintData(
             .into(),
         should_paint_as_overlay,
         uses_overlay_scrollbars,
+        is_solid_color: theme.is_solid_color,
+        uses_macos_painted_scrollbars: theme.uses_macos_painted_scrollbars,
         theme_disallows_hit_test: !theme.allows_hit_test,
         minimum_thumb_length: theme.minimum_thumb_length,
         resizer_on_left: vertical_on_left,
@@ -89,6 +92,9 @@ pub(super) fn ExportScrollbarPaintData(
                 .into(),
             horizontal: true,
             left_side_vertical: false,
+            painted_opacity: area
+                .ScrollbarPaintedOpacity(ScrollbarOrientation::kHorizontalScrollbar),
+            painted_thumb_width: area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar }),
             track_offset: Offset {
                 x: frame.x() as f64,
                 y: frame.y() as f64,
@@ -99,12 +105,7 @@ pub(super) fn ExportScrollbarPaintData(
             },
             ..ScrollbarPaintAxis::default()
         };
-        SetScrollbarThumb(
-            &mut axis,
-            unsafe { &*scrollbar },
-            theme.has_buttons,
-            theme.minimum_thumb_length as f64,
-        );
+        SetScrollbarThumb(&mut axis, unsafe { &*scrollbar });
         data.horizontal = Some(axis);
     }
     if area.HasVerticalScrollbar() {
@@ -128,6 +129,8 @@ pub(super) fn ExportScrollbarPaintData(
                 .into(),
             horizontal: false,
             left_side_vertical: vertical_on_left,
+            painted_opacity: area.ScrollbarPaintedOpacity(ScrollbarOrientation::kVerticalScrollbar),
+            painted_thumb_width: area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar }),
             track_offset: Offset {
                 x: frame.x() as f64,
                 y: frame.y() as f64,
@@ -138,12 +141,7 @@ pub(super) fn ExportScrollbarPaintData(
             },
             ..ScrollbarPaintAxis::default()
         };
-        SetScrollbarThumb(
-            &mut axis,
-            unsafe { &*scrollbar },
-            theme.has_buttons,
-            theme.minimum_thumb_length as f64,
-        );
+        SetScrollbarThumb(&mut axis, unsafe { &*scrollbar });
         data.vertical = Some(axis);
     }
     if !corner_rect.IsEmpty() {

@@ -23,6 +23,12 @@ pub mod mojom {
         }
     }
 
+    impl Default for ScrollType {
+        fn default() -> Self {
+            Self::kUser
+        }
+    }
+
     // cpp: layoutng_style/style/scroll_enums.h:22-31
     #[repr(transparent)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

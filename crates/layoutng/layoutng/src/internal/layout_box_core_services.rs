@@ -98,8 +98,25 @@ pub fn LayoutBoxDefaultIntrinsicContentBlockSize(
     kIndefiniteSize
 }
 
-// cpp: layoutng/internal/layout_box_core_services.cc:111-115
+// Source core/layout/layout_box.cc:1097-1118.
 pub fn LayoutBoxGetScrollMarkerGroup(box_: &mut LayoutBox) -> *mut LayoutBlock {
     box_.CheckIsNotDestroyed();
-    std::ptr::null_mut()
+    if box_.StyleRef().ScrollMarkerGroupNone() {
+        return std::ptr::null_mut();
+    }
+    let content = box_.ContentLayoutBox();
+    if content.is_null()
+        || (!unsafe { &*content }.IsScrollContainer() && !unsafe { &*content }.IsDocumentElement())
+    {
+        return std::ptr::null_mut();
+    }
+    let element = DynamicTo::<Element>(box_.GetNode());
+    if element.is_null() {
+        return std::ptr::null_mut();
+    }
+    let group = unsafe { &(*element).container.node }.GeneratedScrollMarkerGroup();
+    if group.is_null() {
+        return std::ptr::null_mut();
+    }
+    DynamicTo::<LayoutBlock>(unsafe { &(*group).container.node }.GetLayoutObject())
 }

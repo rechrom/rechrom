@@ -1,7 +1,10 @@
 use foundation::{CSSPropertyID as P, CSSValueID as V, Color, String};
 use layoutng_style::{
     css::style_color::StyleColor,
-    style::computed_style::{ComputedStyle, ComputedStyleBuilder},
+    style::{
+        computed_style::{ComputedStyle, ComputedStyleBuilder},
+        svg_paint::SVGPaint,
+    },
 };
 use style::{
     media_queries::MediaValuesCachedData,
@@ -103,6 +106,28 @@ fn internal_visited_svg_paint_keeps_slots_separate_and_inherits_parent_ordinary_
         .is_err());
     }
 }
+
+#[test]
+fn visited_svg_paint_export_replaces_rgb_and_preserves_unvisited_alpha() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut builder = ComputedStyleBuilder::from_style(initial());
+    builder.SetInsideLink(foundation::EInsideLink::kInsideVisitedLink);
+    builder.SetFillPaintOwned(SVGPaint::from_color(Color::FromRGBA(255, 0, 0, 64)));
+    builder.SetInternalVisitedFillPaintOwned(SVGPaint::from_color(Color::FromRGBA(0, 255, 0, 230)));
+    builder.SetFillOpacity(0.5);
+    let style = unsafe { &*builder.TakeStyle() };
+
+    let fill = layoutng::internal::boundary::paint_style_export::Export(style, None)
+        .svg_fill
+        .expect("visited fill");
+    assert!((fill.red - 0.0).abs() < 0.005);
+    assert!((fill.green - 1.0).abs() < 0.005);
+    assert!((fill.blue - 0.0).abs() < 0.005);
+    assert!((fill.alpha - 64.0 / 255.0 * 0.5).abs() < 0.005);
+    let projected = layoutng::style_projection::ProjectComputedStyle(style).unwrap();
+    assert_eq!(projected.paint.svg_fill, Some(fill));
+}
+
 #[test]
 fn reflection_direction_offset_mask_and_css_wide_reach_computed_style_reflection() {
     let _heap = foundation::LayoutHeapScope::new();

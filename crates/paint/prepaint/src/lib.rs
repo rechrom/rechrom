@@ -15,6 +15,7 @@ pub mod background_geometry;
 pub mod block_paint_invalidator;
 pub mod box_paint_invalidator;
 pub mod client_rects;
+pub mod clip_path_clipper;
 pub mod compositing_reason_finder;
 pub mod cull_rect_updater;
 pub mod nine_piece_geometry;
@@ -23,6 +24,9 @@ pub mod object_paint_invalidator;
 pub mod paint_invalidator;
 pub mod paint_shader_resolver;
 pub mod pre_paint_tree_walk;
+pub mod resident_hit_test;
+pub mod resident_layer_clipper;
+pub mod special_paint;
 pub mod table_cell_paint_invalidator;
 
 pub use block_paint_invalidator::BlockPaintInvalidator;
@@ -44,5 +48,12 @@ pub struct PrePaintUpdateStats {
     pub property_geometry_changes_with_own_keys: usize,
     pub property_geometry_changes_needing_property_update: usize,
     pub skipped_subtrees: usize,
+    pub same_context_nodes: usize,
+    pub retained_context_nodes: usize,
+    pub retained_geometry_covered_nodes: usize,
+    pub subtree_revision_matches: usize,
+    pub self_revision_matches: usize,
+    pub source_tree_compatible_nodes: usize,
+    pub invalidation_nodes: usize,
     pub post_walk: bool,
 }

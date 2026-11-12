@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::{FragmentKind, FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources};
 use foundation::{
-    IsManagedLayoutAddress, LayoutOffset as Offset, LayoutSize as Size,
-    TrustedIdentityHashMap as HashMap, TrustedIdentityHashSet as HashSet, WeakPersistent,
+    LayoutOffset as Offset, LayoutSize as Size, TrustedIdentityHashMap as HashMap,
+    TrustedIdentityHashSet as HashSet,
 };
 pub use layout_fragment_boundary::revision::PrePaintRevisionStats;
 
@@ -40,7 +40,7 @@ struct ProductionUpdate {
     previous: HashMap<InputKey, Box<Input>>,
     previous_owners: HashMap<u64, LiveOwner>,
     next_owners: HashMap<u64, LiveOwner>,
-    resource_matches: HashMap<(usize, usize, bool), bool>,
+    resource_matches: HashMap<(usize, usize, u8), bool>,
     stats: PrePaintRevisionStats,
 }
 
@@ -64,8 +64,10 @@ enum InputKey {
 }
 
 struct LiveOwner {
-    weak: WeakPersistent<()>,
-    // Whether this particular weak cell survived from the previous update.
+    // DisplayItemClient::Id is a process-unique opaque token. Retaining the
+    // token across two observations proves the same client lifetime; a new
+    // client never reuses an earlier token even if its allocation address is
+    // recycled.
     retained: bool,
 }
 
@@ -75,11 +77,11 @@ struct Input {
     // dirty bits.
     revision: u64,
     subtree_revision: u64,
-    owner_ids: [u64; 5],
+    owner_ids: [u64; 7],
     fallback_snapshot: Option<InputSnapshot>,
     fallback_paint: Option<PaintProperties>,
     resources: Option<Arc<PaintResources>>,
-    uses_viewport_resource: bool,
+    resource_usage: u8,
     children: Vec<(u64, u64, u64)>,
 }
 
@@ -94,6 +96,7 @@ struct InputSnapshot {
     content_size: Size,
     text_start: Option<u32>,
     text_end: Option<u32>,
+    text_paint_timing_non_whitespace: bool,
     logical_parent_node_id: Option<u64>,
     logical_parent_fragment_instance_id: Option<u64>,
     logical_tree_order: u64,
@@ -136,7 +139,11 @@ impl PrePaintRevisionTracker {
         });
     }
 
-    pub fn ObserveProductionNode(&mut self, node: &mut FragmentPaintData) {
+    pub fn ObserveProductionNode(
+        &mut self,
+        node: &mut FragmentPaintData,
+        descendant_changed: bool,
+    ) -> bool {
         assert_ne!(node.fragment_instance_id, 0);
         let update = self
             .production_update
@@ -155,7 +162,31 @@ impl PrePaintRevisionTracker {
             &mut update.next_owners,
             &mut update.stats,
             true,
-        );
+            descendant_changed,
+        )
+    }
+
+    /// A selection commit changes only native invalidation bits. Certify the
+    /// already indexed selected-client/ancestor sidecar in place; do not walk
+    /// fragments again or rebuild geometry/resource/owner observations.
+    pub(crate) fn ObserveSelectionInvalidation(
+        &mut self,
+        node: &mut FragmentPaintData,
+        generation: u64,
+    ) {
+        assert!(self.production_update.is_none());
+        let Some(input) = self
+            .inputs
+            .get_mut(&InputKey::Instance(node.fragment_instance_id))
+        else {
+            return;
+        };
+        if node.paint.pre_paint_invalidation.own() {
+            node.pre_paint_revision = generation;
+            input.revision = generation;
+        }
+        node.pre_paint_subtree_revision = generation;
+        input.subtree_revision = generation;
     }
 
     pub fn FinishProductionUpdate(&mut self) {
@@ -329,6 +360,7 @@ impl PrePaintRevisionTracker {
                 &mut next_owners,
                 &mut stats,
                 false,
+                false,
             );
         }
         self.inputs = next;
@@ -349,12 +381,13 @@ impl PrePaintRevisionTracker {
         generation: u64,
         previous: &mut HashMap<InputKey, Box<Input>>,
         next: &mut HashMap<InputKey, Box<Input>>,
-        resource_matches: &mut HashMap<(usize, usize, bool), bool>,
+        resource_matches: &mut HashMap<(usize, usize, u8), bool>,
         previous_owners: &mut HashMap<u64, LiveOwner>,
         next_owners: &mut HashMap<u64, LiveOwner>,
         stats: &mut PrePaintRevisionStats,
         trust_source_dirty_bits: bool,
-    ) {
+        production_descendant_changed: bool,
+    ) -> bool {
         let (key, old) = match previous.remove_entry(&lookup_key) {
             Some((key, old)) => (key, Some(old)),
             None => (lookup_key, None),
@@ -415,7 +448,7 @@ impl PrePaintRevisionTracker {
                     &old.resources,
                     &node.paint.resources,
                     resource_matches,
-                    old.uses_viewport_resource || paint_uses_viewport_resource(&node.paint),
+                    old.resource_usage | paint_resource_usage(&node.paint),
                 );
                 (identity, geometry, paint, resources)
             })
@@ -433,7 +466,7 @@ impl PrePaintRevisionTracker {
             && same_paint
             && same_resources;
         let children_same = if trust_source_dirty_bits {
-            old.is_some() && !invalidation.descendants()
+            old.is_some() && !invalidation.descendants() && !production_descendant_changed
         } else {
             old.as_ref()
                 .is_some_and(|old| old.children.as_slice() == child_revisions)
@@ -469,6 +502,7 @@ impl PrePaintRevisionTracker {
         current.subtree_revision = node.pre_paint_subtree_revision;
         current.owner_ids = owner_ids(&node.paint);
         next.insert(key, current);
+        !self_same || !children_same
     }
 }
 
@@ -482,7 +516,7 @@ impl Input {
             None
         };
         let resources = node.paint.resources.clone();
-        let uses_viewport_resource = paint_uses_viewport_resource(&node.paint);
+        let resource_usage = paint_resource_usage(&node.paint);
         // Exhaustive pattern: a new fragment self field cannot accidentally be
         // omitted from this compact observer without a compiler error here.
         let FragmentPaintData {
@@ -503,6 +537,7 @@ impl Input {
             content_size,
             text_start,
             text_end,
+            text_paint_timing_non_whitespace,
             paint: _,
         } = node;
         Self {
@@ -519,13 +554,14 @@ impl Input {
                 content_size: *content_size,
                 text_start: *text_start,
                 text_end: *text_end,
+                text_paint_timing_non_whitespace: *text_paint_timing_non_whitespace,
                 logical_parent_node_id: node.paint.logical_parent_node_id,
                 logical_parent_fragment_instance_id: node.paint.logical_parent_fragment_instance_id,
                 logical_tree_order: node.paint.logical_tree_order,
             }),
             fallback_paint,
             resources,
-            uses_viewport_resource,
+            resource_usage,
             children: Vec::new(),
         }
     }
@@ -538,6 +574,7 @@ fn snapshot_identity_equal(a: &InputSnapshot, b: &FragmentPaintData) -> bool {
         && a.kind == b.kind
         && a.text_start == b.text_start
         && a.text_end == b.text_end
+        && a.text_paint_timing_non_whitespace == b.text_paint_timing_non_whitespace
         && a.logical_parent_node_id == b.paint.logical_parent_node_id
         && a.logical_parent_fragment_instance_id == b.paint.logical_parent_fragment_instance_id
         && a.logical_tree_order == b.paint.logical_tree_order
@@ -558,36 +595,65 @@ pub fn SamePrePaintInput(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
             &a.paint.resources,
             &b.paint.resources,
             &mut HashMap::default(),
-            paint_uses_viewport_resource(&a.paint) || paint_uses_viewport_resource(&b.paint),
+            paint_resource_usage(&a.paint) | paint_resource_usage(&b.paint),
         )
 }
 
-fn paint_uses_viewport_resource(paint: &PaintProperties) -> bool {
+const RESOURCE_VIEWPORT: u8 = 1 << 0;
+const RESOURCE_FONTS: u8 = 1 << 1;
+const RESOURCE_IMAGES: u8 = 1 << 2;
+
+fn paint_resource_usage(paint: &PaintProperties) -> u8 {
     use layoutng::internal::paint_input::BackgroundAttachment;
-    paint.IsLayoutView()
+    let viewport = paint.IsLayoutView()
         || paint.canvas_background.is_some()
         || paint
             .style
             .background_images()
             .iter()
-            .any(|layer| layer.attachment == BackgroundAttachment::kFixed)
+            .any(|layer| layer.attachment == BackgroundAttachment::kFixed);
+    let images = paint.replaced_is_image
+        || paint.video_frame_resource_id.is_some()
+        || paint
+            .replaced_content
+            .as_ref()
+            .is_some_and(|content| content.is_canvas)
+        || paint.style.image_resource_id.is_some()
+        || paint.style.has_background_images()
+        || paint.style.has_mask_images()
+        || paint.style.border_image.is_some()
+        || paint.style.mask_box_image.is_some()
+        || paint.style.box_reflection_mask_image.is_some()
+        || paint.style.has_filters()
+        || paint.style.has_backdrop_filters()
+        || paint.table.is_some()
+        || paint.svg_shape.is_some()
+        || paint.svg_text.is_some();
+    u8::from(viewport) * RESOURCE_VIEWPORT
+        | u8::from(!paint.glyph_runs.is_empty()) * RESOURCE_FONTS
+        | u8::from(images) * RESOURCE_IMAGES
 }
 
-fn owner_ids(paint: &PaintProperties) -> [u64; 5] {
+fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
     let mut ids = [
         paint.display_item_client_id,
+        paint.selection_client_id,
         paint.paint_layer_client_id,
         0,
         0,
         0,
+        0,
     ];
+    if let Some(scroll) = &paint.scroll_container {
+        ids[3] = scroll.scrolling_background_client_id;
+    }
     if let Some(bars) = &paint.scrollbars {
-        ids[2] = bars.corner_client_id;
-        ids[3] = bars
+        ids[4] = bars.corner_client_id;
+        ids[5] = bars
             .horizontal
             .as_ref()
             .map_or(0, |axis| axis.display_item_client_id);
-        ids[4] = bars
+        ids[6] = bars
             .vertical
             .as_ref()
             .map_or(0, |axis| axis.display_item_client_id);
@@ -600,25 +666,15 @@ fn retain_owners(
     previous: &mut HashMap<u64, LiveOwner>,
     next: &mut HashMap<u64, LiveOwner>,
 ) -> bool {
-    let mut retained = paint.display_item_client_id != 0
-        && (!paint.paint_layer_client_is_just_created.get() || paint.paint_layer_client_id != 0);
-    if let Some(bars) = &paint.scrollbars {
-        retained &= (!bars.corner_client_is_just_created.get() || bars.corner_client_id != 0)
-            && bars
-                .horizontal
-                .as_ref()
-                .is_none_or(|axis| axis.display_item_client_id != 0)
-            && bars
-                .vertical
-                .as_ref()
-                .is_none_or(|axis| axis.display_item_client_id != 0);
-    }
+    let mut observed = false;
+    let mut retained = true;
     for id in owner_ids(paint).into_iter().filter(|id| *id != 0) {
-        // Evaluate every owner even after a rejection so all real clients are
+        observed = true;
+        // Evaluate every owner even after a rejection so all clients are
         // registered for the next pass, once per id across every fragment.
         retained &= retain_owner(id, previous, next);
     }
-    retained
+    observed && retained
 }
 
 fn retain_owner(
@@ -629,25 +685,8 @@ fn retain_owner(
     if let Some(owner) = next.get(&id) {
         return owner.retained;
     }
-    let Ok(address) = usize::try_from(id) else {
-        return false;
-    };
-    let pointer = address as *mut ();
-    if !IsManagedLayoutAddress(pointer) {
-        return false;
-    }
-    let old = previous.remove(&id);
-    let retained = old
-        .as_ref()
-        .is_some_and(|owner| owner.weak.Get() == pointer);
-    let weak = if retained {
-        old.unwrap().weak
-    } else {
-        // A reclaimed owner's weak was cleared before sweep. Reusing its
-        // address never revalidates that old cell. No object is dereferenced.
-        WeakPersistent::from_ptr(pointer)
-    };
-    next.insert(id, LiveOwner { weak, retained });
+    let retained = previous.remove(&id).is_some();
+    next.insert(id, LiveOwner { retained });
     retained
 }
 
@@ -663,6 +702,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         is_layout_view,
         is_inclusive_descendant_of_unbounded_element,
         is_printing,
+        should_print_backgrounds,
         canvas_draw_element_enabled,
         is_in_canvas_subtree,
         is_overscroll_area_parent,
@@ -673,6 +713,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         additional_compositing_reasons,
         is_box_model_object,
         is_layout_box,
+        is_page_container,
         is_page_border_box,
         is_paginated_root,
         is_layout_inline,
@@ -696,10 +737,14 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         contents_ink_overflow,
         ink_overflow,
         filtered_ink_overflow,
+        css_mask_bounding_box,
         first_line_decoration_rect,
         text_glyph_ink,
         text_hit_test_bounds,
         box_self_visual_overflow,
+        self_outline,
+        // Previous-paint geometry is an invalidation baseline, not new content.
+        previous_box_geometry: _,
         box_fragment_is_inline_box,
         display_item_raster_effect_outset,
         display_item_client_id,
@@ -713,6 +758,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         paint_layer_has_ancestor_invisible_for_position_visibility,
         paint_layer_has_visible_content,
         paint_layer_has_self_painting_layer_descendant,
+        paint_layer_has_non_isolated_descendant_with_blend_mode,
         paint_layer_is_under_svg_hidden_container,
         paint_layer_supports_subsequence_caching,
         paint_layer_self_or_descendant_needs_repaint,
@@ -742,6 +788,12 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         selection_client_is_just_created,
         display_item_fragment,
         has_source,
+        visible_to_hit_testing,
+        effective_allowed_touch_action,
+        inside_blocking_wheel_event_handler,
+        region_capture_crop_id,
+        tracked_element_sub_rects,
+        is_svg_child,
         logical_parent_node_id,
         logical_parent_fragment_instance_id,
         logical_tree_order,
@@ -755,6 +807,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         has_collapsed_borders,
         source_kind,
         replaced_is_image,
+        video_frame_resource_id,
         image_decoding_mode,
         image_last_painted_id: _,
         focused_image_map_area,
@@ -764,6 +817,9 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         effective_zoom,
         style,
         selection_style,
+        is_selected,
+        replaced_selection_state,
+        replaced_local_selection_visual_rect,
         selection_text_decoration,
         svg_text_decoration_style,
         margin,
@@ -788,7 +844,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         overflow_clip_margin_outsets,
         scroll_offset,
         hit_test_overflow_clip,
-        hit_test_scrolled_content_offset,
+        pixel_snapped_scrolled_content_offset,
         scroll_size,
         scrolls_overflow,
         client_size: _,
@@ -797,6 +853,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         direction,
         first_baseline,
         text_line_top_offset,
+        text_line_snap_delta,
         text_line_height,
         is_ellipsis,
         text_fit_scale,
@@ -806,19 +863,17 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         resources: _,
         glyph_runs,
         text_control_host,
-        text_control_inner_editor,
-        text_control_empty_caret,
         list_marker_symbol,
         list_marker_inside,
         mathml,
         frame_set,
         fieldset,
         column_rules,
+        gap_rules,
         collapsed_table,
         table,
         scrollbars,
         form_control,
-        text_control_caret_metrics,
         svg_shape,
         svg_view_box,
         svg_local_transform,
@@ -828,6 +883,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         table_cell_column,
         sticky_constraint,
         background_transfers_to_view,
+        background_is_known_to_be_obscured,
+        page_document_background_style,
+        page_document_background_geometry,
+        page_container_background_geometry,
         canvas_background,
         view_background_invalidation,
         background_paint_location,
@@ -839,6 +898,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         background_any_layer_uses_content_box,
         scrollable_overflow,
         view_background_rect,
+        previous_view_background_rect: _,
         can_composite_background_attachment_fixed,
     } = a;
     property_fragment_unique_id == &b.property_fragment_unique_id
@@ -848,6 +908,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && is_inclusive_descendant_of_unbounded_element
             == &b.is_inclusive_descendant_of_unbounded_element
         && is_printing == &b.is_printing
+        && should_print_backgrounds == &b.should_print_backgrounds
         && canvas_draw_element_enabled == &b.canvas_draw_element_enabled
         && is_in_canvas_subtree == &b.is_in_canvas_subtree
         && is_overscroll_area_parent == &b.is_overscroll_area_parent
@@ -858,6 +919,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && additional_compositing_reasons == &b.additional_compositing_reasons
         && is_box_model_object == &b.is_box_model_object
         && is_layout_box == &b.is_layout_box
+        && is_page_container == &b.is_page_container
         && is_page_border_box == &b.is_page_border_box
         && is_paginated_root == &b.is_paginated_root
         && is_layout_inline == &b.is_layout_inline
@@ -879,10 +941,12 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && contents_ink_overflow == &b.contents_ink_overflow
         && ink_overflow == &b.ink_overflow
         && filtered_ink_overflow == &b.filtered_ink_overflow
+        && css_mask_bounding_box == &b.css_mask_bounding_box
         && first_line_decoration_rect == &b.first_line_decoration_rect
         && text_glyph_ink == &b.text_glyph_ink
         && text_hit_test_bounds == &b.text_hit_test_bounds
         && box_self_visual_overflow == &b.box_self_visual_overflow
+        && self_outline == &b.self_outline
         && box_fragment_is_inline_box == &b.box_fragment_is_inline_box
         && display_item_raster_effect_outset == &b.display_item_raster_effect_outset
         && display_item_client_id == &b.display_item_client_id
@@ -899,6 +963,8 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && paint_layer_has_visible_content == &b.paint_layer_has_visible_content
         && paint_layer_has_self_painting_layer_descendant
             == &b.paint_layer_has_self_painting_layer_descendant
+        && paint_layer_has_non_isolated_descendant_with_blend_mode
+            == &b.paint_layer_has_non_isolated_descendant_with_blend_mode
         && paint_layer_is_under_svg_hidden_container == &b.paint_layer_is_under_svg_hidden_container
         && paint_layer_supports_subsequence_caching == &b.paint_layer_supports_subsequence_caching
         && paint_layer_self_or_descendant_needs_repaint
@@ -933,6 +999,12 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && selection_client_is_just_created == &b.selection_client_is_just_created
         && display_item_fragment == &b.display_item_fragment
         && has_source == &b.has_source
+        && visible_to_hit_testing == &b.visible_to_hit_testing
+        && effective_allowed_touch_action == &b.effective_allowed_touch_action
+        && inside_blocking_wheel_event_handler == &b.inside_blocking_wheel_event_handler
+        && region_capture_crop_id == &b.region_capture_crop_id
+        && tracked_element_sub_rects == &b.tracked_element_sub_rects
+        && is_svg_child == &b.is_svg_child
         && logical_parent_node_id == &b.logical_parent_node_id
         && logical_parent_fragment_instance_id == &b.logical_parent_fragment_instance_id
         && logical_tree_order == &b.logical_tree_order
@@ -947,11 +1019,15 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && has_collapsed_borders == &b.has_collapsed_borders
         && source_kind == &b.source_kind
         && replaced_is_image == &b.replaced_is_image
+        && video_frame_resource_id == &b.video_frame_resource_id
         && image_decoding_mode == &b.image_decoding_mode
         && focused_image_map_area == &b.focused_image_map_area
         && effective_zoom == &b.effective_zoom
         && style == &b.style
         && selection_style == &b.selection_style
+        && is_selected == &b.is_selected
+        && replaced_selection_state == &b.replaced_selection_state
+        && replaced_local_selection_visual_rect == &b.replaced_local_selection_visual_rect
         && selection_text_decoration == &b.selection_text_decoration
         && margin == &b.margin
         && border == &b.border
@@ -975,7 +1051,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && overflow_clip_margin_outsets == &b.overflow_clip_margin_outsets
         && scroll_offset == &b.scroll_offset
         && hit_test_overflow_clip == &b.hit_test_overflow_clip
-        && hit_test_scrolled_content_offset == &b.hit_test_scrolled_content_offset
+        && pixel_snapped_scrolled_content_offset == &b.pixel_snapped_scrolled_content_offset
         && scroll_size == &b.scroll_size
         && scrolls_overflow == &b.scrolls_overflow
         && scroll_container == &b.scroll_container
@@ -983,6 +1059,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && direction == &b.direction
         && first_baseline == &b.first_baseline
         && text_line_top_offset == &b.text_line_top_offset
+        && text_line_snap_delta == &b.text_line_snap_delta
         && text_line_height == &b.text_line_height
         && is_ellipsis == &b.is_ellipsis
         && text_fit_scale == &b.text_fit_scale
@@ -991,19 +1068,17 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && replaced_content == &b.replaced_content
         && glyph_runs == &b.glyph_runs
         && text_control_host == &b.text_control_host
-        && text_control_inner_editor == &b.text_control_inner_editor
-        && text_control_empty_caret == &b.text_control_empty_caret
         && list_marker_symbol == &b.list_marker_symbol
         && list_marker_inside == &b.list_marker_inside
         && mathml == &b.mathml
         && frame_set == &b.frame_set
         && fieldset == &b.fieldset
         && column_rules == &b.column_rules
+        && gap_rules == &b.gap_rules
         && collapsed_table == &b.collapsed_table
         && table == &b.table
         && scrollbars == &b.scrollbars
         && form_control == &b.form_control
-        && text_control_caret_metrics == &b.text_control_caret_metrics
         && svg_shape == &b.svg_shape
         && svg_view_box == &b.svg_view_box
         && svg_local_transform == &b.svg_local_transform
@@ -1014,6 +1089,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && table_cell_column == &b.table_cell_column
         && sticky_constraint == &b.sticky_constraint
         && background_transfers_to_view == &b.background_transfers_to_view
+        && background_is_known_to_be_obscured == &b.background_is_known_to_be_obscured
+        && page_document_background_style == &b.page_document_background_style
+        && page_document_background_geometry == &b.page_document_background_geometry
+        && page_container_background_geometry == &b.page_container_background_geometry
         && canvas_background == &b.canvas_background
         && view_background_invalidation == &b.view_background_invalidation
         && background_paint_location == &b.background_paint_location
@@ -1029,7 +1108,10 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
 }
 
 fn self_equal(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    identity_equal(a, b) && geometry_equal(a, b) && paint_equal(&a.paint, &b.paint)
+    identity_equal(a, b)
+        && geometry_equal(a, b)
+        && a.text_paint_timing_non_whitespace == b.text_paint_timing_non_whitespace
+        && paint_equal(&a.paint, &b.paint)
 }
 
 fn identity_equal(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
@@ -1069,8 +1151,8 @@ fn just_created(paint: &PaintProperties) -> bool {
 fn resources_equal(
     a: &Option<Arc<PaintResources>>,
     b: &Option<Arc<PaintResources>>,
-    matches: &mut HashMap<(usize, usize, bool), bool>,
-    compare_viewport: bool,
+    matches: &mut HashMap<(usize, usize, u8), bool>,
+    usage: u8,
 ) -> bool {
     let (a, b) = match (a, b) {
         (None, None) => return true,
@@ -1080,35 +1162,40 @@ fn resources_equal(
     if Arc::ptr_eq(a, b) {
         return true;
     }
-    let key = (
-        Arc::as_ptr(a) as usize,
-        Arc::as_ptr(b) as usize,
-        compare_viewport,
-    );
+    let key = (Arc::as_ptr(a) as usize, Arc::as_ptr(b) as usize, usage);
     *matches.entry(key).or_insert_with(|| {
         // These are immutable resource-provider identities, not the catalog
         // allocation rebuilt by every export. New storage conservatively dirties.
         let PaintResources {
             fonts,
             images,
+            canvases,
             device_pixel_ratio,
             preferred_color_scheme,
             layout_zoom_factor,
+            base_background_color,
             paints_opaque_base_background,
+            should_clear_document_background,
             viewport,
         } = &**a;
         *device_pixel_ratio == b.device_pixel_ratio
             && *preferred_color_scheme == b.preferred_color_scheme
             && *layout_zoom_factor == b.layout_zoom_factor
+            && *base_background_color == b.base_background_color
             && *paints_opaque_base_background == b.paints_opaque_base_background
-            && (!compare_viewport || *viewport == b.viewport)
-            && fonts.len() == b.fonts.len()
-            && images.len() == b.images.len()
-            && (fonts.ptr_eq(&b.fonts)
-                || fonts.iter().zip(b.fonts.iter()).all(|(a, b)| {
-                    font_engine::SharedFontBytes::ptr_eq(&a.bytes, &b.bytes) && a == b
-                }))
-            && images.iter().zip(&b.images).all(|(a, b)| a == b)
+            && *should_clear_document_background == b.should_clear_document_background
+            && (usage & RESOURCE_VIEWPORT == 0 || *viewport == b.viewport)
+            && (usage & RESOURCE_FONTS == 0
+                || (fonts.len() == b.fonts.len()
+                    && (fonts.ptr_eq(&b.fonts)
+                        || fonts.iter().zip(b.fonts.iter()).all(|(a, b)| {
+                            font_engine::SharedFontBytes::ptr_eq(&a.bytes, &b.bytes) && a == b
+                        }))))
+            && (usage & RESOURCE_IMAGES == 0
+                || (images.len() == b.images.len()
+                    && images.iter().zip(&b.images).all(|(a, b)| a == b)
+                    && canvases.len() == b.canvases.len()
+                    && canvases.iter().zip(&b.canvases).all(|(a, b)| a == b)))
     })
 }
 
@@ -1163,6 +1250,46 @@ mod tests {
     }
 
     #[test]
+    fn hit_test_facts_and_svg_child_identity_change_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+
+        second.paint.visible_to_hit_testing = false;
+        assert!(!SamePrePaintInput(&first, &second));
+
+        second.paint.visible_to_hit_testing = true;
+        second.paint.effective_allowed_touch_action = foundation::TouchAction::kNone;
+        assert!(!SamePrePaintInput(&first, &second));
+
+        second.paint.effective_allowed_touch_action = foundation::TouchAction::kAuto;
+        second.paint.inside_blocking_wheel_event_handler = true;
+        assert!(!SamePrePaintInput(&first, &second));
+
+        second.paint.inside_blocking_wheel_event_handler = false;
+        second.paint.region_capture_crop_id = Some([1, 2]);
+        assert!(!SamePrePaintInput(&first, &second));
+
+        second.paint.region_capture_crop_id = None;
+        second.paint.tracked_element_sub_rects.push(
+            crate::internal::layout_input::TrackedElementSubRect {
+                feature: 5,
+                id: [3, 4],
+                should_add_to_compositor_frame_metadata: false,
+                should_exclude_fixed_and_sticky_occlusions: false,
+                sub_rect: None,
+                frame_token: None,
+                parent_frame_token: None,
+            },
+        );
+        assert!(!SamePrePaintInput(&first, &second));
+
+        second.paint.tracked_element_sub_rects.clear();
+        second.paint.is_svg_child = true;
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
     fn filter_reference_box_changes_source_revision() {
         let first = fragment(1);
         let mut second = fragment(1);
@@ -1179,6 +1306,25 @@ mod tests {
         second.paint.paint_layer_filter_viewport = Some(Size {
             width: 40.0,
             height: 50.0,
+        });
+        assert!(!SamePrePaintInput(&first, &second));
+    }
+
+    #[test]
+    fn self_outline_geometry_changes_source_revision() {
+        let first = fragment(1);
+        let mut second = fragment(1);
+        assert!(SamePrePaintInput(&first, &second));
+        second.paint.self_outline = Some(layout_fragment_boundary::SelfOutlinePaintData {
+            rects: vec![FragmentPaintRect {
+                offset: Offset { x: 3.0, y: 4.0 },
+                size: Size {
+                    width: 20.0,
+                    height: 10.0,
+                },
+            }],
+            width: 2.0,
+            offset: 1.0,
         });
         assert!(!SamePrePaintInput(&first, &second));
     }
@@ -1275,5 +1421,25 @@ mod tests {
             paint.selection_client_invalidation_reason,
             Some(foundation::PaintInvalidationReason::kNone)
         );
+    }
+
+    #[test]
+    fn production_owner_tokens_retain_just_created_clients() {
+        let mut tracker = PrePaintRevisionTracker::new();
+        let mut fragment = FragmentPaintData::default();
+        fragment.fragment_instance_id = 1;
+        fragment.paint.display_item_client_id = 11;
+
+        tracker.BeginProductionUpdate();
+        assert!(tracker.ObserveProductionNode(&mut fragment, false));
+        tracker.FinishProductionUpdate();
+        let first_revision = fragment.pre_paint_revision;
+
+        tracker.BeginProductionUpdate();
+        assert!(!tracker.ObserveProductionNode(&mut fragment, false));
+        tracker.FinishProductionUpdate();
+
+        assert!(fragment.pre_paint_owner_retained);
+        assert_eq!(fragment.pre_paint_revision, first_revision);
     }
 }

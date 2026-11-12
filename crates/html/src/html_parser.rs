@@ -1,7 +1,8 @@
 #![allow(non_camel_case_types, non_snake_case, dead_code)]
 
 use dom::persistent_document::{
-    CompatibilityMode, DOMAttribute, DOMNamespace, DOMNode, DOMOwnerHandle, PersistentDocument, DOM,
+    CompatibilityMode, DOMAttribute, DOMNamespace, DOMNode, DOMNodeType, DOMOwnerHandle,
+    PersistentDocument, DOM,
 };
 use foundation::BlinkString;
 
@@ -12,11 +13,13 @@ use crate::parser::html_parser_options::HTMLParserOptions;
 use crate::parser::html_token::{HTMLToken, TokenType};
 use crate::parser::html_tokenizer::HTMLTokenizer;
 use crate::parser::literal_buffer::UCharLiteralBuffer;
+use crate::parser::parser_content_policy::ParserContentPolicy;
 use crate::parser::segmented_string::{PrependType, SegmentedString};
 use crate::preload_scanner::{HTMLPreloadScanner, PreloadScanResult};
 use dom::error::{invalid_argument, logic_error};
 use std::{
     pin::Pin,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -144,6 +147,14 @@ pub struct ParserScript {
 }
 
 // cpp: html/html_parser.h:38-41
+/// ParserSynchronizationPolicy, parser_synchronization_policy.h:12-15;
+/// document_loader.cc3519-3523; html_document_parser.cc754-763.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParserSynchronizationPolicy {
+    AllowDeferredParsing,
+    ForceSynchronousParsing,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct HTMLParserResult {
     pub status: HTMLParserStatus,
@@ -565,6 +576,12 @@ impl<'a> DocumentTreeBuilder<'a> {
         }
     }
 
+    // html_tree_builder.cc:1300–1307. Fragment root is the actual
+    // DocumentFragment; only adjusted-current-node queries use the context.
+    fn AdjustedCurrentElement(&self) -> Option<usize> {
+        self.site_.CurrentElement().or(self.fragment_context_)
+    }
+
     // cpp: html/html_parser.cc:158-210
     fn Process(&mut self, token: &HTMLToken, token_position: HTMLSourcePosition) {
         if self.fragment_context_.is_none() {
@@ -628,7 +645,11 @@ impl<'a> DocumentTreeBuilder<'a> {
                             == "script"
                 });
                 self.ProcessEndTag(token);
-                if let Some(script) = script {
+                if let Some(script) = script.filter(|_| {
+                    self.site_
+                        .GetParserContentPolicy()
+                        .ScriptingContentIsAllowed()
+                }) {
                     self.pending_script_ = Some(ParserScript {
                         node_id: self.site_.OwnerDocument().Node(script).Id(),
                         start_position: self.current_script_start_.unwrap_or(token_position),
@@ -637,10 +658,10 @@ impl<'a> DocumentTreeBuilder<'a> {
                 }
             }
             TokenType::kComment => {
-                self.site_.InsertComment(BufferToUtf8(token.Comment()));
+                self.site_.InsertCommentUTF16(token.Comment().as_slice());
             }
             TokenType::kCharacter => {
-                self.ProcessCharacters(&BufferToUtf8(token.Characters()));
+                self.ProcessCharacters(token.Characters().as_slice());
             }
             TokenType::kProcessingInstruction => {
                 let instruction = self.site_.OwnerDocumentMut().CreateProcessingInstruction(
@@ -673,43 +694,24 @@ impl<'a> DocumentTreeBuilder<'a> {
         while self.site_.CurrentElement().is_some() {
             self.site_.Pop();
         }
+        if self.fragment_context_.is_none() {
+            self.site_
+                .OwnerDocument()
+                .ClearPendingParsingRenderBlockingElements();
+        }
     }
 
     // cpp: html/html_parser.cc:241-253
     fn SameFormattingElement(a: &DOMNode, b: &DOMNode) -> bool {
-        if a.Name() != b.Name()
-            || a.Namespace() != b.Namespace()
-            || a.Attributes().len() != b.Attributes().len()
-        {
-            return false;
-        }
-        for index in 0..a.Attributes().len() {
-            let x = &a.Attributes()[index];
-            let y = &b.Attributes()[index];
-            if x.prefix != y.prefix
-                || x.local_name != y.local_name
-                || x.namespace_uri != y.namespace_uri
-                || x.value != y.value
-            {
-                return false;
-            }
-        }
-        true
+        a.QualifiedNameUTF16() == b.QualifiedNameUTF16()
+            && a.AttributesUTF16() == b.AttributesUTF16()
     }
 
     // cpp: html/html_parser.cc:255-258
     fn CloneElement(&mut self, source: usize) -> usize {
-        let (namespace, name, attributes) = {
-            let node = self.site_.OwnerDocument().Node(source);
-            (
-                node.Namespace(),
-                node.Name().to_owned(),
-                node.Attributes().to_vec(),
-            )
-        };
-        self.site_
-            .OwnerDocumentMut()
-            .CreateElement(namespace, name, attributes)
+        // Keep Element::IsValue, which is independent of later is-attribute
+        // mutation, on the canonical clone path (element.cc:1276-1282).
+        self.site_.OwnerDocumentMut().CloneNode(source, false)
     }
 
     // cpp: html/html_parser.cc:260-262
@@ -765,15 +767,7 @@ impl<'a> DocumentTreeBuilder<'a> {
             let old = self.active_formatting_elements_[index]
                 .expect("active formatting entry must follow the last marker");
             let foster_this = foster_parent && self.CurrentCausesFosterParenting();
-            let (name, attributes, namespace) = {
-                let node = self.site_.OwnerDocument().Node(old);
-                (
-                    node.Name().to_owned(),
-                    node.Attributes().to_vec(),
-                    node.Namespace(),
-                )
-            };
-            let replacement = self.site_.InsertElement(name, attributes, namespace);
+            let replacement = self.site_.InsertReconstructedFormattingElement(old);
             if foster_this {
                 self.site_.InsertAtFosterParent(replacement);
             }
@@ -901,23 +895,16 @@ impl<'a> DocumentTreeBuilder<'a> {
         self.site_.HasInOpenElements("template")
     }
 
-    // cpp: html/html_parser.cc:394-402
-    fn InsideSelect(&self) -> bool {
-        for &entry in self.site_.OpenElements().iter().rev() {
-            let node = self.site_.OwnerDocument().Node(entry);
-            if node.IsHTMLElement("select") {
-                return true;
-            }
-            if node.IsHTMLElement("template") || node.IsHTMLElement("html") {
-                return false;
-            }
-        }
-        false
-    }
-
     // cpp: html/html_parser.cc:404-420
     fn CurrentTableMode(&self) -> TableMode {
         for &entry in self.site_.OpenElements().iter().rev() {
+            let entry = if self.site_.OwnerDocument().Node(entry).Type()
+                == DOMNodeType::kDocumentFragment
+            {
+                self.fragment_context_.unwrap_or(entry)
+            } else {
+                entry
+            };
             let node = self.site_.OwnerDocument().Node(entry);
             if node.Namespace() != DOMNamespace::kHTML {
                 continue;
@@ -992,84 +979,84 @@ impl<'a> DocumentTreeBuilder<'a> {
         self.active_formatting_elements_.push(None);
     }
 
-    // cpp: html/html_parser.cc:459-498
-    fn ProcessStartTagInSelect(&mut self, token: &HTMLToken, name: &str) -> StartTagDisposition {
-        if !self.InsideSelect() {
-            return StartTagDisposition::kProcessInBody;
-        }
-        if IsOneOf(
-            name,
-            &[
-                "caption", "table", "tbody", "tfoot", "thead", "tr", "td", "th",
-            ],
-        ) {
-            self.site_.PopUntil("select");
-            return StartTagDisposition::kProcessInBody;
-        }
-        if name == "option" {
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("option")
-            }) {
-                self.site_.Pop();
+    // html_construction_site.cc:114-121,1678-1690.
+    fn GenerateImpliedEndTags(&mut self, exclusion: Option<&str>) {
+        while let Some(node) = self.site_.CurrentElement() {
+            let node = self.site_.OwnerDocument().Node(node);
+            if node.Namespace() != DOMNamespace::kHTML
+                || exclusion == Some(node.Name())
+                || !IsOneOf(
+                    node.Name(),
+                    &[
+                        "dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc",
+                    ],
+                )
+            {
+                break;
             }
-            self.site_
-                .InsertElementFromToken(token, DOMNamespace::kHTML);
-            return StartTagDisposition::kHandled;
-        }
-        if name == "optgroup" {
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("option")
-            }) {
-                self.site_.Pop();
-            }
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("optgroup")
-            }) {
-                self.site_.Pop();
-            }
-            self.site_
-                .InsertElementFromToken(token, DOMNamespace::kHTML);
-            return StartTagDisposition::kHandled;
-        }
-        if name == "hr" {
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("option")
-            }) {
-                self.site_.Pop();
-            }
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("optgroup")
-            }) {
-                self.site_.Pop();
-            }
-            self.site_
-                .InsertElementFromToken(token, DOMNamespace::kHTML);
             self.site_.Pop();
-            return StartTagDisposition::kHandled;
         }
-        if IsOneOf(name, &["input", "keygen", "textarea", "select"]) {
-            self.site_.PopUntil("select");
-            return StartTagDisposition::kProcessInBody;
+    }
+    // html_tree_builder.cc:856-925,1059-1065,1096-1156. In the pinned
+    // revision select uses the ordinary in-body content model; there is no
+    // InSelect insertion mode which suppresses button/selectedcontent/div.
+    fn ProcessSelectRelatedStartTag(&mut self, name: &str) -> StartTagDisposition {
+        let in_select = self.HasInScope("select");
+        if name == "button" && self.HasInScope("button") {
+            self.GenerateImpliedEndTags(None);
+            self.site_.PopUntil("button");
         }
-        if name == "script" {
-            return StartTagDisposition::kProcessInBody;
+        if name == "select" {
+            if self.fragment_context_.is_some_and(|node| {
+                self.site_
+                    .OwnerDocument()
+                    .Node(node)
+                    .IsHTMLElement("select")
+            }) {
+                return StartTagDisposition::kHandled;
+            }
+            if in_select {
+                self.GenerateImpliedEndTags(None);
+                self.site_.PopUntil("select");
+                return StartTagDisposition::kHandled;
+            }
         }
-        StartTagDisposition::kHandled
+        if in_select {
+            match name {
+                "input" => {
+                    let current = self.site_.CurrentElement().expect("select in scope");
+                    let document = self.site_.OwnerDocument();
+                    let parent_select = document.Node(current).IsHTMLElement("select");
+                    let parent_option_optgroup = document.Node(current).IsHTMLElement("option")
+                        || document.Node(current).IsHTMLElement("optgroup");
+                    let enabled = document.InputInSelectEnabled();
+                    let mut add_select_end_tag = !enabled;
+                    if enabled && (parent_select || parent_option_optgroup) {
+                        add_select_end_tag = true;
+                    }
+                    if enabled && parent_select && !document.SelectWasOptionInserted(current) {
+                        add_select_end_tag = false;
+                    }
+                    if add_select_end_tag {
+                        self.GenerateImpliedEndTags(None);
+                        self.site_.PopUntil("select");
+                    }
+                }
+                "option" => self.GenerateImpliedEndTags(Some("optgroup")),
+                "optgroup" | "hr" => self.GenerateImpliedEndTags(None),
+                _ => {}
+            }
+        } else if (name == "option" || name == "optgroup")
+            && self.site_.CurrentElement().is_some_and(|node| {
+                self.site_
+                    .OwnerDocument()
+                    .Node(node)
+                    .IsHTMLElement("option")
+            })
+        {
+            self.site_.Pop();
+        }
+        StartTagDisposition::kProcessInBody
     }
 
     // cpp: html/html_parser.cc:500-612
@@ -1241,67 +1228,33 @@ impl<'a> DocumentTreeBuilder<'a> {
         }
     }
 
-    // cpp: html/html_parser.cc:614-642
-    fn ProcessEndTagInSelect(&mut self, name: &str) -> bool {
-        if !self.InsideSelect() {
-            return false;
-        }
-        if IsOneOf(
-            name,
-            &[
-                "caption", "table", "tbody", "tfoot", "thead", "tr", "td", "th",
-            ],
-        ) {
-            self.site_.PopUntil("select");
-            return false;
-        }
-        if name == "option" {
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("option")
-            }) {
-                self.site_.Pop();
+    // html_tree_builder.cc:1738-1755. Select content uses this generic
+    // end-tag branch for option, optgroup and selectedcontent.
+    fn ProcessSelectContentEndTag(&mut self, name: &str) {
+        let mut match_node = None;
+        for &node in self.site_.OpenElements().iter().rev() {
+            let element = self.site_.OwnerDocument().Node(node);
+            if element.IsHTMLElement(name) {
+                match_node = Some(node);
+                break;
             }
-            return true;
-        }
-        if name == "optgroup" {
-            if let Some(current) = self.site_.CurrentElement() {
-                if self
-                    .site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("option")
-                {
-                    if self.site_.OpenElementBefore(current).is_some_and(|before| {
-                        self.site_
-                            .OwnerDocument()
-                            .Node(before)
-                            .IsHTMLElement("optgroup")
-                    }) {
-                        self.site_.Pop();
-                    }
-                }
+            let special = match element.Namespace() {
+                DOMNamespace::kHTML => IsSpecialElement(element.Name()),
+                DOMNamespace::kMathML => IsOneOf(
+                    element.Name(),
+                    &["mi", "mo", "mn", "ms", "mtext", "annotation-xml"],
+                ),
+                DOMNamespace::kSVG => IsOneOf(element.Name(), &["foreignObject", "desc", "title"]),
+                _ => false,
+            };
+            if special || element.Type() == DOMNodeType::kDocumentFragment {
+                return;
             }
-            if self.site_.CurrentElement().is_some_and(|current| {
-                self.site_
-                    .OwnerDocument()
-                    .Node(current)
-                    .IsHTMLElement("optgroup")
-            }) {
-                self.site_.Pop();
-            }
-            return true;
         }
-        if name == "select" {
-            self.site_.PopUntil("select");
-            return true;
+        if match_node.is_some() {
+            self.GenerateImpliedEndTags(Some(name));
+            self.site_.PopUntil(name);
         }
-        if name == "template" {
-            return false;
-        }
-        true
     }
 
     // cpp: html/html_parser.cc:644-727
@@ -1427,20 +1380,29 @@ impl<'a> DocumentTreeBuilder<'a> {
         }
     }
 
-    // cpp: html/html_parser.cc:729-742
+    // html_element_stack.cc:47-82,421-431,477-479.
     fn HasInScope(&self, name: &str) -> bool {
         for &entry in self.site_.OpenElements().iter().rev() {
             let node = self.site_.OwnerDocument().Node(entry);
-            if node.Type() == dom::persistent_document::DOMNodeType::kElement {
-                if node.Namespace() == DOMNamespace::kHTML {
-                    if node.Name() == name {
-                        return true;
-                    }
-                } else if LowerASCII(node.Name().to_owned()) == name {
-                    return true;
-                }
+            if node.IsHTMLElement(name) {
+                return true;
             }
-            if node.IsHTMLElement("template") {
+            let marker = match node.Namespace() {
+                DOMNamespace::kHTML => IsOneOf(
+                    node.Name(),
+                    &[
+                        "caption", "applet", "html", "marquee", "object", "table", "td",
+                        "template", "th", "select",
+                    ],
+                ),
+                DOMNamespace::kMathML => IsOneOf(
+                    node.Name(),
+                    &["mi", "mo", "mn", "ms", "mtext", "annotation-xml"],
+                ),
+                DOMNamespace::kSVG => IsOneOf(node.Name(), &["foreignObject", "desc", "title"]),
+                _ => false,
+            };
+            if marker || node.Type() == DOMNodeType::kDocumentFragment {
                 return false;
             }
         }
@@ -1545,6 +1507,9 @@ impl<'a> DocumentTreeBuilder<'a> {
             while self.site_.CurrentElement() != self.html_ {
                 self.site_.Pop();
             }
+            if self.fragment_context_.is_none() {
+                self.site_.OwnerDocument().WillInsertBody();
+            }
             self.body_ = Some(self.site_.InsertElement(
                 "body".to_owned(),
                 Vec::new(),
@@ -1605,7 +1570,16 @@ impl<'a> DocumentTreeBuilder<'a> {
     // cpp: html/html_parser.cc:844-1006
     fn ProcessStartTag(&mut self, token: &HTMLToken) {
         let name = BufferToUtf8(token.GetName());
-        let initial_current = self.site_.CurrentElement();
+        if !self.site_.GetParserContentPolicy().PluginContentIsAllowed()
+            && IsOneOf(&name, &["applet", "object", "embed"])
+            && self.site_.CurrentElement().is_none_or(|current| {
+                let node = self.site_.OwnerDocument().Node(current);
+                node.Namespace() == DOMNamespace::kHTML || ProcessesStartTagAsHTML(node, &name)
+            })
+        {
+            return;
+        }
+        let initial_current = self.AdjustedCurrentElement();
         let process_template_as_html = initial_current.is_none_or(|current| {
             let node = self.site_.OwnerDocument().Node(current);
             node.Namespace() == DOMNamespace::kHTML || ProcessesStartTagAsHTML(node, &name)
@@ -1616,7 +1590,8 @@ impl<'a> DocumentTreeBuilder<'a> {
         }
         let in_template = self.InsideTemplate();
         if in_template && name == "html" {
-            self.MergeAttributes(self.html_.expect("template requires html element"), token);
+            // html_tree_builder.cc:ProcessHtmlStartTagForInBody: an open
+            // template causes this token to be ignored, including fragments.
             return;
         }
         if in_template && IsOneOf(&name, &["head", "body", "frameset"]) {
@@ -1633,7 +1608,7 @@ impl<'a> DocumentTreeBuilder<'a> {
         {
             self.site_
                 .InsertElementFromToken(token, DOMNamespace::kHTML);
-            if token.SelfClosing() || IsVoidElement(&name) {
+            if IsVoidElement(&name) {
                 self.site_.Pop();
             }
             return;
@@ -1678,7 +1653,7 @@ impl<'a> DocumentTreeBuilder<'a> {
             self.EnsureHead();
             self.site_
                 .InsertElementFromToken(token, DOMNamespace::kHTML);
-            if token.SelfClosing() || IsVoidElement(&name) {
+            if IsVoidElement(&name) {
                 self.site_.Pop();
             }
             return;
@@ -1692,6 +1667,7 @@ impl<'a> DocumentTreeBuilder<'a> {
                 while self.site_.CurrentElement() != self.html_ {
                     self.site_.Pop();
                 }
+                self.site_.OwnerDocument().WillInsertBody();
                 self.body_ = Some(
                     self.site_
                         .InsertElementFromToken(token, DOMNamespace::kHTML),
@@ -1723,7 +1699,7 @@ impl<'a> DocumentTreeBuilder<'a> {
         {
             self.EnsureBody();
         }
-        let current = self.site_.CurrentElement();
+        let current = self.AdjustedCurrentElement();
         if current.is_some_and(|index| {
             let node = self.site_.OwnerDocument().Node(index);
             node.Namespace() != DOMNamespace::kHTML && !ProcessesStartTagAsHTML(node, &name)
@@ -1753,15 +1729,14 @@ impl<'a> DocumentTreeBuilder<'a> {
                 return;
             }
         }
-        let select_disposition = self.ProcessStartTagInSelect(token, &name);
-        if select_disposition == StartTagDisposition::kHandled {
-            return;
-        }
         let table_disposition = self.ProcessStartTagInTable(token, &name);
         if table_disposition == StartTagDisposition::kHandled {
             return;
         }
         let foster_parent = table_disposition == StartTagDisposition::kFosterParent;
+        if self.ProcessSelectRelatedStartTag(&name) == StartTagDisposition::kHandled {
+            return;
+        }
         if name == "svg" || name == "math" {
             if foster_parent {
                 self.ReconstructActiveFormattingElements(true);
@@ -1790,9 +1765,6 @@ impl<'a> DocumentTreeBuilder<'a> {
         if (name == "dt" || name == "dd") && (self.HasInScope("dt") || self.HasInScope("dd")) {
             self.site_
                 .PopUntil(if self.HasInScope("dt") { "dt" } else { "dd" });
-        }
-        if name == "option" && self.HasInScope("option") {
-            self.site_.PopUntil("option");
         }
         if ClosesParagraph(&name) && self.HasInScope("p") {
             self.site_.PopUntil("p");
@@ -1860,7 +1832,7 @@ impl<'a> DocumentTreeBuilder<'a> {
         if IsFormattingElement(&name) {
             self.AddActiveFormattingElement(inserted);
         }
-        if token.SelfClosing() || IsVoidElement(&name) {
+        if IsVoidElement(&name) {
             self.site_.Pop();
         }
     }
@@ -1912,10 +1884,18 @@ impl<'a> DocumentTreeBuilder<'a> {
                 }
             }
         }
-        if self.ProcessEndTagInSelect(&name) {
+        if self.ProcessEndTagInTable(&name) {
             return;
         }
-        if self.ProcessEndTagInTable(&name) {
+        if name == "select" {
+            if self.HasInScope("select") {
+                self.GenerateImpliedEndTags(None);
+                self.site_.PopUntil("select");
+            }
+            return;
+        }
+        if IsOneOf(&name, &["option", "optgroup", "selectedcontent"]) {
+            self.ProcessSelectContentEndTag(&name);
             return;
         }
         if name == "html" || name == "body" {
@@ -1934,20 +1914,23 @@ impl<'a> DocumentTreeBuilder<'a> {
     }
 
     // cpp: html/html_parser.cc:1062-1105
-    fn ProcessCharacters(&mut self, data: &str) {
+    fn ProcessCharacters(&mut self, data: &[u16]) {
         if self.fragment_context_.is_none()
             && self.site_.CurrentElement().is_none()
-            && IsHTMLWhitespace(data)
+            && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32))
         {
             return;
         }
-        if self.fragment_context_.is_none() && self.html_.is_none() && IsHTMLWhitespace(data) {
+        if self.fragment_context_.is_none()
+            && self.html_.is_none()
+            && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32))
+        {
             return;
         }
         if self.fragment_context_.is_none()
             && !self.head_closed_
             && self.head_.is_none()
-            && IsHTMLWhitespace(data)
+            && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32))
         {
             return;
         }
@@ -1962,7 +1945,7 @@ impl<'a> DocumentTreeBuilder<'a> {
                     .Node(current)
                     .IsHTMLElement("noscript"))
         }) {
-            self.site_.InsertText(data);
+            self.site_.InsertTextUTF16(data);
             return;
         }
         // "In head" whitespace stays in the head insertion mode. In
@@ -1970,7 +1953,7 @@ impl<'a> DocumentTreeBuilder<'a> {
         // body before later metadata and stylesheet links are parsed.
         if self.fragment_context_.is_none()
             && !self.head_closed_
-            && IsHTMLWhitespace(data)
+            && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32))
             && self.site_.CurrentElement().is_some_and(|current| {
                 self.site_
                     .OwnerDocument()
@@ -1978,31 +1961,31 @@ impl<'a> DocumentTreeBuilder<'a> {
                     .IsHTMLElement("head")
             })
         {
-            self.site_.InsertText(data);
+            self.site_.InsertTextUTF16(data);
             return;
         }
-        if self.frameset_document_ && IsHTMLWhitespace(data) {
+        if self.frameset_document_ && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32)) {
             return;
         }
         if self.fragment_context_.is_none()
             && self.body_.is_none()
             && self.site_.CurrentElement() == self.html_
-            && IsHTMLWhitespace(data)
+            && data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32))
         {
-            self.site_.InsertText(data);
+            self.site_.InsertTextUTF16(data);
             return;
         }
         if !self.InsideTemplate() && self.fragment_context_.is_none() {
             self.EnsureBody();
         }
-        let current = self.site_.CurrentElement();
+        let current = self.AdjustedCurrentElement();
         if current.is_some_and(|current| {
             let node = self.site_.OwnerDocument().Node(current);
             node.Namespace() != DOMNamespace::kHTML
                 && !IsHTMLIntegrationPoint(node)
                 && !IsMathMLTextIntegrationPoint(node)
         }) {
-            self.site_.InsertText(data);
+            self.site_.InsertTextUTF16(data);
             return;
         }
         let in_table_mode = current.is_some_and(|current| {
@@ -2011,21 +1994,21 @@ impl<'a> DocumentTreeBuilder<'a> {
                 &["table", "tbody", "tfoot", "thead", "tr"],
             )
         });
-        if in_table_mode && !IsHTMLWhitespace(data) {
+        if in_table_mode && !data.iter().all(|c| matches!(*c, 9 | 10 | 12 | 13 | 32)) {
             if self.ReconstructActiveFormattingElements(true) {
-                self.site_.InsertText(data);
+                self.site_.InsertTextUTF16(data);
             } else {
-                self.site_.InsertTextAtFosterParent(data);
+                self.site_.InsertTextAtFosterParentUTF16(data);
             }
         } else {
             self.ReconstructActiveFormattingElements(false);
-            self.site_.InsertText(data);
+            self.site_.InsertTextUTF16(data);
         }
     }
 }
 
 // cpp: html/html_parser.cc:1121-1124
-struct InertHTMLParserHost;
+pub(crate) struct InertHTMLParserHost;
 
 impl HTMLParserHost for InertHTMLParserHost {
     // The C++ inert host intentionally ignores parser-element events.
@@ -2042,18 +2025,19 @@ pub struct HTMLDocumentParserState {
     storage_: Option<HTMLDocumentParserContinuation>,
 }
 struct HTMLDocumentParserContinuation {
+    lifecycle: Rc<dom::document_parser_lifecycle::DocumentParserLifecycle>,
     document: DOMOwnerHandle,
     tree: DocumentTreeBuilderState,
     input: SegmentedString,
     tokenizer: Pin<Box<HTMLTokenizer>>,
     input_finished: bool,
-    waiting_for_script: bool,
     finished: bool,
     current_script: Option<ParserScript>,
     preload_scanning: Option<ParserPreloadScanning>,
+    synchronization_policy: ParserSynchronizationPolicy,
 }
 struct DocumentTreeBuilderState {
-    open_elements: Vec<usize>,
+    open_elements: (Vec<usize>, ParserContentPolicy),
     html_: Option<usize>,
     head_: Option<usize>,
     body_: Option<usize>,
@@ -2081,6 +2065,10 @@ impl Drop for ParserBorrow<'_, '_> {
             .expect("borrowed parser exists")
             .Suspend()
             .storage_;
+        // Script reentry has already detached the shared source base. Release
+        // the original tokenizer/scanners/tree-builder references as the
+        // exclusive suspended parser borrow returns, before any next pump.
+        self.state.ObserveStoppedState();
     }
 }
 
@@ -2097,6 +2085,17 @@ impl HTMLDocumentParserState {
     ) -> Self {
         HTMLDocumentParser::new_fragment(document, host, context).Suspend()
     }
+    pub fn SetSynchronizationPolicy(&mut self, policy: ParserSynchronizationPolicy) {
+        let storage = self
+            .storage_
+            .as_mut()
+            .expect("resident parser continuation");
+        assert!(
+            storage.input.IsEmpty() && !storage.input_finished && storage.current_script.is_none(),
+            "select synchronization policy before parser input"
+        );
+        storage.synchronization_policy = policy;
+    }
     pub fn SetTextEncoding(&mut self, label: &str) -> std::io::Result<()> {
         if self.decoder_.is_some() {
             return Err(std::io::Error::other(
@@ -2105,6 +2104,21 @@ impl HTMLDocumentParserState {
         }
         self.decoder_ = Some(crate::text_decoder::TextDecoder::new(label)?);
         Ok(())
+    }
+    /// DecodedDataDocumentParser::AppendDecodedData carries this actual
+    /// decoder selection to its Document; it is not the HTTP encoding label.
+    pub fn CommitDecodedEncodingData(&self, document: &mut PersistentDocument) {
+        assert_eq!(
+            self.storage_
+                .as_ref()
+                .expect("parser continuation exists")
+                .document,
+            document.RootHandle(),
+            "decoder metadata belongs to original Document"
+        );
+        if let Some(decoder) = &self.decoder_ {
+            document.SetDocumentEncoding(decoder.Encoding());
+        }
     }
     pub fn AppendBytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         if self.decoder_.is_none() {
@@ -2123,6 +2137,9 @@ impl HTMLDocumentParserState {
         Ok(())
     }
     pub fn Append(&mut self, text: &str) {
+        if self.ObserveStoppedState() {
+            return;
+        }
         let storage = self.storage_.as_mut().expect("parser continuation exists");
         let decoded = BlinkString::FromUtf8(text.as_bytes());
         AppendDecodedParserInput(&mut storage.input, storage.input_finished, &decoded);
@@ -2133,11 +2150,45 @@ impl HTMLDocumentParserState {
         }
     }
     pub fn FinishInput(&mut self) {
+        if self.ObserveStoppedState() {
+            return;
+        }
         let storage = self.storage_.as_mut().expect("parser continuation exists");
         FinishParserInput(&mut storage.input, &mut storage.input_finished);
         if let Some(scanning) = &mut storage.preload_scanning {
             scanning.main.FinishInput();
         }
+    }
+    pub fn Lifecycle(&self) -> Rc<dom::document_parser_lifecycle::DocumentParserLifecycle> {
+        self.storage_
+            .as_ref()
+            .expect("parser continuation exists")
+            .lifecycle
+            .clone()
+    }
+    pub fn Detach(&mut self) {
+        self.Lifecycle().Detach();
+        self.ObserveStoppedState();
+    }
+    pub fn StopParsing(&mut self) {
+        self.Lifecycle().StopParsing();
+        self.ObserveStoppedState();
+    }
+    fn ObserveStoppedState(&mut self) -> bool {
+        let storage = self.storage_.as_mut().expect("parser continuation exists");
+        if !storage.lifecycle.IsStopped() {
+            return false;
+        }
+        if storage.lifecycle.IsDetached() {
+            storage.preload_scanning = None;
+            storage.tokenizer.as_mut().Reset();
+            storage.tree.open_elements.0.clear();
+            storage.tree.active_formatting_elements_.clear();
+            storage.tree.pending_script_ = None;
+        }
+        storage.lifecycle.SetWaitingForScripts(false);
+        storage.current_script = None;
+        true
     }
     /// Pump one bounded turn, releasing the DOM borrow before returning.
     pub fn Pump(
@@ -2179,6 +2230,9 @@ impl HTMLDocumentParserState {
             document.RootHandle(),
             "cannot resume HTML parsing in a different document"
         );
+        // DecodedDataDocumentParser::AppendDecodedData commits the decoder's
+        // actual selection before tokenizer/tree-builder work and script entry.
+        self.CommitDecodedEncodingData(document);
         let continuation = HTMLDocumentParserState {
             decoder_: None,
             storage_: self.storage_.take(),
@@ -2191,19 +2245,29 @@ impl HTMLDocumentParserState {
         task(scope.parser.as_mut().unwrap())
     }
     pub fn ResumeAfterScript(&mut self) {
+        if self.ObserveStoppedState() {
+            return;
+        }
         let storage = self.storage_.as_mut().expect("parser continuation exists");
-        if !storage.waiting_for_script {
+        if !storage.lifecycle.IsWaitingForScripts() {
             logic_error("HTML parser is not waiting for a script");
         }
-        storage.waiting_for_script = false;
+        storage.lifecycle.SetWaitingForScripts(false);
         storage.current_script = None;
         if let Some(scanning) = &mut storage.preload_scanning {
             scanning.EndInsertion();
         }
     }
     pub fn InsertFromScript(&mut self, text: &str) {
+        if self.ObserveStoppedState() {
+            return;
+        }
         let storage = self.storage_.as_mut().expect("parser continuation exists");
-        InsertParserInput(&mut storage.input, storage.waiting_for_script, text);
+        InsertParserInput(
+            &mut storage.input,
+            storage.lifecycle.IsWaitingForScripts(),
+            text,
+        );
         if let Some(scanning) = &mut storage.preload_scanning {
             scanning.Insert(&BlinkString::FromUtf8(text.as_bytes()));
         }
@@ -2231,6 +2295,12 @@ impl HTMLDocumentParserState {
         storage.preload_scanning = Some(ParserPreloadScanning::new(scripting));
     }
     pub fn ScanPreloads(&mut self, token_budget: usize) -> PreloadScanResult {
+        if self.ObserveStoppedState() {
+            return PreloadScanResult {
+                finished: true,
+                ..Default::default()
+            };
+        }
         self.storage_
             .as_mut()
             .expect("parser continuation exists")
@@ -2256,16 +2326,21 @@ impl HTMLDocumentParserState {
             .length() as usize
     }
     pub fn IsPaused(&self) -> bool {
-        self.storage_
-            .as_ref()
-            .expect("parser continuation exists")
-            .waiting_for_script
+        !self.Lifecycle().IsStopped()
+            && self
+                .storage_
+                .as_ref()
+                .expect("parser continuation exists")
+                .lifecycle
+                .IsWaitingForScripts()
     }
     pub fn IsFinished(&self) -> bool {
-        self.storage_
-            .as_ref()
-            .expect("parser continuation exists")
-            .finished
+        self.Lifecycle().IsStopped()
+            || self
+                .storage_
+                .as_ref()
+                .expect("parser continuation exists")
+                .finished
     }
 }
 
@@ -2306,14 +2381,15 @@ fn InsertParserInput(input: &mut SegmentedString, waiting_for_script: bool, html
 
 // cpp: html/html_parser.cc:1129-1141
 struct HTMLDocumentParserStorage<'a> {
+    lifecycle: Rc<dom::document_parser_lifecycle::DocumentParserLifecycle>,
     tree_builder: DocumentTreeBuilder<'a>,
     input: SegmentedString,
     tokenizer: Pin<Box<HTMLTokenizer>>,
     input_finished: bool,
-    waiting_for_script: bool,
     finished: bool,
     current_script: Option<ParserScript>,
     preload_scanning: Option<ParserPreloadScanning>,
+    synchronization_policy: ParserSynchronizationPolicy,
 }
 
 impl<'a> HTMLDocumentParserStorage<'a> {
@@ -2323,15 +2399,23 @@ impl<'a> HTMLDocumentParserStorage<'a> {
         host: &'a mut dyn HTMLParserHost,
         fragment_context: Option<usize>,
     ) -> Self {
+        let lifecycle =
+            dom::document_parser_lifecycle::DocumentParserLifecycle::new(document.RootHandle());
+        if fragment_context.is_none() {
+            document.InstallDocumentParser(lifecycle.clone());
+        }
+        let input = SegmentedString::default();
+        lifecycle.BindSourceLine(input.CurrentLineHandle());
         Self {
+            lifecycle,
             tree_builder: DocumentTreeBuilder::new(document, host, fragment_context),
-            input: SegmentedString::default(),
+            input,
             tokenizer: HTMLTokenizer::new(HTMLParserOptions::default()),
             input_finished: false,
-            waiting_for_script: false,
             finished: false,
             current_script: None,
             preload_scanning: None,
+            synchronization_policy: ParserSynchronizationPolicy::AllowDeferredParsing,
         }
     }
 }
@@ -2352,14 +2436,15 @@ impl<'a> HTMLDocumentParser<'a> {
             .OwnerDocument()
             .RootHandle();
         let HTMLDocumentParserStorage {
+            lifecycle,
             tree_builder,
             input,
             tokenizer,
             input_finished,
-            waiting_for_script,
             finished,
             current_script,
             preload_scanning,
+            synchronization_policy,
         } = *self.storage_;
         let DocumentTreeBuilder {
             site_,
@@ -2379,6 +2464,7 @@ impl<'a> HTMLDocumentParser<'a> {
         HTMLDocumentParserState {
             decoder_: None,
             storage_: Some(HTMLDocumentParserContinuation {
+                lifecycle,
                 document,
                 tree: DocumentTreeBuilderState {
                     open_elements: site_.IntoOpenElements(),
@@ -2398,10 +2484,10 @@ impl<'a> HTMLDocumentParser<'a> {
                 input,
                 tokenizer,
                 input_finished,
-                waiting_for_script,
                 finished,
                 current_script,
                 preload_scanning,
+                synchronization_policy,
             }),
         }
     }
@@ -2419,15 +2505,16 @@ impl<'a> HTMLDocumentParser<'a> {
             "cannot resume HTML parsing in a different document"
         );
         let HTMLDocumentParserContinuation {
+            lifecycle,
             document: _,
             tree,
             input,
             tokenizer,
             input_finished,
-            waiting_for_script,
             finished,
             current_script,
             preload_scanning,
+            synchronization_policy,
         } = state;
         let DocumentTreeBuilderState {
             open_elements,
@@ -2446,8 +2533,14 @@ impl<'a> HTMLDocumentParser<'a> {
         } = tree;
         Self {
             storage_: Box::new(HTMLDocumentParserStorage {
+                lifecycle,
                 tree_builder: DocumentTreeBuilder {
-                    site_: HTMLConstructionSite::Resume(document, host, open_elements),
+                    site_: HTMLConstructionSite::Resume(
+                        document,
+                        host,
+                        open_elements.0,
+                        open_elements.1,
+                    ),
                     html_,
                     head_,
                     body_,
@@ -2464,10 +2557,10 @@ impl<'a> HTMLDocumentParser<'a> {
                 input,
                 tokenizer,
                 input_finished,
-                waiting_for_script,
                 finished,
                 current_script,
                 preload_scanning,
+                synchronization_policy,
             }),
         }
     }
@@ -2496,6 +2589,59 @@ impl<'a> HTMLDocumentParser<'a> {
         }
     }
 
+    pub fn new_fragment_with_root(
+        document: &'a mut PersistentDocument,
+        host: &'a mut dyn HTMLParserHost,
+        fragment_root: usize,
+        context: usize,
+        policy: ParserContentPolicy,
+        scripting_flag: bool,
+    ) -> Self {
+        let mut parser = Self::new_fragment(document, host, context);
+        parser
+            .storage_
+            .tree_builder
+            .site_
+            .open_elements_for_fragment(fragment_root);
+        parser.SetFragmentContentPolicy(policy, scripting_flag);
+        let context = parser
+            .storage_
+            .tree_builder
+            .site_
+            .OwnerDocument()
+            .Node(context);
+        if context.Namespace() == DOMNamespace::kHTML {
+            let tag = LookupHtmlTag(context.NameUTF16());
+            parser.storage_.tokenizer.as_mut().UpdateStateForTag(tag);
+        }
+        parser
+    }
+
+    pub fn SetFragmentContentPolicy(&mut self, policy: ParserContentPolicy, scripting_flag: bool) {
+        assert!(self.storage_.tree_builder.fragment_context_.is_some());
+        self.storage_
+            .tree_builder
+            .site_
+            .SetParserContentPolicy(policy);
+        self.storage_.tree_builder.scripting_flag_ = scripting_flag;
+        // Fragment parsing has no preload scanner or script execution host.
+        assert!(self.storage_.input.IsEmpty());
+        self.storage_.tokenizer = HTMLTokenizer::new(HTMLParserOptions {
+            scripting_flag,
+            ..HTMLParserOptions::default()
+        });
+    }
+    pub fn AppendUTF16(&mut self, html: &[u16]) {
+        if self.storage_.lifecycle.IsStopped() {
+            return;
+        }
+        AppendDecodedParserInput(
+            &mut self.storage_.input,
+            self.storage_.input_finished,
+            &BlinkString::from_utf16(html),
+        );
+    }
+
     // cpp: html/html_parser.h:55-56
     // cpp: html/html_parser.cc:1160-1167
     pub fn Append(&mut self, html: &str) {
@@ -2505,6 +2651,9 @@ impl<'a> HTMLDocumentParser<'a> {
     // std::string_view in the source can contain malformed UTF-8; BlinkString
     // performs the conversion from bytes after the parser receives the input.
     pub fn AppendBytes(&mut self, html: &[u8]) {
+        if self.storage_.lifecycle.IsStopped() {
+            return;
+        }
         let decoded = BlinkString::FromUtf8(html);
         AppendDecodedParserInput(
             &mut self.storage_.input,
@@ -2521,6 +2670,9 @@ impl<'a> HTMLDocumentParser<'a> {
     // cpp: html/html_parser.h:56
     // cpp: html/html_parser.cc:1169-1177
     pub fn FinishInput(&mut self) {
+        if self.storage_.lifecycle.IsStopped() {
+            return;
+        }
         FinishParserInput(&mut self.storage_.input, &mut self.storage_.input_finished);
         if let Some(scanning) = &mut self.storage_.preload_scanning {
             scanning.main.FinishInput();
@@ -2548,14 +2700,33 @@ impl<'a> HTMLDocumentParser<'a> {
         token_budget: usize,
         time_budget: Option<Duration>,
     ) -> HTMLParserResult {
+        let (token_budget, time_budget) = if self.storage_.synchronization_policy
+            == ParserSynchronizationPolicy::ForceSynchronousParsing
+        {
+            (usize::MAX, None)
+        } else {
+            (token_budget, time_budget)
+        };
         let storage = &mut self.storage_;
+        if storage.lifecycle.IsStopped() {
+            storage.lifecycle.SetWaitingForScripts(false);
+            storage.current_script = None;
+            if storage.lifecycle.IsDetached() {
+                storage.preload_scanning = None;
+                storage.tokenizer.as_mut().Reset();
+            }
+            return HTMLParserResult {
+                status: HTMLParserStatus::kFinished,
+                script: None,
+            };
+        }
         if storage.finished {
             return HTMLParserResult {
                 status: HTMLParserStatus::kFinished,
                 script: None,
             };
         }
-        if storage.waiting_for_script {
+        if storage.lifecycle.IsWaitingForScripts() {
             return HTMLParserResult {
                 status: HTMLParserStatus::kWaitingForScript,
                 script: storage.current_script,
@@ -2587,6 +2758,14 @@ impl<'a> HTMLDocumentParser<'a> {
 
             let eof = token.GetType() == TokenType::kEndOfFile;
             storage.tree_builder.Process(token, token_position);
+            if storage.lifecycle.IsStopped() {
+                storage.lifecycle.SetWaitingForScripts(false);
+                storage.current_script = None;
+                return HTMLParserResult {
+                    status: HTMLParserStatus::kFinished,
+                    script: None,
+                };
+            }
             let speculative_tag = if token.GetType() == TokenType::kStartTag
                 && storage.tree_builder.LastStartTagWasHTML()
                 && !token.GetName().IsEmpty()
@@ -2602,7 +2781,7 @@ impl<'a> HTMLDocumentParser<'a> {
             processed += 1;
 
             if let Some(script) = storage.tree_builder.TakePendingScript() {
-                storage.waiting_for_script = true;
+                storage.lifecycle.SetWaitingForScripts(true);
                 storage.current_script = Some(script);
                 return HTMLParserResult {
                     status: HTMLParserStatus::kWaitingForScript,
@@ -2612,6 +2791,9 @@ impl<'a> HTMLDocumentParser<'a> {
             if eof {
                 storage.tree_builder.Finish();
                 storage.finished = true;
+                if storage.lifecycle.IsParsing() {
+                    storage.lifecycle.PrepareToStopParsing();
+                }
                 return HTMLParserResult {
                     status: HTMLParserStatus::kFinished,
                     script: None,
@@ -2640,10 +2822,13 @@ impl<'a> HTMLDocumentParser<'a> {
     // cpp: html/html_parser.h:58
     // cpp: html/html_parser.cc:1225-1230
     pub fn ResumeAfterScript(&mut self) {
-        if !self.storage_.waiting_for_script {
+        if self.storage_.lifecycle.IsStopped() {
+            return;
+        }
+        if !self.storage_.lifecycle.IsWaitingForScripts() {
             logic_error("HTML parser is not waiting for a script");
         }
-        self.storage_.waiting_for_script = false;
+        self.storage_.lifecycle.SetWaitingForScripts(false);
         self.storage_.current_script = None;
         if let Some(scanning) = &mut self.storage_.preload_scanning {
             scanning.EndInsertion();
@@ -2655,9 +2840,10 @@ impl<'a> HTMLDocumentParser<'a> {
     // Rust's exclusive reborrow enforces that no parser method can run inside
     // this callback, matching the source parser's script pause boundary.
     pub fn WithPausedDocument<R>(&mut self, task: impl FnOnce(&mut PersistentDocument) -> R) -> R {
-        if !self.storage_.waiting_for_script {
+        if !self.storage_.lifecycle.IsWaitingForScripts() {
             logic_error("HTML parser is not waiting for a script");
         }
+        let _script_scope = self.storage_.lifecycle.EnterExecutingScript();
         self.WithDocument(task)
     }
 
@@ -2671,9 +2857,12 @@ impl<'a> HTMLDocumentParser<'a> {
     // cpp: html/html_parser.h:59
     // cpp: html/html_parser.cc:1232-1241
     pub fn InsertFromScript(&mut self, html: &str) {
+        if self.storage_.lifecycle.IsStopped() {
+            return;
+        }
         InsertParserInput(
             &mut self.storage_.input,
-            self.storage_.waiting_for_script,
+            self.storage_.lifecycle.IsWaitingForScripts(),
             html,
         );
         if let Some(scanning) = &mut self.storage_.preload_scanning {
@@ -2684,13 +2873,13 @@ impl<'a> HTMLDocumentParser<'a> {
     // cpp: html/html_parser.h:61
     // cpp: html/html_parser.cc:1243-1245
     pub fn IsPaused(&self) -> bool {
-        self.storage_.waiting_for_script
+        !self.storage_.lifecycle.IsStopped() && self.storage_.lifecycle.IsWaitingForScripts()
     }
 
     // cpp: html/html_parser.h:62
     // cpp: html/html_parser.cc:1247-1249
     pub fn IsFinished(&self) -> bool {
-        self.storage_.finished
+        self.storage_.lifecycle.IsStopped() || self.storage_.finished
     }
 }
 
@@ -2728,20 +2917,74 @@ pub fn ParseHTMLFragment(
     context: &DOMNode,
     html: &str,
 ) -> usize {
-    let fragment = document.CreateDocumentFragment();
-    let synthetic_context = document.CreateElement(
-        context.Namespace(),
-        context.Name().to_owned(),
-        context.Attributes().to_vec(),
-    );
-    if let Some(owner) = context.OwnerDocumentNode() {
-        document.AdoptNodeByHandle(fragment, owner);
-        document.AdoptNodeByHandle(synthetic_context, owner);
-    }
+    // Existing embedders may supply a context from a foreign arena. Retain
+    // only its parser context element there; same-arena production calls use
+    // the original node and never make a synthetic context.
+    let context_index = document
+        .FindNodeById(context.Id())
+        .filter(|index| document.Node(*index).OwnerDocumentNode() == context.OwnerDocumentNode())
+        .unwrap_or_else(|| {
+            let index = document.CreateElement(
+                context.Namespace(),
+                context.Name().to_owned(),
+                context.Attributes().to_vec(),
+            );
+            if let Some(owner) = context.OwnerDocumentNode() {
+                document.AdoptNodeByHandle(index, owner);
+            }
+            index
+        });
+    ParseHTMLFragmentUTF16WithPolicy(
+        document,
+        context_index,
+        &html.encode_utf16().collect::<Vec<_>>(),
+        ParserContentPolicy::AllowScriptingContent,
+        false,
+    )
+}
+
+/// HTMLDocumentParser::ParseDocumentFragment / HTMLTreeBuilder cc:390–420.
+/// Borrow the real context; insert directly into the native fragment root.
+pub fn ParseHTMLFragmentUTF16WithPolicy(
+    document: &mut PersistentDocument,
+    context: usize,
+    html: &[u16],
+    policy: ParserContentPolicy,
+    scripting_flag: bool,
+) -> usize {
     let mut host = InertHTMLParserHost;
+    ParseHTMLFragmentUTF16WithPolicyAndHost(
+        document,
+        context,
+        html,
+        policy,
+        scripting_flag,
+        &mut host,
+    )
+}
+
+pub fn ParseHTMLFragmentUTF16WithPolicyAndHost(
+    document: &mut PersistentDocument,
+    context: usize,
+    html: &[u16],
+    policy: ParserContentPolicy,
+    scripting_flag: bool,
+    host: &mut dyn HTMLParserHost,
+) -> usize {
+    let fragment = document.CreateDocumentFragment();
+    if let Some(owner) = document.Node(context).OwnerDocumentNode() {
+        document.AdoptNodeByHandle(fragment, owner);
+    }
     {
-        let mut parser = HTMLDocumentParser::new_fragment(document, &mut host, synthetic_context);
-        parser.Append(html);
+        let mut parser = HTMLDocumentParser::new_fragment_with_root(
+            document,
+            host,
+            fragment,
+            context,
+            policy,
+            scripting_flag,
+        );
+        parser.AppendUTF16(html);
         parser.FinishInput();
         while !parser.IsFinished() {
             let result = parser.Pump(usize::MAX);
@@ -2750,7 +2993,5 @@ pub fn ParseHTMLFragment(
             }
         }
     }
-    let contents = document.TemplateContents(synthetic_context);
-    document.TakeAllChildren(contents.unwrap_or(synthetic_context), fragment);
     fragment
 }

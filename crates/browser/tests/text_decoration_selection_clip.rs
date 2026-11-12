@@ -5,9 +5,9 @@
 mod test_thread;
 
 use browser::page::Page;
-use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType};
+use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType, Offset};
 use layoutng_assembly::{
-    internal::layout_input::{FontFace, NodeKind, Offset},
+    internal::layout_input::{FontFace, NodeKind},
     layout_engine::PaintFragmentCursor,
 };
 use paint::paint_engine::DisplayItemType;
@@ -345,6 +345,28 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             "originating underline and line-through each clip out selection; node items: {node_item_types:?}"
         );
 
+        let matching_restore = |start: usize| {
+            let mut nested_saves = 0usize;
+            for (index, item) in items.iter().enumerate().skip(start + 1) {
+                if matches!(
+                    item.r#type,
+                    DisplayItemType::kSave
+                        | DisplayItemType::kSaveLayer
+                        | DisplayItemType::kSaveLayerAlpha
+                        | DisplayItemType::kSaveLayerBlend
+                        | DisplayItemType::kSaveLayerFilter
+                        | DisplayItemType::kSaveLayerDstIn
+                ) {
+                    nested_saves += 1;
+                } else if item.r#type == DisplayItemType::kRestore {
+                    if nested_saves == 0 {
+                        return index;
+                    }
+                    nested_saves -= 1;
+                }
+            }
+            panic!("selection clip restore");
+        };
         let selection_scopes: Vec<_> = items
             .iter()
             .enumerate()
@@ -352,15 +374,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
                 item.node_id == node_id && item.r#type == DisplayItemType::kClipRect
             })
             .map(|(clip, item)| {
-                let restore = items
-                    .iter()
-                    .enumerate()
-                    .skip(clip + 1)
-                    .find(|(_, item)| {
-                        item.node_id == node_id && item.r#type == DisplayItemType::kRestore
-                    })
-                    .map(|(index, _)| index)
-                    .expect("selection clip restore");
+                let restore = matching_restore(clip);
                 let scope = &items[clip + 1..restore];
                 (
                     clip,
@@ -389,9 +403,10 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         let selected_decoration_colors: Vec<_> = selected_decorations
             .iter()
             .map(|(clip, _, _, _)| {
-                items
+                let restore = matching_restore(*clip);
+                items[*clip + 1..restore]
                     .iter()
-                    .skip(*clip + 1)
+                    .rev()
                     .find(|item| item.is_text_decoration && !item.is_shadow)
                     .expect("selected decoration in clip scope")
                     .color
@@ -477,15 +492,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         let selection_shadow_clip = selection_scopes
             .iter()
             .find(|(clip, _, _, _)| {
-                let restore = items
-                    .iter()
-                    .enumerate()
-                    .skip(*clip + 1)
-                    .find(|(_, item)| {
-                        item.node_id == node_id && item.r#type == DisplayItemType::kRestore
-                    })
-                    .map(|(index, _)| index)
-                    .expect("selection shadow restore");
+                let restore = matching_restore(*clip);
                 *clip < selection_shadow && selection_shadow < restore
             })
             .map(|(_, rect, _, _)| *rect)
@@ -493,13 +500,9 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         let selection_background_rect = items[selection_background].rect;
         assert_eq!(selection_shadow_clip.x, selection_background_rect.x);
         assert_eq!(selection_shadow_clip.y, selection_background_rect.y);
-        assert_eq!(
-            selection_shadow_clip.width,
-            selection_background_rect.width + 4.0
-        );
-        assert_eq!(
-            selection_shadow_clip.height,
-            selection_background_rect.height + 5.0
+        assert!((selection_shadow_clip.width - selection_background_rect.width - 4.0).abs() < 1.0);
+        assert!(
+            (selection_shadow_clip.height - selection_background_rect.height - 5.0).abs() < 1.0
         );
         assert!(originating_shadow < selection_background);
         assert!(selection_background < selection_shadow);
@@ -510,15 +513,18 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             .all(|(clip, _, _, _)| selection_shadow < *clip));
         assert!(
             selected_decorations.iter().all(|(clip, _, _, _)| {
-                items.iter().skip(*clip + 1).any(|item| {
-                    item.is_text_decoration
-                        && item.is_shadow
-                        && close(item.color.red, 1.0)
-                        && close(item.color.green, 0.0)
-                        && close(item.color.blue, 1.0)
-                        && item.shadow_offset.x == 4.0
-                        && item.shadow_offset.y == 5.0
-                })
+                items[*clip + 1..matching_restore(*clip)]
+                    .iter()
+                    .any(|item| {
+                        item.r#type == DisplayItemType::kSaveLayerFilter
+                            && item.text_shadow_filters.iter().any(|shadow| {
+                                close(shadow.color.red, 1.0)
+                                    && close(shadow.color.green, 0.0)
+                                    && close(shadow.color.blue, 1.0)
+                                    && shadow.offset.x == 4.0
+                                    && shadow.offset.y == 5.0
+                            })
+                    })
             }),
             "selection decorations must use the selection layer shadow"
         );
@@ -821,7 +827,11 @@ fn selection_uses_space_width_for_a_selected_hard_line_break() {
             })
             .expect("hard-break selection background")
             .rect;
-        assert!((background.width - rect.width).abs() < 1e-5);
+        let snapped_width = (rect.x + rect.width).round() - rect.x.round();
+        assert!(
+            (background.width - snapped_width).abs() < 1e-5,
+            "hard-break background {background:?} differs from pixel-snapped range {rect:?}"
+        );
     });
 }
 
@@ -868,5 +878,128 @@ fn transparent_selection_background_does_not_record_draw_rect() {
                 && item.r#type == DisplayItemType::kDrawRect
                 && item.color.alpha <= 0.0
         }));
+    });
+}
+
+#[test]
+fn visible_selection_handles_publish_compositor_bounds() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let html = br#"<!doctype html><body style="margin:0"><span style="font:24px/32px SelectionDecorationFixture">selection bounds</span></body>"#;
+        let mut page = load_page(html);
+        let frame = page.CurrentFrame().expect("initial frame");
+        let initial_sequence = frame.sequence;
+        let text =
+            find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
+        let node_id = text.PaintData().node_id;
+        let endpoint = text.text_start.expect("text start");
+        let endpoint_rect = text
+            .TextSelectionRangeRect(endpoint, endpoint, false)
+            .expect("selection endpoint rect");
+        assert_eq!(endpoint_rect.width, 0.0);
+        assert!(endpoint_rect.height > 0.0);
+        let glyph_rect = frame
+            .display_items
+            .items
+            .iter()
+            .find(|item| item.node_id == node_id && item.r#type == DisplayItemType::kDrawGlyphRun)
+            .expect("glyph item")
+            .rect;
+        let y = glyph_rect.y + glyph_rect.height / 2.0;
+        let start = Offset {
+            x: glyph_rect.x + 2.0,
+            y,
+        };
+        let end = Offset {
+            x: glyph_rect.x + glyph_rect.width - 2.0,
+            y,
+        };
+        for event in [
+            MouseEvent {
+                r#type: MouseEventType::kDown,
+                position: start,
+                button: MouseButton::kPrimary,
+                ..Default::default()
+            },
+            MouseEvent {
+                r#type: MouseEventType::kMove,
+                position: end,
+                button: MouseButton::kPrimary,
+                ..Default::default()
+            },
+        ] {
+            page.Dispatch(&InputEvent::Mouse(event)).unwrap();
+        }
+        // SelectionBoundsRecorder is active only while touch-style selection
+        // handles are visible. This retained-state transition invalidates paint.
+        page.GetLayoutEngine()
+            .GetLayoutTree()
+            .expect("layout tree")
+            .EditingState()
+            .selections
+            .SetSelectionHandlesVisible(true);
+        page.Dispatch(&InputEvent::Mouse(MouseEvent {
+            r#type: MouseEventType::kUp,
+            position: end,
+            button: MouseButton::kPrimary,
+            ..Default::default()
+        }))
+        .unwrap();
+
+        for _ in 0..100 {
+            page.RunTask().unwrap();
+            if page.CurrentFrame().is_some_and(|frame| {
+                frame.sequence > initial_sequence
+                    && frame.display_items.chunks.iter().any(|chunk| {
+                        chunk
+                            .compositor
+                            .as_deref()
+                            .and_then(|metadata| metadata.layer_selection_data.as_deref())
+                            .is_some_and(|selection| {
+                                selection.any_selection_was_painted
+                                    && selection.start.is_some()
+                                    && selection.end.is_some()
+                            })
+                    })
+            }) {
+                break;
+            }
+        }
+
+        let document_selection = page
+            .GetLayoutEngine()
+            .GetLayoutTree()
+            .expect("layout tree")
+            .EditingState()
+            .selections
+            .Document();
+        assert!(document_selection.is_some_and(|selection| !selection.Collapsed()));
+        let frame = page.CurrentFrame().expect("selection frame");
+        assert!(frame.sequence > initial_sequence);
+        let layer_selections: Vec<_> = frame
+            .display_items
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.compositor.as_deref())
+            .filter_map(|metadata| metadata.layer_selection_data.as_deref())
+            .collect();
+        assert!(
+            layer_selections
+                .iter()
+                .any(|selection| selection.any_selection_was_painted),
+            "selection paint must mark its chunk for compositor selection metadata"
+        );
+        assert!(
+            layer_selections
+                .iter()
+                .any(|selection| selection.start.is_some()),
+            "visible selection handles must publish a start bound"
+        );
+        assert!(
+            layer_selections
+                .iter()
+                .any(|selection| selection.end.is_some()),
+            "visible selection handles must publish an end bound"
+        );
     });
 }

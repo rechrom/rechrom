@@ -78,13 +78,39 @@ pub struct ChildrenChangeBoundary {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ControlPseudoState {
+    State,
+    Valid,
+    Invalid,
+    UserValid,
+    UserInvalid,
+    Open,
+    ActiveOption,
+    Filtered,
     Default,
     HasDatalist,
     Indeterminate,
+    Paused,
+    Playing,
+    Buffering,
+    Stalled,
+    Muted,
+    Seeking,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UserActionPseudoState {
+    Hover,
+    Active,
+    Focus,
+    FocusVisible,
+    FocusWithin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StyleChange {
+    /// LayoutSelection focus change: local ::selection recalc and the
+    /// source kPseudoSelection descendant/sibling/relational invalidations.
+    PseudoSelection(usize),
     Node(usize),
     /// Attribute mutation with old/new selector keys retained below.
     AttributeValue(usize),
@@ -102,6 +128,11 @@ pub enum StyleChange {
     /// Form association/group observers notify a specific pseudo, without
     /// changing this control's attributes or every sibling selector input.
     ControlPseudo(usize, ControlPseudoState),
+    /// Element::SetHovered/SetActive changed the canonical DOM state.
+    UserAction(usize, UserActionPseudoState),
+    /// Element::SetDragged carries its actual native attachment at mutation;
+    /// selector flags and local/subtree invalidation remain Style-owned.
+    Dragged(usize, bool),
     /// Only the inline declaration attribute changed. The resolver may keep
     /// selector dependencies local after proving no rule reads that attribute.
     InlineStyle(usize),
@@ -168,6 +199,13 @@ pub struct StyleState {
     /// CSSOM's Node::kInlineIndependentStyleChange fact. The resolver combines
     /// it with stronger pending invalidations and inheritance propagation.
     pub independent_inline_styles: HashSet<usize>,
+    /// Node::SetNeedsStyleRecalc(kSubtreeStyleChange). The resolver expands
+    /// these roots when it performs the existing parent-first style walk.
+    pub subtree_style_recalc_roots: HashSet<usize>,
+    /// Node's local/child style-recalc bits and pending source detach traversal.
+    pub style_recalc_dirty_nodes: HashSet<usize>,
+    pub child_needs_style_recalc: HashSet<usize>,
+    pub detach_parent_recalc_roots: HashSet<usize>,
     pub attribute_changes: HashMap<usize, AttributeStyleChange>,
     /// Nodes whose old or new state can match the left side of a sibling
     /// combinator. Kept separately so StyleChange remains compact and deduped.
@@ -211,6 +249,8 @@ pub struct StyleState {
     /// Attribute metadata awaiting validation by the resident LayoutEngine.
     /// Acknowledging query geometry does not consume the frame's paint impact.
     pub geometry_input_nodes: HashSet<u64>,
+    /// Canonical DOM editing metadata awaiting a resident LayoutObject update.
+    pub editing_input_nodes: OrderedNodeSet,
 }
 
 impl Default for StyleState {
@@ -223,6 +263,10 @@ impl Default for StyleState {
             all_dirty: true,
             changes: Default::default(),
             independent_inline_styles: Default::default(),
+            subtree_style_recalc_roots: Default::default(),
+            style_recalc_dirty_nodes: Default::default(),
+            child_needs_style_recalc: Default::default(),
+            detach_parent_recalc_roots: Default::default(),
             attribute_changes: Default::default(),
             sibling_sensitive_nodes: Default::default(),
             descendant_sensitive_nodes: Default::default(),
@@ -241,6 +285,7 @@ impl Default for StyleState {
             paint_style_requires_export: true,
             measurement_geometry_revision: 0,
             geometry_input_nodes: Default::default(),
+            editing_input_nodes: Default::default(),
         }
     }
 }

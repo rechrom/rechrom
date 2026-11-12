@@ -4,7 +4,7 @@ use crate::adapter::{
     geometry::Rect,
     raster_invalidator::{
         ClientIsOldOrNew, DisplayItemClientId, RasterInvalidationItem, RasterInvalidationSink,
-        RasterVisualRectMapper,
+        RasterVisualRectMapper, RoundedOpaqueBacking,
     },
 };
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason as Reason};
@@ -210,11 +210,142 @@ impl<
         reason: Reason,
         old: ClientIsOldOrNew,
     ) {
-        let rect = self
-            .invalidator_
-            .ClipByLayerBounds(self.mapper_.MapVisualRect(rect));
-        self.invalidator_
-            .AddRasterInvalidation(rect, id, reason, old);
+        let source_rect = rect;
+        let mut mapped_rect = self.mapper_.MapVisualRect(source_rect);
+        let inner_rect = self
+            .mapper_
+            .MapVisualRectWithoutRasterEffectOutset(source_rect);
+        let mut requires_full_replay = false;
+        let mut full_replay_rect = Rect::default();
+        let has_rounded_clip = self.mapper_.HasRoundedClip();
+        // A changed drawing can also change antialias coverage in an enclosing
+        // decoration or rounded clip. Chromium invalidates the corresponding
+        // display item as part of the same chunk. Preserve the same result when
+        // Layout only marks the descendant.
+        if !mapped_rect.IsEmpty()
+            && IsFullPaintInvalidationReason(reason)
+            && (has_rounded_clip || reason == Reason::kImage)
+        {
+            let items = if old == Self::kClientIsOld {
+                self.old_display_items_
+            } else {
+                self.new_display_items_
+            };
+            let changed_index = items
+                .iter()
+                .position(|item| item.ClientId() == id)
+                .unwrap_or(items.len());
+            let counterpart_items = if old == Self::kClientIsOld {
+                self.new_display_items_
+            } else {
+                self.old_display_items_
+            };
+            let mut backing_rect = Rect::default();
+            let mut image_decoration_rect = Rect::default();
+            for item in &items[..changed_index] {
+                // Cached display items are represented in the new list by a
+                // tombstone whose subtype bytes have moved out. Resolve that
+                // stable id against the other list before consulting drawing
+                // and opacity metadata.
+                let resolved = if item.IsTombstone() {
+                    counterpart_items
+                        .iter()
+                        .find(|candidate| candidate.GetId() == item.GetId())
+                        .unwrap_or(item)
+                } else {
+                    item
+                };
+                let visual_rect = resolved.VisualRect();
+                if !resolved.DrawsContent() || !visual_rect.Contains(source_rect) {
+                    continue;
+                }
+                if has_rounded_clip && !resolved.RectKnownToBeOpaque().IsEmpty() {
+                    backing_rect.Union(visual_rect);
+                }
+                // An image decode does not invalidate its containing CSS box
+                // decoration in Rechrom's flat artifact. Replaying only the
+                // image can start the partial-raster clip on the decoration's
+                // antialiased border. Select the nearest containing decoration
+                // so the border and image are quantized in the same context.
+                if reason == Reason::kImage && resolved.IsBoxDecorationBackground() {
+                    let visual_area = i64::from(visual_rect.width) * i64::from(visual_rect.height);
+                    let selected_area = i64::from(image_decoration_rect.width)
+                        * i64::from(image_decoration_rect.height);
+                    if image_decoration_rect.IsEmpty() || visual_area < selected_area {
+                        image_decoration_rect = visual_rect;
+                    }
+                }
+            }
+            if has_rounded_clip && !backing_rect.IsEmpty() {
+                // Replay and copy the complete rounded backing.  The mapped
+                // descendant can already include a raster-effect outset, but
+                // that outset is not a substitute for the backing's border
+                // coverage (notably for fractional CSS geometry).
+                let mapped_backing = self.mapper_.MapVisualRect(backing_rect);
+                mapped_rect.Union(mapped_backing);
+                full_replay_rect.Union(mapped_backing);
+                requires_full_replay = true;
+            }
+            if !image_decoration_rect.IsEmpty() {
+                let mapped_decoration = self.mapper_.MapVisualRect(image_decoration_rect);
+                mapped_rect.Union(mapped_decoration);
+                full_replay_rect.Union(mapped_decoration);
+                requires_full_replay = true;
+            }
+            if has_rounded_clip {
+                if let Some(layer_backing) = self.invalidator_.FindRoundedOpaqueBacking(inner_rect)
+                {
+                    // A partial-raster clip that starts on any antialiased edge of
+                    // the backing can quantize that edge differently from the
+                    // original full-tile raster. This applies to integral edges as
+                    // well as fractional right edges, and remains true when a
+                    // shadow/surface sibling overlaps the backing. The raster
+                    // backend intersects this replay region with the actual dirty
+                    // rect before copying from its full-context scratch target, so
+                    // requesting the complete backing does not overwrite clean
+                    // pixels.
+                    mapped_rect.Union(layer_backing.rect);
+                    full_replay_rect.Union(layer_backing.rect);
+                    requires_full_replay = true;
+                }
+                // An asynchronously decoded image is initially rastered as
+                // empty content, then repainted inside its rounded overflow
+                // clip. Preserve one pixel of AA context when no decoration
+                // or opaque backing supplies the edge.
+                if reason == Reason::kImage && self.mapper_.NeedsRoundedClipAAOutset() {
+                    let mut rounded_clip_context = inner_rect;
+                    rounded_clip_context.Inset(-1, -1, -1, -1);
+                    mapped_rect.Union(rounded_clip_context);
+                    full_replay_rect.Union(rounded_clip_context);
+                    requires_full_replay = true;
+                }
+            }
+        }
+        let rect = self.invalidator_.ClipByLayerBounds(mapped_rect);
+        let inner_rect = self.invalidator_.ClipByLayerBounds(inner_rect);
+        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+            eprintln!(
+                "display-item-invalidation id={} reason={:?} old={:?} source={:?} mapped={:?} clipped={:?}",
+                id, reason, old, source_rect, mapped_rect, rect
+            );
+        }
+        if requires_full_replay {
+            if full_replay_rect.IsEmpty() {
+                full_replay_rect = rect;
+            }
+            self.invalidator_
+                .AddRasterInvalidationForFullReplay(
+                    rect,
+                    inner_rect,
+                    full_replay_rect,
+                    id,
+                    reason,
+                    old,
+                );
+        } else {
+            self.invalidator_
+                .AddRasterInvalidation(rect, id, reason, old);
+        }
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/display_item_raster_invalidator.cc:144-187.
     #[inline(always)]
@@ -341,6 +472,8 @@ mod tests {
         draws: bool,
         cacheable: bool,
         tombstone: bool,
+        opaque_rect: Rect,
+        box_decoration: bool,
     }
 
     impl Item {
@@ -353,6 +486,8 @@ mod tests {
                 draws: true,
                 cacheable: true,
                 tombstone: false,
+                opaque_rect: Rect::default(),
+                box_decoration: false,
             }
         }
 
@@ -386,6 +521,12 @@ mod tests {
         fn VisualRect(&self) -> Rect {
             self.rect
         }
+        fn RectKnownToBeOpaque(&self) -> Rect {
+            self.opaque_rect
+        }
+        fn IsBoxDecorationBackground(&self) -> bool {
+            self.box_decoration
+        }
         fn GetPaintInvalidationReason(&self) -> Reason {
             self.reason
         }
@@ -394,11 +535,27 @@ mod tests {
     #[derive(Default)]
     struct Sink {
         invalidations: Vec<(Rect, usize, Reason, ClientIsOldOrNew)>,
+        full_replays: Vec<(Rect, Rect)>,
+        replay_regions: Vec<Rect>,
+        layer_backings: Vec<Rect>,
+        overlapping_layer_backing: bool,
     }
 
     impl RasterInvalidationSink for Sink {
         fn ClipByLayerBounds(&self, rect: Rect) -> Rect {
             rect
+        }
+        fn FindRoundedOpaqueBacking(&self, rect: Rect) -> Option<RoundedOpaqueBacking> {
+            let rect = self
+                .layer_backings
+                .iter()
+                .copied()
+                .filter(|backing| backing.Contains(rect))
+                .min_by_key(|backing| i64::from(backing.width) * i64::from(backing.height))?;
+            Some(RoundedOpaqueBacking {
+                rect,
+                has_overlapping_sibling: self.overlapping_layer_backing,
+            })
         }
         fn AddRasterInvalidation(
             &mut self,
@@ -409,12 +566,65 @@ mod tests {
         ) {
             self.invalidations.push((rect, id, reason, old_or_new));
         }
+        fn AddRasterInvalidationForFullReplay(
+            &mut self,
+            rect: Rect,
+            inner: Rect,
+            replay_rect: Rect,
+            id: DisplayItemClientId,
+            reason: Reason,
+            old_or_new: ClientIsOldOrNew,
+        ) {
+            self.full_replays.push((rect, inner));
+            self.replay_regions.push(replay_rect);
+            self.AddRasterInvalidation(rect, id, reason, old_or_new);
+        }
     }
 
     struct IdentityMapper;
     impl RasterVisualRectMapper for IdentityMapper {
         fn MapVisualRect(&self, rect: Rect) -> Rect {
             rect
+        }
+    }
+
+    struct RoundedMapper;
+    impl RasterVisualRectMapper for RoundedMapper {
+        fn MapVisualRect(&self, rect: Rect) -> Rect {
+            rect
+        }
+        fn NeedsRoundedClipAAOutset(&self) -> bool {
+            true
+        }
+        fn HasRoundedClip(&self) -> bool {
+            true
+        }
+    }
+
+    struct RoundedRasterOutsetMapper;
+    impl RasterVisualRectMapper for RoundedRasterOutsetMapper {
+        fn MapVisualRect(&self, mut rect: Rect) -> Rect {
+            rect.Inset(-1, -1, -1, -1);
+            rect
+        }
+        fn MapVisualRectWithoutRasterEffectOutset(&self, rect: Rect) -> Rect {
+            rect
+        }
+        fn HasRoundedClip(&self) -> bool {
+            true
+        }
+    }
+
+    struct FractionalRightRoundedMapper;
+    impl RasterVisualRectMapper for FractionalRightRoundedMapper {
+        fn MapVisualRect(&self, rect: Rect) -> Rect {
+            rect
+        }
+        fn HasRoundedClip(&self) -> bool {
+            true
+        }
+        fn RoundedClipHasFractionalRightEdge(&self) -> bool {
+            true
         }
     }
 
@@ -518,6 +728,200 @@ mod tests {
                 ClientIsOldOrNew::kClientIsNew
             )]
         );
+    }
+
+    #[test]
+    fn full_invalidation_without_backing_stays_inside_rounded_clip() {
+        let rect = Rect::new(10, 20, 30, 40);
+        let old = [Item::drawing(1, 8, rect)];
+        let mut changed = Item::drawing(1, 8, rect);
+        changed.reason = Reason::kLayout;
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &[changed], &RoundedMapper).Generate();
+        assert_eq!(
+            sink.invalidations,
+            vec![(
+                rect,
+                8,
+                Reason::kLayout,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+        assert!(sink.full_replays.is_empty());
+    }
+
+    #[test]
+    fn decoded_image_replays_rounded_clip_aa_context_without_opaque_backing() {
+        let rect = Rect::new(10, 20, 30, 40);
+        let old = [Item::drawing(1, 8, rect)];
+        let mut changed = Item::drawing(1, 8, rect);
+        changed.reason = Reason::kImage;
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &[changed], &RoundedMapper).Generate();
+        let context = Rect::new(9, 19, 32, 42);
+        assert_eq!(
+            sink.invalidations,
+            vec![(
+                context,
+                8,
+                Reason::kImage,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+        assert_eq!(sink.full_replays, vec![(context, rect)]);
+        assert_eq!(sink.replay_regions, vec![context]);
+    }
+
+    #[test]
+    fn decoded_image_replays_containing_box_decoration_without_rounded_clip() {
+        let decoration_rect = Rect::new(9, 19, 32, 42);
+        let image_rect = Rect::new(10, 20, 30, 40);
+        let mut decoration = Item::drawing(1, 7, decoration_rect);
+        decoration.box_decoration = true;
+        let old = [decoration.clone(), Item::drawing(2, 8, image_rect)];
+        let mut changed = Item::drawing(2, 8, image_rect);
+        changed.reason = Reason::kImage;
+        let new = [decoration, changed];
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &new, &IdentityMapper).Generate();
+        assert_eq!(
+            sink.invalidations,
+            vec![(
+                decoration_rect,
+                8,
+                Reason::kImage,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+        assert_eq!(sink.full_replays, vec![(decoration_rect, image_rect)]);
+        assert_eq!(sink.replay_regions, vec![decoration_rect]);
+    }
+
+    #[test]
+    fn full_invalidation_replays_rounded_opaque_backing() {
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let mut backing = Item::drawing(1, 7, backing_rect);
+        backing.opaque_rect = Rect::new(12, 23, 24, 34);
+        let old = [backing.clone(), Item::drawing(2, 8, changed_rect)];
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let new = [backing, changed];
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &new, &RoundedMapper).Generate();
+        assert_eq!(
+            sink.invalidations,
+            vec![(
+                backing_rect,
+                8,
+                Reason::kLayout,
+                ClientIsOldOrNew::kClientIsNew
+            )]
+        );
+        assert_eq!(sink.full_replays, vec![(backing_rect, changed_rect)]);
+    }
+
+    #[test]
+    fn full_invalidation_uses_smallest_cross_chunk_opaque_backing() {
+        let layer_rect = Rect::new(0, 0, 100, 100);
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let old = [Item::drawing(2, 8, changed_rect)];
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let mut sink = Sink {
+            layer_backings: vec![layer_rect, backing_rect],
+            ..Sink::default()
+        };
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &[changed], &RoundedMapper).Generate();
+        assert_eq!(sink.full_replays, vec![(backing_rect, changed_rect)]);
+        assert_eq!(sink.invalidations[0].0, backing_rect);
+    }
+
+    #[test]
+    fn overlapping_cross_chunk_backing_replays_complete_fractional_backing() {
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let old = [Item::drawing(2, 8, changed_rect)];
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let mut sink = Sink {
+            layer_backings: vec![backing_rect],
+            overlapping_layer_backing: true,
+            ..Sink::default()
+        };
+        DisplayItemRasterInvalidator::new(
+            &mut sink,
+            &old,
+            &[changed],
+            &FractionalRightRoundedMapper,
+        )
+        .Generate();
+        assert_eq!(sink.full_replays, vec![(backing_rect, changed_rect)]);
+        assert_eq!(sink.invalidations[0].0, backing_rect);
+        assert_eq!(sink.replay_regions, vec![backing_rect]);
+    }
+
+    #[test]
+    fn overlapping_cross_chunk_backing_replays_complete_integral_backing() {
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let old = [Item::drawing(2, 8, changed_rect)];
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let mut sink = Sink {
+            layer_backings: vec![backing_rect],
+            overlapping_layer_backing: true,
+            ..Sink::default()
+        };
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &[changed], &RoundedMapper).Generate();
+        assert_eq!(sink.full_replays, vec![(backing_rect, changed_rect)]);
+        assert_eq!(sink.invalidations[0].0, backing_rect);
+        assert_eq!(sink.replay_regions, vec![backing_rect]);
+    }
+
+    #[test]
+    fn cached_backing_tombstone_uses_old_opaque_metadata() {
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let mut backing = Item::drawing(1, 7, backing_rect);
+        backing.opaque_rect = Rect::new(12, 23, 24, 34);
+        let old = [backing.clone(), Item::drawing(2, 8, changed_rect)];
+        let mut cached_backing = backing.tombstone();
+        cached_backing.opaque_rect = Rect::default();
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let new = [cached_backing, changed];
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(&mut sink, &old, &new, &RoundedMapper).Generate();
+        assert_eq!(sink.full_replays, vec![(backing_rect, changed_rect)]);
+        assert_eq!(sink.invalidations[0].0, backing_rect);
+    }
+
+    #[test]
+    fn existing_raster_outset_still_requests_rounded_backing_replay() {
+        let backing_rect = Rect::new(9, 19, 32, 42);
+        let changed_rect = Rect::new(10, 20, 30, 40);
+        let mut backing = Item::drawing(1, 7, backing_rect);
+        backing.opaque_rect = Rect::new(12, 23, 24, 34);
+        let old = [backing.clone(), Item::drawing(2, 8, changed_rect)];
+        let mut changed = Item::drawing(2, 8, changed_rect);
+        changed.reason = Reason::kLayout;
+        let new = [backing, changed];
+        let mut sink = Sink::default();
+        DisplayItemRasterInvalidator::new(
+            &mut sink,
+            &old,
+            &new,
+            &RoundedRasterOutsetMapper,
+        )
+        .Generate();
+        let mapped_backing_rect = Rect::new(8, 18, 34, 44);
+        assert_eq!(
+            sink.full_replays,
+            vec![(mapped_backing_rect, changed_rect)]
+        );
+        assert_eq!(sink.invalidations[0].0, mapped_backing_rect);
     }
 
     #[test]

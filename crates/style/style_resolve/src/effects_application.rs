@@ -39,7 +39,7 @@ fn Identifier(
         Err(LonghandApplicationError::InvalidValue(id))
     }
 }
-fn Number(
+pub(super) fn Number(
     id: CSSPropertyID,
     v: &Value,
     b: &ComputedStyleBuilder,
@@ -73,7 +73,7 @@ fn Number(
         _ => Err(LonghandApplicationError::InvalidValue(id)),
     }
 }
-fn LengthValue(
+pub(super) fn LengthValue(
     id: CSSPropertyID,
     v: &Value,
     b: &ComputedStyleBuilder,
@@ -404,6 +404,9 @@ pub(super) fn Shape(
             value.byte_stream.clone(),
             value.wind_rule,
         ))),
+        CSSValuePayload::kBasicShapeShapeClass(value) => Ok(MakeGarbageCollected(
+            super::shape_application::Shape(id, value, b, root, media)?,
+        )),
         _ => Err(LonghandApplicationError::Unsupported(id)),
     }
 }
@@ -564,13 +567,29 @@ pub(super) fn Apply(
                 b.SetCursorList(parent.unwrap().Cursors());
                 b.SetCursorIsInherited(true);
             } else {
-                let cursor = if initial {
-                    ECursor::kAuto
-                } else {
-                    CursorKeyword(id, v)?
-                };
                 b.ClearCursorList();
-                b.SetCursor(cursor);
+                b.SetCursor(ECursor::kAuto);
+                if !initial {
+                    if let CSSValuePayload::kValueListClass(list) = v.Payload() {
+                        for item in &list.values {
+                            if let CSSValuePayload::kCursorImageClass(cursor) = item.Payload() {
+                                let image = ResolveStyleImage(
+                                    id,
+                                    b,
+                                    &cursor.image_value,
+                                    root,
+                                    media,
+                                    images,
+                                )?;
+                                b.AddCursor(image, cursor.hot_spot_specified, &cursor.hot_spot);
+                            } else {
+                                b.SetCursor(CursorKeyword(id, item)?);
+                            }
+                        }
+                    } else {
+                        b.SetCursor(CursorKeyword(id, v)?);
+                    }
+                }
                 b.SetCursorIsInherited(false);
             }
         }

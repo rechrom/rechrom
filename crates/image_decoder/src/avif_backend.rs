@@ -201,9 +201,11 @@ fn decode_with_limits(bytes: &[u8], limits: Limits) -> io::Result<DecodedImage> 
     // All conversion completes while the decoder owns its referenced pictures.
     let rgba8 = super::avif_rgb8::convert(image)?;
     Ok(DecodedImage {
+        filename_extension: Some("avif"),
         width: image.width,
         height: image.height,
         orientation,
+        hot_spot: None,
         alpha_type: image_resource::PaintImageAlphaType::Unpremultiplied,
         // admit_still_image above rejects sequence tracks before publication.
         animation: image_resource::PaintImageAnimationMetadata::Known(

@@ -137,7 +137,11 @@ impl LayoutObject {
         mode: MapCoordinatesFlags,
     ) -> gfx::QuadF {
         self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectAncestorToLocalQuad(self, ancestor, quad, mode) }
+        let mut state =
+            TransformState::new(TransformState::kUnapplyInverseTransformDirection, *quad);
+        self.MapAncestorToLocal(ancestor, &mut state, mode);
+        state.Flatten();
+        state.LastPlanarQuad()
     }
 
     pub fn AncestorToLocalPointPhysical(
@@ -159,10 +163,94 @@ impl LayoutObject {
         mode: MapCoordinatesFlags,
     ) -> gfx::PointF {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectAncestorToLocalPointFProvider(self, ancestor, point, mode) }
+        let mut state =
+            TransformState::new(TransformState::kUnapplyInverseTransformDirection, *point);
+        self.MapAncestorToLocal(ancestor, &mut state, mode);
+        state.Flatten();
+        state.LastPlanarPoint()
     }
 
     #[inline(never)]
+    // Chromium layout_object.cc:3882-3949. Inverse mapping visits the live
+    // container chain first, then unapplies this object's transform. It must
+    // not invert an enclosing axis-aligned rectangle or copy fragment geometry.
+    pub fn MapAncestorToLocal(
+        &self,
+        ancestor: *const LayoutBoxModelObject,
+        state: &mut TransformState,
+        mode: MapCoordinatesFlags,
+    ) {
+        debug_assert_eq!(
+            state.Direction(),
+            TransformState::kUnapplyInverseTransformDirection
+        );
+        if std::ptr::eq(self, ancestor.cast()) {
+            return;
+        }
+        let canvas = self.CanvasForDrawingLayoutObject();
+        if !canvas.is_null() {
+            if canvas.cast_const() != ancestor.cast() {
+                unsafe { &*canvas }.MapAncestorToLocal(ancestor, state, mode);
+            }
+            let use_transforms = !mode.contains(MapCoordinatesMode::kIgnoreTransforms);
+            let accumulation = if use_transforms && self.StyleRef().Preserves3D() {
+                TransformState::kAccumulateTransform
+            } else {
+                TransformState::kFlattenTransform
+            };
+            if use_transforms && self.ShouldUseTransformFromContainer(canvas) {
+                let mut transform = gfx::Transform::default();
+                self.GetTransformFromContainer(
+                    canvas,
+                    PhysicalOffset::default(),
+                    &mut transform,
+                    std::ptr::null(),
+                    None,
+                );
+                state.ApplyTransform(&transform, accumulation);
+            }
+            return;
+        }
+        let mut skip_info = AncestorSkipInfo::new(ancestor.cast());
+        let container = self.ContainerWithSkipInfo(&mut skip_info);
+        if container.is_null() {
+            return;
+        }
+        if !skip_info.AncestorSkipped() {
+            unsafe { &*container }.MapAncestorToLocal(ancestor, state, mode);
+        }
+        let offset = self.OffsetFromContainer(container, mode);
+        let use_transforms = !mode.contains(MapCoordinatesMode::kIgnoreTransforms);
+        if container != self.NearestAncestorForElement() {
+            state.Move(PhysicalOffset::default(), TransformState::kFlattenTransform);
+        }
+        let accumulation = if use_transforms && self.StyleRef().Preserves3D() {
+            TransformState::kAccumulateTransform
+        } else {
+            TransformState::kFlattenTransform
+        };
+        if use_transforms && self.ShouldUseTransformFromContainer(container) {
+            let mut transform = gfx::Transform::default();
+            self.GetTransformFromContainer(
+                container,
+                offset,
+                &mut transform,
+                std::ptr::null(),
+                None,
+            );
+            state.ApplyTransform(&transform, accumulation);
+        } else {
+            state.Move(offset, accumulation);
+        }
+        if skip_info.AncestorSkipped() {
+            assert!(!ancestor.is_null());
+            state.Move(
+                -unsafe { &*ancestor.cast::<LayoutObject>() }.OffsetFromAncestor(container),
+                TransformState::kFlattenTransform,
+            );
+        }
+    }
+
     pub fn LocalToAncestorRect(
         &self,
         rect: &PhysicalRect,
@@ -188,6 +276,26 @@ impl LayoutObject {
         let mut current = self as *const LayoutObject;
         while current != ancestor_object {
             let current_object = unsafe { &*current };
+            // SVGLayoutSupport::MapLocalToAncestor, svg_layout_support.cc:
+            // 181-200. SVG user space crosses the root's viewBox/zoom once,
+            // then the ordinary CSS LayoutBox container mapping resumes.
+            if current_object.IsSVGChild() {
+                state.ApplyTransform(
+                    &current_object.LocalToSVGParentTransform().ToTransform(),
+                    TransformState::kFlattenTransform,
+                );
+                let parent = current_object.Parent();
+                if let Some(parent) = unsafe { parent.as_ref() } {
+                    if parent.IsSVGRoot() {
+                        state.ApplyTransform(
+                            &parent.LocalToSVGParentTransform().ToTransform(),
+                            TransformState::kFlattenTransform,
+                        );
+                    }
+                }
+                current = parent;
+                continue;
+            }
             let canvas = current_object.CanvasForDrawingLayoutObject();
             if !canvas.is_null() {
                 let use_transforms = !mode.contains(MapCoordinatesMode::kIgnoreTransforms);
@@ -308,7 +416,12 @@ impl LayoutObject {
         mode: MapCoordinatesFlags,
     ) -> gfx::Transform {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectLocalToAncestorTransformProvider(self, ancestor, mode) }
+        // Source: core/layout/layout_object.cc:4048-4057. TransformState's
+        // accumulation-only constructor retains the canonical container walk.
+        debug_assert!(!mode.contains(MapCoordinatesMode::kIgnoreTransforms));
+        let mut state = TransformState::accumulating(TransformState::kApplyTransformDirection);
+        self.MapLocalToAncestorForGeometry(ancestor, &mut state, mode);
+        state.AccumulatedTransform()
     }
 
     pub fn LocalToAbsoluteTransform(&self, mode: MapCoordinatesFlags) -> gfx::Transform {

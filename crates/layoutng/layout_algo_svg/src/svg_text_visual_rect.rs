@@ -21,7 +21,7 @@ pub(crate) fn ObjectBoundingBox(object: &LayoutObject) -> gfx::RectF {
 // core/layout/svg/layout_svg_inline.cc:115-120, layout_svg_text.cc:328-337.
 // The query is a pure read of the completed layout snapshot. The existing
 // SvgLayoutSupport assembly slot carries this derived-class operation.
-pub(crate) fn VisualRectInLocalSVGCoordinates(object: &LayoutObject) -> gfx::RectF {
+pub(crate) fn StrokeBoundingBox(object: &LayoutObject) -> gfx::RectF {
     let mut bounds = ObjectBoundingBox(object);
     if bounds.IsEmpty() {
         return bounds;
@@ -34,13 +34,18 @@ pub(crate) fn VisualRectInLocalSVGCoordinates(object: &LayoutObject) -> gfx::Rec
         let dimension =
             ((viewport.width() * viewport.width() + viewport.height() * viewport.height()) / 2.0)
                 .sqrt();
-        let stroke = crate::svg_length_functions::ValueForLength(
-            style.StrokeWidth().length(),
+        let stroke = crate::svg_length_functions::ValueForUnzoomedLength(
+            style.StrokeWidth(),
             style.EffectiveZoom(),
             dimension,
         );
         bounds.Inset(-stroke);
     }
+    bounds
+}
+pub(crate) fn VisualRectInLocalSVGCoordinates(object: &LayoutObject) -> gfx::RectF {
+    let mut bounds = StrokeBoundingBox(object);
+    let style = object.StyleRef();
     if let Some(shadow) = unsafe { style.TextShadow().as_ref() } {
         shadow.AdjustRectForShadow(&mut bounds);
     }

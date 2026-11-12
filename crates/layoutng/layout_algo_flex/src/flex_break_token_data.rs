@@ -7,6 +7,7 @@ use layoutng_assembly::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
 use layoutng_assembly::internal::layout_box::LayoutBox;
+use layoutng_assembly::RegisterFlexTotalRowGapCount;
 
 use crate::flex_line::FlexLineVector;
 
@@ -58,6 +59,7 @@ impl FlexBreakTokenData {
         break_before_row: FlexBreakBeforeRow,
         gap_data: FlexGapBreakTokenData,
     ) -> Self {
+        RegisterFlexTotalRowGapCount(DispatchFlexTotalRowGapCount);
         Self {
             base: BreakTokenAlgorithmData::new(BreakTokenAlgorithmDataType::kFlexData),
             flex_lines: flex_lines.clone(),
@@ -90,6 +92,10 @@ impl FlexBreakTokenData {
     }
 }
 
+fn DispatchFlexTotalRowGapCount(data: *const BreakTokenAlgorithmData) -> u32 {
+    unsafe { &*data.cast::<FlexBreakTokenData>() }.GetTotalRowGapCount()
+}
+
 const _: () = assert!(std::mem::offset_of!(FlexBreakTokenData, base) == 0);
 
 impl BreakTokenAlgorithmDataVirtual for FlexBreakTokenData {
@@ -117,5 +123,27 @@ impl DowncastFrom<BreakTokenAlgorithmData> for FlexBreakTokenData {
 impl Traceable for FlexBreakTokenData {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         FlexBreakTokenData::Trace(self, visitor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_virtual_dispatch_reads_total_row_gap_count() {
+        let data = FlexBreakTokenData::new(
+            &FlexLineVector::default(),
+            &[],
+            &HeapVector::default(),
+            LayoutUnit::default(),
+            FlexBreakBeforeRow::default(),
+            FlexGapBreakTokenData {
+                total_row_gap_count: 7,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(data.base.GetTotalRowGapCount(), 7);
     }
 }

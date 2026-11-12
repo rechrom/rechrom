@@ -23,6 +23,7 @@ union JSModuleLoaderUnion {
 }
 #[repr(C)]
 pub struct JSRuntime {
+    continuation_data_slot: *const std::cell::RefCell<JSContinuationData>,
     malloc_ctx: JSMallocContext,
     rt_info: *const c_char,
     atom_hash_size: i32,
@@ -50,6 +51,8 @@ pub struct JSRuntime {
     current_stack_frame: *mut JSStackFrame,
     interrupt_handler: Option<JSInterruptHandler>,
     interrupt_opaque: *mut c_void,
+    // Embedder-only native regexp limit; zero retains official QuickJS semantics.
+    regexp_backtrack_limit: u32,
     host_promise_rejection_tracker: Option<JSHostPromiseRejectionTracker>,
     host_promise_rejection_tracker_opaque: *mut c_void,
     job_list: list_head,

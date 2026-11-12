@@ -3,7 +3,7 @@
 use crate::blink_geometry::transforms::affine_transform::AffineTransform;
 use crate::{gfx, PhysicalOffset};
 
-// cpp: foundation/blink_geometry/geometry/transform_state.h:48-53
+// cpp: core/layout/geometry/transform_state.h:48-53
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransformDirection {
     kApplyTransformDirection,
@@ -32,14 +32,131 @@ impl From<gfx::QuadF> for TransformStateInput {
     }
 }
 
-// This is the source's offset and 2D-affine mapping path. A non-2D gfx
-// transform is rejected explicitly until the 4x4 projection path is mapped.
-// cpp: foundation/blink_geometry/geometry/transform_state.h:46-140
+// Source core/layout/geometry/transform_state.{h,cc}. One accumulation owner
+// retains the existing affine fast path until a real 3D transform promotes it.
+#[derive(Clone, Debug)]
+enum AccumulatedTransform {
+    Affine(AffineTransform),
+    Full(Box<gfx::Transform>),
+}
+impl AccumulatedTransform {
+    fn FromTransform(transform: &gfx::Transform) -> Self {
+        if transform.Is2dTransform() {
+            Self::Affine(AffineTransform::FromTransform(transform))
+        } else {
+            Self::Full(Box::new(transform.clone()))
+        }
+    }
+    fn ToTransform(&self) -> gfx::Transform {
+        match self {
+            Self::Affine(t) => t.ToTransform(),
+            Self::Full(t) => (**t).clone(),
+        }
+    }
+    fn IsIdentity(&self) -> bool {
+        match self {
+            Self::Affine(t) => t.IsIdentity(),
+            Self::Full(t) => t.IsIdentity(),
+        }
+    }
+    fn MakeIdentity(&mut self) {
+        match self {
+            Self::Affine(t) => t.MakeIdentity(),
+            Self::Full(t) => t.MakeIdentity(),
+        }
+    }
+    fn Flatten(&mut self) {
+        if let Self::Full(t) = self {
+            t.Flatten();
+        }
+    }
+    fn Concat(&mut self, incoming: &gfx::Transform, direction: TransformDirection) {
+        if let Self::Affine(current) = self {
+            if incoming.Is2dTransform() {
+                let incoming = AffineTransform::FromTransform(incoming);
+                if direction == TransformDirection::kApplyTransformDirection {
+                    current.PostConcat(incoming);
+                } else {
+                    current.PreConcat(incoming);
+                }
+                return;
+            }
+        }
+        if let Self::Full(current) = self {
+            if direction == TransformDirection::kApplyTransformDirection {
+                current.PostConcat(incoming);
+            } else {
+                current.PreConcat(incoming);
+            }
+            return;
+        }
+        // Promote this same accumulated owner once; never flatten a 3D chain
+        // merely to fit the affine representation.
+        let mut current = self.ToTransform();
+        if direction == TransformDirection::kApplyTransformDirection {
+            current.PostConcat(incoming);
+        } else {
+            current.PreConcat(incoming);
+        }
+        *self = Self::Full(Box::new(current));
+    }
+    fn Translate(&mut self, offset: PhysicalOffset, direction: TransformDirection) {
+        match self {
+            Self::Affine(current) => {
+                let translation = AffineTransform::new(
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    offset.left.ToDouble(),
+                    offset.top.ToDouble(),
+                );
+                if direction == TransformDirection::kApplyTransformDirection {
+                    current.PostConcat(translation);
+                } else {
+                    current.PreConcat(translation);
+                }
+            }
+            Self::Full(current) => {
+                if direction == TransformDirection::kApplyTransformDirection {
+                    current.PostTranslate(offset.left.ToFloat(), offset.top.ToFloat());
+                } else {
+                    current.Translate(offset.left.ToFloat(), offset.top.ToFloat());
+                }
+            }
+        }
+    }
+    fn MapPoint(&self, point: gfx::PointF) -> gfx::PointF {
+        match self {
+            Self::Affine(t) => t.MapPoint(&point),
+            Self::Full(t) => t.MapPoint(point),
+        }
+    }
+    fn MapQuad(&self, quad: gfx::QuadF) -> gfx::QuadF {
+        match self {
+            Self::Affine(t) => t.MapQuad(quad),
+            Self::Full(t) => t.MapQuad(quad),
+        }
+    }
+    fn InverseProjectPoint(&self, point: gfx::PointF) -> gfx::PointF {
+        match self {
+            Self::Affine(t) => t.Inverse().MapPoint(&point),
+            Self::Full(t) => t.InverseOrIdentity().ProjectPoint(point),
+        }
+    }
+    fn InverseProjectQuad(&self, quad: gfx::QuadF) -> gfx::QuadF {
+        match self {
+            Self::Affine(t) => t.Inverse().MapQuad(quad),
+            Self::Full(t) => t.InverseOrIdentity().ProjectQuad(quad),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TransformState {
     last_planar_point_: gfx::PointF,
     last_planar_quad_: gfx::QuadF,
-    accumulated_transform_: Option<AffineTransform>,
+    accumulated_transform_: Option<AccumulatedTransform>,
     accumulated_offset_: PhysicalOffset,
     force_accumulating_transform_: bool,
     map_point_: bool,
@@ -56,7 +173,7 @@ impl TransformState {
     pub const kAccumulateTransform: TransformAccumulation =
         TransformAccumulation::kAccumulateTransform;
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.h:55-86
+    // cpp: core/layout/geometry/transform_state.h:55-86
     pub fn new(direction: TransformDirection, input: impl Into<TransformStateInput>) -> Self {
         let (point, quad, map_point, map_quad) = match input.into() {
             TransformStateInput::Point(point) => (point, gfx::QuadF::default(), true, false),
@@ -76,19 +193,20 @@ impl TransformState {
 
     pub fn accumulating(direction: TransformDirection) -> Self {
         let mut state = Self::new(direction, gfx::PointF::default());
-        state.accumulated_transform_ = Some(AffineTransform::default());
+        state.accumulated_transform_ =
+            Some(AccumulatedTransform::Affine(AffineTransform::default()));
         state.force_accumulating_transform_ = true;
         state.map_point_ = false;
         state
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.h:96-106
+    // cpp: core/layout/geometry/transform_state.h:96-106
     pub fn SetQuad(&mut self, quad: gfx::QuadF) {
         debug_assert!(!self.map_point_);
         debug_assert!(self
             .accumulated_transform_
             .as_ref()
-            .is_none_or(AffineTransform::IsIdentity));
+            .is_none_or(AccumulatedTransform::IsIdentity));
         self.accumulated_offset_ = PhysicalOffset::default();
         self.last_planar_quad_ = quad;
     }
@@ -116,28 +234,15 @@ impl TransformState {
         }
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:51-59
+    // cpp: core/layout/geometry/transform_state.cc:51-59
     fn translate_transform(&mut self, offset: PhysicalOffset) {
-        let translation = AffineTransform::new(
-            1.0,
-            0.0,
-            0.0,
-            1.0,
-            offset.left.ToDouble(),
-            offset.top.ToDouble(),
-        );
-        let transform = self
-            .accumulated_transform_
+        self.accumulated_transform_
             .as_mut()
-            .expect("accumulated transform");
-        if self.direction_ == Self::kApplyTransformDirection {
-            transform.PostConcat(translation);
-        } else {
-            transform.PreConcat(translation);
-        }
+            .expect("accumulated transform")
+            .Translate(offset, self.direction_);
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:70-88
+    // cpp: core/layout/geometry/transform_state.cc:70-88
     pub fn Move(&mut self, offset: PhysicalOffset, mut accumulation: TransformAccumulation) {
         if self.force_accumulating_transform_ {
             accumulation = Self::kAccumulateTransform;
@@ -154,7 +259,7 @@ impl TransformState {
         }
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:90-101
+    // cpp: core/layout/geometry/transform_state.cc:90-101
     fn apply_accumulated_offset(&mut self) {
         let offset = std::mem::take(&mut self.accumulated_offset_);
         if offset.IsZero() {
@@ -168,38 +273,18 @@ impl TransformState {
         }
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:105-147
+    // cpp: core/layout/geometry/transform_state.cc:105-147
     pub fn ApplyTransform(
         &mut self,
         transform: &gfx::Transform,
         accumulation: TransformAccumulation,
     ) {
-        let matrix = transform.GetColMajor();
-        assert!(
-            matrix[2] == 0.0
-                && matrix[3] == 0.0
-                && matrix[6] == 0.0
-                && matrix[7] == 0.0
-                && matrix[8] == 0.0
-                && matrix[9] == 0.0
-                && matrix[10] == 1.0
-                && matrix[11] == 0.0
-                && matrix[14] == 0.0
-                && matrix[15] == 1.0,
-            "3D TransformState mapping is not implemented"
-        );
-        let incoming = AffineTransform::FromTransform(transform);
-        if incoming.A() == 1.0
-            && incoming.B() == 0.0
-            && incoming.C() == 0.0
-            && incoming.D() == 1.0
-            && incoming.E().fract() == 0.0
-            && incoming.F().fract() == 0.0
-        {
+        if transform.Is2dTransform() && transform.IsIdentityOrIntegerTranslation() {
+            let translation = transform.To2dTranslation();
             self.Move(
                 PhysicalOffset::new(
-                    crate::LayoutUnit::FromFloatRound(incoming.E() as f32),
-                    crate::LayoutUnit::FromFloatRound(incoming.F() as f32),
+                    crate::LayoutUnit::FromFloatRound(translation.x()),
+                    crate::LayoutUnit::FromFloatRound(translation.y()),
                 ),
                 accumulation,
             );
@@ -207,47 +292,101 @@ impl TransformState {
         }
         self.apply_accumulated_offset();
         if let Some(current) = self.accumulated_transform_.as_mut() {
-            if self.direction_ == Self::kApplyTransformDirection {
-                current.PostConcat(incoming);
-            } else {
-                current.PreConcat(incoming);
-            }
+            current.Concat(transform, self.direction_);
         } else if accumulation == Self::kAccumulateTransform {
-            self.accumulated_transform_ = Some(incoming);
+            self.accumulated_transform_ = Some(AccumulatedTransform::FromTransform(transform));
         }
-        if accumulation == Self::kFlattenTransform && !self.force_accumulating_transform_ {
-            self.flatten_with_transform(self.accumulated_transform_.unwrap_or(incoming));
+        if accumulation == Self::kFlattenTransform {
+            if self.force_accumulating_transform_ {
+                self.accumulated_transform_
+                    .as_mut()
+                    .expect("forced accumulated owner")
+                    .Flatten();
+            } else {
+                if self.accumulated_transform_.is_some() {
+                    self.flatten_accumulated_transform();
+                } else if transform.Is2dTransform() {
+                    self.flatten_with_transform(&AccumulatedTransform::Affine(
+                        AffineTransform::FromTransform(transform),
+                    ));
+                } else {
+                    self.flatten_with_gfx_transform(transform);
+                }
+            }
         }
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:149-159
+    // cpp: core/layout/geometry/transform_state.cc:149-159
     pub fn Flatten(&mut self) {
         assert!(!self.force_accumulating_transform_);
         self.apply_accumulated_offset();
-        if let Some(transform) = self.accumulated_transform_ {
-            self.flatten_with_transform(transform);
-        }
+        self.flatten_accumulated_transform();
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:194-215
-    fn flatten_with_transform(&mut self, transform: AffineTransform) {
-        let mapping = if self.direction_ == Self::kApplyTransformDirection {
-            transform
+    // cpp: core/layout/geometry/transform_state.cc:194-215
+    // Move the unique owner temporarily while mapping planar fields. This
+    // avoids allocating/copying a 4x4 owner just to satisfy a mutable borrow.
+    fn flatten_accumulated_transform(&mut self) {
+        if let Some(mut transform) = self.accumulated_transform_.take() {
+            self.flatten_with_transform(&transform);
+            transform.MakeIdentity();
+            self.accumulated_transform_ = Some(transform);
+        }
+    }
+    fn flatten_with_gfx_transform(&mut self, transform: &gfx::Transform) {
+        if self.direction_ == Self::kApplyTransformDirection {
+            if self.map_point_ {
+                self.last_planar_point_ = transform.MapPoint(self.last_planar_point_);
+            }
+            if self.map_quad_ {
+                self.last_planar_quad_ = transform.MapQuad(self.last_planar_quad_);
+            }
         } else {
-            transform.Inverse()
-        };
-        if self.map_point_ {
-            self.last_planar_point_ = mapping.MapPoint(&self.last_planar_point_);
+            let mut inverse = gfx::Transform::default();
+            if transform.GetInverse(&mut inverse) {
+                if self.map_point_ {
+                    self.last_planar_point_ = inverse.ProjectPoint(self.last_planar_point_);
+                }
+                if self.map_quad_ {
+                    self.last_planar_quad_ = inverse.ProjectQuad(self.last_planar_quad_);
+                }
+            }
         }
-        if self.map_quad_ {
-            self.last_planar_quad_ = mapping.MapQuad(self.last_planar_quad_);
+    }
+    fn flatten_with_transform(&mut self, transform: &AccumulatedTransform) {
+        // Source FlattenWithTransform keeps planar geometry unchanged when
+        // inverse mapping is singular; MappedPoint/Quad use identity fallback.
+        if self.direction_ == Self::kApplyTransformDirection {
+            if self.map_point_ {
+                self.last_planar_point_ = transform.MapPoint(self.last_planar_point_);
+            }
+            if self.map_quad_ {
+                self.last_planar_quad_ = transform.MapQuad(self.last_planar_quad_);
+            }
+        } else {
+            match transform {
+                AccumulatedTransform::Affine(t) if t.IsInvertible() => {
+                    let inverse = t.Inverse();
+                    if self.map_point_ {
+                        self.last_planar_point_ = inverse.MapPoint(&self.last_planar_point_);
+                    }
+                    if self.map_quad_ {
+                        self.last_planar_quad_ = inverse.MapQuad(self.last_planar_quad_);
+                    }
+                }
+                AccumulatedTransform::Full(t) => {
+                    self.flatten_with_gfx_transform(t);
+                }
+
+                _ => {}
+            }
         }
-        if self.accumulated_transform_.is_some() {
-            self.accumulated_transform_ = Some(AffineTransform::default());
+        if let Some(current) = self.accumulated_transform_.as_mut() {
+            current.MakeIdentity();
         }
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.h:115-125
+    // cpp: core/layout/geometry/transform_state.h:115-125
     pub fn LastPlanarPoint(&self) -> gfx::PointF {
         self.last_planar_point_
     }
@@ -255,7 +394,7 @@ impl TransformState {
         self.last_planar_quad_
     }
 
-    // cpp: foundation/blink_geometry/geometry/transform_state.cc:161-192
+    // cpp: core/layout/geometry/transform_state.cc:161-192
     pub fn MappedPoint(&self) -> PhysicalOffset {
         let mut point = self.last_planar_point_;
         let sign = if self.direction_ == Self::kApplyTransformDirection {
@@ -267,11 +406,11 @@ impl TransformState {
             point.x() + sign * self.accumulated_offset_.left.ToFloat(),
             point.y() + sign * self.accumulated_offset_.top.ToFloat(),
         );
-        if let Some(transform) = self.accumulated_transform_ {
+        if let Some(transform) = &self.accumulated_transform_ {
             point = if self.direction_ == Self::kApplyTransformDirection {
-                transform.MapPoint(&point)
+                transform.MapPoint(point)
             } else {
-                transform.Inverse().MapPoint(&point)
+                transform.InverseProjectPoint(point)
             };
         }
         PhysicalOffset::FromPointFRound(&point)
@@ -293,11 +432,11 @@ impl TransformState {
             moved(quad.p3()),
             moved(quad.p4()),
         );
-        match self.accumulated_transform_ {
+        match &self.accumulated_transform_ {
             Some(transform) if self.direction_ == Self::kApplyTransformDirection => {
                 transform.MapQuad(translated)
             }
-            Some(transform) => transform.Inverse().MapQuad(translated),
+            Some(transform) => transform.InverseProjectQuad(translated),
             None => translated,
         }
     }
@@ -308,6 +447,7 @@ impl TransformState {
     pub fn AccumulatedTransform(&self) -> gfx::Transform {
         assert!(self.force_accumulating_transform_);
         self.accumulated_transform_
+            .as_ref()
             .expect("accumulating transform")
             .ToTransform()
     }
@@ -316,6 +456,30 @@ impl TransformState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserve_3d_accumulates_and_inverse_projects_to_the_plane() {
+        let mut rotation = gfx::Transform::default();
+        rotation.RotateAboutYAxis(60.0);
+        let mut undo = gfx::Transform::default();
+        undo.RotateAboutYAxis(-60.0);
+        let original = gfx::PointF::new(2.0, 3.0);
+        let mut apply = TransformState::new(TransformState::kApplyTransformDirection, original);
+        apply.ApplyTransform(&rotation, TransformState::kAccumulateTransform);
+        apply.ApplyTransform(&undo, TransformState::kAccumulateTransform);
+        apply.Flatten();
+        assert!((apply.LastPlanarPoint().x() - 2.0).abs() < 0.00001);
+        assert!((apply.LastPlanarPoint().y() - 3.0).abs() < 0.00001);
+        // Inverse MapPoint would return x=0.5. Source ProjectPoint intersects
+        // the transformed plane and correctly recovers the original x=2.
+        let mut inverse = TransformState::new(
+            TransformState::kUnapplyInverseTransformDirection,
+            gfx::PointF::new(1.0, 3.0),
+        );
+        inverse.ApplyTransform(&rotation, TransformState::kFlattenTransform);
+        assert!((inverse.LastPlanarPoint().x() - 2.0).abs() < 0.00001);
+        assert!((inverse.LastPlanarPoint().y() - 3.0).abs() < 0.00001);
+    }
 
     #[test]
     fn move_and_flatten_map_a_block_rect() {

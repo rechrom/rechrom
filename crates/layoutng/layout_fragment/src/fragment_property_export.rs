@@ -31,6 +31,7 @@ pub(super) fn ExportPaintProperties(
         LayoutUpdateKind::Paint,
         None,
         None,
+        None,
     )
 }
 
@@ -39,7 +40,10 @@ pub(super) fn ExportPaintProperties(
 // first fragment. This distinction is observable for fragmented boxes: each
 // FragmentData owns a different UniqueObjectId while all fragments share the
 // same LayoutObject.
-fn PropertyFragmentUniqueId(object: *const LayoutObject, fragment_data: *mut FragmentData) -> u64 {
+pub(super) fn PropertyFragmentUniqueId(
+    object: *const LayoutObject,
+    fragment_data: *mut FragmentData,
+) -> u64 {
     let fragment_data = if fragment_data.is_null() {
         unsafe { &mut *object.cast_mut() }
             .GetMutableForPainting()
@@ -52,7 +56,7 @@ fn PropertyFragmentUniqueId(object: *const LayoutObject, fragment_data: *mut Fra
     fragment_data.UniqueId()
 }
 
-fn ExportPrePaintInvalidation(
+pub(super) fn ExportPrePaintInvalidation(
     object: *const LayoutObject,
 ) -> layout_fragment::fragment_tree::PrePaintInvalidation {
     if object.is_null() {
@@ -60,6 +64,8 @@ fn ExportPrePaintInvalidation(
     }
     let object = unsafe { &*object };
     layout_fragment::fragment_tree::PrePaintInvalidation {
+        blocking_wheel_event_handler_changed: object.GetPrePaintSubtreeWalkReasons().contains(crate::internal::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kBlockingWheelEventHandler),
+        descendant_blocking_wheel_event_handler_changed: object.GetDescendantPrePaintSubtreeWalkReasons().contains(crate::internal::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kBlockingWheelEventHandler),
         needs_paint_property_update: object.NeedsPaintPropertyUpdate(),
         descendant_needs_paint_property_update: object.DescendantNeedsPaintPropertyUpdate(),
         child_pre_paint_blocked_by_display_lock: object.ChildPrePaintBlockedByDisplayLock(),
@@ -129,6 +135,7 @@ pub(super) fn ExportProperties(
     resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
     mut exported_styles: Option<&mut ExportedStyleCache>,
+    mut exported_selection_styles: Option<&mut ExportedSelectionStyleCache>,
     mut debug_names: Option<&mut DebugNameCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
@@ -137,22 +144,26 @@ pub(super) fn ExportProperties(
         return output;
     }
     output.BindSourceObject(object);
-    output.svg_hidden_container = unsafe { &*object }.IsSVGHiddenContainer();
-    output.svg_descendant_may_have_transform_related_operations =
-        unsafe { &*object }.SVGDescendantMayHaveTransformRelatedOperations();
+    let object_ref = unsafe { &*object };
+    output.is_printing = object_ref.IsPrintingForLayout();
+    output.should_print_backgrounds = object_ref.ShouldPrintBackgroundsForLayout();
+    output.visible_to_hit_testing = object_ref.VisibleToHitTesting();
     if purpose == LayoutUpdateKind::Paint {
-        // Source: core/frame/local_frame_view.cc:3034 and
-        // core/paint/paint_layer.cc:386-514. Chromium updates the root layer
-        // before PrePaint snapshots invalidation and layer aggregates. The
-        // source tree may also be exported from a subtree in tests, so update
-        // the enclosing owned layer here; clean ancestors/children are no-ops.
-        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-        if !box_model.is_null() {
-            let layer = unsafe { &*box_model }.Layer();
-            if !layer.is_null() {
-                unsafe { &mut *layer }.UpdateDescendantDependentFlags();
-            }
-        }
+        output.is_selected = object_ref.IsSelected();
+    }
+    output.effective_allowed_touch_action = object_ref.EffectiveAllowedTouchAction();
+    output.inside_blocking_wheel_event_handler = object_ref.InsideBlockingWheelEventHandler();
+    output.background_is_known_to_be_obscured = object_ref.BackgroundIsKnownToBeObscured();
+    let element = DynamicTo::<Element>(object_ref.GetNode());
+    if let Some(element) = unsafe { element.as_ref() } {
+        output.region_capture_crop_id = element.InputRegionCaptureCropId();
+        output.tracked_element_sub_rects = element.InputTrackedElementSubRects().to_vec();
+    }
+    output.is_svg_child = object_ref.IsSVGChild();
+    output.svg_hidden_container = object_ref.IsSVGHiddenContainer();
+    output.svg_descendant_may_have_transform_related_operations =
+        object_ref.SVGDescendantMayHaveTransformRelatedOperations();
+    if purpose == LayoutUpdateKind::Paint {
         // Source: paint_invalidator.cc:222. LayoutBox uses this point to
         // promote a delayed full invalidation once it intersects the visible
         // viewport, before Paint snapshots the invalidation facts below.
@@ -236,8 +247,7 @@ pub(super) fn ExportProperties(
         } else {
             let primary_font = unsafe { &*primary_font };
             Number(LayoutUnit::from_f32(
-                primary_font.GetFontMetrics().Ascent() as f32
-                    - primary_font.InternalLeading() / 2.0,
+                primary_font.GetFontMetrics().FloatAscent() - primary_font.InternalLeading() / 2.0,
             ))
         };
         output.text_combine = Some(layout_fragment::fragment_tree::TextCombinePaintData {
@@ -255,7 +265,64 @@ pub(super) fn ExportProperties(
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
     if purpose == LayoutUpdateKind::Paint {
+        // Sources: core/paint/css_mask_painter.cc:44-98 and
+        // svg_background_paint_context.cc:29-33. Ordinary CSS boxes,
+        // including SVGForeignObject, use one object-wide maximum mask region
+        // for ObjectPaintProperties::MaskClip. The no-clip query below unions
+        // the foreignObject's self-painting descendants at its PaintLayer,
+        // matching the specialized SVG context while keeping this geometry
+        // distinct from the per-layer clip boxes resolved in Paint.
+        let object_ref = unsafe { &*object };
+        let style = object_ref.StyleRef();
+        if style.HasMask()
+            && object_ref.IsBoxModelObject()
+            && (!object_ref.IsSVGChild() || object_ref.IsSVGForeignObject())
+        {
+            let no_clip = style.MaskLayers().LayersClipMax() == EFillBox::kNoClip;
+            let mut bounds = if object_ref.IsBox() {
+                let box_ = unsafe { &*To::<LayoutBox>(object) };
+                if no_clip {
+                    let layer = box_.Layer();
+                    assert!(!layer.is_null());
+                    unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
+                } else {
+                    box_.PhysicalBorderBoxRect()
+                }
+            } else {
+                let inline = unsafe { &*To::<LayoutInline>(object) };
+                if no_clip {
+                    let layer = inline.Layer();
+                    assert!(!layer.is_null());
+                    unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
+                } else {
+                    inline.PhysicalLinesBoundingBox()
+                }
+            };
+            if style.HasMaskBoxImageOutsets() {
+                bounds.Expand(&style.MaskBoxImageOutsets());
+            }
+            output.css_mask_bounding_box = Some(ExportInkRect(bounds));
+        }
         if !layout_box.is_null() {
+            let box_ = unsafe { &*layout_box };
+            let previous_size = box_.PreviousSize();
+            let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object);
+            output.previous_box_geometry =
+                Some(layout_fragment::fragment_tree::PreviousBoxGeometry {
+                    size: Size {
+                        width: Number(previous_size.width),
+                        height: Number(previous_size.height),
+                    },
+                    content_box: ExportInkRect(box_.PreviousPhysicalContentBoxRect()),
+                    self_visual_overflow: ExportInkRect(box_.PreviousSelfVisualOverflowRect()),
+                    scrollable_overflow: ExportInkRect(box_.PreviousScrollableOverflowRect()),
+                    replaced_content: (!replaced.is_null()).then(|| {
+                        ExportInkRect(
+                            unsafe { &*replaced }
+                                .ReplacedContentRectFrom(&box_.PreviousPhysicalContentBoxRect()),
+                        )
+                    }),
+                });
             output.background_should_always_be_clipped =
                 unsafe { &*layout_box }.BackgroundShouldAlwaysBeClipped();
             output.scrollable_overflow = Some(ExportInkRect(
@@ -285,6 +352,9 @@ pub(super) fn ExportProperties(
             }
             let layout_view = DynamicTo::<LayoutView>(object);
             if !layout_view.is_null() {
+                output.previous_view_background_rect = Some(ExportInkRect(
+                    unsafe { &*layout_view }.PreviousBackgroundRect(),
+                ));
                 output.view_background_rect =
                     Some(ExportInkRect(unsafe { &*layout_view }.BackgroundRect()));
             }
@@ -320,10 +390,10 @@ pub(super) fn ExportProperties(
                 // Source: core/paint/paint_layer_painter.cc:304-318,361-368,
                 // 612-623. Export PaintLayer's already-maintained aggregates;
                 // Paint must not approximate them from flattened fragments.
-                // Source: core/paint/paint_layer_painter.cc:211-219. Keep the
-                // exact LayoutObject virtual, filter mapping, first-fragment
-                // paint offset and enclosing-pixel conversion on the source
-                // side of the boundary.
+                // Source: core/paint/paint_layer_painter.cc:192-219. Export
+                // the LayoutObject-local overflow. PaintLayerPainter applies
+                // the current PrePaint FragmentData paint offset, matching the
+                // source timing; the Layout snapshot precedes that lifecycle.
                 let layout_object = layer.GetLayoutObject();
                 let mut visual_rect = if layout_object.IsBox() {
                     let layout_box = DynamicTo::<LayoutBox>(layout_object);
@@ -333,7 +403,6 @@ pub(super) fn ExportProperties(
                     layout_object.VisualOverflowRect()
                 };
                 visual_rect = layout_object.ApplyFiltersToRect(&visual_rect);
-                visual_rect.Move(&layout_object.FirstFragment().PaintOffset());
                 let visual_rect = foundation::gfx::ToEnclosingRect(gfx::RectF::from(visual_rect));
                 output.paint_layer_first_fragment_visual_rect = Some(FragmentPaintRect {
                     offset: Offset {
@@ -349,7 +418,6 @@ pub(super) fn ExportProperties(
                 if !layout_box.is_null() {
                     let mut contents_visual_rect =
                         unsafe { &*layout_box }.ContentsVisualOverflowRect();
-                    contents_visual_rect.Move(&layout_object.FirstFragment().PaintOffset());
                     output.paint_layer_contents_visual_rect =
                         Some(ExportInkRect(contents_visual_rect));
                 }
@@ -472,12 +540,32 @@ pub(super) fn ExportProperties(
     // other LayoutReplaced subclasses (for example canvas) are not images.
     // cpp: core/layout/layout_image.h:135-138
     output.replaced_is_image = unsafe { &*object }.IsLayoutImage();
+    if purpose == LayoutUpdateKind::Paint {
+        let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object);
+        if !replaced.is_null() {
+            let replaced = unsafe { &*replaced };
+            output.replaced_selection_state = replaced.GetSelectionState();
+            let selection_rect = replaced.LocalSelectionVisualRect();
+            if !selection_rect.IsEmpty() {
+                output.replaced_local_selection_visual_rect = Some(ExportInkRect(selection_rect));
+            }
+        }
+    }
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
         unsafe { &*effective_style }
     };
-    let style_facts = crate::style_projection::ReadFragmentStyleFacts(layout_style);
+    let selection_key = layout_style as *const StyleComputedStyle as usize;
+    let style_facts = if purpose == LayoutUpdateKind::Paint {
+        exported_selection_styles
+            .as_deref()
+            .and_then(|styles| styles.get(&selection_key))
+            .map(|entry| entry.2)
+            .unwrap_or_else(|| crate::style_projection::ReadFragmentStyleFacts(layout_style))
+    } else {
+        crate::style_projection::ReadFragmentStyleFacts(layout_style)
+    };
     output.effective_zoom = layout_style.EffectiveZoom();
     if purpose == LayoutUpdateKind::Paint {
         output.background_fill_layer_count =
@@ -588,8 +676,24 @@ pub(super) fn ExportProperties(
         }
     }
     if purpose == LayoutUpdateKind::Paint {
-        output.selection_style = ExportSelectionPaintStyle(layout_style);
-        output.selection_text_decoration = ExportSelectionTextDecoration(layout_style);
+        let cached_selection = exported_selection_styles
+            .as_deref()
+            .and_then(|styles| styles.get(&selection_key))
+            .cloned();
+        let (selection_style, selection_text_decoration, _) =
+            cached_selection.unwrap_or_else(|| {
+                let exported = (
+                    ExportSelectionPaintStyle(layout_style),
+                    ExportSelectionTextDecoration(layout_style),
+                    style_facts,
+                );
+                if let Some(styles) = exported_selection_styles.as_deref_mut() {
+                    styles.insert(selection_key, exported.clone());
+                }
+                exported
+            });
+        output.selection_style = selection_style;
+        output.selection_text_decoration = selection_text_decoration;
         output.svg_text_decoration_style =
             ExportSvgTextDecorationStyle(object, sources, style_sources, effective_style);
     }
@@ -632,9 +736,14 @@ pub(super) fn ExportProperties(
     if let Some(element_data) = element_data {
         output.scroll_offset = element_data.scroll_offset;
         output.image_decoding_mode = element_data.image_decoding_mode;
+        output.video_frame_resource_id = element_data.video_frame_resource_id;
         output.focused_image_map_area = element_data.focused_image_map_area.clone();
-        if let Some(svg_shape) = &element_data.svg_shape {
-            output.svg_shape = Some(Arc::new(svg_shape.clone()));
+        if !object.is_null() && unsafe { &*object }.IsSVGShape() {
+            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+            output.svg_shape = unsafe { algorithms.as_ref() }
+                .and_then(|a| a.svg_support.retained_shape)
+                .and_then(|query| query(unsafe { &*object }))
+                .cloned();
         }
         output.svg_view_box = element_data.svg_view_box;
         output.svg_view_box_is_empty = element_data
@@ -690,51 +799,6 @@ pub(super) fn ExportProperties(
         }
         ancestor = node.parentNode().cast();
     }
-    if element_data.is_some_and(|data| data.text_control_inner_editor) {
-        output.text_control_inner_editor = true;
-        let style = unsafe { &*object }.StyleRef();
-        let font = style.GetFontHeightForDefaultBaseline();
-        let font_height = Number(font.LineHeight());
-        let line_height = style.ComputedLineHeight() as f64;
-        let editor = unsafe { &*layout_box };
-        let size = editor.StitchedSize();
-        let border = output.border;
-        let padding = output.padding;
-        let left = border.left + padding.left;
-        let right = (Number(size.width) - border.right - padding.right - 1.0).max(left);
-        let align = match layout_style.GetTextAlign() {
-            foundation::ETextAlign::kCenter => crate::internal::layout_input::TextAlign::kCenter,
-            foundation::ETextAlign::kRight => crate::internal::layout_input::TextAlign::kRight,
-            foundation::ETextAlign::kWebkitCenter => {
-                crate::internal::layout_input::TextAlign::kWebkitCenter
-            }
-            foundation::ETextAlign::kWebkitRight => {
-                crate::internal::layout_input::TextAlign::kWebkitRight
-            }
-            foundation::ETextAlign::kEnd => crate::internal::layout_input::TextAlign::kEnd,
-            foundation::ETextAlign::kJustify => crate::internal::layout_input::TextAlign::kJustify,
-            _ => crate::internal::layout_input::TextAlign::kStart,
-        };
-        use crate::internal::layout_input::TextAlign;
-        let rtl = output.direction == TextDirection::kRtl;
-        let x = match align {
-            TextAlign::kCenter | TextAlign::kWebkitCenter => (left + right) * 0.5,
-            TextAlign::kRight | TextAlign::kWebkitRight => right,
-            TextAlign::kEnd if !rtl => right,
-            TextAlign::kStart | TextAlign::kJustify if rtl => right,
-            _ => left,
-        };
-        output.text_control_empty_caret = Some(FragmentPaintRect {
-            offset: Offset {
-                x,
-                y: border.top + padding.top + (line_height - font_height) * 0.5,
-            },
-            size: Size {
-                width: 1.0,
-                height: font_height,
-            },
-        });
-    }
     let appearance = layout_style.EffectiveAppearance();
     if appearance != AppearanceValue::kNone
         || element_data.is_some_and(|element_data| element_data.control_focused)
@@ -747,6 +811,7 @@ pub(super) fn ExportProperties(
             control.r#type = element_data.form_control_type;
             control.checked = element_data.control_checked;
             control.indeterminate = element_data.control_indeterminate;
+            control.is_progress = element_data.control_is_progress;
             control.disabled = element_data.control_disabled;
             control.read_only = element_data.control_read_only;
             control.hovered = element_data.control_hovered;
@@ -771,24 +836,6 @@ pub(super) fn ExportProperties(
             );
         }
         output.form_control = Some(Arc::new(control));
-    }
-    // Blink can resolve an insertion position before focus style has changed.
-    // Keep text-control editing geometry on every source fragment owner; appearance
-    // and focus only decide whether FormControlPainter has anything to draw.
-    if source.InputKind() == NodeKind::kFormControl {
-        let style = unsafe { &*object }.StyleRef();
-        let height = style.GetFontHeightForDefaultBaseline();
-        let primary_font = unsafe { &*style.GetFont() }.PrimaryFont();
-        output.text_control_caret_metrics = Some(crate::fragment_tree::TextControlCaretMetrics {
-            font_height: Number(height.LineHeight()),
-            ascent: Number(height.ascent),
-            line_height: style.ComputedLineHeight() as f64,
-            zero_width: if primary_font.is_null() {
-                1.0
-            } else {
-                unsafe { &*primary_font }.GetFontMetrics().ZeroWidth() as f64
-            },
-        });
     }
     output
 }
@@ -815,4 +862,11 @@ mod tests {
             PropertyFragmentUniqueId(std::ptr::null(), &mut second)
         );
     }
+}
+
+/// Selection commit updates the same resident PrePaint sidecars after LayoutClean.
+pub(crate) fn ExportSelectionPrePaintInvalidation(
+    object: *const LayoutObject,
+) -> layout_fragment::fragment_tree::PrePaintInvalidation {
+    ExportPrePaintInvalidation(object)
 }

@@ -2467,8 +2467,16 @@ impl LineBreaker {
                             || !self.IsNextNonBidiControlItemOpenTag());
                 return;
             }
-            debug_assert!(end_offset > 0);
-            if self.auto_wrap_ && !IsBreakableSpace(units[end_offset - 1]) {
+            if !self.auto_wrap_ {
+                return;
+            }
+            // An empty nowrap inline can close at text offset zero while its
+            // parent restores wrapping. There is no preceding character from
+            // which to derive a break opportunity in that case.
+            if end_offset == 0 {
+                return;
+            }
+            if !IsBreakableSpace(units[end_offset - 1]) {
                 ComputeCanBreakAfter(
                     unsafe { &mut *item_result },
                     self.auto_wrap_,

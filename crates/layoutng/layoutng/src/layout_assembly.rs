@@ -49,6 +49,8 @@ pub struct LayoutAssembly {
     pub algorithms: LayoutAlgorithmSet,
     pub objects: LayoutObjectFactorySet,
     pub boundary: LayoutBoundarySupport,
+    pub shape_coverage:
+        Option<&'static dyn layoutng_geometry::shape_coverage::ShapeCoverageRasterizer>,
 }
 
 // cpp: layoutng/layout_assembly.h:17-17

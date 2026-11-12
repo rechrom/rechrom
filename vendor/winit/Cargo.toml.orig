@@ -137,6 +137,8 @@ features = [
     "NSEnumerator",
     "NSKeyValueObserving",
     "NSNotification",
+    "NSOperation",
+    "NSError",
     "NSObjCRuntime",
     "NSPathUtilities",
     "NSProcessInfo",
@@ -144,11 +146,14 @@ features = [
     "NSString",
     "NSThread",
     "NSValue",
+    "NSURL",
 ]
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
 version = "0.2.2"
 features = [
+    "block2",
+    "NSFilePromiseReceiver",
     "NSAppearance",
     "NSApplication",
     "NSBitmapImageRep",
@@ -231,8 +236,11 @@ features = [
     "Win32_Graphics_Gdi",
     "Win32_Media",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Com_Marshal",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_DataExchange",
     "Win32_System_Ole",
     "Win32_Security",
     "Win32_System_SystemInformation",
@@ -263,6 +271,7 @@ rustix = { version = "0.38.4", default-features = false, features = [
     "system",
     "thread",
     "process",
+    "pipe",
 ] }
 sctk = { package = "smithay-client-toolkit", version = "0.19.2", default-features = false, features = [
     "calloop",

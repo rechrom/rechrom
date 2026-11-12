@@ -36,9 +36,18 @@ pub struct ConnectedSubtreeRequest {
     pub image_request: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResourceRequest {
-    ResetImage { node_id: u64 },
+    ResetImage {
+        node_id: u64,
+    },
+    LoadDeferredImage {
+        node_id: u64,
+    },
+    ImageReferrerPolicyChanged {
+        node_id: u64,
+        previous: Option<String>,
+    },
     DiscoverConnectedSubtree(ConnectedSubtreeRequest),
 }
 
@@ -77,8 +86,12 @@ impl Default for DocumentEngine {
 
 impl DocumentEngine {
     pub fn new() -> Self {
+        Self::FromDOM(DOM::new())
+    }
+    /// Adopt an initially parsed native arena without cloning its nodes.
+    pub fn FromDOM(document: DOM) -> Self {
         Self {
-            dom: Rc::new(RefCell::new(DOM::new())),
+            dom: Rc::new(RefCell::new(document)),
         }
     }
 
@@ -265,9 +278,7 @@ impl DocumentEngine {
                 | DOMMutationType::kSetControlValue
         );
         let changed_image_request = self.ChangedImageRequest(mutation);
-        self.dom
-            .borrow_mut()
-            .ApplyMutationWithFragmentParser(mutation, ParseInnerHTMLMutation)?;
+        dom::tree_mutation::ApplyMutation(&self.dom, mutation, ParseInnerHTMLFragment)?;
         if no_lifecycle_change {
             return Ok(DocumentEffects::default());
         }
@@ -294,8 +305,8 @@ impl DocumentEngine {
         let mut resource = Vec::with_capacity(
             usize::from(changed_image_request.is_some()) + usize::from(connected_subtree.is_some()),
         );
-        if let Some(node_id) = changed_image_request {
-            resource.push(ResourceRequest::ResetImage { node_id });
+        if let Some(request) = changed_image_request {
+            resource.push(request);
         }
         if let Some(request) = connected_subtree {
             resource.push(ResourceRequest::DiscoverConnectedSubtree(request));
@@ -318,27 +329,73 @@ impl DocumentEngine {
         })
     }
 
-    fn ChangedImageRequest(&self, mutation: &DOMMutation) -> Option<u64> {
+    fn ChangedImageRequest(&self, mutation: &DOMMutation) -> Option<ResourceRequest> {
         if !matches!(
             mutation.mutation_type,
             DOMMutationType::kSetAttribute | DOMMutationType::kRemoveAttribute
         ) || !mutation.namespace_uri.is_empty()
-            || !mutation.name.eq_ignore_ascii_case("src")
+            || !matches!(
+                mutation.name.to_ascii_lowercase().as_str(),
+                "src" | "srcset" | "sizes" | "referrerpolicy" | "crossorigin" | "loading"
+            )
         {
             return None;
         }
         let owner = self.dom.borrow();
         let tree = owner.GetDocument();
+        if mutation.name.eq_ignore_ascii_case("loading") {
+            let node = tree.FindNodeById(mutation.target_node_id)?;
+            if tree.Node(node).IsHTMLElement("img")
+                && (mutation.mutation_type == DOMMutationType::kRemoveAttribute
+                    || !mutation.value.eq_ignore_ascii_case("lazy"))
+            {
+                return Some(ResourceRequest::LoadDeferredImage {
+                    node_id: mutation.target_node_id,
+                });
+            }
+            return None;
+        }
+        if mutation.name.eq_ignore_ascii_case("referrerpolicy") {
+            let node = tree.FindNodeById(mutation.target_node_id)?;
+            if !tree.Node(node).IsHTMLElement("img") {
+                return None;
+            }
+            return Some(ResourceRequest::ImageReferrerPolicyChanged {
+                node_id: mutation.target_node_id,
+                previous: tree
+                    .Node(node)
+                    .FindAttribute("referrerpolicy")
+                    .map(|attribute| attribute.value.clone()),
+            });
+        }
         tree.FindNodeById(mutation.target_node_id)
             .filter(|&index| tree.Node(index).IsHTMLElement("img"))
             .filter(|&index| {
-                mutation.mutation_type == DOMMutationType::kRemoveAttribute
-                    || tree
-                        .Node(index)
-                        .FindAttribute("src")
-                        .is_some_and(|attribute| attribute.value != mutation.value)
+                // Source src/srcset/sizes always SelectSourceURL, including
+                // equal src writes which retry a previously failed resource.
+                if matches!(
+                    mutation.name.to_ascii_lowercase().as_str(),
+                    "src" | "srcset" | "sizes"
+                ) {
+                    return true;
+                }
+                let old = tree
+                    .Node(index)
+                    .FindAttribute(&mutation.name)
+                    .map(|attribute| attribute.value.as_str());
+                let next = (mutation.mutation_type != DOMMutationType::kRemoveAttribute)
+                    .then_some(mutation.value.as_str());
+                if mutation.name.eq_ignore_ascii_case("crossorigin") {
+                    let state = |value: Option<&str>| {
+                        value.map(|value| value.eq_ignore_ascii_case("use-credentials"))
+                    };
+                    return state(old) != state(next);
+                }
+                old != next
             })
-            .map(|_| mutation.target_node_id)
+            .map(|_| ResourceRequest::ResetImage {
+                node_id: mutation.target_node_id,
+            })
     }
 }
 
@@ -349,14 +406,14 @@ fn IsImageRequestAttribute(mutation: &DOMMutation) -> bool {
     ) && mutation.namespace_uri.is_empty()
         && matches!(
             mutation.name.to_ascii_lowercase().as_str(),
-            "src" | "srcset" | "sizes" | "referrerpolicy"
+            "src" | "srcset" | "sizes" | "referrerpolicy" | "crossorigin" | "loading"
         )
 }
 
-fn ParseInnerHTMLMutation(
+fn ParseInnerHTMLFragment(
     document: &mut Document,
     mutation: &DOMMutation,
-) -> Result<(), DOMMutationError> {
+) -> Result<(usize, usize), DOMMutationError> {
     let Some(mut target) = document.FindNodeById(mutation.target_node_id) else {
         return Err(DOMException {
             kind: DOMExceptionKind::InvalidArgument,
@@ -381,11 +438,7 @@ fn ParseInnerHTMLMutation(
     if let Some(contents) = document.TemplateContents(target) {
         target = contents;
     }
-    while let Some(&child) = document.Node(target).Children().last() {
-        document.Remove(child);
-    }
-    document.TakeAllChildren(fragment, target);
-    Ok(())
+    Ok((target, fragment))
 }
 
 #[cfg(test)]

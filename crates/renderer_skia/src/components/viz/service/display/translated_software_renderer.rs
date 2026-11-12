@@ -40,7 +40,11 @@ use skia::{
         image::SkImage::SkImage,
     },
 };
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+    sync::Arc,
+};
 use viz::{
     adapter::{AggregatedRenderPass, VizOutput},
     common::quads::aggregated_render_pass::{DrawQuad, SharedQuadState},
@@ -64,15 +68,26 @@ impl paint::cc::paint::filter_operation::FilterMapTransform for TranslatedFilter
     }
 }
 
+fn CanDrawRootDirect(
+    destination: Rect,
+    output: Rect,
+    target_bounds: Rect,
+    target_row_stride: usize,
+) -> bool {
+    target_row_stride >= target_bounds.width.max(0) as usize
+        && destination == target_bounds
+        && output == target_bounds
+}
+
 #[derive(Default)]
 pub struct TranslatedSoftwareRenderer {
     render_pass_bitmaps: BTreeMap<RenderPassId, PassBacking>,
+    video_bypass_passes: BTreeSet<RenderPassId>,
     settings: RendererSettings,
     update: RenderUpdate,
     current_pass: Option<RenderPassId>,
     current_rect: Rect,
     scissor_rect: Option<Rect>,
-    linear_sampling: bool,
     profile_input: bool,
     n32_tile_blit: bool,
     framebuffer_damage: BTreeMap<RenderPassId, Rect>,
@@ -90,23 +105,119 @@ impl TranslatedSoftwareRenderer {
 
     fn BeginDrawingFrame(&mut self, input: &VizOutput) -> io::Result<()> {
         self.update = RenderUpdate::default();
-        self.linear_sampling = false;
+        self.video_bypass_passes.clear();
         self.profile_input = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
         self.n32_tile_blit = std::env::var_os("BROWSER_DISABLE_N32_TILE_BLIT").is_none();
         self.framebuffer_damage.clear();
         self.drawn_damage.clear();
-        for pass in input.Frame().RenderPasses() {
-            if input.RootDestination(pass.RenderPassId()).is_some()
-                && self
-                    .render_pass_bitmaps
-                    .get(&pass.RenderPassId())
-                    .is_none_or(|backing| backing.drawn_rect != pass.OutputRect())
-            {
-                self.framebuffer_damage
-                    .insert(pass.RenderPassId(), pass.OutputRect());
+        // SkiaRenderer bypasses a one-quad RenderPass and draws its content
+        // with the consuming RPDQ transform. This is especially important for
+        // video: Y and UV must be sampled at the final device resolution
+        // before color conversion, rather than materialized into a 1x RGB
+        // backing and scaled afterward.
+        // Source: components/viz/service/display/skia_renderer.cc:1990-2239.
+        for parent in input.Frame().RenderPasses() {
+            if input.RootDestination(parent.RenderPassId()).is_none() {
+                continue;
+            }
+            for quad in parent.Quads() {
+                let QuadMaterial::CompositorRenderPass {
+                    render_pass_id,
+                    mask_resource_id,
+                    ..
+                } = &quad.material
+                else {
+                    continue;
+                };
+                if mask_resource_id.0 != 0 {
+                    continue;
+                }
+                let Some(child) = input
+                    .Frame()
+                    .RenderPasses()
+                    .iter()
+                    .find(|pass| pass.RenderPassId() == *render_pass_id)
+                else {
+                    continue;
+                };
+                if Self::CanBypassVideoRenderPass(parent, quad, child) {
+                    self.video_bypass_passes.insert(*render_pass_id);
+                }
             }
         }
         Ok(())
+    }
+
+    fn CanBypassVideoRenderPass(
+        parent: &AggregatedRenderPass,
+        outer: &DrawQuad,
+        child: &AggregatedRenderPass,
+    ) -> bool {
+        if !child.Filters().IsEmpty()
+            || !child.BackdropFilters().IsEmpty()
+            || child.Quads().len() != 1
+            || outer.geometry.rect != child.OutputRect()
+            || outer.geometry.visible_rect != child.OutputRect()
+        {
+            return false;
+        }
+        let texture = &child.Quads()[0];
+        let QuadMaterial::Texture {
+            tex_coord_rect,
+            is_tex_coord_rect_normalized,
+            nearest_neighbor,
+            secure_output_only,
+            is_video_frame,
+            ..
+        } = &texture.material
+        else {
+            return false;
+        };
+        if !*is_video_frame
+            || !*is_tex_coord_rect_normalized
+            || *nearest_neighbor
+            || *secure_output_only
+            || texture.geometry.rect != child.OutputRect()
+            || texture.geometry.visible_rect != child.OutputRect()
+            || tex_coord_rect.x() != 0.0
+            || tex_coord_rect.y() != 0.0
+            || tex_coord_rect.width() != 1.0
+            || tex_coord_rect.height() != 1.0
+        {
+            return false;
+        }
+        let Some(inner_shared) = texture
+            .geometry
+            .shared_quad_state
+            .and_then(|handle| child.TrySharedQuadState(handle))
+        else {
+            return false;
+        };
+        let Some(outer_shared) = outer
+            .geometry
+            .shared_quad_state
+            .and_then(|handle| parent.TrySharedQuadState(handle))
+        else {
+            return false;
+        };
+        let inner = inner_shared.quad_to_target_transform.as_source();
+        let outer_transform = outer_shared.quad_to_target_transform.as_source();
+        let nearly = |a: f64, b: f64| (a - b).abs() <= 1.0 / 4096.0;
+        inner_shared.opacity == 1.0
+            && inner_shared.mask_filter_info.IsEmpty()
+            && inner_shared.clip_rect.is_none()
+            && nearly(inner.rc(0, 0), 1.0)
+            && nearly(inner.rc(1, 1), 1.0)
+            && nearly(inner.rc(0, 1), 0.0)
+            && nearly(inner.rc(1, 0), 0.0)
+            && nearly(inner.rc(0, 3), 0.0)
+            && nearly(inner.rc(1, 3), 0.0)
+            && outer_shared.opacity == 1.0
+            && outer_shared.mask_filter_info.IsEmpty()
+            && nearly(outer_transform.rc(0, 1), 0.0)
+            && nearly(outer_transform.rc(1, 0), 0.0)
+            && outer_transform.rc(0, 0) > 0.0
+            && outer_transform.rc(1, 1) > 0.0
     }
 
     fn FinishDrawingFrame(&mut self) -> io::Result<()> {
@@ -118,7 +229,7 @@ impl TranslatedSoftwareRenderer {
         Ok(())
     }
 
-    fn BindFrameTarget(&mut self, input: &VizOutput, mut target: RenderTarget) -> io::Result<()> {
+    fn BindFrameTarget(&mut self, input: &VizOutput, target: RenderTarget) -> io::Result<()> {
         if self.frame_target.is_some() {
             return Err(io::Error::other(
                 "translated renderer already has a bound frame target",
@@ -133,30 +244,34 @@ impl TranslatedSoftwareRenderer {
         });
         let direct = roots.next().and_then(|(pass, destination)| {
             if roots.next().is_some()
-                || target.format != crate::render_target::PixelFormat::Bgra8888
-                || target.row_stride != target.width as usize
-                || destination != full_bounds
-                || pass.OutputRect() != full_bounds
+                || !CanDrawRootDirect(
+                    destination,
+                    pass.OutputRect(),
+                    full_bounds,
+                    target.row_stride,
+                )
             {
                 return None;
             }
             Some(pass.RenderPassId())
         });
         if let Some(id) = direct {
-            let backing = self
-                .render_pass_bitmaps
-                .get_mut(&id)
-                .ok_or_else(|| io::Error::other("translated root backing was not allocated"))?;
-            if backing.rect.size() == full_bounds.size()
-                && backing.pixels.len() == target.pixels.len()
-            {
-                std::mem::swap(&mut backing.pixels, &mut target.pixels);
-                if !target.retained {
-                    self.framebuffer_damage.insert(id, full_bounds);
-                    backing.drawn_rect = Rect::default();
+            if !target.retained {
+                self.framebuffer_damage.insert(id, full_bounds);
+            }
+            self.direct_root_pass = Some(id);
+            self.update.direct_root_target = true;
+        } else {
+            for pass in input.Frame().RenderPasses() {
+                if input.RootDestination(pass.RenderPassId()).is_some()
+                    && self
+                        .render_pass_bitmaps
+                        .get(&pass.RenderPassId())
+                        .is_none_or(|backing| backing.drawn_rect != pass.OutputRect())
+                {
+                    self.framebuffer_damage
+                        .insert(pass.RenderPassId(), pass.OutputRect());
                 }
-                self.direct_root_pass = Some(id);
-                self.update.direct_root_target = true;
             }
         }
         self.frame_target = Some(target);
@@ -171,13 +286,7 @@ impl TranslatedSoftwareRenderer {
             .frame_target
             .take()
             .ok_or_else(|| io::Error::other("translated renderer has no bound frame target"))?;
-        if let Some(id) = self.direct_root_pass.take() {
-            let backing = self
-                .render_pass_bitmaps
-                .get_mut(&id)
-                .ok_or_else(|| io::Error::other("translated root backing disappeared"))?;
-            std::mem::swap(&mut backing.pixels, &mut target.pixels);
-        } else {
+        if self.direct_root_pass.take().is_none() {
             publish(
                 input,
                 &mut target,
@@ -186,6 +295,10 @@ impl TranslatedSoftwareRenderer {
             )?;
         }
         Ok((self.update, target))
+    }
+
+    fn IsRootFrameTarget(&self, id: RenderPassId) -> bool {
+        self.direct_root_pass == Some(id)
     }
 
     fn EnsureScissorTestDisabled(&mut self) {
@@ -208,12 +321,20 @@ impl TranslatedSoftwareRenderer {
                 "translated renderer began a render pass before finishing the previous pass",
             ));
         }
-        let backing = self
-            .render_pass_bitmaps
-            .get_mut(&pass.RenderPassId())
-            .ok_or_else(|| io::Error::other("translated render-pass bitmap not allocated"))?;
-        backing.rect.x = pass.OutputRect().x;
-        backing.rect.y = pass.OutputRect().y;
+        if self.direct_root_pass == Some(pass.RenderPassId()) {
+            if self.frame_target.is_none() {
+                return Err(io::Error::other(
+                    "translated root render pass has no bound host target",
+                ));
+            }
+        } else {
+            let backing = self
+                .render_pass_bitmaps
+                .get_mut(&pass.RenderPassId())
+                .ok_or_else(|| io::Error::other("translated render-pass bitmap not allocated"))?;
+            backing.rect.x = pass.OutputRect().x;
+            backing.rect.y = pass.OutputRect().y;
+        }
         self.current_pass = Some(pass.RenderPassId());
         self.current_rect = pass.OutputRect();
         self.drawn_damage.insert(
@@ -260,6 +381,30 @@ impl TranslatedSoftwareRenderer {
         target.clip_path(&path.detach(None), SkClipOp::kIntersect, false);
     }
 
+    fn TraceTargetPixel(target: &mut RasterTarget<'_>, x: i32, y: i32) -> io::Result<[u8; 4]> {
+        let mut pixel = [0u32; 1];
+        let info = image_info(
+            1,
+            1,
+            compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888,
+        )?;
+        if !target
+            .read_pixels(
+                &info,
+                bytemuck::cast_slice_mut(pixel.as_mut_slice()),
+                4,
+                x,
+                y,
+            )
+            .map_err(|error| raster_error("translated trace pixel readback failed", error))?
+        {
+            return Err(io::Error::other(
+                "translated trace pixel readback returned false",
+            ));
+        }
+        Ok(pixel[0].to_ne_bytes())
+    }
+
     fn DrawQuadIntoTarget(
         &mut self,
         target: &mut RasterTarget<'_>,
@@ -303,7 +448,6 @@ impl TranslatedSoftwareRenderer {
             target.set_matrix(&transform);
             let antialias =
                 if settings.force_antialiasing || !is_scale_and_integer_translate(&transform) {
-                    self.linear_sampling = true;
                     let exterior = quad.geometry.rect == shared.quad_layer_rect;
                     settings.allow_antialiasing && (settings.force_antialiasing || exterior)
                 } else {
@@ -338,6 +482,18 @@ impl TranslatedSoftwareRenderer {
                     )?;
                     self.update.tile_quads += 1;
                 }
+                QuadMaterial::Texture { .. } => {
+                    self.DrawTextureQuad(
+                        target,
+                        input,
+                        quad,
+                        shared,
+                        blend,
+                        antialias,
+                        draw_region.is_none(),
+                    )?;
+                    self.update.tile_quads += 1;
+                }
                 QuadMaterial::DebugBorder { .. } => {
                     Self::DrawDebugBorderQuad(target, quad, shared, blend)?;
                 }
@@ -352,6 +508,11 @@ impl TranslatedSoftwareRenderer {
                 QuadMaterial::SharedElement { .. } => {
                     return Err(io::Error::other(
                         "unresolved SharedElement reached translated SoftwareRenderer",
+                    ));
+                }
+                QuadMaterial::Surface { .. } => {
+                    return Err(io::Error::other(
+                        "unaggregated SurfaceDrawQuad reached translated SoftwareRenderer",
                     ));
                 }
             }
@@ -374,7 +535,9 @@ impl TranslatedSoftwareRenderer {
         if let Some(started) = quad_started {
             let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
             let counter = match &quad.material {
-                QuadMaterial::Tile { .. } => Some(&mut self.update.tile_ns),
+                QuadMaterial::Tile { .. } | QuadMaterial::Texture { .. } => {
+                    Some(&mut self.update.tile_ns)
+                }
                 QuadMaterial::Picture { .. } => Some(&mut self.update.picture_ns),
                 QuadMaterial::SolidColor { .. } => Some(&mut self.update.solid_ns),
                 QuadMaterial::CompositorRenderPass { .. } => Some(&mut self.update.render_pass_ns),
@@ -533,16 +696,97 @@ impl TranslatedSoftwareRenderer {
         .clamp(0, 255) as u8;
         let mask = &shared.mask_filter_info;
         let mut rounded_corner_regions = None;
+        let blend_supported = matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver);
         let blit_eligible = self.n32_tile_blit
             && pixel_aligned_one_to_one
             && has_rectangular_clip
             && !antialias
             && !mask.HasGradientMask()
-            && matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver);
+            && blend_supported;
+        if !self.n32_tile_blit {
+            self.update.tile_blit_disabled_quads += 1;
+        } else if !pixel_aligned_one_to_one {
+            self.update.tile_blit_misaligned_quads += 1;
+        } else if !has_rectangular_clip {
+            self.update.tile_blit_complex_clip_quads += 1;
+        } else if antialias {
+            self.update.tile_blit_antialias_quads += 1;
+        } else if mask.HasGradientMask() {
+            self.update.tile_blit_gradient_mask_quads += 1;
+        } else if !blend_supported {
+            self.update.tile_blit_unsupported_blend_quads += 1;
+        }
+        if self.direct_root_pass == self.current_pass {
+            if let Some((trace_x, trace_y)) = std::env::var("RECHROM_TRACE_COMPOSITOR_PIXEL")
+                .ok()
+                .and_then(|value| {
+                    let (x, y) = value.split_once(',')?;
+                    Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+                })
+            {
+                let device_right = device_left + quad.geometry.visible_rect.width as f64;
+                let device_bottom = device_top + quad.geometry.visible_rect.height as f64;
+                if (trace_x as f64) >= device_left.floor()
+                    && (trace_x as f64) < device_right.ceil()
+                    && (trace_y as f64) >= device_top.floor()
+                    && (trace_y as f64) < device_bottom.ceil()
+                {
+                    eprintln!(
+                        "tile-blit-choice target=({trace_x},{trace_y}) resource={resource_id:?} eligible={blit_eligible} enabled={} aligned={pixel_aligned_one_to_one} rectangular_clip={has_rectangular_clip} antialias={antialias} gradient_mask={} blend={blend:?} source={source:?} visible={:?} transform={transform:?}",
+                        self.n32_tile_blit,
+                        mask.HasGradientMask(),
+                        quad.geometry.visible_rect,
+                    );
+                }
+            }
+        }
         if blit_eligible {
             self.update.tile_blit_eligible_quads += 1;
             let mapping = raster::execution::MapResourceForRead(lease.as_ref())?;
             let format = mapping.format();
+            if let Some((trace_x, trace_y)) = std::env::var("RECHROM_TRACE_COMPOSITOR_PIXEL")
+                .ok()
+                .and_then(|value| {
+                    let (x, y) = value.split_once(',')?;
+                    Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+                })
+                .filter(|_| {
+                    nearly(transform.rc(0, 0), 1.)
+                        && nearly(transform.rc(1, 1), 1.)
+                        && nearly(transform.rc(0, 1), 0.)
+                        && nearly(transform.rc(1, 0), 0.)
+                })
+            {
+                let local_x = trace_x - transform.rc(0, 3).round() as i32;
+                let local_y = trace_y - transform.rc(1, 3).round() as i32;
+                if local_x >= quad.geometry.visible_rect.x
+                    && local_x < quad.geometry.visible_rect.right()
+                    && local_y >= quad.geometry.visible_rect.y
+                    && local_y < quad.geometry.visible_rect.bottom()
+                {
+                    let source_x = source.x().round() as i32
+                        + local_x.saturating_sub(quad.geometry.visible_rect.x);
+                    let source_y = source.y().round() as i32
+                        + local_y.saturating_sub(quad.geometry.visible_rect.y);
+                    if source_x >= 0
+                        && source_x < mapping.size().width()
+                        && source_y >= 0
+                        && source_y < mapping.size().height()
+                    {
+                        let offset =
+                            source_y as usize * mapping.row_bytes() + source_x as usize * 4;
+                        let bytes = mapping.bytes();
+                        if offset + 4 <= bytes.len() {
+                            eprintln!(
+                                "tile-source-pixel target=({trace_x},{trace_y}) resource={resource_id:?} source=({source_x},{source_y}) value={:?} format={format:?} size={:?} row_bytes={} source_rect={source:?}",
+                                &bytes[offset..offset + 4],
+                                mapping.size(),
+                                mapping.row_bytes(),
+                            );
+                        }
+                    }
+                }
+            }
             if format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
                 || format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
             {
@@ -690,7 +934,11 @@ impl TranslatedSoftwareRenderer {
                     if direct_complete && direct_region_count > 0 && corner_regions.len() == 4 {
                         rounded_corner_regions = Some(corner_regions);
                     }
+                } else {
+                    self.update.tile_blit_failed_quads += 1;
                 }
+            } else {
+                self.update.tile_blit_unsupported_format_quads += 1;
             }
         }
         let image_started = self.profile_input.then(std::time::Instant::now);
@@ -758,6 +1006,113 @@ impl TranslatedSoftwareRenderer {
                 .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
         result
+    }
+
+    // Source: components/viz/service/display/software_renderer.cc and
+    // texture_draw_quad.h. Single-plane textures share SoftwareRenderer's
+    // image draw. Multiplanar video leases are kept as Texture (never Tile)
+    // and enter the dedicated YUVA mapping path beside lease_image.
+    fn DrawTextureQuad(
+        &mut self,
+        target: &mut RasterTarget<'_>,
+        input: &VizOutput,
+        quad: &DrawQuad,
+        shared: &SharedQuadState,
+        blend: SkBlendMode,
+        antialias: bool,
+        has_rectangular_clip: bool,
+    ) -> io::Result<()> {
+        let QuadMaterial::Texture {
+            resource_id,
+            tex_coord_rect,
+            is_tex_coord_rect_normalized,
+            nearest_neighbor,
+            secure_output_only,
+            is_video_frame,
+            ..
+        } = &quad.material
+        else {
+            return Ok(());
+        };
+        if *secure_output_only {
+            return Err(io::Error::other(
+                "secure TextureDrawQuad cannot use the software output",
+            ));
+        }
+        let lease = resource(input, *resource_id)?;
+        let size = lease.size();
+        if size.width() <= 0 || size.height() <= 0 {
+            return Err(io::Error::other("TextureDrawQuad resource is empty"));
+        }
+        if lease.format().is_multi_plane() {
+            if !*is_video_frame {
+                return Err(io::Error::other(
+                    "multiplanar TextureDrawQuad must identify a video frame",
+                ));
+            }
+            let source = if *is_tex_coord_rect_normalized {
+                RectF::new(
+                    tex_coord_rect.x() * size.width() as f32,
+                    tex_coord_rect.y() * size.height() as f32,
+                    tex_coord_rect.width() * size.width() as f32,
+                    tex_coord_rect.height() * size.height() as f32,
+                )
+            } else {
+                *tex_coord_rect
+            };
+            let source = compositor_core::cc::base::math_util::MathUtil::ScaleRectProportional(
+                source,
+                RectF::from(quad.geometry.rect),
+                RectF::from(quad.geometry.visible_rect),
+            );
+            let image = video_lease_image(lease)?;
+            let sampling = SkSamplingOptions::with_filter(if *nearest_neighbor {
+                SkFilterMode::kNearest
+            } else {
+                SkFilterMode::kLinear
+            });
+            let mut paint = SkPaint::default();
+            paint.setAlphaf(shared.opacity.clamp(0., 1.));
+            paint.setBlendMode(blend);
+            paint.setAntiAlias(antialias);
+            return unsafe {
+                target.draw_image_rect(
+                    &image,
+                    Some(&rectf(source)),
+                    &rect(quad.geometry.visible_rect),
+                    &sampling,
+                    Some(&paint),
+                    SrcRectConstraint::kStrict_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated video texture draw failed", error));
+        }
+        let mut tile = quad.clone();
+        tile.material = QuadMaterial::Tile {
+            resource_id: *resource_id,
+            tex_coord_rect: if *is_tex_coord_rect_normalized {
+                RectF::new(
+                    tex_coord_rect.x() * size.width() as f32,
+                    tex_coord_rect.y() * size.height() as f32,
+                    tex_coord_rect.width() * size.width() as f32,
+                    tex_coord_rect.height() * size.height() as f32,
+                )
+            } else {
+                *tex_coord_rect
+            },
+            nearest_neighbor: *nearest_neighbor,
+            force_anti_aliasing_off: false,
+        };
+        drop(lease);
+        self.DrawTileQuad(
+            target,
+            input,
+            &tile,
+            shared,
+            blend,
+            antialias,
+            has_rectangular_clip,
+        )
     }
 
     // Source: components/viz/service/display/software_renderer.cc:393-431.
@@ -854,6 +1209,9 @@ impl TranslatedSoftwareRenderer {
             .iter()
             .find(|pass| pass.RenderPassId() == *render_pass_id)
             .ok_or_else(|| io::Error::other("referenced aggregate pass is absent"))?;
+        if self.video_bypass_passes.contains(render_pass_id) {
+            return self.DrawBypassedVideoRenderPass(target, input, quad, child, shared, blend);
+        }
         self.update.render_pass_pixels = self.update.render_pass_pixels.saturating_add(
             quad.geometry.visible_rect.width.max(0) as u64
                 * quad.geometry.visible_rect.height.max(0) as u64,
@@ -879,32 +1237,44 @@ impl TranslatedSoftwareRenderer {
         if !child.Filters().IsEmpty() && filter_image.is_none() {
             return Ok(());
         }
-        let (dest, visible, content_size) = if let Some((_, dest)) = &filter_image {
+        let (dest, visible, source_size) = if let Some((_, dest)) = &filter_image {
             (*dest, *dest, dest.size())
         } else if let Some(backing) = backing {
             if backing.drawn_rect.IsEmpty() {
                 return Ok(());
             }
-            let size = if quad.geometry.rect.IsEmpty() {
-                backing.drawn_rect.size()
+            let dest = if quad.geometry.rect.IsEmpty() {
+                backing.drawn_rect
             } else {
-                quad.geometry.rect.size()
+                quad.geometry.rect
             };
-            (quad.geometry.rect, quad.geometry.visible_rect, size)
+            // SoftwareRenderer's content_rect covers the pixels actually
+            // drawn by the child pass; dest_rect remains the
+            // RenderPassDrawQuad rect. They differ for a stretched
+            // SurfaceDrawQuad (including device-scale mapping), and the
+            // reusable backing may be larger than the drawn pass. Sampling
+            // either destination size or backing allocation size includes
+            // transparent padding and leaves DPR>1 output partially blank.
+            // Source: components/viz/service/display/software_renderer.cc:
+            //         537-577.
+            (dest, quad.geometry.visible_rect, backing.drawn_rect.size())
         } else {
             return Ok(());
         };
         let source = SkRect::MakeLTRB(
             0.,
             0.,
-            content_size.width() as f32,
-            content_size.height() as f32,
+            source_size.width() as f32,
+            source_size.height() as f32,
         );
-        let sampling = SkSamplingOptions::with_filter(if self.linear_sampling {
-            SkFilterMode::kLinear
-        } else {
-            SkFilterMode::kNearest
-        });
+        // AggregatedRenderPassDrawQuad has no nearest-neighbor override.
+        // Chromium's production SkiaRenderer therefore resolves it through
+        // GetSampling() to bilinear, including integer device-scale mapping.
+        // Keeping SoftwareRenderer's default-nearest state here first
+        // rasterized a delegated video Surface at 1x and then duplicated its
+        // edge texels at DPR>1.
+        // Source: components/viz/service/display/skia_renderer.cc:302-324.
+        let sampling = SkSamplingOptions::with_filter(SkFilterMode::kLinear);
         let mask = if mask_resource_id.0 == 0 {
             None
         } else {
@@ -969,8 +1339,8 @@ impl TranslatedSoftwareRenderer {
             && nearly(transform.rc(1, 0), 0.)
             && integral(transform.rc(0, 3))
             && integral(transform.rc(1, 3))
-            && dest.width == content_size.width()
-            && dest.height == content_size.height();
+            && dest.width == source_size.width()
+            && dest.height == source_size.height();
         if direct_pass_blit {
             if let Some(backing) = backing {
                 let mut region = visible;
@@ -1102,6 +1472,70 @@ impl TranslatedSoftwareRenderer {
         let restore_result = target
             .restore()
             .map_err(|error| raster_error("translated child-pass restore failed", error));
+        draw_result.and(restore_result)
+    }
+
+    fn DrawBypassedVideoRenderPass(
+        &mut self,
+        target: &mut RasterTarget<'_>,
+        input: &VizOutput,
+        outer: &DrawQuad,
+        child: &AggregatedRenderPass,
+        shared: &SharedQuadState,
+        blend: SkBlendMode,
+    ) -> io::Result<()> {
+        let texture = child
+            .Quads()
+            .first()
+            .ok_or_else(|| io::Error::other("bypassed video pass lost its texture quad"))?;
+        let QuadMaterial::Texture { resource_id, .. } = &texture.material else {
+            return Err(io::Error::other(
+                "bypassed video pass no longer contains a TextureDrawQuad",
+            ));
+        };
+        let transform = shared.quad_to_target_transform.as_source();
+        let output_width = (outer.geometry.rect.width as f64 * transform.rc(0, 0))
+            .round()
+            .clamp(1.0, i32::MAX as f64) as i32;
+        let output_height = (outer.geometry.rect.height as f64 * transform.rc(1, 1))
+            .round()
+            .clamp(1.0, i32::MAX as f64) as i32;
+        let lease = resource(input, *resource_id)?;
+        let image_started = self.profile_input.then(std::time::Instant::now);
+        let image = video_lease_image_scaled(lease, output_width, output_height)?;
+        if let Some(started) = image_started {
+            self.update.tile_image_ns = self
+                .update
+                .tile_image_ns
+                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        }
+        let source = SkRect::MakeLTRB(0.0, 0.0, output_width as f32, output_height as f32);
+        let sampling = SkSamplingOptions::with_filter(SkFilterMode::kNearest);
+        let mut paint = SkPaint::default();
+        paint.setAlphaf(shared.opacity.clamp(0.0, 1.0));
+        paint.setBlendMode(blend);
+        paint.setAntiAlias(false);
+        target.save();
+        target.clip_rect(
+            &rect(outer.geometry.visible_rect),
+            SkClipOp::kIntersect,
+            false,
+        );
+        let draw_result = unsafe {
+            target.draw_image_rect(
+                &image,
+                Some(&source),
+                &rect(outer.geometry.rect),
+                &sampling,
+                Some(&paint),
+                SrcRectConstraint::kStrict_SrcRectConstraint,
+            )
+        }
+        .map_err(|error| raster_error("translated bypassed video draw failed", error));
+        let restore_result = target
+            .restore()
+            .map_err(|error| raster_error("translated bypassed video restore failed", error));
+        self.update.tile_quads += 1;
         draw_result.and(restore_result)
     }
 
@@ -1623,6 +2057,152 @@ impl TranslatedSoftwareRenderer {
         });
     }
 
+    fn DrawPendingIntoTarget(
+        &mut self,
+        input: &VizOutput,
+        pass: &AggregatedRenderPass,
+        draws: Vec<PendingDraw>,
+        pending_clear: Option<(Rect, bool)>,
+        pixels: &mut [u32],
+        width: i32,
+        height: i32,
+        row_bytes: usize,
+        format: PixelFormat,
+    ) -> io::Result<()> {
+        let target_started = self.profile_input.then(std::time::Instant::now);
+        let trace_pixel = (self.direct_root_pass == Some(pass.RenderPassId()))
+            .then(|| std::env::var("RECHROM_TRACE_COMPOSITOR_PIXEL").ok())
+            .flatten()
+            .and_then(|value| {
+                let (x, y) = value.split_once(',')?;
+                Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+            })
+            .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < width && *y < height);
+        match RasterTarget::new(
+            bytemuck::cast_slice_mut(pixels),
+            width,
+            height,
+            row_bytes,
+            format,
+            None,
+        ) {
+            Ok(mut target) => {
+                if let Some(started) = target_started {
+                    self.update.target_create_ns = self
+                        .update
+                        .target_create_ns
+                        .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                }
+                let draw_result = (|| -> io::Result<()> {
+                    if let Some((bounds, transparent)) = pending_clear {
+                        let clear_started = self.profile_input.then(std::time::Instant::now);
+                        let mut paint = SkPaint::default();
+                        paint.setBlendMode(SkBlendMode::kSrc);
+                        paint.setAntiAlias(false);
+                        paint.setColor4f(
+                            &skia::src::core::SkColor::SkColor4f {
+                                fR: 0.,
+                                fG: 0.,
+                                fB: if transparent || !cfg!(debug_assertions) {
+                                    0.
+                                } else {
+                                    1.
+                                },
+                                fA: if transparent { 0. } else { 1. },
+                            },
+                            None,
+                        );
+                        unsafe { target.draw_rect(&rect(bounds), &paint) }.map_err(|error| {
+                            raster_error("translated framebuffer clear failed", error)
+                        })?;
+                        if let Some(started) = clear_started {
+                            self.update.target_clear_ns =
+                                self.update.target_clear_ns.saturating_add(
+                                    started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                                );
+                        }
+                    }
+                    for draw in draws {
+                        self.scissor_rect = draw.scissor_rect;
+                        let before = trace_pixel
+                            .map(|(x, y)| Self::TraceTargetPixel(&mut target, x, y))
+                            .transpose()?;
+                        self.DrawQuadIntoTarget(
+                            &mut target,
+                            input,
+                            pass,
+                            draw.index,
+                            draw.draw_region.as_ref(),
+                        )?;
+                        if let (Some((x, y)), Some(before)) = (trace_pixel, before) {
+                            let after = Self::TraceTargetPixel(&mut target, x, y)?;
+                            if after != before {
+                                let quad = &pass.Quads()[draw.index];
+                                let tile = match &quad.material {
+                                    QuadMaterial::Tile {
+                                        resource_id,
+                                        tex_coord_rect,
+                                        nearest_neighbor,
+                                        force_anti_aliasing_off,
+                                    } => Some((
+                                        resource_id,
+                                        tex_coord_rect,
+                                        nearest_neighbor,
+                                        force_anti_aliasing_off,
+                                    )),
+                                    _ => None,
+                                };
+                                let shared = quad
+                                    .geometry
+                                    .shared_quad_state
+                                    .and_then(|id| pass.TrySharedQuadState(id));
+                                eprintln!(
+                                    "compositor-pixel ({},{}) pass={:?} quad={} material={:?} tile={:?} before={:?} after={:?} rect={:?} visible={:?} layer={} opacity={} blend={:?} clip={:?} layer_rect={:?} mask={:?} transform={:?}",
+                                    x,
+                                    y,
+                                    pass.RenderPassId(),
+                                    draw.index,
+                                    std::mem::discriminant(&quad.material),
+                                    tile,
+                                    before,
+                                    after,
+                                    quad.geometry.rect,
+                                    quad.geometry.visible_rect,
+                                    shared.map_or(0, |state| state.layer_id),
+                                    shared.map_or(1.0, |state| state.opacity),
+                                    shared.map(|state| state.blend_mode),
+                                    shared.and_then(|state| state.clip_rect),
+                                    shared.map(|state| state.quad_layer_rect),
+                                    shared.map(|state| &state.mask_filter_info),
+                                    shared.map(|state| &state.quad_to_target_transform),
+                                );
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                let finish_started = self.profile_input.then(std::time::Instant::now);
+                let finish_result = target.finish().map_err(|error| {
+                    raster_error("translated render-pass target finish failed", error)
+                });
+                if let Some(started) = finish_started {
+                    self.update.target_finish_ns = self
+                        .update
+                        .target_finish_ns
+                        .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+                }
+                match (draw_result, finish_result) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                }
+            }
+            Err(error) => Err(raster_error(
+                "translated render-pass target creation failed",
+                error,
+            )),
+        }
+    }
+
     fn FinishDrawingRenderPass(
         &mut self,
         input: &VizOutput,
@@ -1636,88 +2216,57 @@ impl TranslatedSoftwareRenderer {
                 "translated renderer finished a different render pass",
             ));
         }
+        if self.video_bypass_passes.contains(&id) {
+            self.pending_draws.clear();
+            self.pending_clear = None;
+            if let Some(backing) = self.render_pass_bitmaps.get_mut(&id) {
+                backing.drawn_rect = self.current_rect;
+            }
+            return Ok(());
+        }
+        let draws = std::mem::take(&mut self.pending_draws);
+        let pending_clear = self.pending_clear.take();
+        if self.direct_root_pass == Some(id) {
+            let mut frame_target = self
+                .frame_target
+                .take()
+                .ok_or_else(|| io::Error::other("translated root target disappeared"))?;
+            let width = frame_target.width as i32;
+            let height = frame_target.height as i32;
+            let row_bytes = frame_target
+                .row_stride
+                .checked_mul(4)
+                .ok_or_else(|| io::Error::other("translated root row byte overflow"))?;
+            let format = target_format(frame_target.format);
+            let result = self.DrawPendingIntoTarget(
+                input,
+                pass,
+                draws,
+                pending_clear,
+                frame_target.pixels.as_mut_slice(),
+                width,
+                height,
+                row_bytes,
+                format,
+            );
+            self.frame_target = Some(frame_target);
+            return result;
+        }
         let mut backing = self
             .render_pass_bitmaps
             .remove(&id)
             .ok_or_else(|| io::Error::other("translated active pass backing disappeared"))?;
-        let draws = std::mem::take(&mut self.pending_draws);
-        let pending_clear = self.pending_clear.take();
-        let target_started = self.profile_input.then(std::time::Instant::now);
-        let result =
-            match RasterTarget::new(
-                bytemuck::cast_slice_mut(backing.pixels.as_mut_slice()),
-                backing.rect.width,
-                backing.rect.height,
-                backing.rect.width as usize * 4,
-                PixelFormat::Bgra8888,
-                None,
-            ) {
-                Ok(mut target) => {
-                    if let Some(started) = target_started {
-                        self.update.target_create_ns = self.update.target_create_ns.saturating_add(
-                            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                        );
-                    }
-                    let draw_result = (|| -> io::Result<()> {
-                        if let Some((bounds, transparent)) = pending_clear {
-                            let clear_started = self.profile_input.then(std::time::Instant::now);
-                            let mut paint = SkPaint::default();
-                            paint.setBlendMode(SkBlendMode::kSrc);
-                            paint.setAntiAlias(false);
-                            paint.setColor4f(
-                                &skia::src::core::SkColor::SkColor4f {
-                                    fR: 0.,
-                                    fG: 0.,
-                                    fB: if transparent || !cfg!(debug_assertions) {
-                                        0.
-                                    } else {
-                                        1.
-                                    },
-                                    fA: if transparent { 0. } else { 1. },
-                                },
-                                None,
-                            );
-                            unsafe { target.draw_rect(&rect(bounds), &paint) }.map_err(
-                                |error| raster_error("translated framebuffer clear failed", error),
-                            )?;
-                            if let Some(started) = clear_started {
-                                self.update.target_clear_ns =
-                                    self.update.target_clear_ns.saturating_add(
-                                        started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                                    );
-                            }
-                        }
-                        for draw in draws {
-                            self.scissor_rect = draw.scissor_rect;
-                            self.DrawQuadIntoTarget(
-                                &mut target,
-                                input,
-                                pass,
-                                draw.index,
-                                draw.draw_region.as_ref(),
-                            )?;
-                        }
-                        Ok(())
-                    })();
-                    let finish_started = self.profile_input.then(std::time::Instant::now);
-                    let finish_result = target.finish().map_err(|error| {
-                        raster_error("translated render-pass target finish failed", error)
-                    });
-                    if let Some(started) = finish_started {
-                        self.update.target_finish_ns = self.update.target_finish_ns.saturating_add(
-                            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-                        );
-                    }
-                    match (draw_result, finish_result) {
-                        (Ok(()), Ok(())) => Ok(()),
-                        (Err(error), _) | (_, Err(error)) => Err(error),
-                    }
-                }
-                Err(error) => Err(raster_error(
-                    "translated render-pass target creation failed",
-                    error,
-                )),
-            };
+        let result = self.DrawPendingIntoTarget(
+            input,
+            pass,
+            draws,
+            pending_clear,
+            backing.pixels.as_mut_slice(),
+            backing.rect.width,
+            backing.rect.height,
+            backing.rect.width as usize * 4,
+            PixelFormat::Bgra8888,
+        );
         if result.is_ok() {
             backing.drawn_rect = self.current_rect;
         }
@@ -1766,6 +2315,10 @@ impl RendererBackend for TranslatedSoftwareRenderer {
         input: &VizOutput,
     ) -> io::Result<(RenderUpdate, RenderTarget)> {
         Self::ReleaseFrameTarget(self, input)
+    }
+
+    fn IsRootFrameTarget(&self, id: RenderPassId) -> bool {
+        Self::IsRootFrameTarget(self, id)
     }
 
     fn CanPartialSwap(&self) -> bool {
@@ -1859,5 +2412,36 @@ impl RendererBackend for TranslatedSoftwareRenderer {
 
     fn AbortDrawingFrame(&mut self) {
         Self::AbortDrawingFrame(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CanDrawRootDirect;
+    use compositor_core::adapter::geometry::Rect;
+
+    #[test]
+    fn direct_root_accepts_padded_host_stride() {
+        let full = Rect::new(0, 0, 1280, 720);
+        assert!(CanDrawRootDirect(full, full, full, 1280));
+        assert!(CanDrawRootDirect(full, full, full, 1344));
+        assert!(!CanDrawRootDirect(full, full, full, 1279));
+    }
+
+    #[test]
+    fn direct_root_requires_one_full_output_plane() {
+        let full = Rect::new(0, 0, 1280, 720);
+        assert!(!CanDrawRootDirect(
+            Rect::new(0, 86, 1280, 634),
+            full,
+            full,
+            1280,
+        ));
+        assert!(!CanDrawRootDirect(
+            full,
+            Rect::new(0, 0, 1280, 700),
+            full,
+            1280,
+        ));
     }
 }

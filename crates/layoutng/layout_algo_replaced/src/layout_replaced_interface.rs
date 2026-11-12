@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 use foundation::{
     gfx, DynamicTo, EAspectRatioType, InterpolationQuality, LayoutRatioFromSizeF, LayoutUnit,
@@ -18,7 +19,6 @@ use super::super::hit_test_phase::HitTestPhase;
 use super::super::layout_box::LayoutBox;
 use super::super::layout_node_metadata::Element;
 use super::super::layout_object::{HitTestLocation, HitTestResult, LayoutObject, PaintInfo};
-use super::super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::super::loader::fetch::resource_priority::ResourcePriority;
 
 // Other non-inline LayoutReplaced bodies correspond to
@@ -179,8 +179,11 @@ impl LayoutReplaced {
         unsafe { LayoutReplacedRecalcVisualOverflow(self) }
     }
     pub fn RespectsCSSOverflow(&self) -> bool {
-        let factories = LayoutObjectFactoryScope::Objects();
-        let callback = unsafe { factories.as_ref() }
+        // RecalcVisualOverflow also runs from PrePaint, after the temporary
+        // layout pass scope has unwound. LayoutObject retains the exact factory
+        // set installed when this concrete object was created; use that owner
+        // instead of a thread-local construction scope.
+        let callback = unsafe { self.FactorySet().as_ref() }
             .and_then(|factories| factories.replaced_respects_css_overflow)
             .expect("replaced overflow virtual dispatch is not installed");
         callback(self)
@@ -279,6 +282,67 @@ impl DerefMut for LayoutReplaced {
     }
 }
 
+// cpp: core/layout/layout_image_resource.h:37-86
+// cpp: core/layout/layout_image_resource.cc:42-75
+// LayoutImageResource retains the producer's original ImageResourceContent
+// identity. ImageLoader decides when a candidate is complete; this owner keeps
+// the previous completed candidate during a pending source change.
+pub struct LayoutImageResource {
+    cached_image_: Option<Rc<dyn image_resource::ImageResourceContentLease>>,
+}
+
+impl LayoutImageResource {
+    pub fn new() -> Self {
+        Self {
+            cached_image_: None,
+        }
+    }
+    pub fn Update(&mut self, update: image_resource::ImageResourceContentUpdate) -> bool {
+        let same = match (&self.cached_image_, &update.content) {
+            (Some(current), Some(next)) => Rc::ptr_eq(current, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            // ImageNotifyFinished keeps the same ImageResourceContent owner,
+            // but its decoded metadata and error state become observable.
+            return update.complete;
+        }
+        if !update.complete && self.cached_image_.is_some() {
+            return false;
+        }
+        self.cached_image_ = update.content;
+        true
+    }
+    pub fn CachedImage(&self) -> Option<Rc<dyn image_resource::ImageResourceContentLease>> {
+        self.cached_image_.clone()
+    }
+    pub fn HasImage(&self) -> bool {
+        self.cached_image_.is_some()
+    }
+    pub fn ErrorOccurred(&self) -> bool {
+        self.cached_image_
+            .as_ref()
+            .is_some_and(|content| content.ErrorOccurred())
+    }
+    pub fn IsLoading(&self) -> bool {
+        self.cached_image_
+            .as_ref()
+            .is_some_and(|content| content.IsLoading())
+    }
+    pub fn Metadata(&self) -> Option<image_resource::ImageResourceMetadata> {
+        self.cached_image_
+            .as_ref()
+            .and_then(|content| content.Metadata())
+    }
+}
+
+impl Default for LayoutImageResource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // cpp: core/layout/layout_image.h:47-49,183-200
 // cpp: core/layout/layout_image.cc:60-60
 // Architecture-preserving specialization used by the assembled LayoutImage.
@@ -287,6 +351,7 @@ impl DerefMut for LayoutReplaced {
 #[repr(C)]
 pub struct LayoutInputReplaced {
     replaced_: LayoutReplaced,
+    image_resource_: RefCell<LayoutImageResource>,
     natural_dimensions_: RefCell<PhysicalNaturalSizingInfo>,
     image_device_pixel_ratio_: Cell<f32>,
     is_generated_content_: Cell<bool>,
@@ -316,6 +381,7 @@ impl LayoutInputReplaced {
             .map_or(1.0, |data| data.image_device_pixel_ratio as f32);
         Self {
             replaced_: LayoutReplaced::new(element as *const Element as *mut Element),
+            image_resource_: RefCell::new(LayoutImageResource::new()),
             natural_dimensions_: RefCell::new(PhysicalNaturalSizingInfo::None()),
             image_device_pixel_ratio_: Cell::new(image_device_pixel_ratio),
             is_generated_content_: Cell::new(element.InputIsStyleGenerated()),
@@ -338,6 +404,29 @@ impl LayoutInputReplaced {
     pub fn NaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
         self.CheckIsNotDestroyed();
         self.natural_dimensions_.borrow().clone()
+    }
+    pub fn ImageResource(&self) -> std::cell::Ref<'_, LayoutImageResource> {
+        self.CheckIsNotDestroyed();
+        self.image_resource_.borrow()
+    }
+    pub fn UpdateImageResource(&self, update: image_resource::ImageResourceContentUpdate) -> bool {
+        self.CheckIsNotDestroyed();
+        self.image_resource_.borrow_mut().Update(update)
+    }
+    pub fn UseBrokenImage(
+        &self,
+        variants: image_resource::platform_resources::BrokenImageResourceVariants,
+        device_scale_factor: f64,
+    ) -> bool {
+        let content = if device_scale_factor >= 2.0 {
+            variants.scale200
+        } else {
+            variants.scale100
+        };
+        self.UpdateImageResource(image_resource::ImageResourceContentUpdate {
+            content: Some(content),
+            complete: true,
+        })
     }
     // cpp: core/layout/layout_image.cc:208-221
     pub fn UpdateNaturalDimensionsFromElementInput(&self) {
@@ -364,6 +453,35 @@ impl LayoutInputReplaced {
             } else if !sizing_info.size.IsEmpty() {
                 sizing_info.aspect_ratio = sizing_info.size;
             }
+        }
+        *self.natural_dimensions_.borrow_mut() = sizing_info;
+    }
+    // Source: core/layout/layout_image.cc:208-221 and
+    // LayoutImageResource::ImageSize. The resource owner, not DOM projection,
+    // is authoritative once ImageLoader has installed a content identity.
+    pub fn UpdateNaturalDimensionsFromImageResource(&self) {
+        self.CheckIsNotDestroyed();
+        let resource = self.ImageResource();
+        if resource.ErrorOccurred() {
+            return;
+        }
+        let Some(metadata) = resource.Metadata() else {
+            return;
+        };
+        let respect_orientation = self.StyleRef().ImageOrientation()
+            == foundation::RespectImageOrientationEnum::kRespectImageOrientation;
+        let (width, height) = metadata.NaturalSize(respect_orientation);
+        let scale = self.ImageDevicePixelRatio() as f64;
+        let zoom = self.StyleRef().EffectiveZoom();
+        let mut sizing_info = PhysicalNaturalSizingInfo::None();
+        sizing_info.has_width = true;
+        sizing_info.has_height = true;
+        sizing_info.size = PhysicalSize::new(
+            LayoutUnit::from_f64(width * scale * zoom as f64),
+            LayoutUnit::from_f64(height * scale * zoom as f64),
+        );
+        if !sizing_info.size.IsEmpty() {
+            sizing_info.aspect_ratio = sizing_info.size;
         }
         *self.natural_dimensions_.borrow_mut() = sizing_info;
     }
@@ -485,3 +603,151 @@ impl DerefMut for LayoutInputReplaced {
         &mut self.replaced_
     }
 }
+
+// Source: core/layout/layout_media.h:46-96, layout_video.h:42-102.
+// Keep distinct derived allocations and the native child-list/cache members.
+// All base subobjects have offset zero, as required by assembled C++ virtuals.
+#[repr(C)]
+pub struct LayoutMedia {
+    image_: LayoutInputReplaced,
+    children_: UnsafeCell<super::super::layout_object_child_list::LayoutObjectChildList>,
+}
+impl LayoutMedia {
+    pub fn new(element: *mut Element) -> Self {
+        Self {
+            image_: LayoutInputReplaced::new(element),
+            children_: UnsafeCell::new(Default::default()),
+        }
+    }
+    pub fn Children(&self) -> *mut super::super::layout_object_child_list::LayoutObjectChildList {
+        self.CheckIsNotDestroyed();
+        self.children_.get()
+    }
+    // Source: core/layout/layout_media.h:53-56.
+    pub fn CanHaveChildren(&self) -> bool {
+        self.CheckIsNotDestroyed();
+        true
+    }
+    pub fn GetName(&self) -> &'static str {
+        if self.IsVideo() {
+            "LayoutVideo"
+        } else {
+            "LayoutMedia"
+        }
+    }
+    pub fn ComputePanelWidth(&self, media_rect: &PhysicalRect) -> LayoutUnit {
+        unsafe { LayoutMediaComputePanelWidth(self, media_rect) }
+    }
+    pub fn IsChildAllowed(&self, child: &LayoutObject, style: &ComputedStyle) -> bool {
+        self.CheckIsNotDestroyed();
+        if style.HasOutOfFlowPosition()
+            || (style.IsFloating() && !style.IsInsideDisplayIgnoringFloatingChildren())
+        {
+            return false;
+        }
+        let node = child.GetNode();
+        assert!(!node.is_null());
+        let element = DynamicTo::<Element>(node);
+        if element.is_null() {
+            return false;
+        }
+        match unsafe { &*element }
+            .InputElementData()
+            .as_ref()
+            .and_then(|data| data.media_child_kind)
+        {
+            Some(super::super::layout_input::MediaChildKind::Controls) => child.IsFlexibleBox(),
+            Some(
+                super::super::layout_input::MediaChildKind::TextTrackContainer
+                | super::super::layout_input::MediaChildKind::RemotingInterstitial
+                | super::super::layout_input::MediaChildKind::PictureInPictureInterstitial,
+            ) => true,
+            None => false,
+        }
+    }
+}
+impl Deref for LayoutMedia {
+    type Target = LayoutInputReplaced;
+    fn deref(&self) -> &Self::Target {
+        &self.image_
+    }
+}
+impl DerefMut for LayoutMedia {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.image_
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoDisplayMode {
+    Poster,
+    Video,
+}
+#[repr(C)]
+pub struct LayoutVideo {
+    media_: LayoutMedia,
+    natural_dimensions_: RefCell<PhysicalNaturalSizingInfo>,
+}
+impl LayoutVideo {
+    pub fn new(element: *mut Element) -> Self {
+        Self {
+            media_: LayoutMedia::new(element),
+            natural_dimensions_: RefCell::new(PhysicalNaturalSizingInfo::None()),
+        }
+    }
+    pub fn ElementState(&self) -> super::super::layout_input::VideoLayoutState {
+        self.CheckIsNotDestroyed();
+        let element = DynamicTo::<Element>(self.GetNode());
+        assert!(!element.is_null());
+        unsafe { &*element }
+            .InputElementData()
+            .as_ref()
+            .and_then(|data| data.video)
+            .expect("HTMLVideoElement publishes its player/poster layout facts")
+    }
+    // Source: core/layout/layout_video.cc:119-132.
+    pub fn GetDisplayMode(&self) -> VideoDisplayMode {
+        let state = self.ElementState();
+        if (state.show_poster || !state.has_available_video_frame) && state.poster_url_present {
+            VideoDisplayMode::Poster
+        } else {
+            VideoDisplayMode::Video
+        }
+    }
+    pub fn CachedNaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
+        self.natural_dimensions_.borrow().clone()
+    }
+    pub fn SetCachedNaturalDimensions(&self, sizing: PhysicalNaturalSizingInfo) {
+        *self.natural_dimensions_.borrow_mut() = sizing;
+    }
+    pub fn PosterNaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
+        self.media_.image_.NaturalDimensions()
+    }
+    pub fn RefreshPosterNaturalDimensions(&self) {
+        self.media_.image_.UpdateNaturalDimensionsFromElementInput();
+    }
+    pub fn UpdateFromElement(&mut self) {
+        unsafe { LayoutVideoUpdateFromElement(self) }
+    }
+    pub fn InvalidateCompositing(&mut self) {
+        unsafe { LayoutVideoInvalidateCompositing(self) }
+    }
+}
+impl Deref for LayoutVideo {
+    type Target = LayoutMedia;
+    fn deref(&self) -> &Self::Target {
+        &self.media_
+    }
+}
+impl DerefMut for LayoutVideo {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.media_
+    }
+}
+unsafe extern "Rust" {
+    fn LayoutMediaComputePanelWidth(this: &LayoutMedia, media_rect: &PhysicalRect) -> LayoutUnit;
+    fn LayoutVideoUpdateFromElement(this: &mut LayoutVideo);
+    fn LayoutVideoInvalidateCompositing(this: &mut LayoutVideo);
+}
+const _: () = assert!(std::mem::offset_of!(LayoutMedia, image_) == 0);
+const _: () = assert!(std::mem::offset_of!(LayoutVideo, media_) == 0);

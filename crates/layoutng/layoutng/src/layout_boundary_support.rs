@@ -16,6 +16,28 @@ use crate::internal::layout_object::LayoutObject;
 pub(crate) type LayoutBoundaryHashMap<K, V> = TrustedIdentityHashMap<K, V>;
 pub(crate) type LayoutBoundaryHashSet<K> = TrustedIdentityHashSet<K>;
 
+/// Chromium's retained FragmentData/FragmentItem identity expressed without
+/// borrowing a particular immutable LayoutResult generation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum FragmentIdentityKey {
+    FragmentData(u64),
+    InlineItem {
+        container: u64,
+        client: u64,
+        fragment: u32,
+        kind: u8,
+        start: u32,
+        end: u32,
+        index: u32,
+    },
+    PhysicalFallback {
+        client: u64,
+        fragment: u32,
+        kind: u8,
+        preorder: u32,
+    },
+}
+
 // cpp: layoutng/layout_boundary_support.h:15-23
 pub trait LayoutBoundaryEnvironment {
     fn ReusesPreparedFonts(&self) -> bool;
@@ -51,10 +73,10 @@ pub struct LayoutBoundaryCache {
     // cull-rect updates; preserve the same identity in fragment-local Paint
     // data so PrePaint does not mistake a retained source owner for a new one.
     pub(crate) fragment_identity_result: usize,
-    /// The current result-level Paint state. Clones of the same source result
-    /// share it; a newly published LayoutResult receives a distinct owner.
-    pub(crate) fragment_paint_result: Option<LayoutResultHandle>,
-    pub(crate) fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
+    /// Chromium-style resident FragmentData state. Replacement LayoutResults
+    /// rebind source owners to the same stable fragment slots.
+    pub(crate) fragment_paint_state: Option<Arc<crate::layout_engine::LayoutPaintState>>,
+    pub(crate) fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
     pub(crate) next_fragment_instance_id: u64,
 }
 
@@ -68,7 +90,7 @@ impl LayoutBoundaryCache {
         self.sources.clear();
         self.style_sources.clear();
         self.fragment_identity_result = 0;
-        self.fragment_paint_result = None;
+        self.fragment_paint_state = None;
         self.fragment_instance_ids.clear();
         self.next_fragment_instance_id = 0;
     }

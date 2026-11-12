@@ -4,12 +4,11 @@
 // As for LayoutSVGRoot, descendants retain their own fragments. The boundary
 // exports those children; they are not CSS inline/block children of this box.
 #![allow(non_snake_case)]
-use foundation::{gfx, DynamicTo, LayoutUnit};
+use foundation::{gfx, LayoutUnit};
 use layoutng_assembly::box_fragment_builder::BoxFragmentBuilder;
 use layoutng_assembly::internal::block_node::BlockNode;
 use layoutng_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
 use layoutng_assembly::internal::layout_box::LayoutBox;
-use layoutng_assembly::internal::layout_node_metadata::Element;
 use layoutng_assembly::internal::layout_object::LayoutObject;
 use layoutng_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layoutng_geometry::geometry::{fragment_geometry::FragmentGeometry, logical_size::LogicalSize};
@@ -48,10 +47,18 @@ pub(crate) fn LayoutContainer(
     let mut child = object.SlowFirstChild();
     let mut viewport_dependence = false;
     while let Some(child_object) = unsafe { child.as_mut() } {
+        viewport_dependence |=
+            crate::svg_resources::LayoutMarkerResourcesIfNeeded(child_object, info);
         let result = child_object.UpdateSVGLayout(info);
+        child_object.SetHasViewportDependence(result.has_viewport_dependence);
         viewport_dependence |= result.has_viewport_dependence;
         child = child_object.NextSibling();
     }
+    // SVGContentContainer::Layout updates retained bounds after all children.
+    unsafe {
+        &mut *(object as *mut LayoutObject).cast::<crate::layout_svg_group::LayoutSVGGroup>()
+    }
+    .UpdateObjectBounds();
     let result = builder.ToBoxFragment();
     unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutBox>() }
         .SetCachedLayoutResult(result, 0);
@@ -68,17 +75,10 @@ pub(crate) fn VisualRect(object: &LayoutObject) -> gfx::RectF {
         return gfx::RectF::default();
     }
     if object.IsSVGShape() {
-        let element = DynamicTo::<Element>(object.GetNode());
-        let Some(shape) = (unsafe { element.as_ref() })
-            .and_then(|element| element.InputElementData().as_ref())
-            .and_then(|data| data.svg_shape.as_ref())
-        else {
-            return gfx::RectF::default();
-        };
-        return gfx::RectF::new(
-            gfx::PointF::new(shape.bounds_offset.x as f32, shape.bounds_offset.y as f32),
-            gfx::SizeF::new(shape.bounds_width as f32, shape.bounds_height as f32),
-        );
+        return unsafe {
+            &*(object as *const LayoutObject).cast::<crate::layout_svg_shape::LayoutSVGShape>()
+        }
+        .DecoratedBoundingBox();
     }
     if object.IsSVGText() || object.IsSVGInline() || object.IsSVGInlineText() {
         let algorithms =
@@ -105,6 +105,38 @@ pub(crate) fn VisualRect(object: &LayoutObject) -> gfx::RectF {
             );
         }
         child = child_object.NextSibling();
+    }
+    bounds
+}
+
+// SVGContentContainer::ComputeVisualOverflowRectIncludingFilters cc:225-240,
+// and svg_content_container.cc:37-54. This is the source bounds traversal of
+// native content, used by the SVGRoot virtual; no hit-test tree is projected.
+pub(crate) fn ContentVisualOverflowIncludingFilters(root: &LayoutObject) -> gfx::RectF {
+    let mut bounds = gfx::RectF::default();
+    let mut child = root.SlowFirstChild();
+    while let Some(object) = unsafe { child.as_ref() } {
+        child = object.NextSibling();
+        if !crate::svg_resources::IsObjectBoundingBoxValid(object) {
+            continue;
+        }
+        let local = if object.IsSVGContainer() && !object.IsSVGForeignObject() {
+            ContentVisualOverflowIncludingFilters(object)
+        } else {
+            crate::svg_resources::DecoratedBoundingBox(object)
+        };
+        let filtered =
+            layoutng_assembly::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(
+                |tree| crate::svg_resources::ApplyFiltersToRect(tree, object, local),
+            )
+            .unwrap_or_else(|| {
+                assert!(
+                    !object.StyleRef().HasFilter(),
+                    "SVG filter bounds need the native resource query scope"
+                );
+                local
+            });
+        bounds.Union(object.LocalToSVGParentTransform().MapRect(filtered));
     }
     bounds
 }

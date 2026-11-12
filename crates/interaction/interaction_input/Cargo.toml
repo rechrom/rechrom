@@ -1,0 +1,9 @@
+[package]
+name = "interaction_input"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+foundation = { path = "../../layoutng/layoutng_foundation/base" }
+foundation_transform = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }

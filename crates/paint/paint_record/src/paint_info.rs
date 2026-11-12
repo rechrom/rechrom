@@ -21,6 +21,14 @@ pub struct PaintInfo<'c, 'o> {
     is_painting_background_in_contents_space: bool,
     skips_background: bool,
     skips_gap_decorations: bool,
+    svg_context_paints: Option<&'c crate::svg_context_paints::SvgContextPaints<'c>>,
+    svg_resource_root: u64,
+    pub svg_resource_painter: Option<
+        for<'n, 'f, 'p, 'r> fn(
+            &'n prepaint::pre_paint_tree_walk::PaintTreeNode<'f>,
+            &PaintInfo<'p, 'r>,
+        ),
+    >,
 }
 
 impl<'c, 'o> PaintInfo<'c, 'o> {
@@ -73,7 +81,35 @@ impl<'c, 'o> PaintInfo<'c, 'o> {
             is_painting_background_in_contents_space: false,
             skips_background: false,
             skips_gap_decorations: false,
+            svg_context_paints: None,
+            svg_resource_root: 0,
+            svg_resource_painter: None,
         }
+    }
+
+    pub fn GetSvgContextPaints(
+        &self,
+    ) -> Option<&'c crate::svg_context_paints::SvgContextPaints<'c>> {
+        self.svg_context_paints
+    }
+    pub fn WithSvgContextPaints<'s>(
+        &self,
+        paints: &'s crate::svg_context_paints::SvgContextPaints<'s>,
+    ) -> PaintInfo<'s, 'o>
+    where
+        'c: 's,
+    {
+        let mut info: PaintInfo<'s, 'o> = *self;
+        info.svg_context_paints = Some(paints);
+        info
+    }
+    pub fn SetSvgResourceRoot(&mut self, client: u64) {
+        self.svg_resource_root = client;
+        self.paint_flags |= PaintFlag::kOmitCompositingInfo | PaintFlag::kPaintingResourceSubtree;
+        self.cull_rect = CullRect::Infinite();
+    }
+    pub fn IsSvgResourceRoot(&self, client: u64) -> bool {
+        self.svg_resource_root == client && client != 0
     }
 
     // Source: core/paint/paint_info.h:92-108.

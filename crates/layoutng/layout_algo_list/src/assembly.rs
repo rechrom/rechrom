@@ -88,11 +88,23 @@ fn CreateListObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObjec
     MakeGarbageCollected(LayoutListItem::new(element)) as *mut LayoutObject
 }
 
+// The base-first representation preserves the same original derived virtual.
+fn SubtreeDidChange(object: &mut LayoutObject) {
+    if object.IsInlineListItem() {
+        unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutInlineListItem>() }
+            .SubtreeDidChange();
+    } else {
+        debug_assert!(object.IsLayoutListItem());
+        unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutListItem>() }.SubtreeDidChange();
+    }
+}
+
 // cpp: layoutng_list/assembly.h:2-2
 // cpp: layoutng_list/assembly.cc:73-79
 pub fn InstallListModule(assembly: &mut LayoutAssembly) {
     assembly.algorithms.list_support.performance_owner = Some("layout_algo_list");
     assembly.objects.list = Some(CreateListObject);
+    assembly.objects.list_subtree_did_change = Some(SubtreeDidChange);
     assembly.algorithms.list_support.update_marker_text = Some(UpdateMarkerText);
     assembly.algorithms.list_support.marker_occupies_whole_line = Some(MarkerOccupiesWholeLine);
     assembly.algorithms.list_support.symbol_marker_text = Some(SymbolMarkerText);

@@ -4,7 +4,6 @@ use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::NodeKind;
 use layoutng_assembly::internal::paint_input::PaintFilterType;
-use paint_model::geometry_mapper::MapRectToRoot;
 use paint_model::PaintRect;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
@@ -24,7 +23,9 @@ impl SVGContainerPainter {
         node.fragment.as_deref().is_some_and(|fragment| {
             matches!(
                 fragment.paint.source_kind,
-                NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
+                NodeKind::kSvgGroup
+                    | NodeKind::kSvgResourceMarker
+                    | NodeKind::kSvgViewportContainer
             )
         })
     }
@@ -68,12 +69,16 @@ impl SVGContainerPainter {
             return true;
         }
         let (Some(cull_rect), Some(visual_rect)) =
-            (node.cull_rect, SVGModelObjectPainter::VisualRect(node))
+            (node.self_cull_rect, SVGModelObjectPainter::VisualRect(node))
         else {
             return true;
         };
-        MapRectToRoot(visual_rect, &node.transforms)
-            .is_none_or(|mapped| Intersects(mapped, cull_rect))
+        // ComputeFragmentCullRect stores the inverse-mapped cull in the
+        // container's LocalBorderBoxProperties space. VisualRect is already
+        // expressed in that same local space, matching Chromium's
+        // IntersectsTransformed(LocalToSVGParentTransform, local visual rect)
+        // after the property-tree mapping has been consumed by PrePaint.
+        Intersects(visual_rect, cull_rect)
     }
 
     /// Source: core/paint/svg_container_painter.cc:111-117.
@@ -202,7 +207,7 @@ mod tests {
     fn finite_cull_is_disabled_by_source_transform_aggregate() {
         let mut node = container();
         node.children.push(Box::new(PaintTreeNode::default()));
-        node.cull_rect = Some(PaintRect {
+        node.self_cull_rect = Some(PaintRect {
             x: 100.0,
             y: 100.0,
             width: 20.0,

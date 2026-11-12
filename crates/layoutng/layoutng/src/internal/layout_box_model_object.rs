@@ -15,7 +15,7 @@ use super::layout_node_metadata::{ContainerNode, Element};
 use super::layout_object::LayoutObject;
 use super::layout_scrollable_area::PaintLayerScrollableArea;
 pub use super::paint_layer::PaintLayer;
-use super::sticky_position_scrolling_constraints::{PerAxisData, StickyConstraintsData};
+use super::sticky_position_scrolling_constraints::StickyConstraintsData;
 use foundation::PhysicalOffset;
 
 #[path = "../../../layout_fragment/src/background_transfer.rs"]
@@ -27,6 +27,9 @@ mod layout_fragment_layout_box_model_scrollable_area;
 
 #[path = "../../../layout_fragment/src/layout_box_model_outline.rs"]
 mod layout_fragment_layout_box_model_outline;
+
+#[path = "../../../layout_fragment/src/empty_element_caret.rs"]
+mod layout_fragment_empty_element_caret;
 
 #[path = "../../../layout_invalidation/src/layout_box_model_layer_invalidation.rs"]
 mod layout_invalidation_layout_box_model_layer_invalidation;
@@ -55,12 +58,6 @@ unsafe extern "Rust" {
         offset: &PhysicalOffset,
         element: *const Element,
     ) -> PhysicalOffset;
-    fn LayoutBoxModelObjectLocalCaretRectForEmptyElement(
-        this: &LayoutBoxModelObject,
-        inline_size: LayoutUnit,
-        text_indent_offset: LayoutUnit,
-        shape: CaretShape,
-    ) -> LogicalRect;
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:44-51
@@ -80,8 +77,6 @@ pub enum PaintLayerType {
 #[repr(C)]
 pub struct LayoutBoxModelObject {
     object_: LayoutObject,
-    pub(crate) x_sticky_constraints_: Member<PerAxisData>,
-    pub(crate) y_sticky_constraints_: Member<PerAxisData>,
     // Source: core/paint/paint_layer.h:817. Kept on the extracted
     // LayoutBoxModelObject side of the existing Layout/Paint boundary.
     pub(crate) transform_: Option<Box<gfx::Transform>>,
@@ -114,8 +109,6 @@ impl LayoutBoxModelObject {
     pub fn new(node: *mut ContainerNode) -> Self {
         let object = Self {
             object_: LayoutBoxModelObjectBaseForNode(node),
-            x_sticky_constraints_: Member::default(),
-            y_sticky_constraints_: Member::default(),
             transform_: None,
             scrollable_area_: Member::default(),
         };
@@ -140,8 +133,6 @@ impl LayoutBoxModelObject {
 
     // cpp: layoutng/internal/layout_scrollable_area.cc:346-352
     pub fn Trace(&self, visitor: &mut Visitor) {
-        visitor.Trace(&self.x_sticky_constraints_);
-        visitor.Trace(&self.y_sticky_constraints_);
         visitor.Trace(&self.scrollable_area_);
         self.object_.Trace(visitor);
     }
@@ -290,7 +281,10 @@ impl LayoutBoxModelObject {
             return PaintLayerType::kOverflowClipPaintLayer;
         }
         // cpp: core/layout/svg/layout_svg_root.cc:544-553
-        if self.IsOverscrollContainer() || self.IsSVGRoot() {
+        // cpp: core/layout/layout_embedded_content.cc:168-174. Preserve the
+        // base layer when one is already required; otherwise an embedded
+        // view retains its forced layer even before a child is attached.
+        if self.IsOverscrollContainer() || self.IsSVGRoot() || self.IsLayoutEmbeddedContent() {
             return PaintLayerType::kForcedPaintLayer;
         }
         PaintLayerType::kNoPaintLayer
@@ -338,14 +332,12 @@ impl LayoutBoxModelObject {
         text_indent_offset: LayoutUnit,
         shape: CaretShape,
     ) -> LogicalRect {
-        unsafe {
-            LayoutBoxModelObjectLocalCaretRectForEmptyElement(
-                self,
-                inline_size,
-                text_indent_offset,
-                shape,
-            )
-        }
+        layout_fragment_empty_element_caret::LayoutBoxModelObjectLocalCaretRectForEmptyElement(
+            self,
+            inline_size,
+            text_indent_offset,
+            shape,
+        )
     }
 
     // cpp: layoutng/internal/layout_box_model_object.h:368-373

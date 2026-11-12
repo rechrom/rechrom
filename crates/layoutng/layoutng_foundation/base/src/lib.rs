@@ -3,5 +3,6 @@
 pub mod blink_geometry;
 pub mod gfx_geometry;
 pub mod layout_features;
+pub mod range_geometry;
 pub mod text;
 pub mod unsupported_layout;

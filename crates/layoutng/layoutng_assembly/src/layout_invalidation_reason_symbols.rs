@@ -30,3 +30,5 @@ reason!(kTableChanged, b"Table changed\0");
 reason!(kAttributeChanged, b"Attribute changed\0");
 
 reason!(kTextControlChanged, b"Text control changed\0");
+
+reason!(kSliderValueChanged, b"Slider value changed\0");

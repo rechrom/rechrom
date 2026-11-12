@@ -71,6 +71,7 @@ pub use style_model::property_bitsets;
 pub mod resolver;
 pub mod responsive_image;
 pub mod rule_set;
+pub mod scrollbar_style;
 pub use style_match::selector_checker;
 pub use style_match::selector_filter;
 pub use style_rules::seeker;
@@ -106,9 +107,10 @@ pub use pending_sheet_type::PendingSheetType;
 pub use production_style_sheet_projection::{
     CSSDeclarationMutation, CSSInlineDeclarationMutation, CSSStyleSheetImportRequest,
     CSSStyleSheetImportRequests, CSSStyleSheetRuleMutationError, DeleteCSSStyleSheetRule,
-    GetInlineCSSDeclaration, InsertCSSStyleSheetRule, ParseCSS, ParseCSSDeclarationList,
-    ParseCSSWithBase, ParseUserAgentCSS, ParseUserAgentCSSWithRole, SetCSSDeclaration,
-    SetInlineCSSDeclaration,
+    GetInlineCSSDeclaration, InlineCSSPropertyIsIdentifier, InsertCSSStyleSheetRule, ParseCSS,
+    ParseCSSDeclarationList, ParseCSSWithBase, ParseUserAgentCSS, ParseUserAgentCSSWithRole,
+    RemoveInlineCSSPropertyValue, SetCSSDeclaration, SetInlineCSSDeclaration, SetInlineCSSProperty,
+    SetInlineCSSPropertyValue,
 };
 pub use style_engine::{
     AllowMarkForReattachFromRebuildLayoutTreeScope, AllowMarkStyleDirtyFromRecalcScope,
@@ -153,3 +155,29 @@ pub use style_parser::production_dynamic_range_value;
 pub use style_parser::production_effects_value;
 pub use style_parser::production_motion_value;
 mod production_render_delay_features;
+
+pub mod css_computed_style_declaration;
+pub mod editing_style;
+
+pub mod serialization_style_query;
+
+pub mod form_control_color;
+
+mod html_source_media_query;
+
+pub mod vtt_style;
+
+pub mod cssom_execution_context;
+pub use cssom_execution_context::{DocumentCSSOMContext, DocumentCSSOMSource};
+pub use style_parser::production_css_execution_context::{
+    CSSReferrerPolicy, ProductionCSSDOMWrapperWorld,
+};
+
+pub use production_style_sheet_projection::{
+    SetInlineCSSDeclarationWithContext, SetInlineCSSPropertyWithContext,
+};
+
+pub use production_style_sheet_projection::GetInlineCSSDeclarationWithContext;
+
+mod style_detach_scope;
+pub use style_detach_scope::{StyleDetachCompletion, StyleDetachScope};

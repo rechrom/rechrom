@@ -42,17 +42,54 @@ impl Default for ListMarker {
 
 impl ListMarker {
     // cpp: layoutng_list/list_marker.h:96-96
-    // The declaration has no definition in the supplied source tree.
     pub fn OrdinalValueChanged(&mut self, marker: &mut LayoutObject) {
-        unsafe { ListMarkerOrdinalValueChanged(self, marker) }
+        debug_assert_eq!(Self::Get(marker), self as *const Self);
+        if self.marker_text_type_ == MarkerTextType::kOrdinalValue {
+            self.marker_text_type_ = MarkerTextType::kUnresolved;
+            marker.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+                std::ptr::addr_of!(
+                    layoutng_assembly::internal::layout_invalidation_reason::kListValueChange
+                ),
+            );
+        }
     }
 
     // cpp: layoutng_list/list_marker.h:45-45,95-95
     pub fn UpdateMarkerContentIfNeeded(&mut self, marker: &mut LayoutObject) {
-        unsafe { ListMarkerUpdateMarkerContentIfNeeded(self, marker) }
+        debug_assert_eq!(Self::Get(marker), self as *const Self);
+        if !marker.StyleRef().ContentBehavesAsNormal() {
+            self.marker_text_type_ = MarkerTextType::kNotText;
+            return;
+        }
+        let list_item = self.ListItem(marker);
+        if list_item.is_null() {
+            self.marker_text_type_ = MarkerTextType::kNotText;
+            return;
+        }
+        let style = unsafe { &*list_item }.StyleRef();
+        if style.GeneratesMarkerImage() || style.ListStyleType().Get().is_null() {
+            self.marker_text_type_ = MarkerTextType::kNotText;
+            return;
+        }
+        // Generated marker children are created by the document/layout-tree
+        // mapping boundary. Preserve an existing projected child and mark its
+        // text unresolved exactly when Chromium would create the text child.
+        if !self.GetContentChild(marker).is_null() {
+            self.marker_text_type_ = MarkerTextType::kUnresolved;
+        }
     }
     pub fn ListStyleTypeChanged(&mut self, marker: &mut LayoutObject) {
-        unsafe { ListMarkerListStyleTypeChanged(self, marker) }
+        debug_assert_eq!(Self::Get(marker), self as *const Self);
+        if matches!(
+            self.marker_text_type_,
+            MarkerTextType::kNotText | MarkerTextType::kUnresolved
+        ) {
+            return;
+        }
+        self.marker_text_type_ = MarkerTextType::kUnresolved;
+        marker.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(std::ptr::addr_of!(
+            layoutng_assembly::internal::layout_invalidation_reason::kListStyleTypeChange
+        ));
     }
     // cpp: layoutng_list/list_marker.h:27-28
     // cpp: layoutng_list/list_marker_core.cc:19-29
@@ -220,15 +257,6 @@ impl ListMarker {
         debug_assert_eq!(-margin_start - margin_end, marker_inline_size);
         (margin_start, margin_end)
     }
-}
-
-unsafe extern "Rust" {
-    fn ListMarkerOrdinalValueChanged(marker_data: &mut ListMarker, marker: &mut LayoutObject);
-    fn ListMarkerUpdateMarkerContentIfNeeded(
-        marker_data: &mut ListMarker,
-        marker: &mut LayoutObject,
-    );
-    fn ListMarkerListStyleTypeChanged(marker_data: &mut ListMarker, marker: &mut LayoutObject);
 }
 
 // Other list_marker.h declarations have no definitions in this source tree.

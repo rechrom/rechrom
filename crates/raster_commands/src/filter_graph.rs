@@ -11,6 +11,7 @@ pub struct RenderReflectionMaskLayer {
     pub image_height: u32,
     pub image_rgba: std::sync::Arc<Vec<u8>>,
     pub image_interpolation_quality: crate::commands::ImageInterpolationQuality,
+    pub dynamic_range_limit: crate::commands::DynamicRangeLimit,
     pub paint_shader: Option<crate::commands::PaintShader>,
     pub clip_rect: crate::commands::PaintRect,
     pub source_rect: crate::commands::PaintRect,

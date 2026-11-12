@@ -20,9 +20,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tower_service::Service;
 use url::Url;
 
@@ -79,6 +79,7 @@ pub struct HTTPRequestData {
     pub body: Vec<u8>,
     pub headers: Vec<(String, String)>,
     pub priority: HTTPRequestPriority,
+    pub fetch: Option<crate::NetworkFetchOptions>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -95,17 +96,50 @@ pub enum HTTPRequestPriority {
 // cpp: http_transport/http_request.h:20-25
 #[derive(Clone, Debug, Default)]
 pub struct HTTPResponseData {
+    pub send_start: Option<Instant>,
+    pub response_end: Option<Instant>,
+    pub expected_content_length: Option<u64>,
+    pub headers: Vec<(String, String)>,
     pub status: i64,
     pub final_url: String,
     pub mime_type: String,
     pub content_dpr: Option<f64>,
+    pub content_disposition: String,
+    pub content_language: String,
+    /// Final request referrer after all transport redirects.
+    pub request_referrer: Option<String>,
     pub referrer_policy: String,
     pub content_security_policy: Vec<String>,
+    pub content_security_policy_report_only: Vec<String>,
+    pub response_address_space: crate::IPAddressSpace,
+    pub permissions_policy: String,
+    pub feature_policy: String,
+    pub document_policy: String,
+    pub document_policy_report_only: String,
+    pub require_document_policy: String,
     pub body: Vec<u8>,
 }
 
 // cpp: http_transport/http_request.h:27-34
 pub trait HTTPRequestOperation {
+    /// Main-thread receipt of response headers, independently of body EOF.
+    fn HasResponseStarted(&self) -> Option<bool> {
+        None
+    }
+    /// Explicit cancellation differs from disconnecting a keepalive receiver.
+    fn CancelKeepalive(&mut self) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "HTTP keepalive cancellation producer missing",
+        ))
+    }
+    fn DetachForKeepalive(&mut self) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "HTTP operation has no native keepalive owner",
+        ))
+    }
+
     fn SetPriority(&mut self, _priority: HTTPRequestPriority) {}
     fn Poll(&mut self) -> io::Result<Option<HTTPResponseData>>;
     fn SetWakeCallback(&mut self, _callback: crate::HTTPWakeCallback) {}
@@ -177,6 +211,49 @@ pub(crate) struct Scheduler {
     priority_slots: Option<Arc<Semaphore>>,
     critical_slots: Option<Arc<Semaphore>>,
     client: HTTPClient,
+    /// Hyper does not expose Chromium-style HTTP/2 stream priorities. Keep
+    /// visible/deferred and parser/render-blocking traffic on distinct
+    /// connection pools so a large ordinary script/image multiplex cannot
+    /// consume all body bandwidth after a higher-priority stream's response
+    /// headers arrive.
+    priority_clients: Vec<HTTPClient>,
+    critical_clients: Vec<HTTPClient>,
+    priority_client_lanes: Arc<Mutex<Vec<usize>>>,
+    critical_client_lanes: Arc<Mutex<Vec<usize>>>,
+}
+
+struct ClientLane {
+    index: usize,
+    available: Arc<Mutex<Vec<usize>>>,
+}
+
+impl Drop for ClientLane {
+    fn drop(&mut self) {
+        self.available
+            .lock()
+            .expect("HTTP client lane pool poisoned")
+            .push(self.index);
+    }
+}
+
+enum ScheduledClient {
+    Ordinary,
+    Priority(ClientLane),
+    Critical(ClientLane),
+}
+
+pub(crate) struct ScheduledSlot {
+    _permit: OwnedSemaphorePermit,
+    client: ScheduledClient,
+}
+
+impl ScheduledSlot {
+    fn ordinary(permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            _permit: permit,
+            client: ScheduledClient::Ordinary,
+        }
+    }
 }
 
 impl Scheduler {
@@ -193,7 +270,6 @@ impl Scheduler {
         let certificate_file = std::env::var_os("SSL_CERT_FILE");
         let roots = root_certificates(certificate_file.as_deref().map(Path::new))?;
         let timeout = (milliseconds > 0).then(|| Duration::from_millis(milliseconds));
-        let client = build_client(roots, timeout)?;
         // Source: third_party/blink/renderer/platform/loader/fetch/
         // resource_load_scheduler.cc; services/network/public/cpp/
         // resource_request.cc.  Parser/render-blocking CSS is VeryHigh while
@@ -204,24 +280,37 @@ impl Scheduler {
         let critical = options.max_parallel_requests / 4;
         let reserved = options.max_parallel_requests / 4;
         let ordinary = options.max_parallel_requests - critical - reserved;
+        let client = build_client(roots.clone(), timeout)?;
+        let mut priority_clients = Vec::with_capacity(reserved);
+        for _ in 0..reserved {
+            priority_clients.push(build_client(roots.clone(), timeout)?);
+        }
+        let mut critical_clients = Vec::with_capacity(critical);
+        for _ in 0..critical {
+            critical_clients.push(build_client(roots.clone(), timeout)?);
+        }
         Ok(Self {
             slots: Arc::new(Semaphore::new(ordinary.max(1))),
             priority_slots: (reserved != 0).then(|| Arc::new(Semaphore::new(reserved))),
             critical_slots: (critical != 0).then(|| Arc::new(Semaphore::new(critical))),
             options,
             client,
+            priority_clients,
+            critical_clients,
+            priority_client_lanes: Arc::new(Mutex::new((0..reserved).rev().collect())),
+            critical_client_lanes: Arc::new(Mutex::new((0..critical).rev().collect())),
         })
     }
 
     pub(crate) async fn acquire_slot(
         &self,
         priority: HTTPRequestPriority,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+    ) -> Result<ScheduledSlot, tokio::sync::AcquireError> {
         if priority == HTTPRequestPriority::VeryHigh {
             if let Some(critical) = &self.critical_slots {
                 return tokio::select! {
                     biased;
-                    permit = critical.clone().acquire_owned() => permit,
+                    permit = critical.clone().acquire_owned() => permit.map(|permit| self.critical_slot(permit)),
                     permit = self.acquire_high_or_ordinary_slot() => permit,
                 };
             }
@@ -229,20 +318,66 @@ impl Scheduler {
         if priority >= HTTPRequestPriority::High {
             return self.acquire_high_or_ordinary_slot().await;
         }
-        self.slots.clone().acquire_owned().await
+        self.slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map(ScheduledSlot::ordinary)
     }
 
     async fn acquire_high_or_ordinary_slot(
         &self,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+    ) -> Result<ScheduledSlot, tokio::sync::AcquireError> {
         if let Some(high) = &self.priority_slots {
             return tokio::select! {
                 biased;
-                permit = high.clone().acquire_owned() => permit,
-                permit = self.slots.clone().acquire_owned() => permit,
+                permit = high.clone().acquire_owned() => permit.map(|permit| self.priority_slot(permit)),
+                permit = self.slots.clone().acquire_owned() => permit.map(ScheduledSlot::ordinary),
             };
         }
-        self.slots.clone().acquire_owned().await
+        self.slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map(ScheduledSlot::ordinary)
+    }
+
+    fn priority_slot(&self, permit: OwnedSemaphorePermit) -> ScheduledSlot {
+        ScheduledSlot {
+            _permit: permit,
+            client: ScheduledClient::Priority(ClientLane {
+                index: self
+                    .priority_client_lanes
+                    .lock()
+                    .expect("HTTP priority client lane pool poisoned")
+                    .pop()
+                    .expect("HTTP priority permit must own a client lane"),
+                available: Arc::clone(&self.priority_client_lanes),
+            }),
+        }
+    }
+
+    fn critical_slot(&self, permit: OwnedSemaphorePermit) -> ScheduledSlot {
+        ScheduledSlot {
+            _permit: permit,
+            client: ScheduledClient::Critical(ClientLane {
+                index: self
+                    .critical_client_lanes
+                    .lock()
+                    .expect("HTTP critical client lane pool poisoned")
+                    .pop()
+                    .expect("HTTP critical permit must own a client lane"),
+                available: Arc::clone(&self.critical_client_lanes),
+            }),
+        }
+    }
+
+    fn client_for_slot(&self, slot: &ScheduledSlot) -> &HTTPClient {
+        match &slot.client {
+            ScheduledClient::Ordinary => &self.client,
+            ScheduledClient::Priority(lane) => &self.priority_clients[lane.index],
+            ScheduledClient::Critical(lane) => &self.critical_clients[lane.index],
+        }
     }
 }
 
@@ -304,6 +439,10 @@ fn build_client_with_proxy(
     let client = Client::builder(TokioExecutor::new())
         .pool_timer(TokioTimer::new())
         .timer(TokioTimer::new())
+        // Chromium grows HTTP/2 receive windows with observed bandwidth and
+        // consumption. Hyper's fixed defaults can starve later multiplexed
+        // streams after headers when a page starts many large assets at once.
+        .http2_adaptive_window(true)
         .http2_max_header_list_size(kSpdyMaxHeaderListSize)
         .build(connector);
     Ok(HTTPClient {
@@ -336,12 +475,17 @@ pub(crate) fn network_error(error: &(dyn Error + 'static)) -> TransferError {
     let mut message = Vec::new();
     let mut retryable = false;
     let mut invalid_tls = false;
+    let mut blocked_by_policy = false;
     while let Some(error) = current {
         message.push(error.to_string());
         if error.is::<rustls::Error>() {
             invalid_tls = true;
         }
         if let Some(error) = error.downcast_ref::<io::Error>() {
+            blocked_by_policy |= matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+            );
             invalid_tls |= error
                 .get_ref()
                 .is_some_and(|inner| inner.is::<rustls::Error>());
@@ -369,7 +513,10 @@ pub(crate) fn network_error(error: &(dyn Error + 'static)) -> TransferError {
             .and_then(|io| io.get_ref().map(|inner| inner as &(dyn Error + 'static)))
             .or_else(|| error.source());
     }
-    TransferError::new(message.join(": "), retryable && !invalid_tls)
+    TransferError::new(
+        message.join(": "),
+        retryable && !invalid_tls && !blocked_by_policy,
+    )
 }
 
 pub(crate) async fn with_stall_timeout<F, T>(
@@ -476,7 +623,7 @@ fn decode_body(mut body: Vec<u8>, encodings: &str, limit: usize) -> Result<Vec<u
             other => {
                 return Err(protocol_error(format!(
                     "unsupported HTTP content encoding: {other}"
-                )))
+                )));
             }
         };
     }
@@ -486,12 +633,13 @@ fn decode_body(mut body: Vec<u8>, encodings: &str, limit: usize) -> Result<Vec<u
 pub(crate) async fn fetch_response(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
+    slot: &ScheduledSlot,
     trace: RequestTrace,
     attempt: usize,
 ) -> Result<ResponseStart, TransferError> {
     let options = &scheduler.options;
     let mut url = http_url(&request.url)?;
-    let method = Method::from_bytes(request.method.as_bytes()).map_err(protocol_error)?;
+    let mut method = Method::from_bytes(request.method.as_bytes()).map_err(protocol_error)?;
     let mut body = request.body.clone();
     let mut headers = build_headers(request, options)?;
     let mut referrer_policy = request
@@ -503,7 +651,7 @@ pub(crate) async fn fetch_response(
         .unwrap_or_default()
         .to_owned();
     referrer = referrer_policy.GenerateReferrer(&referrer, url.as_str());
-    let mut implicit_content_type =
+    let implicit_content_type =
         (!body.is_empty() || method == Method::POST) && !headers.contains_key(header::CONTENT_TYPE);
     if implicit_content_type {
         headers.insert(
@@ -511,7 +659,140 @@ pub(crate) async fn fetch_response(
             HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
     }
+    let lna_checker = Arc::new(Mutex::new(fetch_policy::RawLocalNetworkAccessChecker::new()));
+    let lna_pending =
+        Arc::new(crate::local_network_access::LocalNetworkPermissionPending::default());
+    let mut tainted_origin = false;
     for redirects in 0..=10 {
+        if let Some(fetch) = &request.fetch {
+            // FetchContext::CanRequest and KeepAliveURLLoader's retained
+            // PolicyContainer check each redirect without a DOM callback.
+            use foundation::content_security_policy::{
+                CSPCheckHeaderType, CSPRedirectStatus, CSPReportingDisposition, CSPRequest,
+            };
+            if redirects != 0 {
+                lna_checker
+                    .lock()
+                    .expect("LNA checker poisoned")
+                    .ResetForRedirect();
+                let prepared = fetch.policy.PrepareRequestURL(url.as_str());
+                url = http_url(&prepared.url)?;
+                if fetch.upgrade_if_insecure {
+                    if let Some(upgraded) =
+                        fetch_policy::UpgradeInsecureURL(fetch.policy.as_ref(), url.as_str())
+                    {
+                        url = http_url(&upgraded)?;
+                    }
+                }
+                let verdict = fetch.policy.AllowRequest(&CSPRequest {
+                    url: url.as_str(),
+                    url_before_redirects: &request.url,
+                    context: fetch.context,
+                    world: if fetch.keepalive {
+                        foundation::content_security_policy::CSPWorld::Main
+                    } else {
+                        fetch.world
+                    },
+                    redirect: if redirects > 1 {
+                        CSPRedirectStatus::FollowedRedirect
+                    } else {
+                        CSPRedirectStatus::NoRedirect
+                    },
+                    reporting: if fetch.keepalive {
+                        CSPReportingDisposition::SuppressReporting
+                    } else {
+                        CSPReportingDisposition::Report
+                    },
+                    check_header_type: CSPCheckHeaderType::All,
+                });
+                let has_violations = !verdict.violations.is_empty();
+                fetch
+                    .policy_violations
+                    .lock()
+                    .expect("CSP effect queue poisoned")
+                    .extend(verdict.violations);
+                if has_violations {
+                    if let Some(wake) = &fetch.policy_effect_wake {
+                        wake();
+                    }
+                }
+                if !verdict.allowed {
+                    fetch.access_check_failed.store(true, Ordering::Release);
+                    return Err(protocol_error(
+                        "redirect blocked by Content Security Policy",
+                    ));
+                }
+                if !fetch.context_detached.load(Ordering::Acquire) {
+                    let mixed = if fetch.keepalive {
+                        fetch_policy::CheckRawKeepaliveRedirectMixedContent(
+                            fetch.security.as_ref(),
+                            fetch.policy.as_ref(),
+                            url.as_str(),
+                            &request.url,
+                            fetch.context,
+                            prepared.block_all_mixed_content,
+                        )
+                    } else {
+                        fetch_policy::CheckRawMixedContent(fetch.security.as_ref(),fetch.policy.as_ref(),url.as_str(),&request.url,fetch.context,foundation::content_security_policy::CSPRedirectStatus::FollowedRedirect,prepared.block_all_mixed_content)
+                    };
+                    if let Some(effect) = mixed.effect {
+                        fetch
+                            .mixed_content_effects
+                            .lock()
+                            .expect("mixed content effect queue poisoned")
+                            .push(effect);
+                        if let Some(wake) = &fetch.policy_effect_wake {
+                            wake();
+                        }
+                    }
+                    if let Some(reason) = mixed.blocked {
+                        fetch.access_check_failed.store(true, Ordering::Release);
+                        return Err(protocol_error(format!(
+                            "redirect mixed-content admission: {reason:?}"
+                        )));
+                    }
+                }
+            }
+            if fetch.mode == crate::FetchMode::Cors {
+                let origin = if tainted_origin {
+                    "null".to_owned()
+                } else {
+                    fetch.requestor_origin.Serialize()
+                };
+                headers.insert(
+                    header::ORIGIN,
+                    HeaderValue::from_str(&origin)
+                        .map_err(|error| protocol_error(error.to_string()))?,
+                );
+            }
+            if fetch.mode == crate::FetchMode::SameOrigin
+                && (tainted_origin || !fetch.requestor_origin.IsSameOrigin(url.as_str()))
+            {
+                return Err(protocol_error(
+                    "same-origin Fetch mode rejects cross-origin URL",
+                ));
+            }
+            if fetch.credentials == crate::FetchCredentialsMode::Omit
+                || (fetch.credentials == crate::FetchCredentialsMode::SameOrigin
+                    && (tainted_origin || !fetch.requestor_origin.IsSameOrigin(url.as_str())))
+            {
+                headers.remove(header::AUTHORIZATION);
+                headers.remove(header::COOKIE);
+            }
+            if method != Method::GET && method != Method::HEAD
+                || headers.contains_key(header::ORIGIN)
+            {
+                headers.insert(
+                    header::ORIGIN,
+                    HeaderValue::from_str(&if tainted_origin {
+                        "null".into()
+                    } else {
+                        fetch.requestor_origin.Serialize()
+                    })
+                    .map_err(protocol_error)?,
+                );
+            }
+        }
         headers.remove(header::REFERER);
         if !referrer.is_empty() {
             headers.insert(
@@ -522,7 +803,16 @@ pub(crate) async fn fetch_response(
         // Fragments and URL userinfo are not part of the HTTP request target.
         let mut target = url.clone();
         target.set_fragment(None);
-        if !url.username().is_empty() && !headers.contains_key(header::AUTHORIZATION) {
+        let credentials_allowed = request.fetch.as_ref().is_none_or(|fetch| {
+            fetch.credentials == crate::FetchCredentialsMode::Include
+                || (fetch.credentials == crate::FetchCredentialsMode::SameOrigin
+                    && !tainted_origin
+                    && fetch.requestor_origin.IsSameOrigin(url.as_str()))
+        });
+        if credentials_allowed
+            && !url.username().is_empty()
+            && !headers.contains_key(header::AUTHORIZATION)
+        {
             let credentials = format!("{}:{}", url.username(), url.password().unwrap_or_default());
             let decoded = percent_encoding::percent_decode_str(&credentials).collect::<Vec<u8>>();
             let value = format!(
@@ -546,6 +836,19 @@ pub(crate) async fn fetch_response(
             .body(Full::new(Bytes::copy_from_slice(&body)))
             .map_err(protocol_error)?;
         *outgoing.headers_mut() = headers.clone();
+        if let Some(fetch) = &request.fetch {
+            outgoing
+                .extensions_mut()
+                .insert(hyper_util::client::legacy::connect::CheckConnection(
+                    Arc::new(crate::local_network_access::LocalNetworkAccessGate {
+                        fetch: fetch.clone(),
+                        url: url.to_string(),
+                        checker: lna_checker.clone(),
+                        pending: lna_pending.clone(),
+                        trace,
+                    }),
+                ));
+        }
         if options.trace_requests {
             eprintln!("HTTP {} {}", method, url);
         }
@@ -553,17 +856,20 @@ pub(crate) async fn fetch_response(
             "HTTPRequestStart",
             &[("attempt", attempt as f64), ("redirect", redirects as f64)],
         );
-        let response = with_stall_timeout(
-            async {
-                scheduler
-                    .client
-                    .request(outgoing)
-                    .await
-                    .map_err(|error| network_error(&error))
-            },
-            options,
-        )
-        .await?;
+        let send_start = hyper_util::client::legacy::connect::CaptureSendStart::default();
+        outgoing.extensions_mut().insert(send_start.clone());
+        let client = scheduler.client_for_slot(slot);
+        let response = lna_pending
+            .WithStallTimeout(
+                async {
+                    client
+                        .request(outgoing)
+                        .await
+                        .map_err(|error| network_error(&error))
+                },
+                options,
+            )
+            .await?;
         if options.trace_requests {
             eprintln!(
                 "HTTP headers {:?} {} {}",
@@ -571,6 +877,51 @@ pub(crate) async fn fetch_response(
                 response.status(),
                 url
             );
+        }
+        let response_address_space = response
+            .extensions()
+            .get::<fetch_policy::RawNetworkConnection>()
+            .map(|connection| match connection.transport {
+                fetch_policy::RawNetworkTransport::Proxied => crate::IPAddressSpace::Unknown,
+                fetch_policy::RawNetworkTransport::Direct => request
+                    .fetch
+                    .as_ref()
+                    .map(|fetch| connection.AddressSpace(fetch.security.as_ref()))
+                    .unwrap_or_else(|| fetch_policy::AddressSpaceFromIP(connection.peer.ip())),
+            })
+            .unwrap_or(crate::IPAddressSpace::Unknown);
+        if let Some(fetch) = &request.fetch {
+            if fetch.mode == crate::FetchMode::Cors
+                && (tainted_origin || !fetch.requestor_origin.IsSameOrigin(url.as_str()))
+            {
+                let origin = if tainted_origin {
+                    "null".to_owned()
+                } else {
+                    fetch.requestor_origin.Serialize()
+                };
+                let allow = response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .and_then(|value| value.to_str().ok());
+                let wildcard =
+                    allow == Some("*") && fetch.credentials != crate::FetchCredentialsMode::Include;
+                if !wildcard && allow != Some(origin.as_str()) {
+                    fetch.access_check_failed.store(true, Ordering::Release);
+                    return Err(protocol_error(
+                        "image CORS access-control-allow-origin mismatch",
+                    ));
+                }
+                if fetch.credentials == crate::FetchCredentialsMode::Include
+                    && response
+                        .headers()
+                        .get("access-control-allow-credentials")
+                        .and_then(|value| value.to_str().ok())
+                        != Some("true")
+                {
+                    fetch.access_check_failed.store(true, Ordering::Release);
+                    return Err(protocol_error("image CORS credential response disallowed"));
+                }
+            }
         }
         let status = response.status();
         trace.event(
@@ -601,7 +952,19 @@ pub(crate) async fn fetch_response(
                 ),
             ],
         );
-        if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+        let redirect_mode = request
+            .fetch
+            .as_ref()
+            .map_or(crate::FetchRedirectMode::Follow, |fetch| fetch.redirect);
+        if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+            && response.headers().contains_key(header::LOCATION)
+            && redirect_mode == crate::FetchRedirectMode::Error
+        {
+            return Err(protocol_error("Fetch redirect mode is error"));
+        }
+        if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+            && redirect_mode == crate::FetchRedirectMode::Follow
+        {
             if let Some(location) = response.headers().get(header::LOCATION) {
                 if redirects == 10 {
                     return Err(protocol_error("HTTP redirect limit exceeded"));
@@ -610,6 +973,19 @@ pub(crate) async fn fetch_response(
                     .join(location.to_str().map_err(protocol_error)?)
                     .map_err(protocol_error)?;
                 http_url(next.as_str())?;
+                if let Some(fetch) = &request.fetch {
+                    if fetch.mode == crate::FetchMode::Cors
+                        && (!next.username().is_empty() || next.password().is_some())
+                    {
+                        fetch.access_check_failed.store(true, Ordering::Release);
+                        return Err(protocol_error("CORS redirect URL contains credentials"));
+                    }
+                    if next.origin() != url.origin()
+                        && !fetch.requestor_origin.IsSameOrigin(url.as_str())
+                    {
+                        tainted_origin = true;
+                    }
+                }
                 if next.origin() != url.origin() {
                     headers.remove(header::AUTHORIZATION);
                     headers.remove(header::COOKIE);
@@ -624,24 +1000,29 @@ pub(crate) async fn fetch_response(
                     referrer_policy = policy;
                 }
                 referrer = referrer_policy.GenerateReferrer(&referrer, next.as_str());
-                // Match libcurl's custom_request semantics: it retains the
-                // explicitly chosen method, but stops POST body replay for
-                // 301/302/303. 307/308 preserve both method and body.
-                if status.as_u16() == 303 && method != Method::HEAD
-                    || matches!(status.as_u16(), 301 | 302)
-                        && (method == Method::POST || !body.is_empty())
+                // net/url_request/redirect_info.cc:ComputeMethod. Fetch
+                // converts POST on 301/302 and non-GET/HEAD on 303 to GET.
+                if status.as_u16() == 303 && method != Method::GET && method != Method::HEAD
+                    || matches!(status.as_u16(), 301 | 302) && method == Method::POST
                 {
+                    method = Method::GET;
                     body.clear();
                     headers.remove(header::CONTENT_LENGTH);
                     headers.remove(header::TRANSFER_ENCODING);
-                    if implicit_content_type {
-                        headers.remove(header::CONTENT_TYPE);
-                        implicit_content_type = false;
-                    }
+                    headers.remove(header::CONTENT_TYPE);
                 }
                 url = next;
                 drop(response);
                 continue;
+            }
+        }
+        if let Some(fetch) = &request.fetch {
+            if fetch.keepalive && !fetch.succeeded.swap(true, Ordering::AcqRel) {
+                fetch.metrics.Record(
+                    fetch.context,
+                    crate::FetchKeepaliveRequestState::Succeeded,
+                    fetch.context_detached.load(Ordering::Acquire),
+                );
             }
         }
         let mime_type = response
@@ -660,15 +1041,76 @@ pub(crate) async fn fetch_response(
             response_header_values(response.headers(), "referrer-policy").join(",");
         let content_security_policy =
             response_header_values(response.headers(), "content-security-policy");
+        let content_security_policy_report_only =
+            response_header_values(response.headers(), "content-security-policy-report-only");
+        let permissions_policy =
+            response_header_values(response.headers(), "permissions-policy").join(",");
+        let feature_policy = response_header_values(response.headers(), "feature-policy").join(",");
+        let document_policy =
+            response_header_values(response.headers(), "document-policy").join(",");
+        let document_policy_report_only =
+            response_header_values(response.headers(), "document-policy-report-only").join(",");
+        let require_document_policy =
+            response_header_values(response.headers(), "require-document-policy").join(",");
         let content_dpr = response_content_dpr(response.headers());
+        // ResourceResponse's combined HTTP Content-Language field. Preserve
+        // the original octets as Latin-1, as for other HTTP field values.
+        let content_language = response
+            .headers()
+            .get_all(header::CONTENT_LANGUAGE)
+            .iter()
+            .map(|value| {
+                value
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .map(char::from)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let content_disposition = response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .map(|value| value.as_bytes().iter().copied().map(char::from).collect())
+            .unwrap_or_default();
+        let expected_content_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_owned(),
+                    value.as_bytes().iter().copied().map(char::from).collect(),
+                )
+            })
+            .collect();
+        let send_start = *send_start.0.lock().expect("send start poisoned");
         return Ok(ResponseStart {
+            send_start,
+            expected_content_length,
+            headers,
             incoming: response.into_body(),
             status: i64::from(status.as_u16()),
             final_url: url.to_string(),
             mime_type,
             content_dpr,
+            content_disposition,
+            content_language,
+            request_referrer: Some(referrer),
             referrer_policy,
             content_security_policy,
+            content_security_policy_report_only,
+            response_address_space,
+            permissions_policy,
+            feature_policy,
+            document_policy,
+            document_policy_report_only,
+            require_document_policy,
             encodings,
             head_only: method == Method::HEAD,
         });
@@ -677,13 +1119,26 @@ pub(crate) async fn fetch_response(
 }
 
 pub(crate) struct ResponseStart {
+    pub(crate) send_start: Option<Instant>,
+    pub expected_content_length: Option<u64>,
+    pub headers: Vec<(String, String)>,
     pub(crate) incoming: hyper::body::Incoming,
     pub(crate) status: i64,
     pub(crate) final_url: String,
     pub(crate) mime_type: String,
     pub(crate) content_dpr: Option<f64>,
+    pub(crate) content_disposition: String,
+    pub(crate) content_language: String,
+    pub(crate) request_referrer: Option<String>,
     pub(crate) referrer_policy: String,
     pub(crate) content_security_policy: Vec<String>,
+    pub(crate) content_security_policy_report_only: Vec<String>,
+    pub(crate) response_address_space: crate::IPAddressSpace,
+    pub(crate) permissions_policy: String,
+    pub(crate) feature_policy: String,
+    pub(crate) document_policy: String,
+    pub(crate) document_policy_report_only: String,
+    pub(crate) require_document_policy: String,
     pub(crate) encodings: String,
     pub(crate) head_only: bool,
 }
@@ -732,20 +1187,46 @@ mod response_header_tests {
 async fn transfer_traced(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
+    slot: &ScheduledSlot,
     trace: RequestTrace,
     attempt: usize,
+    response_state: Option<&State>,
 ) -> Result<HTTPResponseData, TransferError> {
     let ResponseStart {
+        send_start,
+        expected_content_length,
+        headers,
         mut incoming,
         status,
         final_url,
         mime_type,
         content_dpr,
+        content_disposition,
+        content_language,
+        request_referrer,
         referrer_policy,
         content_security_policy,
+        content_security_policy_report_only,
+        response_address_space,
+        permissions_policy,
+        feature_policy,
+        document_policy,
+        document_policy_report_only,
+        require_document_policy,
         encodings,
         head_only,
-    } = fetch_response(request, scheduler, trace, attempt).await?;
+    } = fetch_response(request, scheduler, slot, trace, attempt).await?;
+    if let Some(state) = response_state {
+        state.response_started.store(true, Ordering::Release);
+        let wake = state
+            .wake
+            .lock()
+            .expect("HTTP header wake poisoned")
+            .clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
     let options = &scheduler.options;
     let mut received = Vec::new();
     while let Some(frame) = with_stall_timeout(
@@ -767,6 +1248,9 @@ async fn transfer_traced(
             received.extend_from_slice(&chunk);
         }
     }
+    // ResourceLoadTiming::ResponseEnd records network EOF, before content
+    // decoding or document-thread polling (image_resource.cc:177-183).
+    let response_end = Some(Instant::now());
     let encoded_bytes = received.len();
     trace.event(
         "HTTPNetworkBodyComplete",
@@ -790,12 +1274,26 @@ async fn transfer_traced(
         ],
     );
     Ok(HTTPResponseData {
+        send_start,
+        response_end,
+        expected_content_length,
+        headers,
         status,
         final_url,
         mime_type,
         content_dpr,
+        content_disposition,
+        content_language,
+        request_referrer,
         referrer_policy,
         content_security_policy,
+        content_security_policy_report_only,
+        response_address_space,
+        permissions_policy,
+        feature_policy,
+        document_policy,
+        document_policy_report_only,
+        require_document_policy,
         body,
     })
 }
@@ -805,66 +1303,123 @@ async fn transfer(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
 ) -> Result<HTTPResponseData, TransferError> {
-    transfer_traced(request, scheduler, RequestTrace::default(), 0).await
+    let slot = scheduler
+        .acquire_slot(request.priority)
+        .await
+        .map_err(|_| protocol_error("HTTP admission closed"))?;
+    transfer_traced(request, scheduler, &slot, RequestTrace::default(), 0, None).await
 }
 
-async fn execute(request: HTTPRequestData, state: Arc<State>) {
-    let _slot = loop {
-        let priority = match state.priority.load(Ordering::Acquire) {
-            2 => HTTPRequestPriority::VeryHigh,
-            1 => HTTPRequestPriority::High,
-            _ => HTTPRequestPriority::Normal,
-        };
-        let admission = state.scheduler.acquire_slot(priority);
-        tokio::select! {
-            biased;
-            _ = state.priority_changed.notified() => continue,
-            permit = admission => break permit,
-        }
-    };
-    let Ok(_slot) = _slot else {
-        state
-            .trace
-            .failed(0, &protocol_error("HTTP admission closed"), false);
-        return;
-    };
-    state.trace.admitted();
-    let options = &state.scheduler.options;
-    for attempt in 0.. {
-        let future = transfer_traced(&request, &state.scheduler, state.trace, attempt);
-        let result = if options.timeout_ms > 0 {
-            tokio::time::timeout(Duration::from_millis(options.timeout_ms as u64), future)
-                .await
-                .unwrap_or_else(|_| Err(TransferError::new("HTTP request timeout", true)))
-        } else {
-            future.await
-        };
-        match result {
-            Ok(response) => {
-                let mut result = state.result.lock().expect("HTTP state poisoned");
-                result.response = Some(response);
-                state
-                    .trace
-                    .event("HTTPResponseReady", &[("attempt", attempt as f64)]);
-                return;
+async fn execute(mut request: HTTPRequestData, state: Arc<State>) {
+    'schedule: loop {
+        let slot = loop {
+            let priority = match state.priority.load(Ordering::Acquire) {
+                2 => HTTPRequestPriority::VeryHigh,
+                1 => HTTPRequestPriority::High,
+                _ => HTTPRequestPriority::Normal,
+            };
+            let admission = state.scheduler.acquire_slot(priority);
+            tokio::select! {
+                biased;
+                _ = state.priority_changed.notified() => continue,
+                permit = admission => break permit,
             }
-            Err(error) => {
-                if state.cancelled.load(Ordering::Relaxed) {
-                    state.trace.event("HTTPRequestCancelled", &[]);
+        };
+        let Ok(slot) = slot else {
+            state
+                .trace
+                .failed(0, &protocol_error("HTTP admission closed"), false);
+            return;
+        };
+        state.trace.admitted();
+        let options = &state.scheduler.options;
+        for attempt in 0.. {
+            request.priority = match state.priority.load(Ordering::Acquire) {
+                2 => HTTPRequestPriority::VeryHigh,
+                1 => HTTPRequestPriority::High,
+                _ => HTTPRequestPriority::Normal,
+            };
+            let priority_changed = state.priority_changed.notified();
+            let future = transfer_traced(
+                &request,
+                &state.scheduler,
+                &slot,
+                state.trace,
+                attempt,
+                Some(state.as_ref()),
+            );
+            let transfer = async {
+                if options.timeout_ms > 0 {
+                    tokio::time::timeout(Duration::from_millis(options.timeout_ms as u64), future)
+                        .await
+                        .unwrap_or_else(|_| Err(TransferError::new("HTTP request timeout", true)))
+                } else {
+                    future.await
+                }
+            };
+            tokio::pin!(priority_changed);
+            tokio::pin!(transfer);
+            let result = tokio::select! {
+                biased;
+                _ = &mut priority_changed => {
+                    let raised = match state.priority.load(Ordering::Acquire) {
+                        2 => HTTPRequestPriority::VeryHigh,
+                        1 => HTTPRequestPriority::High,
+                        _ => HTTPRequestPriority::Normal,
+                    };
+                    if raised != request.priority {
+                        // Hyper does not expose HTTP/2 stream reprioritization.
+                        // Restart an idempotent transfer through the newly chosen
+                        // admission class/client. Raising prevents a now-visible
+                        // resource from remaining starved on a saturated
+                        // connection; lowering releases reserved capacity once
+                        // its consumer leaves the viewport.
+                        // Dropping the request future cancels the old stream; the
+                        // outer loop releases its old-class permit before it
+                        // acquires the raised-class one.
+                        if request.method == "GET" || request.method == "HEAD" {
+                            state.trace.event(
+                                "HTTPRequestRestartedForPriority",
+                                &[("priority", raised as u8 as f64)],
+                            );
+                            continue 'schedule;
+                        }
+                    }
+                    // Priority is monotonic and notifications are emitted only
+                    // for a successful raise, so this branch is reachable solely
+                    // for a coalesced notification consumed after the request had
+                    // already observed that value. Continue the same transfer.
+                    transfer.await
+                }
+                result = &mut transfer => result,
+            };
+            match result {
+                Ok(response) => {
+                    let mut result = state.result.lock().expect("HTTP state poisoned");
+                    result.response = Some(response);
+                    state
+                        .trace
+                        .event("HTTPResponseReady", &[("attempt", attempt as f64)]);
                     return;
                 }
-                let idempotent = request.method == "GET" || request.method == "HEAD";
-                let retry = idempotent && error.retryable && attempt < options.max_retries;
-                state.trace.failed(attempt, &error, retry);
-                if retry {
-                    if options.trace_requests {
-                        eprintln!("HTTP retry {}", request.url);
+                Err(error) => {
+                    if state.cancelled.load(Ordering::Relaxed) {
+                        state.trace.event("HTTPRequestCancelled", &[]);
+                        return;
                     }
-                    continue;
+                    let idempotent = request.method == "GET" || request.method == "HEAD";
+                    let retry = idempotent && error.retryable && attempt < options.max_retries;
+                    state.trace.failed(attempt, &error, retry);
+                    if retry {
+                        if options.trace_requests {
+                            eprintln!("HTTP retry {}", request.url);
+                        }
+                        continue;
+                    }
+                    state.result.lock().expect("HTTP state poisoned").error =
+                        Some(format!("{}: {}", request.url, error.message));
+                    return;
                 }
-                state.result.lock().expect("HTTP state poisoned").error =
-                    Some(format!("{}: {}", request.url, error.message));
-                return;
             }
         }
     }
@@ -874,6 +1429,11 @@ struct State {
     priority: AtomicU8,
     priority_changed: Notify,
     cancelled: AtomicBool,
+    response_started: AtomicBool,
+    keepalive: bool,
+    detached: Arc<AtomicBool>,
+    detached_notify: Notify,
+    disconnected_at: Mutex<Option<Instant>>,
     cancel: Notify,
     result: Mutex<WorkerResult>,
     wake: Mutex<Option<HTTPWakeCallback>>,
@@ -889,16 +1449,36 @@ struct WorkerResult {
 
 struct HTTPRequest {
     state: Arc<State>,
+    delivered_response_started: bool,
 }
 
 impl HTTPRequest {
-    fn new(request: HTTPRequestData, scheduler: Arc<Scheduler>) -> io::Result<Self> {
+    fn new(mut request: HTTPRequestData, scheduler: Arc<Scheduler>) -> io::Result<Self> {
         let executor = runtime()?;
         let trace = RequestTrace::queued(&request, false);
+        // The URLLoader receiver can disconnect while its Document fetch
+        // context is still alive. Keep this connection flag separate from
+        // NetworkFetchOptions::context_detached (the shared context property).
+        let receiver_detached = Arc::new(AtomicBool::new(false));
+        if let Some(fetch) = request.fetch.as_mut() {
+            if let Some(wake) = fetch.policy_effect_wake.take() {
+                let detached = receiver_detached.clone();
+                fetch.policy_effect_wake = Some(Arc::new(move || {
+                    if !detached.load(Ordering::Acquire) {
+                        wake();
+                    }
+                }));
+            }
+        }
         let state = Arc::new(State {
             priority: AtomicU8::new(request.priority as u8),
             priority_changed: Notify::new(),
             cancelled: AtomicBool::new(false),
+            response_started: AtomicBool::new(false),
+            keepalive: request.fetch.as_ref().is_some_and(|fetch| fetch.keepalive),
+            detached: receiver_detached,
+            detached_notify: Notify::new(),
+            disconnected_at: Mutex::new(None),
             cancel: Notify::new(),
             result: Mutex::new(WorkerResult::default()),
             wake: Mutex::new(None),
@@ -906,13 +1486,28 @@ impl HTTPRequest {
             trace,
         });
         let worker_state = state.clone();
+        let fetch = request.fetch.clone();
         executor.spawn(async move {
             let mut trace_guard = trace.guard();
             tokio::select! {
                 biased;
                 _ = worker_state.cancel.notified() => {},
+                _ = async {
+                    worker_state.detached_notify.notified().await;
+                    let disconnected=*worker_state.disconnected_at.lock().expect("HTTP detach state poisoned");
+                    let deadline=disconnected.expect("keepalive detach timestamp")+Duration::from_secs(30);
+                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                }, if worker_state.keepalive => {
+                    worker_state.cancelled.store(true,Ordering::Relaxed);
+                    worker_state.trace.event("KeepAliveDisconnectedTimeout",&[]);
+                    worker_state.result.lock().expect("HTTP state poisoned").error=Some("keepalive disconnected loader timeout".into());
+                    if let Some(fetch)=&fetch {if fetch.keepalive && !fetch.failed.swap(true,Ordering::AcqRel){fetch.metrics.Record(fetch.context,crate::FetchKeepaliveRequestState::Failed,true);}}
+                },
                 _ = execute(request, worker_state.clone()) => {
                     trace_guard.finish();
+                    if worker_state.result.lock().expect("HTTP state poisoned").error.is_some() {
+                        if let Some(fetch)=&fetch {if fetch.keepalive && !fetch.failed.swap(true,Ordering::AcqRel) {fetch.metrics.Record(fetch.context,crate::FetchKeepaliveRequestState::Failed,worker_state.detached.load(Ordering::Acquire));}}
+                    }
                     let callback = worker_state
                         .wake
                         .lock()
@@ -924,32 +1519,69 @@ impl HTTPRequest {
                 },
             }
         });
-        Ok(Self { state })
+        Ok(Self {
+            state,
+            delivered_response_started: false,
+        })
     }
 }
 
 impl Drop for HTTPRequest {
     fn drop(&mut self) {
-        self.state.cancelled.store(true, Ordering::Relaxed);
-        self.state.cancel.notify_one();
+        if self.state.keepalive {
+            let _ = self.DetachForKeepalive();
+        } else {
+            self.state.cancelled.store(true, Ordering::Relaxed);
+            self.state.cancel.notify_one();
+        }
     }
 }
 
 impl HTTPRequestOperation for HTTPRequest {
+    fn HasResponseStarted(&self) -> Option<bool> {
+        Some(self.delivered_response_started)
+    }
+    fn CancelKeepalive(&mut self) -> io::Result<()> {
+        self.state.cancelled.store(true, Ordering::Release);
+        self.state.cancel.notify_one();
+        Ok(())
+    }
+
+    fn DetachForKeepalive(&mut self) -> io::Result<()> {
+        if !self.state.keepalive {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ordinary HTTP request cannot detach as keepalive",
+            ));
+        }
+        self.state.detached.store(true, Ordering::Release);
+        self.state
+            .disconnected_at
+            .lock()
+            .expect("HTTP detach state poisoned")
+            .get_or_insert(Instant::now());
+        *self.state.wake.lock().expect("HTTP wake poisoned") = None;
+        self.state.detached_notify.notify_one();
+        Ok(())
+    }
+
     fn SetPriority(&mut self, priority: HTTPRequestPriority) {
-        // Fetcher's coalesced parser consumer boosts an existing speculative
-        // load. A later async consumer must not demote the blocking consumer.
         let requested = priority as u8;
-        let previous = self.state.priority.fetch_max(requested, Ordering::AcqRel);
-        if requested > previous {
+        let previous = self.state.priority.swap(requested, Ordering::AcqRel);
+        if requested != previous {
             self.state.trace.event(
-                "HTTPRequestPriorityRaised",
+                if requested > previous {
+                    "HTTPRequestPriorityRaised"
+                } else {
+                    "HTTPRequestPriorityLowered"
+                },
                 &[("priority", requested as f64)],
             );
             self.state.priority_changed.notify_one();
         }
     }
     fn Poll(&mut self) -> io::Result<Option<HTTPResponseData>> {
+        self.delivered_response_started |= self.state.response_started.load(Ordering::Acquire);
         let mut result = self.state.result.lock().expect("HTTP state poisoned");
         if let Some(error) = &result.error {
             return Err(io::Error::other(error.clone()));
@@ -965,7 +1597,10 @@ impl HTTPRequestOperation for HTTPRequest {
         *self.state.wake.lock().expect("HTTP wake poisoned") = Some(callback.clone());
         let ready = {
             let result = self.state.result.lock().expect("HTTP state poisoned");
-            result.response.is_some() || result.error.is_some()
+            (!self.delivered_response_started
+                && self.state.response_started.load(Ordering::Acquire))
+                || result.response.is_some()
+                || result.error.is_some()
         };
         if ready {
             callback();
@@ -974,6 +1609,7 @@ impl HTTPRequestOperation for HTTPRequest {
 }
 
 // cpp: http_transport/http_request.h:36-48
+#[derive(Clone)]
 pub struct HTTPRequestTransport {
     pub(crate) scheduler: Arc<Scheduler>,
 }
@@ -1144,6 +1780,10 @@ mod tls_tests {
             critical_slots: None,
             client: build_client_with_proxy(fixture_roots(), Some(Duration::from_secs(2)), proxy)
                 .unwrap(),
+            priority_clients: Vec::new(),
+            critical_clients: Vec::new(),
+            priority_client_lanes: Arc::new(Mutex::new(Vec::new())),
+            critical_client_lanes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1177,6 +1817,42 @@ mod tls_tests {
             .await
             .expect("VeryHigh admission must retain its own capacity")
             .unwrap();
+        });
+    }
+
+    #[test]
+    fn concurrent_high_admissions_use_distinct_connection_lanes() {
+        let scheduler = Scheduler::new(HTTPTransportOptions {
+            max_parallel_requests: 8,
+            ..Default::default()
+        })
+        .unwrap();
+        runtime().unwrap().block_on(async {
+            let first = scheduler
+                .acquire_slot(HTTPRequestPriority::High)
+                .await
+                .unwrap();
+            let second = scheduler
+                .acquire_slot(HTTPRequestPriority::High)
+                .await
+                .unwrap();
+            let first_client = scheduler.client_for_slot(&first) as *const HTTPClient;
+            let second_client = scheduler.client_for_slot(&second) as *const HTTPClient;
+            assert_ne!(first_client, second_client);
+
+            drop(second);
+            let replacement = scheduler
+                .acquire_slot(HTTPRequestPriority::High)
+                .await
+                .unwrap();
+            assert_eq!(
+                scheduler.client_for_slot(&replacement) as *const HTTPClient,
+                second_client
+            );
+            assert_ne!(
+                scheduler.client_for_slot(&replacement) as *const HTTPClient,
+                first_client
+            );
         });
     }
 
@@ -1474,6 +2150,10 @@ mod tls_tests {
             priority_slots: None,
             critical_slots: None,
             client: build_client(roots, Some(Duration::from_secs(2))).unwrap(),
+            priority_clients: Vec::new(),
+            critical_clients: Vec::new(),
+            priority_client_lanes: Arc::new(Mutex::new(Vec::new())),
+            critical_client_lanes: Arc::new(Mutex::new(Vec::new())),
         };
         let result = runtime()
             .unwrap()

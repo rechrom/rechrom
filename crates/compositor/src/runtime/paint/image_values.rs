@@ -198,9 +198,10 @@ impl CpuPaintImage {
     }
 }
 impl CpuPaintImageValue for ImageLease {
-    // Source boundary: cc/paint/paint_image.cc GetSwSkImage. The immutable
-    // producer owns straight RGBA. Skia performs the actual upload conversion;
-    // OnceLock retains that one resulting SkImage-equivalent allocation.
+    // Source boundary: cc/paint/paint_image.cc GetSwSkImage. Upload converts
+    // straight RGBA once into Skia's native premultiplied N32. A decoder that
+    // already published premultiplied pixels only needs native channel order.
+    // OnceLock retains that SkImage-equivalent allocation.
     fn GetSwSkImage(&self, frame_index: usize) -> std::io::Result<Arc<Vec<u8>>> {
         let software_image = self.software_images.get(frame_index).ok_or_else(|| {
             std::io::Error::new(
@@ -218,14 +219,28 @@ impl CpuPaintImageValue for ImageLease {
                 "software image requires an actual bitmap allocation",
             )
         })?;
-        let converted =
-            skia::raster_target::premultiply_rgba8888(input.width, input.height, pixels)
-                .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
+        let converted = match input.alpha_type {
+            paint::paint_engine::PaintImageAlphaType::Unpremultiplied => {
+                skia::raster_target::premultiply_n32_rgba8888(input.width, input.height, pixels)
+            }
+            paint::paint_engine::PaintImageAlphaType::Premultiplied => {
+                skia::raster_target::native_n32_from_premultiplied_rgba8888(
+                    input.width,
+                    input.height,
+                    pixels,
+                )
+            }
+        }
+        .ok_or_else(|| std::io::Error::other("invalid software image bitmap allocation"))?;
         let _ = software_image.set(Arc::new(converted));
         Ok(software_image
             .get()
             .expect("same immutable image backing")
             .clone())
+    }
+
+    fn GetEncodedData(&self) -> Option<Arc<[u8]>> {
+        self.image().encoded_data.clone()
     }
 
     fn GetPaintRecord(&self) -> Option<CpuPaintRecordImage> {

@@ -20,9 +20,21 @@ fn retain_invalidated_layout_result(engine: &mut LayoutEngine) {
     }
 }
 
-fn invalidate_contextual_font_fallbacks(tree: &mut LayoutObjectTree) -> usize {
+// Source: core/layout/layout_object.cc
+// LayoutObject::InvalidateSubtreeLayoutForFontUpdates and
+// core/layout/layout_text.cc
+// LayoutText::InvalidateSubtreeLayoutForFontUpdates.
+//
+// A FontFallbackList invalidation is not a text-leaf-only invalidation. Every
+// object whose computed Font observes the selector revision is invalidated,
+// while LayoutText additionally discards its inline items. Keeping ancestors
+// clean lets line reuse retain a provisional .notdef result after a contextual
+// fallback query resolves without changing the catalog (for example, a second
+// IME composition update that selects an already-open system face).
+fn invalidate_contextual_font_fallbacks(tree: &mut LayoutObjectTree) -> (usize, usize) {
     let root = tree.RootMut() as *mut LayoutObject;
     let mut object = root;
+    let mut objects = 0usize;
     let mut text_objects = 0usize;
     while !object.is_null() {
         let current = unsafe { &mut *object };
@@ -35,14 +47,15 @@ fn invalidate_contextual_font_fallbacks(tree: &mut LayoutObjectTree) -> usize {
             let text = unsafe { &mut *text };
             text.InvalidateInlineItems();
             text.SetNeedsCollectInlines();
-            text.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
-                &raw const kFontsChanged,
-            );
             text_objects += 1;
         }
+        current.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+            &raw const kFontsChanged,
+        );
+        objects += 1;
         object = current.NextInPreOrder(root);
     }
-    text_objects
+    (objects, text_objects)
 }
 
 impl EngineMutation for LayoutEngine {
@@ -61,6 +74,21 @@ impl EngineMutation for LayoutEngine {
 
     #[inline(never)]
     fn apply_mutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
+        // A cancelled/restarted timer has no source mutation. Reject it before
+        // clearing any retained paint/scroll/local-layout bookkeeping.
+        if let LayoutMutation::PasswordEchoTimerFired(token) = &mutation {
+            let text = self
+                .tree_
+                .as_ref()
+                .and_then(|tree| tree.OutputNode(token.node_id))
+                .map(|object| {
+                    DynamicTo::<LayoutText>(object as *const LayoutObject as *mut LayoutObject)
+                })
+                .unwrap_or(std::ptr::null_mut());
+            if text.is_null() || !unsafe { &*text }.PasswordEchoTimerMatches(*token) {
+                return false;
+            }
+        }
         // EmitConstraints is deliberately unconditional at the DOM boundary:
         // compatibility mode is resolved there. Do not let an identical
         // value erase a valid local-layout hint on every frame.
@@ -151,12 +179,13 @@ impl EngineMutation for LayoutEngine {
                 retain_invalidated_layout_result(self);
                 let mut trace =
                     browser_tracing::span("layout", "layout_invalidation.FontFallbackChanged");
-                let text_objects = self
+                let (objects, text_objects) = self
                     .tree_
                     .as_mut()
-                    .map_or(0, invalidate_contextual_font_fallbacks);
+                    .map_or((0, 0), invalidate_contextual_font_fallbacks);
+                trace.set("objects", objects as f64);
                 trace.set("text_objects", text_objects as f64);
-                text_objects != 0
+                objects != 0
             }
             LayoutMutation::TreeUpdate(update) => {
                 let mut trace =
@@ -165,6 +194,7 @@ impl EngineMutation for LayoutEngine {
                 // DOM projection has always used a deferred construction font
                 // resolver. Layout's boundary installs the current resources;
                 // do not build a duplicate font catalog while creating inputs.
+                let device_scale_factor = self.constraints_.device_pixel_ratio;
                 let tree = self.tree_.get_or_insert_with(|| {
                     LayoutObjectTree::new_with_factories(
                         &ConstraintSpace::default(),
@@ -172,7 +202,8 @@ impl EngineMutation for LayoutEngine {
                     )
                 });
                 tree.Update(|tree| {
-                    let mut attachment = LayoutTreeUpdate::new(tree);
+                    let mut attachment =
+                        LayoutTreeUpdate::new_with_device_scale(tree, device_scale_factor);
                     update(&mut attachment);
                 });
                 let stats = tree.UpdateStats();
@@ -181,6 +212,59 @@ impl EngineMutation for LayoutEngine {
                 trace.set("updated", stats.updated as f64);
                 trace.set("removed", stats.removed as f64);
                 trace.set("moved", stats.moved as f64);
+                self.boundary_cache_.Clear();
+                self.tree_facts_ = None;
+                self.tree_relations_dirty_ = true;
+                self.targeted_font_objects_ = None;
+                true
+            }
+            LayoutMutation::DetachDocumentLayoutTree => {
+                // Document.cc3401-3404. Destruction uses the same source root,
+                // derived LayoutObject virtuals, native scroll disposal and
+                // child-before-parent detach identity queue as ordinary detach.
+                let _scope = self.NativeScrollPassScope();
+                self.fragments = None;
+                self.invalidated_fragments_ = None;
+                if let Some(mut tree) = self.tree_.take() {
+                    if tree.HasRoot() {
+                        let root = tree.RootMut();
+                        if let Some(node) = unsafe { root.GetNode().as_mut() } {
+                            node.SetLayoutObject(std::ptr::null_mut());
+                        }
+                        root.Destroy();
+                    }
+                    self.detached_document_elements_
+                        .extend(tree.TakeDetachedElements());
+                }
+                self.scroll_paint_index_ = None;
+                self.scroll_paint_index_spare_ = None;
+                self.boundary_cache_.Clear();
+                self.tree_facts_ = None;
+                self.tree_relations_dirty_ = true;
+                self.targeted_font_objects_ = None;
+                true
+            }
+            LayoutMutation::DetachElementLayoutTree {
+                node_id,
+                performing_reattach,
+            } => {
+                let _scope = self.NativeScrollPassScope();
+                if !self
+                    .tree_
+                    .as_ref()
+                    .is_some_and(|tree| tree.HasManagedInputForNode(node_id))
+                {
+                    return false;
+                }
+                retain_invalidated_layout_result(self);
+                if !self
+                    .tree_
+                    .as_mut()
+                    .unwrap()
+                    .DetachElementLayoutTree(node_id, performing_reattach)
+                {
+                    return false;
+                }
                 self.boundary_cache_.Clear();
                 self.tree_facts_ = None;
                 self.tree_relations_dirty_ = true;
@@ -202,9 +286,13 @@ impl EngineMutation for LayoutEngine {
                     layout_invalidation::trace_span(layout_invalidation::TracePhase::SubtreeUpdate);
                 trace.set("node_id", node_id as f64);
                 trace.set("had_fragments", self.fragments.is_some() as u8 as f64);
+                let device_scale_factor = self.constraints_.device_pixel_ratio;
                 let applied = self.tree_.as_mut().is_some_and(|tree| {
                     tree.UpdateSubtree(node_id, parent_id, |tree, parent| {
-                        update(&mut LayoutTreeUpdate::new(tree), parent);
+                        update(
+                            &mut LayoutTreeUpdate::new_with_device_scale(tree, device_scale_factor),
+                            parent,
+                        );
                     })
                 });
                 if applied {
@@ -366,16 +454,48 @@ impl EngineMutation for LayoutEngine {
                 self.targeted_font_objects_ = None;
                 true
             }
-            LayoutMutation::ScrollOffset { node_id, offset } => {
+            LayoutMutation::ScrollOffset {
+                node_id,
+                offset,
+                scroll_type,
+            } => {
                 self.fragments = None;
                 let applied = self
                     .tree_
                     .as_mut()
-                    .is_some_and(|tree| tree.UpdateScrollOffset(node_id, offset));
+                    .is_some_and(|tree| tree.UpdateScrollOffset(node_id, offset, scroll_type));
                 if applied {
                     self.pending_scroll_ids_.insert(node_id);
                 }
                 applied
+            }
+            LayoutMutation::EditingNodeFacts { node_id, facts } => {
+                if let Some(object) = self
+                    .tree_
+                    .as_mut()
+                    .and_then(|tree| tree.OutputNodeMut(node_id))
+                {
+                    crate::layout_engine::LayoutTreeUpdate::SetEditingNodeFacts(object, facts);
+                    true
+                } else {
+                    false
+                }
+            }
+            LayoutMutation::PasswordEchoTimerFired(token) => {
+                let _scope = self.NativeScrollPassScope();
+                let text = self
+                    .tree_
+                    .as_mut()
+                    .and_then(|tree| tree.OutputNodeMut(token.node_id))
+                    .map(|object| DynamicTo::<LayoutText>(object as *mut LayoutObject))
+                    .unwrap_or(std::ptr::null_mut());
+                if text.is_null() || !unsafe { &*text }.PasswordEchoTimerMatches(token) {
+                    return false;
+                }
+                retain_invalidated_layout_result(self);
+                // Timer expiry uses LayoutText::ForceSetText, which marks the
+                // native inline/layout/paint owners through its source path.
+                unsafe { &mut *text }.PasswordEchoTimerFired(token)
             }
             LayoutMutation::Editing { node_id } => {
                 retain_invalidated_layout_result(self);
@@ -383,10 +503,19 @@ impl EngineMutation for LayoutEngine {
                     .as_mut()
                     .is_some_and(|tree| tree.InvalidateEditing(node_id))
             }
-            LayoutMutation::SelectionPaint { node_id } => self
-                .tree_
-                .as_mut()
-                .is_some_and(|tree| tree.InvalidateSelectionPaint(node_id)),
+            LayoutMutation::SelectionPaint { node_id } => {
+                let objects = self
+                    .tree_
+                    .as_mut()
+                    .map(|tree| tree.InvalidateSelectionPaint(node_id))
+                    .unwrap_or_default();
+                let changed = !objects.is_empty();
+                // The resident fragment Paint inputs are the canonical bridge
+                // to Paint. Updating only LayoutObject invalidation bits leaves
+                // a retained composition/selection display item reusable.
+                self.RefreshSelectionPaintInputs(&objects);
+                changed
+            }
             LayoutMutation::EditingState(state) => {
                 if let Some(tree) = &mut self.tree_ {
                     tree.SetEditingState(state);

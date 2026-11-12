@@ -54,8 +54,8 @@ fn main() {
     let major = version.trim().split('.').next().unwrap_or_default();
     assert!(major.chars().all(|ch| ch.is_ascii_digit()) && !major.is_empty());
     println!("cargo:rustc-env=ICU_MAJOR={major}");
-    let flags = pkg_config(&["--libs", "icu-uc"], extra_path.as_ref())
-        .expect("ICU uc linker flags are required");
+    let flags = pkg_config(&["--libs", "icu-uc", "icu-i18n"], extra_path.as_ref())
+        .expect("ICU uc and i18n linker flags are required");
     let flags = String::from_utf8(flags.stdout).expect("ICU flags are not UTF-8");
     for flag in flags.split_whitespace() {
         if let Some(path) = flag.strip_prefix("-L") {

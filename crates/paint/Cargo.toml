@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+canvas = { path = "../canvas" }
 animation = { path = "../animation" }
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }

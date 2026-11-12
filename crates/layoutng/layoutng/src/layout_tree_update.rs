@@ -16,13 +16,150 @@ use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 /// the underlying tree or start/end another transaction through this handle.
 pub struct LayoutTreeUpdate<'a> {
     tree: &'a mut LayoutObjectTree,
+    device_scale_factor: f64,
+    hit_test_owner: Option<u64>,
+    // AttachContext aliases to the already-attached native pseudo boxes.
+    // Only this transaction retains them; this directory owns no geometry.
+    overscroll_area_parents: std::collections::HashMap<u64, *mut LayoutObject>,
 }
 
 impl<'a> LayoutTreeUpdate<'a> {
-    pub(crate) fn new(tree: &'a mut LayoutObjectTree) -> Self {
-        Self { tree }
+    pub fn SelectedBrokenImageResourceId(
+        &self,
+        variants: &image_resource::platform_resources::BrokenImageResourceVariants,
+    ) -> Option<u64> {
+        let content = if self.device_scale_factor >= 2.0 {
+            &variants.scale200
+        } else {
+            &variants.scale100
+        };
+        content.Metadata().map(|metadata| metadata.id)
     }
 
+    pub fn UseBrokenImageResource(
+        &self,
+        object: &mut LayoutObject,
+        variants: image_resource::platform_resources::BrokenImageResourceVariants,
+    ) -> bool {
+        if !object.IsLayoutImage() {
+            return false;
+        }
+        let factories = crate::internal::layout_pass_scope::LayoutObjectFactoryScope::Objects();
+        assert!(
+            !factories.is_null(),
+            "LayoutObjectFactoryScope is not active"
+        );
+        let callback = unsafe { &*factories }
+            .replaced_broken_image_resource_updater
+            .expect("broken LayoutImageResource updater is not installed");
+        callback(
+            unsafe {
+                &mut *std::ptr::from_mut(object)
+                    .cast::<crate::internal::layout_replaced::LayoutReplaced>()
+            },
+            variants,
+            self.device_scale_factor,
+        )
+    }
+
+    /// Install ImageLoader's same ImageResourceContent owner on the native
+    /// LayoutImage created or retained by this attachment transaction.
+    pub fn UpdateHTMLImageResource(
+        object: &mut LayoutObject,
+        update: image_resource::ImageResourceContentUpdate,
+    ) -> bool {
+        let node = object.GetNode();
+        if !object.IsLayoutImage() || node.is_null() || unsafe { &*node }.InputIsStyleGenerated() {
+            return false;
+        }
+        let factories = crate::internal::layout_pass_scope::LayoutObjectFactoryScope::Objects();
+        assert!(
+            !factories.is_null(),
+            "LayoutObjectFactoryScope is not active"
+        );
+        let callback = unsafe { &*factories }
+            .replaced_image_resource_updater
+            .expect("LayoutImageResource updater is not installed");
+        callback(
+            unsafe {
+                &mut *std::ptr::from_mut(object)
+                    .cast::<crate::internal::layout_replaced::LayoutReplaced>()
+            },
+            update,
+        )
+    }
+
+    pub fn UpdateVideoPosterResource(
+        object: &mut LayoutObject,
+        update: image_resource::ImageResourceContentUpdate,
+    ) -> bool {
+        if !object.IsVideo() {
+            return false;
+        }
+        let factories = crate::internal::layout_pass_scope::LayoutObjectFactoryScope::Objects();
+        assert!(
+            !factories.is_null(),
+            "LayoutObjectFactoryScope is not active"
+        );
+        let callback = unsafe { &*factories }
+            .replaced_video_poster_resource_updater
+            .expect("LayoutVideo poster resource updater is not installed");
+        callback(
+            unsafe {
+                &mut *std::ptr::from_mut(object)
+                    .cast::<crate::internal::layout_replaced::LayoutReplaced>()
+            },
+            update,
+        )
+    }
+
+    /// Route DOM-owned editing facts onto the same native node being attached.
+    /// This deliberately takes the already returned owner instead of building
+    /// an id index during every element's attachment.
+    pub fn SetEditingNodeFacts(object: &mut LayoutObject, facts: crate::EditingNodeFacts) {
+        if let Some(node) = unsafe { object.GetNode().as_mut() } {
+            node.SetInputEditingFacts(facts);
+        }
+    }
+
+    /// Native attachment count, sampled around one construction call. This
+    /// distinguishes a newly attached object from an in-place retained update.
+    pub fn CreatedObjectCount(&self) -> usize {
+        self.tree.UpdateStats().created
+    }
+    pub(crate) fn new(tree: &'a mut LayoutObjectTree) -> Self {
+        Self::new_with_device_scale(tree, 1.0)
+    }
+    pub(crate) fn new_with_device_scale(
+        tree: &'a mut LayoutObjectTree,
+        device_scale_factor: f64,
+    ) -> Self {
+        Self {
+            tree,
+            device_scale_factor,
+            hit_test_owner: None,
+            overscroll_area_parents: Default::default(),
+        }
+    }
+
+    /// Attachment-scoped alias to the same DOM generated-pseudo owner. Every
+    /// created LayoutObject receives just its source Node identity link.
+    pub fn WithGeneratedPseudoElementOwner<R>(
+        &mut self,
+        owner: u64,
+        attach: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.hit_test_owner.replace(owner);
+        let result = attach(self);
+        self.hit_test_owner = previous;
+        result
+    }
+    pub fn BindOverscrollAreaParent(&mut self, area: u64, parent: *mut LayoutObject) {
+        self.overscroll_area_parents.insert(area, parent);
+    }
+    pub fn OverscrollAreaParent(&self, area: u64) -> Option<*mut LayoutObject> {
+        self.overscroll_area_parents.get(&area).copied()
+    }
     /// Consume Style's per-node reattachment decision before creating inputs.
     pub fn Reattach(&mut self, node_ids: &[u64]) {
         self.tree.Reattach(node_ids);
@@ -63,16 +200,18 @@ impl<'a> LayoutTreeUpdate<'a> {
         style_generated: bool,
     ) -> &mut LayoutObject {
         let input = Self::StyleInput(style, resources, image_resource_id);
-        self.tree.AddBox(
-            parent,
-            id,
-            &input,
-            debug_name,
-            element,
-            kind,
-            style_generated,
-            std::ptr::null(),
-        )
+        self.tree
+            .AddBox(
+                parent,
+                id,
+                &input,
+                debug_name,
+                element,
+                kind,
+                style_generated,
+                std::ptr::null(),
+            )
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddReplacedFromStyle(
@@ -89,6 +228,7 @@ impl<'a> LayoutTreeUpdate<'a> {
         let input = Self::StyleInput(style, resources, image_resource_id);
         self.tree
             .AddReplaced(parent, id, &input, element, debug_name, kind)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddGeneratedReplacedFromStyle(
@@ -104,6 +244,7 @@ impl<'a> LayoutTreeUpdate<'a> {
         let input = Self::StyleInput(style, resources, image_resource_id);
         self.tree
             .AddGeneratedReplaced(parent, id, &input, element, debug_name)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddTextFromStyle(
@@ -117,26 +258,44 @@ impl<'a> LayoutTreeUpdate<'a> {
         style_generated: bool,
     ) -> &mut LayoutObject {
         if std::ptr::eq(parent.StyleRef(), style) {
-            return self.tree.AddText(
+            return self
+                .tree
+                .AddText(
+                    parent,
+                    id,
+                    text,
+                    debug_name,
+                    std::ptr::null(),
+                    style_generated,
+                    std::ptr::null(),
+                )
+                .WithHitTestNodeOwner(self.hit_test_owner);
+        }
+        let input = Self::StyleInput(style, resources, None);
+        self.tree
+            .AddText(
                 parent,
                 id,
                 text,
                 debug_name,
-                std::ptr::null(),
+                &input,
                 style_generated,
                 std::ptr::null(),
-            );
+            )
+            .WithHitTestNodeOwner(self.hit_test_owner)
+    }
+
+    /// Element::RebuildLayoutTree, element.cc6142-6147. The source input
+    /// projection below revisits every whitespace child of this attachment.
+    pub fn BeginElementLayoutTreeAttachment(object: &mut LayoutObject) {
+        if object.WhitespaceChildrenMayChange() {
+            object.SetWhitespaceChildrenMayChange(false);
         }
-        let input = Self::StyleInput(style, resources, None);
-        self.tree.AddText(
-            parent,
-            id,
-            text,
-            debug_name,
-            &input,
-            style_generated,
-            std::ptr::null(),
-        )
+    }
+    /// Element::AttachLayoutTree/RebuildLayoutTree, cc4888/6189/6336-6339.
+    /// Called by the existing element-by-element producer after its children.
+    pub fn FinishElementLayoutTreeAttachment(object: &mut LayoutObject) {
+        object.HandleSubtreeModifications();
     }
 
     pub fn CreateRoot(
@@ -166,16 +325,18 @@ impl<'a> LayoutTreeUpdate<'a> {
         style_generated: bool,
         first_line_style: *const ComputedStyle,
     ) -> &mut LayoutObject {
-        self.tree.AddBox(
-            parent,
-            id,
-            style,
-            debug_name,
-            element,
-            kind,
-            style_generated,
-            first_line_style,
-        )
+        self.tree
+            .AddBox(
+                parent,
+                id,
+                style,
+                debug_name,
+                element,
+                kind,
+                style_generated,
+                first_line_style,
+            )
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddBoxDefault(
@@ -184,7 +345,9 @@ impl<'a> LayoutTreeUpdate<'a> {
         id: u64,
         style: &ComputedStyle,
     ) -> &mut LayoutObject {
-        self.tree.AddBoxDefault(parent, id, style)
+        self.tree
+            .AddBoxDefault(parent, id, style)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddReplaced(
@@ -198,6 +361,7 @@ impl<'a> LayoutTreeUpdate<'a> {
     ) -> &mut LayoutObject {
         self.tree
             .AddReplaced(parent, id, style, element, debug_name, kind)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddGeneratedReplaced(
@@ -210,6 +374,7 @@ impl<'a> LayoutTreeUpdate<'a> {
     ) -> &mut LayoutObject {
         self.tree
             .AddGeneratedReplaced(parent, id, style, element, debug_name)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddText(
@@ -222,15 +387,17 @@ impl<'a> LayoutTreeUpdate<'a> {
         style_generated: bool,
         source_style: *const ComputedStyle,
     ) -> &mut LayoutObject {
-        self.tree.AddText(
-            parent,
-            id,
-            text,
-            debug_name,
-            style,
-            style_generated,
-            source_style,
-        )
+        self.tree
+            .AddText(
+                parent,
+                id,
+                text,
+                debug_name,
+                style,
+                style_generated,
+                source_style,
+            )
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn AddTextDefault(
@@ -239,7 +406,9 @@ impl<'a> LayoutTreeUpdate<'a> {
         id: u64,
         text: String,
     ) -> &mut LayoutObject {
-        self.tree.AddTextDefault(parent, id, text)
+        self.tree
+            .AddTextDefault(parent, id, text)
+            .WithHitTestNodeOwner(self.hit_test_owner)
     }
 
     pub fn NeedsCollapsibleWhitespace(&self, parent: &LayoutObject) -> bool {

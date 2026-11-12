@@ -299,3 +299,99 @@ impl LayoutObject {
         }
     }
 }
+
+// Chromium layout_object.cc: SetShouldInvalidateSelection. Keep this body in
+// the invalidation owner even though LayoutSelection calls it through the
+// native LayoutObject API. The package split previously left only the extern
+// declaration, so changing focus jumped through an unresolved provider.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectSetShouldInvalidateSelectionProvider(object: *mut LayoutObject) {
+    let object = unsafe { &mut *object };
+    object.CheckIsNotDestroyed();
+    object.bitfields_.should_invalidate_selection_ = true;
+    object.SetShouldCheckForPaintInvalidation();
+    if object.IsText() {
+        let selection = object.StyleRef().HighlightData().Selection();
+        if unsafe { selection.as_ref() }.is_some_and(|style| {
+            style.HasAppliedTextDecorations() || style.HasVisualOverflowingEffect()
+        }) {
+            object.InvalidateVisualOverflow();
+        }
+    }
+}
+
+// Chromium layout_object.cc:5218-5227.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(
+    object: *mut LayoutObject,
+) {
+    let object = unsafe { &mut *object };
+    object.CheckIsNotDestroyed();
+    if (object.PaintInvalidationReasonForPrePaint() as u8) < PaintInvalidationReason::kHitTest as u8
+    {
+        object.SetShouldCheckForPaintInvalidationWithoutLayoutChange();
+        object.bitfields_.paint_invalidation_reason_for_pre_paint_ =
+            PaintInvalidationReason::kHitTest as u8;
+    }
+}
+
+// Chromium layout_object.cc:5468-5512. The flags belong to the original
+// LayoutObject and propagate through its live parent chain, stopping at a lock.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(
+    object: *mut LayoutObject,
+    reasons: PrePaintSubtreeWalkReasons,
+) {
+    let object = unsafe { &mut *object };
+    object.CheckIsNotDestroyed();
+    assert_ne!(reasons.bits(), 0);
+    object.bitfields_.pre_paint_subtree_walk_reasons_ |= reasons.bits();
+    if object.ChildPrePaintBlockedByDisplayLock() {
+        object.bitfields_.descendant_pre_paint_subtree_walk_reasons_ |= reasons.bits();
+        return;
+    }
+    if let Some(parent) = unsafe { object.Parent().as_mut() } {
+        parent.SetDescendantNeedsPrePaintSubtreeWalk(reasons);
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider(
+    mut object: *mut LayoutObject,
+    reasons: PrePaintSubtreeWalkReasons,
+) {
+    while let Some(current) = unsafe { object.as_mut() } {
+        current.CheckIsNotDestroyed();
+        if current.GetDescendantPrePaintSubtreeWalkReasons().bits() & reasons.bits()
+            == reasons.bits()
+        {
+            break;
+        }
+        current
+            .bitfields_
+            .descendant_pre_paint_subtree_walk_reasons_ |= reasons.bits();
+        if current.ChildPrePaintBlockedByDisplayLock() {
+            break;
+        }
+        object = current.Parent();
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(
+    object: *mut LayoutObject,
+) {
+    unsafe { &mut *object }.SetNeedsPrePaintSubtreeWalk(
+        PrePaintSubtreeWalkReasons::from_reason(
+            super::super::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kEffectiveAllowedTouchAction,
+        ),
+    );
+}
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(
+    object: *mut LayoutObject,
+) {
+    unsafe { &mut *object }.SetNeedsPrePaintSubtreeWalk(
+        PrePaintSubtreeWalkReasons::from_reason(
+            super::super::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kBlockingWheelEventHandler,
+        ),
+    );
+}

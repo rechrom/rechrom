@@ -19,6 +19,12 @@ pub type HMENU = isize;
 /// Monitor Handle type used by Win32 API
 pub type HMONITOR = isize;
 
+/// Admit virtual files from the current OLE clipboard IDataObject. The same
+/// apartment-correct immutable file offers are used by native drag and paste.
+pub fn clipboard_virtual_files() -> std::io::Result<Vec<crate::event::NativeDragVirtualFileOffer>> {
+    crate::platform_impl::clipboard_virtual_files()
+}
+
 /// Describes a system-drawn backdrop material of a window.
 ///
 /// For a detailed explanation, see [`DWM_SYSTEMBACKDROP_TYPE docs`].

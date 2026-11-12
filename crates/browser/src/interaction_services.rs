@@ -6,18 +6,52 @@ use interaction::{
     input_event::{FocusEvent, FocusEventType, InputEvent},
     Interaction, InteractionOutput,
 };
-use javascript::javascript_runtime::{JavaScriptException, JavaScriptHostRuntime};
+use javascript::javascript_runtime::{
+    JavaScriptException, JavaScriptHostRuntime, JavaScriptRealm, JavaScriptRuntime,
+    WeakJavaScriptRealm,
+};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
 use webapi::dom_bindings::DOMJavaScriptBindings;
 
+pub(crate) struct MonotonicEventClock;
+impl interaction::dispatch::core::dom::events::event::EventClock for MonotonicEventClock {
+    fn Now(&self) -> interaction::input::base::time::time::TimeTicks {
+        static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let elapsed = ORIGIN.get_or_init(std::time::Instant::now).elapsed();
+        interaction::input::base::time::time::TimeTicks::FromInternalValue(
+            elapsed.as_micros().min((i64::MAX - 1) as u128) as i64 + 1,
+        )
+    }
+}
+
 /// Browser-owned interaction service on the parser's persistent DOM. Its
 /// shared state is also the input to layout/measurement, and dirty flags are
 /// available to a frame owner; this service does not own a cached frame.
+/// Page-owned continuation entry, invoked by the binding before returning to
+/// author script. It borrows this call's Interaction/listener scope only.
+pub(crate) type FormSubmissionTransaction =
+    Rc<dyn for<'scope> Fn(&Interaction<'scope>, &interaction::InteractionDocument)>;
+
+pub(crate) type FormDataTransaction = Rc<
+    dyn for<'scope> Fn(
+        &Interaction<'scope>,
+        &interaction::InteractionDocument,
+        interaction::input_type::FormSubmissionToken,
+    ) -> Result<
+        Rc<interaction::dispatch::core::fileapi::form_data_object::FormDataObject>,
+        interaction::dispatch::core::fileapi::form_data_object::FormDataConstructionError,
+    >,
+>;
+
 pub struct PageInteraction {
+    form_data_transaction: Rc<RefCell<Option<FormDataTransaction>>>,
+    form_controller: Rc<interaction::adapter::page_form_controller::PageFormController>,
+    form_submission_transaction: Rc<RefCell<Option<FormSubmissionTransaction>>>,
     engine: Interaction<'static>,
+    listeners: Rc<PageListenerRouting>,
     document: Rc<RefCell<DOM>>,
     bindings: std::rc::Weak<RefCell<DOMJavaScriptBindings>>,
     state: Rc<RefCell<UserInteractionState>>,
@@ -27,14 +61,154 @@ pub struct PageInteraction {
     styles_resolved: Rc<Cell<bool>>,
 }
 
+// The registry and realm identities are non-owning. Every listener invocation
+// resolves its original Document afresh and lends the current host runtime;
+// neither a callback nor an event path survives this dispatch scope.
+struct PageListenerRouting {
+    document: std::rc::Weak<RefCell<DOM>>,
+    bindings: std::rc::Weak<RefCell<DOMJavaScriptBindings>>,
+    realm: RefCell<WeakJavaScriptRealm>,
+    frames: RefCell<std::rc::Weak<crate::page::local_frame::LocalFrameDomain>>,
+}
+impl PageListenerRouting {
+    /// Borrow the invocation once for the complete synchronous dispatch,
+    /// including default actions after author listeners have returned. The
+    /// native invoker already selects each listener's original Window/realm.
+    fn WithScriptRuntime<T>(
+        &self,
+        engine: &Interaction<'_>,
+        runtime: &mut dyn JavaScriptHostRuntime,
+        run: impl FnOnce(&Interaction<'_>) -> T,
+    ) -> T {
+        let Some(bindings) = self.bindings.upgrade() else {
+            return run(engine);
+        };
+        let mut run = Some(run);
+        let mut result = None;
+        DOMJavaScriptBindings::RunNavigationInvocation(&bindings, runtime, &mut |script| {
+            let listeners = Rc::new(
+                |event: &EventListenerInvocation<'_>,
+                 document: &interaction::InteractionDocument,
+                 _: &interaction::InteractionDOMMutationEmitter| {
+                    let Some(bindings) = self.Bindings(document) else {
+                        return EventListenerResult::default();
+                    };
+                    DOMJavaScriptBindings::DispatchNavigationDOMListeners(&bindings, event, script)
+                },
+            );
+            let scoped = engine.WithScopedListeners(listeners);
+            let scoped = scoped.WithScriptInvocation(script);
+            result = Some(run.take().expect("one native invocation scope")(&scoped));
+        });
+        result.expect("navigation invocation runs synchronously")
+    }
+
+    fn ForDocument(
+        &self,
+        document: &interaction::InteractionDocument,
+    ) -> Option<Rc<PageInteraction>> {
+        self.frames
+            .borrow()
+            .upgrade()?
+            .InteractionForDocument(document)
+    }
+    fn Owns(&self, document: &interaction::InteractionDocument) -> bool {
+        self.document
+            .upgrade()
+            .is_some_and(|owner| Rc::ptr_eq(&owner, document))
+    }
+    fn Bindings(
+        &self,
+        document: &interaction::InteractionDocument,
+    ) -> Option<Rc<RefCell<DOMJavaScriptBindings>>> {
+        if self.Owns(document) {
+            self.bindings.upgrade()
+        } else {
+            self.ForDocument(document)?.listeners.bindings.upgrade()
+        }
+    }
+    fn Dispatch(
+        &self,
+        document: &interaction::InteractionDocument,
+        invocation: &EventListenerInvocation<'_>,
+        runtime: &mut dyn JavaScriptHostRuntime,
+        report_error: &mut dyn FnMut(&JavaScriptException),
+    ) -> EventListenerResult {
+        if !self.Owns(document) {
+            return self
+                .ForDocument(document)
+                .map_or_else(EventListenerResult::default, |owner| {
+                    owner
+                        .listeners
+                        .Dispatch(document, invocation, runtime, report_error)
+                });
+        }
+        let Some(bindings) = self.bindings.upgrade() else {
+            return EventListenerResult::default();
+        };
+        let realm = self.realm.borrow().Upgrade();
+        let Some(realm) = realm else {
+            if self.frames.borrow().upgrade().is_some() {
+                return EventListenerResult::default();
+            }
+            // Standalone parser services have no Frame/Window registry. Their
+            // only Document already runs in this call's originating realm.
+            return DOMJavaScriptBindings::DispatchEventListenersScoped(
+                &bindings,
+                invocation,
+                runtime,
+                report_error,
+            );
+        };
+        let mut result = EventListenerResult::default();
+        if let Err(error) = runtime.WithRealm(&realm, &mut |runtime| {
+            result = DOMJavaScriptBindings::DispatchEventListenersScoped(
+                &bindings,
+                invocation,
+                runtime,
+                report_error,
+            );
+        }) {
+            report_error(&error);
+        }
+        result
+    }
+}
+
 impl PageInteraction {
+    pub(crate) fn WindowRealm(&self) -> Option<JavaScriptRealm> {
+        self.listeners.realm.borrow().Upgrade()
+    }
+    pub(crate) fn WindowView(
+        &self,
+    ) -> Option<interaction::dispatch::core::events::ui_event::AbstractViewRef> {
+        self.engine
+            .ResolveDOMEventTarget(&self.document, 0)?
+            .AsAbstractView()
+    }
+    pub fn SetFormStateTaskRunner(
+        &self,
+        runner: interaction::adapter::page_form_controller::FormStateTaskRunner,
+    ) {
+        self.form_controller.SetTaskRunner(runner);
+    }
+    pub fn SetFormStateFileReader(&self, reader: std::sync::Arc<dyn fileapi::NativeFileReader>) {
+        self.form_controller.SetFileReader(reader);
+    }
     // cpp: browser/browser.cc:629-631,671-676,702-734
     pub fn Install(
         document: Rc<RefCell<DOM>>,
         bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
         state: Rc<RefCell<UserInteractionState>>,
     ) -> Self {
-        Self::InstallWithEmitter(document, bindings, state, None, Rc::new(Default::default()))
+        Self::InstallWithEmitter(
+            document,
+            bindings,
+            state,
+            None,
+            Rc::new(Default::default()),
+            Rc::new(MonotonicEventClock),
+        )
     }
 
     pub(crate) fn InstallWithEmitter(
@@ -43,8 +217,50 @@ impl PageInteraction {
         state: Rc<RefCell<UserInteractionState>>,
         emitter: Option<interaction::InteractionOutputEmitter>,
         selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
+    ) -> Self {
+        Self::InstallWithRetainedOwner(document, bindings, state, emitter, selections, clock, None)
+    }
+
+    pub(crate) fn InstallWithFrameOwner(
+        document: Rc<RefCell<DOM>>,
+        bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
+        state: Rc<RefCell<UserInteractionState>>,
+        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
+        engine: Interaction<'static>,
+        controller: Rc<interaction::adapter::page_form_controller::PageFormController>,
+    ) -> Self {
+        Self::InstallWithRetainedOwner(
+            document,
+            bindings,
+            state,
+            None,
+            selections,
+            clock,
+            Some((engine, controller)),
+        )
+    }
+
+    fn InstallWithRetainedOwner(
+        document: Rc<RefCell<DOM>>,
+        bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
+        state: Rc<RefCell<UserInteractionState>>,
+        emitter: Option<interaction::InteractionOutputEmitter>,
+        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
+        retained: Option<(
+            Interaction<'static>,
+            Rc<interaction::adapter::page_form_controller::PageFormController>,
+        )>,
     ) -> Self {
         let weak = Rc::downgrade(bindings);
+        let listeners = Rc::new(PageListenerRouting {
+            document: Rc::downgrade(&document),
+            bindings: weak.clone(),
+            realm: Default::default(),
+            frames: Default::default(),
+        });
         let mutation_document = document.clone();
         let mutation_bindings = weak.clone();
         let mutation_state = state.clone();
@@ -52,61 +268,261 @@ impl PageInteraction {
         let styles_resolved = Rc::new(Cell::new(false));
         let mutation_dirty = dirty.clone();
         let mutation_styles = styles_resolved.clone();
-        let engine = Interaction::WithSelectionState(
-            Rc::new(move |mutation| {
-                if let Some(emitter) = &emitter {
-                    emitter(mutation);
-                    mutation_styles.set(false);
-                    mutation_dirty.set(true);
-                    return;
-                }
-                match mutation {
-                    InteractionOutput::DocumentMutation(mutation) => {
-                        // cpp: browser/browser.cc:950-981
-                        // Connected-subtree discovery stays with the resource scheduler.
-                        let mut owner = mutation_document.borrow_mut();
-                        crate::dom_mutation::ApplyDOMTreeMutation(&mut owner, &mutation);
+        let (retained_engine, retained_controller) = retained
+            .map_or((None, None), |(engine, controller)| {
+                (Some(engine), Some(controller))
+            });
+        let engine = retained_engine.unwrap_or_else(|| {
+            Interaction::WithSelectionState(
+                Rc::new(move |mutation| {
+                    if let Some(emitter) = &emitter {
+                        emitter(mutation);
                         mutation_styles.set(false);
                         mutation_dirty.set(true);
+                        return;
                     }
-                    InteractionOutput::StateMutation(mutation) => {
-                        ApplyInteractionStateMutation(
-                            &mutation_document,
-                            &mutation_bindings,
-                            &mutation_state,
-                            &mutation_dirty,
-                            &mutation_styles,
-                            mutation,
-                        );
+                    match mutation {
+                        InteractionOutput::DocumentMutation(mutation) => {
+                            // cpp: browser/browser.cc:950-981
+                            // Connected-subtree discovery stays with the resource scheduler.
+                            let mut owner = mutation_document.borrow_mut();
+                            crate::dom_mutation::ApplyDOMTreeMutation(&mut owner, &mutation);
+                            mutation_styles.set(false);
+                            mutation_dirty.set(true);
+                        }
+                        InteractionOutput::StateMutation(mutation) => {
+                            ApplyInteractionStateMutation(
+                                &mutation_document,
+                                &mutation_bindings,
+                                &mutation_state,
+                                &mutation_dirty,
+                                &mutation_styles,
+                                mutation,
+                            );
+                        }
+                        InteractionOutput::Effect(_) => {
+                            // Standalone service users have no navigation host.
+                            // A composed Page always supplies an output emitter.
+                        }
                     }
-                    InteractionOutput::Effect(_) => {
-                        // Standalone service users have no navigation host.
-                        // A composed Page always supplies an output emitter.
-                    }
-                }
-            }),
-            None,
-            selections,
-        );
+                }),
+                None,
+                selections,
+                clock,
+            )
+        });
+        engine
+            .FormControlState()
+            .SetValidationPatternEngine(webapi::form_validation::CreateValidationPatternEngine());
+        bindings
+            .borrow_mut()
+            .BindFormValidationState(engine.FormControlState());
+        // EventTarget listener interest is a retained read-only owner, separate
+        // from the call-scoped JavaScript listener dispatcher. Boundary event
+        // phases re-query it after synchronous listener mutation.
+        engine.SetEventListenerInterest(Some(Rc::new(bindings.borrow().EventListenerInterest())));
+        engine.BindDocumentInputLifecycle(&document);
+        let selection_read_engine = engine.clone();
+        let selection_read_document = document.clone();
+        let selection_write_engine = engine.clone();
+        let selection_text_engine = engine.clone();
+        bindings
+            .borrow_mut()
+            .SetDOMSelectionHost(Some(webapi::dom_bindings::DOMSelectionHost {
+                read: Rc::new(move || {
+                    selection_read_engine.DOMSelectionSnapshot(&selection_read_document)
+                }),
+                write: Rc::new(move |range| selection_write_engine.SetDOMSelectionFromRange(range)),
+                text: Rc::new(move || selection_text_engine.DOMSelectionText()),
+            }));
+        let text_selection_read_engine = engine.clone();
+        let text_selection_read_document = document.clone();
+        let text_selection_write_engine = engine.clone();
+        let text_selection_write_document = document.clone();
+        bindings.borrow_mut().SetTextControlSelectionHost(Some(
+            webapi::dom_bindings::TextControlSelectionHost {
+                read: Rc::new(move |id| {
+                    text_selection_read_engine
+                        .TextControlSelectionSnapshot(&text_selection_read_document, id)
+                }),
+                write: Rc::new(move |id, start, end, backward| {
+                    text_selection_write_engine.SetTextControlSelectionRange(
+                        &text_selection_write_document,
+                        id,
+                        start,
+                        end,
+                        backward,
+                    )
+                }),
+            },
+        ));
+        let target_engine = engine.clone();
+        let target_document = document.clone();
+        bindings
+            .borrow_mut()
+            .SetDOMEventTargetResolver(Rc::new(move |id| {
+                target_engine.ResolveDOMEventTarget(&target_document, id)
+            }));
+        let form_controller = retained_controller.unwrap_or_else(|| {
+            interaction::adapter::page_form_controller::PageFormController::Install(
+                document.clone(),
+                engine.clone(),
+            )
+        });
+        let capture_engine = engine.clone();
+        let close_create_engine = engine.clone();
+        let close_create_document = document.clone();
+        let close_invoke_engine = engine.clone();
+        let close_invoke_document = document.clone();
+        let close_destroy_engine = engine.clone();
+        let close_destroy_document = document.clone();
+        let close_listeners = listeners.clone();
         let errors = Rc::new(RefCell::new(Vec::new()));
         let error_reporter: Rc<RefCell<Option<Rc<dyn Fn(&JavaScriptException)>>>> =
             Rc::new(RefCell::new(None));
+        let close_errors = errors.clone();
+        let close_reporter = error_reporter.clone();
+        bindings.borrow().SetCloseWatcherHost(webapi::dom_bindings::CloseWatcherHost {
+            create: Rc::new(move |host_id, target, aborted| {
+                close_create_engine.CreateScriptCloseWatcher(&close_create_document, host_id, target, aborted).map_err(|error| error.to_string())
+            }),
+            invoke: Rc::new(move |watcher, request, runtime| {
+                let runtime = RefCell::new(runtime);
+                let shared_runtime = &runtime;
+                let listeners = close_listeners.clone();
+                let errors = close_errors.clone();
+                let reporter = close_reporter.clone();
+                let scoped_listeners = Rc::new(move |invocation: &EventListenerInvocation<'_>, source_document: &interaction::InteractionDocument, _: &interaction::InteractionDOMMutationEmitter| {
+                    listeners.Dispatch(source_document, invocation, &mut **shared_runtime.borrow_mut(), &mut |error| {
+                        if let Some(report) = reporter.borrow().clone() { report(error); }
+                        else { errors.borrow_mut().push(error.clone()); }
+                    })
+                });
+                let result = close_invoke_engine.WithScopedListeners(scoped_listeners).InvokeScriptCloseWatcher(&close_invoke_document, watcher, request).map_err(|error| error.to_string());
+                result
+            }),
+            destroy: Rc::new(move |watcher| close_destroy_engine.DestroyScriptCloseWatcher(&close_destroy_document, watcher)),
+        });
+        let capture_document = document.clone();
+        bindings.borrow_mut().SetPointerCaptureHandler(Some(Rc::new(
+            move |operation, pointer_id, target| match operation {
+                webapi::dom_bindings::PointerCaptureOperation::Set => {
+                    capture_engine.SetPointerCapture(&capture_document, pointer_id, target)?;
+                    Ok(false)
+                }
+                webapi::dom_bindings::PointerCaptureOperation::Release => {
+                    capture_engine.ReleasePointerCapture(&capture_document, pointer_id, target)?;
+                    Ok(false)
+                }
+                webapi::dom_bindings::PointerCaptureOperation::Has => {
+                    Ok(capture_engine.HasPointerCapture(&capture_document, pointer_id, target))
+                }
+            },
+        )));
+        let command_engine = engine.clone();
+        let command_document = document.clone();
+        let command_listeners = listeners.clone();
+        let command_errors = errors.clone();
+        let command_reporter = error_reporter.clone();
+        bindings.borrow_mut().SetDocumentEditorCommandHandler(Some(Rc::new(move |operation, name, value, runtime| {
+            let scoped_runtime = RefCell::new(runtime);
+            let listeners = command_listeners.clone();
+            let reporter = command_reporter.clone();
+            let errors = command_errors.clone();
+            let scoped_listeners = Rc::new(move |invocation: &EventListenerInvocation<'_>, source_document: &interaction::InteractionDocument, _: &interaction::InteractionDOMMutationEmitter| {
+                listeners.Dispatch(source_document, invocation, &mut **scoped_runtime.borrow_mut(), &mut |error| {
+                    if let Some(report) = reporter.borrow().clone() { report(error); }
+                    else { errors.borrow_mut().push(error.clone()); }
+                })
+            });
+            let result = command_engine.WithScopedListeners(scoped_listeners).DocumentEditorCommand(&command_document, operation, name, value);
+            result
+        })));
+        let execute_engine = engine.clone();
+        let execute_document = document.clone();
+        let execute_listeners = listeners.clone();
+        let execute_errors = errors.clone();
+        let execute_reporter = error_reporter.clone();
+        bindings
+            .borrow_mut()
+            .SetDocumentEditorCommandExecutor(Some(Rc::new(move |name, check_value, runtime| {
+                use javascript::javascript_runtime::{
+                    HostResult, HostValue, JavaScriptExceptionKind,
+                };
+                let scoped_runtime = RefCell::new(runtime);
+                let shared_runtime = &scoped_runtime;
+                let listeners = execute_listeners.clone();
+                let errors = execute_errors.clone();
+                let reporter = execute_reporter.clone();
+                let scoped_listeners = Rc::new(
+                    move |invocation: &EventListenerInvocation<'_>,
+                          source_document: &interaction::InteractionDocument,
+                          _: &interaction::InteractionDOMMutationEmitter| {
+                        listeners.Dispatch(
+                            source_document,
+                            invocation,
+                            &mut **shared_runtime.borrow_mut(),
+                            &mut |error| {
+                                if let Some(report) = reporter.borrow().clone() {
+                                    report(error);
+                                } else {
+                                    errors.borrow_mut().push(error.clone());
+                                }
+                            },
+                        )
+                    },
+                );
+                let scoped = execute_engine.WithScopedListeners(scoped_listeners);
+                let prepared = match scoped.PrepareDocumentEditorCommand(&execute_document, name) {
+                    Ok(Some(prepared)) => prepared,
+                    Ok(None) => {
+                        return HostResult {
+                            value: HostValue::Boolean(false),
+                            ..Default::default()
+                        };
+                    }
+                    Err(error) => {
+                        return HostResult::Failure(
+                            JavaScriptExceptionKind::kTypeError,
+                            &format!("Editing command service required: {error:?}"),
+                        );
+                    }
+                };
+                let value = match check_value(
+                    prepared.IsValueInterpretedAsHtml(),
+                    &mut **scoped_runtime.borrow_mut(),
+                ) {
+                    Ok(value) => value,
+                    Err(error) => return error,
+                };
+                match prepared.Execute(&value) {
+                    Ok(value) => HostResult {
+                        value: HostValue::Boolean(value),
+                        ..Default::default()
+                    },
+                    Err(error) => HostResult::Failure(
+                        JavaScriptExceptionKind::kTypeError,
+                        &format!("Editing command service required: {error:?}"),
+                    ),
+                }
+            })));
         let focus_engine = engine.clone();
         let focus_document = document.clone();
         let focus_bindings = weak.clone();
+        let focus_listeners = listeners.clone();
         let focus_errors = errors.clone();
         let focus_reporter = error_reporter.clone();
         bindings
             .borrow_mut()
             .SetFocusChangeHandler(Some(Rc::new(move |id, focus, runtime| {
-                let Some(bindings) = focus_bindings.upgrade() else {
+                let Some(_bindings) = focus_bindings.upgrade() else {
                     return;
                 };
                 let scoped_runtime = RefCell::new(runtime);
                 let listeners = Rc::new(|invocation: &EventListenerInvocation<'_>,
-                _: &interaction::ownership::InteractionDocument,
+                source_document: &interaction::ownership::InteractionDocument,
                 _: &interaction::ownership::InteractionDOMMutationEmitter| {
-                DispatchPageListeners(&bindings, &focus_document, invocation,
+                focus_listeners.Dispatch(source_document, invocation,
                     &mut **scoped_runtime.borrow_mut(), &mut |error| {
                         let reporter = focus_reporter.borrow().clone();
                         if let Some(reporter) = reporter { reporter(error); }
@@ -128,50 +544,102 @@ impl PageInteraction {
                 );
             })));
         // cpp: browser/browser.cc:668-670
+        let form_data_transaction: Rc<RefCell<Option<FormDataTransaction>>> = Default::default();
+        let form_submission_transaction: Rc<RefCell<Option<FormSubmissionTransaction>>> =
+            Default::default();
+        let synthetic_transaction = form_submission_transaction.clone();
         let synthetic_engine = engine.clone();
         let synthetic_document = document.clone();
         let synthetic_bindings = weak.clone();
-        let synthetic_errors = errors.clone();
-        let synthetic_reporter = error_reporter.clone();
+        let synthetic_listeners = listeners.clone();
         bindings
             .borrow_mut()
             .SetSyntheticEventHandler(Some(Rc::new(move |event, id, runtime| {
-                let Some(bindings) = synthetic_bindings.upgrade() else {
+                let Some(_bindings) = synthetic_bindings.upgrade() else {
                     return;
                 };
-                let scoped_runtime = RefCell::new(runtime);
-                let listeners = Rc::new(|invocation: &EventListenerInvocation<'_>,
-                _: &interaction::ownership::InteractionDocument,
-                _: &interaction::ownership::InteractionDOMMutationEmitter| {
-                DispatchPageListeners(&bindings, &synthetic_document, invocation,
-                    &mut **scoped_runtime.borrow_mut(), &mut |error| {
-                        let reporter = synthetic_reporter.borrow().clone();
-                        if let Some(reporter) = reporter { reporter(error); }
-                        else { synthetic_errors.borrow_mut().push(error.clone()); }
-                    })
-            });
-                synthetic_engine
-                    .WithScopedListeners(listeners)
-                    .DispatchDOMEvent(event, id, &synthetic_document);
+                synthetic_listeners.WithScriptRuntime(&synthetic_engine, runtime, |scoped| {
+                    scoped.DispatchDOMEvent(event, id, &synthetic_document);
+                    let transaction = synthetic_transaction.borrow().clone();
+                    if let Some(transaction) = transaction {
+                        transaction(scoped, &synthetic_document);
+                    }
+                });
             })));
+        let validation_engine = engine.clone();
+        let validation_document = document.clone();
+        let validation_bindings = weak.clone();
+        let validation_listeners = listeners.clone();
+        let validation_errors = errors.clone();
+        let validation_reporter = error_reporter.clone();
+        bindings.borrow_mut().SetFormValidationHandler(Some(Rc::new(move |id, report, runtime| {
+            let Some(_bindings) = validation_bindings.upgrade() else {return Err(interaction::adapter::page_form_validation::ValidationRequired::PatternEngine);};
+            let scoped_runtime = RefCell::new(runtime);
+            let scoped_listeners = validation_listeners.clone();
+            let scoped_reporter = validation_reporter.clone();
+            let scoped_errors = validation_errors.clone();
+            let listeners = Rc::new(move |invocation: &EventListenerInvocation<'_>, source_document: &interaction::ownership::InteractionDocument, _: &interaction::ownership::InteractionDOMMutationEmitter| {
+                scoped_listeners.Dispatch(source_document, invocation, &mut **scoped_runtime.borrow_mut(), &mut |error| {
+                    if let Some(reporter) = scoped_reporter.borrow().clone() {reporter(error);} else {scoped_errors.borrow_mut().push(error.clone());}
+                })
+            });
+            let result = validation_engine
+                .WithScopedListeners(listeners)
+                .CheckValidity(&validation_document, id, report);
+            result
+        })));
+        let submit_transaction = form_submission_transaction.clone();
         let submit_engine = engine.clone();
         let submit_document = document.clone();
         let submit_bindings = weak.clone();
+        let submit_listeners = listeners.clone();
         let submit_errors = errors.clone();
         let submit_reporter = error_reporter.clone();
         bindings.borrow_mut().SetFormSubmissionHandler(Some(Rc::new(move |id, submitter, dispatch_event, runtime| {
-            let Some(bindings) = submit_bindings.upgrade() else { return; };
+            let Some(_bindings) = submit_bindings.upgrade() else { return; };
             let scoped_runtime = RefCell::new(runtime);
-            let listeners = Rc::new(|invocation: &EventListenerInvocation<'_>, _: &interaction::ownership::InteractionDocument, _: &interaction::ownership::InteractionDOMMutationEmitter| {
-                DispatchPageListeners(&bindings, &submit_document, invocation, &mut **scoped_runtime.borrow_mut(), &mut |error| {
+            let listeners = Rc::new(|invocation: &EventListenerInvocation<'_>, source_document: &interaction::ownership::InteractionDocument, _: &interaction::ownership::InteractionDOMMutationEmitter| {
+                submit_listeners.Dispatch(source_document, invocation, &mut **scoped_runtime.borrow_mut(), &mut |error| {
                     if let Some(reporter) = submit_reporter.borrow().clone() { reporter(error); }
                     else { submit_errors.borrow_mut().push(error.clone()); }
                 })
             });
-            submit_engine.WithScopedListeners(listeners).SubmitForm(&submit_document, id, submitter, dispatch_event);
+            let scoped = submit_engine.WithScopedListeners(listeners);
+            let _ = scoped.SubmitForm(&submit_document, id, submitter, dispatch_event);
+            let transaction = submit_transaction.borrow().clone();
+            if let Some(transaction) = transaction { transaction(&scoped, &submit_document); }
+        })));
+        let construct_transaction = form_data_transaction.clone();
+        let construct_engine = engine.clone();
+        let construct_document = document.clone();
+        let construct_listeners = listeners.clone();
+        let construct_errors = errors.clone();
+        let construct_reporter = error_reporter.clone();
+        bindings.borrow_mut().SetFormDataConstructor(Some(Rc::new(move |form, submitter, runtime| {
+            let scoped_runtime = RefCell::new(runtime);
+            let listeners = Rc::new(|invocation: &EventListenerInvocation<'_>, source_document: &interaction::ownership::InteractionDocument, _: &interaction::ownership::InteractionDOMMutationEmitter| {
+                construct_listeners.Dispatch(source_document, invocation, &mut **scoped_runtime.borrow_mut(), &mut |error| {
+                    if let Some(reporter) = construct_reporter.borrow().clone() { reporter(error); }
+                    else { construct_errors.borrow_mut().push(error.clone()); }
+                })
+            });
+            let scoped = construct_engine.WithScopedListeners(listeners);
+            match scoped.CreateFormData(&construct_document, form, submitter)? {
+                interaction::FormDataCreation::Ready(data) => Ok(data),
+                interaction::FormDataCreation::NeedsLifecycle(token) => {
+                    let transaction = construct_transaction.borrow().clone().ok_or(
+                        interaction::dispatch::core::fileapi::form_data_object::FormDataConstructionError::InvalidState("FormData lifecycle service is unavailable."),
+                    )?;
+                    transaction(&scoped, &construct_document, token)
+                }
+            }
         })));
         Self {
+            form_controller,
+            form_data_transaction,
+            form_submission_transaction,
             engine,
+            listeners,
             document,
             bindings: weak,
             state,
@@ -179,6 +647,56 @@ impl PageInteraction {
             error_reporter,
             dirty,
             styles_resolved,
+        }
+    }
+
+    pub(crate) fn BindFrameDomain(
+        &self,
+        frames: std::rc::Weak<crate::page::local_frame::LocalFrameDomain>,
+    ) {
+        *self.listeners.frames.borrow_mut() = frames;
+    }
+    pub(crate) fn BindRealm(&self, realm: &JavaScriptRealm) {
+        *self.listeners.realm.borrow_mut() = realm.Downgrade();
+    }
+    pub(crate) fn OwnsDocument(&self, document: &interaction::InteractionDocument) -> bool {
+        self.listeners.Owns(document)
+    }
+    pub(crate) fn BindingsForDocument(
+        &self,
+        document: &interaction::InteractionDocument,
+    ) -> Option<Rc<RefCell<DOMJavaScriptBindings>>> {
+        self.listeners.Bindings(document)
+    }
+    pub(crate) fn DispatchListeners(
+        &self,
+        document: &interaction::InteractionDocument,
+        invocation: &EventListenerInvocation<'_>,
+        runtime: &mut dyn JavaScriptRuntime,
+        realm: &JavaScriptRealm,
+        report_error: &mut dyn FnMut(&JavaScriptException),
+    ) -> EventListenerResult {
+        let mut result = EventListenerResult::default();
+        if let Err(error) = runtime.WithHostRuntime(realm, &mut |runtime| {
+            result = self
+                .listeners
+                .Dispatch(document, invocation, runtime, report_error);
+        }) {
+            report_error(&error);
+        }
+        result
+    }
+
+    pub(crate) fn SetFormDataTransaction(&self, transaction: FormDataTransaction) {
+        *self.form_data_transaction.borrow_mut() = Some(transaction);
+    }
+    pub(crate) fn SetFormSubmissionTransaction(&self, transaction: FormSubmissionTransaction) {
+        *self.form_submission_transaction.borrow_mut() = Some(transaction);
+    }
+    pub(crate) fn CompleteFormSubmissions(&self, engine: &Interaction<'_>) {
+        let transaction = self.form_submission_transaction.borrow().clone();
+        if let Some(transaction) = transaction {
+            transaction(engine, &self.document);
         }
     }
 
@@ -223,6 +741,37 @@ impl PageInteraction {
     }
     pub fn Engine(&self) -> &Interaction<'static> {
         &self.engine
+    }
+
+    /// Lend the current host invocation to popup lifecycle dispatch. This
+    /// scope can synchronously reenter DOM bindings and never retains runtime.
+    pub(crate) fn WithScriptRuntime<T>(
+        &self,
+        runtime: &mut dyn JavaScriptHostRuntime,
+        run: impl FnOnce(&Interaction<'_>) -> T,
+    ) -> T {
+        self.listeners.WithScriptRuntime(&self.engine, runtime, run)
+    }
+
+    pub(crate) fn ApplyPopupMutation(
+        &self,
+        mutation: &dom::dom_mutation::DOMMutation,
+        runtime: &mut dyn JavaScriptHostRuntime,
+    ) -> Result<
+        bool,
+        interaction::adapter::page_event_dispatcher::pointer_dom_effects::PointerDomError,
+    > {
+        self.WithScriptRuntime(runtime, |engine| {
+            engine.ApplyPopupMutation(&self.document, mutation)
+        })
+    }
+
+    pub(crate) fn DrainPopupLifecycle(
+        &self,
+        runtime: &mut dyn JavaScriptHostRuntime,
+    ) -> Result<(), interaction::adapter::page_event_dispatcher::pointer_dom_effects::PointerDomError>
+    {
+        self.WithScriptRuntime(runtime, |engine| engine.DrainPopupLifecycle(&self.document))
     }
 }
 
@@ -274,17 +823,6 @@ fn ApplyInteractionStateMutation(
         styles_resolved.set(false);
         dirty.set(true);
     }
-}
-
-// Interaction supplies the complete DOM/Window path and listener phase.
-pub(crate) fn DispatchPageListeners(
-    bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
-    _document: &Rc<RefCell<DOM>>,
-    invocation: &EventListenerInvocation<'_>,
-    runtime: &mut dyn JavaScriptHostRuntime,
-    report_error: &mut dyn FnMut(&JavaScriptException),
-) -> EventListenerResult {
-    DOMJavaScriptBindings::DispatchEventListenersScoped(bindings, invocation, runtime, report_error)
 }
 
 #[cfg(test)]

@@ -81,9 +81,24 @@ impl<T> EventLoopBuilderExtWayland for EventLoopBuilder<T> {
 pub trait WindowExtWayland {
     /// Returns `xdg_toplevel` of the window or [`None`] if the window is X11 window.
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>>;
+
+    /// Returns the focused wl_seat and live pointer-button grab serial.
+    ///
+    /// This platform value is used to initiate an outgoing data-device drag.
+    /// The borrowed seat pointer remains owned by Winit and must not be destroyed
+    /// or assigned a different listener. Returns None after the button releases.
+    fn drag_source_seat(&self) -> Option<(NonNull<c_void>, u32)>;
 }
 
 impl WindowExtWayland for Window {
+    fn drag_source_seat(&self) -> Option<(NonNull<c_void>, u32)> {
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => None,
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => window.drag_source_seat(),
+        }
+    }
     #[inline]
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
         #[allow(clippy::single_match)]
@@ -111,8 +126,10 @@ pub trait WindowAttributesExtWayland {
 impl WindowAttributesExtWayland for WindowAttributes {
     #[inline]
     fn with_name(mut self, general: impl Into<String>, instance: impl Into<String>) -> Self {
-        self.platform_specific.name =
-            Some(crate::platform_impl::ApplicationName::new(general.into(), instance.into()));
+        self.platform_specific.name = Some(crate::platform_impl::ApplicationName::new(
+            general.into(),
+            instance.into(),
+        ));
         self
     }
 }

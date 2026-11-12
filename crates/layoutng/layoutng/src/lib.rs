@@ -237,7 +237,16 @@ pub mod layout_assembly;
 pub mod layout_boundary_support;
 pub mod layout_engine;
 mod layoutng_trace_bindings;
+pub mod native_autoscroll_source;
+pub mod native_editing_style;
+pub mod native_event_registry_source;
+pub mod native_scroll_source;
+pub mod native_user_scroll_source;
+pub mod native_wheel_scrollable_traversal;
+pub mod password_echo;
 pub mod style_projection;
+#[cfg(feature = "translation_in_progress")]
+mod text_control_hard_wrap;
 
 pub use internal::form_control_types::{AutofillState, FormControlType};
 pub use internal::layout_algorithm_set::LayoutAlgorithmSet;
@@ -251,3 +260,29 @@ pub use internal::scrollbar_mode::mojom;
 pub mod caret;
 
 pub mod editing_state;
+pub mod layout_selection;
+pub mod svg_filter_geometry;
+
+// Canonical values crossing the Layout/editing boundary; no LayoutObject owner
+// or dependency on an Interaction implementation crosses with them.
+pub use internal::editing::forward::{
+    EditingCaretFacts, EditingInlineAdjustmentFacts, EditingNodeFacts, EditingPositionOptions,
+    EditingTextFacts, Position as EditingPosition, PositionAnchorType as EditingPositionAnchorType,
+    PositionWithAffinity as EditingPositionWithAffinity, TextAffinity as EditingTextAffinity,
+};
+
+#[path = "../../layout_algo_inline/src/editing_caret.rs"]
+pub(crate) mod layout_algo_inline_editing_caret;
+
+#[path = "../../layout_algo_inline/src/editing_caret_rect.rs"]
+pub(crate) mod layout_algo_inline_editing_caret_rect;
+
+#[cfg(feature = "translation_in_progress")]
+pub mod native_mouse_coordinates;
+pub mod native_page_scale_geometry;
+
+mod native_anchor_metrics;
+
+mod native_vtt_geometry;
+
+pub mod native_pointer_scroll_controls;

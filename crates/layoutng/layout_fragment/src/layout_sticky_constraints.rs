@@ -52,29 +52,21 @@ fn MapRectToAncestorIgnoringPaintGeometry(
 impl LayoutBoxModelObject {
     pub fn StickyConstraints(&self) -> StickyPositionScrollingConstraints {
         self.CheckIsNotDestroyed();
-        StickyPositionScrollingConstraints::new(
-            self.x_sticky_constraints_.Get(),
-            self.y_sticky_constraints_.Get(),
-        )
+        self.FirstFragment().StickyConstraints()
     }
 
     pub fn HasStickyConstraints(&self) -> bool {
         self.CheckIsNotDestroyed();
-        !self.x_sticky_constraints_.Get().is_null() || !self.y_sticky_constraints_.Get().is_null()
+        self.FirstFragment().HasStickyConstraints()
     }
 
     pub fn SetStickyConstraints(&mut self, constraints: StickyConstraintsData) {
         self.CheckIsNotDestroyed();
         debug_assert!(!constraints.x_data.is_null() || !constraints.y_data.is_null());
-        let mut has_changed = false;
-        if !constraints.x_data.is_null() {
-            has_changed = true;
-            self.x_sticky_constraints_ = Member::from_ptr(constraints.x_data);
-        }
-        if !constraints.y_data.is_null() {
-            has_changed = true;
-            self.y_sticky_constraints_ = Member::from_ptr(constraints.y_data);
-        }
+        let has_changed = self
+            .GetMutableForPainting()
+            .FirstFragment()
+            .SetStickyConstraints(constraints);
         if has_changed {
             self.SetNeedsPaintPropertyUpdate();
         }
@@ -82,19 +74,10 @@ impl LayoutBoxModelObject {
 
     pub fn ClearStickyConstraints(&mut self, axes_to_clear: PhysicalAxes) {
         self.CheckIsNotDestroyed();
-        let mut has_changed = false;
-        if (axes_to_clear & kPhysicalAxesHorizontal).is_nonzero()
-            && !self.x_sticky_constraints_.Get().is_null()
-        {
-            has_changed = true;
-            self.x_sticky_constraints_ = Member::default();
-        }
-        if (axes_to_clear & kPhysicalAxesVertical).is_nonzero()
-            && !self.y_sticky_constraints_.Get().is_null()
-        {
-            has_changed = true;
-            self.y_sticky_constraints_ = Member::default();
-        }
+        let has_changed = self
+            .GetMutableForPainting()
+            .FirstFragment()
+            .ClearStickyConstraints(axes_to_clear);
         if has_changed {
             self.SetNeedsPaintPropertyUpdate();
         }

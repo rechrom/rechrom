@@ -35,9 +35,7 @@ fn ControlType(input: &NodeConstructionData) -> Type {
     Require(
         (input.kind == NodeKind::kFormControl
             && data.is_some_and(|element| element.form_control_type.is_some()))
-            || (input.kind == NodeKind::kReplaced
-                && data
-                    .is_some_and(|element| element.form_control_type == Some(Type::kInputImage))),
+            || data.is_some_and(|element| element.form_control_type == Some(Type::kInputImage)),
         "Form-control input requires an explicit control type",
     );
     let control_type = data
@@ -160,6 +158,7 @@ fn input_element(input: &NodeConstructionData, style: *const ComputedStyle) -> H
 // cpp: layoutng_forms/form_node_metadata.cc:72-75,83-86
 fn TraceTextControl(element: &TextControlElement, visitor: &mut Visitor) {
     visitor.Trace(element.InnerEditorMember());
+    visitor.Trace(element.HitContainerMember());
     element.state.control.html.element.Trace(visitor);
 }
 fn TraceInput(input: &HTMLInputElement, visitor: &mut Visitor) {
@@ -413,6 +412,11 @@ pub fn CreateFormElementMetadata(
     }
     if data.is_some_and(|element| element.text_control_spin_button) {
         return MakeGarbageCollected(spin_button_element(input, style)).cast();
+    }
+    // ImageInputType may select the generic object for fallback content;
+    // its DOM node remains the same HTMLInputElement for every layout class.
+    if data.is_some_and(|element| element.form_control_type == Some(Type::kInputImage)) {
+        return MakeGarbageCollected(input_element(input, style)).cast();
     }
     match input.kind {
         NodeKind::kFieldset => return MakeGarbageCollected(fieldset_element(input, style)).cast(),

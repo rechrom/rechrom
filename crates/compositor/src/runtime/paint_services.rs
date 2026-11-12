@@ -797,6 +797,25 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
                 property_tree_sequence_number: sequence,
             };
         if let Some(previous) = previous_artifact {
+            // Chromium's ScrollbarDisplayItem retains a live cc::Scrollbar
+            // adapter. PaintedScrollbarLayer can therefore reuse its layer on
+            // the repaint fast path and still observe changing geometry and
+            // opacity through that adapter (scrollbar_display_item.h:93-106,
+            // painted_scrollbar_layer.cc:185-283). The paint_record package
+            // boundary retains the same inputs as an immutable payload
+            // instead. Reusing layerization when that payload changed would
+            // leave PaintedScrollbarLayer attached to the old snapshot.
+            // Promote only those repaints to the canonical full layer update;
+            // all other repaint and resize fast paths remain unchanged.
+            let scrollbar_inputs_changed = previous
+                .display_items
+                .iter()
+                .filter_map(|item| item.scrollbar.as_ref())
+                .ne(input
+                    .artifact()
+                    .display_items
+                    .iter()
+                    .filter_map(|item| item.scrollbar.as_ref()));
             // Blink's LocalFrameView/PaintArtifactCompositor owner calls
             // SetNeedsUpdate before SetNeedsUpdateAfterRepaint when the paint
             // property trees changed. Page publishes both immutable artifacts
@@ -826,7 +845,7 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
                         .iter()
                         .zip(&input.artifact().chunks)
                         .any(|(old, new)| !old.properties.same_nodes(&new.properties)));
-            if property_trees_changed {
+            if property_trees_changed || scrollbar_inputs_changed {
                 pac.SetNeedsUpdate();
             } else {
                 pac.SetNeedsUpdateAfterRepaint(previous, input.artifact(), self);
@@ -878,7 +897,8 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
             // Source: paint_property_tree_builder.cc:3801-3827;
             //         property_tree_manager.cc:138-177.
             let transform = paint::TransformNode::<R>::from_arc(scroll_translation.clone());
-            if !pac.DirectlyUpdateScrollOffsetTransform(&transform, context.layer) {
+            let direct = pac.DirectlyUpdateScrollOffsetTransform(&transform, context.layer);
+            if !direct {
                 // The direct transform path intentionally declines nodes that
                 // must be realized on main. Keep ScrollingCoordinator's
                 // independent scroll-map update for that source case.

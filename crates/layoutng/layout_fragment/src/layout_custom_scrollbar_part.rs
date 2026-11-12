@@ -19,6 +19,7 @@ pub struct LayoutCustomScrollbarPart {
     style_: Member<ComputedStyle>,
     scrollbar_: Member<CustomScrollbar>,
     overridden_size_: PhysicalSize,
+    fragment_data_: layout_fragment::fragment_data::FragmentData,
     part_: ScrollbarPart,
 }
 
@@ -34,6 +35,7 @@ impl LayoutCustomScrollbarPart {
             style_: Member::from_ptr(style as *mut ComputedStyle),
             scrollbar_: Member::from_ptr(scrollbar),
             overridden_size_: PhysicalSize::default(),
+            fragment_data_: layout_fragment::fragment_data::FragmentData::default(),
             part_: part,
         }
     }
@@ -41,6 +43,7 @@ impl LayoutCustomScrollbarPart {
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.style_);
         visitor.Trace(&self.scrollbar_);
+        self.fragment_data_.Trace(visitor);
     }
 
     pub fn StyleRef(&self) -> &ComputedStyle {
@@ -134,6 +137,23 @@ impl LayoutCustomScrollbarPart {
                 ScrollbarSizeComputeMode::Length,
             )
         }
+    }
+
+    // Source: custom_scrollbar.cc:417-423. These extracted anonymous parts
+    // do not run general Layout; their canonical FragmentData owns paint offset.
+    pub fn SetPartFrameRect(&mut self, rect: &foundation::gfx::Rect) {
+        self.fragment_data_
+            .SetPaintOffset(&foundation::PhysicalOffset::new(
+                LayoutUnit::from_signed(rect.x()),
+                LayoutUnit::from_signed(rect.y()),
+            ));
+        self.SetOverriddenSize(&PhysicalSize::new(
+            LayoutUnit::from_signed(rect.width()),
+            LayoutUnit::from_signed(rect.height()),
+        ));
+    }
+    pub fn FirstFragment(&self) -> &layout_fragment::fragment_data::FragmentData {
+        &self.fragment_data_
     }
 
     pub fn SetOverriddenSize(&mut self, size: &PhysicalSize) {

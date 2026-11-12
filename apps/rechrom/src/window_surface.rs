@@ -109,6 +109,15 @@ impl HostPixelStorage for PreparedDisplayTarget {
 }
 
 impl DisplayTarget {
+    pub(crate) fn primary_clipboard(&self) -> Arc<crate::primary_clipboard::PrimaryClipboard> {
+        match self {
+            Self::Window(target) => crate::primary_clipboard::PrimaryClipboard::for_window(
+                target.surface.window().clone(),
+            ),
+            Self::Offscreen { .. } => crate::primary_clipboard::PrimaryClipboard::unavailable(),
+        }
+    }
+
     pub(crate) fn is_window(&self) -> bool {
         matches!(self, Self::Window(_))
     }
@@ -116,6 +125,46 @@ impl DisplayTarget {
     pub(crate) fn invalidate_pending_presentations(&mut self) {
         if let Self::Window(target) = self {
             target.invalidate_pending_presentations();
+        }
+    }
+
+    /// Read the last completed memory target for a Viz CopyOutput request.
+    /// Native targets continue to use their pre-presentation diagnostic copy:
+    /// after handing a prepared buffer to the platform it is no longer owned
+    /// by this object.
+    pub(crate) fn copy_output_rgba(
+        &self,
+        viewport: crate::engine::Viewport,
+        target: crate::engine::CopyOutputTarget,
+    ) -> io::Result<crate::engine::CopyOutputResult> {
+        match self {
+            Self::Offscreen { pixels } => {
+                let toolbar_height = viewport.toolbar_pixels();
+                let (start_y, height) = match target {
+                    crate::engine::CopyOutputTarget::Page => (
+                        toolbar_height,
+                        viewport.height.saturating_sub(toolbar_height),
+                    ),
+                    crate::engine::CopyOutputTarget::Toolbar => (0, toolbar_height),
+                    crate::engine::CopyOutputTarget::Root => (0, viewport.height),
+                };
+                Ok(crate::engine::CopyOutputResult {
+                    width: viewport.width,
+                    height,
+                    pixels: readback_region(
+                        pixels,
+                        viewport.width as usize,
+                        true,
+                        viewport.width,
+                        start_y,
+                        height,
+                    )?,
+                    provenance: None,
+                })
+            }
+            Self::Window(_) => Err(io::Error::other(
+                "native CopyOutput uses the retained diagnostic frame",
+            )),
         }
     }
 
@@ -148,10 +197,11 @@ impl DisplayTarget {
         prepared: PreparedDisplayTarget,
         sequence: u64,
         on_complete: softbuffer::PresentCallback,
+        on_presentation: softbuffer::PresentationCallback,
     ) -> io::Result<()> {
         match (self, prepared) {
             (Self::Window(target), PreparedDisplayTarget::Window(frame)) => {
-                target.present_prepared(frame, sequence, on_complete)
+                target.present_prepared(frame, sequence, on_complete, on_presentation)
             }
             (
                 Self::Offscreen { pixels },
@@ -170,6 +220,9 @@ impl DisplayTarget {
                 );
                 *pixels = completed;
                 on_complete(now, now);
+                on_presentation(softbuffer::PresentationFeedback::Unavailable(
+                    softbuffer::PresentationUnavailableReason::OffscreenTarget,
+                ));
                 Ok(())
             }
             _ => Err(io::Error::new(
@@ -402,22 +455,19 @@ fn readback_pixels(
     has_alpha: bool,
     viewport: crate::engine::Viewport,
 ) -> io::Result<crate::engine::WindowFrame> {
-    let rows = |start_y: u32, height: u32| -> io::Result<crate::engine::CapturedSurface> {
-        let mut rgba = Vec::with_capacity(viewport.width as usize * height as usize * 4);
-        for y in start_y..start_y + height {
-            let row =
-                &pixels[y as usize * row_stride..y as usize * row_stride + viewport.width as usize];
-            for &pixel in row {
-                let bytes = pixel.to_ne_bytes();
-                rgba.extend_from_slice(&[
-                    bytes[2],
-                    bytes[1],
-                    bytes[0],
-                    if has_alpha { bytes[3] } else { 255 },
-                ]);
-            }
-        }
-        crate::engine::CapturedSurface::from_pixels(viewport.width, height, rgba)
+    let rows = |start_y: u32, height: u32| {
+        crate::engine::CapturedSurface::from_pixels(
+            viewport.width,
+            height,
+            readback_region(
+                pixels,
+                row_stride,
+                has_alpha,
+                viewport.width,
+                start_y,
+                height,
+            )?,
+        )
     };
     let toolbar_height = viewport.toolbar_pixels();
     Ok(crate::engine::WindowFrame {
@@ -426,6 +476,53 @@ fn readback_pixels(
         toolbar: rows(0, toolbar_height)?,
         content: rows(toolbar_height, viewport.height - toolbar_height)?,
     })
+}
+
+fn readback_region(
+    pixels: &[u32],
+    row_stride: usize,
+    has_alpha: bool,
+    width: u32,
+    start_y: u32,
+    height: u32,
+) -> io::Result<Vec<u8>> {
+    let width = width as usize;
+    if row_stride < width
+        || pixels.len() < row_stride.saturating_mul(start_y.saturating_add(height) as usize)
+    {
+        return Err(io::Error::other("readback source dimensions mismatch"));
+    }
+    let length = width
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| io::Error::other("readback dimensions overflow"))?;
+    let mut rgba = vec![0; length];
+    // `chunks_exact_mut(0)` is not a valid iteration request; an empty
+    // surface needs no conversion.
+    if length != 0 {
+        if row_stride == width {
+            let start = start_y as usize * row_stride;
+            let end = start + width * height as usize;
+            if !renderer_skia::swizzle_bgra_to_rgba(&pixels[start..end], &mut rgba) {
+                return Err(io::Error::other("readback swizzle dimensions mismatch"));
+            }
+        } else {
+            for (source_y, target) in
+                (start_y..start_y + height).zip(rgba.chunks_exact_mut(width * 4))
+            {
+                let start = source_y as usize * row_stride;
+                if !renderer_skia::swizzle_bgra_to_rgba(&pixels[start..start + width], target) {
+                    return Err(io::Error::other("readback swizzle dimensions mismatch"));
+                }
+            }
+        }
+    }
+    if !has_alpha {
+        for alpha in rgba.iter_mut().skip(3).step_by(4) {
+            *alpha = 255;
+        }
+    }
+    Ok(rgba)
 }
 
 fn error(error: softbuffer::SoftBufferError) -> io::Error {
@@ -538,6 +635,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         prepared: PreparedWindowFrame,
         present_sequence: u64,
         on_swap_ack: softbuffer::PresentCallback,
+        on_presentation: softbuffer::PresentationCallback,
     ) -> io::Result<()> {
         let context = browser_tracing::context();
         let ready_at = std::time::Instant::now();
@@ -567,15 +665,21 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
         #[cfg(target_os = "macos")]
         if optical_probe {
             self.surface
-                .present_prepared_with_transaction_observer(
+                .present_prepared_with_presentation_feedback(
                     prepared.buffer,
                     callback,
-                    transaction_observer(context, present_sequence),
+                    on_presentation,
+                    Some(transaction_observer(context, present_sequence)),
                 )
                 .map_err(error)?;
         } else {
             self.surface
-                .present_prepared_with_callback(prepared.buffer, callback)
+                .present_prepared_with_presentation_feedback(
+                    prepared.buffer,
+                    callback,
+                    on_presentation,
+                    None,
+                )
                 .map_err(error)?;
         }
         #[cfg(not(target_os = "macos"))]
@@ -593,7 +697,9 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> WindowSurface<D, W> {
                     target[..self.width as usize].copy_from_slice(&source[..self.width as usize]);
                 }
             }
-            buffer.present_with_callback(callback).map_err(error)?;
+            buffer
+                .present_with_presentation_feedback(callback, on_presentation)
+                .map_err(error)?;
         }
         trace.set("succeeded", 1.0);
         Ok(())
@@ -879,6 +985,111 @@ mod tests {
     }
 
     #[test]
+    fn completed_offscreen_target_supports_on_demand_copy_output() {
+        let viewport = crate::engine::Viewport {
+            width: 2,
+            height: crate::chrome::HEIGHT as u32 + 1,
+            scale: 1.0,
+        };
+        let toolbar_pixels = viewport.toolbar_pixels() as usize * viewport.width as usize;
+        let mut pixels = vec![0xff30_2010; viewport.width as usize * viewport.height as usize];
+        pixels[toolbar_pixels..].fill(0xff60_5040);
+        let target = DisplayTarget::Offscreen {
+            pixels: pixels.clone(),
+        };
+
+        let toolbar = target
+            .copy_output_rgba(viewport, crate::engine::CopyOutputTarget::Toolbar)
+            .unwrap();
+        let page = target
+            .copy_output_rgba(viewport, crate::engine::CopyOutputTarget::Page)
+            .unwrap();
+        let root = target
+            .copy_output_rgba(viewport, crate::engine::CopyOutputTarget::Root)
+            .unwrap();
+
+        assert_eq!(
+            (toolbar.width, toolbar.height),
+            (2, viewport.toolbar_pixels())
+        );
+        assert_eq!((page.width, page.height), (2, 1));
+        assert_eq!((root.width, root.height), (2, viewport.height));
+        assert!(toolbar
+            .pixels
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0x30, 0x20, 0x10, 255]));
+        assert!(page
+            .pixels
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0x60, 0x50, 0x40, 255]));
+        assert_eq!(
+            root.pixels,
+            toolbar
+                .pixels
+                .iter()
+                .chain(&page.pixels)
+                .copied()
+                .collect::<Vec<_>>()
+        );
+
+        // A toolbar request does not inspect or convert the page rows.
+        let toolbar_only = DisplayTarget::Offscreen {
+            pixels: pixels[..toolbar_pixels].to_vec(),
+        };
+        assert!(toolbar_only
+            .copy_output_rgba(viewport, crate::engine::CopyOutputTarget::Toolbar)
+            .is_ok());
+        assert!(toolbar_only
+            .copy_output_rgba(viewport, crate::engine::CopyOutputTarget::Page)
+            .is_err());
+    }
+
+    #[test]
+    fn readback_swizzle_matches_scalar_bytes_for_contiguous_and_padded_rows() {
+        let viewport = crate::engine::Viewport {
+            width: 17,
+            height: crate::chrome::HEIGHT as u32 + 3,
+            scale: 1.0,
+        };
+        let toolbar_height = viewport.toolbar_pixels();
+        for row_stride in [viewport.width as usize, viewport.width as usize + 3] {
+            let pixels = (0..row_stride * viewport.height as usize)
+                .map(|index| {
+                    let red = (index as u32 * 17) & 255;
+                    let green = (index as u32 * 29) & 255;
+                    let blue = (index as u32 * 43) & 255;
+                    let alpha = (index as u32 * 61) & 255;
+                    alpha << 24 | red << 16 | green << 8 | blue
+                })
+                .collect::<Vec<_>>();
+            for has_alpha in [true, false] {
+                let frame = readback_pixels(&pixels, row_stride, has_alpha, viewport).unwrap();
+                let scalar_rows = |start_y: u32, height: u32| {
+                    let mut expected = Vec::new();
+                    for y in start_y..start_y + height {
+                        let row_start = y as usize * row_stride;
+                        for pixel in &pixels[row_start..row_start + viewport.width as usize] {
+                            let bytes = pixel.to_ne_bytes();
+                            expected.extend_from_slice(&[
+                                bytes[2],
+                                bytes[1],
+                                bytes[0],
+                                if has_alpha { bytes[3] } else { 255 },
+                            ]);
+                        }
+                    }
+                    expected
+                };
+                assert_eq!(frame.toolbar.pixels(), scalar_rows(0, toolbar_height));
+                assert_eq!(
+                    frame.content.pixels(),
+                    scalar_rows(toolbar_height, viewport.height - toolbar_height)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn offscreen_completion_acknowledges_once_without_window_target() {
         let mut target = DisplayTarget::Offscreen { pixels: Vec::new() };
         assert!(!target.is_window());
@@ -895,6 +1106,14 @@ mod tests {
                 Box::new(move |started, finished| {
                     assert_eq!(started, finished);
                     observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }),
+                Box::new(|feedback| {
+                    assert!(matches!(
+                        feedback,
+                        softbuffer::PresentationFeedback::Unavailable(
+                            softbuffer::PresentationUnavailableReason::OffscreenTarget
+                        )
+                    ));
                 }),
             )
             .unwrap();

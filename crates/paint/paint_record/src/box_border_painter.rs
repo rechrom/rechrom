@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use layoutng_assembly::fragment_tree::GapRuleSide;
 use layoutng_assembly::internal::background_bleed_avoidance::{
     BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
 };
@@ -10,9 +11,11 @@ use layoutng_assembly::internal::layout_input::{
 };
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::PaintCornerRadii;
+use paint_model::cc::paint::path_effect::PathEffect;
+use paint_model::styled_stroke_data::{GeometryInfo, StrokeStyle, StyledStrokeData};
 
 use crate::contoured_border_geometry::{ConicRoundedRectPath, ResolveCornerRadii, RoundedRectPath};
-use crate::geometry_mapper::MapRectToRoot;
+use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::pre_paint_tree_walk::PaintTreeNode;
@@ -23,6 +26,281 @@ pub struct BoxBorderPainter<'n, 'f, 'c, 'o> {
     node: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
     border_rect: PaintRect,
+}
+
+/// Chromium BoxBorderPainter::DrawBoxSide for an already pixel-snapped gap
+/// decoration strip. Gap rules have no adjacent border widths, so the source
+/// recursion reduces to axis-aligned fills and styled center lines.
+// cpp: paint/box_border_painter.cc:570-610,612-843,921-979,2497-2509
+pub(crate) fn DrawBoxSide(
+    node: &PaintTreeNode<'_>,
+    context: &RefCell<PaintContext<'_>>,
+    phase: PaintPhase,
+    rect: PaintRect,
+    side: GapRuleSide,
+    color: Color,
+    style: BorderLineStyle,
+) {
+    if matches!(style, BorderLineStyle::kNone | BorderLineStyle::kHidden) {
+        return;
+    }
+    let edge = match side {
+        GapRuleSide::Top => 0,
+        GapRuleSide::Right => 1,
+        GapRuleSide::Bottom => 2,
+        GapRuleSide::Left => 3,
+    };
+    let horizontal = matches!(side, GapRuleSide::Top | GapRuleSide::Bottom);
+    let thickness = if horizontal { rect.height } else { rect.width };
+    let length = if horizontal { rect.width } else { rect.height };
+    let thickness_px = thickness as i32;
+    if thickness_px <= 0 || length <= 0.0 {
+        return;
+    }
+    let style = if (style == BorderLineStyle::kDouble && thickness_px < 3)
+        || (matches!(style, BorderLineStyle::kRidge | BorderLineStyle::kGroove)
+            && thickness_px <= 1)
+    {
+        BorderLineStyle::kSolid
+    } else {
+        style
+    };
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("box side owner has a fragment");
+    let styled_color = |line_style| {
+        InvertColorIfNeeded(
+            &fragment.paint.style,
+            StyledBorderColor(edge, line_style, color, false),
+            ElementRole::kBackground,
+        )
+    };
+    let append_rect = |draw_rect: PaintRect, draw_color: Color| {
+        context.borrow_mut().Append(
+            DisplayItem {
+                r#type: DisplayItemType::kDrawRect,
+                phase,
+                node_id: fragment.node_id,
+                rect: draw_rect,
+                color: draw_color,
+                line_style: BorderLineStyle::kSolid,
+                ..Default::default()
+            },
+            node,
+        );
+    };
+
+    match style {
+        BorderLineStyle::kDotted | BorderLineStyle::kDashed => {
+            let half = f64::from(thickness_px / 2);
+            let mut p1 = if horizontal {
+                (rect.x, rect.y + half)
+            } else {
+                (rect.x + half, rect.y)
+            };
+            let mut p2 = if horizontal {
+                (rect.x + rect.width, p1.1)
+            } else {
+                (p1.0, rect.y + rect.height)
+            };
+            let stroke_style = if style == BorderLineStyle::kDashed {
+                StrokeStyle::kDashedStroke
+            } else {
+                StrokeStyle::kDottedStroke
+            };
+            let mut styled_stroke = StyledStrokeData::default();
+            styled_stroke.SetThickness(thickness_px as f32);
+            styled_stroke.SetStyle(stroke_style);
+            let stroke_data = styled_stroke.ConvertToStrokeData(&GeometryInfo {
+                path_length: length as i32,
+                dash_thickness: thickness_px,
+                closed_path: false,
+            });
+            let draw_color = styled_color(style);
+
+            if style == BorderLineStyle::kDotted
+                && StyledStrokeData::StrokeIsDashed(thickness_px as f32, stroke_style)
+            {
+                let mod_4 = (length as i32) % 4;
+                let mod_6 = (length as i32) % 6;
+                let mut use_start_dot = false;
+                let mut start_dot_growth = 0;
+                let mut start_line_offset = 0;
+                let mut use_end_dot = false;
+                let mut end_dot_growth = 0;
+                if (thickness_px == 1 && (length as i32) % 2 == 0)
+                    || (thickness_px == 3 && mod_6 == 0)
+                {
+                    use_start_dot = true;
+                    start_dot_growth = 1;
+                    start_line_offset = 1;
+                }
+                if (thickness_px == 2 && (mod_4 == 0 || mod_4 == 1))
+                    || (thickness_px == 3 && (mod_6 == 1 || mod_6 == 2))
+                {
+                    use_start_dot = true;
+                    start_line_offset = -1;
+                }
+                if (thickness_px == 2 && mod_4 == 0) || (thickness_px == 3 && mod_6 == 1) {
+                    use_end_dot = true;
+                }
+                if (thickness_px == 2 && mod_4 == 3)
+                    || (thickness_px == 3 && (mod_6 == 4 || mod_6 == 5))
+                {
+                    use_start_dot = true;
+                    start_line_offset = 1;
+                }
+                if thickness_px == 3 && mod_6 == 5 {
+                    use_end_dot = true;
+                } else if thickness_px == 3 && mod_6 == 0 {
+                    use_end_dot = true;
+                    end_dot_growth = 1;
+                }
+                if use_start_dot {
+                    let dot = if horizontal {
+                        PaintRect {
+                            x: p1.0,
+                            y: p1.1 - half,
+                            width: f64::from(thickness_px + start_dot_growth),
+                            height: f64::from(thickness_px),
+                        }
+                    } else {
+                        PaintRect {
+                            x: p1.0 - half,
+                            y: p1.1,
+                            width: f64::from(thickness_px),
+                            height: f64::from(thickness_px + start_dot_growth),
+                        }
+                    };
+                    append_rect(dot, draw_color);
+                    if horizontal {
+                        p1.0 += f64::from(2 * thickness_px + start_line_offset);
+                    } else {
+                        p1.1 += f64::from(2 * thickness_px + start_line_offset);
+                    }
+                }
+                if use_end_dot {
+                    let dot = if horizontal {
+                        PaintRect {
+                            x: p2.0 - f64::from(thickness_px + end_dot_growth),
+                            y: p2.1 - half,
+                            width: f64::from(thickness_px + end_dot_growth),
+                            height: f64::from(thickness_px),
+                        }
+                    } else {
+                        PaintRect {
+                            x: p2.0 - half,
+                            y: p2.1 - f64::from(thickness_px + end_dot_growth),
+                            width: f64::from(thickness_px),
+                            height: f64::from(thickness_px + end_dot_growth),
+                        }
+                    };
+                    append_rect(dot, draw_color);
+                    if horizontal {
+                        p2.0 -= f64::from(thickness_px + end_dot_growth + 1);
+                    } else {
+                        p2.1 -= f64::from(thickness_px + end_dot_growth + 1);
+                    }
+                }
+            } else if style == BorderLineStyle::kDotted {
+                let endpoint_inset = f64::from(thickness_px) / 2.0;
+                if horizontal {
+                    p1.0 += endpoint_inset;
+                    p2.0 -= endpoint_inset;
+                } else {
+                    p1.1 += endpoint_inset;
+                    p2.1 -= endpoint_inset;
+                }
+            }
+            if thickness_px % 2 != 0 {
+                if horizontal {
+                    p1.1 += 0.5;
+                    p2.1 += 0.5;
+                } else {
+                    p1.0 += 0.5;
+                    p2.0 += 0.5;
+                }
+            }
+            let mut item = DisplayItem {
+                r#type: DisplayItemType::kStrokeLine,
+                phase,
+                node_id: fragment.node_id,
+                rect: PaintRect {
+                    x: p1.0,
+                    y: p1.1,
+                    width: p2.0 - p1.0,
+                    height: p2.1 - p1.1,
+                },
+                color: draw_color,
+                line_style: style,
+                stroke_width: f64::from(thickness_px),
+                antialias: true,
+                ..Default::default()
+            };
+            if let Some(effect) = stroke_data.DashEffect() {
+                let PathEffect::Dash { intervals, phase } = effect.as_ref() else {
+                    unreachable!("StyledStrokeData only resolves dash path effects")
+                };
+                item.dash_intervals = intervals.iter().copied().map(f64::from).collect();
+                item.dash_offset = f64::from(*phase);
+            }
+            item.round_cap = style == BorderLineStyle::kDotted
+                && !StyledStrokeData::StrokeIsDashed(thickness_px as f32, stroke_style);
+            context.borrow_mut().Append(item, node);
+        }
+        BorderLineStyle::kDouble => {
+            let band = f64::from((thickness_px + 1) / 3);
+            let bands = if horizontal {
+                [
+                    PaintRect {
+                        height: band,
+                        ..rect
+                    },
+                    PaintRect {
+                        y: rect.y + rect.height - band,
+                        height: band,
+                        ..rect
+                    },
+                ]
+            } else {
+                [
+                    PaintRect {
+                        width: band,
+                        ..rect
+                    },
+                    PaintRect {
+                        x: rect.x + rect.width - band,
+                        width: band,
+                        ..rect
+                    },
+                ]
+            };
+            let color = styled_color(BorderLineStyle::kSolid);
+            for band in bands {
+                append_rect(band, color);
+            }
+        }
+        BorderLineStyle::kGroove | BorderLineStyle::kRidge => {
+            let (outer, inner) = SplitBorderEdgeRect(rect, edge);
+            let outer_style = if style == BorderLineStyle::kGroove {
+                BorderLineStyle::kInset
+            } else {
+                BorderLineStyle::kOutset
+            };
+            let inner_style = if style == BorderLineStyle::kGroove {
+                BorderLineStyle::kOutset
+            } else {
+                BorderLineStyle::kInset
+            };
+            append_rect(outer, styled_color(outer_style));
+            append_rect(inner, styled_color(inner_style));
+        }
+        BorderLineStyle::kInset | BorderLineStyle::kOutset | BorderLineStyle::kSolid => {
+            append_rect(rect, styled_color(style));
+        }
+        BorderLineStyle::kNone | BorderLineStyle::kHidden => unreachable!(),
+    }
 }
 
 impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
@@ -70,15 +348,28 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
             blue: 0.0,
             alpha: 1.0,
         };
-        let border_color = |edge: usize| {
+        let raw_border_color = |edge: usize| {
             if alpha_mask {
                 opaque_mask_color
             } else {
                 style.style.border_colors()[edge]
             }
         };
+        let auto_dark_color = |color: Color| {
+            if alpha_mask {
+                color
+            } else {
+                InvertColorIfNeeded(&style.style, color, ElementRole::kBorder)
+            }
+        };
+        let border_color = |edge: usize| auto_dark_color(raw_border_color(edge));
         let styled_border_color = |edge: usize, line_style: BorderLineStyle| {
-            StyledBorderColor(edge, line_style, border_color(edge), alpha_mask)
+            auto_dark_color(StyledBorderColor(
+                edge,
+                line_style,
+                raw_border_color(edge),
+                alpha_mask,
+            ))
         };
         let border_has_alpha =
             |edge: usize| alpha_mask || style.style.border_colors()[edge].alpha > 0.0;
@@ -936,8 +1227,8 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
             ];
             const ADJACENT: [[usize; 2]; 4] = [[0, 3], [0, 1], [2, 1], [2, 3]];
             for (corner, corner_rect) in corners.into_iter().enumerate() {
-                let first = border_color(ADJACENT[corner][0]);
-                let second = border_color(ADJACENT[corner][1]);
+                let first = raw_border_color(ADJACENT[corner][0]);
+                let second = raw_border_color(ADJACENT[corner][1]);
                 if first == second {
                     continue;
                 }
@@ -947,7 +1238,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         phase,
                         node_id: fragment.node_id,
                         rect: corner_rect,
-                        color: average(first, second),
+                        color: auto_dark_color(average(first, second)),
                         line_style: BorderLineStyle::kSolid,
                         antialias: false,
                         ..Default::default()
@@ -1107,8 +1398,7 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(self_cull_rect) = node.self_cull_rect else {
         return true;
     };
-    let mapped = MapRectToRoot(*rect, &node.transforms);
-    mapped.is_none_or(|mapped| Intersects(&mapped, &self_cull_rect))
+    Intersects(rect, &self_cull_rect)
 }
 
 // cpp: paint/box_border_painter.cc:990-996

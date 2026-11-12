@@ -34,6 +34,7 @@ impl EnginePaintUpdate for LayoutEngine {
             algorithms: self.algorithms_,
             objects: self.objects_,
             boundary: self.boundary_,
+            shape_coverage: self.shape_coverage_,
         };
         let fragments = assembly.PublishLayoutResult(
             unsafe { &mut *root },
@@ -130,6 +131,7 @@ impl EnginePaintUpdate for LayoutEngine {
             PaintFragmentCursor::FromHandle(fragments),
             &self.pending_paint_ids_,
             &self.pending_inline_ink_ids_,
+            self.constraints_.should_apply_root_background_behavior,
         ) {
             trace.set("rejected", 1.0);
             return false;
@@ -174,6 +176,7 @@ impl EnginePaintUpdate for LayoutEngine {
                 algorithms: self.algorithms_,
                 objects: self.objects_,
                 boundary: self.boundary_,
+                shape_coverage: self.shape_coverage_,
             };
             assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
             let reuse = self

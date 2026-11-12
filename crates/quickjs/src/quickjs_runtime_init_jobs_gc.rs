@@ -18,6 +18,7 @@ unsafe fn JS_EnqueueJob2(
     if e.is_null() {
         return -1;
     }
+    (*e).continuation_data = js_capture_continuation_data(ctx);
     (*e).realm = JS_DupContext(ctx);
     (*e).job_func = job_func;
     (*e).argc = argc;
@@ -57,7 +58,11 @@ pub unsafe fn JS_ExecutePendingJob(rt: *mut JSRuntime, pctx: *mut *mut JSContext
     let mut trace = browser_tracing::span("javascript", "PendingJob");
     trace.set("argc", (*e).argc as f64);
     let stack_profile = js_job_stack_profile_begin(rt, (*e).job_func.unwrap() as usize);
+    let continuation_scope =
+        JSContinuationScope::Enter(ctx, js_continuation_value((*e).continuation_data));
     let res = (*e).job_func.unwrap()(ctx, (*e).argc, argv);
+    drop(continuation_scope);
+    js_free_continuation_data((*e).continuation_data);
     drop(stack_profile);
     for i in 0..(*e).argc {
         JS_FreeValue(ctx, *argv.add(i as usize));
@@ -125,7 +130,10 @@ unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
     let mut trace = browser_tracing::span("gc", "QuickJSGC");
     trace.set("remove_weak_objects", remove_weak_objects as f64);
     let count = browser_tracing::enabled();
-    trace.set("malloc_bytes_before", (*rt).malloc_ctx.malloc_state.malloc_size as f64);
+    trace.set(
+        "malloc_bytes_before",
+        (*rt).malloc_ctx.malloc_state.malloc_size as f64,
+    );
     trace.set("gc_threshold", (*rt).malloc_gc_threshold as f64);
     if remove_weak_objects != 0 {
         let _phase = browser_tracing::span("gc", "QuickJSWeakObjects");
@@ -144,13 +152,22 @@ unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
             phase.set("function_slots", counts.function_slots as f64);
             // Each trace event has eight field slots. Keep the type breakdown
             // separate from parent totals and phase work counters.
-            browser_tracing::instant("gc", "QuickJSTopology", &[
-                ("objects", counts.kinds[0] as f64), ("bytecodes", counts.kinds[1] as f64),
-                ("shapes", counts.kinds[2] as f64), ("var_refs", counts.kinds[3] as f64),
-                ("async_functions", counts.kinds[4] as f64), ("contexts", counts.kinds[5] as f64),
-                ("modules", counts.kinds[6] as f64),
-            ]);
-        } else { gc_decref(rt); }
+            browser_tracing::instant(
+                "gc",
+                "QuickJSTopology",
+                &[
+                    ("objects", counts.kinds[0] as f64),
+                    ("bytecodes", counts.kinds[1] as f64),
+                    ("shapes", counts.kinds[2] as f64),
+                    ("var_refs", counts.kinds[3] as f64),
+                    ("async_functions", counts.kinds[4] as f64),
+                    ("contexts", counts.kinds[5] as f64),
+                    ("modules", counts.kinds[6] as f64),
+                ],
+            );
+        } else {
+            gc_decref(rt);
+        }
     }
     {
         let _phase = browser_tracing::span("gc", "QuickJSScan");
@@ -158,13 +175,18 @@ unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
             let counts = gc_scan_counted::<true>(rt);
             trace.set("live_gc_nodes", counts.iter().sum::<usize>() as f64);
             trace.set("live_gc_objects", counts[0] as f64);
-        } else { gc_scan(rt); }
+        } else {
+            gc_scan(rt);
+        }
     }
     {
         let _phase = browser_tracing::span("gc", "QuickJSFreeCycles");
         gc_free_cycles(rt);
     }
-    trace.set("malloc_bytes_after", (*rt).malloc_ctx.malloc_state.malloc_size as f64);
+    trace.set(
+        "malloc_bytes_after",
+        (*rt).malloc_ctx.malloc_state.malloc_size as f64,
+    );
 }
 pub unsafe fn JS_RunGC(rt: *mut JSRuntime) {
     JS_RunGCInternal(rt, 1);

@@ -5,9 +5,10 @@ pub mod css_property_value_set;
 pub use css_inline_style::CSSInlineStyle;
 pub mod css_style_sheet;
 pub mod cssom;
+pub mod editing_style;
 pub use css_style_sheet::{
-    CSSDeclaration, CSSFontFaceRule, CSSKeyframeRule, CSSKeyframesRule, CSSStyleRule,
-    CSSStyleSheet, CSSUserAgentStyleSheetRole,
+    CSSDeclaration, CSSFontFaceDescriptorBacking, CSSFontFaceRule, CSSKeyframeRule,
+    CSSKeyframesRule, CSSStyleRule, CSSStyleSheet, CSSUserAgentStyleSheetRole,
 };
 #[cfg(test)]
 pub use css_style_sheet::{ParseCSS, ParseCSSDeclarationList};

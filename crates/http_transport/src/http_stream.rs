@@ -25,8 +25,18 @@ pub enum HTTPStreamEvent {
         final_url: String,
         content_type: String,
         content_dpr: Option<f64>,
+        content_disposition: String,
+        content_language: String,
+        request_referrer: Option<String>,
         referrer_policy: String,
         content_security_policy: Vec<String>,
+        content_security_policy_report_only: Vec<String>,
+        response_address_space: crate::IPAddressSpace,
+        permissions_policy: String,
+        feature_policy: String,
+        document_policy: String,
+        document_policy_report_only: String,
+        require_document_policy: String,
     },
     Data(Vec<u8>),
     Finished,
@@ -214,7 +224,7 @@ fn decode(
             other => {
                 return Err(io::Error::other(format!(
                     "unsupported HTTP content encoding: {other}"
-                )))
+                )));
             }
         };
         reader = Box::new(LimitedReader {
@@ -257,6 +267,7 @@ fn decode(
 async fn transfer(
     request: &HTTPRequestData,
     scheduler: &Scheduler,
+    slot: &super::http_request::ScheduledSlot,
     tx: &mpsc::Sender<Event>,
     notify: &Wake,
     published: &mut bool,
@@ -264,16 +275,29 @@ async fn transfer(
     attempt: usize,
 ) -> Result<(), TransferError> {
     let ResponseStart {
+        send_start: _,
+        expected_content_length: _,
+        headers: _,
         mut incoming,
         status,
         final_url,
         mime_type,
         content_dpr,
+        content_disposition,
+        content_language,
+        request_referrer,
         referrer_policy,
         content_security_policy,
+        content_security_policy_report_only,
+        response_address_space,
+        permissions_policy,
+        feature_policy,
+        document_policy,
+        document_policy_report_only,
+        require_document_policy,
         encodings,
         head_only,
-    } = fetch_response(request, scheduler, trace, attempt).await?;
+    } = fetch_response(request, scheduler, slot, trace, attempt).await?;
     send(
         tx,
         Ok(HTTPStreamEvent::Response {
@@ -281,8 +305,18 @@ async fn transfer(
             final_url,
             content_type: mime_type,
             content_dpr,
+            content_disposition,
+            content_language,
+            request_referrer,
             referrer_policy,
             content_security_policy,
+            content_security_policy_report_only,
+            response_address_space,
+            permissions_policy,
+            feature_policy,
+            document_policy,
+            document_policy_report_only,
+            require_document_policy,
         }),
         notify,
     )
@@ -403,7 +437,7 @@ impl HTTPRequestTransport {
         let scheduler = self.scheduler.clone();
         let task = executor.spawn(async move {
             let mut trace_guard = trace.guard();
-            let Ok(_slot) = scheduler.acquire_slot(request.priority).await else {
+            let Ok(slot) = scheduler.acquire_slot(request.priority).await else {
                 trace.failed(0, &protocol_error("HTTP admission closed"), false);
                 trace_guard.finish();
                 return;
@@ -414,6 +448,7 @@ impl HTTPRequestTransport {
                 let future = transfer(
                     &request,
                     &scheduler,
+                    &slot,
                     &tx,
                     &worker_wake,
                     &mut published,

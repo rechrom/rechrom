@@ -54,6 +54,12 @@ fn boundary(f: &Frame<'_>) -> Option<u64> {
             })
         })
 }
+fn handling_interaction(f: Option<&Frame<'_>>) -> bool {
+    f.and_then(|frame| frame.cycle).is_some_and(|cycle| {
+        number(cycle, "scroll_active") == Some(1.)
+            || number(cycle, "is_handling_interaction") == Some(1.)
+    })
+}
 fn percentiles(mut a: Vec<f64>) -> Value {
     a.retain(|n| n.is_finite());
     a.sort_by(f64::total_cmp);
@@ -86,6 +92,7 @@ pub fn analyze(s: &Snapshot) -> Value {
     let mut wheels: BTreeMap<u64, Vec<&RecordedSpan>> = BTreeMap::new();
     let mut motion: BTreeMap<(u64, u64), Vec<&RecordedSpan>> = BTreeMap::new();
     let mut wheel_ids = BTreeSet::new();
+    let mut offscreen_commits = 0usize;
     for e in &s.instants {
         match e.name.as_str() {
             "VSync" => frames.entry(key(e)).or_default().pulse = Some(e),
@@ -105,6 +112,20 @@ pub fn analyze(s: &Snapshot) -> Value {
                     .or_default()
                     .push(e);
             }
+            "OffscreenFramePublished" => {
+                // Display has finished rendering and installed this exact
+                // prepared candidate in its retained offscreen target. It is
+                // therefore the headless counterpart of PresentReturn for
+                // commit cadence and logical scroll-motion analysis, while
+                // remaining explicitly distinct from native presentation or
+                // physical scanout.
+                frames.entry(key(e)).or_default().commit = Some(e);
+                commits
+                    .entry((e.context.target_id, e.context.source_id))
+                    .or_default()
+                    .push(e);
+                offscreen_commits += 1;
+            }
             _ => {}
         }
     }
@@ -112,6 +133,7 @@ pub fn analyze(s: &Snapshot) -> Value {
     let mut latencies = Vec::new();
     let mut owner_wait = Vec::new();
     let mut input_wait = Vec::new();
+    let mut nonblocking_dom_input_wait = Vec::new();
     let mut present_wait = Vec::new();
     let mut failures = 0;
     let mut failure_keys = BTreeSet::new();
@@ -164,6 +186,10 @@ pub fn analyze(s: &Snapshot) -> Value {
             }
             "InputToPresentReturn" => latencies.push(milliseconds(e.duration_ns)),
             "InputOwnerQueue" => owner_wait.push(milliseconds(e.duration_ns)),
+            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) =>
+            {
+                nonblocking_dom_input_wait.push(milliseconds(e.duration_ns))
+            }
             "InputQueue" => input_wait.push(milliseconds(e.duration_ns)),
             "PresentQueue" => present_wait.push(milliseconds(e.duration_ns)),
             "InputNoFrame" => {
@@ -259,8 +285,9 @@ pub fn analyze(s: &Snapshot) -> Value {
                     // Diagnose phase crossings even when submission cadence
                     // is healthy; gesture pauses are handled separately.
                     if commit_gap <= p + p / 2
-                        && old_frame.is_some_and(|f| f.scroll)
-                        && frame.is_some_and(|f| f.scroll)
+                        && (old_frame.is_some_and(|f| f.scroll)
+                            || handling_interaction(old_frame))
+                        && (frame.is_some_and(|f| f.scroll) || handling_interaction(frame))
                     {
                         let display_gap = target.saturating_sub(old_target);
                         let anomaly = if display_gap > p + p / 2 {
@@ -411,6 +438,7 @@ pub fn analyze(s: &Snapshot) -> Value {
             "wait_ms":f.cycle.and_then(|e|number(e,"late_scroll_wait_ms")),"deadline_missed":missed,
             "input_count":f.input_count,"cancelled_wheel":f.cancelled_wheel,"raster_tasks":f.raster_tasks,"reused_tiles":f.reused_tiles,"related_event_ids":f.stages,
             "scroll_active":f.cycle.and_then(|e|number(e,"scroll_active")),"scroll_changed":f.scroll,
+            "is_handling_interaction":f.cycle.and_then(|e|number(e,"is_handling_interaction")),
             "wheel_dispatch_count":f.wheel_input_count,"no_submit_reason":no_submit_reason,
             "next_wheel_event_id":next_wheel.map(|e|e.id),
             "next_wheel_after_close_ms":next_wheel.zip(cycle_end).map(|(e,t)|milliseconds(e.start_ns.saturating_sub(t))),
@@ -470,12 +498,16 @@ pub fn analyze(s: &Snapshot) -> Value {
             // to nearby scroll commits or explicitly active gestures.
             let nearby_scroll = gap <= p.saturating_mul(4)
                 && (af.is_some_and(|f| f.scroll) || bf.is_some_and(|f| f.scroll));
-            let active = af
-                .and_then(|f| f.cycle)
-                .is_some_and(|e| number(e, "scroll_active") == Some(1.))
-                && bf
-                    .and_then(|f| f.cycle)
-                    .is_some_and(|e| number(e, "scroll_active") == Some(1.));
+            // CompositorFrameMetadata can retain is_handling_interaction over
+            // a momentum-tail pause.  That state keeps latency attribution
+            // attached to the gesture, but it does not mean the page owed a
+            // frame while no scroll update arrived.  Keep the frame-less
+            // ScrollApplied fallback local to nearby commits, just like the
+            // explicit scroll marker above, so pauses are not reported as
+            // dropped frames.
+            let active = gap <= p.saturating_mul(4)
+                && handling_interaction(af)
+                && handling_interaction(bf);
             if !nearby_scroll && !active {
                 continue;
             }
@@ -562,7 +594,11 @@ pub fn analyze(s: &Snapshot) -> Value {
                 ("input_latency", "Input to commit > one interval")
             }
             "InputOwnerQueue" => ("input_owner_wait", "Native input owner wait"),
-            "InputQueue" => ("input_frame_wait", "Frame-aligned input wait"),
+            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) =>
+            {
+                continue
+            }
+            "InputQueue" => ("input_frame_wait", "Blocking frame-aligned input wait"),
             "PresentQueue" => ("present_wait", "Window-thread presentation wait"),
             "ForegroundTasks" | "BackgroundTasks" => {
                 ("long_task", "Main-thread task > one interval")
@@ -658,15 +694,15 @@ pub fn analyze(s: &Snapshot) -> Value {
         "vsync":if s.instants.iter().any(|e|e.name=="VSync") {"source pulses"} else {"handled boundaries only"},
         "wheel_samples":if wheel_ids.is_empty() {"unavailable"} else {"native UI enqueue"},
         "scroll_motion":if series.is_empty() {"unavailable"} else {"logical CSS offsets at commit"},
-        "to_ui_latency":"unavailable","presentation":if present_wait.is_empty() {"commit API return only; window-thread receipt unobserved"} else {"window-thread receipt and transaction return; not scanout"},
-        "physical_display":"unavailable","displayed_scroll_motion":"unavailable",
+        "to_ui_latency":"unavailable","presentation":if offscreen_commits > 0 {"offscreen display target publication; not native presentation or scanout"} else if present_wait.is_empty() {"commit API return only; window-thread receipt unobserved"} else {"window-thread receipt and transaction return; not scanout"},
+        "physical_display":"unavailable","displayed_scroll_motion":if offscreen_commits > 0 && !series.is_empty() {"offscreen display target publication; not physical display"} else {"unavailable"},
         "display_opportunities":if display_targets.is_empty() {"unavailable"} else {"native estimated targets; not physical presentation feedback"},
         "js":"instrumented callbacks and tasks; no sampled JS stack"},
         "metrics":{"vsync_pulses":s.instants.iter().filter(|e|e.name=="VSync").count(),"handled_cycles":ledger.iter().filter(|e|e["work_ns"].is_number()).count(),
         "commits":commits.values().map(Vec::len).sum::<usize>(),"no_submit_cycles":no_submit,"idle_pulses":idle,"unobserved_pulses":unobserved,
         "deadline_misses":deadline_misses,"scroll_commit_gaps":gap_count,"presentation_failures":failures,"wheel_no_frame_outcomes":no_frame_inputs,"cancelled_wheel_updates":frames.values().map(|f|f.cancelled_wheel).sum::<usize>(),
         "estimated_display_gaps":display_phase_gaps,"estimated_display_collisions":display_phase_collisions,
-        "scroll_commit_interval":percentiles(gaps),"input_to_commit":percentiles(latencies),"input_owner_wait":percentiles(owner_wait),"input_frame_wait":percentiles(input_wait),"present_wait":percentiles(present_wait)},
+        "scroll_commit_interval":percentiles(gaps),"input_to_commit":percentiles(latencies),"input_owner_wait":percentiles(owner_wait),"input_frame_wait":percentiles(input_wait),"nonblocking_dom_input_frame_wait":percentiles(nonblocking_dom_input_wait),"present_wait":percentiles(present_wait)},
         "frames":ledger,"issues":issues,"scroll_series":series,"commit_intervals":intervals})
 }
 
@@ -839,6 +875,157 @@ mod tests {
         assert_eq!(r["metrics"]["scroll_commit_gaps"], 0);
         assert_eq!(r["issues"].as_array().unwrap().len(), 0);
         assert_eq!(r["coverage"]["physical_display"], "unavailable");
+    }
+    #[test]
+    fn nonblocking_dom_wait_is_not_visual_input_wait() {
+        let instants = vec![event(
+            10,
+            "VSync",
+            0,
+            0,
+            1,
+            &[("interval_ms", 10.), ("requested", 1.)],
+        )];
+        let spans = vec![
+            event(
+                1,
+                "InputQueue",
+                0,
+                25_000_000,
+                1,
+                &[
+                    ("frame_aligned", 1.),
+                    ("kind", 1.),
+                    ("compositor_nonblocking", 1.),
+                ],
+            ),
+            event(
+                2,
+                "InputQueue",
+                0,
+                25_000_000,
+                1,
+                &[("frame_aligned", 1.), ("kind", 1.)],
+            ),
+        ];
+        let r = analyze(&snapshot(spans, instants));
+        assert_eq!(r["metrics"]["input_frame_wait"]["count"], 1);
+        assert_eq!(
+            r["metrics"]["nonblocking_dom_input_frame_wait"]["count"],
+            1
+        );
+        assert_eq!(
+            r["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|issue| issue["kind"] == "input_frame_wait")
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn offscreen_publication_is_a_commit_without_claiming_native_presentation() {
+        let mut instants = Vec::new();
+        let mut spans = Vec::new();
+        for i in 0..3 {
+            let sequence = i + 1;
+            let start = i * 10_000_000;
+            instants.push(event(
+                10 + i,
+                "VSync",
+                start,
+                0,
+                sequence,
+                &[("interval_ms", 10.), ("requested", 1.)],
+            ));
+            instants.push(event(
+                20 + i,
+                "ScrollApplied",
+                start + 1_000_000,
+                0,
+                0,
+                &[("scroll_node", 9.), ("offset_y", i as f64 * 10.)],
+            ));
+            instants.push(event(
+                30 + i,
+                "OffscreenFramePublished",
+                start + 5_000_000,
+                0,
+                sequence,
+                &[],
+            ));
+            spans.push(event(
+                40 + i,
+                "FrameCycle",
+                start,
+                3_000_000,
+                sequence,
+                &[
+                    ("interval_ms", 10.),
+                    ("submitted", 1.),
+                    ("is_handling_interaction", 1.),
+                ],
+            ));
+        }
+        let r = analyze(&snapshot(spans, instants));
+        assert_eq!(r["metrics"]["commits"], 3);
+        assert_eq!(r["commit_intervals"].as_array().unwrap().len(), 2);
+        assert!(r["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|frame| frame["status"] == "committed"));
+        assert_eq!(
+            r["coverage"]["presentation"],
+            "offscreen display target publication; not native presentation or scanout"
+        );
+        assert_eq!(
+            r["coverage"]["displayed_scroll_motion"],
+            "offscreen display target publication; not physical display"
+        );
+        assert_eq!(r["coverage"]["physical_display"], "unavailable");
+    }
+    #[test]
+    fn retained_interaction_state_does_not_turn_a_gesture_pause_into_a_gap() {
+        let mut instants = Vec::new();
+        let mut spans = Vec::new();
+        for (i, start) in [0, 10_000_000, 500_000_000].into_iter().enumerate() {
+            let sequence = i as u64 + 1;
+            instants.push(event(
+                10 + sequence,
+                "VSync",
+                start,
+                0,
+                sequence,
+                &[("interval_ms", 10.), ("requested", 1.)],
+            ));
+            instants.push(event(
+                20 + sequence,
+                "OffscreenFramePublished",
+                start + 5_000_000,
+                0,
+                sequence,
+                &[],
+            ));
+            spans.push(event(
+                30 + sequence,
+                "FrameCycle",
+                start,
+                3_000_000,
+                sequence,
+                &[
+                    ("interval_ms", 10.),
+                    ("submitted", 1.),
+                    ("is_handling_interaction", 1.),
+                ],
+            ));
+        }
+        let r = analyze(&snapshot(spans, instants));
+        assert_eq!(r["metrics"]["commits"], 3);
+        assert_eq!(r["metrics"]["scroll_commit_interval"]["count"], 1);
+        assert_eq!(r["commit_intervals"].as_array().unwrap().len(), 1);
+        assert!(r["issues"].as_array().unwrap().is_empty());
     }
     #[test]
     fn fast_work_can_have_a_commit_gap_and_late_input_at_non_60hz() {

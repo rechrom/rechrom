@@ -13,7 +13,7 @@ pub(super) fn Number(value: LayoutUnit) -> f64 {
 
 #[inline(never)]
 pub(super) fn ExportAppliedTextDecorations(style: &StyleComputedStyle) -> Vec<TextDecorationPaint> {
-    let skip_ink = style.TextDecorationSkipInk() != ETextDecorationSkipInk::kNone;
+    let skip_ink = style.TextDecorationSkipInk();
     let decorations = style.AppliedTextDecorationData();
     if decorations.is_null() {
         return Vec::new();
@@ -26,7 +26,7 @@ pub(super) fn ExportAppliedTextDecorations(style: &StyleComputedStyle) -> Vec<Te
 
 pub(crate) fn ExportAppliedTextDecoration(
     applied: &AppliedTextDecoration,
-    skip_ink: bool,
+    skip_ink: ETextDecorationSkipInk,
 ) -> TextDecorationPaint {
     let lines = applied.Lines();
     let color = applied.GetColor();
@@ -37,6 +37,8 @@ pub(crate) fn ExportAppliedTextDecoration(
         underline: (lines & TextDecorationLine::kUnderline) != TextDecorationLine::kNone,
         overline: (lines & TextDecorationLine::kOverline) != TextDecorationLine::kNone,
         line_through: (lines & TextDecorationLine::kLineThrough) != TextDecorationLine::kNone,
+        spelling_error: (lines & TextDecorationLine::kSpellingError) != TextDecorationLine::kNone,
+        grammar_error: (lines & TextDecorationLine::kGrammarError) != TextDecorationLine::kNone,
         color: Some(crate::internal::layout_input_types::Color {
             red,
             green,
@@ -62,7 +64,11 @@ pub(crate) fn ExportAppliedTextDecoration(
 }
 
 fn SameDecorationLines(a: &TextDecorationPaint, b: &TextDecorationPaint) -> bool {
-    a.underline == b.underline && a.overline == b.overline && a.line_through == b.line_through
+    a.underline == b.underline
+        && a.overline == b.overline
+        && a.line_through == b.line_through
+        && a.spelling_error == b.spelling_error
+        && a.grammar_error == b.grammar_error
 }
 
 // Source: core/highlight/highlight_style_utils.cc:38-43,126-167,169-187,
@@ -155,4 +161,12 @@ pub(super) type SourceMap = LayoutBoundaryHashMap<*const LayoutObject, SourceEnt
 pub(super) type StyleSourceEntry = LayoutBoundaryStyleSourceEntry;
 pub(super) type StyleSourceMap = LayoutBoundaryHashMap<*const StyleComputedStyle, StyleSourceEntry>;
 pub(super) type ExportedStyleCache = LayoutBoundaryHashMap<(usize, usize), PaintStyle>;
+pub(super) type ExportedSelectionStyleCache = LayoutBoundaryHashMap<
+    usize,
+    (
+        PaintStyle,
+        Option<TextDecorationPaint>,
+        crate::style_projection::FragmentStyleFacts,
+    ),
+>;
 pub(super) type DebugNameCache = LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>;

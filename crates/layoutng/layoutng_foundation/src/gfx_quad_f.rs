@@ -15,6 +15,25 @@ pub struct QuadF {
 }
 
 impl QuadF {
+    // Source: ui/gfx/geometry/quad_f.cc:86-96.
+    pub fn IsRectilinear(&self) -> bool {
+        let close = |a: f32, b: f32| (a - b).abs() < f32::EPSILON;
+        (close(self.p1_.x(), self.p2_.x())
+            && close(self.p2_.y(), self.p3_.y())
+            && close(self.p3_.x(), self.p4_.x())
+            && close(self.p4_.y(), self.p1_.y()))
+            || (close(self.p1_.y(), self.p2_.y())
+                && close(self.p2_.x(), self.p3_.x())
+                && close(self.p3_.y(), self.p4_.y())
+                && close(self.p4_.x(), self.p1_.x()))
+    }
+    // Source: ui/gfx/geometry/quad_f.h:133-136.
+    pub fn CenterPoint(&self) -> PointF {
+        PointF::new(
+            (self.p1_.x() + self.p2_.x() + self.p3_.x() + self.p4_.x()) / 4.0,
+            (self.p1_.y() + self.p2_.y() + self.p3_.y() + self.p4_.y()) / 4.0,
+        )
+    }
     // cpp: foundation/gfx_geometry/quad_f.h:29-33
     pub fn new(p1: PointF, p2: PointF, p3: PointF, p4: PointF) -> Self {
         Self {

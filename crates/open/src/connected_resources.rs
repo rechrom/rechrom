@@ -41,6 +41,12 @@ impl ConnectedResourceDiscovery {
         *self.prepare_script.borrow_mut() = prepare;
     }
 
+    pub fn ProcessRenderBlockingMutations(&self) {
+        if let Some(resources) = self.resources.borrow().as_ref() {
+            let owner = self.document.borrow();
+            resources.ProcessRenderBlockingDocumentMutations(owner.GetDocument());
+        }
+    }
     pub fn PrepareNode(
         &self,
         node: usize,
@@ -48,6 +54,7 @@ impl ConnectedResourceDiscovery {
         image_request: bool,
         dispatch_image: &mut dyn FnMut(u64, bool),
     ) -> io::Result<ConnectedResourceEffects> {
+        self.ProcessRenderBlockingMutations();
         {
             let owner = self.document.borrow();
             let tree = owner.GetDocument();
@@ -96,12 +103,12 @@ impl ConnectedResourceDiscovery {
             let style = {
                 let owner = self.document.borrow();
                 let tree = owner.GetDocument();
-                let style = if tree.Node(node).IsHTMLElement("style") {
+                let style = if tree.Node(node).IsStyleElement() {
                     Some(node)
                 } else {
                     tree.Node(node)
                         .Parent()
-                        .filter(|&parent| tree.Node(parent).IsHTMLElement("style"))
+                        .filter(|&parent| tree.Node(parent).IsStyleElement())
                 };
                 style
                     .filter(|&index| owner.NeedsStyleSheetParsing(tree.Node(index).Id()))

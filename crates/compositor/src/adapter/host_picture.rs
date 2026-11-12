@@ -53,7 +53,32 @@ pub struct HostPictureFields<'a, B: HostImplTypes> {
     /// input-triggered draw always supplies Some(actual borrowed View).
     pub input_view: Option<InputHandlerView<'a>>,
     pub services: &'a mut dyn HostImplServices<B>,
+    pub ui_resources: &'a dyn HostUIResourceRead,
 }
+
+pub trait HostUIResourceRead {
+    fn ResourceIdForUIResource(
+        &self,
+        id: super::layer_tree_impl::UIResourceId,
+    ) -> super::layer_tree_impl::ResourceId;
+    fn GetUIResourceSize(&self, id: super::layer_tree_impl::UIResourceId) -> super::geometry::Size;
+}
+pub struct EmptyHostUIResourceRead;
+impl HostUIResourceRead for EmptyHostUIResourceRead {
+    fn ResourceIdForUIResource(
+        &self,
+        _id: super::layer_tree_impl::UIResourceId,
+    ) -> super::layer_tree_impl::ResourceId {
+        super::layer_tree_impl::ResourceId::default()
+    }
+    fn GetUIResourceSize(
+        &self,
+        _id: super::layer_tree_impl::UIResourceId,
+    ) -> super::geometry::Size {
+        super::geometry::Size::default()
+    }
+}
+pub static EMPTY_HOST_UI_RESOURCES: EmptyHostUIResourceRead = EmptyHostUIResourceRead;
 
 /// Independent immutable platform/feature capability. It contains no cc owner,
 /// tree, layer or manager; all decisions remain in the source host helpers.

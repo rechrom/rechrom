@@ -1,11 +1,13 @@
 #![allow(non_snake_case)]
 
+use std::sync::Arc;
+
 use layoutng_assembly::fragment_tree::PaintResources;
 use layoutng_assembly::internal::layout_input::{Offset, PaintPathVerb, Size, TransformMatrix};
 use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{
     PaintColorInterpolationSpace, PaintColorStop, PaintHueInterpolationMethod, PaintRadialExtent,
-    PaintRadialShape, PaintShader, PaintShaderKind,
+    PaintRadialShape, PaintShader, PaintShaderKind, SvgMarkerPrimitive, SvgPatternCommand,
 };
 
 use paint_model::geometry_mapper::{InvertTransform, MultiplyTransforms, TranslationTransform};
@@ -1039,6 +1041,58 @@ pub fn ResolvePaintShaderForBounds(
         object_origin,
         unit_box,
     )
+}
+
+/// SVGObjectPainter rejects paint-server resource elements outside the canvas
+/// subtree during a privacy-preserving paint. Apply the same rule recursively
+/// to immutable pattern and mask subgraphs before they reach Raster.
+pub fn PrivacyPreservingPaintServer(
+    input: &PaintShader,
+    privacy_preserving: bool,
+) -> Option<PaintShader> {
+    if privacy_preserving && !input.is_in_canvas_subtree {
+        return None;
+    }
+    let mut output = input.clone();
+    if privacy_preserving {
+        SanitizePrivacyPreservingPattern(&mut output);
+    }
+    Some(output)
+}
+
+fn SanitizePrivacyPreservingPattern(server: &mut PaintShader) {
+    let Some(pattern) = server.pattern.as_mut() else {
+        return;
+    };
+    SanitizePrivacyPreservingCommands(&mut Arc::make_mut(pattern).commands);
+}
+
+fn SanitizePrivacyPreservingPrimitive(primitive: &mut SvgMarkerPrimitive) {
+    primitive.fill_server = primitive
+        .fill_server
+        .as_ref()
+        .and_then(|server| PrivacyPreservingPaintServer(server, true));
+    primitive.stroke_server = primitive
+        .stroke_server
+        .as_ref()
+        .and_then(|server| PrivacyPreservingPaintServer(server, true));
+}
+
+fn SanitizePrivacyPreservingCommands(commands: &mut [SvgPatternCommand]) {
+    for command in commands {
+        match command {
+            SvgPatternCommand::DrawShape(primitive) | SvgPatternCommand::DrawGlyph(primitive) => {
+                SanitizePrivacyPreservingPrimitive(primitive)
+            }
+            SvgPatternCommand::DrawText(text) => {
+                SanitizePrivacyPreservingPrimitive(&mut text.paint)
+            }
+            SvgPatternCommand::SaveLayerMask(mask) => {
+                SanitizePrivacyPreservingCommands(&mut Arc::make_mut(mask).commands)
+            }
+            _ => {}
+        }
+    }
 }
 
 fn ResolvePaintShaderInner(

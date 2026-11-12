@@ -2,8 +2,13 @@ use browser::page::{Page, PageClient};
 use layoutng_assembly::internal::layout_input::Offset;
 use std::{cell::RefCell, rc::Rc};
 
-struct Client;
-impl PageClient for Client {}
+#[derive(Default)]
+struct Client(browser::page::PageChromeState);
+impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        self.0.Apply(effect);
+    }
+}
 
 fn open() -> Page {
     let loader = Rc::new(RefCell::new(
@@ -20,7 +25,7 @@ fn open() -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         None,
-        Some(Rc::new(RefCell::new(Client))),
+        Some(Rc::new(RefCell::new(Client::default()))),
     );
     page.Open("http://127.0.0.1:9555/text-fixed-oracle.html", 16384, 4096)
         .unwrap();

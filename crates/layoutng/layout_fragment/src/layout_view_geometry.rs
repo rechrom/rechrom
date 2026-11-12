@@ -227,9 +227,14 @@ impl LayoutView {
             .ShouldPlaceBlockDirectionScrollbarOnLogicalLeft()
     }
 
+    // Source core/layout/layout_view.cc:534-537.
     pub fn OffsetForFixedPosition(&self) -> PhysicalOffset {
         self.CheckIsNotDestroyed();
-        PhysicalOffset::default()
+        if self.IsScrollContainer() {
+            self.ScrolledContentOffset()
+        } else {
+            PhysicalOffset::default()
+        }
     }
 
     pub fn SmallViewportSizeForViewportUnits(&self) -> gfx::SizeF {

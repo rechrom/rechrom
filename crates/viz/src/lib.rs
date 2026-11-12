@@ -7,5 +7,5 @@ pub mod common;
 pub mod service;
 
 pub use service::display::display_scheduler::{
-    DisplayScheduler, FrameDeadlines, FrameTiming, ScheduledFrame,
+    BeginFrameId, DisplayScheduler, FrameDeadlines, FrameTiming, PendingSwapParams, ScheduledFrame,
 };

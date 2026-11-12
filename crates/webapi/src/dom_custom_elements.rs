@@ -4,7 +4,7 @@
 use super::*;
 use dom::custom_elements::{
     CustomElementCallbacks, CustomElementDefinitionId, CustomElementDescriptor,
-    CustomElementReaction, IsValidCustomElementName,
+    CustomElementOptions, CustomElementReaction, IsValidCustomElementName,
 };
 
 impl DOMJavaScriptBindings {
@@ -25,6 +25,47 @@ impl DOMJavaScriptBindings {
             .clone();
         self.custom_element_backup_queued = true;
         Some(callback)
+    }
+
+    /// Enqueue the original Document's backup element queue on its same Agent.
+    /// The installed helper receives that Document explicitly after Window reuse.
+    pub fn ScheduleCustomElementBackupReactions(
+        &mut self,
+    ) -> Result<(), javascript::javascript_runtime::NativeMicrotaskEnqueueError> {
+        let Some(callback) = self.TakeCustomElementBackupCallback() else {
+            return Ok(());
+        };
+        let namespace = self
+            .HostObjectNamespace()
+            .expect("scripted Document namespace")
+            .Downgrade();
+        let callback = callback.Downgrade();
+        let document = {
+            let owner = self.document.borrow();
+            owner.GetDocument().Node(owner.GetDocument().Root()).Id()
+        };
+        self.runtime_realm
+            .Upgrade()
+            .and_then(|realm| realm.NativeMicrotasks())
+            .ok_or(javascript::javascript_runtime::NativeMicrotaskEnqueueError::RealmDestroyed)?
+            .Enqueue(Box::new(move |runtime| {
+                let Some(namespace) = namespace.Upgrade() else {
+                    return;
+                };
+                let Some(callback) = callback.Upgrade() else {
+                    return;
+                };
+                let runtime = runtime.expect("scripted Agent lends its current runtime");
+                let _scope = runtime.EnterHostObjectNamespace(&namespace);
+                let result = runtime.Call(
+                    &callback,
+                    &HostValue::default(),
+                    &[namespace.Wrap(HostValue::Object(HostObjectRef { id: document }))],
+                );
+                if let Some(error) = result.exception {
+                    let _ = runtime.ReportException(&HostValue::String(error.message));
+                }
+            }))
     }
 
     pub(super) fn CustomElementCall(
@@ -88,7 +129,7 @@ impl DOMJavaScriptBindings {
                     return Self::type_error("Observed attributes must be DOMStrings");
                 };
                 let flags = *flags as u32;
-                match document.RegisterCustomElementDefinition(
+                match document.RegisterCustomElementDefinitionWithOptions(
                     CustomElementDescriptor {
                         name: name.clone(),
                         local_name: name.clone(),
@@ -100,6 +141,14 @@ impl DOMJavaScriptBindings {
                         connected_move: flags & 4 != 0,
                         adopted: flags & 8 != 0,
                         attribute_changed: flags & 16 != 0,
+                        form_associated: flags & 32 != 0,
+                        form_disabled: flags & 64 != 0,
+                        form_reset: flags & 128 != 0,
+                        form_state_restore: flags & 1024 != 0,
+                    },
+                    CustomElementOptions {
+                        form_associated: flags & 256 != 0,
+                        disable_internals: flags & 512 != 0,
                     },
                 ) {
                     Ok(id) => Self::value(HostValue::Number(id.0 as f64)),
@@ -139,6 +188,8 @@ impl DOMJavaScriptBindings {
                     id,
                     matches!(arguments.get(1), Some(HostValue::Boolean(true))),
                 );
+                drop(owner);
+                dom::attribute_lifecycle::DrainAttributeLifecycle(&self.document);
                 HostResult::default()
             }
             "__ceNext" => {
@@ -153,6 +204,14 @@ impl DOMJavaScriptBindings {
                     }
                     CustomElementReaction::Connected { id, .. } => ("connectedCallback", *id),
                     CustomElementReaction::Disconnected { id, .. } => ("disconnectedCallback", *id),
+                    CustomElementReaction::FormAssociated { id, .. } => {
+                        ("formAssociatedCallback", *id)
+                    }
+                    CustomElementReaction::FormDisabled { id, .. } => ("formDisabledCallback", *id),
+                    CustomElementReaction::FormReset { id, .. } => ("formResetCallback", *id),
+                    CustomElementReaction::FormStateRestore { id, .. } => {
+                        ("formStateRestoreCallback", *id)
+                    }
                 };
                 let mut fields = vec![
                     ("kind".into(), HostValue::String(kind.into())),
@@ -164,29 +223,54 @@ impl DOMJavaScriptBindings {
                         }),
                     ),
                 ];
-                if let CustomElementReaction::AttributeChanged {
-                    name,
-                    old_value,
-                    new_value,
-                    namespace,
-                    ..
-                } = reaction
-                {
-                    fields.extend([
-                        ("name".into(), HostValue::String(name)),
-                        (
-                            "oldValue".into(),
-                            old_value.map_or(HostValue::Null(JavaScriptNull), HostValue::String),
-                        ),
-                        (
-                            "newValue".into(),
-                            new_value.map_or(HostValue::Null(JavaScriptNull), HostValue::String),
-                        ),
-                        (
-                            "namespace".into(),
-                            namespace.map_or(HostValue::Null(JavaScriptNull), HostValue::String),
-                        ),
-                    ]);
+                match &reaction {
+                    CustomElementReaction::FormAssociated { form, .. } => fields.push((
+                        "form".into(),
+                        form.map_or(HostValue::Null(JavaScriptNull), |form| {
+                            HostValue::Object(HostObjectRef {
+                                id: document.Node(form).Id(),
+                            })
+                        }),
+                    )),
+                    CustomElementReaction::FormDisabled { disabled, .. } => {
+                        fields.push(("disabled".into(), HostValue::Boolean(*disabled)))
+                    }
+                    _ => {}
+                }
+                match reaction {
+                    CustomElementReaction::AttributeChanged {
+                        name,
+                        old_value,
+                        new_value,
+                        namespace,
+                        ..
+                    } => {
+                        fields.extend([
+                            ("name".into(), HostValue::String(name)),
+                            (
+                                "oldValue".into(),
+                                old_value
+                                    .map_or(HostValue::Null(JavaScriptNull), HostValue::String),
+                            ),
+                            (
+                                "newValue".into(),
+                                new_value
+                                    .map_or(HostValue::Null(JavaScriptNull), HostValue::String),
+                            ),
+                            (
+                                "namespace".into(),
+                                namespace
+                                    .map_or(HostValue::Null(JavaScriptNull), HostValue::String),
+                            ),
+                        ]);
+                    }
+                    CustomElementReaction::FormStateRestore { state, .. } => {
+                        fields.push((
+                            "state".into(),
+                            self.native_abort.ElementInternalsStateValue(state),
+                        ));
+                    }
+                    _ => {}
                 }
                 Self::value(HostValue::Record(fields))
             }

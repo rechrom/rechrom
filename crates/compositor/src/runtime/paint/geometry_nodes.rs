@@ -19,11 +19,10 @@ fn rect(value: paint::paint_engine::PaintRect) -> Rect {
 }
 impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
     type Matrix = Transform<R>;
-    type Weak = Weak<paint_property_tree::TransformPaintPropertyNode>;
-    fn Downgrade(&self) -> Self::Weak {
+    fn Downgrade(&self) -> Weak<paint_property_tree::TransformPaintPropertyNode> {
         Arc::downgrade(self.as_arc())
     }
-    fn Upgrade(weak: &Self::Weak) -> Self {
+    fn Upgrade(weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
         Self::from_arc(weak.upgrade().expect("source live cached node"))
     }
     fn CacheSlot(&self) -> &paint::opaque_paint_cache_slot::OpaquePaintCacheSlot {

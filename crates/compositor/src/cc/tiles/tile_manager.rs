@@ -2382,10 +2382,12 @@ impl<B: TileManagerTypes> TileManager<B> {
         }
         let mut resource = InUsePoolResource::<B>::default();
         let mut resource_content_id = 0;
-        let mut invalidated_rect = *context.TileById(tile).invalidated_content_rect();
-        if self.UsePartialRaster(msaa_sample_count, context)
-            && context.TileById(tile).invalidated_id() != 0
-        {
+        let requested_invalidated_rect = *context.TileById(tile).invalidated_content_rect();
+        let mut invalidated_rect = requested_invalidated_rect;
+        let mut unavailable_previous_content = false;
+        let can_partial_raster = self.UsePartialRaster(msaa_sample_count, context)
+            && context.TileById(tile).invalidated_id() != 0;
+        if can_partial_raster {
             let (tile, source, pool) = context.TileRasterSourceAndPool(
                 tile,
                 source_tiling,
@@ -2397,6 +2399,7 @@ impl<B: TileManagerTypes> TileManager<B> {
                 tile.invalidated_content_rect(),
                 tile.invalidated_id(),
                 &mut invalidated_rect,
+                &mut unavailable_previous_content,
                 target_color_params.color_space(),
                 &*debug_name,
             );
@@ -2420,6 +2423,17 @@ impl<B: TileManagerTypes> TileManager<B> {
                 &*debug_name,
             );
             debug_assert!(resource.IsValid());
+            // A busy exported resource cannot be handed back to cc for
+            // in-place partial raster. The host-memory backend can still
+            // preserve Chromium's partial-raster result by copying the
+            // immutable pixels into this fresh allocation. Carry the old
+            // content identity and the original dirty rect to that backend;
+            // if its bounded snapshot is unavailable it safely falls back to
+            // full replay.
+            if can_partial_raster && unavailable_previous_content {
+                resource_content_id = tile.invalidated_id();
+                invalidated_rect = requested_invalidated_rect;
+            }
         }
         let mut playback_settings = RasterPlaybackSettings::default();
         playback_settings.use_lcd_text = context.TileById(tile).can_use_lcd_text();

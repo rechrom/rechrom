@@ -235,6 +235,61 @@ fn Interpolate(value: f64, from_css: bool) -> f64 {
     points[8].1
 }
 
+// third_party/blink/renderer/platform/fonts/mac/font_matcher_mac.mm
+// BetterWeightMatch. CSS Fonts 4 uses a directional search around 400/500,
+// not absolute nearest-weight selection.
+fn BetterWeightMatch(desired: i32, chosen: i32, candidate: i32) -> bool {
+    const LOWER: i32 = 400;
+    const UPPER: i32 = 500;
+    if desired > UPPER {
+        let chosen_above = chosen >= desired;
+        let candidate_above = candidate >= desired;
+        if chosen_above != candidate_above {
+            return candidate_above;
+        }
+    } else if desired < LOWER {
+        let chosen_below = chosen <= desired;
+        let candidate_below = candidate <= desired;
+        if chosen_below != candidate_below {
+            return candidate_below;
+        }
+    } else {
+        let priority = |weight: i32| {
+            if weight >= desired && weight <= UPPER {
+                0
+            } else if weight < desired {
+                1
+            } else {
+                2
+            }
+        };
+        let chosen_priority = priority(chosen);
+        let candidate_priority = priority(candidate);
+        if chosen_priority != candidate_priority {
+            return candidate_priority < chosen_priority;
+        }
+    }
+    (candidate - desired).abs() < (chosen - desired).abs()
+}
+
+fn BetterFamilyChoice(
+    desired_weight: f64,
+    desired_italic: bool,
+    chosen: &HostFace,
+    candidate: &HostFace,
+) -> bool {
+    let chosen_italic_mismatch = chosen.italic != desired_italic;
+    let candidate_italic_mismatch = candidate.italic != desired_italic;
+    if chosen_italic_mismatch != candidate_italic_mismatch {
+        return !candidate_italic_mismatch;
+    }
+    BetterWeightMatch(
+        desired_weight.round() as i32,
+        chosen.weight.round() as i32,
+        candidate.weight.round() as i32,
+    )
+}
+
 unsafe fn Variations(font: Ref) -> Vec<FontVariation> {
     let Some(variation) = Owned::new(CTFontCopyVariation(font)) else {
         return Vec::new();
@@ -320,10 +375,12 @@ unsafe fn Matching(
     italic: bool,
     locale: &str,
 ) -> Vec<HostFace> {
-    let Some(value) = StringRef(value) else {
+    let requested_value = value;
+    let desired_weight = weight;
+    let Some(value) = StringRef(requested_value) else {
         return Vec::new();
     };
-    let Some(weight) = Number(Interpolate(weight, true)) else {
+    let Some(weight) = Number(Interpolate(desired_weight, true)) else {
         return Vec::new();
     };
     let Some(symbolic) = Number(if italic { 1.0 } else { 0.0 }) else {
@@ -363,17 +420,34 @@ unsafe fn Matching(
     )) else {
         return Vec::new();
     };
-    ReadArray(matches.get())
-        .into_iter()
-        .filter_map(|descriptor| {
-            let font = Owned::new(CTFontCreateWithFontDescriptor(
-                descriptor,
-                12.0,
-                ptr::null(),
-            ))?;
-            Face(font.get())
-        })
-        .collect()
+
+    // font_matcher_mac.mm::BestStyleMatchForFamily/BetterChoiceCT: enumerate
+    // only the mandatory family, prefer the requested italic trait, then apply
+    // CSS's directional weight search. Return one selected descriptor so the
+    // retained open stage cannot stop at a previously opened regular face.
+    let mut selected: Option<HostFace> = None;
+    for descriptor in ReadArray(matches.get()) {
+        let Some(font) = Owned::new(CTFontCreateWithFontDescriptor(
+            descriptor,
+            12.0,
+            ptr::null(),
+        )) else {
+            continue;
+        };
+        let Some(candidate) = Face(font.get()) else {
+            continue;
+        };
+        if key == kCTFontFamilyNameAttribute && !SameName(&candidate.family, requested_value) {
+            continue;
+        }
+        if selected
+            .as_ref()
+            .is_none_or(|chosen| BetterFamilyChoice(desired_weight, italic, chosen, &candidate))
+        {
+            selected = Some(candidate);
+        }
+    }
+    selected.into_iter().collect()
 }
 
 unsafe fn FontForFace(face: &HostFace) -> Option<Owned> {
@@ -1128,6 +1202,15 @@ mod tests {
             assert!((Interpolate(native, false) - css).abs() < 0.001);
         }
     }
+    #[test]
+    fn css_weight_matching_is_directional_around_400_and_500() {
+        assert!(BetterWeightMatch(700, 400, 700));
+        assert!(!BetterWeightMatch(700, 700, 400));
+        assert!(BetterWeightMatch(300, 400, 300));
+        assert!(BetterWeightMatch(450, 300, 500));
+        assert!(!BetterWeightMatch(450, 500, 600));
+        assert!(BetterWeightMatch(500, 400, 500));
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn unknown_unique_name_is_not_a_substitute() {
@@ -1136,6 +1219,45 @@ mod tests {
                 name: "__Rechrom_missing_face_5fe8bfe1__".into()
             },
             None
+        )
+        .is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn family_match_selects_one_directional_weight_and_rejects_substitution() {
+        ClearQueryCache();
+        let regular = Query(
+            &SystemFontQuery::MatchFamily {
+                family: "Georgia".into(),
+                weight: 400.0,
+                italic: false,
+                locale: "en".into(),
+            },
+            None,
+        );
+        let bold = Query(
+            &SystemFontQuery::MatchFamily {
+                family: "Georgia".into(),
+                weight: 700.0,
+                italic: false,
+                locale: "en".into(),
+            },
+            None,
+        );
+        assert_eq!(regular.len(), 1);
+        assert_eq!(bold.len(), 1);
+        assert!(regular[0].weight < 600.0, "{:?}", regular[0].weight);
+        assert!(bold[0].weight >= 600.0, "{:?}", bold[0].weight);
+        assert_ne!(regular[0].unique_name, bold[0].unique_name);
+        assert!(Query(
+            &SystemFontQuery::MatchFamily {
+                family: "__Rechrom_missing_family_64f28aa7__".into(),
+                weight: 700.0,
+                italic: false,
+                locale: "en".into(),
+            },
+            None,
         )
         .is_empty());
     }

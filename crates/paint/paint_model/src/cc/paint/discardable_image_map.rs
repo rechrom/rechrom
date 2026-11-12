@@ -35,6 +35,7 @@ pub trait DiscardableImageTypes: Sized {
     type FloatRect: ImageFloatRect<Rect = Self::Rect>;
     type Matrix: ImageMatrix<Self::FloatRect>;
     type FilterQuality: Copy;
+    type DynamicRangeLimit: Copy + Default;
     type DecodingMode: Copy;
     type WorkletInput: Clone;
     type CompletionState: Copy;
@@ -50,6 +51,7 @@ pub trait DiscardableImageTypes: Sized {
         dark: bool,
         source: Self::Rect,
         quality: Self::FilterQuality,
+        dynamic_range_limit: Self::DynamicRangeLimit,
         matrix: Self::Matrix,
     ) -> Self::DrawImage;
     fn ConservativeDecodingMode(a: Self::DecodingMode, b: Self::DecodingMode)
@@ -118,6 +120,7 @@ pub trait DiscardableImageBackend<B: PaintOpBufferView + ?Sized>: DiscardableIma
     fn FlagFilter<'a>(&'a self, flags: Self::Flags<'a>) -> Option<Self::Filter<'a>>;
     fn FlagQuality(&self, flags: Self::Flags<'_>) -> Self::FilterQuality;
     fn FlagUseDarkMode(&self, flags: Self::Flags<'_>) -> bool;
+    fn FlagDynamicRangeLimit(&self, flags: Self::Flags<'_>) -> Self::DynamicRangeLimit;
     fn PreserveDiscardableImageMapQuality(&self) -> bool;
     fn Image<'a>(&'a self, op: B::Op<'a>) -> Self::Image;
     fn ImageQuality(&self, op: B::Op<'_>) -> Self::FilterQuality;
@@ -344,6 +347,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
                         op_rect,
                         ctm,
                         quality,
+                        backend.FlagDynamicRangeLimit(flags),
                     )
                 }
                 PaintOpType::kDrawImageRect => {
@@ -365,6 +369,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
                         op_rect,
                         matrix,
                         quality,
+                        backend.FlagDynamicRangeLimit(flags),
                     )
                 }
                 PaintOpType::kDrawSkottie => {
@@ -376,7 +381,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
                             A::FloatRect::FromRect(dst),
                             true,
                         ));
-                        self.AddImage(image, false, src, dst, matrix, quality)
+                        self.AddImage(image, false, src, dst, matrix, quality, Default::default())
                     }
                 }
                 PaintOpType::kDrawRecord => {
@@ -414,8 +419,13 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
             backend.FlagShader(flags),
             ctm,
             backend.FlagQuality(flags),
+            backend.FlagDynamicRangeLimit(flags),
         );
-        self.AddImageFromFilter(rect, backend.FlagFilter(flags));
+        self.AddImageFromFilter(
+            rect,
+            backend.FlagFilter(flags),
+            backend.FlagDynamicRangeLimit(flags),
+        );
     }
     // Source: cc/paint/discardable_image_map.cc:218-263.
     fn AddImageFromShader<'b>(
@@ -424,6 +434,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
         shader: Option<A::Shader<'b>>,
         ctm: &A::Matrix,
         quality: A::FilterQuality,
+        dynamic_range_limit: A::DynamicRangeLimit,
     ) where
         'a: 'b,
     {
@@ -436,7 +447,15 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
             let image = backend.ShaderImage(shader);
             let matrix = ctm.Multiply(&backend.ShaderLocalMatrix(shader));
             let src = A::FloatRect::MakeWH(image.width(), image.height());
-            self.AddImage(image, false, src, rect, matrix, quality);
+            self.AddImage(
+                image,
+                false,
+                src,
+                rect,
+                matrix,
+                quality,
+                dynamic_range_limit,
+            );
             return;
         }
         if backend.ShaderType(shader) == ShaderType::PaintRecord {
@@ -457,7 +476,12 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
     }
     // Source: cc/paint/discardable_image_map.cc:265-282;
     // cc/paint/discardable_image_map.cc:56-74 (ImageGatheringProvider).
-    fn AddImageFromFilter(&mut self, rect: A::Rect, filter: Option<A::Filter<'_>>) {
+    fn AddImageFromFilter(
+        &mut self,
+        rect: A::Rect,
+        filter: Option<A::Filter<'_>>,
+        dynamic_range_limit: A::DynamicRangeLimit,
+    ) {
         let Some(filter) = filter else { return };
         let backend = self.backend;
         if !backend.FilterHasDiscardableImages(filter) || backend.FilterHasNoAnimatedImages(filter)
@@ -468,7 +492,15 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
         self.only_gather_animated_images_ = true;
         let previous = self.map_.images_.len();
         backend.FilterSnapshotWithImages(filter, &mut |image, source, quality| {
-            self.AddImage(image, false, source, rect, A::Matrix::Identity(), quality)
+            self.AddImage(
+                image,
+                false,
+                source,
+                rect,
+                A::Matrix::Identity(),
+                quality,
+                dynamic_range_limit,
+            )
         });
         debug_assert!(self.map_.images_.len() >= previous);
         backend.FilterSetHasAnimatedImages(filter, self.map_.images_.len() > previous);
@@ -483,6 +515,7 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
         rect: A::Rect,
         matrix: A::Matrix,
         quality: A::FilterQuality,
+        dynamic_range_limit: A::DynamicRangeLimit,
     ) {
         if image.IsTextureBacked() {
             return;
@@ -539,9 +572,10 @@ impl<'a, B: PaintOpBufferView + ?Sized, A: DiscardableImageBackend<B>> Generator
             add_image = image.ShouldAnimate()
         }
         if add_image {
-            self.map_
-                .images_
-                .push((A::NewDrawImage(image, dark, src, quality, matrix), rect));
+            self.map_.images_.push((
+                A::NewDrawImage(image, dark, src, quality, dynamic_range_limit, matrix),
+                rect,
+            ));
         }
     }
 }

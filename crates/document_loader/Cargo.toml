@@ -4,6 +4,11 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+fileapi = { path = "../fileapi" }
+getrandom = "0.4"
+navigation_history = { path = "../navigation_history" }
+fetch_policy = { path = "../fetch_policy" }
+url = "2"
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 url_loader = { path = "../url_loader" }
@@ -16,6 +21,7 @@ image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 page_mutation = { path = "../page_mutation" }
 font_engine = { path = "../font_engine" }
+style_parser = { path = "../style/style_parser" }
 javascript = { path = "../javascript" }
 style = { path = "../style/style" }
 

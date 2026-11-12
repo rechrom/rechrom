@@ -234,6 +234,9 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
             self.document.ImageResourceFailedFor(&source),
             resource.is_some_and(|resource| resource.known_to_be_opaque),
         ));
+        if let Some(content) = self.document.ImageResourceContentFor(&source) {
+            unsafe { &mut *fetched }.SetResourceContent(content);
+        }
         let image = std::ptr::NonNull::new(fetched.cast::<StyleImage>()).unwrap();
         if let Some(id) = std::num::NonZeroU64::new(id) {
             unsafe { production_style_builder::FetchedImageBinding::FromResource(id, image) }
@@ -267,6 +270,8 @@ impl AttributeResolutionState for CascadeAttributeState {
 
 #[derive(Debug)]
 pub enum DocumentStyleError {
+    FontPending,
+    DetachedDocument,
     WrongDocument,
     Selector(PersistentSelectorError),
     Property {
@@ -303,6 +308,7 @@ struct MatchedRule {
 }
 
 struct CollectedRules {
+    serialization_declarations: Vec<crate::serialization_style_query::SerializationDeclaration>,
     rules: Vec<MatchedRule>,
 }
 
@@ -318,7 +324,11 @@ fn ConsumeProductionRuleCollection(
     _tree_scope_root: Option<usize>,
     collection: crate::production_rule_matching::ProductionRuleMatchCollection,
     direct_rules: &mut Vec<MatchedRule>,
+    serialization_declarations: &mut Vec<
+        crate::serialization_style_query::SerializationDeclaration,
+    >,
 ) {
+    serialization_declarations.extend(collection.serialization_declarations);
     let report = collection.report;
     stats.rule_sets_consulted += rule_sets_consulted;
     stats.translated_collector_calls += report.collector_invocations;
@@ -355,6 +365,8 @@ struct ProductionResolverRuleSets {
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     forced_colors_user_agent:
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
+    overscroll_user_agent:
+        Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     marker_user_agent:
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     fullscreen_user_agent:
@@ -362,6 +374,10 @@ struct ProductionResolverRuleSets {
     svg_user_agent:
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     mathml_user_agent:
+        Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
+    media_controls_user_agent:
+        Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
+    forced_media_controls_user_agent:
         Option<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>,
     author: Rc<Vec<crate::resolver::production_style_resolver::ProductionResolverRuleSetInput>>,
 }
@@ -402,8 +418,9 @@ fn UserAgentSheetAppliesToDocument(
         // CSSDefaultStyleSheets::marker_style_sheet_ is selected by pseudo
         // request rather than originating-element namespace. Its selectors
         // restrict the sheet to ::marker (including nested marker forms).
-        Some(CSSUserAgentStyleSheetRole::kMarker) => true,
+        Some(CSSUserAgentStyleSheetRole::kMarker | CSSUserAgentStyleSheetRole::kOverscroll) => true,
         Some(CSSUserAgentStyleSheetRole::kFullscreen) => document.HasFullscreenElements(),
+        Some(CSSUserAgentStyleSheetRole::kMediaControls) => namespace == DOMNamespace::kHTML,
         Some(CSSUserAgentStyleSheetRole::kSVG) => namespace == DOMNamespace::kSVG,
         Some(CSSUserAgentStyleSheetRole::kMathML) => namespace == DOMNamespace::kMathML,
         // Untyped UA input is the HTML default supplied by standalone callers.
@@ -698,6 +715,19 @@ struct ResolverDependencyState {
 }
 
 impl ResolverDependencyState {
+    fn Clear(&mut self) {
+        self.uses_root_relative_units = false;
+        self.uses_glyph_relative_units = false;
+        self.uses_line_height_units = false;
+        self.viewport_unit_flags = 0;
+        self.uses_tree_counting_functions = false;
+        self.forward_positional_parents.clear();
+        self.backward_positional_parents.clear();
+        self.text_link_text_color = None;
+        self.link_color = None;
+        self.visited_link_color = None;
+        self.active_link_color = None;
+    }
     fn Merge(
         &mut self,
         metrics: &crate::resolver::production_style_resolver::ProductionBaseStyleMetrics,
@@ -821,9 +851,14 @@ impl<'a> UserAgentStyleSheetInput<'a> {
 // Unsupported declarations are retained as typed diagnostics and skipped.
 // Structural errors keep all previously rooted document styles.
 pub struct DocumentStyleEngine {
+    detached: bool,
+    detach_scope: Rc<crate::style_detach_scope::StyleDetachState>,
+    pub(crate) cssom_document: Rc<crate::cssom_execution_context::DocumentCSSOMSource>,
     document: DOMOwnerHandle,
+    text_track_owners: HashMap<usize, Rc<dyn crate::vtt_style::TextTrackStyleOwner>>,
     selectors: Rc<RefCell<PersistentSelectorService>>,
     interaction_changed_nodes: HashSet<u64>,
+    interaction_changed_subtrees: HashSet<u64>,
     interaction_changed_pseudos: BTreeSet<PseudoType>,
     interaction_invalidation_roots: std::collections::BTreeMap<PseudoType, HashSet<usize>>,
     diagnostics: Vec<DocumentStyleError>,
@@ -851,9 +886,12 @@ pub struct DocumentStyleEngine {
     typed_sheet_source_parses: usize,
     translated_rule_sets:
         HashMap<(u64, u64), Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>>,
+    translated_forced_media_rule_sets:
+        HashMap<(u64, u64), Rc<crate::rule_set::RuleSet<crate::production_style_sheet::Backend>>>,
     matched_properties_cache:
         crate::resolver::production_style_resolver::ProductionMatchedPropertiesCache,
     declarations: Rc<crate::resolver::production_style_resolver::ProductionDeclarationCache>,
+    vtt_style_sheets: Rc<crate::vtt_style::VTTStyleSheetRules>,
     resolver_dependencies: ResolverDependencyState,
     // Immutable per-family font inputs are derived from this Style-owned
     // document-author registry, never from Layout or a Page-side CSS scan.
@@ -903,12 +941,18 @@ pub struct DocumentStyleEngine {
         >,
     >,
     container_states: HashMap<usize, ContainerState>,
+    snapped_query_dependencies: std::cell::RefCell<HashSet<usize>>,
+    snapped_query_bound_dependencies: HashSet<usize>,
+    snapped_query_snapshots: HashMap<foundation::CompositorElementId, SnappedQueryScrollSnapshot>,
     layout_container_nodes: HashSet<usize>,
     invalidated_container_nodes: HashSet<usize>,
     property_registry: crate::property_registry::PropertyRegistry,
     registered_container_properties: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
     font_metrics: Option<Rc<dyn production_style_builder::FontMetricsResolver>>,
+    menu_list_theme: layoutng_style::style::menu_list_inner_style::MenuListPopupTheme,
+    menu_list_native_theme_metrics:
+        Option<layoutng_style::style::menu_list_inner_style::MenuListNativeThemeMetrics>,
 }
 /// Read-only capacities of the production custom-property owner. Map bucket
 /// figures exclude control bytes/allocator rounding. Token payloads and maps
@@ -977,11 +1021,60 @@ impl DocumentStyleEngine {
         stats
     }
 
+    // StyleEngine.cc:591-597. The client preserves weak membership of the
+    // original TextTrack and borrows its current compiled CSSStyleSheet owners.
+    pub fn AddTextTrackOwner(
+        &mut self,
+        id: usize,
+        owner: Rc<dyn crate::vtt_style::TextTrackStyleOwner>,
+    ) {
+        self.text_track_owners.insert(id, owner);
+    }
+    pub fn RemoveTextTrackOwner(&mut self, id: usize) {
+        self.text_track_owners.remove(&id);
+    }
+    // StyleEngine.cc:607-634. Use the original media owner's subtree style
+    // invalidation, rather than treating VTT rules as document author sheets.
+    fn InvalidateTextTrackMediaQueries(&mut self, document: &Document) -> HashSet<usize> {
+        self.text_track_owners.retain(|_, owner| owner.IsAlive());
+        let mut roots = HashSet::new();
+        for owner in self.text_track_owners.values() {
+            let mut needs_recalc = false;
+            owner.VisitStyleSheets(&mut |sheet| {
+                let parsed = sheet
+                    .ParsedBacking::<crate::production_style_sheet::ProductionStyleSheet>()
+                    .expect("text track retains compiled stylesheet");
+                if parsed.contents.HasMediaQueries() {
+                    needs_recalc = true;
+                    self.vtt_style_sheets.ClearRuleSet(sheet);
+                }
+            });
+            if needs_recalc {
+                if let Some(root) = owner.OwnerNodeId().and_then(|id| document.FindNodeById(id)) {
+                    roots.insert(root);
+                }
+            }
+        }
+        roots
+    }
+
     pub fn new(owner: &DOM) -> Self {
+        let cssom_document =
+            Rc::new(crate::cssom_execution_context::DocumentCSSOMSource::default());
+        let declarations = Rc::new(
+            crate::resolver::production_style_resolver::ProductionDeclarationCache::new(
+                cssom_document.clone(),
+            ),
+        );
         Self {
             document: owner.GetDocument().RootHandle(),
+            detached: false,
+            detach_scope: Default::default(),
+            cssom_document,
+            text_track_owners: HashMap::new(),
             selectors: Default::default(),
             interaction_changed_nodes: HashSet::new(),
+            interaction_changed_subtrees: HashSet::new(),
             interaction_changed_pseudos: BTreeSet::new(),
             interaction_invalidation_roots: std::collections::BTreeMap::new(),
             diagnostics: vec![],
@@ -992,8 +1085,10 @@ impl DocumentStyleEngine {
             shared_rule_sets: HashMap::new(),
             typed_sheet_source_parses: 0,
             translated_rule_sets: HashMap::new(),
+            translated_forced_media_rule_sets: HashMap::new(),
             matched_properties_cache: Default::default(),
-            declarations: Default::default(),
+            declarations,
+            vtt_style_sheets: Default::default(),
             resolver_dependencies: Default::default(),
             font_feature_values: Default::default(),
             translated_rule_set_environment: None,
@@ -1012,12 +1107,100 @@ impl DocumentStyleEngine {
             rule_candidate_index: None,
             media_query_cache: HashMap::new(),
             container_states: HashMap::new(),
+            snapped_query_dependencies: Default::default(),
+            snapped_query_bound_dependencies: Default::default(),
+            snapped_query_snapshots: Default::default(),
             layout_container_nodes: HashSet::new(),
             invalidated_container_nodes: HashSet::new(),
             property_registry: Default::default(),
             registered_container_properties: None,
             color_scheme_settings: Default::default(),
             font_metrics: None,
+            menu_list_theme: Default::default(),
+            menu_list_native_theme_metrics: None,
+        }
+    }
+
+    /// StyleEngine::ClearResolvers/DidDetach, style_engine.cc:1041-1081.
+    /// Release this Document's retained resolver state in place. DOM's CSSOM
+    /// sheets and script property registrations still belong to the detached
+    /// Document; this operation never mutates those original owners.
+    pub fn DidDetach(&mut self) {
+        if self.detached {
+            return;
+        }
+        // ClearResolvers -> StyleResolver::Dispose (style_resolver.cc:651-653).
+        // Detached Documents can remain reachable from their Window/CSSOM.
+        // `clear()` would keep every HashMap bucket and Vec allocation alive
+        // for that retained Document, so replace resolver owners outright.
+        self.matched_properties_cache = Default::default();
+        self.matches = Default::default();
+        self.cascade_values = Default::default();
+        self.custom_properties = Default::default();
+        self.font_feature_values = Default::default();
+        self.active_sheets = Arc::new(Vec::new());
+        self.active_sheet_scopes = Arc::new(Vec::new());
+        self.typed_sheets = Default::default();
+        self.inline_sheet_contents = Default::default();
+        self.translated_rule_sets = Default::default();
+        self.translated_forced_media_rule_sets = Default::default();
+        self.shared_rule_sets = Default::default();
+        self.vtt_style_sheets.Dispose();
+        self.vtt_style_sheets = Default::default();
+        self.text_track_owners = Default::default();
+        // CSSGlobalRuleSet::Dispose and the scoped-resolver feature owners.
+        self.sheet_dependencies = Default::default();
+        self.shared_selector_dependencies = Default::default();
+        self.style_selectors = Default::default();
+        self.rule_candidate_index = None;
+        self.sheet_revision = None;
+        self.selectors = Default::default();
+        // No pending invalidation/recalc/rebuild root survives detach.
+        self.interaction_changed_nodes = Default::default();
+        self.interaction_changed_subtrees = Default::default();
+        self.interaction_changed_pseudos = Default::default();
+        self.interaction_invalidation_roots = Default::default();
+        self.viewport_dependent_elements = Default::default();
+        self.container_dependent_elements = Default::default();
+        self.svg_style_elements = Default::default();
+        self.container_states = Default::default();
+        self.layout_container_nodes = Default::default();
+        self.invalidated_container_nodes = Default::default();
+        *self.snapped_query_dependencies.borrow_mut() = Default::default();
+        self.snapped_query_bound_dependencies = Default::default();
+        self.snapped_query_snapshots = Default::default();
+        self.resolver_dependencies = Default::default();
+        // viewport_resolver_/media_query_evaluator_ and their cached results.
+        self.environment = None;
+        self.translated_rule_set_environment = None;
+        self.media_query_cache = Default::default();
+        self.registered_container_properties = None;
+        // This facade retains the metrics input, not CSSFontSelector's
+        // FontFaceCache or an EnvironmentVariables parent/child owner.
+        self.font_metrics = None;
+        self.cssom_document.DidDetach();
+        self.detach_scope.Clear();
+        self.diagnostics = Default::default();
+        self.detached = true;
+    }
+    pub fn BeginDetachLayoutTreeScope(&self) -> crate::StyleDetachScope {
+        assert!(
+            !self.detached,
+            "active detach scope belongs to attached StyleEngine"
+        );
+        self.detach_scope.Begin()
+    }
+    pub fn DetachedFromParent(&self, parent: foundation::layout_detach::LayoutDetachedParent) {
+        self.detach_scope.DetachedFromParent(parent);
+    }
+    pub fn IsDetached(&self) -> bool {
+        self.detached
+    }
+    pub(crate) fn EnsureAttached(&self) -> Result<(), DocumentStyleError> {
+        if self.detached {
+            Err(DocumentStyleError::DetachedDocument)
+        } else {
+            Ok(())
         }
     }
 
@@ -1027,6 +1210,12 @@ impl DocumentStyleEngine {
     ) {
         self.font_metrics = Some(resolver);
     }
+    pub fn SetMenuListNativeThemeMetrics(
+        &mut self,
+        metrics: layoutng_style::style::menu_list_inner_style::MenuListNativeThemeMetrics,
+    ) {
+        self.menu_list_native_theme_metrics = Some(metrics);
+    }
     /// Layout/scroll/anchor owners publish the complete state after their update.
     /// Descendant query matches must be revisited even when CSS/DOM are unchanged.
     pub fn SetContainerState(
@@ -1035,6 +1224,7 @@ impl DocumentStyleEngine {
         node: usize,
         state: Option<ContainerState>,
     ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1057,6 +1247,7 @@ impl DocumentStyleEngine {
         owner: &mut DOM,
         sizes: impl IntoIterator<Item = (usize, f64, f64)>,
     ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1095,7 +1286,9 @@ impl DocumentStyleEngine {
                 .and_then(|mut state| {
                     state.width = None;
                     state.height = None;
-                    (state.scroll_state_available || state.anchored_state_available)
+                    (state.scroll_state_available
+                        || state.snapped_state_available
+                        || state.anchored_state_available)
                         .then_some(state)
                 });
             changed |= self.SetContainerState(owner, node, state)?;
@@ -1109,6 +1302,7 @@ impl DocumentStyleEngine {
         owner: &mut DOM,
         resolver: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     ) -> Result<(), DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1123,6 +1317,7 @@ impl DocumentStyleEngine {
         owner: &mut DOM,
         settings: production_style_builder::ColorSchemeSettings,
     ) -> Result<(), DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1131,6 +1326,22 @@ impl DocumentStyleEngine {
             owner.GetDocumentMut().InvalidateAllStyles();
         }
         Ok(())
+    }
+    /// Source style_engine.cc:4659-4671. The Page supplies its live preferred
+    /// setting; the canonical LayoutObject style is borrowed without projection.
+    pub fn ResolveColorSchemeForEmbedding(
+        &self,
+        style: Option<&ComputedStyle>,
+        preferred: crate::PreferredColorScheme,
+    ) -> crate::PreferredColorScheme {
+        if style.is_none_or(|style| style.ColorSchemeFlagsIsNormal()) {
+            return preferred;
+        }
+        if style.expect("embedding style").DarkColorScheme() {
+            crate::PreferredColorScheme::kDark
+        } else {
+            crate::PreferredColorScheme::kLight
+        }
     }
     pub fn PropertyRegistry(&self) -> &crate::property_registry::PropertyRegistry {
         &self.property_registry
@@ -1143,6 +1354,7 @@ impl DocumentStyleEngine {
         name: foundation::AtomicString,
         registration: crate::property_registry::PropertyRegistration,
     ) -> Result<(), DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1155,6 +1367,24 @@ impl DocumentStyleEngine {
     pub fn Diagnostics(&self) -> &[DocumentStyleError] {
         &self.diagnostics
     }
+    /// Production counterpart of StyleEngine::PseudoStateChangedForElement
+    /// (style_engine.cc:1982-2021). The existing retained RuleSet/Pending-
+    /// Invalidations stage consumes these roots with its compiled pseudo data.
+    fn PseudoStateChangedForElement(&mut self, document: &Document, id: u64, pseudo: PseudoType) {
+        let Some(index) = document
+            .FindNodeById(id)
+            .filter(|&index| document.IsConnectedToDocument(index))
+        else {
+            return;
+        };
+        self.interaction_changed_nodes.insert(id);
+        self.interaction_changed_pseudos.insert(pseudo);
+        self.interaction_invalidation_roots
+            .entry(pseudo)
+            .or_default()
+            .insert(index);
+    }
+
     // cpp: Element::SetHovered/SetActive/FocusWithinStateChanged and
     // AffectedByPseudoStateChange (element.cc:6880-6998,9140-9151,13146-13192).
     // SelectorChecker's retained flags select local and relational invalidation;
@@ -1183,6 +1413,12 @@ impl DocumentStyleEngine {
                 Some(F::ChildrenOrSiblingsAffectedByActive),
                 Some(F::AncestorsOrSiblingsAffectedByActiveInHas),
             ),
+            PseudoType::kPseudoDrag => (
+                style.is_some_and(|s| s.AffectedByDrag())
+                    || subject & MatchFlag::kAffectedByDrag as u8 != 0,
+                Some(F::ChildrenOrSiblingsAffectedByDrag),
+                None,
+            ),
             PseudoType::kPseudoFocusWithin => (
                 style.is_some_and(|s| s.AffectedByFocusWithin())
                     || subject & MatchFlag::kAffectedByFocusWithin as u8 != 0,
@@ -1203,6 +1439,22 @@ impl DocumentStyleEngine {
         };
         if local {
             self.interaction_changed_nodes.insert(id);
+            // Element::FocusStateChanged/FocusVisibleStateChanged/
+            // FocusWithinStateChanged preserve kSubtreeStyleChange when the
+            // same canonical style owns ::first-letter (element.cc:9065-9150).
+            if matches!(
+                pseudo,
+                PseudoType::kPseudoFocus
+                    | PseudoType::kPseudoFocusVisible
+                    | PseudoType::kPseudoFocusWithin
+                    | PseudoType::kPseudoDrag
+            ) && style.is_some_and(|style| {
+                style.HasPseudoElementStyle(
+                    layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdFirstLetter,
+                )
+            }) {
+                self.interaction_changed_subtrees.insert(id);
+            }
         }
         let relational = children
             .into_iter()
@@ -1243,6 +1495,7 @@ impl DocumentStyleEngine {
         owner: &mut DOM,
         state: UserInteractionState,
     ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
         if owner.GetDocument().RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
@@ -1250,22 +1503,13 @@ impl DocumentStyleEngine {
         if previous == state {
             return Ok(false);
         }
-        use crate::selector_checker::SelectorCheckerBackend;
-        let old_actions = {
-            let mut selectors = self.selectors.borrow_mut();
-            let session = selectors.StyleMatchSession(owner.GetDocument());
-            let backend = session.Backend();
-            ConnectedElements(owner.GetDocument())
-                .map(|index| {
-                    (
-                        index,
-                        backend.IsHovered(&index),
-                        backend.IsActive(&index),
-                        backend.HasFocusWithin(&index),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
+        if previous.hovered_node_id != state.hovered_node_id
+            || previous.pressed_node_id != state.pressed_node_id
+        {
+            owner
+                .GetDocumentMut()
+                .SetUserActionTargets(state.hovered_node_id, state.pressed_node_id);
+        }
         self.selectors.borrow_mut().interaction = state;
         self.interaction_changed_nodes.extend(
             [previous.focused_node_id, state.focused_node_id]
@@ -1288,16 +1532,6 @@ impl DocumentStyleEngine {
                 PseudoType::kPseudoFocusVisible,
             ),
             (
-                previous.hovered_node_id,
-                state.hovered_node_id,
-                PseudoType::kPseudoHover,
-            ),
-            (
-                previous.pressed_node_id,
-                state.pressed_node_id,
-                PseudoType::kPseudoActive,
-            ),
-            (
                 previous.multi_select_focused_option_id,
                 state.multi_select_focused_option_id,
                 PseudoType::kPseudoMultiSelectFocus,
@@ -1318,39 +1552,61 @@ impl DocumentStyleEngine {
                 }
             }
         }
-        let mut transitions = Vec::new();
-        {
-            // Reuse the production user-action traversal, including label
-            // controls, flat-tree ancestry and top-layer boundaries. Blink
-            // updates local style on every element whose state actually flips.
+        // Element::SetHasFocusWithinUpToAncestor supplies canonical per-element
+        // UserAction mutations. Never reconstruct that chain with a full walk.
+        Ok(true)
+    }
+    /// Original FrameSelection/FocusController state crosses as two booleans;
+    /// SelectorChecker reads these values from its retained environment owner.
+    pub fn SetPageFocusState(
+        &mut self,
+        owner: &DOM,
+        frame_focused_and_active: bool,
+        page_is_active: bool,
+    ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
+        if owner.GetDocument().RootHandle() != self.document {
+            return Err(DocumentStyleError::WrongDocument);
+        }
+        let changed = {
             let mut selectors = self.selectors.borrow_mut();
-            let session = selectors.StyleMatchSession(owner.GetDocument());
-            let backend = session.Backend();
-            for (index, hovered, active, focus_within) in old_actions {
-                for (changed, pseudo) in [
-                    (
-                        hovered != backend.IsHovered(&index),
-                        PseudoType::kPseudoHover,
-                    ),
-                    (
-                        active != backend.IsActive(&index),
-                        PseudoType::kPseudoActive,
-                    ),
-                    (
-                        focus_within != backend.HasFocusWithin(&index),
-                        PseudoType::kPseudoFocusWithin,
-                    ),
-                ] {
-                    if changed {
-                        transitions.push((owner.GetDocument().Node(index).Id(), pseudo));
-                    }
-                }
+            let changed = selectors.frame_focused_and_active != frame_focused_and_active
+                || selectors.page_is_active != page_is_active;
+            selectors.frame_focused_and_active = frame_focused_and_active;
+            selectors.page_is_active = page_is_active;
+            changed
+        };
+        if changed {
+            for node in owner.GetDocument().FocusedUserActionElements() {
+                let id = owner.GetDocument().Node(node).Id();
+                self.RecordUserActionChange(owner.GetDocument(), id, PseudoType::kPseudoFocus);
+                self.RecordUserActionChange(
+                    owner.GetDocument(),
+                    id,
+                    PseudoType::kPseudoFocusVisible,
+                );
             }
         }
-        for (id, pseudo) in transitions {
-            self.RecordUserActionChange(owner.GetDocument(), id, pseudo);
-        }
-        Ok(true)
+        Ok(changed)
+    }
+    /// Source Element flags read by touch_adjustment.cc:112-114. The same
+    /// compiled selector owner records these flags during element matching.
+    pub fn ChildrenOrSiblingsAffectedByActiveOrHover(&self, document: &Document, id: u64) -> bool {
+        use crate::selector_checker::ElementInvalidationFlag as F;
+        let Some(index) = document.FindNodeById(id) else {
+            return false;
+        };
+        let selectors = self.selectors.borrow();
+        selectors.ElementHasInvalidationFlag(index, F::ChildrenOrSiblingsAffectedByActive)
+            || selectors.ElementHasInvalidationFlag(index, F::ChildrenOrSiblingsAffectedByHover)
+    }
+    // Source: StyleEngine::UsesWindowInactiveSelector, style_engine.cc/h.
+    // The active production RuleSets retain this metadata; no CSSOM projection
+    // is reparsed at focus/activation time.
+    pub fn UsesWindowInactiveSelector(&self) -> bool {
+        self.translated_rule_sets
+            .values()
+            .any(|rules| rules.Features().uses_window_inactive_selector)
     }
     pub fn HasContainerQueries(&self) -> bool {
         self.active_sheets.iter().any(|(sheet, _)| {
@@ -1371,6 +1627,265 @@ impl DocumentStyleEngine {
     pub fn TranslatedRuleShadowStats(&self) -> TranslatedRuleShadowStats {
         self.translated_rule_shadow_stats
     }
+    /// cpp: custom_scrollbar.cc:136-165; layout_object.cc:4732-4756;
+    /// element.cc:11335-11343; StyleRequest's scrollbar constructor.
+    ///
+    /// Resolves one native scrollbar part through the document's canonical
+    /// RuleSets and StyleResolver with the supplied live source-style owner.
+    /// This never reads or populates Element's generated-pseudo style cache.
+    /// The caller routes the returned owner to that same scrollbar part.
+    pub fn ResolveScrollbarPartStyle<'a, D: StyleDocument + ?Sized>(
+        &mut self,
+        owner: &mut D,
+        media: &MediaValuesCachedData,
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
+        source_node: usize,
+        source_style: Persistent<ComputedStyle>,
+        part: crate::scrollbar_style::ScrollbarStylePart,
+        scrollbar: crate::scrollbar_style::ScrollbarStyleState,
+        environment_variables: Option<&dyn EnvironmentVariableResolver>,
+    ) -> Result<Option<Persistent<ComputedStyle>>, DocumentStyleError> {
+        let Some(pseudo_id) = part.PseudoId() else {
+            return Ok(None);
+        };
+        self.ResolveUncachedScrollbarStyle(
+            owner,
+            media,
+            ua,
+            source_node,
+            source_style,
+            pseudo_id,
+            part,
+            Some(scrollbar),
+            scrollbar.page_active,
+            environment_variables,
+        )
+    }
+    /// Source: PaintLayerScrollableArea::UpdateScrollCornerStyle. Corners have
+    /// no Scrollbar owner; only :window-inactive consumes the page activity.
+    pub fn ResolveScrollbarCornerStyle<'a, D: StyleDocument + ?Sized>(
+        &mut self,
+        owner: &mut D,
+        media: &MediaValuesCachedData,
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
+        source_node: usize,
+        source_style: Persistent<ComputedStyle>,
+        page_active: bool,
+        environment_variables: Option<&dyn EnvironmentVariableResolver>,
+    ) -> Result<Option<Persistent<ComputedStyle>>, DocumentStyleError> {
+        self.ResolveUncachedScrollbarStyle(
+            owner,
+            media,
+            ua,
+            source_node,
+            source_style,
+            PseudoId::kPseudoIdScrollbarCorner,
+            crate::scrollbar_style::ScrollbarStylePart::kNoPart,
+            None,
+            page_active,
+            environment_variables,
+        )
+    }
+    fn ResolveUncachedScrollbarStyle<'a, D: StyleDocument + ?Sized>(
+        &mut self,
+        owner: &mut D,
+        media: &MediaValuesCachedData,
+        ua: impl Into<UserAgentStyleSheetInput<'a>>,
+        source_node: usize,
+        source_style: Persistent<ComputedStyle>,
+        pseudo_id: PseudoId,
+        part: crate::scrollbar_style::ScrollbarStylePart,
+        scrollbar: Option<crate::scrollbar_style::ScrollbarStyleState>,
+        page_active: bool,
+        environment_variables: Option<&dyn EnvironmentVariableResolver>,
+    ) -> Result<Option<Persistent<ComputedStyle>>, DocumentStyleError> {
+        use crate::resolver::production_style_resolver::{
+            ApplyBaseStyleForElement, ProductionBaseStyleCollaborators, ProductionBaseStyleInputs,
+            ProductionResolverBatch, ProductionRuleCollectionCache, ProductionRuleMatchingInputs,
+        };
+        let document_owner = owner.DocumentForStyleMut();
+        self.EnsureAttached()?;
+        if document_owner.RootHandle() != self.document {
+            return Err(DocumentStyleError::WrongDocument);
+        }
+        // LayoutObject asks for the first Element ancestor or self. The caller
+        // supplies the source LayoutObject's node, which can be a text node.
+        let mut element = (source_node < document_owner.NodeCount()).then_some(source_node);
+        while let Some(index) = element {
+            if document_owner.Node(index).Type() == DOMNodeType::kElement {
+                break;
+            }
+            element = document_owner.Node(index).Parent();
+        }
+        let Some(element) = element else {
+            return Ok(None);
+        };
+        let (active, scopes, _) = self.ActiveStyleSheetsForRequest(document_owner, ua.into());
+        let document = &*document_owner;
+        let active_changed = !Arc::ptr_eq(&active, &self.active_sheets)
+            || self.translated_rule_set_environment.as_ref() != Some(media);
+        if active_changed {
+            // UpdateActiveStyle can run outside recalc while the previous RuleSets
+            // are still needed by the pending style invalidation. Retain those
+            // immutable owners until the normal update consumes the old/new pair.
+            let mut retained = active.as_ref().clone();
+            for old in self.active_sheets.iter() {
+                if !retained.iter().any(|(sheet, origin)| {
+                    *origin == old.1
+                        && sheet.Identity() == old.0.Identity()
+                        && sheet.Revision() == old.0.Revision()
+                }) {
+                    retained.push(old.clone());
+                }
+            }
+            self.SynchronizeTypedSheets(document, &retained);
+            self.SynchronizeTranslatedRuleSets(&retained, media);
+        }
+        let sheets = active
+            .iter()
+            .map(|(sheet, origin)| (sheet.as_ref(), *origin))
+            .collect::<Vec<_>>();
+        let rules = self
+            .ProductionResolverRuleSets(document, media, &sheets, scopes.as_slice())
+            .ok_or(DocumentStyleError::Unsupported(
+                "production-scrollbar-rule-set-bundle",
+            ))?;
+        let function_rules = active
+            .iter()
+            .filter_map(|(sheet, _)| {
+                self.translated_rule_sets
+                    .get(&(sheet.Identity(), sheet.Revision()))
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let functions = crate::production_style_sheet::ProductionFunctionRegistry::FromRuleSets(
+            &function_rules,
+        );
+        if active_changed {
+            let registry_changed = self
+                .property_registry
+                .UpdateDeclaredProperties(&active, &DocumentMediaValues::new(document, media));
+            let font_features_changed =
+                self.SynchronizeFontFeatureValues(document, media, &active, scopes.as_slice());
+            if registry_changed || font_features_changed {
+                // These active-style owners may update outside recalc. Preserve
+                // their pending invalidation even after their registries are current.
+                document_owner.InvalidateAllStyles();
+                self.matched_properties_cache.Clear();
+            }
+        }
+        let document = &*document_owner;
+        let root_style = document
+            .Node(document.Root())
+            .Children()
+            .iter()
+            .copied()
+            .find(|&index| document.Node(index).Type() == DOMNodeType::kElement)
+            .and_then(|index| document.ResolvedStyleFor(index))
+            .map(|style| style.computed_style_owner.clone());
+        let root_font_size = root_style.as_ref().map_or_else(
+            || {
+                unsafe { &*source_style.Get() }
+                    .GetFontDescription()
+                    .ComputedSize()
+            },
+            |style| unsafe { &*style.Get() }.GetFontDescription().ComputedSize(),
+        );
+        let environment = CascadeEnvironment::new(environment_variables);
+        let attributes_source = PersistentAttributeSource::new(document, element, true);
+        let attributes_state = CascadeAttributeState::new();
+        let attributes = AttributeResolver::new(&attributes_source, &attributes_state, false);
+        let images = DocumentURLImageResolver {
+            document,
+            originating_index: element,
+        };
+        let containers =
+            crate::resolver::production_container_runtime::ProductionContainerRuntime {
+                document,
+                media,
+                states: &self.container_states,
+                snapped_dependencies: Some(&self.snapped_query_dependencies),
+                stored_custom: &self.custom_properties,
+                current_styles: None,
+                current_custom: None,
+                environment: environment_variables,
+                registered: Some(
+                    self.registered_container_properties
+                        .as_deref()
+                        .unwrap_or(&self.property_registry),
+                ),
+            };
+        let selector_backend = {
+            let mut selectors = self.selectors.borrow_mut();
+            selectors.page_is_active = page_active;
+            selectors.StyleMatchSession(document).Backend()
+        };
+        let mut collaborators = ProductionBaseStyleCollaborators::ordinary(root_font_size);
+        collaborators.html_quirks_user_agent_rules = rules.html_quirks_user_agent;
+        collaborators.forced_colors_user_agent_rules = rules.forced_colors_user_agent;
+        collaborators.pseudo_element_user_agent_rules = rules.marker_user_agent;
+        collaborators.fullscreen_user_agent_rules = rules.fullscreen_user_agent;
+        collaborators.root_style = root_style;
+        collaborators.color_scheme_settings = self.color_scheme_settings;
+        collaborators.text_link_text_color = self.resolver_dependencies.text_link_text_color;
+        collaborators.link_color = self.resolver_dependencies.link_color;
+        collaborators.visited_link_color = self.resolver_dependencies.visited_link_color;
+        collaborators.active_link_color = self.resolver_dependencies.active_link_color;
+        collaborators.pseudo_id = pseudo_id;
+        collaborators.scrollbar = scrollbar.map(Rc::new);
+        collaborators.scrollbar_part = part;
+        collaborators.subject_node = Some(element);
+        collaborators.parent_custom_properties =
+            self.custom_properties.get(&element).map(Rc::as_ref);
+        collaborators.container_runtime = Some(&containers);
+        collaborators.substitution_context = SubstitutionContext {
+            environment: Some(&environment),
+            attributes: Some(&attributes),
+        };
+        collaborators.image_resolver = Some(&images);
+        collaborators.property_registry = Some(&self.property_registry);
+        collaborators.function_registry = Some(&functions);
+        collaborators.font_metrics = self.font_metrics.as_deref();
+        collaborators.matched_properties_cache = Some(self.matched_properties_cache.clone());
+        collaborators.rule_collections = Some(Rc::new(ProductionRuleCollectionCache::default()));
+        collaborators.resolver_batch = Some(Rc::new(ProductionResolverBatch::ForMediaControls(
+            rules.media_controls_user_agent.clone(),
+            rules.forced_media_controls_user_agent.clone(),
+        )));
+        collaborators.declarations = Some(self.declarations.clone());
+        collaborators.vtt_style_sheets = Some(self.vtt_style_sheets.clone());
+        collaborators.selectors = Some(self.selectors.clone());
+        collaborators.selector_backend = Some(selector_backend);
+        collaborators.interaction = self.selectors.borrow().interaction;
+        let output = ApplyBaseStyleForElement(ProductionBaseStyleInputs {
+            matching: ProductionRuleMatchingInputs {
+                document,
+                element_index: element,
+                media,
+                html_user_agent_rules: rules.html_user_agent,
+                svg_user_agent_rules: rules.svg_user_agent,
+                mathml_user_agent_rules: rules.mathml_user_agent,
+                author_rule_sets: rules.author,
+            },
+            parent: Some(source_style),
+            collaborators,
+        })
+        .map_err(|_| DocumentStyleError::Unsupported("production-scrollbar-style-resolution"))?;
+        self.resolver_dependencies.Merge(&output.metrics);
+        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+        environment.ApplyState(&mut builder);
+        attributes_state.ApplyState(&mut builder);
+        self.ResolveFontFeatureValues(&mut builder);
+        let style = Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
+        if scrollbar.is_some()
+            && unsafe { &*style.Get() }.DependsOnFontMetrics()
+            && document_owner.Node(source_node).Type() == DOMNodeType::kElement
+        {
+            document_owner.SetScrollbarPseudoElementStylesDependOnFontMetrics(source_node, true);
+        }
+        Ok(Some(style))
+    }
+
     pub fn Update<'a, D: StyleDocument + ?Sized>(
         &mut self,
         owner: &mut D,
@@ -1405,6 +1920,7 @@ impl DocumentStyleEngine {
         ua: impl Into<UserAgentStyleSheetInput<'a>>,
         node: usize,
     ) -> Result<(), DocumentStyleError> {
+        self.EnsureAttached()?;
         let document = owner.DocumentForStyleMut();
         if document.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
@@ -1445,9 +1961,17 @@ impl DocumentStyleEngine {
             browser_tracing::span("style_rules", "StyleEngine.UpdateActiveStyleSheets");
         self.diagnostics.clear();
         self.translated_rule_shadow_stats = Default::default();
+        self.EnsureAttached()?;
         if document_owner.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
         }
+        self.vtt_style_sheets.Prune();
+        let vtt_media_changed = self.translated_rule_set_environment.as_ref() != Some(media);
+        let vtt_media_roots = if vtt_media_changed {
+            self.InvalidateTextTrackMediaQueries(document_owner)
+        } else {
+            HashSet::new()
+        };
         let state = document_owner.StyleState();
         // Chromium's StyleFetchedImage retains identity while its
         // ImageResourceContent changes underneath it, so a matched-properties
@@ -1459,12 +1983,6 @@ impl DocumentStyleEngine {
             .changes
             .iter()
             .any(|change| matches!(change, StyleChange::Resource(_)));
-        if state.all_dirty
-            || !state.dirty_style_elements.is_empty()
-            || !state.inserted_style_subtrees.is_empty()
-        {
-            self.SynchronizeStyleSheets(document_owner);
-        }
         let document = &*document_owner;
         if document.RootHandle() != self.document {
             return Err(DocumentStyleError::WrongDocument);
@@ -1476,88 +1994,20 @@ impl DocumentStyleEngine {
         // Blink's ApplyRuleSetChanges invalidates against old and new rule sets.
         // Retain exact source snapshots: removals and source-order/layer changes
         // are observable even when the DOM and declaration text are unchanged.
-        let revision = document.StyleState().sheet_revision;
-        let mut previous_ua = self
-            .active_sheets
-            .iter()
-            .filter(|(_, origin)| *origin == CascadeOrigin::kUserAgent)
-            .map(|(sheet, _)| sheet);
-        let mut shared_checks = 0;
-        let mut value_comparisons = 0;
-        let ua_unchanged = (0..ua.len()).all(|index| {
-            let Some(previous) = previous_ua.next() else {
-                return false;
-            };
-            if let Some(shared) = ua.shared(index) {
-                shared_checks += 1;
-                Rc::ptr_eq(previous, shared)
-            } else {
-                value_comparisons += 1;
-                previous.as_ref() == ua.sheet(index)
-            }
-        }) && previous_ua.next().is_none();
-        sheets_trace.set("ua_shared_owner_checks", shared_checks as f64);
-        sheets_trace.set("ua_value_comparisons", value_comparisons as f64);
-        // cpp: StyleEngine::UpdateActiveStyleSheets / NeedsActiveStyleSheetUpdate.
-        // The DOM version includes owner connectivity, order and adoption. Reuse
-        // both retained outputs when none of those inputs changed.
-        let (active_sheets, active_sheet_scopes) = if self.sheet_revision == Some(revision)
-            && ua_unchanged
+        let (active_sheets, active_sheet_scopes, ua_unchanged) =
+            self.ActiveStyleSheetsForRequest(document_owner, ua);
+        if document_owner.DocumentType(document_owner.Root())
+            == dom::persistent_document::DOMDocumentType::kSVG
         {
-            (self.active_sheets.clone(), self.active_sheet_scopes.clone())
-        } else {
-            let active_scope_sheets = document.ActiveStyleSheetsWithTreeScopes();
-            // ActiveStyleSheets holds stylesheet owners in Blink, not copies
-            // of their rule/declaration projections. Reuse immutable snapshots
-            // across list changes while retaining value checks for directly
-            // edited CSSOM projections and owner metadata.
-            let mut trace =
-                browser_tracing::span("style_rules", "StyleEngine.SnapshotActiveSheets");
-            let previous = self
-                .active_sheets
-                .iter()
-                .map(|(sheet, origin)| ((sheet.Identity(), sheet.Revision(), *origin as u8), sheet))
-                .collect::<HashMap<_, _>>();
-            let mut reused = 0;
-            let mut copied = 0;
-            let mut retain = |sheet: &CSSStyleSheet, origin: CascadeOrigin| {
-                let key = (sheet.Identity(), sheet.Revision(), origin as u8);
-                if let Some(previous) = previous.get(&key).filter(|previous| {
-                    previous.HasCurrentSource() == sheet.HasCurrentSource()
-                        && previous.as_ref() == sheet
-                }) {
-                    reused += 1;
-                    (*previous).clone()
-                } else {
-                    copied += 1;
-                    Rc::new(sheet.clone())
-                }
-            };
-            let mut sheets = Vec::with_capacity(ua.len() + active_scope_sheets.len());
-            let mut shared_ua = 0;
-            for index in 0..ua.len() {
-                let sheet = if let Some(shared) = ua.shared(index) {
-                    shared_ua += 1;
-                    shared.clone()
-                } else {
-                    retain(ua.sheet(index), CascadeOrigin::kUserAgent)
-                };
-                sheets.push((sheet, CascadeOrigin::kUserAgent));
-            }
-            for (_, sheet) in &active_scope_sheets {
-                sheets.push((
-                    retain(sheet, CascadeOrigin::kAuthor),
-                    CascadeOrigin::kAuthor,
-                ));
-            }
-            trace.set("reused", reused as f64);
-            trace.set("copied", copied as f64);
-            trace.set("shared_ua", shared_ua as f64);
-            let scopes = std::iter::repeat_n(None, ua.len())
-                .chain(active_scope_sheets.iter().map(|(scope, _)| Some(*scope)))
-                .collect::<Vec<_>>();
-            (Arc::new(sheets), Arc::new(scopes))
-        };
+            document_owner.SetViewportStyle(
+                crate::resolver::production_style_resolver::ViewportStyleForDocument(
+                    media,
+                    self.color_scheme_settings,
+                ),
+            );
+        }
+        let document = &*document_owner;
+        let revision = document.StyleState().sheet_revision;
         // Preserve old RuleSet identities across synchronization/pruning for
         // Blink's active-sheet comparison below.
         let viewport_only_environment_change = self
@@ -1852,6 +2302,9 @@ impl DocumentStyleEngine {
         if all_dirty {
             AddSubtree(document, document.Root(), &mut dirty);
         } else {
+            for &root in &vtt_media_roots {
+                AddSubtree(document, root, &mut dirty);
+            }
             if viewport_only_environment_change {
                 // LocalFrameView::ViewportSizeChanged marks only styles which
                 // consumed viewport units. Media queries whose truth value did
@@ -1862,6 +2315,10 @@ impl DocumentStyleEngine {
                 dirty.extend(self.viewport_dependent_elements.iter().copied());
             }
             let state = document.StyleState();
+            dirty.extend(state.detach_parent_recalc_roots.iter().copied());
+            for &root in &state.subtree_style_recalc_roots {
+                AddSubtree(document, root, &mut dirty);
+            }
             let dom_invalidation =
                 browser_tracing::span("style_invalidation", "StyleEngine.InvalidateDOMChanges");
             for change in &state.changes {
@@ -1869,10 +2326,13 @@ impl DocumentStyleEngine {
                     StyleChange::PlaceholderShown(index)
                     | StyleChange::EmptyState(index)
                     | StyleChange::Directionality(index)
+                    | StyleChange::PseudoSelection(index)
                     | StyleChange::Defined(index)
                     | StyleChange::Node(index)
                     | StyleChange::AttributeValue(index)
                     | StyleChange::ControlPseudo(index, _)
+                    | StyleChange::UserAction(index, _)
+                    | StyleChange::Dragged(index, _)
                     | StyleChange::ExportParts(index)
                     | StyleChange::InlineStyle(index)
                     | StyleChange::Animation(index)
@@ -1893,10 +2353,13 @@ impl DocumentStyleEngine {
                         StyleChange::PlaceholderShown(index)
                         | StyleChange::EmptyState(index)
                         | StyleChange::Directionality(index)
+                        | StyleChange::PseudoSelection(index)
                         | StyleChange::Defined(index)
                         | StyleChange::Node(index)
                         | StyleChange::AttributeValue(index)
                         | StyleChange::ControlPseudo(index, _)
+                        | StyleChange::UserAction(index, _)
+                        | StyleChange::Dragged(index, _)
                         | StyleChange::ExportParts(index)
                         | StyleChange::InlineStyle(index)
                         | StyleChange::Animation(index)
@@ -1904,11 +2367,28 @@ impl DocumentStyleEngine {
                         | StyleChange::Children(index) => index,
                     };
                     let node = document.Node(index);
-                    eprintln!("style invalidation {change:?} node_id={} tag={} id={} class={} connected={}",
-                        node.Id(), node.Name(), node.FindAttribute("id").map_or("", |a| &a.value),
-                        node.FindAttribute("class").map_or("", |a| &a.value), document.IsConnectedToDocument(index));
+                    eprintln!(
+                        "style invalidation {change:?} node_id={} tag={} id={} class={} connected={}",
+                        node.Id(),
+                        node.Name(),
+                        node.FindAttribute("id").map_or("", |a| &a.value),
+                        node.FindAttribute("class").map_or("", |a| &a.value),
+                        document.IsConnectedToDocument(index)
+                    );
                 }
                 match *change {
+                    StyleChange::PseudoSelection(index) => {
+                        // LayoutSelection requests a local recalc as well as
+                        // Element::PseudoStateChanged(kPseudoSelection). Keep
+                        // all compiled descendant/sibling/relational feature
+                        // data on the existing pseudo-invalidation path below.
+                        dirty.insert(index);
+                        self.PseudoStateChangedForElement(
+                            document,
+                            document.Node(index).Id(),
+                            PseudoType::kPseudoSelection,
+                        );
+                    }
                     StyleChange::Directionality(index) => {
                         dirty.insert(index);
                         self.interaction_changed_nodes
@@ -1931,10 +2411,68 @@ impl DocumentStyleEngine {
                             .or_default()
                             .insert(index);
                     }
+                    StyleChange::Dragged(index, has_layout) => {
+                        // Element::SetDragged cc:8660-8674: when :-webkit-drag
+                        // removed layout, clearing the flag must still restore
+                        // style. Setting it on an already unlaid-out node does
+                        // not force attachment.
+                        if !has_layout {
+                            if document.IsNodeDragged(index) {
+                                continue;
+                            }
+                            let relational = self.selectors.borrow().ElementHasInvalidationFlag(
+                                index, crate::selector_checker::ElementInvalidationFlag::ChildrenOrSiblingsAffectedByDrag,
+                            );
+                            if !relational {
+                                self.interaction_changed_nodes
+                                    .insert(document.Node(index).Id());
+                                continue;
+                            }
+                        }
+                        self.RecordUserActionChange(
+                            document,
+                            document.Node(index).Id(),
+                            PseudoType::kPseudoDrag,
+                        );
+                    }
+                    StyleChange::UserAction(index, state) => {
+                        let pseudo = match state {
+                            dom::style_state::UserActionPseudoState::Hover => {
+                                PseudoType::kPseudoHover
+                            }
+                            dom::style_state::UserActionPseudoState::Active => {
+                                PseudoType::kPseudoActive
+                            }
+                            dom::style_state::UserActionPseudoState::Focus => {
+                                PseudoType::kPseudoFocus
+                            }
+                            dom::style_state::UserActionPseudoState::FocusVisible => {
+                                PseudoType::kPseudoFocusVisible
+                            }
+                            dom::style_state::UserActionPseudoState::FocusWithin => {
+                                PseudoType::kPseudoFocusWithin
+                            }
+                        };
+                        self.RecordUserActionChange(document, document.Node(index).Id(), pseudo);
+                    }
                     StyleChange::ControlPseudo(index, state) => {
                         use dom::style_state::ControlPseudoState;
                         let pseudo = match state {
+                            ControlPseudoState::State => PseudoType::kPseudoState,
+                            ControlPseudoState::Valid => PseudoType::kPseudoValid,
+                            ControlPseudoState::Invalid => PseudoType::kPseudoInvalid,
+                            ControlPseudoState::UserValid => PseudoType::kPseudoUserValid,
+                            ControlPseudoState::UserInvalid => PseudoType::kPseudoUserInvalid,
+                            ControlPseudoState::Paused => PseudoType::kPseudoPaused,
+                            ControlPseudoState::Playing => PseudoType::kPseudoPlaying,
+                            ControlPseudoState::Buffering => PseudoType::kPseudoBuffering,
+                            ControlPseudoState::Stalled => PseudoType::kPseudoStalled,
+                            ControlPseudoState::Muted => PseudoType::kPseudoMuted,
+                            ControlPseudoState::Seeking => PseudoType::kPseudoSeeking,
                             ControlPseudoState::Default => PseudoType::kPseudoDefault,
+                            ControlPseudoState::Open => PseudoType::kPseudoOpen,
+                            ControlPseudoState::ActiveOption => PseudoType::kPseudoActiveOption,
+                            ControlPseudoState::Filtered => PseudoType::kPseudoFiltered,
                             ControlPseudoState::HasDatalist => PseudoType::kPseudoHasDatalist,
                             ControlPseudoState::Indeterminate => PseudoType::kPseudoIndeterminate,
                         };
@@ -2238,10 +2776,13 @@ impl DocumentStyleEngine {
                         StyleChange::PlaceholderShown(index)
                         | StyleChange::EmptyState(index)
                         | StyleChange::Directionality(index)
+                        | StyleChange::PseudoSelection(index)
                         | StyleChange::Defined(index)
                         | StyleChange::Node(index)
                         | StyleChange::AttributeValue(index)
                         | StyleChange::ControlPseudo(index, _)
+                        | StyleChange::UserAction(index, _)
+                        | StyleChange::Dragged(index, _)
                         | StyleChange::ExportParts(index)
                         | StyleChange::InlineStyle(index)
                         | StyleChange::Animation(index)
@@ -2537,6 +3078,14 @@ impl DocumentStyleEngine {
             // can reach into descendant shadow scopes, so a changed ancestor
             // scope also visits those scoped subtrees.
             InvalidateChangedTreeScopes(document, &changed_tree_scopes, &mut dirty);
+            for id in &self.interaction_changed_subtrees {
+                if let Some(node) = document
+                    .FindNodeById(*id)
+                    .filter(|&node| ConnectedElement(document, node))
+                {
+                    AddSubtree(document, node, &mut dirty);
+                }
+            }
             if !self.interaction_changed_nodes.is_empty() {
                 // RuleSet's compiled features select relational subjects.
                 // Local user-action state was compared through the production
@@ -2872,6 +3421,7 @@ impl DocumentStyleEngine {
         if visit.is_empty() {
             self.invalidated_container_nodes.clear();
             self.interaction_changed_nodes.clear();
+            self.interaction_changed_subtrees.clear();
             self.interaction_changed_pseudos.clear();
             self.interaction_invalidation_roots.clear();
             self.sheet_revision = Some(revision);
@@ -2901,8 +3451,16 @@ impl DocumentStyleEngine {
         let rule_collections = Rc::new(
             crate::resolver::production_style_resolver::ProductionRuleCollectionCache::default(),
         );
-        let resolver_batch =
-            Rc::new(crate::resolver::production_style_resolver::ProductionResolverBatch::default());
+        let resolver_batch = Rc::new(
+            crate::resolver::production_style_resolver::ProductionResolverBatch::ForMediaControls(
+                production_resolver_rule_sets
+                    .media_controls_user_agent
+                    .clone(),
+                production_resolver_rule_sets
+                    .forced_media_controls_user_agent
+                    .clone(),
+            ),
+        );
         // MatchResult carries the exact highlight names which matched each
         // originating element. No document-wide selector inventory is needed.
         // Build and install each immutable style in traversal order. The
@@ -2923,6 +3481,7 @@ impl DocumentStyleEngine {
         let mut stack = vec![(
             document.Root(),
             None,
+            false,
             false,
             false,
             false,
@@ -2977,6 +3536,7 @@ impl DocumentStyleEngine {
             explicit,
             subtree,
             _at_shadow_boundary,
+            has_scroller_ancestor_with_scroll_marker_group,
         )) = stack.pop()
         {
             let mut resolved_to_commit = None;
@@ -3266,6 +3826,7 @@ impl DocumentStyleEngine {
                                 document,
                                 media,
                                 states: &self.container_states,
+                snapped_dependencies:Some(&self.snapped_query_dependencies),
                                 stored_custom: &self.custom_properties,
                                 current_styles: Some(&computed_style),
                                 current_custom: Some(&custom_properties),
@@ -3273,9 +3834,15 @@ impl DocumentStyleEngine {
                                 registered: Some(registered_container_properties),
                             };
                         let mut collaborators = crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(root_font);
+                        let selector_backend = self
+                            .selectors
+                            .borrow_mut()
+                            .StyleMatchSession(document)
+                            .Backend();
                         collaborators.rule_collections = Some(rule_collections.clone());
                         collaborators.resolver_batch = Some(resolver_batch.clone());
                         collaborators.declarations = Some(self.declarations.clone());
+                        collaborators.vtt_style_sheets = Some(self.vtt_style_sheets.clone());
                         collaborators.html_quirks_user_agent_rules =
                             rule_sets.html_quirks_user_agent.clone();
                         collaborators.forced_colors_user_agent_rules =
@@ -3331,8 +3898,8 @@ impl DocumentStyleEngine {
                                     .translated_style_resolver_failures += 1;
                                 if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
                                     eprintln!(
-                                            "translated StyleResolver interpolation failure node={index}: {failures:?}"
-                                        );
+                                        "translated StyleResolver interpolation failure node={index}: {failures:?}"
+                                    );
                                 }
                                 return Err(DocumentStyleError::Unsupported(
                                     "animation-sample-parse",
@@ -3357,8 +3924,8 @@ impl DocumentStyleEngine {
                                     .translated_style_resolver_failures += 1;
                                 if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
                                     eprintln!(
-                                            "translated StyleResolver transition failure node={index}: {failures:?}"
-                                        );
+                                        "translated StyleResolver transition failure node={index}: {failures:?}"
+                                    );
                                 }
                                 return Err(DocumentStyleError::Unsupported(
                                     "transition-sample-parse",
@@ -3370,6 +3937,7 @@ impl DocumentStyleEngine {
                         collaborators.matched_properties_cache =
                             Some(self.matched_properties_cache.clone());
                         collaborators.selectors = Some(self.selectors.clone());
+                        collaborators.selector_backend = Some(selector_backend.clone());
                         collaborators.interaction = self.selectors.borrow().interaction;
                         let translated_output = match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
                                 crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
@@ -3469,6 +4037,28 @@ impl DocumentStyleEngine {
                             mut matched_signatures,
                             mut variable_dependencies,
                         ) = translated_output;
+                        if node.IsElement("marker", DOMNamespace::kSVG) {
+                            let inputs = node.SVGMarkerLengthInputs();
+                            if inputs.HasUnparsed() {
+                                builder.SetHasVariableReference();
+                            }
+                            if inputs.HasAttributeReference() {
+                                builder.SetHasAttrFunction();
+                            }
+                            inputs.VisitReferences(
+                                |name| {
+                                    if let Some(dependencies) = &mut variable_dependencies {
+                                        dependencies.referenced.insert(name);
+                                    }
+                                },
+                                |name| {
+                                    builder.SetHasEnv();
+                                    if name == "safe-area-inset-bottom" {
+                                        builder.SetHasEnvSafeAreaInsetBottom();
+                                    }
+                                },
+                            );
+                        }
                         let values = HashMap::new();
                         let base_signature_len = matched_signatures.len();
                         ApplyTextControlInnerEditorCustomStyle(document, index, &mut builder);
@@ -3519,6 +4109,7 @@ impl DocumentStyleEngine {
                                 Some(&computed_style),
                                 Some(&custom_properties),
                                 environment_variables,
+                                None,
                             )?;
                             matched_signatures.extend(
                                 rules
@@ -3582,6 +4173,15 @@ impl DocumentStyleEngine {
                         self.ResolveFontFeatureValues(&mut builder);
                         if ensure_target.is_some() {
                             builder.SetIsEnsuredInDisplayNone();
+                        }
+                        // HTMLInputElement::AdjustStyle -> RangeInputType::AdjustStyle,
+                        // html_input_element.cc:2571-2573; range_input_type.cc:296-299.
+                        if document.InputType(index)
+                            == Some(dom::persistent_document::DOMInputType::kRange)
+                        {
+                            layoutng_style::style::range_input_style::AdjustRangeInputStyle(
+                                &mut builder,
+                            );
                         }
                         let ordinary_style =
                             Persistent::from_ptr(builder.TakeStyle() as *mut ComputedStyle);
@@ -3717,6 +4317,7 @@ impl DocumentStyleEngine {
                                         document,
                                         media,
                                         states: &self.container_states,
+                snapped_dependencies:Some(&self.snapped_query_dependencies),
                                         stored_custom: &self.custom_properties,
                                         current_styles: Some(&computed_style),
                                         current_custom: Some(&custom_properties),
@@ -3729,6 +4330,8 @@ impl DocumentStyleEngine {
                                         collaborators.resolver_batch = Some(resolver_batch.clone());
                                         collaborators.declarations =
                                             Some(self.declarations.clone());
+                                        collaborators.vtt_style_sheets =
+                                            Some(self.vtt_style_sheets.clone());
                                         collaborators.html_quirks_user_agent_rules =
                                             rule_sets.html_quirks_user_agent.clone();
                                         collaborators.forced_colors_user_agent_rules =
@@ -3770,6 +4373,8 @@ impl DocumentStyleEngine {
                                         collaborators.matched_properties_cache =
                                             Some(self.matched_properties_cache.clone());
                                         collaborators.selectors = Some(self.selectors.clone());
+                                        collaborators.selector_backend =
+                                            Some(selector_backend.clone());
                                         collaborators.interaction =
                                             self.selectors.borrow().interaction;
                                         match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
@@ -3881,6 +4486,65 @@ impl DocumentStyleEngine {
                                 }
                             }
                         }
+                        // Element::RecalcOwnStyle (element.cc:5104-5117) updates
+                        // the same canonical DisplayLockContext and adjusts its
+                        // ComputedStyle owner before the source difference.
+                        style = document.AdjustInputImageStyle(index, style);
+                        match document.DateTimeEditCustomStyle(
+                            index,
+                            unsafe { &*style.Get() },
+                            &DateTimeTextMetrics(self.font_metrics.as_deref()),
+                            media.device_pixel_ratio,
+                        ) {
+                            Ok(Some(custom)) => style = custom,
+                            Ok(None) => {}
+                            Err(
+                                dom::persistent_document::DateTimeCustomStyleError::FontPending,
+                            ) => return Err(DocumentStyleError::FontPending),
+                            Err(_) => {
+                                return Err(DocumentStyleError::Unsupported(
+                                    "date-time-native-custom-style",
+                                ));
+                            }
+                        }
+
+                        // MenuListInnerElement::CustomStyleForLayoutObject,
+                        // cc:22-127. Native UA class identity supplies the host;
+                        // this runs before equality/diff and attachment, using
+                        // the same parent and SelectType option-style owners.
+                        if let Some((
+                            select,
+                            dom::persistent_document::DOMSelectUAPartKind::MenuListInner,
+                        )) = document.SelectUAPart(index)
+                        {
+                            let parent = document
+                                .ResolvedStyleFor(select)
+                                .and_then(|s| s.ComputedStyle())
+                                .expect("select styled before its UA inner");
+                            if !parent.HasBaseEffectiveAppearance() {
+                                let option_owner = document.SelectOptionStyleOwner(select);
+                                let option_style = option_owner.borrow();
+                                let height = self
+                                    .font_metrics
+                                    .as_ref()
+                                    .and_then(|resolver| {
+                                        resolver.Metrics(parent.GetFontDescription())
+                                    })
+                                    .map(|m| m.Height() as f32);
+                                let custom = layoutng_style::style::menu_list_inner_style::MenuListInnerCustomStyle(
+                                    parent, unsafe { option_style.Get().as_ref() },
+                                    document.AutofillState(select) != dom::persistent_document::DOMAutofillState::kNotFilled,
+                                    height, document.SelectRemoveOverflowHiddenEnabled(),
+                                    &self.menu_list_theme, self.menu_list_native_theme_metrics.expect("native select styling requires actual Theme popup metrics"),
+                                );
+                                style = Persistent::from_ptr(custom as *mut ComputedStyle);
+                            }
+                        }
+                        style = document.AdjustStyleForDisplayLock(
+                            index,
+                            style,
+                            has_scroller_ancestor_with_scroll_marker_group,
+                        );
                         let final_style = unsafe { &*style.Get() };
                         if parent.is_none() {
                             root_font = final_style.GetFontDescription().SpecifiedSize()
@@ -4293,6 +4957,14 @@ impl DocumentStyleEngine {
                     }
                 }
             }
+            let child_has_scroller_with_scroll_marker_group =
+                has_scroller_ancestor_with_scroll_marker_group
+                    || computed_style.get(&index).is_some_and(|owner| {
+                        let style = unsafe { &*owner.Get() };
+                        !style.ScrollMarkerGroupNone()
+                            && (style.IsScrollContainer()
+                                || document.DocumentElement() == Some(index))
+                    });
             let mut push_child = |child: usize,
                                   parent: Option<usize>,
                                   ancestor_none: bool,
@@ -4316,6 +4988,7 @@ impl DocumentStyleEngine {
                         explicit,
                         subtree,
                         at_shadow_boundary,
+                        parent.is_some() && child_has_scroller_with_scroll_marker_group,
                     ));
                 }
             };
@@ -4410,6 +5083,12 @@ impl DocumentStyleEngine {
             }
             if clear_current_style {
                 document_owner.ClearResolvedStyle(index);
+                if document_owner
+                    .GeneratedPseudoElement(index, PseudoId::kPseudoIdOverscrollAreaParent)
+                    .is_some()
+                {
+                    document_owner.SetOverscrollAreaParentStyle(index, None);
+                }
             } else if let Some(resolved) = resolved_to_commit {
                 CommitResolvedStyle(
                     document_owner,
@@ -4418,6 +5097,49 @@ impl DocumentStyleEngine {
                     resolved,
                 );
                 changed_style_nodes.insert(index);
+            }
+            if element {
+                document_owner.DisplayLockDidStyleSelf(index);
+                if ensure_target.is_none() && !clear_current_style {
+                    // Element::RecalcOwnStyle, element.cc:5725-5752. Target
+                    // membership can change while computed style stays equal.
+                    document_owner.OverscrollDidStyleSelf(index);
+                    if document_owner.GetOverscrollContainer(index).is_some() {
+                        let parent = document_owner
+                            .ResolvedStyleFor(index)
+                            .expect("overscroll area style")
+                            .computed_style_owner
+                            .clone();
+                        let pseudo = document_owner
+                            .GeneratedPseudoElement(index, PseudoId::kPseudoIdOverscrollAreaParent)
+                            .unwrap_or_else(|| {
+                                document_owner.EnsureGeneratedPseudoElement(
+                                    index,
+                                    PseudoId::kPseudoIdOverscrollAreaParent,
+                                    parent.clone(),
+                                )
+                            });
+                        let style = self.ResolveOverscrollAreaParentStyle(
+                            document_owner,
+                            pseudo,
+                            index,
+                            parent,
+                            media,
+                            environment_variables,
+                            &production_resolver_rule_sets,
+                            &rule_collections,
+                            &resolver_batch,
+                            &computed_style,
+                            &custom_properties,
+                        )?;
+                        document_owner.SetOverscrollAreaParentStyle(index, Some(style));
+                    } else if document_owner
+                        .GeneratedPseudoElement(index, PseudoId::kPseudoIdOverscrollAreaParent)
+                        .is_some()
+                    {
+                        document_owner.SetOverscrollAreaParentStyle(index, None);
+                    }
+                }
             }
         }
         drop(sheets);
@@ -4438,9 +5160,24 @@ impl DocumentStyleEngine {
                 document,
                 &self.svg_style_elements,
                 &changed_style_nodes,
+                &crate::resolver::production_container_runtime::ProductionContainerRuntime {
+                    document,
+                    media,
+                    states: &self.container_states,
+                    snapped_dependencies: Some(&self.snapped_query_dependencies),
+                    stored_custom: &self.custom_properties,
+                    current_styles: None,
+                    current_custom: Some(&pending_custom_properties),
+                    environment: environment_variables,
+                    registered: Some(
+                        self.registered_container_properties
+                            .as_deref()
+                            .unwrap_or(&self.property_registry),
+                    ),
+                },
                 &mut stats,
                 &mut impact,
-            );
+            )?;
             let _publish_trace =
                 browser_tracing::span("style_commit", "StyleEngine.PublishSVGResourceStyles");
             for (index, resources) in svg_updates {
@@ -4457,6 +5194,7 @@ impl DocumentStyleEngine {
         self.custom_properties.extend(pending_custom_properties);
         self.invalidated_container_nodes.clear();
         self.interaction_changed_nodes.clear();
+        self.interaction_changed_subtrees.clear();
         self.interaction_changed_pseudos.clear();
         self.interaction_invalidation_roots.clear();
         for (index, dependent) in pending_container_dependencies {
@@ -4609,7 +5347,7 @@ impl DocumentStyleEngine {
             };
             let parsed = if document
                 .FindNodeById(sheet.owner_node_id)
-                .is_some_and(|index| document.Node(index).IsHTMLElement("style"))
+                .is_some_and(|index| document.Node(index).IsStyleElement())
             {
                 // Parser-delivered sheets already carry a typed backing and
                 // bypass SynchronizeStyleSheets. They must consume the same
@@ -4714,7 +5452,11 @@ impl DocumentStyleEngine {
                     &evaluator
                 };
                 !rules.DidMediaQueryResultsChange(medium)
-            });
+            })
+            && self
+                .translated_forced_media_rule_sets
+                .values()
+                .all(|rules| !rules.DidMediaQueryResultsChange(&forced_colors_evaluator));
         if environment_changed && !retained_viewport_environment {
             if viewport_only_change && owner_media_unchanged {
                 // cpp: StyleSheetContents::EnsureRuleSet. A viewport change
@@ -4761,6 +5503,24 @@ impl DocumentStyleEngine {
             .retain(|key, _| active_keys.contains(key));
         self.shared_rule_sets
             .retain(|_, (contents, _)| contents.strong_count() != 0);
+        self.translated_forced_media_rule_sets
+            .retain(|key, _| active_keys.contains(key));
+        for (sheet, _) in sheets.iter().filter(|(sheet, _)| {
+            sheet.UserAgentStyleSheetRole() == Some(CSSUserAgentStyleSheetRole::kMediaControls)
+        }) {
+            let key = (sheet.Identity(), sheet.Revision());
+            let changed = self
+                .translated_forced_media_rule_sets
+                .get(&key)
+                .is_none_or(|rules| rules.DidMediaQueryResultsChange(&forced_colors_evaluator));
+            if changed {
+                if let Some(typed) = self.typed_sheets.get(&key) {
+                    self.translated_forced_media_rule_sets
+                        .insert(key, Rc::new(typed.BuildRuleSet(&forced_colors_evaluator)));
+                    self.translated_rule_shadow_stats.rule_sets_built += 1;
+                }
+            }
+        }
         for (sheet, _) in sheets {
             let key = (sheet.Identity(), sheet.Revision());
             if key.0 == 0 || self.translated_rule_sets.contains_key(&key) {
@@ -4910,9 +5670,12 @@ impl DocumentStyleEngine {
         let mut html_quirks_user_agent = None;
         let mut forced_colors_user_agent = None;
         let mut marker_user_agent = None;
+        let mut overscroll_user_agent = None;
         let mut fullscreen_user_agent = None;
         let mut svg_user_agent = None;
         let mut mathml_user_agent = None;
+        let mut media_controls_user_agent = None;
+        let mut forced_media_controls_user_agent = None;
         let mut author = Vec::new();
         for (sheet_index, &(sheet, origin)) in sheets.iter().enumerate() {
             let tree_scope_root = match origin {
@@ -4960,6 +5723,20 @@ impl DocumentStyleEngine {
                     sheet_revision: sheet.Revision(),
                     tree_scope_root,
                 };
+            if origin == CascadeOrigin::kUserAgent
+                && sheet.UserAgentStyleSheetRole()
+                    == Some(CSSUserAgentStyleSheetRole::kMediaControls)
+            {
+                let forced = self.translated_forced_media_rule_sets.get(&key)?.clone();
+                let mut forced_input = input.clone();
+                forced_input.rule_set = forced;
+                if forced_media_controls_user_agent
+                    .replace(forced_input)
+                    .is_some()
+                {
+                    return None;
+                }
+            }
             match origin {
                 CascadeOrigin::kUserAgent => {
                     let slot = match sheet
@@ -4970,9 +5747,13 @@ impl DocumentStyleEngine {
                         CSSUserAgentStyleSheetRole::kHTMLQuirks => &mut html_quirks_user_agent,
                         CSSUserAgentStyleSheetRole::kForcedColors => &mut forced_colors_user_agent,
                         CSSUserAgentStyleSheetRole::kMarker => &mut marker_user_agent,
+                        CSSUserAgentStyleSheetRole::kOverscroll => &mut overscroll_user_agent,
                         CSSUserAgentStyleSheetRole::kFullscreen => &mut fullscreen_user_agent,
                         CSSUserAgentStyleSheetRole::kSVG => &mut svg_user_agent,
                         CSSUserAgentStyleSheetRole::kMathML => &mut mathml_user_agent,
+                        CSSUserAgentStyleSheetRole::kMediaControls => {
+                            &mut media_controls_user_agent
+                        }
                     };
                     // Chromium owns one aggregate RuleSet for each of these
                     // roles. Duplicate role owners are an invalid bundle; do
@@ -4995,9 +5776,12 @@ impl DocumentStyleEngine {
             html_quirks_user_agent,
             forced_colors_user_agent,
             marker_user_agent,
+            overscroll_user_agent,
             fullscreen_user_agent,
             svg_user_agent,
             mathml_user_agent,
+            media_controls_user_agent,
+            forced_media_controls_user_agent,
             author: Rc::new(author),
         })
     }
@@ -5611,6 +6395,113 @@ impl DocumentStyleEngine {
         }
         matches
     }
+    // cpp: StyleEngine::UpdateActiveStyle. Both normal recalc and an uncached
+    // scrollbar request must observe the same current stylesheet owners.
+    // Keep the previous published sheet baseline until normal invalidation.
+    fn ActiveStyleSheetsForRequest(
+        &mut self,
+        document_owner: &mut Document,
+        ua: UserAgentStyleSheetInput<'_>,
+    ) -> (
+        Arc<Vec<(Rc<CSSStyleSheet>, CascadeOrigin)>>,
+        Arc<Vec<Option<usize>>>,
+        bool,
+    ) {
+        let mut trace = browser_tracing::span("style_rules", "StyleEngine.UpdateActiveStyle");
+        let state = document_owner.StyleState();
+        if state.all_dirty
+            || !state.dirty_style_elements.is_empty()
+            || !state.inserted_style_subtrees.is_empty()
+        {
+            self.SynchronizeStyleSheets(document_owner);
+        }
+        let document = &*document_owner;
+        let revision = document.StyleState().sheet_revision;
+        let mut previous_ua = self
+            .active_sheets
+            .iter()
+            .filter(|(_, origin)| *origin == CascadeOrigin::kUserAgent)
+            .map(|(sheet, _)| sheet);
+        let mut shared_checks = 0;
+        let mut value_comparisons = 0;
+        let ua_unchanged = (0..ua.len()).all(|index| {
+            let Some(previous) = previous_ua.next() else {
+                return false;
+            };
+            if let Some(shared) = ua.shared(index) {
+                shared_checks += 1;
+                Rc::ptr_eq(previous, shared)
+            } else {
+                value_comparisons += 1;
+                previous.as_ref() == ua.sheet(index)
+            }
+        }) && previous_ua.next().is_none();
+        trace.set("ua_shared_owner_checks", shared_checks as f64);
+        trace.set("ua_value_comparisons", value_comparisons as f64);
+        // cpp: StyleEngine::UpdateActiveStyleSheets / NeedsActiveStyleSheetUpdate.
+        // The DOM version includes owner connectivity, order and adoption. Reuse
+        // both retained outputs when none of those inputs changed.
+        if self.sheet_revision == Some(revision) && ua_unchanged {
+            (
+                self.active_sheets.clone(),
+                self.active_sheet_scopes.clone(),
+                ua_unchanged,
+            )
+        } else {
+            let active_scope_sheets = document.ActiveStyleSheetsWithTreeScopes();
+            // ActiveStyleSheets holds stylesheet owners in Blink, not copies
+            // of their rule/declaration projections. Reuse immutable snapshots
+            // across list changes while retaining value checks for directly
+            // edited CSSOM projections and owner metadata.
+            let mut trace =
+                browser_tracing::span("style_rules", "StyleEngine.SnapshotActiveSheets");
+            let previous = self
+                .active_sheets
+                .iter()
+                .map(|(sheet, origin)| ((sheet.Identity(), sheet.Revision(), *origin as u8), sheet))
+                .collect::<HashMap<_, _>>();
+            let mut reused = 0;
+            let mut copied = 0;
+            let mut retain = |sheet: &CSSStyleSheet, origin: CascadeOrigin| {
+                let key = (sheet.Identity(), sheet.Revision(), origin as u8);
+                if let Some(previous) = previous.get(&key).filter(|previous| {
+                    previous.HasCurrentSource() == sheet.HasCurrentSource()
+                        && previous.as_ref() == sheet
+                }) {
+                    reused += 1;
+                    (*previous).clone()
+                } else {
+                    copied += 1;
+                    Rc::new(sheet.clone())
+                }
+            };
+            let mut sheets = Vec::with_capacity(ua.len() + active_scope_sheets.len());
+            let mut shared_ua = 0;
+            for index in 0..ua.len() {
+                let sheet = if let Some(shared) = ua.shared(index) {
+                    shared_ua += 1;
+                    shared.clone()
+                } else {
+                    retain(ua.sheet(index), CascadeOrigin::kUserAgent)
+                };
+                sheets.push((sheet, CascadeOrigin::kUserAgent));
+            }
+            for (_, sheet) in &active_scope_sheets {
+                sheets.push((
+                    retain(sheet, CascadeOrigin::kAuthor),
+                    CascadeOrigin::kAuthor,
+                ));
+            }
+            trace.set("reused", reused as f64);
+            trace.set("copied", copied as f64);
+            trace.set("shared_ua", shared_ua as f64);
+            let scopes = std::iter::repeat_n(None, ua.len())
+                .chain(active_scope_sheets.iter().map(|(scope, _)| Some(*scope)))
+                .collect::<Vec<_>>();
+            (Arc::new(sheets), Arc::new(scopes), ua_unchanged)
+        }
+    }
+
     // cpp: HTMLStyleElement::ProcessStyleSheet; StyleEngine::UpdateActiveStyleSheets.
     // CSSOM owns the parsed sheets; owner-node replacement preserves source order.
     fn SynchronizeStyleSheets(&mut self, document_owner: &mut Document) {
@@ -5646,7 +6537,7 @@ impl DocumentStyleEngine {
                 continue;
             }
             let node = document.Node(index);
-            if node.IsHTMLElement("style") && document.NeedsStyleSheetParsing(node.Id()) {
+            if node.IsStyleElement() && document.NeedsStyleSheetParsing(node.Id()) {
                 fn text(document: &Document, index: usize, result: &mut String) {
                     let node = document.Node(index);
                     if node.Type() == DOMNodeType::kText {
@@ -5672,7 +6563,23 @@ impl DocumentStyleEngine {
                             && contents.source.Utf8() == source
                             && contents.contents.ParserContext() == &parser_context
                     });
-                let mut sheet = if let Some(contents) = cached {
+                let mut sheet = if document.IsForMarkupSanitization() {
+                    // serialization.cc's staging Document must retain its parser
+                    // profile: CSSParserImpl rejects @import in this context.
+                    // The ordinary inline-sheet cache has a different context.
+                    fn collect_utf16(document: &Document, index: usize, result: &mut Vec<u16>) {
+                        if document.Node(index).Type() == DOMNodeType::kText {
+                            result.extend_from_slice(document.CharacterDataUTF16Slice(index));
+                        }
+                        for &child in document.Node(index).Children() {
+                            collect_utf16(document, child, result);
+                        }
+                    }
+                    let mut source_utf16 = Vec::new();
+                    collect_utf16(document, index, &mut source_utf16);
+                    self.ParseStyleElementSheet(document, index, &source_utf16)
+                        .unwrap_or_else(|| crate::ParseCSS(""))
+                } else if let Some(contents) = cached {
                     let mut projection =
                         crate::production_style_sheet_projection::ProjectStyleSheet(&contents);
                     projection.AttachParsedBacking(source, contents);
@@ -5724,7 +6631,9 @@ impl DocumentStyleEngine {
         computed_style: Option<&HashMap<usize, Persistent<ComputedStyle>>>,
         custom: Option<&HashMap<usize, Rc<CustomProperties>>>,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,
+        serialization_scope: Option<crate::serialization_style_query::SerializationRuleScope>,
     ) -> Result<CollectedRules, DocumentStyleError> {
+        let for_serialization = serialization_scope.is_some();
         let mut trace = browser_tracing::span("style_match", "StyleEngine.CollectRules");
         trace.set("node_id", document.Node(index).Id() as f64);
         trace.set("pseudo", pseudo.map_or(0, |kind| kind.Id().value()) as f64);
@@ -5749,6 +6658,7 @@ impl DocumentStyleEngine {
             .collect::<HashSet<_>>();
         let mut cascade_result = MatchResult::default();
         let mut direct_rules = Vec::new();
+        let mut serialization_declarations = Vec::new();
         {
             let registered_container_properties = self
                 .registered_container_properties
@@ -5759,6 +6669,7 @@ impl DocumentStyleEngine {
                     document,
                     media,
                     states: &self.container_states,
+                    snapped_dependencies: Some(&self.snapped_query_dependencies),
                     stored_custom: &self.custom_properties,
                     current_styles: computed_style,
                     current_custom: custom,
@@ -5796,7 +6707,17 @@ impl DocumentStyleEngine {
                 Option<usize>,
             )>::new();
             for (sheet_index, &(sheet, origin)) in sheets.iter().enumerate() {
-                let Some(expected_mode) = ExpectedSheetParserMode(document, origin) else {
+                if serialization_scope.is_some_and(|scope| !scope.Includes(origin)) {
+                    continue;
+                }
+                let expected_mode = if for_serialization && origin == CascadeOrigin::kUser {
+                    self.typed_sheets
+                        .get(&(sheet.Identity(), sheet.Revision()))
+                        .map(|typed| typed.contents.ParserContext().Mode())
+                } else {
+                    ExpectedSheetParserMode(document, origin)
+                };
+                let Some(expected_mode) = expected_mode else {
                     continue;
                 };
                 let key = (sheet.Identity(), sheet.Revision());
@@ -5829,7 +6750,16 @@ impl DocumentStyleEngine {
                     };
                 direct.push((sheet_index, origin, rule_set, implicit_scope_trigger));
             }
-            for origin in [CascadeOrigin::kUserAgent, CascadeOrigin::kAuthor] {
+            for origin in [
+                CascadeOrigin::kUserAgent,
+                CascadeOrigin::kUser,
+                CascadeOrigin::kAuthor,
+            ] {
+                if (origin == CascadeOrigin::kUser && !for_serialization)
+                    || serialization_scope.is_some_and(|scope| !scope.Includes(origin))
+                {
+                    continue;
+                }
                 if origin == CascadeOrigin::kAuthor
                     && (pseudo.is_none() || defer_author_until_after_slotted)
                 {
@@ -5852,16 +6782,18 @@ impl DocumentStyleEngine {
                         }
                     })
                     .collect::<Vec<_>>();
-                let collection = crate::production_rule_matching::CollectProductionRuleMatchesInto(
-                    &inputs,
-                    document,
-                    index,
-                    &mut self.selectors.borrow_mut(),
-                    origin,
-                    &pseudo_request,
-                    Some(&container_runtime),
-                    &mut cascade_result,
-                );
+                let collection =
+                    crate::production_rule_matching::CollectProductionRuleMatchesIntoWithPurpose(
+                        &inputs,
+                        document,
+                        index,
+                        &mut self.selectors.borrow_mut(),
+                        origin,
+                        &pseudo_request,
+                        Some(&container_runtime),
+                        &mut cascade_result,
+                        for_serialization,
+                    );
                 ConsumeProductionRuleCollection(
                     &mut self.translated_rule_shadow_stats,
                     sheets,
@@ -5869,6 +6801,7 @@ impl DocumentStyleEngine {
                     (origin == CascadeOrigin::kAuthor).then(|| document.TreeScopeRoot(index)),
                     collection,
                     &mut direct_rules,
+                    &mut serialization_declarations,
                 );
             }
 
@@ -5881,7 +6814,9 @@ impl DocumentStyleEngine {
             } else {
                 None
             };
-            if let Some(shadow_matching_index) = shadow_matching_index {
+            if let Some(shadow_matching_index) = shadow_matching_index.filter(|_| {
+                serialization_scope.is_none_or(|scope| scope.Includes(CascadeOrigin::kAuthor))
+            }) {
                 // cpp: style_resolver.cc:946-955,969-1030. Part names are
                 // retained across every OwnerShadowHost boundary. Each host's
                 // exportparts map is applied before entering the next outer
@@ -5960,7 +6895,7 @@ impl DocumentStyleEngine {
                         )
                         .collect::<Vec<_>>();
                     let collection =
-                        crate::production_rule_matching::CollectProductionShadowRuleMatchesInto(
+                        crate::production_rule_matching::CollectProductionShadowRuleMatchesIntoWithPurpose(
                             &inputs,
                             document,
                             shadow_matching_index,
@@ -5969,6 +6904,7 @@ impl DocumentStyleEngine {
                             &pass,
                             Some(&container_runtime),
                             &mut cascade_result,
+                    for_serialization,
                         );
                     ConsumeProductionRuleCollection(
                         &mut self.translated_rule_shadow_stats,
@@ -5981,6 +6917,7 @@ impl DocumentStyleEngine {
                         }),
                         collection,
                         &mut direct_rules,
+                    &mut serialization_declarations,
                     );
                 };
 
@@ -6049,7 +6986,7 @@ impl DocumentStyleEngine {
                         })
                         .collect::<Vec<_>>();
                     let collection =
-                        crate::production_rule_matching::CollectProductionRuleMatchesInto(
+                        crate::production_rule_matching::CollectProductionRuleMatchesIntoWithPurpose(
                             &inputs,
                             document,
                             index,
@@ -6058,6 +6995,7 @@ impl DocumentStyleEngine {
                             &pseudo_request,
                             Some(&container_runtime),
                             &mut cascade_result,
+                    for_serialization,
                         );
                     ConsumeProductionRuleCollection(
                         &mut self.translated_rule_shadow_stats,
@@ -6066,12 +7004,13 @@ impl DocumentStyleEngine {
                         Some(document.TreeScopeRoot(index)),
                         collection,
                         &mut direct_rules,
+                        &mut serialization_declarations,
                     );
                 }
             }
         }
         debug_assert!(
-            pseudo.is_some(),
+            for_serialization || pseudo.is_some(),
             "CollectRules is the generated-pseudo inventory path"
         );
         if direct_rules.len() > u16::MAX as usize {
@@ -6083,6 +7022,7 @@ impl DocumentStyleEngine {
         );
         Ok(CollectedRules {
             rules: direct_rules,
+            serialization_declarations,
         })
     }
     fn CompiledRuleMayMatchElement(
@@ -6287,6 +7227,113 @@ impl DocumentStyleEngine {
             .or_default()
             .insert(variant, compiled);
     }
+    // Element::UpdatePseudoElement(kOverscrollAreaParent), source element.cc
+    // 5438-5441/11468-11472; pseudo_element.cc:374-396. This internal pseudo
+    // has its own DOM element and UA sheet, independent of parent pseudo bits.
+    fn ResolveOverscrollAreaParentStyle(
+        &mut self,
+        document: &Document,
+        pseudo: usize,
+        area: usize,
+        parent: Persistent<ComputedStyle>,
+        media: &MediaValuesCachedData,
+        environment: Option<&dyn EnvironmentVariableResolver>,
+        rule_sets: &ProductionResolverRuleSets,
+        rule_collections: &Rc<
+            crate::resolver::production_style_resolver::ProductionRuleCollectionCache,
+        >,
+        resolver_batch: &Rc<crate::resolver::production_style_resolver::ProductionResolverBatch>,
+        current_styles: &HashMap<usize, Persistent<ComputedStyle>>,
+        current_custom: &HashMap<usize, Rc<CustomProperties>>,
+    ) -> Result<Persistent<ComputedStyle>, DocumentStyleError> {
+        let sheet =
+            rule_sets
+                .overscroll_user_agent
+                .clone()
+                .ok_or(DocumentStyleError::Unsupported(
+                    "overscroll UA resource owner",
+                ))?;
+        let root = document
+            .DocumentElement()
+            .and_then(|root| current_styles.get(&root))
+            .or_else(|| {
+                document
+                    .DocumentElement()
+                    .and_then(|root| document.ResolvedStyleFor(root))
+                    .map(|style| &style.computed_style_owner)
+            })
+            .cloned();
+        let font_root = root
+            .as_ref()
+            .map_or(unsafe { &*parent.Get() }.SpecifiedFontSize(), |root| {
+                unsafe { &*root.Get() }.SpecifiedFontSize()
+            });
+        let attribute_source = PersistentAttributeSource::new(
+            document,
+            area,
+            document.Node(area).Namespace() == DOMNamespace::kHTML,
+        );
+        let attribute_state = CascadeAttributeState::new();
+        let attributes = AttributeResolver::new(&attribute_source, &attribute_state, false);
+        let environment_state = CascadeEnvironment::new(environment);
+        let mut collaborators =
+            crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(
+                font_root,
+            );
+        collaborators.pseudo_id = PseudoId::kPseudoIdOverscrollAreaParent;
+        collaborators.originating_style = Some(parent.clone());
+        collaborators.subject_node = Some(pseudo);
+        collaborators.parent_custom_properties = current_custom
+            .get(&area)
+            .or_else(|| self.custom_properties.get(&area))
+            .map(Rc::as_ref);
+        collaborators.substitution_context = SubstitutionContext {
+            environment: Some(&environment_state),
+            attributes: Some(&attributes),
+        };
+        collaborators.pseudo_element_user_agent_rules = Some(sheet);
+        collaborators.root_style = root;
+        collaborators.rule_collections = Some(rule_collections.clone());
+        collaborators.resolver_batch = Some(resolver_batch.clone());
+        collaborators.declarations = Some(self.declarations.clone());
+        collaborators.vtt_style_sheets = Some(self.vtt_style_sheets.clone());
+        collaborators.property_registry = Some(&self.property_registry);
+        collaborators.font_metrics = self.font_metrics.as_deref();
+        collaborators.matched_properties_cache = Some(self.matched_properties_cache.clone());
+        collaborators.selectors = Some(self.selectors.clone());
+        collaborators.selector_backend = Some(
+            self.selectors
+                .borrow_mut()
+                .StyleMatchSession(document)
+                .Backend(),
+        );
+        collaborators.interaction = self.selectors.borrow().interaction;
+        collaborators.color_scheme_settings = self.color_scheme_settings;
+        let output = crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
+            crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
+                matching:
+                    crate::resolver::production_style_resolver::ProductionRuleMatchingInputs {
+                        document,
+                        element_index: pseudo,
+                        media,
+                        html_user_agent_rules: rule_sets.html_user_agent.clone(),
+                        svg_user_agent_rules: rule_sets.svg_user_agent.clone(),
+                        mathml_user_agent_rules: rule_sets.mathml_user_agent.clone(),
+                        author_rule_sets: rule_sets.author.clone(),
+                    },
+                parent: Some(parent),
+                collaborators,
+            },
+        )
+        .map_err(|_| DocumentStyleError::Unsupported("overscroll pseudo style resolver"))?;
+        self.resolver_dependencies.Merge(&output.metrics);
+        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*output.style.Get() });
+        environment_state.ApplyState(&mut builder);
+        attribute_state.ApplyState(&mut builder);
+        self.ResolveFontFeatureValues(&mut builder);
+        Ok(Persistent::from_ptr(builder.TakeStyle().cast_mut()))
+    }
+
     fn ResolvePseudoStyle(
         &mut self,
         document: &Document,
@@ -6391,12 +7438,18 @@ impl DocumentStyleEngine {
                 document,
                 media,
                 states: &self.container_states,
+                snapped_dependencies: Some(&self.snapped_query_dependencies),
                 stored_custom: &self.custom_properties,
                 current_styles: Some(current_styles),
                 current_custom: Some(current_custom),
                 environment: environment_variables,
                 registered: Some(registered_container_properties),
             };
+        let selector_backend = self
+            .selectors
+            .borrow_mut()
+            .StyleMatchSession(document)
+            .Backend();
         let mut collaborators =
             crate::resolver::production_style_resolver::ProductionBaseStyleCollaborators::ordinary(
                 root,
@@ -6404,6 +7457,7 @@ impl DocumentStyleEngine {
         collaborators.rule_collections = Some(rule_collections.clone());
         collaborators.resolver_batch = Some(resolver_batch.clone());
         collaborators.declarations = Some(self.declarations.clone());
+        collaborators.vtt_style_sheets = Some(self.vtt_style_sheets.clone());
         collaborators.html_quirks_user_agent_rules = rule_sets.html_quirks_user_agent.clone();
         collaborators.forced_colors_user_agent_rules = rule_sets.forced_colors_user_agent.clone();
         collaborators.pseudo_element_user_agent_rules = rule_sets.marker_user_agent.clone();
@@ -6431,6 +7485,7 @@ impl DocumentStyleEngine {
         collaborators.font_metrics = self.font_metrics.as_deref();
         collaborators.matched_properties_cache = Some(self.matched_properties_cache.clone());
         collaborators.selectors = Some(self.selectors.clone());
+        collaborators.selector_backend = Some(selector_backend);
         collaborators.interaction = self.selectors.borrow().interaction;
         match crate::resolver::production_style_resolver::ApplyBaseStyleForElement(
             crate::resolver::production_style_resolver::ProductionBaseStyleInputs {
@@ -6539,8 +7594,8 @@ impl DocumentStyleEngine {
                     .translated_style_cascade_pseudo_failures += 1;
                 if std::env::var_os("RECHROM_DEBUG_STYLE_RESOLVER").is_some() {
                     eprintln!(
-                                "translated pseudo StyleResolver failure node={index} pseudo={kind:?}: {failures:?}"
-                            );
+                        "translated pseudo StyleResolver failure node={index} pseudo={kind:?}: {failures:?}"
+                    );
                 }
                 return Err(DocumentStyleError::Unsupported(
                     "production-pseudo-style-resolver",
@@ -6675,6 +7730,69 @@ impl DocumentStyleEngine {
     }
 }
 
+// svg_length_context.cc:55-94. The package boundary schedules the source
+// substitution/parse at Style's existing SVG resource publication point; the
+// authored SVGLength retains the resulting compiled value owner.
+fn ResolveSVGMarkerLengthValues(
+    document: &Document,
+    node: usize,
+    context: &crate::resolver::production_container_runtime::ProductionContainerRuntime<'_>,
+) -> Result<Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues>, DocumentStyleError> {
+    use style_parser::svg_length_parser::SVGLengthInput;
+    let inputs = document.Node(node).SVGMarkerLengthInputs();
+    if !inputs.HasUnparsed() {
+        return Ok(inputs.Fallback());
+    }
+    let empty = CustomProperties::default();
+    let custom = context.custom(node).unwrap_or(&empty);
+    let mode = match document.GetCompatibilityMode() {
+        CompatibilityMode::kQuirks => {
+            crate::parser::css_parser_mode::CSSParserMode::kHTMLQuirksMode
+        }
+        _ => crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+    };
+    // svg_length_context.cc:65-85 creates StyleResolverState for the SVG
+    // context element. Use that same actual element and null namespace lookup;
+    // LowercaseIfNecessary applies only to HTML elements in HTML documents.
+    let attribute_source = PersistentAttributeSource::new(
+        document,
+        node,
+        document.Node(node).Namespace() == DOMNamespace::kHTML,
+    );
+    let attribute_state = CascadeAttributeState::new();
+    // Fixed revision's ordinary branch: CSSArgumentGrammar is a test-only
+    // feature. The shared resolver supports raw-string/default, dimension-unit
+    // and number, including fallback/attr taint/cycles. Its unported type()
+    // CSSSyntaxDefinition branch remains an explicit typed Unsupported.
+    let attributes = AttributeResolver::new(&attribute_source, &attribute_state, false);
+    let substitution = SubstitutionContext {
+        environment: context.environment,
+        attributes: Some(&attributes),
+    };
+    let resolve = |value: &SVGLengthInput| -> Result<
+        Arc<crate::css_numeric_literal_value::CSSNumericLiteralValue>,
+        DocumentStyleError,
+    > {
+        Ok(match value {
+            SVGLengthInput::Numeric(value)=>Arc::clone(value),
+            SVGLengthInput::Unparsed(value)=>match custom.SubstituteWithContext(&value.data,substitution){
+                Ok(data)=>value.ResolveTokens(data,mode),
+                Err(crate::resolver::production_style_builder::custom_properties::VariableResolutionError::Unsupported(operation))=>
+                    return Err(DocumentStyleError::Unsupported(operation)),
+                Err(_)=>value.Unresolved(),
+            },
+        })
+    };
+    Ok(Arc::new(
+        layoutng_style::css::svg_length_value::SVGMarkerLengthValues {
+            width: resolve(&inputs.width)?,
+            height: resolve(&inputs.height)?,
+            ref_x: resolve(&inputs.ref_x)?,
+            ref_y: resolve(&inputs.ref_y)?,
+        },
+    ))
+}
+
 // SVGResources::GetClient + LayoutSVGResourcePaintServer::ApplyShader own this
 // dependency in Chromium.  Rechrom's StyleEngine freezes the same local
 // resource result into its existing typed paint payload.  Scan URI consumers
@@ -6684,9 +7802,10 @@ fn ResolveSVGPaintServers(
     document: &Document,
     resident_svg_styles: &HashSet<usize>,
     changed_style_nodes: &HashSet<usize>,
+    containers: &crate::resolver::production_container_runtime::ProductionContainerRuntime<'_>,
     stats: &mut StyleUpdateStats,
     impact: &mut StyleUpdateImpact,
-) -> Vec<(usize, ResolvedStyleResources)> {
+) -> Result<Vec<(usize, ResolvedStyleResources)>, DocumentStyleError> {
     let mut trace = browser_tracing::span("style_resolve", "StyleEngine.ResolveSVGPaintServers");
     let snapshot = resident_svg_styles
         .iter()
@@ -6726,8 +7845,53 @@ fn ResolveSVGPaintServers(
         let marker_start = computed_style.and_then(|style| marker_url(style.MarkerStartResource()));
         let marker_mid = computed_style.and_then(|style| marker_url(style.MarkerMidResource()));
         let marker_end = computed_style.and_then(|style| marker_url(style.MarkerEndResource()));
+        let pattern_definition = document.Node(node).IsElement("pattern", DOMNamespace::kSVG);
+        let pattern_content_target = pattern_definition
+            .then(|| crate::svg_paint_server::PatternContentTarget(document, &snapshot, node))
+            .flatten();
         let mask_definition = document.Node(node).IsElement("mask", DOMNamespace::kSVG);
-        if !mask_definition
+        let marker_definition = document.Node(node).IsElement("marker", DOMNamespace::kSVG);
+        let resolved_marker_lengths = if marker_definition {
+            Some(ResolveSVGMarkerLengthValues(document, node, containers)?)
+        } else {
+            None
+        };
+        let length_container_sizes = marker_definition.then(|| {
+            use layoutng_style::css::css_primitive_value::UnitType::*;
+            let values = resolved_marker_lengths
+                .as_ref()
+                .expect("resolved SVG animated lengths");
+            let horizontal = computed_style
+                .expect("retained SVG style")
+                .IsHorizontalWritingMode();
+            let both = values.UsesUnit(kContainerMin) || values.UsesUnit(kContainerMax);
+            let width = both
+                || values.UsesUnit(kContainerWidth)
+                || values.UsesUnit(if horizontal {
+                    kContainerInlineSize
+                } else {
+                    kContainerBlockSize
+                });
+            let height = both
+                || values.UsesUnit(kContainerHeight)
+                || values.UsesUnit(if horizontal {
+                    kContainerBlockSize
+                } else {
+                    kContainerInlineSize
+                });
+            let parent = containers.FlatTreeParentElement(node);
+            layoutng_style::css::css_to_length_conversion_data::ContainerSizes::PreCached(
+                parent
+                    .filter(|_| width)
+                    .and_then(|parent| containers.ContainerUnitSizeForAxis(parent, true)),
+                parent
+                    .filter(|_| height)
+                    .and_then(|parent| containers.ContainerUnitSizeForAxis(parent, false)),
+            )
+        });
+        if !pattern_definition
+            && !marker_definition
+            && !mask_definition
             && fill_reference.is_none()
             && stroke_reference.is_none()
             && marker_start.is_none()
@@ -6739,31 +7903,38 @@ fn ResolveSVGPaintServers(
         clients += 1;
         let fill_opacity = computed_style.map_or(1.0, |style| style.FillOpacity());
         let stroke_opacity = computed_style.map_or(1.0, |style| style.StrokeOpacity());
+        let force_dark = computed_style.is_some_and(ComputedStyle::ForceDark);
         let fill = fill_reference.as_deref().and_then(|reference| {
-            crate::svg_paint_server::Resolve(document, node, &snapshot, reference, fill_opacity)
+            crate::svg_paint_server::Resolve(
+                document,
+                node,
+                &snapshot,
+                reference,
+                fill_opacity,
+                force_dark,
+            )
         });
         let stroke = stroke_reference.as_deref().and_then(|reference| {
-            crate::svg_paint_server::Resolve(document, node, &snapshot, reference, stroke_opacity)
+            crate::svg_paint_server::Resolve(
+                document,
+                node,
+                &snapshot,
+                reference,
+                stroke_opacity,
+                force_dark,
+            )
         });
-        let paint = layoutng::internal::boundary::paint_style_export::Export(
-            computed_style.expect("resolved SVG client style must be owned"),
-            None,
-        );
-        let context_paint = crate::svg_paint_server::SVGContextPaint::new(&paint, &fill, &stroke);
-        let markers = crate::svg_paint_server::ResolveMarkers(
-            document,
-            &snapshot,
-            node,
-            context_paint,
-            marker_start.as_deref(),
-            marker_mid.as_deref(),
-            marker_end.as_deref(),
-            paint.svg_stroke_width,
-        );
+        // Marker placement and resource contents remain on native Layout
+        // owners. Production Paint visits that same subtree; the old flattened
+        // primitive list remains only a detached fixture compatibility payload.
+        let markers = Vec::new();
         let mask_graph = mask_definition
             .then(|| crate::svg_paint_server::ResolveMaskDefinition(document, &snapshot, node));
         let current_resources = document.ResolvedStyleResourcesFor(node);
-        if current_resources.svg_mask_resource == mask_graph
+        if current_resources.svg_pattern_content_target == pattern_content_target
+            && current_resources.svg_length_container_sizes == length_container_sizes
+            && current_resources.svg_marker_resolved_lengths == resolved_marker_lengths
+            && current_resources.svg_mask_resource == mask_graph
             && current_resources.svg_fill_server == fill
             && current_resources.svg_stroke_server == stroke
             && current_resources.svg_markers == markers
@@ -6772,6 +7943,12 @@ fn ResolveSVGPaintServers(
         }
         let mut updated = current_resources.clone();
         updated.svg_mask_resource = mask_graph;
+        updated.svg_pattern_content_target = pattern_content_target;
+        updated.svg_length_container_sizes = length_container_sizes;
+        updated.svg_marker_resolved_lengths = resolved_marker_lengths;
+        impact.layout |=
+            current_resources.svg_marker_resolved_lengths != updated.svg_marker_resolved_lengths;
+        impact.layout |= current_resources.svg_length_container_sizes != length_container_sizes;
         updated.svg_fill_server = fill;
         updated.svg_stroke_server = stroke;
         updated.svg_markers = markers;
@@ -6787,7 +7964,7 @@ fn ResolveSVGPaintServers(
     trace.set("updated", updates.len() as f64);
     drop(snapshot);
     if updates.is_empty() {
-        return updates;
+        return Ok(updates);
     }
     for (node, _) in &updates {
         if !changed_style_nodes.contains(node) {
@@ -6805,7 +7982,7 @@ fn ResolveSVGPaintServers(
         }
         (depth, document.Node(*node).Id())
     });
-    updates
+    Ok(updates)
 }
 
 fn ApplyTextControlInnerEditorCustomStyle(
@@ -6836,6 +8013,10 @@ fn ApplyTextControlInnerEditorCustomStyle(
         builder.SetScrollbarWidth(EScrollbarWidth::kNone);
         builder.SetDisplay(EDisplay::kFlowRoot);
     }
+    // cpp: TextControlInnerEditorElement::CustomStyleForLayoutObject. The
+    // custom style installs user-modify after normal resolver adjustment, so
+    // Chromium explicitly reapplies its editing-only white-space adjustment.
+    style_resolve::style_adjuster::AdjustStyleForEditingValues(builder);
     builder.SetOpacity(if document.TextControlInnerEditorIsVisible(element) {
         1.0
     } else {
@@ -7232,6 +8413,10 @@ fn ProductionRuleSetDifference(old: &RetainedRuleSet, new: &RetainedRuleSet) -> 
     let mut difference = RuleSet::new();
     difference.AddFilteredRulesFromOtherSet(old, &old_only);
     difference.AddFilteredRulesFromOtherSet(new, &new_only);
+    // cpp: RuleSetDiff::CreateDiffRuleset. RuleMap's insertion indices are
+    // bucket numbers until compaction; both the invalidation inventory and
+    // ElementRuleCollector require contiguous, indexed selector buckets.
+    difference.CompactRulesIfNeeded();
     Rc::new(difference)
 }
 
@@ -7365,6 +8550,11 @@ fn ShouldStoreComputedStyle(document: &Document, index: usize, style: &ComputedS
     if style.Display() != EDisplay::kNone {
         return true;
     }
+    if document.SelectPickerShouldStoreComputedStyle(index, style) == Some(true)
+        || document.DataListSupportsBaseAppearance(index, style.EffectiveAppearance())
+    {
+        return true;
+    }
     let node = document.Node(index);
     if node.IsHTMLElement("area") {
         return true;
@@ -7447,9 +8637,7 @@ fn StyleImpact(
                     return (StyleUpdateImpact::TREE, reattach);
                 }
                 let fields = style_diff::FieldInvalidationDiff(old_style, new_style);
-                let layout = fields
-                    & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
-                    != 0;
+                let layout = StyleFieldsNeedLayout(old_style, new_style, fields);
                 pseudo_impact.layout |= layout;
                 pseudo_impact.paint |= layout
                     || fields != 0
@@ -7470,8 +8658,8 @@ fn StyleImpact(
     }
     let difference = style_diff::ComputeDifference(old_computed_style, new_computed_style);
     let fields = style_diff::FieldInvalidationDiff(old_computed_style, new_computed_style);
-    // cpp: ComputedStyle::VisualInvalidationDiff, computed style.cc:753-757.
-    let layout = fields & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits()) != 0;
+    // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-780.
+    let layout = StyleFieldsNeedLayout(old_computed_style, new_computed_style, fields);
     (
         StyleUpdateImpact {
             reattach: false,
@@ -7483,6 +8671,15 @@ fn StyleImpact(
         },
         reattach,
     )
+}
+
+// cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:749-780.
+// The shared translated second stage covers the document-independent branches
+// from DiffNeedsReshape, DiffNeedsFullLayoutAndPaintInvalidation, and
+// DiffNeedsFullLayout. Layout Custom remains document-owned and dormant until
+// the LayoutWorklet implementation is present.
+fn StyleFieldsNeedLayout(old: &ComputedStyle, new: &ComputedStyle, fields: u64) -> bool {
+    old.VisualInvalidationDiffNeedsLayout(new, fields)
 }
 
 // cpp: StyleRecalcChange::RecalcContainerQueryDependentStyle and
@@ -7689,6 +8886,10 @@ fn FinishUpdate(document: &mut Document, stats: StyleUpdateStats, impact: StyleU
     state.all_dirty = false;
     state.changes.clear();
     state.independent_inline_styles.clear();
+    state.subtree_style_recalc_roots.clear();
+    state.style_recalc_dirty_nodes.clear();
+    state.child_needs_style_recalc.clear();
+    state.detach_parent_recalc_roots.clear();
     state.attribute_changes.clear();
     state.sibling_sensitive_nodes.clear();
     state.descendant_sensitive_nodes.clear();
@@ -7836,4 +9037,159 @@ fn ContainerConditionsMatch(
         }
         result == KleeneValue::kTrue
     })
+}
+
+#[path = "serialization_style_query_impl.rs"]
+mod serialization_style_query_impl;
+
+/// CSS SnappedQueryScrollSnapshot keeps only its two source target identities;
+/// native scroller geometry and CSS matching remain with their original owners.
+#[derive(Default)]
+struct SnappedQueryScrollSnapshot {
+    target_x: Option<usize>,
+    target_y: Option<usize>,
+    current_x: Option<usize>,
+    current_y: Option<usize>,
+}
+impl DocumentStyleEngine {
+    pub fn TakeSnappedQuerySubscriptionRequests(&mut self) -> Vec<usize> {
+        let requests = self
+            .snapped_query_dependencies
+            .borrow()
+            .difference(&self.snapped_query_bound_dependencies)
+            .copied()
+            .collect::<Vec<_>>();
+        requests
+    }
+    pub fn MarkSnappedQuerySubscriptionBound(&mut self, node: usize) {
+        self.snapped_query_bound_dependencies.insert(node);
+    }
+    pub fn ForgetSnappedQueryScrollSnapshot(&mut self, scroller: foundation::CompositorElementId) {
+        self.snapped_query_snapshots.remove(&scroller);
+    }
+    pub fn EnsureSnappedQueryScrollSnapshot(&mut self, scroller: foundation::CompositorElementId) {
+        self.snapped_query_snapshots.entry(scroller).or_default();
+    }
+    pub fn SnappedQuerySnapshotSources(&self) -> Vec<foundation::CompositorElementId> {
+        self.snapped_query_snapshots.keys().copied().collect()
+    }
+    pub fn ObserveSnappedQueryTargets(
+        &mut self,
+        owner: &mut DOM,
+        scroller: foundation::CompositorElementId,
+        x: Option<usize>,
+        y: Option<usize>,
+    ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
+        if owner.GetDocument().RootHandle() != self.document {
+            return Err(DocumentStyleError::WrongDocument);
+        }
+        // PLSA.cc:3600-3626: ensure only if an actual target evaluator depends
+        // on snapped. A pre-existing snapshot remains a source frame client.
+        let depends = [x, y]
+            .into_iter()
+            .flatten()
+            .any(|node| self.snapped_query_dependencies.borrow().contains(&node));
+        if depends {
+            self.EnsureSnappedQueryScrollSnapshot(scroller);
+        }
+        let Some(snapshot) = self.snapped_query_snapshots.get_mut(&scroller) else {
+            return Ok(false);
+        };
+        let changed = snapshot.current_x != x || snapshot.current_y != y;
+        snapshot.current_x = x;
+        snapshot.current_y = y;
+        Ok(changed)
+    }
+    /// PostLayoutSnapshotClient::UpdateSnapshot, snapped_query_scroll_snapshot.cc:29-57;
+    /// ContainerQueryEvaluator::SetPendingSnappedStateFromScrollSnapshot, cc386-409.
+    pub fn UpdateSnappedQuerySnapshots(
+        &mut self,
+        owner: &mut DOM,
+    ) -> Result<bool, DocumentStyleError> {
+        self.EnsureAttached()?;
+        if owner.GetDocument().RootHandle() != self.document {
+            return Err(DocumentStyleError::WrongDocument);
+        }
+        let mut updates = Vec::new();
+        for snapshot in self.snapped_query_snapshots.values_mut() {
+            let mut changed = Vec::new();
+            if snapshot.target_x != snapshot.current_x {
+                changed.extend([snapshot.target_x, snapshot.current_x]);
+                snapshot.target_x = snapshot.current_x;
+            }
+            if snapshot.target_y != snapshot.current_y {
+                changed.extend([snapshot.target_y, snapshot.current_y]);
+                snapshot.target_y = snapshot.current_y;
+            }
+            for target in changed.into_iter().flatten() {
+                updates.push((
+                    target,
+                    (if snapshot.target_x == Some(target) {
+                        1
+                    } else {
+                        0
+                    }) | (if snapshot.target_y == Some(target) {
+                        2
+                    } else {
+                        0
+                    }),
+                ));
+            }
+        }
+        let mut did_change = false;
+        for (node, flags) in updates {
+            if !self.snapped_query_dependencies.borrow().contains(&node) {
+                continue;
+            }
+            let Some(style) = owner
+                .GetDocument()
+                .ResolvedStyleFor(node)
+                .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
+            else {
+                continue;
+            };
+            let mut state = self
+                .container_states
+                .get(&node)
+                .cloned()
+                .unwrap_or_else(|| {
+                    let mut state = ContainerState::SizeOnly(0., 0., style.GetWritingDirection());
+                    state.width = None;
+                    state.height = None;
+                    state
+                });
+            state.snapped = flags;
+            state.snapped_state_available = true;
+            did_change |= self.SetContainerState(owner, node, Some(state))?;
+        }
+        Ok(did_change)
+    }
+}
+
+// text_utils.cc14-24: use original style before inherited child style exists.
+struct DateTimeTextMetrics<'a>(Option<&'a dyn production_style_builder::FontMetricsResolver>);
+impl dom::persistent_document::DateTimeCustomStyleTextMetrics for DateTimeTextMetrics<'_> {
+    fn TextWidth(
+        &self,
+        text: &[u16],
+        original: &ComputedStyle,
+    ) -> Result<f32, dom::persistent_document::DateTimeCustomStyleError> {
+        use dom::persistent_document::DateTimeCustomStyleError as E;
+        if text.is_empty() {
+            return Ok(0.);
+        }
+        let resolver = self.0.ok_or(E::FontUnavailable)?;
+        let direction = font_engine::plain_text_painter::PlainTextPainter::BaseDirection(text);
+        match resolver.TextWidth(
+            original.GetFontDescription(),
+            text,
+            direction,
+            original.RtlOrdering() == foundation::EOrder::kVisual,
+        ) {
+            font_engine::FontCompute::Ready(width) => Ok(width),
+            font_engine::FontCompute::Pending(_) => Err(E::FontPending),
+            font_engine::FontCompute::Error(_) => Err(E::FontUnavailable),
+        }
+    }
 }

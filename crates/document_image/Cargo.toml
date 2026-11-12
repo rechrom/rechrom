@@ -11,4 +11,5 @@ dom = { path = "../dom" }
 html = { path = "../html" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 paint = { path = "../paint" }

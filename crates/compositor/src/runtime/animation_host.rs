@@ -73,6 +73,10 @@ struct AnimationState {
     scroll: Option<ScrollOffsetAnimationsImpl>,
     timelines: BTreeMap<i32, ScrollTimelineRef>,
     animations: BTreeMap<i32, AnimationHandle>,
+    source_scroll_animations: BTreeMap<i32, AnimationHandle>,
+    source_scroll_completions:
+        Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion>,
+    scroll_updates: compositor_animation::scroll_offset_animations::ScrollOffsetAnimations,
     ticking: BTreeSet<i32>,
     elements: BTreeMap<ElementId, ElementState>,
     layer_tree_mutator: Option<Box<super::host_owners::LayerTreeMutator>>,
@@ -86,6 +90,7 @@ struct AnimationState {
     has_smil_animation: bool,
     has_view_transition: bool,
     needs_push_properties: bool,
+    needs_commit: bool,
     delegate: Option<LayerTreeHostId>,
 }
 
@@ -338,6 +343,9 @@ impl Default for AnimationHostOwner {
                 scroll: Some(ScrollOffsetAnimationsImpl::new(host)),
                 timelines: BTreeMap::new(),
                 animations: BTreeMap::new(),
+                source_scroll_animations: BTreeMap::new(),
+                source_scroll_completions: Vec::new(),
+                scroll_updates: Default::default(),
                 ticking: BTreeSet::new(),
                 elements: BTreeMap::new(),
                 layer_tree_mutator: None,
@@ -350,6 +358,7 @@ impl Default for AnimationHostOwner {
                 has_smil_animation: false,
                 has_view_transition: false,
                 needs_push_properties: false,
+                needs_commit: false,
                 delegate: None,
             })),
             config: Arc::new(ScrollCurveConfig::default()),
@@ -365,6 +374,218 @@ impl AnimationHostOwner {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Platform CompositorAnimation.cc:39-105. All commands target the same
+    /// native allocations; return only the source remove/drop-delta decision.
+    pub(crate) fn ApplySourceScrollAnimation(
+        &self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) -> Option<ElementId> {
+        use crate::cc::animation::{
+            animation_timeline::AnimationTimeline, keyframe_model::TargetPropertyId,
+        };
+        use scroll_animation::compositor_mutation::ScrollAnimationMutation as M;
+        let mut call = AnimationCall::detached(self);
+        let animation_id = match &mutation {
+            M::Create { animation }
+            | M::Dispose { animation }
+            | M::Attach { animation, .. }
+            | M::Detach { animation, .. }
+            | M::AddKeyframeModel { animation, .. }
+            | M::RemoveKeyframeModel { animation, .. }
+            | M::AbortKeyframeModel { animation, .. } => Some(*animation),
+            _ => None,
+        };
+        if let M::Create { animation } = mutation {
+            let native = Animation::Create(animation);
+            native
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .set_animation_delegate(Some(AnimationDelegateId(animation as u64)));
+            assert!(self
+                .lock()
+                .source_scroll_animations
+                .insert(animation, native)
+                .is_none());
+            return None;
+        }
+        let native = animation_id.map(|id| {
+            self.lock()
+                .source_scroll_animations
+                .get(&id)
+                .cloned()
+                .expect("source CompositorAnimation owner")
+        });
+        match mutation {
+            M::Create { .. } => unreachable!(),
+            M::Dispose { animation } => {
+                let native = native.unwrap();
+                let timeline = {
+                    let mut selected = native
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    selected.set_animation_delegate(None);
+                    selected.animation_timeline()
+                };
+                if let Some(timeline) = timeline {
+                    let timeline = self
+                        .lock()
+                        .timelines
+                        .get(&timeline)
+                        .cloned()
+                        .expect("source scroll timeline");
+                    timeline
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .DetachAnimation(&native, &mut call);
+                }
+                self.lock().source_scroll_animations.remove(&animation);
+            }
+            M::Attach {
+                timeline, element, ..
+            } => {
+                let existing = self.lock().timelines.get(&timeline).cloned();
+                let timeline = if let Some(existing) = existing {
+                    existing
+                } else {
+                    let new = Arc::new(Mutex::new(
+                        AnimationTimeline::<ScrollAnimationTypes>::Create(timeline, false),
+                    ));
+                    call.AddAnimationTimeline(new.clone());
+                    new
+                };
+                let native = native.unwrap();
+                timeline
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .AttachAnimation(native.clone(), &mut call);
+                native
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .AttachElement(element, &mut call);
+            }
+            M::Detach { timeline, .. } => {
+                let native = native.unwrap();
+                {
+                    let mut animation = native
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if animation.element_id() != ElementId::default() {
+                        animation.DetachElement(&mut call);
+                    }
+                }
+                let timeline = self
+                    .lock()
+                    .timelines
+                    .get(&timeline)
+                    .cloned()
+                    .expect("attached source scroll timeline");
+                timeline
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .DetachAnimation(&native, &mut call);
+            }
+            M::AddKeyframeModel {
+                model,
+                group,
+                curve,
+                start,
+                ..
+            } => {
+                let mut model = KeyframeModel::Create(
+                    Some(curve),
+                    model,
+                    group,
+                    TargetPropertyId::new(TargetProperty::SCROLL_OFFSET as i32),
+                    self.trace.clone(),
+                );
+                model.base_mut().set_start_time(start);
+                model.set_needs_synchronized_start_time(true);
+                native
+                    .unwrap()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .AddKeyframeModel(Box::new(model), &mut call);
+            }
+            M::RemoveKeyframeModel {
+                model,
+                element,
+                drop_scroll_delta_if_interrupted,
+                ..
+            } => {
+                let native = native.unwrap();
+                let mut animation = native
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                animation.RemoveKeyframeModel(model, &mut call);
+                if drop_scroll_delta_if_interrupted
+                    && animation
+                        .keyframe_effect()
+                        .scroll_offset_animation_was_interrupted()
+                {
+                    return Some(element);
+                }
+            }
+            M::AbortKeyframeModel { model, .. } => {
+                native
+                    .unwrap()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .AbortKeyframeModel(model, &mut call);
+            }
+            M::ImplOnlyAdjustment {
+                element,
+                adjustment,
+            } => {
+                let mut state = self.lock();
+                state
+                    .scroll_updates
+                    .AddAdjustmentUpdate(element, adjustment);
+                state.needs_push_properties = true;
+            }
+            M::ImplOnlyTakeover { element } => {
+                let mut state = self.lock();
+                state.scroll_updates.AddTakeoverUpdate(element);
+                state.needs_push_properties = true;
+                state.needs_commit = true;
+            }
+        }
+        None
+    }
+    /// AnimationHost.cc:795-822, called by the real BeginMainFrame transaction.
+    pub(crate) fn ApplySourceAnimationEvents(&self, mut events: Box<MutatorEvents>) {
+        events.WithScrollAnimationEvents(&mut |events| {
+            for event in events.events() {
+                if let crate::cc::animation::animation_events::Event::Playback(event) = event {
+                    let timeline = self.lock().timelines.get(&event.uid.timeline_id).cloned();
+                    let Some(timeline) = timeline else {
+                        continue;
+                    };
+                    let animation = timeline
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .GetAnimationById(event.uid.animation_id)
+                        .cloned();
+                    if let Some(animation) = animation {
+                        animation
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .DispatchAndDelegateAnimationEvent(
+                                event,
+                                &mut AnimationCall::detached(self),
+                            );
+                    }
+                }
+            }
+        });
+    }
+    pub(crate) fn TakeSourceScrollCompletions(
+        &self,
+    ) -> Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion> {
+        std::mem::take(&mut self.lock().source_scroll_completions)
+    }
+    pub(crate) fn TakeNeedsCommit(&self) -> bool {
+        std::mem::take(&mut self.lock().needs_commit)
+    }
     pub(crate) fn identity(&self) -> super::types::MainMutatorHostIdentity {
         self.identity
     }
@@ -668,6 +889,16 @@ impl AnimationHostOwner {
                 property_trees,
             },
         );
+        let updates = self.lock().scroll_updates.TakeUpdates();
+        target_owner.WithScroll(None, None, |scroll, call| {
+            for (_, update) in updates {
+                if update.takeover {
+                    scroll.ScrollAnimationAbort(true, update.element, call);
+                } else {
+                    scroll.ScrollAnimationApplyAdjustment(update.element, &update.adjustment, call);
+                }
+            }
+        });
     }
 
     pub(crate) fn UpdateAnimationState(
@@ -1137,6 +1368,7 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         self.owner.lock().ticking.remove(&animation);
     }
     fn HostSetNeedsCommit(&mut self, _host: AnimationHostId) {
+        self.owner.lock().needs_commit = true;
         if let Some(target) = self.target.as_deref_mut() {
             target.SetMutatorsNeedCommit();
         }
@@ -1272,7 +1504,21 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         _property: i32,
         _group: i32,
     ) {
-        if let (Some(target), Some(element)) = (self.target.as_deref_mut(), self.selected_element) {
+        if self
+            .owner
+            .lock()
+            .source_scroll_animations
+            .contains_key(&(_delegate.0 as i32))
+        {
+            self.owner.lock().source_scroll_completions.push(
+                scroll_animation::compositor_mutation::ScrollAnimationCompletion::Finished {
+                    animation: _delegate.0 as i32,
+                    group: _group,
+                },
+            );
+        } else if let (Some(target), Some(element)) =
+            (self.target.as_deref_mut(), self.selected_element)
+        {
             target.ScrollOffsetAnimationFinished(element, None);
         }
     }
@@ -1283,6 +1529,19 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         _property: i32,
         _group: i32,
     ) {
+        if self
+            .owner
+            .lock()
+            .source_scroll_animations
+            .contains_key(&(_delegate.0 as i32))
+        {
+            self.owner.lock().source_scroll_completions.push(
+                scroll_animation::compositor_mutation::ScrollAnimationCompletion::Aborted {
+                    animation: _delegate.0 as i32,
+                    group: _group,
+                },
+            );
+        }
     }
     fn DelegateAnimationTakeover(
         &mut self,
@@ -1406,7 +1665,13 @@ impl AnimationTimelineContext<ScrollAnimationTypes> for AnimationCall<'_> {
     }
     fn HostWaitForProtectedSequenceCompletion(&self, _host: AnimationHostId) {}
     fn HostSetNeedsPushProperties(&mut self, _host: AnimationHostId) {
-        self.owner.lock().needs_push_properties = true;
+        {
+            let mut state = self.owner.lock();
+            if !state.needs_push_properties {
+                state.needs_commit = true;
+            }
+            state.needs_push_properties = true;
+        }
         if let Some(target) = self.target.as_deref_mut() {
             target.SetMutatorsNeedCommit();
         }

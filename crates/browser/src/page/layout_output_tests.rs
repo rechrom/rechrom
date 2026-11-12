@@ -9,14 +9,19 @@ use page_mutation::{
 use paint::paint_engine::PaintRect;
 use std::cell::RefCell;
 
-struct Client;
-impl PageClient for Client {}
+#[derive(Default)]
+struct Client(crate::page::PageChromeState);
+impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: crate::page::EventHandlerChromeEffect) {
+        self.0.Apply(effect);
+    }
+}
 fn constraints() -> ConstraintSpace {
     // Match the live browser's viewport, themes, font catalog and native backend.
     crate::CreateBrowserConstraints(320, 200)
 }
 fn state(html: &str) -> Rc<PageState> {
-    let state = PageState::new(constraints(), Rc::new(RefCell::new(Client)));
+    let state = PageState::new(constraints(), Rc::new(RefCell::new(Client::default())));
     *state.document.borrow_mut() = html::html_parser::ParseHTML(html);
     state
 }
@@ -71,7 +76,6 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_la
                 value: String::new(),
                 ..Default::default()
             },
-            &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
         let (document_id, next_id) = {
@@ -89,7 +93,6 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_la
                 name: "div".into(),
                 ..Default::default()
             },
-            &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
         assert_eq!(before, held(&state));
@@ -100,6 +103,8 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_la
         state.ApplyMutation(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: node,
             offset: Offset::default(),
+            scroll_type:
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }));
         state.ApplyMutation(PageMutation::InteractionStateMutation(
             InteractionStateMutation::default(),
@@ -154,7 +159,6 @@ fn paint_selector_attribute_mutations_preserve_resident_layout_geometry() {
                 value: "stable".into(),
                 ..Default::default()
             },
-            &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
         assert_eq!(before, held(&state));
@@ -167,7 +171,6 @@ fn paint_selector_attribute_mutations_preserve_resident_layout_geometry() {
                 value: "true".into(),
                 ..Default::default()
             },
-            &mut || {},
             &mut |_, _| panic!("unexpected image callback"),
         );
         assert_eq!(before, held(&state));
@@ -187,6 +190,8 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
         state.ApplyMutation(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: scroller,
             offset: Offset { x: 0., y: 10. },
+            scroll_type:
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }));
         assert!(state.layout_revision.get().is_none());
         assert_eq!(geometry(&state, node)[0].y, y - 10.);
@@ -233,6 +238,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
         assert!(state.styles_resolved.get());
         state.ApplyResourceMutation(ResourceMutation::ImageResourceReady(
             page_mutation::ImageResourceReady {
+                content: None,
                 source: "fixture.png".into(),
                 image: PaintImage {
                     id: 800,
@@ -323,7 +329,6 @@ fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
                 value: "width:80px;height:20px;background:blue".into(),
                 ..Default::default()
             },
-            &mut || {},
             &mut |_, _| {},
         );
         assert_eq!(geometry(&page.state, node)[0].width, 80.);
@@ -397,7 +402,6 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
                     value: format!("width:40px;height:20px;background:blue;opacity:{opacity}"),
                     ..Default::default()
                 },
-                &mut || {},
                 &mut |_, _| {},
             );
             assert_eq!(geometry(&page.state, node), before);

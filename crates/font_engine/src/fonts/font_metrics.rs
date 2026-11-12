@@ -26,6 +26,7 @@ pub struct FontMetrics {
     hanging_baseline_position_: Option<f32>,
     int_ascent_: i32,
     int_descent_: i32,
+    device_scale_factor_: f32,
     has_x_height_: bool,
     has_zero_width_: bool,
 }
@@ -67,6 +68,13 @@ impl FontMetrics {
         self.float_descent_ = descent;
         self.int_descent_ = descent.round() as i32;
     }
+    pub fn SetDeviceScaleFactor(&mut self, scale: f32) {
+        self.device_scale_factor_ = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+    }
     pub fn FloatHeight(&self) -> f32 {
         self.float_ascent_ + self.float_descent_
     }
@@ -103,6 +111,12 @@ impl FontMetrics {
     }
     pub fn LineSpacing(&self) -> i32 {
         self.line_spacing_.round() as i32
+    }
+    /// CSS-coordinate equivalent of Chromium's integer zoom-for-DSF metric.
+    /// The platform strike has already been rounded before this value is
+    /// dezoomed, so rounding it again would turn 37/2 into 19.
+    pub fn FloatLineSpacing(&self) -> f32 {
+        self.line_spacing_
     }
     pub fn SetLineSpacing(&mut self, line_spacing: f32) {
         self.line_spacing_ = line_spacing;
@@ -176,6 +190,14 @@ impl FontMetrics {
         FontHeight::new(self.FixedAscent(baseline), self.FixedDescent(baseline))
     }
     pub fn GetFontHeight(&self, baseline: FontBaseline) -> FontHeight {
+        // Chromium keeps zoom-for-DSF font metrics in device-scaled Layout
+        // units, so integer ascent/descent can become fractional CSS values
+        // after the frame dezooms them. Rechrom stores CSS values directly;
+        // retain that same fraction whenever platform metrics were sampled at
+        // a non-unit device scale.
+        if self.device_scale_factor_ != 0.0 && self.device_scale_factor_ != 1.0 {
+            return self.GetFloatFontHeight(baseline);
+        }
         FontHeight::new(
             LayoutUnit::from_signed(self.AscentFor(baseline)),
             LayoutUnit::from_signed(self.DescentFor(baseline)),
@@ -234,6 +256,7 @@ impl FontMetrics {
         self.float_descent_ = 0.0;
         self.int_ascent_ = 0;
         self.int_descent_ = 0;
+        self.device_scale_factor_ = 0.0;
         self.line_gap_ = 0.0;
         self.line_spacing_ = 0.0;
         self.x_height_ = 0.0;

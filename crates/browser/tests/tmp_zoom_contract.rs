@@ -1,7 +1,12 @@
 use browser::page::{Page, PageClient};
 use std::{cell::RefCell, rc::Rc};
-struct C;
-impl PageClient for C {}
+#[derive(Default)]
+struct C(browser::page::PageChromeState);
+impl PageClient for C {
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        self.0.Apply(effect);
+    }
+}
 fn walk(
     n: &layoutng_assembly::fragment_tree::FragmentPaintData,
     p: layoutng_assembly::internal::layout_input::Offset,
@@ -35,7 +40,7 @@ fn zoom_contract() {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&a))),
         s,
         None,
-        Some(Rc::new(RefCell::new(C))),
+        Some(Rc::new(RefCell::new(C::default()))),
     );
     p.Open("http://127.0.0.1:9555/zoom-contract.html", 16384, 4096)
         .unwrap();

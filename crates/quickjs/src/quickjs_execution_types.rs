@@ -372,6 +372,7 @@ pub struct JSModuleDef {
 }
 #[repr(C)]
 struct JSJobEntry {
+    continuation_data: *mut JSContinuationData,
     link: list_head,
     realm: *mut JSContext,
     job_func: Option<JSJobFunc>,

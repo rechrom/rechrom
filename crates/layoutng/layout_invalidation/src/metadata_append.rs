@@ -6,8 +6,33 @@
 
 use super::*;
 
+fn TreeRoot(mut node: *mut Node) -> *mut Node {
+    debug_assert!(!node.is_null());
+    loop {
+        let parent = unsafe { &*node }.parent_.Get();
+        if parent.is_null() {
+            return node;
+        }
+        node = unsafe { &mut (*parent).node };
+    }
+}
+
 #[inline(never)]
 pub(super) fn DetachForTreeUpdate(node: &mut Node) {
+    // Clear the control's direct native UA-part aliases before unlinking.
+    // A replacement part can then attach within this same transaction; hit
+    // queries cannot retain a detached inner-editor/container identity.
+    let host = foundation::DynamicTo::<crate::internal::form_node_metadata::TextControlElement>(
+        node.OwnerShadowHost().cast::<Node>(),
+    );
+    if let Some(host) = unsafe { host.as_mut() } {
+        if host.InnerEditorElement().cast::<Node>() == node as *mut Node {
+            host.inner_editor_ = Member::default();
+        }
+        if host.HitContainerElement().cast::<Node>() == node as *mut Node {
+            host.hit_container_ = Member::default();
+        }
+    }
     let parent = node.parent_.Get();
     if parent.is_null() {
         return;
@@ -34,6 +59,7 @@ pub(super) fn DetachForTreeUpdate(node: &mut Node) {
 #[inline(never)]
 pub(super) fn InsertForTreeUpdate(parent: &mut ContainerNode, child: &mut Node, before: *mut Node) {
     assert!(before.is_null() || unsafe { &*before }.parentNode() == parent);
+    let global_owner = TreeRoot(&mut parent.node);
     DetachForTreeUpdate(child);
     let previous = if before.is_null() {
         parent.last_child_.Get()
@@ -41,6 +67,10 @@ pub(super) fn InsertForTreeUpdate(parent: &mut ContainerNode, child: &mut Node, 
         unsafe { &*before }.previousSibling()
     };
     child.parent_ = Member::from_ptr(parent);
+    // The native Document/LocalFrameView identity is available as soon as a
+    // node joins its metadata tree.  PaintLayer may create its scrollable area
+    // during the subsequent SetStyle call, before the final relation pass.
+    child.global_input_owner_ = Member::from_ptr(global_owner);
     child.previous_ = Member::from_ptr(previous);
     child.next_ = Member::from_ptr(before);
     unsafe {
@@ -74,7 +104,9 @@ pub(super) fn AppendChild(
     }
     let child_ptr = child as *mut Node;
     let mut ancestor = &mut parent.node as *mut Node;
+    let mut global_owner = ancestor;
     while !ancestor.is_null() {
+        global_owner = ancestor;
         if ancestor == child_ptr {
             return Err(AppendChildError::Cycle);
         }
@@ -90,6 +122,10 @@ pub(super) fn AppendChild(
         };
     }
     child.parent_ = Member::from_ptr(parent);
+    // Match Node's source owner at attachment time.  Delaying this identity
+    // until FinalizeTreeRelations makes PaintLayerScrollableArea registration
+    // miss LocalFrameView while the initial LayoutObject tree is constructed.
+    child.global_input_owner_ = Member::from_ptr(global_owner);
     child.previous_ = Member::from_ptr(parent.last_child_.Get());
     if !parent.last_child_.Get().is_null() {
         // SAFETY: last_child_ is a linked node owned by the same tree.

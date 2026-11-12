@@ -174,6 +174,8 @@ impl<'operation, 'rec, 'ctx> SkDrawTiler<'operation, 'rec, 'ctx> {
             draw.fDst.clone_from(&root);
             crate::src::core::SkPoint::SkIPoint::make(0, 0)
         };
+        draw.fRasterPhaseOrigin = dev.base.raster_phase_origin_for_ctm();
+        draw.fRasterBackingOrigin = dev.base.raster_phase_origin();
         let props = *dev.base.surface_props();
         if let Some(recorder) = dev.fRecorder {
             draw.fCtx = unsafe { recorder.ctx().as_ref() };
@@ -311,6 +313,8 @@ impl<'operation> BDDraw<'operation> {
         let dev = dev.into_ref().get_ref();
         draw.fCTM = Some(dev.base.local_to_device());
         draw.fRC = Some(dev.fRCStack.rc());
+        draw.fRasterPhaseOrigin = dev.base.raster_phase_origin_for_ctm();
+        draw.fRasterBackingOrigin = dev.base.raster_phase_origin();
         Self { draw }
     }
 }
@@ -873,6 +877,34 @@ impl SkBitmapDevice<'_, '_> {
     }
 }
 
+// A raster saveLayer is restored through drawDevice()/drawSpecial(). Chromium's
+// raster backend keeps a uniform opaque layer on the solid-color blitter path;
+// sending the same pixels through an image shader changes the integer coverage
+// rounding at an antialiased clip edge. Keep this internal-device optimization
+// separate from authored images (which enter through drawImageRect).
+fn uniform_opaque_n32_color(bitmap: &SkBitmap) -> Option<crate::src::core::SkColor::SkColor> {
+    let mut pixels = crate::src::core::SkPixmap::SkPixmap::default();
+    if bitmap.width() <= 0
+        || bitmap.height() <= 0
+        || !bitmap.peekPixels(Some(&mut pixels))
+        || pixels.colorType() != crate::include::core::SkColorType::kN32_SkColorType
+    {
+        return None;
+    }
+    let first = unsafe { pixels.addr32_xy(0, 0).read_unaligned() };
+    if crate::src::core::SkColorPriv::SkGetPackedA32(first) != 255 {
+        return None;
+    }
+    for y in 0..pixels.height() {
+        for x in 0..pixels.width() {
+            if unsafe { pixels.addr32_xy(x, y).read_unaligned() } != first {
+                return None;
+            }
+        }
+    }
+    Some(unsafe { pixels.getColor(0, 0) })
+}
+
 // Source: src/core/SkBitmapDevice.cpp:575-595
 impl SkBitmapDevice<'_, '_> {
     /// Safety: complete native destination lease excludes all conflicting pixel
@@ -897,6 +929,29 @@ impl SkBitmapDevice<'_, '_> {
             }
             draw.fCTM = Some(local_to_device);
             draw.fRC = Some(dev.fRCStack.rc());
+            let default_sampling =
+                crate::include::core::SkSamplingOptions::SkSamplingOptions::new();
+            if *sampling == default_sampling
+                && local_to_device.isTranslate()
+                && paint.isSrcOver()
+                && paint.getAlpha() == 255
+                && paint.getShader().is_none()
+                && paint.getColorFilter().is_none()
+                && paint.getImageFilter().is_none()
+                && paint.getMaskFilter().is_none()
+            {
+                if let Some(color) = uniform_opaque_n32_color(&bitmap) {
+                    let mut solid = paint.clone();
+                    solid.setColor(color);
+                    unsafe {
+                        draw.drawRectSimple(
+                            &SkRect::MakeIWH(bitmap.width(), bitmap.height()),
+                            &solid,
+                        )
+                    }?;
+                    return Ok(());
+                }
+            }
             unsafe {
                 draw.drawBitmap(
                     &bitmap,

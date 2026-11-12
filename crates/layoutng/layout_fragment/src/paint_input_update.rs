@@ -7,6 +7,74 @@
 use super::*;
 use crate::internal::layout_object::MarkingBehavior;
 
+/// Resource completion does not change a CSS image's URL, so
+/// FieldInvalidationDiff can legitimately report no computed-style field
+/// change while the immutable StyleFetchedImage binding changes from the
+/// unpublished id to a decoded PaintImage id. Keep that resource transition
+/// in the retained-paint invalidation proof instead of reusing the drawing
+/// recorded while the image was absent.
+fn StyleImageResourceBindings(style: &StyleComputedStyle) -> Vec<(String, u64)> {
+    use layoutng_style::style::{
+        content_data::ImageContentData, fill_layer::FillLayer, style_fetched_image::FetchedImage,
+        style_image::StyleImage,
+    };
+
+    fn append(image: *mut StyleImage, output: &mut Vec<(String, u64)>) {
+        let Some(image) = (unsafe { image.as_ref() }) else {
+            return;
+        };
+        let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
+            .and_then(|mask| mask.FetchedImage())
+            .unwrap_or(image);
+        if let Some(image) = FetchedImage(image) {
+            output.push((image.SourceURL().to_owned(), image.ResourceId()));
+        }
+    }
+    fn layers(mut layer: *const FillLayer, output: &mut Vec<(String, u64)>) {
+        while let Some(current) = unsafe { layer.as_ref() } {
+            append(current.GetImage(), output);
+            layer = current.Next();
+        }
+    }
+
+    let mut output = Vec::new();
+    layers(style.BackgroundLayers(), &mut output);
+    layers(style.MaskLayers(), &mut output);
+    append(style.BorderImageSource(), &mut output);
+    append(style.MaskBoxImageSource(), &mut output);
+    if let Some(reflection) = unsafe { style.BoxReflect().as_ref() } {
+        append(reflection.Mask().GetImage(), &mut output);
+    }
+    append(style.ListStyleImage().Get(), &mut output);
+    if let Some(shape) = unsafe { style.ShapeOutside().as_ref() } {
+        append(shape.GetImage(), &mut output);
+    }
+    if let Some(cursors) = unsafe { style.Cursors().as_ref() } {
+        for cursor in cursors.iter() {
+            append(cursor.GetImage(), &mut output);
+        }
+    }
+    let mut content = style.GetContentData();
+    while let Some(pointer) = content {
+        let data = unsafe { &*pointer };
+        if data.IsImage() {
+            append(
+                unsafe { &*(pointer as *const ImageContentData) }.GetImage(),
+                &mut output,
+            );
+        }
+        content = data.Next();
+    }
+    output
+}
+
+pub(super) fn StyleImageResourceBindingsChanged(
+    old: &StyleComputedStyle,
+    new: &StyleComputedStyle,
+) -> bool {
+    StyleImageResourceBindings(old) != StyleImageResourceBindings(new)
+}
+
 #[inline(never)]
 pub(super) fn update_paint_style(
     tree: &mut LayoutObjectTree,
@@ -202,6 +270,8 @@ pub(super) fn update_paint_input(
         let previous = unsafe { &*record.object }.StyleRef();
         let control_paint_state_changed = ControlPaintStateChanged(&element, &record.input.element);
         let image_paint_state_changed = ImagePaintStateChanged(&element, &record.input.element);
+        let element_capture_state_changed =
+            ElementCaptureStateChanged(&element, &record.input.element);
         let natural_size_change_is_paint_only = LayoutImageNaturalSizeChangeIsPaintOnly(
             record.object,
             &element,
@@ -216,6 +286,8 @@ pub(super) fn update_paint_input(
                 previous,
                 unsafe { &*layout_style },
             );
+        let image_resource_binding_changed =
+            StyleImageResourceBindingsChanged(previous, unsafe { &*layout_style });
         if natural_size_change_is_paint_only {
             let object = unsafe { &mut *record.object };
             object.SetIntrinsicLogicalWidthsDirty(MarkingBehavior::kMarkContainerChain);
@@ -223,9 +295,15 @@ pub(super) fn update_paint_input(
             object.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kImage,
             );
-        } else if image_paint_state_changed {
+        } else if image_paint_state_changed || image_resource_binding_changed {
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
                 foundation::PaintInvalidationReason::kImage,
+            );
+        } else if element_capture_state_changed {
+            // Region-capture and tracked-element metadata both require a full
+            // paint invalidation so their new chunk payload is republished.
+            unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+                foundation::PaintInvalidationReason::kStyle,
             );
         } else if fields != 0
             || record.input.resources.as_ref() != &new_resources

@@ -3,10 +3,10 @@ mod test_thread;
 
 use browser::page::Page;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
+use interaction::input_event::Offset;
 use interaction::input_event::{
     InputEvent, MouseButton, MouseEvent, MouseEventType, WheelEvent, WheelPhase,
 };
-use layoutng_assembly::internal::layout_input::Offset;
 use paint::display_item_id::DisplayItemIdType;
 use paint::paint_engine::{DisplayItemType, PaintHitTestOpaqueness};
 use std::{cell::RefCell, io, rc::Rc};
@@ -45,6 +45,16 @@ fn fixture_with_options(body: &'static [u8], device_scale: f64, printing: bool) 
         None,
         None,
     );
+    let editing_behavior = if cfg!(target_os = "macos") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Mac
+    } else if cfg!(target_os = "windows") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Windows
+    } else if cfg!(target_os = "android") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Android
+    } else {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Unix
+    };
+    page.SetInteractionTextSettings(editing_behavior, c"en-US", cfg!(target_os = "macos"));
     page.Open("https://page.test/", 16384, 4096).unwrap();
     for _ in 0..100 {
         page.RunTask().unwrap();
@@ -53,6 +63,20 @@ fn fixture_with_options(body: &'static [u8], device_scale: f64, printing: bool) 
         }
     }
     assert!(!page.IsLoading());
+    if !printing {
+        let width = (320.0 * device_scale).round() as u32;
+        let height = (200.0 * device_scale).round() as u32;
+        let mut pixels = vec![0; width as usize * height as usize];
+        page.PaintInto(
+            width,
+            height,
+            device_scale,
+            &mut pixels,
+            renderer_skia::PixelFormat::Rgba8888,
+            width as usize,
+        )
+        .unwrap();
+    }
     page
 }
 
@@ -62,6 +86,30 @@ fn fixture_with_scale(body: &'static [u8], device_scale: f64) -> Page {
 
 fn fixture(body: &'static [u8]) -> Page {
     fixture_with_scale(body, 1.0)
+}
+trait PointerClickFixture {
+    fn DispatchPointerClick(
+        &mut self,
+        input: &InputEvent,
+    ) -> io::Result<interaction::InteractionResult>;
+}
+impl PointerClickFixture for Page {
+    fn DispatchPointerClick(
+        &mut self,
+        input: &InputEvent,
+    ) -> io::Result<interaction::InteractionResult> {
+        let InputEvent::Mouse(mouse) = input else {
+            panic!("mouse fixture")
+        };
+        assert_eq!(mouse.r#type, MouseEventType::kDown);
+        let mut down = mouse.clone();
+        down.click_count = 1;
+        down.buttons = down.button.ButtonsMask();
+        self.Dispatch(&InputEvent::Mouse(down.clone()))?;
+        down.r#type = MouseEventType::kUp;
+        down.buttons = 0;
+        self.Dispatch(&InputEvent::Mouse(down))
+    }
 }
 
 fn id(page: &Page, value: &str) -> u64 {
@@ -97,8 +145,8 @@ fn root_scroll_hit_tests_visible_descendants() {
         })
         .unwrap();
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 20.0, y: 180.0 },
                 ..Default::default()
@@ -130,8 +178,8 @@ fn root_scroll_hit_tests_fixed_descendants_in_viewport_space() {
         })
         .unwrap();
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 20.0, y: 100.0 },
                 ..Default::default()
@@ -155,6 +203,7 @@ fn overflow_scroll_hit_tests_sticky_descendants_at_painted_offset() {
             <div id=spacer></div>
         </div>"#,
         );
+        let scroller = id(&page, "scroller");
         let sticky = id(&page, "sticky");
         page.ScrollWheelDefault(&WheelEvent {
             phase: WheelPhase::kEnded,
@@ -163,15 +212,51 @@ fn overflow_scroll_hit_tests_sticky_descendants_at_painted_offset() {
             ..Default::default()
         })
         .unwrap();
+        {
+            let owner = page.Document();
+            let document = owner.GetDocument();
+            let scroller = document.FindNodeById(scroller).unwrap();
+            assert_eq!(document.ScrollOffsetFor(scroller).y, 600.0);
+        }
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 20.0, y: 20.0 },
                 ..Default::default()
             }))
             .unwrap();
         assert_eq!(result.target_node_id, Some(sticky));
+    });
+}
+
+#[test]
+fn overflow_scroll_hit_test_scales_css_position_for_the_compositor() {
+    test_thread::run(|| {
+        let mut page = fixture_with_scale(
+            br#"<!doctype html><style>
+            html, body { margin: 0; }
+            #above { height: 120px; }
+            #scroller { width: 200px; height: 80px; overflow: auto; }
+            #content { height: 600px; }
+            #below { height: 1000px; }
+        </style><body><div id=above></div><div id=scroller>
+            <div id=content></div>
+        </div><div id=below></div>"#,
+            2.0,
+        );
+        let scroller = id(&page, "scroller");
+        page.ScrollWheelDefault(&WheelEvent {
+            phase: WheelPhase::kEnded,
+            position: Offset { x: 20.0, y: 150.0 },
+            delta: Offset { x: 0.0, y: 100.0 },
+            ..Default::default()
+        })
+        .unwrap();
+        let owner = page.Document();
+        let document = owner.GetDocument();
+        let scroller = document.FindNodeById(scroller).unwrap();
+        assert_eq!(document.ScrollOffsetFor(scroller).y, 100.0);
     });
 }
 
@@ -229,8 +314,8 @@ fn transformed_link_hit_test_applies_the_owner_transform_once() {
         );
         let link = id(&page, "link");
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 20.0, y: 120.0 },
                 ..Default::default()
@@ -253,8 +338,8 @@ fn replaced_border_radius_excludes_the_outer_corner_from_self_hit_testing() {
         let body = id(&page, "body");
         let rounded = id(&page, "rounded");
         let click = |page: &mut Page, x, y| {
-            page.Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            page.DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x, y },
                 ..Default::default()
@@ -284,8 +369,8 @@ fn overlapping_positioned_links_follow_stable_z_index_order() {
         );
         let front = id(&page, "front");
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 40.0, y: 40.0 },
                 ..Default::default()
@@ -312,8 +397,8 @@ fn overlapping_flex_items_follow_z_index_order() {
         );
         let front = id(&page, "front");
         let result = page
-            .Dispatch(&InputEvent::Mouse(MouseEvent {
-                r#type: MouseEventType::kClick,
+            .DispatchPointerClick(&InputEvent::Mouse(MouseEvent {
+                r#type: MouseEventType::kDown,
                 button: MouseButton::kPrimary,
                 position: Offset { x: 40.0, y: 40.0 },
                 ..Default::default()

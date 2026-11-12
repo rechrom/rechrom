@@ -45,6 +45,7 @@ pub fn CompileReflectionMaskLayers(
                 image_height: height,
                 image_rgba: rgba,
                 image_interpolation_quality: layer.image_interpolation_quality.to_skia(),
+                dynamic_range_limit: layer.dynamic_range_limit.to_skia(),
                 paint_shader: layer.paint_shader.as_ref().map(ToSkia::to_skia),
                 clip_rect: target::PaintRect {
                     x: layer.clip_origin.x,

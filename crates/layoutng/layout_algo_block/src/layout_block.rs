@@ -39,6 +39,9 @@ mod layout_invalidation_positioned_object_invalidation;
 mod layout_invalidation_layout_block_style_change;
 use layout_invalidation_layout_block_style_change::LayoutBlockStyleDidChange;
 
+#[path = "layout_block_caret.rs"]
+mod layout_block_caret;
+
 #[path = "../../layout_invalidation/src/layout_block_child_mutation.rs"]
 mod layout_invalidation_layout_block_child_mutation;
 use layout_invalidation_layout_block_child_mutation::LayoutBlockAddChildBeforeDescendant;
@@ -68,12 +71,6 @@ unsafe extern "Rust" {
         image: WrappedImagePtr,
         defer: CanDeferInvalidation,
     );
-    fn LayoutBlockLocalCaretRect(
-        block: *const LayoutBlock,
-        caret_offset: i32,
-        caret_shape: CaretShape,
-    ) -> PhysicalRect;
-    fn LayoutBlockIsInlineBoxWrapperActuallyChild(block: *const LayoutBlock) -> bool;
     fn LayoutBlockPositionForPointIfOutsideAtomicInlineLevel(
         block: *const LayoutBlock,
         point: &PhysicalOffset,
@@ -490,13 +487,17 @@ impl LayoutBlock {
     // cpp: layoutng/internal/layout_block.h:236-237
     pub fn LocalCaretRect(&self, caret_offset: i32, caret_shape: CaretShape) -> PhysicalRect {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockLocalCaretRect(self, caret_offset, caret_shape) }
+        layout_block_caret::LayoutBlockLocalCaretRect(self, caret_offset, caret_shape)
     }
 
     // cpp: layoutng/internal/layout_block.h:238-238
     pub fn IsInlineBoxWrapperActuallyChild(&self) -> bool {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockIsInlineBoxWrapperActuallyChild(self) }
+        // Source: core/layout/layout_block.cc:501-504.
+        self.IsInline()
+            && !self.StitchedSize().IsEmpty()
+            && unsafe { self.GetNode().as_ref() }
+                .is_some_and(|node| node.InputEditingFacts().ignores_content)
     }
 
     // cpp: layoutng/internal/layout_block.h:241-242

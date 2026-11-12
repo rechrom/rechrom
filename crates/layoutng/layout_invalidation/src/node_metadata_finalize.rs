@@ -11,9 +11,19 @@ use super::*;
 #[inline(never)]
 pub(super) fn FinalizeTreeRelations(root: &mut Node) -> Result<(), MetadataRelationsError> {
     let mut nodes: Vec<*mut Node> = Vec::new();
+    // Resolve boundary scalar identities during the existing native walk;
+    // never add a separate tree walk or retain another node model.
+    let mut node_by_id = std::collections::HashMap::<u64, Option<*mut Node>>::new();
     let mut pending: Vec<*mut Node> = vec![root];
     while let Some(node) = pending.pop() {
         nodes.push(node);
+        let id = unsafe { &*node }.InputId();
+        if id != 0 {
+            node_by_id
+                .entry(id)
+                .and_modify(|node| *node = None)
+                .or_insert(Some(node));
+        }
         if !unsafe { &*node }.IsContainerNode() {
             continue;
         }
@@ -115,6 +125,45 @@ pub(super) fn FinalizeTreeRelations(root: &mut Node) -> Result<(), MetadataRelat
             continue;
         }
         let owner = node.cast::<Element>();
+        let origin_id = unsafe { &*owner }
+            .InputElementData()
+            .as_ref()
+            .and_then(|data| data.ultimate_originating_element_id);
+        let origin = if let Some(id) = origin_id {
+            let origin = node_by_id.get(&id).copied().flatten().ok_or(
+                MetadataRelationsError::InvalidIncrementalRelation(
+                    "PseudoElement originating Element must exist uniquely",
+                ),
+            )?;
+            if origin == node || !unsafe { &*origin }.IsElementNode() {
+                return Err(MetadataRelationsError::InvalidIncrementalRelation(
+                    "PseudoElement originating Element must differ",
+                ));
+            }
+            origin.cast::<Element>()
+        } else {
+            std::ptr::null_mut()
+        };
+        unsafe { &mut *node }.set_ultimate_originating_element(origin);
+        let group_id = unsafe { &*owner }
+            .InputElementData()
+            .as_ref()
+            .and_then(|data| data.generated_scroll_marker_group_id);
+        // A DOM pseudo can have no attached LayoutObject, in which case it
+        // has no resident metadata node either. Preserve source's null result.
+        let group = group_id.and_then(|id| node_by_id.get(&id).copied().flatten());
+        let group = if let Some(group) = group {
+            if group == node || !unsafe { &*group }.IsElementNode() {
+                return Err(MetadataRelationsError::InvalidIncrementalRelation(
+                    "Generated scroll-marker-group must be a distinct Element",
+                ));
+            }
+            group.cast::<Element>()
+        } else {
+            std::ptr::null_mut()
+        };
+        unsafe { &mut *node }.set_generated_scroll_marker_group(group);
+
         let anchor_id = unsafe { &*owner }
             .InputElementData()
             .as_ref()
@@ -122,16 +171,11 @@ pub(super) fn FinalizeTreeRelations(root: &mut Node) -> Result<(), MetadataRelat
         if anchor_id == 0 {
             continue;
         }
-        let mut found: *mut Element = std::ptr::null_mut();
-        for &candidate_node in &nodes {
-            if unsafe { &*candidate_node }.InputId() != anchor_id {
-                continue;
-            }
-            if !unsafe { &*candidate_node }.IsElementNode() || !found.is_null() {
-                return Err(MetadataRelationsError::ImplicitAnchorIdNotUnique);
-            }
-            found = candidate_node.cast::<Element>();
-        }
+        let found: *mut Element = match node_by_id.get(&anchor_id).copied() {
+            Some(Some(found)) if unsafe { &*found }.IsElementNode() => found.cast(),
+            Some(_) => return Err(MetadataRelationsError::ImplicitAnchorIdNotUnique),
+            None => std::ptr::null_mut(),
+        };
         if found.is_null() || found == owner {
             return Err(MetadataRelationsError::ImplicitAnchorMustDiffer);
         }

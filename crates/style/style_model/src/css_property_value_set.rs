@@ -282,9 +282,10 @@ pub trait CSSPropertyValueSetBackend: CSSPropertyValueBackend {
     fn SerializeShorthand(set: &CSSPropertyValueSet<Self>, id: CSSPropertyID) -> String;
     fn AsText(set: &CSSPropertyValueSet<Self>) -> String;
     fn CreateIdentifier(id: CSSValueID) -> Rc<CSSValue<Self>>;
-    fn DeclarationPropertyValueSet(
+    fn DeclarationWithPropertyValueSet<R>(
         style: &Self::CSSStyleDeclaration,
-    ) -> Option<&CSSPropertyValueSet<Self>>;
+        read: impl FnOnce(Option<&CSSPropertyValueSet<Self>>) -> R,
+    ) -> R;
     fn DeclarationPropertyMatches(
         style: &Self::CSSStyleDeclaration,
         id: CSSPropertyID,
@@ -292,7 +293,7 @@ pub trait CSSPropertyValueSetBackend: CSSPropertyValueBackend {
     ) -> bool;
     fn NewCSSStyleDeclaration(
         context: Option<&Self::ExecutionContext>,
-        set: &MutableCSSPropertyValueSet<Self>,
+        set: Rc<std::cell::RefCell<MutableCSSPropertyValueSet<Self>>>,
     ) -> Rc<Self::CSSStyleDeclaration>;
 }
 
@@ -352,7 +353,7 @@ pub struct CSSPropertyValueSet<D: CSSPropertyValueSetBackend> {
 // the base view, and Rc retains the original GC references without fake values.
 pub struct MutableCSSPropertyValueSet<D: CSSPropertyValueSetBackend> {
     set: CSSPropertyValueSet<D>,
-    cssom_wrapper_: Option<Rc<D::CSSStyleDeclaration>>,
+    cssom_wrapper_: Option<std::rc::Weak<D::CSSStyleDeclaration>>,
 }
 pub struct ImmutableCSSPropertyValueSet<D: CSSPropertyValueSetBackend>(std::marker::PhantomData<D>);
 impl<D: CSSPropertyValueSetBackend> Deref for MutableCSSPropertyValueSet<D> {
@@ -582,8 +583,9 @@ impl<D: CSSPropertyValueSetBackend> CSSPropertyValueSet<D> {
         id: CSSPropertyID,
         style: &D::CSSStyleDeclaration,
     ) -> bool {
-        D::DeclarationPropertyValueSet(style)
-            .is_some_and(|set| self.ShorthandPropertyMatches(id, set))
+        D::DeclarationWithPropertyValueSet(style, |set| {
+            set.is_some_and(|set| self.ShorthandPropertyMatches(id, set))
+        })
     }
     // cpp: css_property_value_set.cc:866-884
     pub fn MutableCopy(&self) -> MutableCSSPropertyValueSet<D> {
@@ -1029,16 +1031,47 @@ impl<D: CSSPropertyValueSetBackend> MutableCSSPropertyValueSet<D> {
             self.RemoveProperty(id, None);
         }
     }
+    /// css_property_value_set.cc:855-881 for the internal
+    /// PropertySetCSSStyleDeclaration lane. The original set is borrowed, so
+    /// editing does not construct or retain another mutable CSSOM declaration.
+    pub fn RemoveEquivalentPropertiesPreservingShorthandsFromSet(
+        &mut self,
+        style: &CSSPropertyValueSet<D>,
+    ) {
+        let mut remove = HashSet::new();
+        for property in &self.properties {
+            let shorthand = property.ShorthandID();
+            if shorthand != CSSPropertyID::kInvalid {
+                if !remove.contains(&shorthand) && self.ShorthandPropertyMatches(shorthand, style) {
+                    remove.insert(shorthand);
+                }
+                continue;
+            }
+            if style.PropertyMatches(property.PropertyID(), property.Value()) {
+                remove.insert(property.PropertyID());
+            }
+        }
+        for id in remove {
+            self.RemoveProperty(id, None);
+        }
+    }
     // cpp: css_property_value_set.cc:886-899
     pub fn EnsureCSSStyleDeclaration(
-        &mut self,
+        owner: &Rc<std::cell::RefCell<Self>>,
         context: Option<&D::ExecutionContext>,
     ) -> Rc<D::CSSStyleDeclaration> {
-        if let Some(wrapper) = &self.cssom_wrapper_ {
-            return wrapper.clone();
+        if let Some(wrapper) = owner
+            .borrow()
+            .cssom_wrapper_
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+        {
+            return wrapper;
         }
-        let wrapper = D::NewCSSStyleDeclaration(context, self);
-        self.cssom_wrapper_ = Some(wrapper.clone());
+        // No mutable property-set borrow spans construction. The declaration
+        // owns the very same GC-equivalent Rc, not a copy of its current values.
+        let wrapper = D::NewCSSStyleDeclaration(context, owner.clone());
+        owner.borrow_mut().cssom_wrapper_ = Some(Rc::downgrade(&wrapper));
         wrapper
     }
     pub fn IntoBase(self) -> CSSPropertyValueSet<D> {
@@ -1327,8 +1360,11 @@ mod property_store_tests {
             assert_eq!(id, CSSValueID::kRevert);
             revert()
         }
-        fn DeclarationPropertyValueSet(style: &Declaration) -> Option<&CSSPropertyValueSet<Self>> {
-            style.set.as_deref()
+        fn DeclarationWithPropertyValueSet<R>(
+            style: &Declaration,
+            read: impl FnOnce(Option<&CSSPropertyValueSet<Self>>) -> R,
+        ) -> R {
+            read(style.set.as_deref())
         }
         fn DeclarationPropertyMatches(
             style: &Declaration,
@@ -1339,7 +1375,7 @@ mod property_store_tests {
         }
         fn NewCSSStyleDeclaration(
             context: Option<&u32>,
-            _: &MutableCSSPropertyValueSet<Self>,
+            _: Rc<std::cell::RefCell<MutableCSSPropertyValueSet<Self>>>,
         ) -> Rc<Declaration> {
             assert_eq!(context, Some(&7));
             Rc::new(Declaration {
@@ -1603,15 +1639,17 @@ mod property_store_tests {
         let image = Rc::new(CSSValue::new(CSSValuePayload::kImageClass(image)));
         set.SetLonghandProperty(property(CSSPropertyID::kWidth, image, false));
         assert!(set.HasFailedOrCanceledSubresources());
-        let first = set.EnsureCSSStyleDeclaration(Some(&7));
-        let second = set.EnsureCSSStyleDeclaration(None);
+        let set = Rc::new(std::cell::RefCell::new(set));
+        let first = MutableCSSPropertyValueSet::EnsureCSSStyleDeclaration(&set, Some(&7));
+        let second = MutableCSSPropertyValueSet::EnsureCSSStyleDeclaration(&set, None);
         assert!(Rc::ptr_eq(&first, &second));
         let style = Declaration {
             set: None,
             property_match: true,
         };
-        set.RemoveEquivalentPropertiesPreservingShorthands(&style);
-        assert!(set.IsEmpty());
+        set.borrow_mut()
+            .RemoveEquivalentPropertiesPreservingShorthands(&style);
+        assert!(set.borrow().IsEmpty());
     }
     #[test]
     fn rule_adapter_retains_mutable_subclass_and_existing_value_identity() {

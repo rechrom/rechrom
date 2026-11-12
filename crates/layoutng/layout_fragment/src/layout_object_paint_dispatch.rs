@@ -33,7 +33,11 @@ impl LayoutObject {
         additional_offset: &PhysicalOffset,
         outline_type: OutlineType,
     ) -> Vector<PhysicalRect> {
-        unsafe { LayoutObjectOutlineRectsProvider(self, info, additional_offset, outline_type) }
+        self.CheckIsNotDestroyed();
+        let mut collector =
+            crate::internal::outline_rect_collector::VectorOutlineRectCollector::default();
+        self.AddOutlineRects(&mut collector, info, additional_offset, outline_type);
+        collector.TakeRects()
     }
 
     // Paint is invoked for many individual objects. Physical ownership is
@@ -73,49 +77,39 @@ impl LayoutObject {
     // cpp: third_party/blink/renderer/core/layout/layout_object.cc:3792-3803
     #[inline(never)]
     pub fn CanvasForDrawingLayoutObject(&self) -> *mut LayoutObject {
+        self.CanvasForDrawingLayoutObjectInfo()
+            .unwrap_or(std::ptr::null_mut())
+    }
+    /// Some(nullptr) retains an eligible canvas with no LayoutObject (for
+    /// example display:contents), distinct from no CanvasForDrawing owner.
+    pub fn CanvasForDrawingLayoutObjectInfo(&self) -> Option<*mut LayoutObject> {
         self.CheckIsNotDestroyed();
         if !self.IsBoxModelObject() {
-            return std::ptr::null_mut();
+            return None;
         }
-        let node = self.GetNode();
-        if node.is_null() {
-            return std::ptr::null_mut();
-        }
-        let node = unsafe { &*node };
+        let node = unsafe { self.GetNode().as_ref()? };
         if !node.InputCanvasDrawElementEnabled() || node.InputIsStyleGenerated() {
-            return std::ptr::null_mut();
+            return None;
         }
-
-        // A resident LayoutObject is connected, and the metadata parent chain
-        // is Layout's retained flat-tree projection. The remaining tests below
-        // are Element::CanvasForDrawing()'s pseudo, immediate-child,
-        // `drawable`, nearest-canvas, and `layoutSubtree` gates.
         let mut ancestor = node.parentNode().cast::<Node>();
-        if ancestor.is_null() {
-            return std::ptr::null_mut();
-        }
-        let parent_object = unsafe { &*ancestor }.GetLayoutObject();
-        if !parent_object.is_null()
-            && unsafe { &*parent_object }.IsCanvas()
-            && unsafe { &*ancestor }.InputCanvasLayoutSubtree()
-        {
-            return parent_object;
+        let parent = unsafe { ancestor.as_ref()? };
+        if parent.InputIsHTMLCanvasElement() {
+            return parent
+                .InputCanvasLayoutSubtree()
+                .then(|| parent.GetLayoutObject());
         }
         if !node.InputHasDrawableAttribute() {
-            return std::ptr::null_mut();
+            return None;
         }
-        while !ancestor.is_null() {
-            let object = unsafe { &*ancestor }.GetLayoutObject();
-            if !object.is_null() && unsafe { &*object }.IsCanvas() {
-                return if unsafe { &*ancestor }.InputCanvasLayoutSubtree() {
-                    object
-                } else {
-                    std::ptr::null_mut()
-                };
+        while let Some(parent) = unsafe { ancestor.as_ref() } {
+            if parent.InputIsHTMLCanvasElement() {
+                return parent
+                    .InputCanvasLayoutSubtree()
+                    .then(|| parent.GetLayoutObject());
             }
-            ancestor = unsafe { &*ancestor }.parentNode().cast::<Node>();
+            ancestor = parent.parentNode().cast::<Node>();
         }
-        std::ptr::null_mut()
+        None
     }
 
     pub fn AddOutlineRectsBase(

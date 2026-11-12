@@ -210,7 +210,11 @@ pub fn ParseAttributeValue(
             if token.GetType() != kNumberToken {
                 return Ok(None);
             }
-            let number = token.NumericValue();
+            // CSSAttrType::Parse uses CSSNumericLiteralValue's clamped
+            // double, including overflowed authored numbers (cc:88-94).
+            let number = crate::css_value_clamping_utils::CSSValueClampingUtils::ClampDouble(
+                token.NumericValue(),
+            );
             let number = if number == 0.0 { 0.0 } else { number };
             let value = values::numeric(number, unit);
             let mut token = CSSParserToken::WithNumber(

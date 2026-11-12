@@ -267,6 +267,7 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
     ) -> io::Result<image_decoder::image_decoder::DecodedImage> {
         assert_eq!(input.bytes, [1, 2, 3, 255]);
         Ok(image_decoder::image_decoder::DecodedImage {
+            filename_extension: None,
             alpha_type: Default::default(),
             animation: image_resource::PaintImageAnimationMetadata::Known(
                 image_resource::PaintImageAnimationInfo::confirmed_static(),
@@ -274,6 +275,7 @@ impl image_decoder::image_decoder::ImageDecoder for Images {
             width: 1,
             height: 1,
             orientation: Default::default(),
+            hot_spot: None,
             animation_frames: Vec::new(),
             rgba8: input.bytes.into(),
         })
@@ -519,6 +521,91 @@ fn lazy_image_does_not_delay_load_and_an_eager_consumer_promotes_it() {
     assert!(fetcher.HasPendingImages());
     assert!(fetcher.HasPendingLoadBlockingImages());
     assert_eq!(backend.borrow().requests.borrow().len(), 1);
+}
+
+#[test]
+fn visible_lazy_image_uses_high_but_not_render_blocking_priority() {
+    struct PriorityOperation(Rc<RefCell<Vec<url_loader::ResourceLoadPriority>>>);
+    impl URLLoadOperation for PriorityOperation {
+        fn SetPriority(&mut self, priority: url_loader::ResourceLoadPriority) {
+            self.0.borrow_mut().push(priority);
+        }
+
+        fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+            Ok(None)
+        }
+    }
+
+    struct PriorityLoader(Rc<RefCell<Vec<url_loader::ResourceLoadPriority>>>);
+    impl URLLoader for PriorityLoader {
+        fn Load(&mut self, _: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+            Ok(Box::new(PriorityOperation(self.0.clone())))
+        }
+    }
+
+    let priorities = Rc::new(RefCell::new(Vec::new()));
+    let fetcher = fetcher(Rc::new(RefCell::new(PriorityLoader(priorities.clone()))));
+    fetcher
+        .QueueImageWithLoadBlocking("visible-lazy.jpg", None, false)
+        .unwrap();
+    let sources = std::collections::HashSet::from(["visible-lazy.jpg".to_owned()]);
+    assert_eq!(fetcher.StartVisibleImageSources(&sources).unwrap(), (1, 0));
+    assert_eq!(
+        priorities.borrow().as_slice(),
+        [url_loader::ResourceLoadPriority::High]
+    );
+}
+
+#[test]
+fn visible_image_is_polled_before_older_offscreen_image() {
+    struct PollOrderOperation {
+        url: String,
+        polls: Rc<RefCell<Vec<String>>>,
+    }
+    impl URLLoadOperation for PollOrderOperation {
+        fn Poll(&mut self) -> io::Result<Option<URLResponse>> {
+            self.polls.borrow_mut().push(self.url.clone());
+            Ok(None)
+        }
+    }
+
+    struct PollOrderLoader(Rc<RefCell<Vec<String>>>);
+    impl URLLoader for PollOrderLoader {
+        fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+            Ok(Box::new(PollOrderOperation {
+                url: request.url.clone(),
+                polls: self.0.clone(),
+            }))
+        }
+    }
+
+    let polls = Rc::new(RefCell::new(Vec::new()));
+    let fetcher = fetcher(Rc::new(RefCell::new(PollOrderLoader(polls.clone()))));
+    fetcher
+        .QueueImageWithLoadBlocking("offscreen-eager.jpg", None, true)
+        .unwrap();
+    fetcher
+        .QueueImageWithLoadBlocking("visible-lazy.jpg", None, false)
+        .unwrap();
+    assert_eq!(
+        fetcher
+            .StartVisibleImageSources(&std::collections::HashSet::from([
+                "visible-lazy.jpg".to_owned(),
+            ]))
+            .unwrap(),
+        (1, 0)
+    );
+    assert_eq!(
+        fetcher.PollPendingImagesWithBudget(&mut Client::default(), 1),
+        0
+    );
+    assert_eq!(
+        polls.borrow().as_slice(),
+        [
+            "https://page.test/root/visible-lazy.jpg",
+            "https://page.test/root/offscreen-eager.jpg"
+        ]
+    );
 }
 struct FailingLoader(Rc<RefCell<Vec<String>>>);
 impl URLLoader for FailingLoader {

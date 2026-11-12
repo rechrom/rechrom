@@ -60,6 +60,22 @@ pub(super) fn update_node_input(
         ) {
             return None;
         }
+        let image_resource_binding_changed = unsafe {
+            match (
+                record.effective_computed_style.as_ref(),
+                style.style.as_ref(),
+            ) {
+                (Some(old), Some(new)) => {
+                    layout_fragment_paint_input::StyleImageResourceBindingsChanged(old, new)
+                }
+                _ => false,
+            }
+        };
+        if image_resource_binding_changed {
+            unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+                foundation::PaintInvalidationReason::kImage,
+            );
+        }
         relations_changed |= record.input.element != input.element
             || record
                 .input
@@ -151,4 +167,41 @@ pub(super) fn update_node_input(
         objects,
         relations_changed,
     })
+}
+
+/// Source HTMLMediaElement::UpdateLayoutObject scalar admission. Keep the
+/// retained input descriptor in sync with its original metadata node, so the
+/// next ordinary tree reconciliation cannot rediscover this same update as an
+/// unrelated geometry change. This uses the existing per-node attachment index.
+pub(super) fn update_video_layout_state(
+    tree: &mut LayoutObjectTree,
+    id: u64,
+    state: super::super::layout_input::VideoLayoutState,
+) -> Option<*mut LayoutObject> {
+    let storage = unsafe { &mut *tree.storage_ };
+    assert!(!storage.updating);
+    let keys = storage.InputKeys(id).to_vec();
+    let mut result = None;
+    for key in keys {
+        let record = storage
+            .managed
+            .get_mut(&key)
+            .expect("native attachment key");
+        if record.input.style_generated
+            || unsafe { &*record.object }.WasDestroyedForTreeUpdate()
+            || !unsafe { &*record.object }.IsVideo()
+        {
+            continue;
+        }
+        assert!(
+            result.is_none(),
+            "one canonical video LayoutObject per element"
+        );
+        let input = record.input.element.as_mut().expect("video element input");
+        input.video = Some(state);
+        input.media_is_fullscreen = state.is_fullscreen;
+        unsafe { &mut *record.node }.SetVideoLayoutState(state);
+        result = Some(record.object);
+    }
+    result
 }

@@ -209,6 +209,9 @@ impl SimpleFontData {
         let platform = unsafe { &*platform_ptr };
         let raw = platform.RawFont();
         let size = platform.size();
+        let device_scale = platform.DeviceScaleFactor();
+        let metric_size = size * device_scale;
+        let to_css = 1.0 / device_scale;
         if size == 0.0 {
             self.font_metrics_.Reset();
             self.avg_char_width_ = 0.0;
@@ -216,19 +219,23 @@ impl SimpleFontData {
             return;
         }
         let mut ascent = overrides.ascent_override.map_or_else(
-            || PositiveMetric(raw, FontMetric::kHorizontalAscender, size * 0.8),
-            |value| value * size,
+            || PositiveMetric(raw, FontMetric::kHorizontalAscender, size * 0.8) * device_scale,
+            |value| value * metric_size,
         );
         let mut descent = overrides.descent_override.map_or_else(
-            || PositiveMetric(raw, FontMetric::kHorizontalDescender, size * 0.2),
-            |value| value * size,
+            || PositiveMetric(raw, FontMetric::kHorizontalDescender, size * 0.2) * device_scale,
+            |value| value * metric_size,
         );
         let line_gap = overrides.line_gap_override.map_or_else(
-            || PositiveMetric(raw, FontMetric::kHorizontalLineGap, 0.0),
-            |value| value * size,
+            || PositiveMetric(raw, FontMetric::kHorizontalLineGap, 0.0) * device_scale,
+            |value| value * metric_size,
         );
         let backend_metrics = platform.Backend().map(|backend| {
-            backend.Metrics(size, platform.SyntheticBold(), platform.SyntheticItalic())
+            backend.Metrics(
+                metric_size,
+                platform.SyntheticBold(),
+                platform.SyntheticItalic(),
+            )
         });
         if let Some(metrics) = backend_metrics {
             if overrides.ascent_override.is_none() {
@@ -239,9 +246,6 @@ impl SimpleFontData {
             }
         }
         if !(subpixel_ascent_descent && (ascent < 3.0 || ascent + descent < 2.0)) {
-            // FontPlatformData and SkFont metrics are in Blink layout/CSS
-            // pixels. Device scale is applied by raster and must not change
-            // line metrics or baseline geometry.
             ascent = ascent.round();
             descent = descent.round();
         }
@@ -252,45 +256,57 @@ impl SimpleFontData {
                 ascent += ((ascent + descent) * 0.15 + 0.5).floor();
             }
         }
-        self.font_metrics_.SetAscent(ascent);
-        self.font_metrics_.SetDescent(descent);
+        self.font_metrics_.SetAscent(ascent * to_css);
+        self.font_metrics_.SetDescent(descent * to_css);
+        self.font_metrics_.SetDeviceScaleFactor(device_scale);
         let resolved_line_gap = if overrides.line_gap_override.is_some() {
             line_gap
         } else {
             backend_metrics.map_or(line_gap, |metrics| metrics.leading)
         };
-        self.font_metrics_.SetLineGap(resolved_line_gap);
-        self.font_metrics_
-            .SetLineSpacing(ascent.round() + descent.round() + resolved_line_gap.round());
+        self.font_metrics_.SetLineGap(resolved_line_gap * to_css);
+        self.font_metrics_.SetLineSpacing(
+            (ascent.round() + descent.round() + resolved_line_gap.round()) * to_css,
+        );
         let mut x_height = backend_metrics
             .filter(|metrics| metrics.x_height != 0.0)
             .map_or_else(
-                || PositiveMetric(raw, FontMetric::kXHeight, ascent * 0.56),
+                || PositiveMetric(raw, FontMetric::kXHeight, ascent * to_css * 0.56) * device_scale,
                 |metrics| metrics.x_height,
             );
         if backend_metrics.is_some() {
             let x_glyph = self.GlyphForCharacter('x' as u32);
             if x_glyph != 0 {
-                x_height = -self.PlatformBoundsForGlyph(x_glyph).y();
+                x_height = platform.Backend().map_or(x_height, |backend| {
+                    -backend
+                        .GlyphMetrics(
+                            x_glyph,
+                            metric_size,
+                            platform.SyntheticBold(),
+                            platform.SyntheticItalic(),
+                        )
+                        .y
+                });
             }
         }
+        x_height *= to_css;
         self.font_metrics_.SetXHeight(x_height);
         let cap_height = backend_metrics
             .filter(|metrics| metrics.cap_height != 0.0)
             .map_or_else(
-                || PositiveMetric(raw, FontMetric::kCapHeight, ascent),
+                || PositiveMetric(raw, FontMetric::kCapHeight, ascent * to_css) * device_scale,
                 |metrics| metrics.cap_height,
             );
-        self.font_metrics_.SetCapHeight(cap_height);
+        self.font_metrics_.SetCapHeight(cap_height * to_css);
         if let Some(metrics) = backend_metrics.filter(|metrics| metrics.has_underline_position) {
             self.font_metrics_
-                .SetUnderlinePosition(metrics.underline_position);
+                .SetUnderlinePosition(metrics.underline_position * to_css);
         } else if let Some(value) = raw.Metric(FontMetric::kUnderlineOffset) {
             self.font_metrics_.SetUnderlinePosition(-(value as f32));
         }
         if let Some(metrics) = backend_metrics.filter(|metrics| metrics.has_underline_thickness) {
             self.font_metrics_
-                .SetUnderlineThickness(metrics.underline_thickness);
+                .SetUnderlineThickness(metrics.underline_thickness * to_css);
         } else if let Some(value) = raw.Metric(FontMetric::kUnderlineSize) {
             self.font_metrics_
                 .SetUnderlineThickness((value as f32).abs());
@@ -300,7 +316,7 @@ impl SimpleFontData {
         if x_glyph != 0 {
             self.avg_char_width_ = self.WidthForGlyph(x_glyph);
         }
-        self.max_char_width_ = self.avg_char_width_.max(ascent);
+        self.max_char_width_ = self.avg_char_width_.max(ascent * to_css);
     }
 
     // cpp: font_engine/fonts/simple_font_data.cc:171-195
@@ -417,12 +433,8 @@ impl SimpleFontData {
         baseline: FontBaseline,
     ) -> LayoutUnit {
         match position_type {
-            FontVerticalPositionType::TextTop => {
-                LayoutUnit::from_signed(self.font_metrics_.AscentFor(baseline))
-            }
-            FontVerticalPositionType::TextBottom => {
-                LayoutUnit::from_signed(-self.font_metrics_.DescentFor(baseline))
-            }
+            FontVerticalPositionType::TextTop => self.font_metrics_.FixedAscent(baseline),
+            FontVerticalPositionType::TextBottom => -self.font_metrics_.FixedDescent(baseline),
             FontVerticalPositionType::TopOfEmHeight => self.NormalizedTypoAscent(baseline),
             FontVerticalPositionType::BottomOfEmHeight => -self.NormalizedTypoDescent(baseline),
         }

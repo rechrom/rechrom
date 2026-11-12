@@ -381,6 +381,12 @@ impl<B: LayerImplTypes> ScrollbarLayerImplBase<B> {
         fade_out: bool,
         c: &mut (impl ScrollbarOpacityContext<B> + ?Sized),
     ) {
+        let mut trace = browser_tracing::span(
+            "compositor.animation",
+            "Compositor.Animation.ScrollbarOpacity",
+        );
+        trace.set("requested_opacity", opacity as f64);
+        trace.set("fade_out", fade_out as u8 as f64);
         debug_assert!(self.is_overlay_scrollbar());
         // Source null tree branch is excluded by the live nonnull context: a
         // native operation after Shutdown cannot acquire this owner borrow.
@@ -388,14 +394,19 @@ impl<B: LayerImplTypes> ScrollbarLayerImplBase<B> {
             return;
         }
         let effect_id = self.base_.effect_tree_index();
+        trace.set("effect_id", effect_id as f64);
         if effect_id == kInvalidPropertyNodeId {
+            trace.set("applied", 0.0);
             return;
         }
         let property_trees = c.property_trees_mut();
         let node = property_trees.effect_tree_mutable().MutableNode(effect_id);
         if node.opacity == opacity {
+            trace.set("applied", 0.0);
             return;
         }
+        trace.set("previous_opacity", node.opacity as f64);
+        trace.set("applied", 1.0);
         node.opacity = opacity;
         node.effect_changed = true;
         property_trees.set_changed(true);

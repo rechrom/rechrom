@@ -3955,15 +3955,16 @@ impl BlockLayoutAlgorithm {
         let font_metrics = unsafe { &*font_data }.GetFontMetrics();
         let baseline_type = first_line_style.GetFontBaseline();
         let line_height = first_line_style.ComputedLineHeightAsFixed();
+        let font_height = font_metrics.GetFontHeight(baseline_type);
         let offset = if first_line_style.IsFlippedLinesWritingMode() {
-            font_metrics.DescentFor(baseline_type)
+            font_height.descent
         } else {
-            font_metrics.AscentFor(baseline_type)
+            font_height.ascent
         };
         let baseline: LayoutUnit = self.Borders().block_start
             + self.Padding().block_start
-            + LayoutUnit::from_signed(offset)
-            + (line_height - LayoutUnit::from_signed(font_metrics.Height())) / 2;
+            + offset
+            + (line_height - font_height.LineHeight()) / 2;
         Some(LayoutUnit::from_signed(baseline.ToInt()))
     }
 

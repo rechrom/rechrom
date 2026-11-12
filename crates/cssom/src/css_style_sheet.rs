@@ -37,14 +37,49 @@ pub struct CSSStyleRule {
     pub container_conditions: Vec<crate::container_condition::CSSContainerQuerySet>,
 }
 
+/// One parsed @font-face descriptor owner. Like CSSStyleSheet's parsed backing,
+/// this transfer slot preserves compiled CSSValue identity without introducing
+/// a CSSOM dependency on the parsing or style engine.
+#[derive(Clone)]
+pub struct CSSFontFaceDescriptorBacking(Rc<dyn Any>);
+impl CSSFontFaceDescriptorBacking {
+    pub fn new<T: Any>(owner: Rc<T>) -> Self {
+        Self(owner)
+    }
+    pub fn Get<T: Any>(&self) -> Option<Rc<T>> {
+        self.0.clone().downcast::<T>().ok()
+    }
+}
+impl fmt::Debug for CSSFontFaceDescriptorBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CSSFontFaceDescriptorBacking")
+    }
+}
+impl PartialEq for CSSFontFaceDescriptorBacking {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for CSSFontFaceDescriptorBacking {}
 // cpp: cssom/css_style_sheet.h:27-31
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct CSSFontFaceRule {
+    pub compiled_descriptors: Option<CSSFontFaceDescriptorBacking>,
     pub declaration_text: String,
     pub declarations: Vec<CSSDeclaration>,
     pub media_conditions: Vec<String>,
     pub layer_name: String,
 }
+
+impl PartialEq for CSSFontFaceRule {
+    fn eq(&self, other: &Self) -> bool {
+        self.declaration_text == other.declaration_text
+            && self.declarations == other.declarations
+            && self.media_conditions == other.media_conditions
+            && self.layer_name == other.layer_name
+    }
+}
+impl Eq for CSSFontFaceRule {}
 
 /// One selector block inside an author `@keyframes` rule.  Keep the selector
 /// text (rather than prematurely converting it to a single offset): CSS permits
@@ -84,9 +119,14 @@ pub enum CSSUserAgentStyleSheetRole {
     /// request; keeping the role on the CSSOM owner preserves that RuleSet
     /// boundary across `StyleEngine::Update`.
     kMarker,
+    /// Source CSSDefaultStyleSheets::overscroll_style_sheet_.
+    kOverscroll,
     /// Supplemental rules selected while the document retains at least one
     /// element with the Fullscreen API fullscreen flag.
     kFullscreen,
+    /// CSSDefaultStyleSheets::media_controls_style_sheet_, including its
+    /// independent normal and ua-forced-colors compiled RuleSets.
+    kMediaControls,
     kSVG,
     kMathML,
 }

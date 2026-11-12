@@ -7,7 +7,11 @@ use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::{
     fragment_tree::FragmentPaintData,
     internal::{
-        layout_input::FontFace, layout_object::LayoutObject,
+        layout_input::{
+            FontFace, TrackedElementFrameToken, TrackedElementRelativeRect, TrackedElementSubRect,
+            TrackedElementSubRectType,
+        },
+        layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
     },
     layout_engine::PaintFragmentCursor,
@@ -247,5 +251,327 @@ fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
             item.node_id == id(&page, "masked")
                 && item.r#type == paint::paint_engine::DisplayItemType::kSaveLayerDstIn
         }));
+    });
+}
+
+#[test]
+fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = fixture(
+            r#"<svg width="80" height="80"><rect id="capture" x="10" y="20" width="30" height="40" fill="red"/></svg>"#,
+        );
+        let node_id = id(&page, "capture");
+        let old = page.CurrentFrame().unwrap().display_items.clone();
+        assert!(old.chunks.iter().all(|chunk| chunk
+            .compositor
+            .as_deref()
+            .and_then(|metadata| metadata.region_capture_data.as_deref())
+            .is_none()));
+
+        let crop_id = [0x1020_3040_5060_7080, 0x90a0_b0c0_d0e0_f001];
+        assert!(page.SetRegionCaptureCropId(node_id, crop_id));
+        for _ in 0..20 {
+            page.RunTask().unwrap();
+            if page
+                .CurrentFrame()
+                .unwrap()
+                .display_items
+                .chunks
+                .iter()
+                .any(|chunk| {
+                    chunk
+                        .compositor
+                        .as_deref()
+                        .and_then(|metadata| metadata.region_capture_data.as_deref())
+                        .is_some_and(|data| data.iter().any(|(id, _)| *id == crop_id))
+                })
+            {
+                break;
+            }
+        }
+
+        let source = foundation::DynamicTo::<
+            layoutng_assembly::internal::layout_node_metadata::Element,
+        >(native(&page, "capture").GetNode());
+        assert_eq!(
+            unsafe { &*source }.InputRegionCaptureCropId(),
+            Some(crop_id),
+            "crop ID did not reach the resident Layout Element"
+        );
+        assert_eq!(
+            fragment(&page, "capture").paint.region_capture_crop_id,
+            Some(crop_id),
+            "crop ID did not cross the DOM-to-fragment boundary"
+        );
+
+        let regions = page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.compositor.as_deref())
+            .filter_map(|metadata| metadata.region_capture_data.as_deref())
+            .flatten()
+            .filter(|(id, _)| *id == crop_id)
+            .collect::<Vec<_>>();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(
+            regions[0].1,
+            paint::paint_engine::PaintRect {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+            }
+        );
+        assert!(old.chunks.iter().all(|chunk| chunk
+            .compositor
+            .as_deref()
+            .and_then(|metadata| metadata.region_capture_data.as_deref())
+            .is_none()));
+    });
+}
+
+#[test]
+fn html_box_publishes_region_capture_and_tracked_subrects() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = fixture(
+            r#"<div id="capture" style="position:absolute;left:10px;top:20px;width:30px;height:40px"></div>"#,
+        );
+        let node_id = id(&page, "capture");
+        let old = page.CurrentFrame().unwrap().display_items.clone();
+        let crop_id = [0x1111, 0x2222];
+        let tracked_id = [0x3333, 0x4444];
+        assert!(page.SetRegionCaptureCropId(node_id, crop_id));
+        assert!(page.SetTrackedElementSubRect(
+            node_id,
+            TrackedElementSubRect {
+                feature: 7,
+                id: tracked_id,
+                should_add_to_compositor_frame_metadata: true,
+                should_exclude_fixed_and_sticky_occlusions: true,
+                sub_rect: Some(TrackedElementRelativeRect {
+                    x: 5,
+                    y: 6,
+                    width: 10,
+                    height: 12,
+                    r#type: TrackedElementSubRectType::IntersectWithElementRect,
+                }),
+                frame_token: Some(TrackedElementFrameToken::Remote([0x7777, 0x8888])),
+                parent_frame_token: Some([0x9999, 0xaaaa]),
+            }
+        ));
+        for _ in 0..20 {
+            page.RunTask().unwrap();
+            let artifact = &page.CurrentFrame().unwrap().display_items;
+            let has_region = artifact.chunks.iter().any(|chunk| {
+                chunk
+                    .compositor
+                    .as_deref()
+                    .and_then(|metadata| metadata.region_capture_data.as_deref())
+                    .is_some_and(|data| data.iter().any(|(id, _)| *id == crop_id))
+            });
+            let has_tracked = artifact.chunks.iter().any(|chunk| {
+                chunk
+                    .compositor
+                    .as_deref()
+                    .and_then(|metadata| metadata.tracked_element_rects.as_deref())
+                    .is_some_and(|data| data.iter().any(|rect| rect.id == tracked_id))
+            });
+            if has_region && has_tracked {
+                break;
+            }
+        }
+
+        assert_eq!(
+            fragment(&page, "capture").paint.region_capture_crop_id,
+            Some(crop_id)
+        );
+        let fragment_tracking = &fragment(&page, "capture").paint.tracked_element_sub_rects;
+        assert_eq!(fragment_tracking.len(), 1);
+        assert_eq!(fragment_tracking[0].feature, 7);
+        assert_eq!(fragment_tracking[0].id, tracked_id);
+        let artifact = &page.CurrentFrame().unwrap().display_items;
+        let regions = artifact
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.compositor.as_deref())
+            .filter_map(|metadata| metadata.region_capture_data.as_deref())
+            .flatten()
+            .filter(|(id, _)| *id == crop_id)
+            .collect::<Vec<_>>();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(
+            regions[0].1,
+            paint::paint_engine::PaintRect {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+            }
+        );
+        let capture_chunk = artifact
+            .chunks
+            .iter()
+            .find(|chunk| {
+                chunk
+                    .compositor
+                    .as_deref()
+                    .and_then(|metadata| metadata.region_capture_data.as_deref())
+                    .is_some_and(|data| data.iter().any(|(id, _)| *id == crop_id))
+            })
+            .expect("capture metadata chunk");
+        assert_eq!(
+            capture_chunk.bounds,
+            paint::paint_engine::PaintRect {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 40.0,
+            }
+        );
+        assert_eq!(
+            capture_chunk
+                .compositor
+                .as_ref()
+                .unwrap()
+                .hit_test_opaqueness,
+            paint::paint_engine::PaintHitTestOpaqueness::Opaque
+        );
+        let tracked = artifact
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.compositor.as_deref())
+            .filter_map(|metadata| metadata.tracked_element_rects.as_deref())
+            .flatten()
+            .filter(|rect| rect.id == tracked_id)
+            .collect::<Vec<_>>();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].feature, 7);
+        assert_eq!(
+            tracked[0].rect,
+            paint::paint_engine::PaintRect {
+                x: 15.0,
+                y: 26.0,
+                width: 10.0,
+                height: 12.0,
+            }
+        );
+        assert!(tracked[0].should_add_to_compositor_frame_metadata);
+        assert!(tracked[0].should_exclude_fixed_and_sticky_occlusions);
+        assert_eq!(
+            tracked[0].frame_token,
+            Some(paint::paint_engine::PaintFrameToken::Remote([
+                0x7777, 0x8888
+            ]))
+        );
+        assert_eq!(
+            tracked[0].parent_frame_token,
+            Some(paint::paint_engine::PaintFrameToken::Local([
+                0x9999, 0xaaaa
+            ]))
+        );
+        assert!(old.chunks.iter().all(|chunk| chunk
+            .compositor
+            .as_deref()
+            .is_none_or(|metadata| metadata.region_capture_data.is_none()
+                && metadata.tracked_element_rects.is_none())));
+
+        assert!(page.ClearTrackedElementSubRect(node_id, 7));
+        for _ in 0..20 {
+            page.RunTask().unwrap();
+            if page
+                .CurrentFrame()
+                .unwrap()
+                .display_items
+                .chunks
+                .iter()
+                .all(|chunk| {
+                    chunk
+                        .compositor
+                        .as_deref()
+                        .and_then(|metadata| metadata.tracked_element_rects.as_deref())
+                        .is_none_or(|data| data.iter().all(|rect| rect.id != tracked_id))
+                })
+            {
+                break;
+            }
+        }
+        assert!(fragment(&page, "capture")
+            .paint
+            .tracked_element_sub_rects
+            .is_empty());
+        assert!(page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .chunks
+            .iter()
+            .all(|chunk| chunk
+                .compositor
+                .as_deref()
+                .and_then(|metadata| metadata.tracked_element_rects.as_deref())
+                .is_none_or(|data| data.iter().all(|rect| rect.id != tracked_id))));
+    });
+}
+
+#[test]
+fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = fixture(r#"<span id="capture">A</span>"#);
+        let node_id = id(&page, "capture");
+        let tracked_id = [0x5555, 0x6666];
+        assert!(page.SetTrackedElementSubRect(
+            node_id,
+            TrackedElementSubRect {
+                feature: 9,
+                id: tracked_id,
+                should_add_to_compositor_frame_metadata: false,
+                should_exclude_fixed_and_sticky_occlusions: false,
+                sub_rect: None,
+                frame_token: None,
+                parent_frame_token: None,
+            }
+        ));
+        for _ in 0..20 {
+            page.RunTask().unwrap();
+            if page
+                .CurrentFrame()
+                .unwrap()
+                .display_items
+                .chunks
+                .iter()
+                .any(|chunk| {
+                    chunk
+                        .compositor
+                        .as_deref()
+                        .and_then(|metadata| metadata.tracked_element_rects.as_deref())
+                        .is_some_and(|data| data.iter().any(|rect| rect.id == tracked_id))
+                })
+            {
+                break;
+            }
+        }
+
+        let fragment = fragment(&page, "capture");
+        assert!(fragment.paint.box_fragment_is_inline_box);
+        assert_eq!(fragment.paint.tracked_element_sub_rects.len(), 1);
+        let tracked = page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .chunks
+            .iter()
+            .filter_map(|chunk| chunk.compositor.as_deref())
+            .filter_map(|metadata| metadata.tracked_element_rects.as_deref())
+            .flatten()
+            .find(|rect| rect.id == tracked_id)
+            .expect("tracked inline bounds");
+        assert!(tracked.rect.width > 0.0);
+        assert!(tracked.rect.height > 0.0);
     });
 }

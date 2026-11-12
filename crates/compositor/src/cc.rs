@@ -589,6 +589,18 @@ pub mod layers {
             "/src/cc/layers/solid_color_layer_impl.rs"
         ));
     }
+    pub mod surface_layer_impl {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/cc/layers/surface_layer_impl.rs"
+        ));
+    }
+    pub mod surface_layer {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/cc/layers/surface_layer.rs"
+        ));
+    }
     pub mod scrollbar_layer_base {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -599,6 +611,18 @@ pub mod layers {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/cc/layers/scrollbar_layer_impl_base.rs"
+        ));
+    }
+    pub mod painted_scrollbar_layer {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/cc/layers/painted_scrollbar_layer.rs"
+        ));
+    }
+    pub mod painted_scrollbar_layer_impl {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/cc/layers/painted_scrollbar_layer_impl.rs"
         ));
     }
     pub mod solid_color_scrollbar_layer {

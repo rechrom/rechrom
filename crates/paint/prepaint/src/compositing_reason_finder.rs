@@ -81,6 +81,10 @@ impl CompositingReasonFinder {
                 | NodeKind::kSvgHiddenContainer
                 | NodeKind::kSvgResourceClipper
                 | NodeKind::kSvgResourceMasker
+                | NodeKind::kSvgResourceGradient
+                | NodeKind::kSvgResourcePattern
+                | NodeKind::kSvgResourceFilter
+                | NodeKind::kSvgResourceMarker
                 | NodeKind::kSvgForeignObject
                 | NodeKind::kSvgText
                 | NodeKind::kSvgInline
@@ -134,22 +138,16 @@ impl CompositingReasonFinder {
 
     /// Source: `compositing_reason_finder.cc:541-568`.
     pub fn PotentialCompositingReasonsFor3DTransform(style: &PaintStyle) -> CompositingReasons {
-        let mut reasons = CompositingReasons::new();
-        if style.has_nontrivial_3d_transform() {
-            reasons.Put(CompositingReason::k3DTransform);
-        } else if style.has_trivial_3d_transform() {
-            reasons.Put(CompositingReason::kTrivial3DTransform);
-        }
-        if style.has_3d_translate() {
-            reasons.Put(CompositingReason::k3DTranslate);
-        }
-        if style.has_3d_rotate() {
-            reasons.Put(CompositingReason::k3DRotate);
-        }
-        if style.has_3d_scale() {
-            reasons.Put(CompositingReason::k3DScale);
-        }
-        reasons
+        use layoutng_style::style::compositing_reason_facts::{
+            Potential3DCompositingReasons, Potential3DTransformFacts,
+        };
+        Potential3DCompositingReasons(Potential3DTransformFacts {
+            nontrivial_transform: style.has_nontrivial_3d_transform(),
+            trivial_transform: style.has_trivial_3d_transform(),
+            translate: style.has_3d_translate(),
+            rotate: style.has_3d_rotate(),
+            scale: style.has_3d_scale(),
+        })
     }
 
     /// Supported portion of
@@ -179,6 +177,26 @@ impl CompositingReasonFinder {
         }
         if style.has_backdrop_filters() {
             reasons.Put(CompositingReason::kBackdropFilter);
+        }
+        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()
+            && (style.will_change_transform()
+                || style.will_change_opacity()
+                || style.will_change_filter())
+        {
+            eprintln!(
+                "will-change-prepaint offset=({}, {}) size=({}, {}) source={} establishes={} transform={} transform-property={} opacity={} filter={} reasons={:?}",
+                fragment.offset.x,
+                fragment.offset.y,
+                fragment.size.width,
+                fragment.size.height,
+                fragment.paint.HasSource(),
+                fragment.paint.establishes_paint_state,
+                style.will_change_transform(),
+                style.will_change_transform_property(),
+                style.will_change_opacity(),
+                style.will_change_filter(),
+                reasons,
+            );
         }
         reasons
     }

@@ -270,6 +270,16 @@ impl Transform {
         }
     }
 
+    // Source: ui/gfx/geometry/transform.cc:863-866.
+    pub fn MapQuad(&self, quad: crate::gfx_quad_f::QuadF) -> crate::gfx_quad_f::QuadF {
+        crate::gfx_quad_f::QuadF::new(
+            self.map_point(*quad.p1()),
+            self.map_point(*quad.p2()),
+            self.map_point(*quad.p3()),
+            self.map_point(*quad.p4()),
+        )
+    }
+
     // cpp: foundation/gfx_geometry/transform.cc:775-802,858-862
     pub fn MapRect(&self, rect: crate::gfx_ext::RectF) -> crate::gfx_ext::RectF {
         use foundation_base::gfx_geometry::{PointF, SizeF};

@@ -165,9 +165,18 @@ impl PaintChunker {
             self.force_new_chunk();
         }
         let created = self.ensure_current_chunk(chunks, id, client);
+        chunks.last_mut().unwrap().end_index += 1;
+        // Chromium treats every ordinary display item's visual rect as
+        // transparent to hit testing while extending the chunk bounds.  This
+        // must go through UnionBounds: a drawing outside previously recorded
+        // opaque hit-test data makes the enlarged chunk mixed rather than
+        // allowing the opaque region to cover the un-hit-testable gap.
+        self.UnionBounds(
+            chunks,
+            visual_rect,
+            PaintHitTestOpaqueness::Transparent,
+        );
         let chunk = chunks.last_mut().unwrap();
-        chunk.end_index += 1;
-        chunk.bounds.union(visual_rect);
         chunk.bounds_are_complete &= visual_rect_is_accurate;
         if draws_content {
             chunk.drawable_bounds.union(visual_rect);
@@ -614,6 +623,20 @@ mod tests {
             true,
             PaintHitTestOpaqueness::Opaque,
         ));
+        assert!(!chunker.increment_display_item(
+            &mut chunks,
+            id(45, DisplayItemIdType::kBoxDecorationBackground, 0),
+            client,
+            separate,
+            true,
+            RasterEffectOutset::kNone,
+            true,
+            PaintRect::default(),
+        ));
+        assert_eq!(
+            chunks[0].compositor.as_ref().unwrap().hit_test_opaqueness,
+            PaintHitTestOpaqueness::Mixed
+        );
         assert!(!chunker.AddHitTestDataToCurrentChunk(
             &mut chunks,
             hit_test_id,

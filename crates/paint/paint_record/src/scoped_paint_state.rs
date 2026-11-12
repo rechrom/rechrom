@@ -10,7 +10,7 @@ use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::layout_input::{NodeKind, Offset};
 use paint_model::geometry_mapper::SourceToDestinationRect;
 use paint_model::geometry_mapper::TranslationTransform;
-use paint_model::paint_property_tree::{PaintPropertyRole, TransformPaintPropertyNode};
+use paint_model::paint_property_tree::PaintPropertyRole;
 use paint_model::{CullRect, PaintPhase, PaintRect, PaintResult};
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
@@ -26,6 +26,10 @@ fn IsSvgLayoutChild(kind: NodeKind) -> bool {
             | NodeKind::kSvgHiddenContainer
             | NodeKind::kSvgResourceClipper
             | NodeKind::kSvgResourceMasker
+            | NodeKind::kSvgResourceGradient
+            | NodeKind::kSvgResourcePattern
+            | NodeKind::kSvgResourceFilter
+            | NodeKind::kSvgResourceMarker
             | NodeKind::kSvgForeignObject
             | NodeKind::kSvgText
             | NodeKind::kSvgInline
@@ -45,25 +49,8 @@ fn FragmentRect(rect: layoutng_assembly::fragment_tree::FragmentPaintRect) -> Pa
     }
 }
 
-#[doc(hidden)]
-pub fn CullRectInTransform(
-    root_cull_rect: PaintRect,
-    target: &Arc<TransformPaintPropertyNode>,
-) -> PaintRect {
-    let mut root = Arc::clone(target);
-    while let Some(parent) = &root.parent {
-        root = Arc::clone(parent);
-    }
-    SourceToDestinationRect(&root, target, root_cull_rect).unwrap_or_default()
-}
-
-fn LocalCullRect(
-    root_cull_rect: Option<PaintRect>,
-    target: &Arc<TransformPaintPropertyNode>,
-) -> CullRect {
-    root_cull_rect.map_or_else(CullRect::Infinite, |root_cull_rect| {
-        CullRect::FromRect(CullRectInTransform(root_cull_rect, target))
-    })
+fn LocalCullRect(local_cull_rect: Option<PaintRect>) -> CullRect {
+    local_cull_rect.map_or_else(CullRect::Infinite, CullRect::FromRect)
 }
 
 /// Source: `paint_layer_painter.cc:192-208`.
@@ -71,6 +58,8 @@ fn LocalCullRect(
 pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
     let mut contents = FragmentRect(fragment.paint.paint_layer_contents_visual_rect?);
+    contents.x += node.paint_offset.x;
+    contents.y += node.paint_offset.y;
     if fragment.paint.svg_view_box.is_some() {
         contents = SourceToDestinationRect(
             &node.properties.nodes.transform,
@@ -95,13 +84,11 @@ fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
     {
         return;
     }
-    let (Some(root_cull_rect), Some(contents_visual_rect)) =
+    let (Some(contents_cull_rect), Some(contents_visual_rect)) =
         (node.cull_rect, ContentsVisualRect(node))
     else {
         return;
     };
-    let contents_cull_rect =
-        CullRectInTransform(root_cull_rect, &node.contents_properties.nodes.transform);
     if !contents_cull_rect.contains(contents_visual_rect) {
         node.previous_paint_result
             .set(PaintResult::kMayBeClippedByCullRect);
@@ -125,10 +112,7 @@ pub struct ScopedPaintState<'n, 'f, 'c, 'o> {
 impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
     pub fn new(node: &'n PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) -> Self {
         let mut adjusted_paint_info = *paint_info;
-        adjusted_paint_info.SetCullRect(LocalCullRect(
-            node.self_cull_rect,
-            &node.properties.nodes.transform,
-        ));
+        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect));
         let Some(fragment) = node.fragment.as_deref() else {
             return Self {
                 node,
@@ -223,10 +207,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         paint_offset: Offset,
     ) -> Self {
         let mut adjusted_paint_info = *paint_info;
-        adjusted_paint_info.SetCullRect(LocalCullRect(
-            node.self_cull_rect,
-            &node.properties.nodes.transform,
-        ));
+        adjusted_paint_info.SetCullRect(LocalCullRect(node.self_cull_rect));
         Self {
             node,
             input_paint_info: adjusted_paint_info,
@@ -341,10 +322,9 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
             state.paint_offset.x += scroll_origin.x;
             state.paint_offset.y += scroll_origin.y;
         }
-        state.input_paint_info.SetCullRect(LocalCullRect(
-            node.cull_rect,
-            &node.contents_properties.nodes.transform,
-        ));
+        state
+            .input_paint_info
+            .SetCullRect(LocalCullRect(node.cull_rect));
         let chunk_properties = Some(ScopedPaintChunkProperties::contents(
             paint_info.context,
             node,
@@ -531,6 +511,41 @@ mod tests {
         assert_eq!(output.items[1].transform.values[12], 4.0);
         assert_eq!(output.items[1].transform.values[13], 6.0);
         assert_eq!(output.items[2].r#type, DisplayItemType::kRestore);
+    }
+
+    #[test]
+    fn object_scope_consumes_local_cull_without_root_reprojection() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.has_source = true;
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        let parent = node.properties.nodes.transform.clone();
+        node.properties.nodes.transform = Arc::new(TransformPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 20,
+            parent: Some(parent),
+            matrix: TranslationTransform(0.0, 52.0),
+            ..(*node.properties.nodes.transform).clone()
+        });
+        let local_cull = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 52.0,
+        };
+        node.self_cull_rect = Some(local_cull);
+
+        let mut output = crate::PaintRecording::default();
+        let context = RefCell::new(PaintContext::new(&mut output));
+        let info = PaintInfo::new(&context, PaintPhase::kForeground);
+        let state = ScopedPaintState::new(&node, &info);
+        assert_eq!(state.GetPaintInfo().GetCullRect().Rect(), Some(local_cull));
+        assert!(state.LocalRectIntersectsCullRect(PaintRect {
+            x: 0.0,
+            y: 3.0,
+            width: 100.0,
+            height: 19.0,
+        }));
     }
 
     #[test]

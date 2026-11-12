@@ -70,14 +70,8 @@ impl StrokeData {
             self.dash_ = None;
             return;
         }
-        let count = if dashes.len().is_multiple_of(2) {
-            dashes.len()
-        } else {
-            dashes.len() * 2
-        };
-        let intervals: Vec<f32> = (0..count)
-            .map(|index| dashes[index % dashes.len()])
-            .collect();
+        let intervals = foundation::native_path::RepeatedDashIntervals(dashes);
+        let count = intervals.len();
         self.dash_ = Some(PathEffect::MakeDash(
             &intervals,
             i32::try_from(count).expect("source dash count fits i32"),

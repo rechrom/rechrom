@@ -26,7 +26,22 @@ pub(super) fn GeometryMetadataEqual(new: &Option<ElementData>, old: &Option<Elem
             normalized.image_resource_maybe_animated = old.image_resource_maybe_animated;
             normalized.focused_image_map_area = old.focused_image_map_area.clone();
             normalized.scroll_offset = old.scroll_offset;
+            normalized.region_capture_crop_id = old.region_capture_crop_id;
             normalized == *old
+        }
+        _ => false,
+    }
+}
+
+#[inline(always)]
+pub(super) fn ElementCaptureStateChanged(
+    new: &Option<ElementData>,
+    old: &Option<ElementData>,
+) -> bool {
+    match (new, old) {
+        (Some(new), Some(old)) => {
+            new.region_capture_crop_id != old.region_capture_crop_id
+                || new.tracked_element_sub_rects != old.tracked_element_sub_rects
         }
         _ => false,
     }
@@ -200,6 +215,28 @@ mod tests {
 
         assert!(GeometryMetadataEqual(&loaded, &old));
         assert!(ImagePaintStateChanged(&loaded, &old));
+
+        let mut capture = old.clone().unwrap();
+        capture.region_capture_crop_id = Some([1, 2]);
+        let capture = Some(capture);
+        assert!(GeometryMetadataEqual(&capture, &old));
+        assert!(ElementCaptureStateChanged(&capture, &old));
+
+        let mut tracked = old.clone().unwrap();
+        tracked.tracked_element_sub_rects.push(
+            layoutng_assembly::internal::layout_input::TrackedElementSubRect {
+                feature: 7,
+                id: [3, 4],
+                should_add_to_compositor_frame_metadata: true,
+                should_exclude_fixed_and_sticky_occlusions: false,
+                sub_rect: None,
+                frame_token: None,
+                parent_frame_token: None,
+            },
+        );
+        let tracked = Some(tracked);
+        assert!(!GeometryMetadataEqual(&tracked, &old));
+        assert!(ElementCaptureStateChanged(&tracked, &old));
 
         let mut resized = loaded.clone().unwrap();
         resized.natural_width = Some(40.0);

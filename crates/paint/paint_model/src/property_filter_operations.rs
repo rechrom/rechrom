@@ -794,6 +794,7 @@ mod tests {
         PaintFilterOperation {
             r#type: PaintFilterType::kReference,
             reference_graph: Some(Arc::new(SvgFilterGraph {
+                resource_node_id:0,
                 id: "viewport-filter".into(),
                 filter_units: SvgFilterUnits::kUserSpaceOnUse,
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -1151,6 +1152,7 @@ mod tests {
             }
         };
         let mut graph = SvgFilterGraph {
+            resource_node_id: 0,
             id: "taint".into(),
             filter_units: SvgFilterUnits::kUserSpaceOnUse,
             primitive_units: SvgFilterUnits::kUserSpaceOnUse,
@@ -1217,6 +1219,7 @@ mod tests {
             }
         };
         let graph = SvgFilterGraph {
+            resource_node_id: 0,
             id: "builder-fallbacks".into(),
             filter_units: SvgFilterUnits::kUserSpaceOnUse,
             primitive_units: SvgFilterUnits::kUserSpaceOnUse,

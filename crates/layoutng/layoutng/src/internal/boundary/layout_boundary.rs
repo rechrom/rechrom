@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use crate::layout_boundary_support::{
-    LayoutBoundaryCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet, LayoutBoundarySourceEntry,
-    LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
+    FragmentIdentityKey, LayoutBoundaryCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet,
+    LayoutBoundarySourceEntry, LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
 };
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -38,12 +38,13 @@ use layout_fragment::fragment_tree::{
     BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge,
     CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
     FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentPaintData,
-    FragmentPaintRect, FrameSetPaintData, LayoutResultHandle, MathMLPaintData, MathMLPaintKind,
-    PaintGlyph, PaintGlyphRun, PaintProperties, PaintResources, ReplacedContentPaintData,
-    ScrollContainerPaintData, ScrollSnapAxisPaintData, ScrollSnapStrictnessPaintData,
-    ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData,
-    StickyPositionPaintData, StitchedDecorationData, SvgTextPaintData, TablePaintColumn,
-    TablePaintData, TextCombineEmphasisPaintData,
+    FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
+    LayoutResultHandle, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
+    PaintProperties, PaintPropertiesHandle, PaintResources, PrePaintInvalidation,
+    ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
+    ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
+    SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
+    SvgTextPaintData, TablePaintColumn, TablePaintData, TextCombineEmphasisPaintData,
 };
 use layout_fragment::layout_result::LayoutResult;
 use layout_fragment::logical_fragment::LogicalFragment;
@@ -62,7 +63,7 @@ use layoutng_style::style::applied_text_decoration::AppliedTextDecoration;
 use layoutng_style::style::computed_style::{
     ComputedStyle as StyleComputedStyle, ComputedStyleBuilder,
 };
-use layoutng_style::style::computed_style_constants::{EVerticalAlign, PseudoId};
+use layoutng_style::style::computed_style_constants::{EFillBox, EVerticalAlign, PseudoId};
 use layoutng_style::style::gap_data_list::GapDataListIterator;
 use layoutng_style::style::grid_enums::GridTrackSizingDirection;
 use layoutng_style::text_transform_services::{TextTransformResolver, TextTransformResolverScope};
@@ -138,12 +139,15 @@ mod layout_fragment_fragment_export_support;
 pub(crate) use layout_fragment_fragment_export_support::ExportAppliedTextDecoration;
 use layout_fragment_fragment_export_support::{
     DebugNameCache, ExportAppliedTextDecorations, ExportSelectionPaintStyle,
-    ExportSelectionTextDecoration, ExportedStyleCache, InputId, Number, PublicWritingMode,
-    SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
+    ExportSelectionTextDecoration, ExportedSelectionStyleCache, ExportedStyleCache, InputId,
+    Number, PublicWritingMode, SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
 };
 #[path = "../../../../layout_fragment/src/fragment_property_export.rs"]
 mod layout_fragment_fragment_property_export;
-use layout_fragment_fragment_property_export::{ExportPaintProperties, ExportProperties};
+pub(crate) use layout_fragment_fragment_property_export::ExportSelectionPrePaintInvalidation;
+use layout_fragment_fragment_property_export::{
+    ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,
+};
 #[path = "../../../../layout_fragment/src/text_paint_export.rs"]
 mod layout_fragment_text_paint_export;
 pub(crate) use layout_fragment_text_paint_export::{BuildPaintGlyphRuns, ExportTextPaintBaseline};
@@ -154,7 +158,8 @@ use layout_fragment_text_paint_export::{
 #[path = "../../../../layout_fragment/src/fragment_geometry_export.rs"]
 mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::{
-    ExportBoxPaintGeometry, ExportContentSize, ExportSvgTextPaintData,
+    ExportBoxPaintGeometry, ExportContentSize, ExportReplacedContentPaintData,
+    ExportSelfOutlineGeometry, ExportSvgTextPaintData,
 };
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
@@ -163,7 +168,7 @@ use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
 mod layout_fragment_specialized_paint_export;
 use layout_fragment_specialized_paint_export::{
     ExportColumnRulePaintData, ExportFieldsetPaintData, ExportFrameSetPaintData,
-    ExportMathMLPaintData, ExportOverflowClipMargin, ExportTablePaintData,
+    ExportGapRulePaintData, ExportMathMLPaintData, ExportOverflowClipMargin, ExportTablePaintData,
 };
 #[path = "../../../../layout_fragment/src/collapsed_table_paint_export.rs"]
 mod layout_fragment_collapsed_table_paint_export;
@@ -283,12 +288,14 @@ pub(crate) fn RefreshRetainedPaintInputs(
     fragments: crate::layout_engine::PaintFragmentCursor<'_>,
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
+    should_apply_root_background_behavior: bool,
 ) -> bool {
     layout_fragment_retained_paint_refresh::refresh_retained_paint_inputs(
         root,
         fragments,
         changed,
         inline_ink_changes,
+        should_apply_root_background_behavior,
     )
 }
 // cpp: layoutng/internal/boundary/layout_boundary.h:41-43

@@ -4,6 +4,19 @@ use std::time::{Duration, Instant};
 
 use super::display_scheduler_base::DisplaySchedulerDrawResult;
 
+// Source: components/viz/common/frame_sinks/begin_frame_args.cc:50-65
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BeginFrameId {
+    pub source_id: u64,
+    pub sequence_number: u64,
+}
+
+impl BeginFrameId {
+    pub fn IsSequenceValid(self) -> bool {
+        self.sequence_number != 0
+    }
+}
+
 // Source: components/viz/service/display/display_scheduler.h:1-38
 // Source: components/viz/service/display/display_scheduler.cc:1-50
 // BeginFrameSource observation, task posting, timers, ADPF hint sessions and
@@ -11,6 +24,7 @@ use super::display_scheduler_base::DisplaySchedulerDrawResult;
 // scheduling actions so the embedding can provide those platform services.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameTiming {
+    pub frame_id: BeginFrameId,
     pub frame_time: Instant,
     pub interval: Duration,
     pub source_deadline: Instant,
@@ -124,12 +138,16 @@ pub struct DisplayScheduler<T> {
 // Source: components/viz/service/display/display_scheduler.h:168-222
 impl<T> Default for DisplayScheduler<T> {
     fn default() -> Self {
-        Self::new(PendingSwapParams::default(), false)
+        Self::new(PendingSwapParams::default(), false, false)
     }
 }
 
 impl<T> DisplayScheduler<T> {
-    pub fn new(params: PendingSwapParams, wait_for_all_surfaces_before_draw: bool) -> Self {
+    pub fn new(
+        params: PendingSwapParams,
+        wait_for_all_surfaces_before_draw: bool,
+        allow_multiple_swaps_per_vsync: bool,
+    ) -> Self {
         Self {
             pending: None,
             last_undrawn: None,
@@ -144,7 +162,7 @@ impl<T> DisplayScheduler<T> {
             pending_swaps_: 0,
             pending_swap_params_: params,
             wait_for_all_surfaces_before_draw_: wait_for_all_surfaces_before_draw,
-            allow_multiple_swaps_per_vsync_: false,
+            allow_multiple_swaps_per_vsync_: allow_multiple_swaps_per_vsync,
             inside_deadline_: false,
             inside_surface_damaged_: false,
             observing_begin_frames_: false,
@@ -209,12 +227,18 @@ impl<T: Copy> DisplayScheduler<T> {
         self.RescheduleFromPending();
     }
 
-    pub fn OnDisplayDamaged(&mut self, now: Instant) {
+    pub fn OnDisplayDamaged(&mut self, frame_id: BeginFrameId, now: Instant) -> Option<T> {
         self.inside_surface_damaged_ = true;
         self.NotifyVisualDamage(now);
         self.MaybeStartObservingBeginFrames();
+        if self.allow_multiple_swaps_per_vsync_ && self.CanDrawForPreviousFrame(frame_id, now) {
+            let drawn = self.ForceImmediateSwapForPreviousFrame(frame_id, now);
+            self.inside_surface_damaged_ = false;
+            return drawn;
+        }
         self.inside_surface_damaged_ = false;
         self.ScheduleBeginFrameDeadline(now);
+        None
     }
 
     pub fn OnPendingSurfacesChanged(&mut self, has_pending: bool) {
@@ -370,22 +394,34 @@ impl<T: Copy> DisplayScheduler<T> {
         self.needs_draw_ && !self.output_surface_lost_ && self.visible_ && !self.root_frame_missing_
     }
 
-    pub fn CanDrawForPreviousFrame(&self, now: Instant) -> bool {
+    pub fn CanDrawForPreviousFrame(&self, frame_id: BeginFrameId, now: Instant) -> bool {
+        if !frame_id.IsSequenceValid() {
+            return false;
+        }
         let Some(frame) = self.last_undrawn else {
             return false;
         };
         !self.inside_deadline_
+            && frame_id == frame.timing.frame_id
             && self.pending_swaps_ < self.MaxPendingSwapsForRefreshRate(frame.timing.interval)
             && now < frame.timing.source_deadline
     }
 
-    pub fn ForceImmediateSwapForPreviousFrame(&mut self, now: Instant) -> Option<T> {
-        if !self.CanDrawForPreviousFrame(now) {
+    pub fn ForceImmediateSwapForPreviousFrame(
+        &mut self,
+        frame_id: BeginFrameId,
+        now: Instant,
+    ) -> Option<T> {
+        if !self.CanDrawForPreviousFrame(frame_id, now) {
             return None;
         }
-        let frame = self.last_undrawn.take()?;
-        self.needs_draw_ = false;
-        Some(frame.payload)
+        let drawn = self.AttemptDrawAndSwap();
+        self.DidFinishFrame(if drawn.is_some() {
+            DisplaySchedulerDrawResult::kDrawnLate
+        } else {
+            DisplaySchedulerDrawResult::kDidNotDraw
+        });
+        drawn
     }
 
     // Source: components/viz/service/display/display_scheduler.cc:669-771
@@ -481,6 +517,8 @@ impl<T: Copy> DisplayScheduler<T> {
         // incorrectly make a later frame immediate before its surface arrives.
         self.DidFinishFrame(if drawn.is_some() {
             DisplaySchedulerDrawResult::kDrawn
+        } else if self.allow_multiple_swaps_per_vsync_ && self.last_undrawn.is_some() {
+            DisplaySchedulerDrawResult::kMayDrawLate
         } else {
             DisplaySchedulerDrawResult::kDidNotDraw
         });
@@ -538,6 +576,10 @@ mod tests {
         let frame_time = Instant::now();
         let interval = Duration::from_micros(16_667);
         let timing = FrameTiming {
+            frame_id: BeginFrameId {
+                source_id: 1,
+                sequence_number: 1,
+            },
             frame_time,
             interval,
             source_deadline: frame_time + interval,
@@ -554,11 +596,18 @@ mod tests {
         let surface_arrival = frame_time + Duration::from_millis(2);
         scheduler.SetDamageDueToInteraction(true);
         scheduler.OnPendingSurfacesChanged(false);
-        scheduler.OnDisplayDamaged(surface_arrival);
+        assert_eq!(
+            scheduler.OnDisplayDamaged(timing.frame_id, surface_arrival),
+            None
+        );
         assert_eq!(scheduler.NextDeadline(), Some(surface_arrival));
         assert_eq!(scheduler.TakeIfDrawDue(surface_arrival), Some(1));
 
         let next_timing = FrameTiming {
+            frame_id: BeginFrameId {
+                source_id: 1,
+                sequence_number: 2,
+            },
             frame_time: frame_time + interval,
             interval,
             source_deadline: frame_time + interval * 2,
@@ -569,5 +618,55 @@ mod tests {
             scheduler.NextDeadline(),
             Some(next_timing.Deadlines().draw_and_swap)
         );
+    }
+
+    #[test]
+    fn late_damage_draws_only_the_matching_undrawn_frame_after_swap_ack() {
+        let frame_time = Instant::now();
+        let interval = Duration::from_micros(16_667);
+        let timing = FrameTiming {
+            frame_id: BeginFrameId {
+                source_id: 7,
+                sequence_number: 21,
+            },
+            frame_time,
+            interval,
+            source_deadline: frame_time + interval,
+        };
+        let late = timing.Deadlines().draw_and_swap + Duration::from_micros(100);
+        let mut scheduler = DisplayScheduler::<u32>::new(PendingSwapParams::default(), false, true);
+
+        scheduler.BeginFrame(21, timing);
+        scheduler.needs_draw_ = false;
+        assert_eq!(
+            scheduler.OnBeginFrameDeadline(timing.Deadlines().draw_and_swap),
+            None
+        );
+
+        let next_frame = BeginFrameId {
+            sequence_number: 22,
+            ..timing.frame_id
+        };
+        assert_eq!(
+            scheduler.OnDisplayDamaged(BeginFrameId::default(), late),
+            None
+        );
+        assert_eq!(scheduler.OnDisplayDamaged(next_frame, late), None);
+        assert_eq!(
+            scheduler.OnDisplayDamaged(
+                BeginFrameId {
+                    source_id: timing.frame_id.source_id + 1,
+                    sequence_number: timing.frame_id.sequence_number,
+                },
+                late,
+            ),
+            None
+        );
+
+        scheduler.DidSwapBuffers();
+        assert_eq!(scheduler.OnDisplayDamaged(timing.frame_id, late), None);
+        scheduler.DidReceiveSwapBuffersAck();
+        assert_eq!(scheduler.OnDisplayDamaged(timing.frame_id, late), Some(21));
+        assert_eq!(scheduler.OnDisplayDamaged(timing.frame_id, late), None);
     }
 }

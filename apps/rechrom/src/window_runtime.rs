@@ -15,17 +15,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Window-owned readiness for the Page surfaces embedded by the current Scene.
-///
-/// Page producers finish independently. During a resize, treating the first
-/// arriving surface as an all-surfaces-ready signal lets a fast toolbar frame
-/// force an immediate draw while the content surface still has the old size.
-/// Keep this coordination beside DisplayScheduler; Page and Viz algorithms only
-/// continue to publish their normal immutable outputs.
+/// Window-owned availability of the surfaces embedded by the current Scene.
+/// Desktop DelegatedFrameHost::EmbedSurface uses a zero-frame resize deadline:
+/// an existing fallback surface is drawable even at the preceding size. Page
+/// producers remain independent; geometry mismatch must not make Display wait
+/// for their next frames. Browser-owned tab state still uses its revision fence.
 #[derive(Default)]
 struct SurfaceReadiness {
     scene: Option<crate::page_presentation::Scene>,
     viewports: BTreeMap<crate::page_presentation::Document, crate::engine::Viewport>,
+    local_surface_ids:
+        BTreeMap<crate::page_presentation::Document, compositor::runtime::types::LocalSurfaceId>,
     embedder_revisions: BTreeMap<crate::page_presentation::Document, u64>,
     ready_damage: bool,
     interaction_damage: bool,
@@ -45,9 +45,11 @@ impl SurfaceReadiness {
     }
 
     fn observe_page(&mut self, interaction: bool) -> bool {
-        self.interaction_damage |= interaction;
-        let all_ready = self.all_placed_surfaces_match();
-        self.ready_damage |= all_ready;
+        let all_ready = self.all_placed_surfaces_available();
+        if all_ready {
+            self.ready_damage = true;
+            self.interaction_damage |= interaction;
+        }
         all_ready
     }
 
@@ -56,26 +58,69 @@ impl SurfaceReadiness {
             display::Message::Scene(scene) => {
                 self.scene = Some(scene.clone());
                 // A tab switch normally selects an already submitted Surface.
-                // Treat that retained surface as ready immediately. A resize or
-                // first navigation still waits because its viewport does not
-                // match (or no submitted surface exists yet).
-                let all_ready = self.all_placed_surfaces_match();
+                // Treat that retained surface as ready immediately, including
+                // during resize. The new child surface replaces its fallback
+                // independently when it arrives.
+                let all_ready = self.all_placed_surfaces_available();
                 self.ready_damage = all_ready;
-                self.interaction_damage = all_ready;
+                // Scene geometry is browser state, not user interaction.
+                // Do not let a stale content fallback select the interaction
+                // deadline before the exact toolbar/root surface arrives.
+                self.interaction_damage = false;
                 Some(all_ready)
             }
             display::Message::Prepare { submitted } => {
-                self.viewports
-                    .insert(submitted.provenance.document, submitted.viewport);
+                let document = submitted.provenance.document;
+                let local_surface_id = submitted.frame.local_surface_id;
+                let Some(parameters) = submitted
+                    .frame
+                    .frame
+                    .render_pass_list
+                    .last()
+                    .map(|pass| (pass.output_rect.width, pass.output_rect.height))
+                else {
+                    return None;
+                };
+                if let Some(current) = self.local_surface_ids.get(&document) {
+                    let same_embed = current.embed_token == local_surface_id.embed_token;
+                    if same_embed && !local_surface_id.IsSameOrNewerThan(current) {
+                        return None;
+                    }
+                    if *current == local_surface_id
+                        && self.viewports.get(&document).is_some_and(|viewport| {
+                            parameters != (viewport.width as i32, viewport.height as i32)
+                        })
+                    {
+                        return None;
+                    }
+                }
+                self.local_surface_ids.insert(document, local_surface_id);
+                self.viewports.insert(document, submitted.viewport);
                 self.embedder_revisions.insert(
-                    submitted.provenance.document,
+                    document,
                     submitted
                         .provenance
                         .content
                         .map_or(0, |content| content.embedder_revision),
                 );
-                self.affects_current_scene(submitted.provenance.document)
+                self.affects_current_scene(document)
                     .then(|| self.observe_page(submitted.is_handling_interaction))
+            }
+            display::Message::CopyOutput {
+                expected_viewport, ..
+            } => {
+                // DirectRenderer copy requests count as display damage. Keep
+                // the request behind the exact root Scene so a resize followed
+                // immediately by capture cannot schedule the preceding size.
+                let all_ready = self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|scene| scene.viewport == *expected_viewport)
+                    && self.all_placed_surfaces_available();
+                if all_ready {
+                    self.ready_damage = true;
+                }
+                Some(all_ready)
             }
             display::Message::Submit { .. }
             | display::Message::SwapAck(_)
@@ -83,7 +128,7 @@ impl SurfaceReadiness {
         }
     }
 
-    fn all_placed_surfaces_match(&self) -> bool {
+    fn all_placed_surfaces_available(&self) -> bool {
         self.scene.as_ref().is_some_and(|scene| {
             !scene.placements.is_empty()
                 && scene.placements.iter().all(|placement| {
@@ -98,10 +143,8 @@ impl SurfaceReadiness {
                                 (document.0 == placement.document.0).then_some(viewport)
                             })
                     });
-                    let geometry_ready = selected.is_some_and(|viewport| {
-                        viewport.width == placement.destination.width
-                            && viewport.height == placement.destination.height
-                    }) || (selected.is_none()
+                    let surface_available = selected.is_some()
+                        || (selected.is_none()
                             // The browser chrome must itself have a frame before
                             // a root can be presented. A newly selected content
                             // view is different: before its first frame Chromium
@@ -116,7 +159,13 @@ impl SurfaceReadiness {
                             .copied()
                             .unwrap_or(0)
                             == scene.toolbar_revision;
-                    geometry_ready && revision_ready
+                    // BrowserView adopts new root bounds synchronously. Until
+                    // our Page-backed toolbar submits that size, its existing
+                    // Surface is the same zero-frame-deadline fallback used by
+                    // WebContents: retain its source dimensions and clip it,
+                    // never scale it. The browser-owned revision fence above
+                    // still prevents a tab-state mismatch.
+                    surface_available && revision_ready
                 })
         })
     }
@@ -138,6 +187,7 @@ impl SurfaceReadiness {
 pub(crate) enum Command {
     Display(display::Message),
     Tick(BeginFrame),
+    SwapStarted,
     Ack(u64),
 }
 pub(crate) fn spawn(
@@ -156,7 +206,7 @@ pub(crate) fn spawn(
         .name("window-presentation".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            crate::engine::set_page_thread_presentation_priority();
+            crate::engine::set_presentation_thread_priority();
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 target_id: 1,
                 ..Default::default()
@@ -226,16 +276,21 @@ fn apply_display_work(
     display: &mut Display,
     acks: &mpsc::Receiver<u64>,
     work: DisplayWork,
+    post_swap_started: &Arc<dyn Fn() + Send + Sync>,
     post_ack: &Arc<dyn Fn(u64) + Send + Sync>,
 ) -> io::Result<Vec<display::Effect>> {
     // Completion tokens have their own queue and are consumed by the Display
     // owner before any queued draw, exactly as in the previous executor.
     let mut effects = Vec::new();
     while let Ok(id) = acks.try_recv() {
-        effects.extend(display.Handle(display::Message::SwapAck(id), post_ack)?);
+        effects.extend(display.Handle(
+            display::Message::SwapAck(id),
+            post_swap_started,
+            post_ack,
+        )?);
     }
     if let DisplayWork::Command(message) = work {
-        effects.extend(display.Handle(message, post_ack)?);
+        effects.extend(display.Handle(message, post_swap_started, post_ack)?);
     }
     Ok(effects)
 }
@@ -248,6 +303,10 @@ fn run(
     reply: mpsc::Sender<Command>,
 ) -> io::Result<()> {
     let (acks, ack_receiver) = mpsc::channel();
+    let swap_started_reply = reply.clone();
+    let post_swap_started: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = swap_started_reply.send(Command::SwapStarted);
+    });
     let post_ack: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |id| {
         if acks.send(id).is_ok() {
             let _ = reply.send(Command::Ack(id));
@@ -259,19 +318,26 @@ fn run(
         let (sender, receiver) = mpsc::channel();
         remote = Some(sender);
         let source = source.clone();
+        let post_swap_started = post_swap_started.clone();
         let post_ack = post_ack.clone();
         std::thread::Builder::new()
             .name("window-display".into())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
-                crate::engine::set_page_thread_presentation_priority();
+                crate::engine::set_presentation_thread_priority();
                 let mut display = Display::New(target, output.clone(), config.capture_frames);
                 let mut pending = VecDeque::new();
                 while let Ok(work) = ReceiveDisplayWork(&receiver, &mut pending) {
                     if matches!(work, DisplayWork::Command(display::Message::Stop)) {
                         break;
                     }
-                    let result = apply_display_work(&mut display, &ack_receiver, work, &post_ack);
+                    let result = apply_display_work(
+                        &mut display,
+                        &ack_receiver,
+                        work,
+                        &post_swap_started,
+                        &post_ack,
+                    );
                     match result {
                         Ok(effects) => {
                             for _ in effects {
@@ -299,13 +365,16 @@ fn run(
                 .send(work)
                 .map_err(|_| io::Error::other("Display stopped"))?;
         } else if let Some((display, acks)) = &mut local {
-            for _ in apply_display_work(display, acks, work, &post_ack)? {
+            for _ in apply_display_work(display, acks, work, &post_swap_started, &post_ack)? {
                 source.request_begin_frame();
             }
         }
         Ok(())
     };
-    let mut scheduler = viz::DisplayScheduler::default();
+    // Chromium keeps kAllowMultipleSwapsPerVsync feature-gated. Rechrom opts
+    // in explicitly at this application assembly point because Page and
+    // Display share physical BeginFrameIds and the typed swap ACK path below.
+    let mut scheduler = viz::DisplayScheduler::new(viz::PendingSwapParams::default(), false, true);
     let mut surfaces = SurfaceReadiness::default();
     loop {
         let timeout = scheduler
@@ -321,6 +390,16 @@ fn run(
             }
             Ok(Command::Display(message)) => {
                 let all_surfaces_ready = surfaces.observe(&message);
+                let damage_frame_id = match &message {
+                    display::Message::Prepare { submitted } => {
+                        let frame_id = submitted.frame.frame.metadata.begin_frame_ack.frame_id;
+                        viz::BeginFrameId {
+                            source_id: frame_id.source_id,
+                            sequence_number: frame_id.sequence_number,
+                        }
+                    }
+                    _ => viz::BeginFrameId::default(),
+                };
                 dispatch(DisplayWork::Command(message))?;
                 if let Some(all_surfaces_ready) = all_surfaces_ready {
                     // Damage after a completed deadline belongs to the next
@@ -337,15 +416,18 @@ fn run(
                     // immediate deadline instead of waiting until the regular
                     // display draw deadline and missing Core Animation's latch.
                     // is_handling_interaction is aggregate display-frame state.
-                    // Do not expose it to DisplayScheduler while another placed
-                    // Page surface still has the previous resize geometry: its
-                    // immediate mode would otherwise bypass the pending-surface
-                    // wait. Retain the bit until the complete candidate arrives.
+                    // A previous-size fallback satisfies the desktop resize
+                    // deadline. Only missing required surfaces or a different
+                    // browser-owned tab revision keep this root pending.
                     if all_surfaces_ready && surfaces.has_interaction_damage() {
                         scheduler.SetDamageDueToInteraction(true);
                     }
                     scheduler.OnPendingSurfacesChanged(!all_surfaces_ready);
-                    scheduler.OnDisplayDamaged(Instant::now());
+                    if let Some(frame) = scheduler.OnDisplayDamaged(damage_frame_id, Instant::now())
+                    {
+                        surfaces.did_schedule_draw();
+                        dispatch(DisplayWork::Command(display::Message::Submit { frame }))?;
+                    }
                 }
                 if all_surfaces_ready.is_some() {
                     source.request_begin_frame();
@@ -355,6 +437,10 @@ fn run(
                 if let Some(previous) = scheduler.BeginFrame(
                     frame,
                     viz::FrameTiming {
+                        frame_id: viz::BeginFrameId {
+                            source_id: frame.source_id,
+                            sequence_number: frame.sequence_number,
+                        },
                         frame_time: frame.frame_time,
                         interval: frame.interval,
                         source_deadline: frame.deadline,
@@ -375,7 +461,11 @@ fn run(
                 let pending = scheduler.PendingFrame().unwrap();
                 scheduler.MarkPrepared(pending, true);
             }
+            Ok(Command::SwapStarted) => {
+                scheduler.DidSwapBuffers();
+            }
             Ok(Command::Ack(_id)) => {
+                scheduler.DidReceiveSwapBuffersAck();
                 dispatch(DisplayWork::SwapAckReady)?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -396,7 +486,7 @@ mod tests {
     };
 
     #[test]
-    fn resize_damage_waits_for_every_placed_surface() {
+    fn resize_damage_uses_available_fallback_surfaces() {
         let toolbar = (0, 0);
         let content = (1, 1);
         let mut state = SurfaceReadiness::default();
@@ -406,6 +496,11 @@ mod tests {
                 height: 700,
                 scale: 1.0,
             },
+            browser_root: crate::chrome::browser_root_frame(Viewport {
+                width: 1000,
+                height: 700,
+                scale: 1.0,
+            }),
             placements: vec![
                 Placement {
                     document: toolbar,
@@ -429,8 +524,8 @@ mod tests {
                 scale: 1.0,
             },
         );
-        assert!(!state.observe_page(true));
-        assert!(!state.has_ready_damage());
+        assert!(state.observe_page(true));
+        assert!(state.has_ready_damage());
         assert!(state.has_interaction_damage());
         state.viewports.insert(
             content,
@@ -440,8 +535,8 @@ mod tests {
                 scale: 1.0,
             },
         );
-        assert!(!state.observe_page(false));
-        assert!(!state.has_ready_damage());
+        assert!(state.observe_page(false));
+        assert!(state.has_ready_damage());
         state.viewports.insert(
             content,
             Viewport {
@@ -480,6 +575,11 @@ mod tests {
                     height: 700,
                     scale: 1.0,
                 },
+                browser_root: crate::chrome::browser_root_frame(Viewport {
+                    width: 1000,
+                    height: 700,
+                    scale: 1.0,
+                }),
                 placements: vec![
                     Placement {
                         document: toolbar,
@@ -492,11 +592,82 @@ mod tests {
                 ],
                 live_documents: vec![toolbar, next_content],
                 metadata: Vec::new(),
-                toolbar_revision: 0,
+                toolbar_revision: 1,
             })),
             Some(true),
             "the previous document surface keeps a same-tab navigation drawable"
         );
+        assert!(state.has_ready_damage());
+        assert!(!state.has_interaction_damage());
+    }
+
+    #[test]
+    fn resized_root_uses_stale_toolbar_without_latching_interaction() {
+        let toolbar = (0, 0);
+        let content = (1, 1);
+        let mut state = SurfaceReadiness::default();
+        state.viewports.insert(
+            toolbar,
+            Viewport {
+                width: 1000,
+                height: 86,
+                scale: 1.0,
+            },
+        );
+        state.viewports.insert(
+            content,
+            Viewport {
+                width: 1000,
+                height: 614,
+                scale: 1.0,
+            },
+        );
+        let resized = Scene {
+            viewport: Viewport {
+                width: 1100,
+                height: 700,
+                scale: 1.0,
+            },
+            browser_root: crate::chrome::browser_root_frame(Viewport {
+                width: 1100,
+                height: 700,
+                scale: 1.0,
+            }),
+            placements: vec![
+                Placement {
+                    document: toolbar,
+                    destination: DeviceRect::new(0, 0, 1100, 86),
+                },
+                Placement {
+                    document: content,
+                    destination: DeviceRect::new(0, 86, 1100, 614),
+                },
+            ],
+            live_documents: vec![toolbar, content],
+            metadata: Vec::new(),
+            toolbar_revision: 0,
+        };
+
+        assert_eq!(state.observe(&display::Message::Scene(resized)), Some(true));
+        assert!(state.has_ready_damage());
+        assert!(!state.has_interaction_damage());
+
+        // The retained toolbar and WebContents surfaces make the resized root
+        // drawable immediately. A later Page frame can use the interaction
+        // deadline without waiting for an exact toolbar size.
+        assert!(state.observe_page(true));
+        assert!(state.has_ready_damage());
+        assert!(state.has_interaction_damage());
+
+        state.viewports.insert(
+            toolbar,
+            Viewport {
+                width: 1100,
+                height: 86,
+                scale: 1.0,
+            },
+        );
+        assert!(state.observe_page(false));
         assert!(state.has_ready_damage());
         assert!(state.has_interaction_damage());
     }

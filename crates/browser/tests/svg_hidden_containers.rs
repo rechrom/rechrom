@@ -206,8 +206,8 @@ fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
 
 #[test]
 fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
+    use interaction::input_event::Offset;
     use interaction::input_event::{InputEvent, MouseEvent, MouseEventType};
-    use layoutng_assembly::internal::layout_input::Offset;
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = fixture(HIDDEN);

@@ -885,7 +885,7 @@ fn checked_option_uses_live_selectedness_dirty_state_and_select_lifecycle() {
 }
 
 #[test]
-fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
+fn internal_multi_select_focus_uses_canonical_option_owner() {
     use crate::selector_checker::SelectorCheckerBackend;
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
@@ -899,16 +899,16 @@ fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
     let first = node(&owner, "first");
     let second = node(&owner, "second");
     let list_id = owner.GetDocument().Node(list).Id();
-    let first_id = owner.GetDocument().Node(first).Id();
-    let second_id = owner.GetDocument().Node(second).Id();
     let opacity = |owner: &dom::DOM, element| unsafe { (&*pointer(owner, element)).Opacity() };
     let mut engine = StyleEngine::new(&owner);
     let second_active = dom::UserInteractionState {
         focused_node_id: Some(list_id),
         focus_visible_node_id: Some(list_id),
-        multi_select_focused_option_id: Some(second_id),
         ..Default::default()
     };
+    owner
+        .GetDocumentMut()
+        .SetOptionMultiSelectFocused(second, true);
     let mut selectors = crate::persistent_selector::PersistentSelectorService::default();
     selectors.interaction = second_active;
     let session = selectors.StyleMatchSession(owner.GetDocument());
@@ -927,13 +927,18 @@ fn internal_multi_select_focus_uses_non_contiguous_interaction_owner() {
     assert_eq!(opacity(&owner, first), 1.0);
     assert_eq!(opacity(&owner, second), 0.41);
 
+    owner
+        .GetDocumentMut()
+        .SetOptionMultiSelectFocused(second, false);
+    owner
+        .GetDocumentMut()
+        .SetOptionMultiSelectFocused(first, true);
     engine
         .SetUserInteractionState(
             &mut owner,
             dom::UserInteractionState {
                 focused_node_id: Some(list_id),
                 focus_visible_node_id: Some(list_id),
-                multi_select_focused_option_id: Some(first_id),
                 ..Default::default()
             },
         )
@@ -1519,7 +1524,8 @@ fn update_reaches_retained_translated_rule_set_and_selector_checker() {
     // in the retained typed cache while the new attachments are synchronized.
     for different_context in [false, true] {
         let mut parsed_owner = html::html_parser::ParseHTML(
-            "<!doctype html><head id=head><style id=one></style><style id=two></style></head><body><b id=target></b></body>");
+            "<!doctype html><head id=head><style id=one></style><style id=two></style></head><body><b id=target></b></body>",
+        );
         let mut parsed_engine = StyleEngine::new(&parsed_owner);
         let target = node(&parsed_owner, "target");
         let head = node(&parsed_owner, "head");
@@ -1647,6 +1653,44 @@ fn update_resolves_pending_shorthand_from_typed_variable_data() {
     assert_eq!(style.BorderRightWidth(), 3);
     assert_eq!(style.BorderBottomWidth(), 3);
     assert_eq!(style.BorderLeftWidth(), 3);
+}
+
+#[test]
+fn late_custom_property_sheet_recomputes_pending_logical_border_shorthand() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><html><body><div id=target></div></body></html>",
+    );
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        "#target{border-block-end:var(--edge) solid var(--tone)}",
+    ));
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let border = |owner: &dom::DOM| unsafe {
+        &*owner
+            .GetDocument()
+            .ResolvedStyleFor(target)
+            .unwrap()
+            .computed_style_owner
+            .Get()
+    };
+    assert_eq!(
+        border(&owner).BorderBottomStyle(),
+        foundation::EBorderStyle::kNone
+    );
+
+    owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
+        ":root{--base-tone:#e4ebe6;--edge:max(1px,.0625rem);--tone:var(--base-tone)}",
+    ));
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let style = border(&owner);
+    assert_eq!(style.BorderBottomStyle(), foundation::EBorderStyle::kSolid);
+    assert_eq!(style.SpecifiedBorderBottomWidth(), &1);
+    assert_eq!(
+        style.BorderBottomColor().GetColor(),
+        Color::FromRGB(228, 235, 230)
+    );
 }
 
 #[test]
@@ -2034,6 +2078,47 @@ fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].resource_id, 41);
     assert_eq!(paint.background_images[0].source_url, source);
+}
+
+#[test]
+fn inline_url_mask_is_retained_as_a_style_image_dependency() {
+    use layoutng_style::style::style_mask_source_image::MaskSourceImage;
+
+    let _heap = foundation::LayoutHeapScope::new();
+    let source = "https://example.test/assets/logo-mask.png";
+    let mut owner = html::html_parser::ParseHTML(&format!(
+        "<span id=target style='mask-image:url(\"{source}\")'></span>"
+    ));
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+
+    let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
+    assert_eq!(resolved.ReferencedStyleImageSources(), [source]);
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let mask = MaskSourceImage(unsafe { &*computed_style.MaskLayers().GetImage() })
+        .expect("computed URL mask source");
+    assert_eq!(mask.SourceURL(), source);
+    assert_eq!(mask.FetchedImage().unwrap().ResourceId(), 0);
+
+    owner.GetDocumentMut().SetImageResource(
+        source.into(),
+        dom::ImageResourceMetadata {
+            id: 73,
+            natural_width: 160.0,
+            natural_height: 56.0,
+            resolution_scale: 1.0,
+            orientation: Default::default(),
+            known_to_be_opaque: false,
+            is_cors_same_origin: false,
+        },
+    );
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+    let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
+    let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
+    let mask = MaskSourceImage(unsafe { &*computed_style.MaskLayers().GetImage() })
+        .expect("completed URL mask source");
+    assert_eq!(mask.FetchedImage().unwrap().ResourceId(), 73);
 }
 
 #[test]
@@ -2866,6 +2951,194 @@ fn local_svg_paint_servers_resolve_attached_resource_nodes() {
 }
 
 #[test]
+fn svg_paint_servers_retain_canvas_subtree_membership_for_privacy_paints() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r##"<canvas><svg><defs><linearGradient id="inside"><stop stop-color="red"/></linearGradient></defs></svg></canvas>
+        <svg width="32" height="16"><defs><linearGradient id="outside"><stop stop-color="blue"/></linearGradient></defs>
+        <rect id="inside-client" width="16" height="16" fill="url(#inside) red"/>
+        <rect id="outside-client" x="16" width="16" height="16" fill="url(#outside) blue"/></svg>"##,
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+
+    let document = owner.GetDocument();
+    let inside = document
+        .ResolvedStyleResourcesFor(node(&owner, "inside-client"))
+        .svg_fill_server
+        .as_ref()
+        .expect("canvas-subtree gradient shader");
+    let outside = document
+        .ResolvedStyleResourcesFor(node(&owner, "outside-client"))
+        .svg_fill_server
+        .as_ref()
+        .expect("ordinary gradient shader");
+    assert!(inside.is_in_canvas_subtree);
+    assert!(!outside.is_in_canvas_subtree);
+}
+
+#[test]
+fn svg_paint_server_alpha_is_quantized_without_quantizing_solid_fallback() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r##"<svg width="64" height="32"><defs>
+        <linearGradient id="gradient"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="black"/></linearGradient>
+        <pattern id="pattern" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0H8V8Z" fill="white"/></pattern>
+        </defs>
+        <rect id="gradient-client" width="24" height="24" fill="url(#gradient) rgb(255 0 0 / .7)" fill-opacity=".503"/>
+        <rect id="pattern-client" x="32" width="24" height="24" fill="url(#pattern) blue" fill-opacity=".503"/>
+        <rect id="context-source" width="8" height="8" fill="url(#gradient) red" fill-opacity=".2"/>
+        </svg>"##,
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+
+    let document = owner.GetDocument();
+    let expected = 128.0 / 255.0;
+    let gradient = document
+        .ResolvedStyleResourcesFor(node(&owner, "gradient-client"))
+        .svg_fill_server
+        .as_ref()
+        .expect("gradient shader");
+    assert!(gradient
+        .stops
+        .iter()
+        .all(|stop| (stop.color.alpha - expected).abs() < 1e-6));
+    let pattern = document
+        .ResolvedStyleResourcesFor(node(&owner, "pattern-client"))
+        .svg_fill_server
+        .as_ref()
+        .and_then(|shader| shader.pattern.as_ref())
+        .expect("pattern shader");
+    assert!((pattern.opacity - expected).abs() < 1e-6);
+
+    let style = document
+        .ResolvedStyleFor(node(&owner, "gradient-client"))
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
+        .expect("gradient client style");
+    let fallback = layoutng::internal::boundary::paint_style_export::Export(style, None)
+        .svg_fill
+        .expect("solid fallback");
+    assert!((fallback.alpha - 0.7 * 0.503).abs() < 1e-6);
+
+    let context_source = node(&owner, "context-source");
+    let context_style = document
+        .ResolvedStyleFor(context_source)
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
+        .expect("context source style");
+    let pending = (0..document.NodeCount())
+        .filter_map(|node| document.ResolvedStyleFor(node).map(|style| (node, style)))
+        .collect::<crate::svg_paint_server::PendingStyles<'_>>();
+    let context = crate::svg_paint_server::SVGContextPaint::new(context_source, context_style);
+    let context_shader = crate::svg_paint_server::ResolveContextPaintServer(
+        document,
+        &pending,
+        &context,
+        context_style.FillPaint(),
+        0.503,
+        &mut std::collections::HashSet::new(),
+    )
+    .expect("context shader");
+    assert!(context_shader
+        .stops
+        .iter()
+        .all(|stop| (stop.color.alpha - expected).abs() < 1e-6));
+}
+
+#[test]
+fn svg_mask_linear_rgb_color_interpolation_reaches_recorded_primitives() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r##"<svg width="32" height="32"><defs>
+        <linearGradient id="mask-gradient"><stop offset="0" stop-color="rgb(128 64 32)"/><stop offset="1" stop-color="white"/></linearGradient>
+        <mask id="linear-mask" style="color-interpolation:linearRGB">
+        <rect width="24" height="24" fill="url(#mask-gradient) rgb(128 64 32)" stroke="white"/>
+        </mask></defs><rect width="32" height="32" mask="url(#linear-mask)"/>
+        </svg>"##,
+    );
+    let mut engine = StyleEngine::new(&owner);
+    engine.Update(&mut owner, &media(), &[]).unwrap();
+
+    let graph = owner
+        .GetDocument()
+        .ResolvedStyleResourcesFor(node(&owner, "linear-mask"))
+        .svg_mask_resource
+        .as_ref()
+        .expect("local mask graph");
+    assert_eq!(graph.unsupported, None);
+    let primitive = graph.commands.iter().find_map(|command| match command {
+        layoutng::internal::paint_input::SvgPatternCommand::DrawShape(primitive) => Some(primitive),
+        _ => None,
+    });
+    let primitive = primitive.expect("mask shape primitive");
+    assert!(primitive.apply_srgb_to_linear_color_filter);
+    assert!(primitive.fill_server.is_some());
+}
+
+#[test]
+fn svg_gradient_dark_mode_requires_both_client_and_resource_force_dark() {
+    use crate::{
+        media_queries::PreferredColorScheme,
+        resolver::production_style_builder::ColorSchemeSettings,
+    };
+
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        r##"<svg width="64" height="24"><defs>
+        <linearGradient id="forced"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white"/></linearGradient>
+        <linearGradient id="only-light" style="color-scheme:only light"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white"/></linearGradient>
+        <pattern id="pattern" width="1" height="1"><path d="M0 0H1V1Z" fill="white"/></pattern>
+        </defs><rect id="forced-client" width="16" height="16" fill="url(#forced)"/>
+        <rect id="only-light-client" x="20" width="16" height="16" fill="url(#only-light)"/>
+        <rect id="pattern-client" x="40" width="16" height="16" fill="url(#pattern)"/></svg>"##,
+    );
+    let mut values = media();
+    values.preferred_color_scheme = PreferredColorScheme::kDark;
+    let mut engine = StyleEngine::new(&owner);
+    engine
+        .SetColorSchemeSettings(
+            &mut owner,
+            ColorSchemeSettings {
+                page_color_schemes: 0,
+                force_dark: true,
+            },
+        )
+        .unwrap();
+    engine.Update(&mut owner, &values, &[]).unwrap();
+
+    let document = owner.GetDocument();
+    let force_dark = |id| {
+        let style = document.ResolvedStyleFor(node(&owner, id)).unwrap();
+        let style = unsafe { &*style.computed_style_owner.Get() };
+        (
+            style.DarkColorScheme(),
+            style.ColorSchemeForced(),
+            style.ForceDark(),
+        )
+    };
+    let shader = |id| {
+        document
+            .ResolvedStyleResourcesFor(node(&owner, id))
+            .svg_fill_server
+            .as_ref()
+            .unwrap()
+    };
+    assert!(
+        shader("forced-client").apply_dark_mode,
+        "client={:?} resource={:?}",
+        force_dark("forced-client"),
+        force_dark("forced")
+    );
+    assert!(
+        !shader("only-light-client").apply_dark_mode,
+        "client={:?} resource={:?}",
+        force_dark("only-light-client"),
+        force_dark("only-light")
+    );
+    assert!(!shader("pattern-client").apply_dark_mode);
+}
+
+#[test]
 fn unnamed_white_space_combination_crosses_the_layout_boundary() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=target></div>");
@@ -3260,7 +3533,9 @@ fn incremental_inline_and_class_changes_retain_unrelated_computed_style_styles()
     assert_eq!(pointer(&owner, target), target_style);
 
     // CSSOM's computed style SetResult, not a text diff, grants MISU eligibility.
-    let mut owner = html::html_parser::ParseHTML("<!doctype html><style>#target{height:5px;--w:41px}#target::before{content:'';width:inherit}.blocked{width:60px!important}</style><div id=target style='width:10px'></div>");
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style>#target{height:5px;--w:41px}#target::before{content:'';width:inherit}.blocked{width:60px!important}</style><div id=target style='width:10px'></div>",
+    );
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();
@@ -3839,17 +4114,14 @@ fn production_pseudo_styles_have_independent_cascade_and_computed_style_content(
         .ComputedSize(),
         40.0
     );
-    let placeholder = owner
-        .GetDocument()
-        .ResolvedStyleFor(control)
-        .unwrap()
-        .placeholder
-        .as_ref()
-        .unwrap();
+    let control_style = owner.GetDocument().ResolvedStyleFor(control).unwrap();
+    let placeholder = control_style.placeholder.as_ref().unwrap();
     assert_eq!(
         unsafe { &*placeholder.computed_style_owner.Get() }.StyleType(),
         PseudoId::kPseudoIdPlaceholder
     );
+    assert!(unsafe { &*control_style.computed_style_owner.Get() }.AlignContentBlockCenter());
+    assert!(!unsafe { &*placeholder.computed_style_owner.Get() }.AlignContentBlockCenter());
     assert_eq!(
         unsafe { &*placeholder.computed_style_owner.Get() }
             .Color()
@@ -4376,7 +4648,7 @@ fn production_pseudo_local_invalidation_and_unchanged_frame_reuse() {
 fn production_custom_properties_feed_cascade_and_invalidate_inheriting_children() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
-        "<div id=parent style='--size:31px;--tone:blue'><span id=child style='display:block;width:var(--size);height:var(--missing,9px);color:var(--tone)'></span></div>",
+        "<div id=parent style='--size:31px;--tone:blue;--bottom:1px'><span id=child style='display:block;width:var(--size);height:var(--missing,9px);color:var(--tone);border:solid 1px;border-bottom-width:var(--bottom)'></span></div>",
     );
     let parent = node(&owner, "parent");
     let child = node(&owner, "child");
@@ -4392,9 +4664,15 @@ fn production_custom_properties_feed_cascade_and_invalidate_inheriting_children(
     assert_eq!(style.Width().Pixels(), 31.0);
     assert_eq!(style.Height().Pixels(), 9.0);
     assert_eq!(style.Color().GetColor(), Color::FromRGB(0, 0, 255));
+    assert_eq!(style.BorderBottomWidth(), 1);
 
-    set_attribute(&mut owner, parent, "style", "--size:47px;--tone:red");
-    engine.Update(&mut owner, &media(), &[]).unwrap();
+    set_attribute(
+        &mut owner,
+        parent,
+        "style",
+        "--size:47px;--tone:red;--bottom:0",
+    );
+    let impact = engine.Update(&mut owner, &media(), &[]).unwrap();
     assert!(
         engine.Diagnostics().is_empty(),
         "{:?}",
@@ -4404,6 +4682,8 @@ fn production_custom_properties_feed_cascade_and_invalidate_inheriting_children(
     let style = unsafe { &*resolved.computed_style_owner.Get() };
     assert_eq!(style.Width().Pixels(), 47.0);
     assert_eq!(style.Color().GetColor(), Color::FromRGB(255, 0, 0));
+    assert_eq!(style.BorderBottomWidth(), 0);
+    assert!(impact.layout);
 }
 
 #[test]
@@ -5994,7 +6274,9 @@ fn html_hidden_hint_does_not_apply_to_foreign_elements_or_namespaced_attributes(
 #[test]
 fn production_fit_content_tracks_preserve_typed_limits_and_inheritance() {
     let _heap = foundation::LayoutHeapScope::new();
-    let mut owner = html::html_parser::ParseHTML("<!doctype html><div id=parent style='font-size:10px;grid-template-columns:fit-content(2em) fit-content(25%);grid-template-rows:fit-content(calc(10px + 20%));grid-auto-columns:fit-content(32px)'><div id=target style='grid-template-columns:inherit;grid-template-rows:inherit;grid-auto-columns:inherit'></div></div>");
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><div id=parent style='font-size:10px;grid-template-columns:fit-content(2em) fit-content(25%);grid-template-rows:fit-content(calc(10px + 20%));grid-auto-columns:fit-content(32px)'><div id=target style='grid-template-columns:inherit;grid-template-rows:inherit;grid-auto-columns:inherit'></div></div>",
+    );
     let target = node(&owner, "target");
     let mut engine = StyleEngine::new(&owner);
     engine.Update(&mut owner, &media(), &[]).unwrap();

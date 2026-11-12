@@ -8,4 +8,5 @@ animation = { path = "../animation" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 image_resource = { path = "../image_resource" }

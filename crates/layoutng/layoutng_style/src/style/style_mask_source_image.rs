@@ -54,6 +54,16 @@ impl StyleMaskSourceImage {
     pub fn FetchedImage(&self) -> Option<&StyleImage> {
         unsafe { self.image.Get().as_ref() }
     }
+    pub fn HasEncodedFragment(&self) -> bool {
+        let source = if self.url_data.unresolved_url.starts_with('#') {
+            self.url_data.unresolved_url.as_ref()
+        } else {
+            self.url_data.resolved_url.as_ref()
+        };
+        source
+            .split_once('#')
+            .is_some_and(|(_, fragment)| fragment.contains('%'))
+    }
     pub fn NormalizedFragment(&self) -> String {
         // CSSImageValue::NormalizedFragmentIdentifier uses UTF-8-or-isomorphic
         // decoding. Fragment-only values retain their originating document.

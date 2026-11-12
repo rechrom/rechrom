@@ -27,6 +27,25 @@ pub use error::SoftBufferError;
 /// On macOS IOSurface presentation runs on the window main thread. This is
 /// transaction feedback, not physical display/scanout feedback.
 pub type PresentCallback = Box<dyn FnOnce(std::time::Instant, std::time::Instant) + Send>;
+/// Actual presentation feedback is independent of the transaction callback.
+/// A backend without a timestamp must report Unavailable, never synthesize one
+/// from its commit return or an unrelated display-link pulse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentationUnavailableReason {
+    BackendHasNoTimestamp,
+    DiscardedBeforePresentation,
+    OffscreenTarget,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum PresentationFeedback {
+    Presented {
+        timestamp: std::time::Instant,
+        interval: std::time::Duration,
+        flags: u32,
+    },
+    Unavailable(PresentationUnavailableReason),
+}
+pub type PresentationCallback = Box<dyn FnOnce(PresentationFeedback) + Send>;
 
 /// Diagnostic stages of a native Core Animation root transaction.
 /// These stages do not indicate physical display or scanout completion.
@@ -242,9 +261,21 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> Surface<D, W> {
         callback: PresentCallback,
     ) -> Result<(), SoftBufferError> {
         let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
-        surface.present_prepared(prepared.inner, callback, None)
+        surface.present_prepared(prepared.inner, callback, None, None)
     }
 
+    /// Submit an IOSurface with separate swap and presentation feedback.
+    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
+    pub fn present_prepared_with_presentation_feedback(
+        &mut self,
+        prepared: PreparedBuffer,
+        swap_ack: PresentCallback,
+        presentation: PresentationCallback,
+        observer: Option<NativeTransactionObserver>,
+    ) -> Result<(), SoftBufferError> {
+        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
+        surface.present_prepared(prepared.inner, swap_ack, observer, Some(presentation))
+    }
     /// Submit a prepared IOSurface and register Core Animation diagnostics.
     #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
     pub fn present_prepared_with_transaction_observer(
@@ -254,7 +285,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> Surface<D, W> {
         observer: NativeTransactionObserver,
     ) -> Result<(), SoftBufferError> {
         let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
-        surface.present_prepared(prepared.inner, callback, Some(observer))
+        surface.present_prepared(prepared.inner, callback, Some(observer), None)
     }
 }
 
@@ -400,6 +431,15 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> Buffer<'_, D, W> {
         self.buffer_impl.present_with_callback(callback, None)
     }
 
+    /// Independently acknowledge the swap and report backend presentation.
+    pub fn present_with_presentation_feedback(
+        self,
+        swap_ack: PresentCallback,
+        presentation: PresentationCallback,
+    ) -> Result<(), SoftBufferError> {
+        self.buffer_impl
+            .present_with_feedback(swap_ack, presentation, None)
+    }
     /// Present with transaction timing and optional Core Animation phase diagnostics.
     /// Phase callbacks identify the submitted surface update, not a displayed frame.
     /// This does not flush transactions or change presentation scheduling.

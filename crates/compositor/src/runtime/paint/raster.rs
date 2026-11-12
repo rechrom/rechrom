@@ -26,7 +26,9 @@ pub trait CpuDecodedImageLease: Send {
     // Source: cc/paint/decoded_draw_image.h:75-87. These belong to the actual
     // decoded allocation, not guesses from requested size or cache identity.
     fn scale_adjustment(&self) -> crate::adapter::geometry::SizeF;
-    fn src_rect_offset(&self) -> crate::adapter::geometry::SizeF;
+    // Source SkSize is signed: subrect cache entries use (-src.x, -src.y).
+    // Vector2dF preserves that contract; gfx::SizeF clamps negatives to zero.
+    fn src_rect_offset(&self) -> crate::adapter::geometry::Vector2dF;
     fn filter_quality(&self) -> super::CpuFilterQuality;
 }
 pub enum CpuScopedRasterResult<R: CpuSkiaBackend> {

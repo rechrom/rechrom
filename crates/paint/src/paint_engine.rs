@@ -4,6 +4,8 @@
 //! connected after their owning source files have been translated.
 
 use std::sync::Arc;
+#[path = "drag_image.rs"]
+pub mod drag_image;
 
 use layoutng_assembly::fragment_tree::PaintResources;
 pub use layoutng_assembly::fragment_tree::RasterEffectOutset;
@@ -32,8 +34,8 @@ use paint_record::{PaintControllerPersistentData, PaintRecording};
 // Public producer analysis also serves canonical PaintRecords downstream.
 pub use image_resource::{
     downcast_document_paint_record, ContainerKey as DocumentImageContainerKey,
-    ImageDecodingMode as PaintImageDecodingMode, PaintImageAnimationMetadata, PaintImageContent,
-    PaintImageId as PaintImageResourceId,
+    ImageDecodingMode as PaintImageDecodingMode, PaintImageAlphaType, PaintImageAnimationMetadata,
+    PaintImageContent, PaintImageId as PaintImageResourceId,
     PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
 pub use layoutng_assembly::internal::layout_input::PaintImage as LayoutPaintImage;
@@ -322,21 +324,43 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
     }
 }
 
-fn RecordPaint(
+/// Immediate lifecycle notifications at the owning PrePaint/Paint commit
+/// points. The receiver has no DOM, Layout or rendering operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintLifecyclePhase {
+    InPrePaint,
+    PrePaintClean,
+    InPaint,
+    PaintClean,
+}
+pub trait PaintLifecycleObserver {
+    fn AdvanceTo(&self, phase: PaintLifecyclePhase);
+    fn SetIntersectionObservationState(
+        &self,
+        state: foundation::intersection_observation_state::IntersectionObservationState,
+    );
+}
+
+/// Call-scoped borrow of the native same-Page child LocalFrameView. Layout
+/// retains geometry and FragmentPaintData; Paint retains only opaque leases.
+pub struct LocalFrameViewPaintInput<'a> {
+    pub owner: layoutng_assembly::layout_engine::PaintFragmentCursor<'a>,
+    pub layout: &'a layoutng_assembly::layout_engine::LayoutPaintOutput,
+    pub is_cross_origin_to_parent: bool,
+    pub blocking_wheel_targets: Arc<[u64]>,
+    pub lifecycle: &'a dyn PaintLifecycleObserver,
+}
+
+fn WalkPrePaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
     source_lease: layoutng_assembly::layout_engine::PaintFragmentLease,
-    editing: EditingPaintState,
-    previous: Option<Arc<PaintArtifact>>,
-    previous_subsequences: paint_record::SubsequencesData,
-) -> (
-    PaintRecording,
-    paint_record::SubsequencesData,
-    crate::performance::PaintPerformanceSnapshot,
-) {
-    let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
-    ValidateReplayResources(fragments.paint.resources.as_deref());
-    let paint_tree = {
+) -> Box<crate::pre_paint_tree_walk::PaintTreeNode<'static>> {
+    // Chromium refreshes PaintLayer descendant-dependent flags immediately
+    // before PrePaint. Doing this at Layout publication alone is too early:
+    // later lifecycle work may dirty the layer tree before this walk.
+    fragments.Cursor().UpdateRootLayerDescendantDependentFlags();
+    {
         let mut trace = browser_tracing::span("prepaint", "PrePaint.Walk");
         let tree = pre_paint.Walk(fragments, source_lease);
         let stats = pre_paint.stats;
@@ -365,51 +389,130 @@ fn RecordPaint(
         trace.set("skipped_subtrees", stats.skipped_subtrees as f64);
         trace.set("post_walk", stats.post_walk as u8 as f64);
         tree
+    }
+}
+
+/// A completed resident PrePaint pass. This token carries the same layout
+/// lifetime/identity lease; it contains no copied fragment or Paint tree.
+pub struct PreparedPrePaint {
+    source: layoutng_assembly::layout_engine::PaintFragmentLease,
+}
+
+fn RecordPaint(
+    pre_paint: &mut PrePaintTreeWalk,
+    fragments: PaintFragmentSource<'_>,
+    source_lease: layoutng_assembly::layout_engine::PaintFragmentLease,
+    editing: EditingPaintState,
+    previous: Option<Arc<PaintArtifact>>,
+    previous_subsequences: paint_record::SubsequencesData,
+    foreign_layers: &foundation::TrustedIdentityHashMap<u64, Arc<dyn ForeignLayer>>,
+    lifecycle: Option<&dyn PaintLifecycleObserver>,
+    prepared: Option<PreparedPrePaint>,
+) -> (
+    PaintRecording,
+    paint_record::SubsequencesData,
+    crate::performance::PaintPerformanceSnapshot,
+) {
+    let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
+    ValidateReplayResources(fragments.paint.resources.as_deref());
+    let paint_tree = if let Some(prepared) = prepared {
+        assert!(
+            prepared.source.PtrEq(&source_lease),
+            "Paint uses the exact prepared Layout result"
+        );
+        pre_paint
+            .retained_tree
+            .take()
+            .expect("completed PrePaint retains its native tree")
+    } else {
+        if let Some(lifecycle) = lifecycle {
+            lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
+        }
+        let tree = WalkPrePaint(pre_paint, fragments, source_lease);
+        if let Some(lifecycle) = lifecycle {
+            lifecycle.SetIntersectionObservationState(pre_paint.IntersectionObservationState());
+            lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
+        }
+        tree
     };
+    if let Some(lifecycle) = lifecycle {
+        lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
+    }
     let mut output = PaintRecording::default();
     output.compositor_viewport = pre_paint.ExportCompositorViewport(&fragments);
     output.resources = fragments.paint.resources.clone();
-    // Resolve caret ownership through Layout's source fragment links. The
-    // resident PaintTree stores derived paint state, never source topology.
-    fn caret_owner(
-        node: PaintFragmentSource<'_>,
-        id: u64,
-    ) -> Option<layoutng_assembly::layout_engine::PaintFragmentCursor<'_>> {
-        if node.node_id == id && node.paint.text_control_caret_metrics.is_some() {
-            return Some(node.Cursor());
-        }
-        node.Children()
-            .into_iter()
-            .find_map(|child| caret_owner(child, id))
-    }
-    let caret_geometry = editing.caret.and_then(|state| {
-        let owner = caret_owner(fragments, state.node_id)?;
-        // core/layout/inline/caret_rect.cc:426-430 keeps the insertion caret
-        // as a bar while an IME composition is active.
-        let shape = if state.composition.is_some() {
-            layoutng_assembly::internal::caret_rect::CaretShape::kBar
-        } else {
-            owner.paint.style.caret_shape()
+    // Same-Page LocalFrames record into this controller. Their immutable
+    // resource identities therefore enter its single artifact catalog too;
+    // encoded pixels, decoded frames and font bytes remain shared owners.
+    for view in pre_paint.LocalFrameViews() {
+        let root = view.Root();
+        let Some(resources) = root.paint.resources.as_ref() else {
+            continue;
         };
-        let rect = layoutng_assembly::caret::geometry::TextControlCaretRect(
-            owner,
-            state.offset,
-            state.empty,
-            shape,
-        )?;
-        Some((rect, shape))
-    });
+        ValidateReplayResources(Some(resources));
+        if let Some(catalog) = output.resources.as_mut() {
+            if Arc::ptr_eq(catalog, resources) {
+                continue;
+            }
+            let catalog = Arc::make_mut(catalog);
+            if !catalog.fonts.ptr_eq(&resources.fonts) {
+                for face in &resources.fonts {
+                    if !catalog.fonts.contains(face) {
+                        catalog.fonts.push(face.clone());
+                    }
+                }
+            }
+            for image in &resources.images {
+                if let Some(existing) = catalog
+                    .images
+                    .iter()
+                    .find(|existing| existing.id == image.id)
+                {
+                    assert_eq!(
+                        existing.revision, image.revision,
+                        "shared PaintImage identity must have one revision"
+                    );
+                } else {
+                    catalog.images.push(image.clone());
+                }
+            }
+            for canvas in &resources.canvases {
+                if !catalog
+                    .canvases
+                    .iter()
+                    .any(|existing| existing.resource_id == canvas.resource_id)
+                {
+                    catalog.canvases.push(canvas.clone());
+                }
+            }
+        } else {
+            output.resources = Some(resources.clone());
+        }
+    }
+    let caret_geometry = editing
+        .caret
+        .and_then(|state| state.native.map(|native| (native.local_rect(), native.shape)));
+    let drag_caret_geometry = editing
+        .drag_caret
+        .and_then(|state| state.native.map(|native| native.local_rect()));
     let mut paint_context = PaintContext::WithEditingAndPersistentCache(
         &mut output,
         editing,
         previous,
         previous_subsequences,
     );
+    paint_context.BindForeignLayers(foreign_layers);
+    paint_context.drag_caret_local_rect = drag_caret_geometry;
     // RecordPaint's root cursor is the documentElement Layout result. Preserve
     // its exact computed opacity as the document-global Paint Timing fact used
     // by every nested PaintLayerPainter scope.
     paint_context.SetDocumentElementIsInvisible(fragments.paint.style.opacity() == 0.0);
     paint_context.BindTextSources(fragments.Cursor());
+    for view in pre_paint.LocalFrameViews() {
+        paint_context.BindTextSources(view.Root());
+    }
+    paint_context.BindSvgResourceTree(&paint_tree);
+    paint_context.BindPaintTimingRoot(&paint_tree);
     if let Some((rect, shape)) = caret_geometry {
         paint_context.caret_local_rect = Some(rect);
         paint_context.caret_shape = Some(shape);
@@ -597,8 +700,84 @@ pub struct PaintEngine {
     persistent_data: PaintControllerPersistentData,
     performance: crate::performance::PaintPerformanceSnapshot,
     animation_targeted_nodes: Vec<u64>,
+    foreign_layers: foundation::TrustedIdentityHashMap<u64, Arc<dyn ForeignLayer>>,
 }
 impl PaintEngine {
+    pub fn ReverseResidentLayerOrder(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+        selection: crate::resident_hit_test::ResidentLayerSelection,
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+        self.ResidentLayerOrder(source, selection, true)
+    }
+    pub fn ResidentLayerOrder(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+        selection: crate::resident_hit_test::ResidentLayerSelection,
+        reverse: bool,
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+        self.pre_paint
+            .WithResidentPaintNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
+        Some(
+            self.pre_paint
+                .ResidentHitTest(source)?
+                .LayerOrder(selection, None, reverse),
+        )
+    }
+
+    pub fn ResidentOverlayControlsAfter(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+        child: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+    ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+        self.pre_paint
+            .WithResidentPaintNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
+        let child = self
+            .pre_paint
+            .ResidentHitTest(child)?
+            .Fragment()
+            .paint
+            .paint_layer_client_id;
+        let all = crate::resident_hit_test::ResidentLayerSelection {
+            negative_z: true,
+            normal_flow: true,
+            positive_z: true,
+        };
+        Some(
+            self.pre_paint
+                .ResidentHitTest(source)?
+                .LayerOrder(all, Some(child), false),
+        )
+    }
+
+    /// Borrow committed PrePaint data for this exact resident Layout fragment.
+    /// The lease prevents a paint lifecycle mutation while the query runs.
+    pub fn ResidentHitTest(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+    ) -> Option<crate::resident_hit_test::ResidentPaintHitTest<'_>> {
+        self.pre_paint.ResidentHitTest(source)
+    }
+
+    pub fn ResidentLayerHitTest(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+    ) -> Option<crate::resident_hit_test::ResidentPaintHitTest<'_>> {
+        self.pre_paint.ResidentLayerHitTest(source)
+    }
+
+    pub fn CalculateResidentLayerClipRects(
+        &self,
+        source: layoutng_assembly::layout_engine::PaintFragmentCursor<'_>,
+        layer: crate::resident_hit_test::ResidentPaintHitTest<'_>,
+        root: crate::resident_hit_test::ResidentPaintHitTest<'_>,
+        fragment: crate::resident_hit_test::ResidentPaintHitTest<'_>,
+        options: crate::resident_layer_clipper::ResidentLayerClipOptions,
+    ) -> crate::resident_layer_clipper::ResidentLayerClipRects {
+        self.pre_paint
+            .CalculateResidentLayerClipRects(source, layer, root, fragment, options)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -624,20 +803,174 @@ impl PaintEngine {
         layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
         editing: EditingPaintState,
     ) {
+        self.PaintInternal(layout_output, editing, None, None, None);
+    }
+    /// Publish actual EmbeddedContentView owners for the next cross-document
+    /// walk. This never records a child artifact or changes child lifecycle.
+    pub fn SetLocalFrameViews(&mut self, views: &[LocalFrameViewPaintInput<'_>]) {
+        self.pre_paint.SetLocalFrameViews(views.iter().map(|view| {
+            prepaint::pre_paint_tree_walk::EmbeddedLocalFrameView::new(
+                view.owner,
+                view.layout,
+                view.is_cross_origin_to_parent,
+            )
+            .WithBlockingWheelEventHandlerTargets(view.blocking_wheel_targets.clone())
+        }));
+    }
+    pub fn SetBlockingWheelEventHandlerTargets(&mut self, targets: Arc<[u64]>) {
+        self.pre_paint.SetBlockingWheelEventHandlerTargets(targets);
+    }
+
+    pub fn PrePaintWithLocalFrameViews(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        views: &[LocalFrameViewPaintInput<'_>],
+        lifecycle: &dyn PaintLifecycleObserver,
+    ) -> PreparedPrePaint {
+        self.SetLocalFrameViews(views);
+        let prepared = self.PrePaintWithLifecycle(layout_output, lifecycle);
+        // Only children actually reached by the resident PrePaint walk become
+        // clean. A display-locked frame owner must retain its dirty lifecycle.
+        for view in views {
+            if self
+                .pre_paint
+                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+            {
+                view.lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
+                view.lifecycle
+                    .SetIntersectionObservationState(self.pre_paint.IntersectionObservationState());
+                view.lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
+            }
+        }
+        prepared
+    }
+
+    pub fn PaintAfterPrePaintWithLocalFrameViews(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        views: &[LocalFrameViewPaintInput<'_>],
+        editing: EditingPaintState,
+        lifecycle: &dyn PaintLifecycleObserver,
+        document: canvas::CanvasDocumentIdentity,
+        prepared: PreparedPrePaint,
+    ) {
+        for view in views {
+            if self
+                .pre_paint
+                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+            {
+                view.lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
+            }
+        }
+        self.PaintAfterPrePaint(layout_output, editing, lifecycle, document, prepared);
+        for view in views {
+            if self
+                .pre_paint
+                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+            {
+                view.lifecycle.AdvanceTo(PaintLifecyclePhase::PaintClean);
+            }
+        }
+    }
+
+    pub fn PaintWithLocalFrameViews(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        views: &[LocalFrameViewPaintInput<'_>],
+        editing: EditingPaintState,
+        lifecycle: &dyn PaintLifecycleObserver,
+        document: canvas::CanvasDocumentIdentity,
+    ) {
+        let prepared = self.PrePaintWithLocalFrameViews(layout_output, views, lifecycle);
+        self.PaintAfterPrePaintWithLocalFrameViews(
+            layout_output,
+            views,
+            editing,
+            lifecycle,
+            document,
+            prepared,
+        );
+    }
+
+    /// LocalFrameView::UpdateAllLifecyclePhasesExceptPaint: execute the same
+    /// resident PrePaint walk used by Paint, leaving display-item recording
+    /// and artifact publication to the scheduled rendering lifecycle.
+    pub fn PrePaintWithLifecycle(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        lifecycle: &dyn PaintLifecycleObserver,
+    ) -> PreparedPrePaint {
+        lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
+        self.pre_paint.SetRetainedOwnerLifetimes(false);
+        let tree = WalkPrePaint(
+            &mut self.pre_paint,
+            PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
+            layout_output.PaintLease(),
+        );
+        self.pre_paint.RetainTree(tree);
+        lifecycle.SetIntersectionObservationState(self.pre_paint.IntersectionObservationState());
+        lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
+        PreparedPrePaint {
+            source: layout_output.PaintLease(),
+        }
+    }
+    pub fn PaintAfterPrePaint(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        editing: EditingPaintState,
+        lifecycle: &dyn PaintLifecycleObserver,
+        document: canvas::CanvasDocumentIdentity,
+        prepared: PreparedPrePaint,
+    ) {
+        self.PaintInternal(
+            layout_output,
+            editing,
+            Some(lifecycle),
+            Some(document),
+            Some(prepared),
+        );
+    }
+    pub fn PaintWithLifecycle(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        editing: EditingPaintState,
+        lifecycle: &dyn PaintLifecycleObserver,
+        document: canvas::CanvasDocumentIdentity,
+    ) {
+        self.PaintInternal(
+            layout_output,
+            editing,
+            Some(lifecycle),
+            Some(document),
+            None,
+        );
+    }
+    fn PaintInternal(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        editing: EditingPaintState,
+        lifecycle: Option<&dyn PaintLifecycleObserver>,
+        document: Option<canvas::CanvasDocumentIdentity>,
+        prepared: Option<PreparedPrePaint>,
+    ) {
         let _trace = browser_tracing::span("paint", "PaintEngine.Paint");
         let layout_result = PaintFragmentSource::FromCursor(layout_output.PaintCursor());
         let source_lease = layout_output.PaintLease();
         let previous = self.persistent_data.GetPaintArtifact().cloned();
         let previous_subsequences = self.persistent_data.GetSubsequences().clone();
         self.pre_paint.SetRetainedOwnerLifetimes(false);
-        let (result, subsequences, performance) = RecordPaint(
+        let (mut result, subsequences, performance) = RecordPaint(
             &mut self.pre_paint,
             layout_result,
             source_lease,
             editing,
             previous,
             previous_subsequences,
+            &self.foreign_layers,
+            lifecycle,
+            prepared,
         );
+        result.canvas_document = document;
         if self.pre_paint.stats.post_walk || self.retained_scroll_state.is_none() {
             self.retained_scroll_state = None;
             self.retained_scroll_state_initialized = false;
@@ -647,6 +980,20 @@ impl PaintEngine {
             paint_commit::CommitArtifact(result),
             subsequences,
         );
+        if let Some(lifecycle) = lifecycle {
+            lifecycle.AdvanceTo(PaintLifecyclePhase::PaintClean);
+        }
+    }
+
+    /// Publish the resident compositor layer used by VideoPainter's normal
+    /// foreground path. Passing `None` detaches the node without affecting
+    /// unrelated paint resources or the package graph.
+    pub fn SetForeignLayer(&mut self, node_id: u64, layer: Option<Arc<dyn ForeignLayer>>) {
+        if let Some(layer) = layer {
+            self.foreign_layers.insert(node_id, layer);
+        } else {
+            self.foreign_layers.remove(&node_id);
+        }
     }
 
     pub fn GetPrePaintUpdateStats(&self) -> crate::pre_paint_tree_walk::PrePaintUpdateStats {
@@ -685,6 +1032,19 @@ impl PaintEngine {
     /// Apply a content-only image mutation to the committed artifact. Stable
     /// display items remain shared; the retained dependency index identifies
     /// exactly which paint clients LayerTile must invalidate.
+    /// VisualViewport native scalar input. PrePaint updates its existing
+    /// property slot during the ordinary walk; it never allocates a second id.
+    pub fn SetVisualViewportState(&mut self, state: paint_model::PaintVisualViewportState) {
+        self.pre_paint.SetVisualViewportState(state);
+    }
+    pub fn SetVisualViewportScrollOffset(
+        &mut self,
+        element: foundation::CompositorElementId,
+        offset: foundation::gfx::Vector2dF,
+    ) {
+        self.pre_paint
+            .SetVisualViewportScrollOffset(element, offset);
+    }
     pub fn ApplyMutation(&mut self, mutation: PaintMutation) -> Option<PaintMutationResult> {
         let artifact = self.persistent_data.GetPaintArtifactMut()?;
         let artifact = Arc::make_mut(artifact);

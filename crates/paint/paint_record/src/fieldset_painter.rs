@@ -10,6 +10,7 @@ use layoutng_assembly::internal::paint_input::{BackgroundBox, PaintBlendMode};
 use crate::box_decoration_data::BoxDecorationData;
 use crate::box_fragment_painter::{BackgroundRadii, BoxFragmentPainter};
 use crate::contoured_border_geometry::UniformCornerRadius;
+use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
@@ -122,7 +123,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
         }
 
         if decoration_data.ShouldPaintBackground() {
-            fragment_painter.PaintBackground(phase, bleed_avoidance);
+            fragment_painter.PaintBackground(paint_info, bleed_avoidance);
         }
         if decoration_data.ShouldPaintShadow() {
             fragment_painter.PaintBoxShadows(phase, true);
@@ -157,6 +158,18 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                 self.node,
             );
         }
+    }
+
+    // Chromium: core/paint/fieldset_painter.h:29 and
+    // core/paint/fieldset_painter.cc:153-166. PrePaint has already resolved
+    // mask layers against this contracted border box; pass the same reference
+    // rect to mask-border painting so both mask sources share its geometry.
+    pub fn PaintMask(
+        &self,
+        fragment_painter: &BoxFragmentPainter<'n, 'f, 'c, 'o>,
+        item_type: DisplayItemIdType,
+    ) {
+        fragment_painter.PaintMaskImages(item_type, Some(Self::DecorationRect(self.node)));
     }
 
     // Chromium: core/paint/fieldset_painter.cc:129-147.

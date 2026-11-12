@@ -16,7 +16,7 @@ pub mod painted_selection_bound;
 pub mod region_capture_data;
 pub mod tracked_element_data;
 
-pub use hit_test_data::PaintHitTestData;
+pub use hit_test_data::{NullableHitTestDataToString, PaintHitTestData};
 pub use layer_selection_data::PaintLayerSelectionData;
 pub use model::{
     PaintChunk, PaintChunkBackgroundColorInfo, PaintChunkCompositorData, PaintChunks,

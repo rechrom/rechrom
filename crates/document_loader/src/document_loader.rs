@@ -1,9 +1,10 @@
 #![allow(non_snake_case)]
 use dom::Document;
-use html::html_parser::{
-    HTMLDocumentParser, HTMLDocumentParserState, HTMLParserResult, HTMLParserStatus,
+use html::html_parser::{HTMLParserResult, HTMLParserStatus};
+use html::{
+    document_parser::{DocumentParser, DocumentParserState},
+    HTMLParserHost,
 };
-use html::HTMLParserHost;
 use resource::ResourceEngine;
 use std::{cell::RefCell, io, rc::Rc, time::Duration};
 // Bound unread decoded input while scripts block the tree builder. The stream
@@ -66,12 +67,25 @@ pub struct DocumentLoadProgress {
 /// One main-document byte stream and its resident parser. Page owns the DOM,
 /// navigation commit, JavaScript environment, lifecycle events and rendering.
 /// No method waits for IO or retains a borrow of the document between calls.
+/// Original DocumentLoader::InitialScrollState (document_loader.h:337-345).
+/// Page retains only an alias to this loader-owned state for synchronous edits.
+#[derive(Default)]
+pub struct InitialScrollState {
+    pub was_scrolled_by_user: std::cell::Cell<bool>,
+    pub did_restore_from_history: std::cell::Cell<bool>,
+}
 pub struct DocumentLoader {
+    document_policy: crate::document_policy::DocumentPolicyLoader,
+    is_javascript_url_commit: bool,
+    is_initial_frame_document: bool,
+    render_blocking_timing: Rc<dom::render_blocking_resource_manager::RenderBlockingLoadTiming>,
+    initial_scroll_state: Rc<InitialScrollState>,
+    navigation_state: Rc<crate::DocumentLoaderNavigationState>,
     resources: Rc<ResourceEngine>,
     stream: Option<Box<dyn URLStreamOperation>>,
     response: Option<URLResponseHead>,
     requested_url: String,
-    parser: Option<HTMLDocumentParserState>,
+    parser: Option<DocumentParserState>,
     status: DocumentLoaderStatus,
     body_finished: bool,
     needs_input: bool,
@@ -82,13 +96,81 @@ pub struct DocumentLoader {
     diagnostic: Option<crate::diagnostic_read_ahead::DiagnosticReadAhead>,
 }
 impl DocumentLoader {
+    /// FrameLoader::Init cc:251-306: the initial empty Document uses the same
+    /// DocumentLoader/parser path with static empty bytes, never a transport
+    /// request or a fabricated response from another Frame.
+    pub fn ForInitialLocalFrame(resources: Rc<ResourceEngine>) -> Self {
+        let mut loader = Self::WithResourceEngine(resources);
+        loader.is_initial_frame_document = true;
+        loader
+            .navigation_state
+            .SetLoadType(navigation_history::FrameLoadType::Standard);
+        loader
+            .navigation_state
+            .SetNavigationType(navigation_history::WebNavigationType::Other);
+        loader.response = Some(URLResponseHead {
+            final_url: String::new(),
+            mime_type: "text/html".into(),
+            text_encoding: "UTF-8".into(),
+            ..Default::default()
+        });
+        loader.stream = Some(Box::new(
+            crate::navigation::StaticDataNavigationBodyLoader::new(std::sync::Arc::from([])),
+        ));
+        loader.status = DocumentLoaderStatus::kResponseReady;
+        loader
+    }
+    /// Source initialization is ScriptForbidden and has no document observers
+    /// yet. All parsing, tree construction and parser teardown still use their
+    /// original owners; this method does not synthesize html/head/body nodes.
+    pub fn InitializeLocalFrameDocument(&mut self, document: &mut Document) -> io::Result<()> {
+        struct InitialEmptyDocumentHost;
+        impl HTMLParserHost for InitialEmptyDocumentHost {
+            fn HandleParserElement(&mut self, _: html::ParserElementEvent<'_>) {}
+        }
+        assert!(self.is_initial_frame_document);
+        let mut host = InitialEmptyDocumentHost;
+        self.BeginParsing(document, &mut host)?;
+        while self.status != DocumentLoaderStatus::kFinished {
+            let progress = self.Pump(
+                document,
+                &mut host,
+                DocumentLoadBudget {
+                    body_bytes: usize::MAX,
+                    parser_tokens: usize::MAX,
+                },
+            )?;
+            if !progress.made_progress && self.status != DocumentLoaderStatus::kFinished {
+                return Err(io::Error::other(
+                    "initial empty Frame document did not finish synchronously",
+                ));
+            }
+        }
+        let mut cancellation = document.BeginCancelParsing(true);
+        while !matches!(
+            cancellation.Next(),
+            dom::document_parser_lifecycle::CancelParsingStage::Done
+        ) {}
+        self.navigation_state.SetSentDidFinishLoad();
+        Ok(())
+    }
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>) -> Self {
         let resources = Rc::new(ResourceEngine::new(loader, String::new()));
         Self::WithResourceEngine(resources)
     }
 
     pub fn WithResourceEngine(resources: Rc<ResourceEngine>) -> Self {
+        let initial_scroll_state = Rc::new(InitialScrollState::default());
+        let navigation_state =
+            crate::DocumentLoaderNavigationState::new(initial_scroll_state.clone());
+        let render_blocking_timing = navigation_state.LoadTiming();
         Self {
+            document_policy: Default::default(),
+            is_javascript_url_commit: false,
+            is_initial_frame_document: false,
+            navigation_state,
+            render_blocking_timing,
+            initial_scroll_state,
             resources,
             stream: None,
             response: None,
@@ -116,13 +198,80 @@ impl DocumentLoader {
         assert!(self.parser.is_none(), "configure diagnostic before parsing");
         self.diagnostic_scripting = Some(scripting);
     }
+    /// FrameLoader.cc1508-1525; WebNavigationParams.cc98-107. Static data
+    /// starts a fresh loader. No URLRequest, transport, or old parser is reused.
+    pub fn ForStaticDocumentCommit(
+        resources: Rc<ResourceEngine>,
+        commit: &crate::StaticDocumentCommit,
+    ) -> Self {
+        let mut loader = Self::WithResourceEngine(resources);
+        loader.navigation_state = commit.NavigationState();
+        loader.render_blocking_timing = loader.navigation_state.LoadTiming();
+        loader.initial_scroll_state = loader.navigation_state.InitialScrollState();
+        loader.requested_url = loader.navigation_state.URL();
+        loader.response = Some(URLResponseHead {
+            final_url: loader.requested_url.clone(),
+            status_code: commit.ClonedHttpStatus(),
+            mime_type: "text/html".into(),
+            text_encoding: "UTF-8".into(),
+            request_referrer: Some(commit.Referrer()),
+            ..Default::default()
+        });
+        loader.stream = Some(Box::new(
+            crate::navigation::StaticDataNavigationBodyLoader::new(commit.Body()),
+        ));
+        loader.status = DocumentLoaderStatus::kResponseReady;
+        loader.is_javascript_url_commit = true;
+        loader.navigation_state.SetProvisional();
+        loader.render_blocking_timing.MarkNavigationStart();
+        loader
+    }
+    /// FrameLoader.cc1531-1544. Only a real captured unload interval transfers
+    /// to the new loader; no synthetic zero timestamps are substituted.
+    pub fn ApplyPreviousDocumentUnloadTiming(
+        &self,
+        timing: Option<navigation_history::UnloadEventTiming>,
+    ) {
+        if let Some(timing) = timing {
+            self.render_blocking_timing.unload_event.set(Some(timing));
+            self.render_blocking_timing
+                .commit_navigation_end
+                .set(Some(self.render_blocking_timing.Now()));
+        }
+    }
+    pub fn NavigationState(&self) -> Rc<crate::DocumentLoaderNavigationState> {
+        self.navigation_state.clone()
+    }
+    pub fn BindRequiredDocumentPolicy(
+        &mut self,
+        required: Rc<dom::document_policy::DocumentPolicyFeatureState>,
+    ) {
+        self.document_policy.BindRequiredPolicy(required);
+    }
+    pub fn InitialScrollState(&self) -> Rc<InitialScrollState> {
+        self.initial_scroll_state.clone()
+    }
+    pub fn ForcesSynchronousParsing(&self) -> bool {
+        self.is_javascript_url_commit
+    }
+    pub fn IsWaitingForParserBlockingScript(&self) -> bool {
+        self.parser
+            .as_ref()
+            .is_some_and(DocumentParserState::IsPaused)
+    }
     pub fn Status(&self) -> DocumentLoaderStatus {
         self.status
     }
-    pub fn URL(&self) -> &str {
-        self.response
-            .as_ref()
-            .map_or("", |head| head.final_url.as_str())
+    pub fn URL(&self) -> String {
+        // Response headers remain immutable. Same-document commits mutate the
+        // original DocumentLoader navigation owner, not that response record.
+        if self.navigation_state.CurrentHistoryItem().is_some() {
+            self.navigation_state.URL()
+        } else {
+            self.response
+                .as_ref()
+                .map_or_else(String::new, |head| head.final_url.clone())
+        }
     }
     pub fn SetWakeCallback(&mut self, callback: URLWakeCallback) {
         self.wake = Some(callback.clone());
@@ -130,7 +279,10 @@ impl DocumentLoader {
             stream.SetWakeCallback(callback);
         }
     }
-    pub fn StartLoading(&mut self, request: &URLRequest) -> io::Result<()> {
+    /// Static/about/srcdoc responses still admit the original navigation
+    /// request before Window initialization. They bypass transport, not the
+    /// DocumentLoader's history and structured-state ownership contract.
+    pub fn AdmitSuppliedDocumentRequest(&mut self, request: &URLRequest) -> io::Result<()> {
         if self.status != DocumentLoaderStatus::kIdle {
             return Err(io::Error::other("document loading has already started"));
         }
@@ -140,11 +292,26 @@ impl DocumentLoader {
                 "Open URL is empty",
             ));
         }
+        if request.navigation.as_ref().is_some_and(|navigation| {
+            navigation.load_type.IsTraversal() && navigation.history_item.is_none()
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "back/forward and restore require the destination history item",
+            ));
+        }
+        self.render_blocking_timing.MarkNavigationStart();
+        self.navigation_state.SetRequest(request);
+        self.requested_url = request.url.clone();
+        Ok(())
+    }
+    pub fn StartLoading(&mut self, request: &URLRequest) -> io::Result<()> {
+        self.AdmitSuppliedDocumentRequest(request)?;
         let mut request = request.clone();
         request.destination = RequestDestination::kDocument;
         let result = self.resources.StartStream(request.clone());
         let mut stream = match result {
-            Ok(stream) => stream,
+            Ok(result) => result,
             Err(error) => return self.Fail(error),
         };
         if let Some(wake) = &self.wake {
@@ -167,6 +334,25 @@ impl DocumentLoader {
             Ok(Some(URLLoadEvent::Response(mut head))) => {
                 if head.final_url.is_empty() {
                     head.final_url = self.requested_url.clone();
+                }
+                self.document_policy.Initialize(
+                    &head.final_url,
+                    &head.document_policy,
+                    &head.document_policy_report_only,
+                    &head.require_document_policy,
+                );
+                if self.document_policy.WasBlocked() {
+                    // ReplaceWithEmptyDocument, cc1622-1629. The original
+                    // response body never reaches parser/preload/script entry.
+                    self.stream.take();
+                    self.body_finished = true;
+                    head = URLResponseHead {
+                        final_url: "data:,".into(),
+                        status_code: 200,
+                        mime_type: "text/html".into(),
+                        text_encoding: "UTF-8".into(),
+                        ..Default::default()
+                    };
                 }
                 if let Some(policy) = head.referrer_policy {
                     self.resources.SetReferrerPolicy(policy);
@@ -199,7 +385,114 @@ impl DocumentLoader {
         if let Some(scripting) = self.preload_scripting {
             document.SetScriptingEnabled(scripting);
         }
-        let mut parser = HTMLDocumentParserState::new(document, host);
+        // ExecutionContextCSPDelegate cc:147-167 reads the original Loader
+        // response and Document.referrer. An idle supplied-document loader has
+        // ResourceResponse's source status-code constructor value, zero.
+        document.ContentSecurityPolicy().BindReportContext(
+            Some(
+                self.response
+                    .as_ref()
+                    .map_or(0, |head| head.status_code as u16),
+            ),
+            self.response
+                .as_ref()
+                .map_or_else(|| Some(String::new()), |head| head.request_referrer.clone()),
+        );
+        // DocumentLoader.cc3144-3172: JavaScript documents inherit the
+        // previous Window's policies during installation. Parsing must not
+        // replace them with the empty static response's header policies.
+        if !self.is_javascript_url_commit {
+            if let Some(head) = &self.response {
+                // DocumentLoader.cc2312-2322. Only the first language is used,
+                // stripped with HTML-space semantics; an empty value does not set
+                // the Document's retained ContentLanguage.
+                let language = head
+                    .content_language
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim_matches(|c| matches!(c, '\t' | '\n' | '\x0c' | '\r' | ' '));
+                if !language.is_empty() {
+                    document.SetContentLanguage(&language.encode_utf16().collect::<Vec<_>>());
+                }
+                if !self.is_initial_frame_document {
+                    document.SetResponseAddressSpace(head.response_address_space);
+                }
+                document.AddResponseContentSecurityPolicies(
+                    &head.final_url,
+                    &head.content_security_policy,
+                    &head.content_security_policy_report_only,
+                );
+            }
+            document.ApplyResponsePolicySandbox();
+            if !self.document_policy.Initialized() {
+                self.document_policy
+                    .Initialize(document.DocumentURL(), "", "", "");
+            }
+            self.document_policy.Commit(document);
+            self.navigation_state.CommitDocumentPolicy(
+                document
+                    .SecurityContext()
+                    .DocumentPolicy()
+                    .expect("source committed policy"),
+            );
+            if let Some(head) = &self.response {
+                let context = document.SecurityContext();
+                context
+                    .NetworkPermissionsPolicy()
+                    .SetHeaderPoliciesForOutermostDocument(
+                        &head.feature_policy,
+                        &head.permissions_policy,
+                        context.Origin(),
+                        &head.final_url,
+                    );
+            }
+        } else if let Some(policy) = document.SecurityContext().DocumentPolicy() {
+            self.navigation_state.CommitDocumentPolicy(policy);
+        }
+        self.navigation_state
+            .InitializeForDocument(document, self.response.as_ref())?;
+        document.AttachDocumentLoader();
+        // DocumentInit::ComputeDocumentType cc:169-173 and Document::CreateParser
+        // cc:3653-3685: the response owner selects SVG/XML before parsing bytes.
+        let svg = self.response.as_ref().is_some_and(|head| {
+            head.mime_type
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("image/svg+xml")
+        });
+        if svg {
+            document.SetDocumentType(
+                document.Root(),
+                dom::persistent_document::DOMDocumentType::kSVG,
+            );
+        }
+        // DocumentLoader.cc:3335-3349, kPaintHolding is enabled by default
+        // (blink/common/features.cc:1706). kInitialWebUISurfaceSync is disabled
+        // and this ordinary navigation has no WebUI FrameClient admission.
+        document.SetDeferredCompositorCommitIsAllowed(
+            document
+                .DocumentClasses(document.Root())
+                .Has(dom::document_metadata::DocumentClass::HTML)
+                && self.response.as_ref().is_some_and(|head| {
+                    url::Url::parse(&head.final_url)
+                        .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+                }),
+        );
+        if self.render_blocking_timing.navigation_start.get().is_none() {
+            self.render_blocking_timing.MarkNavigationStart();
+        }
+        document.BindRenderBlockingLoadTiming(self.render_blocking_timing.clone());
+        let mut parser = if svg {
+            DocumentParserState::NewXML(document)
+        } else {
+            DocumentParserState::NewHTML(document, host)
+        };
+        if self.document_policy.WasBlocked() {
+            parser.FinishInput();
+        }
         if let Some(head) = &self.response {
             if let Err(error) = parser.SetTextEncoding(&head.text_encoding) {
                 return self.Fail(error);
@@ -217,7 +510,7 @@ impl DocumentLoader {
                 parser.DisablePreloadScanning();
             }
         }
-        if let Some(scripting) = self.diagnostic_scripting {
+        if let Some(scripting) = self.diagnostic_scripting.filter(|_| !svg) {
             let encoding = self
                 .response
                 .as_ref()
@@ -225,6 +518,16 @@ impl DocumentLoader {
             self.diagnostic = Some(crate::diagnostic_read_ahead::DiagnosticReadAhead::new(
                 encoding, scripting,
             )?);
+        }
+        if self.is_javascript_url_commit {
+            let DocumentParserState::HTML(html) = &mut parser else {
+                return Err(io::Error::other(
+                    "JavaScript URL replacement requires a new HTML document",
+                ));
+            };
+            html.SetSynchronizationPolicy(
+                html::html_parser::ParserSynchronizationPolicy::ForceSynchronousParsing,
+            );
         }
         self.parser = Some(parser);
         self.status = DocumentLoaderStatus::kParsing;
@@ -239,6 +542,14 @@ impl DocumentLoader {
         let mut trace = browser_tracing::span("loading", "DocumentLoader.Pump");
         let mut body_bytes = 0usize;
         let budget = budget.into();
+        let budget = if self.is_javascript_url_commit {
+            DocumentLoadBudget {
+                body_bytes: usize::MAX,
+                parser_tokens: usize::MAX,
+            }
+        } else {
+            budget
+        };
         if budget.body_bytes == 0 || budget.parser_tokens == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -273,8 +584,12 @@ impl DocumentLoader {
                 }
             }
         }
-        let room = MAX_BUFFERED_INPUT_CHARACTERS
-            .saturating_sub(self.parser.as_ref().unwrap().BufferedInputCharacters());
+        let room = if self.is_javascript_url_commit {
+            usize::MAX
+        } else {
+            MAX_BUFFERED_INPUT_CHARACTERS
+                .saturating_sub(self.parser.as_ref().unwrap().BufferedInputCharacters())
+        };
         // HTMLDocumentParser::Append continues network input while paused.
         // Only AppendBytes and speculative tokenization run here; the tree
         // builder still waits for its blocking script, including at EOF.
@@ -318,11 +633,19 @@ impl DocumentLoader {
                         if let Err(error) = self.parser.as_mut().unwrap().AppendBytes(&bytes) {
                             return self.Fail(error);
                         }
+                        self.parser
+                            .as_ref()
+                            .unwrap()
+                            .CommitDecodedEncodingData(document);
                     }
                     Some(URLLoadEvent::Finished) => {
                         if let Err(error) = self.parser.as_mut().unwrap().FinishBytes() {
                             return self.Fail(error);
                         }
+                        self.parser
+                            .as_ref()
+                            .unwrap()
+                            .CommitDecodedEncodingData(document);
                         self.body_finished = true;
                         made_progress = true;
                         self.stream.take();
@@ -332,7 +655,7 @@ impl DocumentLoader {
                         return self.Fail(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "duplicate document response headers",
-                        ))
+                        ));
                     }
                 }
             }
@@ -350,12 +673,15 @@ impl DocumentLoader {
         if scan.stopped_for_csp {
             self.parser.as_mut().unwrap().DisablePreloadScanning();
         }
-        let result = self.parser.as_mut().unwrap().PumpWithTimeBudget(
+        let result = match self.parser.as_mut().unwrap().PumpWithTimeBudget(
             document,
             host,
             budget.parser_tokens,
             PARSER_TIME_BUDGET,
-        );
+        ) {
+            Ok(result) => result,
+            Err(error) => return self.Fail(error),
+        };
         self.needs_input = result.status == HTMLParserStatus::kNeedMoreInput;
         // ResumeParsingAfterPause schedules another tokenizer pump in Blink.
         // Our parser can consume its resident input after a blocking script and
@@ -429,7 +755,7 @@ impl DocumentLoader {
         self.status = DocumentLoaderStatus::kFailed;
         Err(error)
     }
-    fn Parser(&mut self) -> io::Result<&mut HTMLDocumentParserState> {
+    fn Parser(&mut self) -> io::Result<&mut DocumentParserState> {
         self.CheckFailure()?;
         if self.status != DocumentLoaderStatus::kParsing {
             return Err(io::Error::other("document parser is not active"));
@@ -461,7 +787,7 @@ impl DocumentLoader {
         &mut self,
         document: &mut Document,
         host: &mut dyn HTMLParserHost,
-        task: impl FnOnce(&mut HTMLDocumentParser<'_>) -> R,
+        task: impl FnOnce(&mut DocumentParser<'_, '_>) -> R,
     ) -> io::Result<R> {
         // EOF has been parsed, but deferred scripts may still need scoped access.
         self.CheckFailure()?;
@@ -499,7 +825,7 @@ impl DocumentLoader {
         if let Some(diagnostic) = &mut self.diagnostic {
             diagnostic.cancel_scan(2);
         }
-        self.Parser()?.InsertFromScript(text);
+        self.Parser()?.InsertFromScript(text)?;
         Ok(())
     }
     pub fn ResumeAfterScript(&mut self) -> io::Result<()> {

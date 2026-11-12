@@ -237,7 +237,7 @@ pub trait LayerTreeTypes: Sized + 'static {
     type LayerList: LayerTreeLayerList<Self> + Default;
     type DisplayColorSpaces: Clone + Default + PartialEq;
     type LocalSurfaceId: Clone + Default + PartialEq;
-    type SurfaceRange: Clone + Ord;
+    type SurfaceRange: Clone + Ord + Send + Sync + 'static;
     type SwapPromise: SwapPromise<Self::CompositorFrameMetadata>;
     type CompositorFrameMetadata;
     type UIResourceRequest: LayerTreeUIResourceRequest<Self>;
@@ -969,16 +969,7 @@ pub trait LayerTreeViewTransitionRequest {
 // gfx::RectF inclusive intersection is a geometry primitive, including zero
 // area intersections at touching edges (ordinary Intersect excludes those).
 pub fn InclusiveIntersectRectF(rect: &mut RectF, other: RectF) -> bool {
-    let left = super::geometry::cpp_max(rect.x(), other.x());
-    let top = super::geometry::cpp_max(rect.y(), other.y());
-    let right = super::geometry::cpp_min(rect.right(), other.right());
-    let bottom = super::geometry::cpp_min(rect.bottom(), other.bottom());
-    if left > right || top > bottom {
-        *rect = RectF::default();
-        return false;
-    }
-    *rect = RectF::new(left, top, right - left, bottom - top);
-    true
+    paint_model::source_geometry::InclusiveIntersectRectF(rect, other)
 }
 
 // components/viz/common/traced_value.cc:14-18,29-35. These are trace-output

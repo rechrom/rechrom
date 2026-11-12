@@ -225,17 +225,17 @@ impl UiRasterServices for RasterEngine {
         &self,
         format: SharedImageFormat,
         size: Size,
-        _color: &RasterColorSpace,
+        color: &RasterColorSpace,
         _usage: HostUISharedImageUsage,
         _label: &'static str,
     ) -> Option<RasterSharedImage> {
-        self.CreateUiSharedImage(size, &format).ok()
+        self.CreateUiSharedImage(size, &format, color).ok()
     }
     fn CreateSharedImageWithPixels(
         &self,
         format: SharedImageFormat,
         size: Size,
-        _color: &RasterColorSpace,
+        color: &RasterColorSpace,
         _usage: HostUISharedImageUsage,
         _label: &'static str,
         pixels: &[u8],
@@ -243,7 +243,7 @@ impl UiRasterServices for RasterEngine {
         if super::pixel_len(size).ok()? != pixels.len() {
             return None;
         }
-        let image = self.CreateUiSharedImage(size, &format).ok()?;
+        let image = self.CreateUiSharedImage(size, &format, color).ok()?;
         let mut mapping = image.MapRasterWrite().ok()?;
         let target = mapping.bytes_mut();
         debug_assert_eq!(target.len(), pixels.len());

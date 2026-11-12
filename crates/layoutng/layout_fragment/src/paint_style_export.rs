@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use foundation::{
     BlendMode, CSSPropertyID, EBackfaceVisibility, EBorderStyle, ECaretShape, EForcedColorAdjust,
-    EImageRendering, EIsolation, EObjectFit, EPointerEvents, EShapeRendering, ETransformBox,
-    EUserSelect, EVectorEffect, EVisibility, Length, LineCap, LineJoin, TransformOperationType,
-    TranslateTransformOperation, WindRule,
+    EImageRendering, EIsolation, EObjectFit, EPointerEvents, EPrintColorAdjust, EShapeRendering,
+    ETransformBox, EUserSelect, EVectorEffect, EVisibility, Length, LineCap, LineJoin,
+    TransformOperationType, TranslateTransformOperation, WindRule,
 };
 use layoutng_style::style::{
     border_image_length::BorderImageLength,
@@ -43,12 +43,12 @@ use crate::internal::{
     layout_input_types::Color,
     paint_input::{
         BackgroundAttachment, BackgroundBox, BackgroundImageLayer, BackgroundRepeat,
-        BackgroundRepeatRule, BackgroundSizeMode, NinePieceImagePaint, PaintBlendMode,
-        PaintCanvasFilter, PaintColorInterpolationSpace, PaintColorStop,
-        PaintComponentTransferFunction, PaintComponentTransferType, PaintConvolveEdgeMode,
-        PaintCornerRadii, PaintCornerRadius, PaintFilterOperation, PaintFilterType,
-        PaintHueInterpolationMethod, PaintImageTileRule, PaintMaskComposite, PaintMaskImageState,
-        PaintMaskLayer, PaintMaskMode, PaintRadialExtent, PaintRadialShape,
+        BackgroundRepeatRule, BackgroundSizeMode, NinePieceImagePaint, NinePieceImageWidth,
+        NinePieceImageWidths, PaintBlendMode, PaintCanvasFilter, PaintColorInterpolationSpace,
+        PaintColorStop, PaintComponentTransferFunction, PaintComponentTransferType,
+        PaintConvolveEdgeMode, PaintCornerRadii, PaintCornerRadius, PaintFilterOperation,
+        PaintFilterType, PaintHueInterpolationMethod, PaintImageTileRule, PaintMaskComposite,
+        PaintMaskImageState, PaintMaskLayer, PaintMaskMode, PaintRadialExtent, PaintRadialShape,
         PaintReflectionDirection, PaintShader, PaintShaderKind, PaintSpreadMethod, PaintStyleData,
         PaintTransform, PaintTransformOperation, PaintTransformOperationKind, PaintTransformOrigin,
         PaintTransformReferenceBox, PaintTurbulenceType, SvgPaintComponent, SvgStrokeLineCap,
@@ -929,7 +929,23 @@ fn ResolveBorderImageSlice(value: &Length, scale: f64, maximum: f64) -> f64 {
         let (_, percent) = LengthParts(value);
         maximum * percent / 100.0
     };
-    resolved.clamp(0.0, maximum)
+    foundation::LayoutUnit::FromFloatRound(resolved.clamp(0.0, maximum) as f32).ToDouble()
+}
+
+fn ExportBorderImageWidth(value: &BorderImageLength) -> NinePieceImageWidth {
+    if value.IsNumber() {
+        return NinePieceImageWidth::Number(value.Number());
+    }
+    let length = value.length();
+    if length.IsAuto() {
+        return NinePieceImageWidth::Auto;
+    }
+    let (pixels, percentage) = LengthParts(length);
+    NinePieceImageWidth::Length {
+        pixels,
+        percentage,
+        calculation: LengthExpression(length),
+    }
 }
 
 pub fn FetchedNinePieceImageResourceId(
@@ -939,9 +955,9 @@ pub fn FetchedNinePieceImageResourceId(
 }
 
 /// Freeze the source NinePieceImage after the physical fragment size is known.
-/// Percent border widths use the border-image area while numeric widths use
-/// the already zoomed border widths. Raster slices stay in image pixel space,
-/// exactly as NinePieceImageGrid expects.
+/// Width syntax remains typed so NinePieceImageGrid can resolve percentages
+/// against the final pixel-snapped area. Raster slices stay in image pixel
+/// space, exactly as the grid expects.
 pub fn ExportNinePieceImageForFragment(
     style: &ComputedStyle,
     source: &NinePieceImage,
@@ -950,6 +966,15 @@ pub fn ExportNinePieceImageForFragment(
     image: Option<&PaintImage>,
 ) -> Option<NinePieceImagePaint> {
     let style_image = unsafe { source.GetImage().as_ref() }?;
+    let is_loaded = style_image.IsLoaded();
+    let can_render = style_image.CanRender();
+    let respect_orientation = style_image.ForceOrientationIfNecessary(style.ImageOrientation())
+        == foundation::RespectImageOrientationEnum::kRespectImageOrientation;
+    let image_orientation = image
+        .filter(|_| respect_orientation)
+        .map_or(image_resource::ImageOrientation::default(), |image| {
+            image.orientation
+        });
     let fetched = FetchedImage(style_image);
     let resource_id = fetched.map_or(0, |fetched| fetched.ResourceId());
     let outset = source.Outset();
@@ -967,6 +992,13 @@ pub fn ExportNinePieceImageForFragment(
     );
     let area_width = fragment_size.width + outsets.left + outsets.right;
     let area_height = fragment_size.height + outsets.top + outsets.bottom;
+    let source_widths = source.BorderSlices();
+    let widths = NinePieceImageWidths {
+        top: ExportBorderImageWidth(source_widths.Top()),
+        right: ExportBorderImageWidth(source_widths.Right()),
+        bottom: ExportBorderImageWidth(source_widths.Bottom()),
+        left: ExportBorderImageWidth(source_widths.Left()),
+    };
     let effective_zoom = f64::from(style.EffectiveZoom()).max(f64::MIN_POSITIVE);
     let shader = ExportGeneratedImageShader(style, style_image);
     let (image_size, scale) = if shader.is_some() {
@@ -981,11 +1013,10 @@ pub fn ExportNinePieceImageForFragment(
             effective_zoom,
         )
     } else if let Some(image) = image {
+        let (width, height) =
+            image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
         (
-            Size {
-                width: f64::from(image.width),
-                height: f64::from(image.height),
-            },
+            Size { width, height },
             fetched
                 .map(|fetched| fetched.ResolutionScale())
                 .unwrap_or(image.resolution_scale)
@@ -995,6 +1026,11 @@ pub fn ExportNinePieceImageForFragment(
         // Pending and unsupported StyleImages still suppress fallback borders.
         return Some(NinePieceImagePaint {
             resource_id,
+            is_loaded,
+            can_render,
+            image_orientation,
+            widths,
+            border_widths: borders,
             horizontal_rule: BorderImageRule(source.HorizontalRule()),
             vertical_rule: BorderImageRule(source.VerticalRule()),
             fill: source.Fill(),
@@ -1007,44 +1043,17 @@ pub fn ExportNinePieceImageForFragment(
         bottom: ResolveBorderImageSlice(source.ImageSlices().Bottom(), scale, image_size.height),
         left: ResolveBorderImageSlice(source.ImageSlices().Left(), scale, image_size.width),
     };
-    let widths = source.BorderSlices();
-    let auto_x = effective_zoom / scale;
-    let auto_y = effective_zoom / scale;
-    let resolve_width = |value: &BorderImageLength, border, basis, auto| {
-        let resolved = ResolveBorderImageLength(value, border, basis);
-        if resolved.is_nan() {
-            auto
-        } else {
-            resolved
-        }
-    };
     Some(NinePieceImagePaint {
         resource_id,
+        is_loaded,
+        can_render,
         image_resolution_scale: scale,
         image_size,
+        image_orientation,
         shader,
         slices,
-        widths: Edges {
-            top: resolve_width(widths.Top(), borders.top, area_height, slices.top * auto_y),
-            right: resolve_width(
-                widths.Right(),
-                borders.right,
-                area_width,
-                slices.right * auto_x,
-            ),
-            bottom: resolve_width(
-                widths.Bottom(),
-                borders.bottom,
-                area_height,
-                slices.bottom * auto_y,
-            ),
-            left: resolve_width(
-                widths.Left(),
-                borders.left,
-                area_width,
-                slices.left * auto_x,
-            ),
-        },
+        widths,
+        border_widths: borders,
         outsets,
         horizontal_rule: BorderImageRule(source.HorizontalRule()),
         vertical_rule: BorderImageRule(source.VerticalRule()),
@@ -1251,6 +1260,7 @@ fn SvgStrokeStyle(style: &ComputedStyle, output: &mut PaintStyleData) {
     };
     output.svg_stroke_miter_limit = style.StrokeMiterLimit() as f64;
     output.svg_fill_even_odd = style.FillRule() == WindRule::RULE_EVENODD;
+    output.svg_clip_even_odd = style.ClipRule() == WindRule::RULE_EVENODD;
     output.svg_non_scaling_stroke = style.VectorEffect() == EVectorEffect::kNonScalingStroke;
     // svg_shape_painter.cc:99-102 disables antialiasing for these two
     // shape-rendering values and enables it for auto/geometricPrecision.
@@ -1261,11 +1271,16 @@ fn SvgStrokeStyle(style: &ComputedStyle, output: &mut PaintStyleData) {
     output.svg_paint_order = PaintOrder(style.PaintOrder());
 }
 
-fn SvgColor(style: &ComputedStyle, paint: &SVGPaint, opacity: f32) -> Option<Color> {
+pub fn SvgColor(
+    style: &ComputedStyle,
+    paint: &SVGPaint,
+    visited_paint: &SVGPaint,
+    opacity: f32,
+) -> Option<Color> {
     if paint.paint_type == SVGPaintType::kNone || !paint.HasColor() {
         return None;
     }
-    let mut color = StyleColor(style, paint.GetColor());
+    let mut color = ColorValue(style.VisitedDependentSvgPaint(paint, visited_paint));
     color.alpha *= opacity;
     Some(color)
 }
@@ -1352,6 +1367,29 @@ fn ExportGeometryProperties(
         .into_iter()
         .any(|id| style.HasWillChangeProperty(id));
         output.will_change_scroll_position = style.HasWillChangeScrollPosition();
+        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()
+            && (output.will_change_transform
+                || output.will_change_opacity
+                || output.will_change_filter
+                || output.will_change_backdrop_filter
+                || output.will_change_clip_path
+                || output.will_change_mix_blend_mode
+                || output.will_change_mask
+                || output.will_change_other
+                || output.will_change_scroll_position)
+        {
+            eprintln!(
+                "will-change-export style={:p} transform={} transform-property={} translate={} rotate={} scale={} opacity={} filter={}",
+                style,
+                output.will_change_transform,
+                output.will_change_transform_property,
+                output.will_change_translate,
+                output.will_change_rotate,
+                output.will_change_scale,
+                output.will_change_opacity,
+                output.will_change_filter,
+            );
+        }
 
         output.active_transform_animation = style.HasCurrentTransformAnimation();
         output.active_scale_animation = style.HasCurrentScaleAnimation();
@@ -1399,17 +1437,20 @@ fn ExportForPaint(
             ECaretShape::kBlock => CaretShape::kBlock,
             ECaretShape::kUnderscore => CaretShape::kUnderscore,
         };
+        output.caret_color = ColorValue(style.ResolvedCaretColor());
     }
     // Use the translated ComputedStyle owner instead of reinterpreting the
     // CSS enum at the Layout/Paint boundary. This preserves Chromium's runtime
     // default-quality policy as well as the pixelated/crisp-edges cap.
     if copy_canonical_values {
         output.image_interpolation_quality = style.GetInterpolationQuality();
+        output.dynamic_range_limit = *style.GetDynamicRangeLimit();
     }
     if copy_canonical_values {
         output.text_fill_color = StyleColor(style, style.TextFillColor());
         output.text_stroke_color = StyleColor(style, style.TextStrokeColor());
         output.text_stroke_width = f64::from(style.TextStrokeWidth());
+        output.print_color_adjust_economy = style.PrintColorAdjust() == EPrintColorAdjust::kEconomy;
     }
     if copy_canonical_values {
         output.color_scheme_flags_is_normal = style.ColorSchemeFlagsIsNormal();
@@ -1417,6 +1458,7 @@ fn ExportForPaint(
             style.UsedColorScheme(),
             layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kDark
         );
+        output.force_dark = style.ForceDark();
     }
     if copy_canonical_values {
         output.accent_color = (!style.AccentColor().IsAutoColor())
@@ -1494,8 +1536,18 @@ fn ExportForPaint(
     }
     ExportGeometryProperties(style, &mut output, copy_canonical_values);
     output.clip_path = clip_path_export::ExportClipPath(style);
-    output.svg_fill = SvgColor(style, style.FillPaint(), style.FillOpacity());
-    output.svg_stroke = SvgColor(style, style.StrokePaint(), style.StrokeOpacity());
+    output.svg_fill = SvgColor(
+        style,
+        style.FillPaint(),
+        style.InternalVisitedFillPaint(),
+        style.FillOpacity(),
+    );
+    output.svg_stroke = SvgColor(
+        style,
+        style.StrokePaint(),
+        style.InternalVisitedStrokePaint(),
+        style.StrokeOpacity(),
+    );
     output.svg_fill_reference = style
         .FillPaint()
         .HasUrl()
@@ -2005,6 +2057,41 @@ mod tests {
     }
 
     #[test]
+    fn svg_visited_fill_and_stroke_replace_rgb_but_keep_unvisited_alpha() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetInsideLink(foundation::EInsideLink::kInsideVisitedLink);
+        builder.SetFillPaintOwned(SVGPaint::from_color(foundation::Color::FromRGBA(
+            255, 0, 0, 64,
+        )));
+        builder.SetInternalVisitedFillPaintOwned(SVGPaint::from_color(
+            foundation::Color::FromRGBA(0, 255, 0, 230),
+        ));
+        builder.SetStrokePaintOwned(SVGPaint::from_color(foundation::Color::FromRGBA(
+            0, 0, 255, 128,
+        )));
+        builder.SetInternalVisitedStrokePaintOwned(SVGPaint::from_color(
+            foundation::Color::FromRGBA(255, 255, 0, 26),
+        ));
+        builder.SetFillOpacity(0.5);
+        builder.SetStrokeOpacity(0.25);
+        let style = unsafe { &*builder.TakeStyle() };
+
+        let paint = Export(style, None);
+        let fill = paint.svg_fill.expect("visited fill");
+        near(fill.red, 0.0);
+        near(fill.green, 1.0);
+        near(fill.blue, 0.0);
+        near(fill.alpha, 64.0 / 255.0 * 0.5);
+        let stroke = paint.svg_stroke.expect("visited stroke");
+        near(stroke.red, 1.0);
+        near(stroke.green, 1.0);
+        near(stroke.blue, 0.0);
+        near(stroke.alpha, 128.0 / 255.0 * 0.25);
+    }
+
+    #[test]
     fn svg_stroke_and_geometry_properties_cross_paint_boundary() {
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
@@ -2017,6 +2104,7 @@ mod tests {
         builder.SetCapStyle(LineCap::kRoundCap);
         builder.SetJoinStyle(LineJoin::kBevelJoin);
         builder.SetFillRule(WindRule::RULE_EVENODD);
+        builder.SetClipRule(WindRule::RULE_EVENODD);
         builder.SetVectorEffect(EVectorEffect::kNonScalingStroke);
         builder.SetShapeRendering(EShapeRendering::kCrispedges);
         builder.SetPaintOrder(EPaintOrder::kPaintOrderStrokeMarkersFill);
@@ -2029,6 +2117,7 @@ mod tests {
         assert_eq!(paint.svg_stroke_line_cap, SvgStrokeLineCap::kRound);
         assert_eq!(paint.svg_stroke_line_join, SvgStrokeLineJoin::kBevel);
         assert!(paint.svg_fill_even_odd);
+        assert!(paint.svg_clip_even_odd);
         assert!(paint.svg_non_scaling_stroke);
         assert!(!paint.svg_shape_antialias);
         assert_eq!(
@@ -2039,5 +2128,18 @@ mod tests {
                 SvgPaintComponent::kFill,
             ]
         );
+    }
+
+    #[test]
+    fn dynamic_range_limit_crosses_the_layout_paint_boundary() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        let limit = foundation::DynamicRangeLimit::from_mix(0.25, 0.5);
+        builder.SetDynamicRangeLimit(&limit);
+        let style = unsafe { &*builder.TakeStyle() };
+
+        let paint = Export(style, None);
+        assert_eq!(paint.dynamic_range_limit, limit);
     }
 }

@@ -38,6 +38,15 @@ pub type CustomLayoutChildFactory = fn(&mut LayoutBox);
 pub type InlineObjectStyleUpdater = fn(&mut LayoutBlockFlow, *const ComputedStyle, &ComputedStyle);
 pub type AnonymousTextCombineStyleUpdater = fn(&mut LayoutObject, &mut ComputedStyleBuilder);
 pub type CombinedTextStyleAdjuster = fn(&mut ComputedStyleBuilder);
+#[derive(Clone, Copy)]
+pub struct TextFragmentSelectionFacts {
+    pub node_length: Option<u32>,
+    pub state: super::selection_state::SelectionState,
+    pub start: u32,
+    pub length: u32,
+}
+pub type TextFragmentSelectionFactsQuery =
+    fn(&super::layout_text::LayoutText) -> TextFragmentSelectionFacts;
 pub type TextFragmentSelectionQuery = fn(&super::layout_text::LayoutText) -> bool;
 pub type TextCombineBoundingBoxAdjuster =
     fn(&LayoutObject, &foundation::PhysicalRect) -> foundation::PhysicalRect;
@@ -65,12 +74,47 @@ pub type SvgRootChildren =
 pub type ColumnSpannerInvalidator = fn(&mut LayoutBox);
 pub type ReplacedRespectsCSSOverflow = fn(&LayoutReplaced) -> bool;
 pub type ReplacedImageStateUpdater = fn(&mut LayoutReplaced, f64, bool);
+pub type ReplacedImageResourceUpdater =
+    fn(&mut LayoutReplaced, image_resource::ImageResourceContentUpdate) -> bool;
+pub type ReplacedVideoPosterResourceUpdater =
+    fn(&mut LayoutReplaced, image_resource::ImageResourceContentUpdate) -> bool;
+pub type ReplacedBrokenImageResourceUpdater = fn(
+    &mut LayoutReplaced,
+    image_resource::platform_resources::BrokenImageResourceVariants,
+    f64,
+) -> bool;
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReplacedImageResourceFacts {
+    pub has_image: bool,
+    pub metadata: Option<image_resource::ImageResourceMetadata>,
+    pub error: bool,
+    pub loading: bool,
+    pub device_pixel_ratio: f32,
+}
+pub type ReplacedImageResourceFactsQuery = fn(&LayoutReplaced) -> ReplacedImageResourceFacts;
+pub type ReplacedVideoStateUpdater = fn(&mut LayoutReplaced);
+
+/// Source quad virtual on an out-of-package SVG object. The override is
+/// supplied by the object's existing factory owner, never synthesized as a CSS box.
+pub type ObjectQuadEnumerator = fn(
+    &LayoutObject,
+    &mut foundation::Vector<foundation::gfx::QuadF>,
+    *const super::layout_box_model_object::LayoutBoxModelObject,
+    super::map_coordinates_flags::MapCoordinatesFlags,
+    super::layout_object::BoxQuadType,
+);
 
 // C++ derived table vtables live in the table package. This typed callback
 // record preserves those overrides without a Cargo dependency cycle. Every
 // entry is required when the table object owner is installed.
 #[derive(Clone, Copy)]
 pub struct TableObjectVirtuals {
+    pub focusgroup_facts: fn(
+        &LayoutObject,
+    ) -> Option<
+        foundation::table_focusgroup::TableFocusgroupFacts<*const LayoutObject>,
+    >,
+    pub quads_in_ancestor: ObjectQuadEnumerator,
     pub add_child: fn(&mut LayoutObject, *mut LayoutObject, *mut LayoutObject),
     pub remove_child: fn(&mut LayoutObject, *mut LayoutObject),
     pub style_did_change: fn(
@@ -104,7 +148,17 @@ pub struct TableObjectVirtuals {
 // cpp: layoutng/internal/layout_object_factory_set.h:45-85
 #[derive(Clone, Copy, Default)]
 pub struct LayoutObjectFactorySet {
+    pub svg_context_reference_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    pub svg_marker_paints: Option<fn(&LayoutObject) -> Vec<super::paint_input::SvgMarkerPaint>>,
+    /// Injected platform Path construction; SVG Layout owns the returned path.
+    pub svg_shape_path: Option<
+        fn(
+            &super::layout_input::SvgShapeData,
+        ) -> std::sync::Arc<dyn foundation::native_path::NativePath>,
+    >,
+
     pub table_virtuals: Option<TableObjectVirtuals>,
+    pub svg_quads_in_ancestor: Option<ObjectQuadEnumerator>,
     pub block_ruby: Option<LayoutObjectFactory>,
     pub inline_box: Option<LayoutObjectFactory>,
     pub inline_line_break: Option<LayoutObjectFactory>,
@@ -113,6 +167,11 @@ pub struct LayoutObjectFactorySet {
     pub replaced: Option<LayoutObjectFactory>,
     pub replaced_respects_css_overflow: Option<ReplacedRespectsCSSOverflow>,
     pub replaced_image_state_updater: Option<ReplacedImageStateUpdater>,
+    pub replaced_image_resource_updater: Option<ReplacedImageResourceUpdater>,
+    pub replaced_video_poster_resource_updater: Option<ReplacedVideoPosterResourceUpdater>,
+    pub replaced_broken_image_resource_updater: Option<ReplacedBrokenImageResourceUpdater>,
+    pub replaced_image_resource_facts: Option<ReplacedImageResourceFactsQuery>,
+    pub replaced_video_state_updater: Option<ReplacedVideoStateUpdater>,
     pub flex: Option<LayoutObjectFactory>,
     pub grid: Option<LayoutObjectFactory>,
     pub grid_lanes: Option<LayoutObjectFactory>,
@@ -121,6 +180,8 @@ pub struct LayoutObjectFactorySet {
     pub forms: Option<LayoutObjectFactory>,
     pub frameset: Option<LayoutObjectFactory>,
     pub list: Option<LayoutObjectFactory>,
+    /// Original derived ListItem/InlineListItem::SubtreeDidChange virtual.
+    pub list_subtree_did_change: Option<fn(&mut LayoutObject)>,
     pub mathml: Option<LayoutObjectFactory>,
     pub svg: Option<LayoutObjectFactory>,
 
@@ -145,6 +206,7 @@ pub struct LayoutObjectFactorySet {
     pub update_anonymous_text_combine_style: Option<AnonymousTextCombineStyleUpdater>,
     pub adjust_combined_text_style: Option<CombinedTextStyleAdjuster>,
     pub is_text_fragment_selected: Option<TextFragmentSelectionQuery>,
+    pub text_fragment_selection_facts: Option<TextFragmentSelectionFactsQuery>,
     pub adjust_text_combine_bounding_box: Option<TextCombineBoundingBoxAdjuster>,
     pub recalc_text_combine_contents_ink_overflow:
         Option<TextCombineContentsInkOverflowRecalculator>,
@@ -152,6 +214,7 @@ pub struct LayoutObjectFactorySet {
     pub update_svg_block_style: Option<SvgBlockStyleUpdater>,
     pub svg_group_add_child: Option<SvgGroupChildInserter>,
     pub svg_container_style_did_change: Option<InnerEditorStyleUpdater>,
+    pub svg_shape_style_did_change: Option<InnerEditorStyleUpdater>,
     pub svg_is_child_allowed: Option<SvgChildAllowed>,
     pub svg_text_add_child: Option<SvgTextChildChange>,
     pub svg_text_remove_child: Option<SvgTextChildRemoval>,

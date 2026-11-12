@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use layoutng_assembly::fragment_tree::{PaintGlyph, RasterEffectOutset};
+use foundation::ETextDecorationSkipInk;
+use layoutng_assembly::fragment_tree::{PaintGlyph, PaintGlyphRun, RasterEffectOutset};
 use layoutng_assembly::internal::layout_input::{
     BorderLineStyle, FontSmoothing, FontVariation, Offset, PaintPathCommand, Size,
     TextDecorationStyle, TransformMatrix, WritingMode,
@@ -78,19 +79,31 @@ pub struct DisplayItem {
     pub non_scaling_stroke: bool,
     pub paint_shader: Option<PaintShader>,
     pub blend_mode: PaintBlendMode,
+    /// GraphicsContext::FillRect with SkBlendMode::kSrc. CSS blend modes stay
+    /// independent because source replacement is a canvas-clear policy.
+    pub source_overwrite: bool,
     pub svg_marker_resource_id: u64,
+    /// cc::CustomDataOp payload used by nested canvas snapshot substitution.
+    pub custom_data_id: u32,
     /// Canonical FilterEffectBuilder output owned by PrePaint. Flat records
     /// replay this same value; Raster must not rebuild it from authored style.
     pub canonical_filters: PropertyFilterOperations,
+    /// ScopedTextShadowPainter's parallel shadow-only filter branches. The
+    /// decorated source geometry is drawn once inside this layer; Raster
+    /// merges these branches before compositing the shadow result.
+    pub text_shadow_filters: Vec<layoutng_assembly::internal::layout_input::PaintShadow>,
     pub mask_layers: Vec<DisplayMaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
     pub image_interpolation_quality: InterpolationQuality,
+    pub dynamic_range_limit: foundation::DynamicRangeLimit,
     /// PaintImage::DecodingMode selected for this concrete image use.
     pub image_decoding_mode: image_resource::ImageDecodingMode,
     /// Effective orientation for this image use after CSS image-orientation.
     /// Source rectangles are expressed in the oriented image coordinate space.
     pub image_orientation: image_resource::ImageOrientation,
+    /// PaintFlags::useDarkModeForImage for the raster-side image decoder.
+    pub use_dark_mode_for_image: bool,
     pub document_image_container_key: Option<image_resource::ContainerKey>,
     pub repeat_x: bool,
     pub repeat_y: bool,
@@ -109,7 +122,15 @@ pub struct DisplayItem {
     pub shadow_has_opaque_background: bool,
     pub is_text_decoration: bool,
     pub stroke_glyphs: bool,
-    pub skip_ink: bool,
+    pub skip_ink: ETextDecorationSkipInk,
+    /// Bounds and shaping inputs consumed by TextPainter::ClipDecorationLine.
+    /// Runs remain shared in Paint and are projected into the backend-neutral
+    /// raster command only at the package boundary.
+    pub decoration_ink_bounds: Option<PaintRect>,
+    pub decoration_ink_baseline: f64,
+    pub decoration_text_origin: Offset,
+    pub decoration_text_fit_scale: f64,
+    pub decoration_ink_runs: Arc<Vec<PaintGlyphRun>>,
     pub opacity: f32,
     pub transform: TransformMatrix,
     pub font_face_index: u32,
@@ -174,14 +195,19 @@ impl Default for DisplayItem {
             non_scaling_stroke: false,
             paint_shader: None,
             blend_mode: PaintBlendMode::kNormal,
+            source_overwrite: false,
             svg_marker_resource_id: 0,
+            custom_data_id: 0,
             canonical_filters: Default::default(),
+            text_shadow_filters: Vec::new(),
             mask_layers: Vec::new(),
             round_cap: false,
             resource_id: 0,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            dynamic_range_limit: foundation::DynamicRangeLimit::default(),
             image_decoding_mode: Default::default(),
             image_orientation: Default::default(),
+            use_dark_mode_for_image: false,
             document_image_container_key: None,
             repeat_x: false,
             repeat_y: false,
@@ -200,7 +226,12 @@ impl Default for DisplayItem {
             shadow_has_opaque_background: false,
             is_text_decoration: false,
             stroke_glyphs: false,
-            skip_ink: false,
+            skip_ink: ETextDecorationSkipInk::kNone,
+            decoration_ink_bounds: None,
+            decoration_ink_baseline: 0.0,
+            decoration_text_origin: Offset::default(),
+            decoration_text_fit_scale: 1.0,
+            decoration_ink_runs: Arc::new(Vec::new()),
             opacity: 1.0,
             transform: TransformMatrix::default(),
             font_face_index: 0,

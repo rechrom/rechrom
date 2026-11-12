@@ -56,7 +56,7 @@ use crate::internal::layout_node_data::LayoutBoxRareData;
 use crate::internal::layout_node_metadata::{ContainerNode, Element, Node, Text};
 use crate::internal::layout_object::LayoutObject;
 use crate::internal::layout_object_child_list::LayoutObjectChildList;
-use crate::internal::layout_replaced::LayoutInputReplaced;
+use crate::internal::layout_replaced::{LayoutInputReplaced, LayoutMedia, LayoutVideo};
 use crate::internal::layout_scrollable_area::PaintLayerScrollableArea;
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_text_combine::LayoutTextCombine;
@@ -194,6 +194,22 @@ impl Traceable for LayoutInputReplaced {
     }
 }
 
+// Source: core/layout/layout_media.cc:52-55. The derived allocation retains
+// its original image resource and child-list managed edges.
+impl Traceable for LayoutMedia {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        let image: &LayoutInputReplaced = self;
+        Traceable::Trace(image, visitor);
+        unsafe { &*self.Children() }.Trace(visitor);
+    }
+}
+impl Traceable for LayoutVideo {
+    fn Trace(&self, visitor: &mut Visitor<'_>) {
+        let media: &LayoutMedia = self;
+        Traceable::Trace(media, visitor);
+    }
+}
+
 impl<T: Copy> Traceable for OofContainingBlock<T> {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         OofContainingBlock::Trace(self, visitor);
@@ -284,6 +300,7 @@ trace_form_base!(
 impl Traceable for TextControlElement {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         visitor.Trace(self.InnerEditorMember());
+        visitor.Trace(self.HitContainerMember());
         self.state.Trace(visitor);
     }
 }

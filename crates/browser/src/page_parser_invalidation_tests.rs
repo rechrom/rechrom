@@ -40,8 +40,11 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
     }
 }
 #[derive(Default)]
-struct Client(Vec<String>);
+struct Client(Vec<String>, crate::page::PageChromeState);
 impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: crate::page::EventHandlerChromeEffect) {
+        self.1.Apply(effect);
+    }
     fn DidReportScriptError(&mut self, e: &JavaScriptException) {
         self.0.push(e.message.clone());
     }

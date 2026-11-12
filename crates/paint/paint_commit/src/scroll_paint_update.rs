@@ -63,6 +63,9 @@ struct OverflowControlGeometry {
     properties: PrePaintPropertyTreeState,
     contents_properties: PrePaintPropertyTreeState,
     transforms: Vec<TransformMatrix>,
+    phase: PaintPhase,
+    is_self_painting_layer: bool,
+    needs_reorder_overlay_overflow_controls: bool,
 }
 
 #[derive(Clone)]
@@ -483,20 +486,27 @@ impl RetainedScrollPaintState {
                 .filter(|rect| !rect.is_empty())
                 // A visible source may legitimately emit no drawing item
                 // (for example a transparent LayoutView). Paint culls a box
-                // only when its mapped visual rect misses self_cull_rect, so
+                // only when its local visual rect misses self_cull_rect, so
                 // retain the same predicate here. Treating every non-recorded
                 // client as culled rejects every property-only scroll update.
                 // Source: box_fragment_painter.cc IsVisible;
                 //         paint_layer_painter.cc ShouldUseCachedSubsequence.
                 .filter(|rect| {
-                    node.self_cull_rect.is_some_and(|cull| {
-                        MapRectToRoot(*rect, &node.transforms)
-                            .is_some_and(|mapped| intersection(mapped, cull).is_empty())
-                    })
+                    node.self_cull_rect
+                        .is_some_and(|cull| intersection(*rect, cull).is_empty())
                 });
             if let (Some(world), Some(recorded_visible)) = (world, recorded_visible) {
                 if paintable && was_recorded {
-                    if let Some(recorded_cull) = node.self_cull_rect {
+                    if let Some(local_recorded_cull) = node.self_cull_rect {
+                        // FragmentData retains the cull in local property
+                        // space. Coverage validation compares it with root
+                        // visible output across frames, so normalize exactly
+                        // once at this retained-artifact boundary.
+                        let recorded_cull = MapRectWithTransforms(
+                            local_recorded_cull,
+                            std::slice::from_ref(&world),
+                            false,
+                        )?;
                         let key = (
                             state_cache_key(&node.properties.nodes),
                             world.values.map(f64::to_bits),
@@ -536,11 +546,26 @@ impl RetainedScrollPaintState {
                     .paint
                     .scrollbars
                     .as_ref()
-                    .map(|_| OverflowControlGeometry {
+                    .map(|scrollbars| OverflowControlGeometry {
                         paint_snap_offset: node.paint_snap_offset,
                         properties: node.properties.clone(),
                         contents_properties: node.contents_properties.clone(),
                         transforms: node.transforms.clone(),
+                        phase: if scrollbars.should_paint_as_overlay {
+                            if node.is_self_painting_layer
+                                || node.needs_reorder_overlay_overflow_controls.get()
+                            {
+                                PaintPhase::kOverlayOverflowControls
+                            } else {
+                                PaintPhase::kForeground
+                            }
+                        } else {
+                            PaintPhase::kSelfBlockBackgroundOnly
+                        },
+                        is_self_painting_layer: node.is_self_painting_layer,
+                        needs_reorder_overlay_overflow_controls: node
+                            .needs_reorder_overlay_overflow_controls
+                            .get(),
                     }),
                 revision,
                 subtree_revision,
@@ -1110,7 +1135,11 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     // Only overflow-control IDs can be produced here. Build their directory
     // lazily, without allocating entries for the page's ordinary records.
     let mut old_record_indices: Option<BTreeMap<(u64, u32, u8), usize>> = None;
-    let mut replacements: Vec<(usize, Vec<DisplayItem>)> = Vec::new();
+    let mut replacements: Vec<(
+        usize,
+        Vec<DisplayItem>,
+        Option<paint_record::ScrollbarDisplayItemData>,
+    )> = Vec::new();
     let scrollbar_trace = browser_tracing::span("paint_record", "ScrollPaint.UpdateScrollbars");
     for (old, f) in retained.fragments.iter().zip(&nodes) {
         let Some(f) = f else {
@@ -1127,12 +1156,14 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         node.paint_snap_offset = geometry.paint_snap_offset;
         node.properties = geometry.properties.clone();
         node.contents_properties = geometry.contents_properties.clone();
+        node.is_self_painting_layer = geometry.is_self_painting_layer;
+        node.needs_reorder_overlay_overflow_controls
+            .set(geometry.needs_reorder_overlay_overflow_controls);
         node.SetOwnedFragmentForTesting(f);
         let mut controls = PaintRecording::default();
         let context = RefCell::new(paint_context::PaintContext::WithCaret(&mut controls, None));
-        scrollable_area_painter::ScrollableAreaPainter::new(&node, &context).PaintOverflowControls(
-            &paint_info::PaintInfo::new(&context, PaintPhase::kOverlayOverflowControls),
-        );
+        scrollable_area_painter::ScrollableAreaPainter::new(&node, &context)
+            .PaintOverflowControls(&paint_info::PaintInfo::new(&context, geometry.phase));
         drop(context);
         for record in &controls.display_items {
             let key = (record.id.client_id, record.id.fragment, record.id.r#type.0);
@@ -1198,7 +1229,12 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
                 }
                 op.phase = before.phase;
             }
-            replacements.push((index, ops));
+            // ScrollbarDisplayItem owns cc-facing state in addition to its
+            // PaintRecord. Chromium re-records the whole display item here;
+            // retaining the old payload would discard native painted opacity,
+            // resource invalidation and theme geometry while only moving the
+            // thumb's fallback drawing ops.
+            replacements.push((index, ops, record.scrollbar.clone()));
         }
     }
     drop(scrollbar_trace);
@@ -1219,12 +1255,22 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
             record.scroll_translation = trees.transform_for(old).cloned();
         }
     }
-    for (index, ops) in replacements {
-        let record = &artifact.display_items[index];
-        if &artifact.items[record.record_begin..record.record_end] != ops.as_slice() {
-            let old_ops = &mut std::sync::Arc::make_mut(&mut artifact.items)
-                [record.record_begin..record.record_end];
+    for (index, ops, scrollbar) in replacements {
+        let record = &mut artifact.display_items[index];
+        let mut changed = false;
+        if record.scrollbar != scrollbar {
+            record.scrollbar = scrollbar;
+            changed = true;
+        }
+        let record_begin = record.record_begin;
+        let record_end = record.record_end;
+        if &artifact.items[record_begin..record_end] != ops.as_slice() {
+            let old_ops =
+                &mut std::sync::Arc::make_mut(&mut artifact.items)[record_begin..record_end];
             old_ops.clone_from_slice(&ops);
+            changed = true;
+        }
+        if changed {
             result.updated_scrollbar_records += 1;
         }
     }

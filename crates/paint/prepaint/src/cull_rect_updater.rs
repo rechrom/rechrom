@@ -14,7 +14,6 @@
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::layout_input::Offset;
 use paint_model::cull_rect::{ApplyScrollExpansion, IsSmallScroller, LocalPixelDistanceToExpand};
-use paint_model::geometry_mapper::SourceToDestinationRect;
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_model::{CullRect, PaintRect, PaintResult};
 
@@ -101,6 +100,16 @@ pub fn HasScrolledEnough(fragment: &FragmentPaintData, current: Offset) -> bool 
         ratio,
         contents,
     )
+}
+
+/// Inputs already computed by ObjectPaintProperties during the same PrePaint
+/// lifecycle. Special recording reuses them without reinterpreting CSS.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CullRectDecisionInputs {
+    pub has_filter_that_moves_pixels: bool,
+    pub has_perspective: bool,
+    pub has_active_transform_animation: bool,
+    pub has_non_composited_transform: bool,
 }
 
 /// Result of Chromium's `ShouldUseInfiniteCullRect` decision. The second bit
@@ -193,52 +202,12 @@ impl CullRectUpdater {
         HasScrolledEnough(fragment, current)
     }
 
-    fn CullRectInState(
-        stored_cull: Option<PaintRect>,
-        root_state: &PropertyTreeState,
-        state: &PropertyTreeState,
-    ) -> CullRect {
-        let Some(rect) = stored_cull else {
-            return CullRect::Infinite();
-        };
-        if root_state
-            .transform
-            .lifecycle
-            .same_node(&state.transform.lifecycle)
-        {
-            return CullRect::FromRect(rect);
-        }
-        CullRect::FromRect(
-            SourceToDestinationRect(&root_state.transform, &state.transform, rect)
-                .unwrap_or_default(),
-        )
-    }
-
-    fn StoreCullRect(
-        cull: CullRect,
-        state: &PropertyTreeState,
-        root_state: &PropertyTreeState,
-    ) -> Option<PaintRect> {
-        let rect = cull.Rect()?;
-        if state
-            .transform
-            .lifecycle
-            .same_node(&root_state.transform.lifecycle)
-        {
-            return Some(rect);
-        }
-        Some(
-            SourceToDestinationRect(&state.transform, &root_state.transform, rect)
-                .unwrap_or_default(),
-        )
-    }
-
     /// Source: `cull_rect_updater.cc:437-519`.
     ///
-    /// Blink stores the result in the fragment's local property space. The
-    /// current PaintTreeNode ABI stores cull rectangles in root space because
-    /// its painters compare them with root-mapped visual rects; conversion at
-    /// this boundary preserves the source update algorithm and package ABI.
+    /// Like FragmentData::GetCullRect(), the stored rectangle is in
+    /// LocalBorderBoxProperties transform space. The incoming parent cull is
+    /// already in `parent_state` because it is the parent's stored contents
+    /// cull; retaining that invariant avoids a root-space proxy ABI.
     pub fn ComputeFragmentCullRect(
         parent_cull: Option<PaintRect>,
         old_cull: Option<Option<PaintRect>>,
@@ -247,10 +216,11 @@ impl CullRectUpdater {
         local_state: &PropertyTreeState,
         expansion_ratio: f64,
     ) -> (Option<PaintRect>, bool) {
-        let mut cull = Self::CullRectInState(parent_cull, root_state, parent_state);
+        let mut cull = parent_cull.map_or_else(CullRect::Infinite, CullRect::FromRect);
         let mut expanded = false;
         if parent_state != local_state {
-            let old = old_cull.map(|stored| Self::CullRectInState(stored, root_state, local_state));
+            let old =
+                old_cull.map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
             expanded = cull.ApplyPaintProperties(
                 root_state,
                 parent_state,
@@ -259,7 +229,7 @@ impl CullRectUpdater {
                 expansion_ratio,
             );
         }
-        (Self::StoreCullRect(cull, local_state, root_state), expanded)
+        (cull.Rect(), expanded)
     }
 
     /// Source: `cull_rect_updater.cc:521-541`.
@@ -271,11 +241,11 @@ impl CullRectUpdater {
         contents_state: &PropertyTreeState,
         expansion_ratio: f64,
     ) -> (Option<PaintRect>, bool) {
-        let mut contents_cull = Self::CullRectInState(cull_rect, root_state, local_state);
+        let mut contents_cull = cull_rect.map_or_else(CullRect::Infinite, CullRect::FromRect);
         let mut expanded = false;
         if local_state != contents_state {
             let old = old_contents_cull
-                .map(|stored| Self::CullRectInState(stored, root_state, contents_state));
+                .map(|stored| stored.map_or_else(CullRect::Infinite, CullRect::FromRect));
             expanded = contents_cull.ApplyPaintProperties(
                 root_state,
                 local_state,
@@ -284,16 +254,101 @@ impl CullRectUpdater {
                 expansion_ratio,
             );
         }
-        (
-            Self::StoreCullRect(contents_cull, contents_state, root_state),
-            expanded,
-        )
+        (contents_cull.Rect(), expanded)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paint_model::geometry_mapper::TranslationTransform;
+    use paint_model::paint_property_tree::{ClipPaintPropertyNode, TransformPaintPropertyNode};
+    use std::sync::Arc;
+
+    #[test]
+    fn paint_offset_translation_keeps_fragment_culls_in_local_property_space() {
+        let root = PropertyTreeState::default();
+        let translated = Arc::new(TransformPaintPropertyNode {
+            lifecycle: Default::default(),
+            id: 1,
+            parent: Some(root.transform.clone()),
+            matrix: TranslationTransform(0.0, 52.0),
+            ..(*root.transform).clone()
+        });
+        let border = PropertyTreeState {
+            transform: translated.clone(),
+            clip: root.clip.clone(),
+            effect: root.effect.clone(),
+        };
+        let overflow_clip = Arc::new(
+            ClipPaintPropertyNode {
+                lifecycle: Default::default(),
+                id: 2,
+                parent: Some(root.clip.clone()),
+                local_transform_space: translated,
+                rect: Some(PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 320.0,
+                    height: 52.0,
+                }),
+                ..(*root.clip).clone()
+            }
+            .with_layout_clips(),
+        );
+        let contents = PropertyTreeState {
+            transform: border.transform.clone(),
+            clip: overflow_clip,
+            effect: root.effect.clone(),
+        };
+        let viewport = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 320.0,
+            height: 200.0,
+        };
+
+        let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
+            Some(viewport),
+            None,
+            &root,
+            &root,
+            &border,
+            1.0,
+        );
+        assert_eq!(
+            self_cull,
+            Some(PaintRect {
+                x: 0.0,
+                y: -52.0,
+                width: 320.0,
+                height: 200.0,
+            })
+        );
+
+        let (contents_cull, _) = CullRectUpdater::ComputeFragmentContentsCullRect(
+            self_cull, None, &root, &border, &contents, 1.0,
+        );
+        assert_eq!(
+            contents_cull,
+            Some(PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 52.0,
+            })
+        );
+
+        let (child_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
+            contents_cull,
+            None,
+            &root,
+            &contents,
+            &contents,
+            1.0,
+        );
+        assert_eq!(child_cull, contents_cull);
+    }
 
     #[test]
     fn canvas_and_perspective_propagate_but_filter_and_overscroll_do_not() {

@@ -177,6 +177,9 @@ impl NinePieceImageGeometry {
         image: &NinePieceImagePaint,
     ) -> Vec<PaintReflectionMaskLayer> {
         let fragment = node.fragment.as_deref().expect("reflection mask fragment");
+        if !image.is_loaded || !image.can_render {
+            return Vec::new();
+        }
         let fetched = if image.shader.is_none() {
             FindImage(node, image.resource_id)
         } else {
@@ -187,10 +190,7 @@ impl NinePieceImageGeometry {
             // the reflected SrcIn branch is transparent.
             return Vec::new();
         }
-        let source_size = fetched.map_or(image.image_size, |image| Size {
-            width: f64::from(image.width),
-            height: f64::from(image.height),
-        });
+        let source_size = image.image_size;
         if source_size.width <= 0.0
             || source_size.height <= 0.0
             || !source_size.width.is_finite()
@@ -203,10 +203,8 @@ impl NinePieceImageGeometry {
             ResolveDocumentImageContainerKey(
                 resource,
                 Size {
-                    width: f64::from(resource.width) / image.image_resolution_scale
-                        * effective_zoom,
-                    height: f64::from(resource.height) / image.image_resolution_scale
-                        * effective_zoom,
+                    width: source_size.width / image.image_resolution_scale * effective_zoom,
+                    height: source_size.height / image.image_resolution_scale * effective_zoom,
                 },
                 effective_zoom,
                 fragment.paint.resources.as_deref(),
@@ -226,7 +224,9 @@ impl NinePieceImageGeometry {
             image,
             source_size,
             effective_zoom,
-            Self::ReflectionBounds(node, image),
+            node.PixelSnappedRect(&Self::ReflectionBounds(node, image)),
+            Default::default(),
+            node.pixel_snap_scale,
         );
         const PIECES: [NinePiece; 9] = [
             NinePiece::kTopLeft,
@@ -273,6 +273,7 @@ impl NinePieceImageGeometry {
                     document_image_container_key: document_image_container_key.clone(),
                     paint_shader: shader.clone(),
                     image_interpolation_quality: fragment.paint.style.image_interpolation_quality(),
+                    dynamic_range_limit: fragment.paint.style.dynamic_range_limit(),
                     clip_origin: Offset {
                         x: info.destination.x,
                         y: info.destination.y,

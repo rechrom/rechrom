@@ -1,4 +1,31 @@
 #![allow(non_snake_case)]
+// Source: text_iterator.cc:628-640,689-695. Keep table traversal and grouped
+// section ordering in their existing owning package, behind scalar results.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextIteratorTableFacts(
+    object: *const layoutng_assembly::internal::layout_object::LayoutObject,
+) -> (bool, bool, bool) {
+    let object = unsafe { &*object };
+    if object.IsTableCell() {
+        let cell = unsafe {
+            &*foundation::To::<crate::layout_table_cell::LayoutTableCell>(object as *const _)
+        };
+        let Some(table) = (unsafe { cell.Table().as_ref() }) else {
+            return (false, false, false);
+        };
+        (true, table.IsFirstCell(cell), table.IsInline())
+    } else if object.IsTableRow() {
+        let row = unsafe {
+            &*foundation::To::<crate::layout_table_row::LayoutTableRow>(object as *const _)
+        };
+        let Some(table) = (unsafe { row.Table().as_ref() }) else {
+            return (false, false, false);
+        };
+        (true, false, table.IsInline())
+    } else {
+        (false, false, false)
+    }
+}
 use crate::{layout_table_cell::LayoutTableCell, layout_table_section::LayoutTableSection};
 use foundation::{
     infinite_int_rect::InfiniteIntRect, paint_invalidation_reason::PaintInvalidationReason,
@@ -425,4 +452,32 @@ impl Traceable for LayoutTable {
         visitor.Trace(&self.cached_table_borders);
         self.base.Trace(visitor);
     }
+}
+
+// Source element_inner_text.cc:180-211. Table grouping remains on the original
+// LayoutTable/Section/Row owners, not DOM sibling guesses in the collector.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutInnerTextTableRowNeedsNewline(object: *const LayoutObject) -> bool {
+    let row = unsafe { &*foundation::To::<crate::layout_table_row::LayoutTableRow>(object) };
+    if row.Table().is_null() {
+        return false;
+    }
+    if !row.NextRow().is_null() {
+        return true;
+    }
+    let Some(section) = (unsafe { row.Section().as_ref() }) else {
+        return false;
+    };
+    let mut runner = section.NextSibling();
+    while let Some(object) = (unsafe { runner.as_ref() }) {
+        if let Some(section) =
+            (unsafe { foundation::DynamicTo::<LayoutTableSection>(object as *const _).as_ref() })
+        {
+            if section.NumRows() > 0 {
+                return true;
+            }
+        }
+        runner = object.NextSibling();
+    }
+    false
 }

@@ -1709,6 +1709,15 @@ impl<'device> SkCanvas<'device> {
             .image_info()
             .dimensions()
     }
+
+    /// Set the picture-device coordinate represented by root backing pixel
+    /// (0, 0). This is raster metadata; it does not change the canvas matrix.
+    pub(crate) fn setRasterPhaseOrigin(self: core::pin::Pin<&mut Self>, x: i32, y: i32) {
+        let this = unsafe { self.get_unchecked_mut() };
+        let mut device = this.topDevice();
+        unsafe { device.as_mut().base_mut() }
+            .set_raster_phase_origin(crate::src::core::SkPoint::SkIPoint::make(x, y));
+    }
 }
 // Source: src/core/SkCanvas.cpp:373-376
 impl<'device> SkCanvas<'device> {
@@ -2716,6 +2725,18 @@ impl<'device> SkCanvas<'device> {
             new_layer_mapping.layerMatrix(),
             layer_bounds.left(),
             layer_bounds.top(),
+        );
+        // The child backing pixel (0, 0) represents layer_bounds' origin in
+        // the parent device. Preserve the picture-coordinate phase used by
+        // analytic AA instead of restarting it at each temporary saveLayer.
+        let parent_phase = unsafe { prior_device.as_ref() }
+            .base()
+            .raster_phase_origin();
+        unsafe { new_ptr.as_mut().base_mut() }.set_inherited_raster_phase_origin(
+            crate::src::core::SkPoint::SkIPoint::make(
+                parent_phase.fX.wrapping_add(layer_bounds.left()),
+                parent_phase.fY.wrapping_add(layer_bounds.top()),
+            ),
         );
         if init_backdrop {
             crate::SkASSERT!(@source b"src/core/SkCanvas.cpp\0".as_ptr(), 1067; @condition b"!coverageOnly\0".as_ptr(); !coverage_only);

@@ -22,6 +22,14 @@ pub struct FontPlatformData {
     resource_face_index_: u32,
     resource_variations_: Vec<FontVariation>,
     pub text_size_: f32,
+    /// Scale used only while sampling and pixel-rounding platform metrics.
+    ///
+    /// Chromium's use-zoom-for-DSF path asks the platform strike at the
+    /// device-scaled text size, rounds ascent/descent/leading there, then
+    /// exposes the result in CSS coordinates. Rechrom keeps Layout in CSS
+    /// coordinates, so this retained factor performs the equivalent metric
+    /// conversion without scaling glyph advances or the viewport twice.
+    device_scale_factor_: f32,
     pub synthetic_bold_: bool,
     pub synthetic_italic_: bool,
     pub avoid_embedded_bitmaps_: bool,
@@ -42,6 +50,7 @@ impl Default for FontPlatformData {
             resource_face_index_: 0,
             resource_variations_: Vec::new(),
             text_size_: 0.0,
+            device_scale_factor_: 1.0,
             synthetic_bold_: false,
             synthetic_italic_: false,
             avoid_embedded_bitmaps_: false,
@@ -63,6 +72,7 @@ impl Clone for FontPlatformData {
             resource_face_index_: self.resource_face_index_,
             resource_variations_: self.resource_variations_.clone(),
             text_size_: self.text_size_,
+            device_scale_factor_: self.device_scale_factor_,
             synthetic_bold_: self.synthetic_bold_,
             synthetic_italic_: self.synthetic_italic_,
             avoid_embedded_bitmaps_: self.avoid_embedded_bitmaps_,
@@ -103,6 +113,7 @@ impl FontPlatformData {
         output
             .resource_variations_
             .clone_from(&self.resource_variations_);
+        output.device_scale_factor_ = self.device_scale_factor_;
         output
     }
 
@@ -132,6 +143,7 @@ impl FontPlatformData {
             resource_face_index_: 0,
             resource_variations_: resource_variations,
             text_size_: text_size,
+            device_scale_factor_: 1.0,
             synthetic_bold_: synthetic_bold,
             synthetic_italic_: synthetic_italic,
             avoid_embedded_bitmaps_: false,
@@ -147,6 +159,16 @@ impl FontPlatformData {
     // cpp: font_engine/fonts/font_platform_data.h:88-124
     pub fn size(&self) -> f32 {
         self.text_size_
+    }
+    pub fn DeviceScaleFactor(&self) -> f32 {
+        self.device_scale_factor_
+    }
+    pub fn SetDeviceScaleFactor(&mut self, scale: f32) {
+        self.device_scale_factor_ = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
     }
     pub fn SyntheticBold(&self) -> bool {
         self.synthetic_bold_
@@ -218,7 +240,7 @@ impl FontPlatformData {
                 | ((self.synthetic_bold_ as u32) << 1)
                 | (self.synthetic_italic_ as u32),
         );
-        h ^ self.text_size_.to_bits()
+        h ^ self.text_size_.to_bits() ^ self.device_scale_factor_.to_bits().rotate_left(13)
     }
 
     pub fn FontFamilyName(&self) -> String {
@@ -248,6 +270,11 @@ impl FontPlatformData {
             || (character == 0xa0 && self.RawFont().GlyphForCharacter(0x20).is_some())
     }
 
+    /// font_platform_data.cc:193-200.
+    pub fn HasSpaceInLigaturesOrKerning(&self, features: u32) -> bool {
+        unsafe { self.GetHarfBuzzFace().as_ref() }
+            .is_some_and(|face| face.HasSpaceInLigaturesOrKerning(features))
+    }
     pub fn GetHarfBuzzFace(&self) -> *mut HarfBuzzFace {
         let mut face = self.harfbuzz_face_.borrow_mut();
         if face.Get().is_null() {
@@ -261,6 +288,7 @@ impl PartialEq for FontPlatformData {
     fn eq(&self, other: &Self) -> bool {
         self.UniqueID() == other.UniqueID()
             && self.text_size_ == other.text_size_
+            && self.device_scale_factor_ == other.device_scale_factor_
             && self.is_hash_table_deleted_value_ == other.is_hash_table_deleted_value_
             && self.synthetic_bold_ == other.synthetic_bold_
             && self.synthetic_italic_ == other.synthetic_italic_

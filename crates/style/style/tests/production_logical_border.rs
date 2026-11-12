@@ -44,6 +44,22 @@ fn styles(s: &ComputedStyle) -> [S; 4] {
 }
 
 #[test]
+fn logical_side_shorthand_resolves_variable_width_style_and_color_atomically() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<style>@layer primer-brand{:root{--base-tone:#e4ebe6;--edge:max(1px,.0625rem);--tone:var(--base-tone)}}.card{border-block-end:var(--edge) solid var(--tone)}</style><div id=x class=card></div>",
+    );
+    update(&mut owner);
+    let x = computed_style(&owner, "x");
+    assert_eq!(*x.SpecifiedBorderBottomWidth(), 1);
+    assert_eq!(x.BorderBottomStyle(), S::kSolid);
+    assert_eq!(
+        x.BorderBottomColor().GetColor(),
+        Color::FromRGB(228, 235, 230)
+    );
+}
+
+#[test]
 fn all_logical_side_shorthands_map_to_computed_style_for_every_writing_direction() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut markup = std::string::String::new();

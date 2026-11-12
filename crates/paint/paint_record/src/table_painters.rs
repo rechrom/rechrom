@@ -12,9 +12,10 @@ use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_assembly::internal::paint_input::{BackgroundImageLayer, PaintBlendMode};
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
+use crate::box_fragment_painter::BackgroundForPainting;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
-use crate::geometry_mapper::MapRectToRoot;
+use crate::paint_auto_dark_mode::{ElementRole, GetImageAutoDarkMode, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, ResolveDocumentImageContainerKey};
 use crate::paint_info::PaintInfo;
@@ -420,7 +421,7 @@ fn ToPhysical(
             width: block_size,
             height: inline_size,
         },
-        WritingMode::kVerticalLr => PaintRect {
+        WritingMode::kVerticalLr | WritingMode::kSidewaysLr => PaintRect {
             x: block_start,
             y: if ltr {
                 inline_start
@@ -443,22 +444,17 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(cull_rect) = node.cull_rect else {
         return true;
     };
-    let mapped = MapRectToRoot(*rect, &node.transforms);
-    mapped.is_none_or(|mapped| Intersects(&mapped, &cull_rect))
+    Intersects(rect, &cull_rect)
 }
 
 // cpp: paint/table_painters.cc:292-309
-fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> &'a PaintImage {
+fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
     let fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let Some(resources) = fragment.paint.resources.as_ref() else {
-        panic!("table column image has no PaintResources");
-    };
-    let Some(found) = resources.images.iter().find(|image| image.id == id) else {
-        panic!("table column image resource is missing");
-    };
+    let resources = fragment.paint.resources.as_ref()?;
+    let found = resources.images.iter().find(|image| image.id == id)?;
     if found.width == 0
         || found.height == 0
         || found.resolution_scale <= 0.0
@@ -467,9 +463,9 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> &'a PaintImage {
             .BitmapPixels()
             .is_some_and(|pixels| pixels.len() != found.width as usize * found.height as usize * 4)
     {
-        panic!("table column image resource is invalid");
+        return None;
     }
-    found
+    Some(found)
 }
 
 // cpp: paint/table_painters.cc:311-431
@@ -482,8 +478,20 @@ fn PaintColumnStyle(
     cell_clip: &PaintRect,
 ) {
     let style = &column.style;
+    let table_fragment = table_node
+        .fragment
+        .as_deref()
+        .expect("table background requires a fragment");
+    let background_images = style.background_images();
+    let (background_color, paints_background_images) =
+        BackgroundForPainting(table_fragment, style, &background_images);
+    let background_images = if paints_background_images {
+        background_images.as_slice()
+    } else {
+        &[]
+    };
     if !style.visible()
-        || (style.background_color().alpha <= 0.0 && !style.has_background_images())
+        || (background_color.alpha <= 0.0 && background_images.is_empty())
         || !IsVisible(table_node, cell_clip)
     {
         return;
@@ -507,8 +515,7 @@ fn PaintColumnStyle(
         },
         table_node,
     );
-    let has_blended_layer = style
-        .background_images()
+    let has_blended_layer = background_images
         .iter()
         .any(|layer: &BackgroundImageLayer| layer.blend_mode != PaintBlendMode::kNormal);
     if has_blended_layer {
@@ -523,31 +530,33 @@ fn PaintColumnStyle(
             table_node,
         );
     }
-    if style.background_color().alpha > 0.0 {
+    if background_color.alpha > 0.0 {
         context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: info.phase,
                 node_id: column.node_id,
                 rect: *cell_clip,
-                color: style.background_color(),
+                color: background_color,
                 ..Default::default()
             },
             table_node,
         );
     }
-    for layer in style.background_images().iter().rev() {
-        if layer.shader.is_none() && layer.resource_id == 0 {
+    for layer in background_images.iter().rev() {
+        if !layer.can_render || (layer.shader.is_none() && layer.resource_id == 0) {
             continue;
         }
-        let table_fragment = table_node
-            .fragment
-            .as_deref()
-            .expect("table background requires a fragment");
         let image = if layer.shader.is_some() {
             None
         } else {
-            Some(FindImage(table_node, layer.resource_id))
+            let Some(image) = FindImage(table_node, layer.resource_id) else {
+                continue;
+            };
+            if info.IsPrivacyPreserving() && !image.is_cors_same_origin {
+                continue;
+            }
+            Some(image)
         };
         let image_orientation = image.map_or(image_resource::ImageOrientation::kDefault, |image| {
             if style.respect_image_orientation() {
@@ -637,22 +646,36 @@ fn PaintColumnStyle(
             let image = image.expect("bitmap column background requires image");
             let (source_width, source_height) =
                 image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
+            let source_rect = PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: source_width,
+                height: source_height,
+            };
+            let use_dark_mode_for_image = GetImageAutoDarkMode(
+                style,
+                table_fragment
+                    .paint
+                    .resources
+                    .as_deref()
+                    .map_or(1.0, |resources| resources.layout_zoom_factor),
+                *cell_clip,
+                source_rect,
+            )
+            .ShouldUseRasterDarkMode();
             context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawTiledImage,
                     phase: info.phase,
                     node_id: column.node_id,
                     rect: *cell_clip,
-                    source_rect: PaintRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: source_width,
-                        height: source_height,
-                    },
+                    source_rect,
                     tile_rect: tile,
                     resource_id: image.id,
                     image_interpolation_quality: style.image_interpolation_quality(),
+                    dynamic_range_limit: style.dynamic_range_limit(),
                     image_orientation,
+                    use_dark_mode_for_image,
                     document_image_container_key: document_image_container_key.clone(),
                     repeat_x,
                     repeat_y,
@@ -669,21 +692,35 @@ fn PaintColumnStyle(
             let image = image.expect("bitmap column background requires image");
             let (source_width, source_height) =
                 image_orientation.oriented_size(f64::from(image.width), f64::from(image.height));
+            let source_rect = PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: source_width,
+                height: source_height,
+            };
+            let use_dark_mode_for_image = GetImageAutoDarkMode(
+                style,
+                table_fragment
+                    .paint
+                    .resources
+                    .as_deref()
+                    .map_or(1.0, |resources| resources.layout_zoom_factor),
+                tile,
+                source_rect,
+            )
+            .ShouldUseRasterDarkMode();
             context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawImageRect,
                     phase: info.phase,
                     node_id: column.node_id,
                     rect: tile,
-                    source_rect: PaintRect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: source_width,
-                        height: source_height,
-                    },
+                    source_rect,
                     resource_id: image.id,
                     image_interpolation_quality: style.image_interpolation_quality(),
+                    dynamic_range_limit: style.dynamic_range_limit(),
                     image_orientation,
+                    use_dark_mode_for_image,
                     document_image_container_key,
                     background_repeat_x: resolved.rule_x,
                     background_repeat_y: resolved.rule_y,
@@ -740,6 +777,11 @@ fn DrawEdge(
     let horizontal =
         edge.IsInlineAxis() == (fragment.paint.writing_mode == WritingMode::kHorizontalTb);
     let style = edge.BorderStyle();
+    let color = InvertColorIfNeeded(
+        &fragment.paint.style,
+        edge.BorderColor(),
+        ElementRole::kBorder,
+    );
     let thickness = if horizontal { rect.height } else { rect.width };
     if matches!(style, BorderLineStyle::kDashed | BorderLineStyle::kDotted) {
         let line = if horizontal {
@@ -762,7 +804,7 @@ fn DrawEdge(
             phase: info.phase,
             node_id: fragment.node_id,
             rect: line,
-            color: edge.BorderColor(),
+            color,
             line_style: style,
             stroke_width: thickness,
             ..Default::default()
@@ -816,7 +858,7 @@ fn DrawEdge(
                     phase: info.phase,
                     node_id: fragment.node_id,
                     rect: band_rect,
-                    color: edge.BorderColor(),
+                    color,
                     line_style: style,
                     stroke_width: thickness,
                     ..Default::default()
@@ -832,7 +874,7 @@ fn DrawEdge(
             phase: info.phase,
             node_id: fragment.node_id,
             rect,
-            color: edge.BorderColor(),
+            color,
             line_style: style,
             stroke_width: thickness,
             ..Default::default()

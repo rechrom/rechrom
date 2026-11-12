@@ -7,7 +7,8 @@ use layoutng_assembly::{
     fragment_item::{FragmentItem, ItemType},
     inline_cursor::InlineCursor,
     internal::{
-        layout_object::LayoutObject, style_variant::ToParentStyleVariant, used_font::UsedFont,
+        layout_inline::LayoutInline, layout_object::LayoutObject,
+        style_variant::ToParentStyleVariant, used_font::UsedFont,
     },
 };
 use layoutng_style::style::{
@@ -325,11 +326,28 @@ impl DecorationBoxSynchronizer<'_> {
                         .PushDecoratingBoxes(&self.saved_decorating_boxes[..size]);
                     return size;
                 }
+                #[cfg(debug_assertions)]
+                unsafe {
+                    (&*layout_object).ShowLayoutTreeForThis();
+                }
                 panic!("unexpected applied text-decoration propagation tree");
             }
 
             if !unsafe { &*parent }.IsLayoutInline() {
                 return 0;
+            }
+            #[cfg(debug_assertions)]
+            unsafe {
+                let layout_inline = &*parent.cast::<LayoutInline>();
+                let grandparent = (&*parent).Parent();
+                debug_assert!(!grandparent.is_null());
+                let duplicated_parent_decorations = parent_decorations.len()
+                    == (&*grandparent).StyleRef().AppliedTextDecorations().len()
+                    && parent_style.GetTextDecorationLine() == TextDecorationLine::kNone;
+                if !duplicated_parent_decorations && !(&*layout_object).IsText() {
+                    debug_assert!(!layout_inline.ShouldCreateBoxFragment());
+                    debug_assert!(!layout_inline.HasInlineFragments());
+                }
             }
             item = std::ptr::null();
             layout_object = parent;

@@ -61,7 +61,9 @@ unsafe fn JS_GetOwnPropertyNamesInternal(
             }
             let mut key = 0;
             if JS_AtomIsArrayIndex(ctx, &mut key, atom) != 0 {
-                num_keys_count = num_keys_count.wrapping_add(1);
+                if flags & JS_CLONE_SKIP_INDICES == 0 {
+                    num_keys_count = num_keys_count.wrapping_add(1);
+                }
             } else if kind == JS_ATOM_KIND_STRING {
                 str_keys_count = str_keys_count.wrapping_add(1);
             } else {
@@ -71,11 +73,11 @@ unsafe fn JS_GetOwnPropertyNamesInternal(
     }
     if (*p).is_exotic() != 0 {
         if (*p).fast_array() != 0 {
-            if flags & JS_GPN_STRING_MASK != 0 {
+            if flags & JS_GPN_STRING_MASK != 0 && flags & JS_CLONE_SKIP_INDICES == 0 {
                 num_keys_count = num_keys_count.wrapping_add((*p).u.array.count);
             }
         } else if (*p).class_id as u32 == JS_CLASS_STRING {
-            if flags & JS_GPN_STRING_MASK != 0 {
+            if flags & JS_GPN_STRING_MASK != 0 && flags & JS_CLONE_SKIP_INDICES == 0 {
                 num_keys_count = num_keys_count.wrapping_add(js_string_obj_get_length(
                     ctx,
                     JS_MKPTR(JS_TAG_OBJECT, p.cast()),
@@ -165,6 +167,9 @@ unsafe fn JS_GetOwnPropertyNamesInternal(
         if (flags & JS_GPN_ENUM_ONLY == 0 || enumerable) && (flags >> kind) & 1 != 0 {
             let mut key = 0;
             let j = if JS_AtomIsArrayIndex(ctx, &mut key, atom) != 0 {
+                if flags & JS_CLONE_SKIP_INDICES != 0 {
+                    continue;
+                }
                 let j = num_index;
                 num_index += 1;
                 num_sorted = false;
@@ -184,7 +189,7 @@ unsafe fn JS_GetOwnPropertyNamesInternal(
     }
     if (*p).is_exotic() != 0 {
         if (*p).fast_array() != 0 || (*p).class_id as u32 == JS_CLASS_STRING {
-            if flags & JS_GPN_STRING_MASK != 0 {
+            if flags & JS_GPN_STRING_MASK != 0 && flags & JS_CLONE_SKIP_INDICES == 0 {
                 let len = if (*p).fast_array() != 0 {
                     (*p).u.array.count
                 } else {

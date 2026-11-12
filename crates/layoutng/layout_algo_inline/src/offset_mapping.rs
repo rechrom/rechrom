@@ -15,7 +15,7 @@ mod translated {
     use foundation::{
         DynamicTo, HeapHashMap, HeapVector, Member, String, Traceable, UChar, Visitor,
     };
-    use layoutng::internal::editing::forward::{EphemeralRange, Position};
+    use layoutng::internal::editing::forward::{EphemeralRange, Position, PositionAnchorType};
     use layoutng::internal::inline_node::InlineNode;
     use layoutng::internal::layout_block_flow::LayoutBlockFlow;
     use layoutng::internal::layout_node_metadata::Node;
@@ -106,6 +106,34 @@ mod translated {
             let node = self.AssociatedNode();
             assert!(!node.is_null());
             unsafe { &*node }
+        }
+
+        /// Source: core/layout/inline/offset_mapping.cc:24-43. Keep neighbor
+        /// anchors for atomic inline objects; text offsets are DOM UTF-16.
+        pub fn PositionForDOMOffset(&self, offset: u32) -> Position {
+            let Some(node) = (unsafe { self.AssociatedNode().as_ref() }) else {
+                return Position::default();
+            };
+            if node.IsTextNode() {
+                let text = DynamicTo::<LayoutText>(node.GetLayoutObject());
+                let Some(text) = (unsafe { text.as_ref() }) else {
+                    return Position::default();
+                };
+                return Position::new(
+                    node.InputId(),
+                    offset.min(text.OriginalTextLength()) as usize,
+                );
+            }
+            debug_assert!(offset <= 1);
+            Position::WithAnchor(
+                node.InputId(),
+                0,
+                if offset == 0 {
+                    PositionAnchorType::BeforeAnchor
+                } else {
+                    PositionAnchorType::AfterAnchor
+                },
+            )
         }
 
         // cpp: layoutng_inline/offset_mapping.h:59-78
@@ -259,8 +287,6 @@ mod translated {
             this: &OffsetMapping,
             position: &Position,
         ) -> Option<UChar>;
-        fn OffsetMappingGetFirstPosition(this: &OffsetMapping, offset: u32) -> Position;
-        fn OffsetMappingGetLastPosition(this: &OffsetMapping, offset: u32) -> Position;
         fn NGInlineFormattingContextOf(position: &Position) -> *mut LayoutBlockFlow;
     }
 
@@ -370,6 +396,132 @@ mod translated {
         }
 
         // cpp: layoutng_inline/offset_mapping.h:211-258
+        /// Source: core/layout/inline/offset_mapping.cc:47-61,278-299,405-413.
+        /// The resident caller supplies the borrowed anchor owner, avoiding a
+        /// second node index or a global lookup from neutral boundary values.
+        fn DOMOffsetForNode(node: &Node, position: &Position) -> Option<u32> {
+            if position.node_id != Some(node.InputId()) {
+                return None;
+            }
+            match (node.IsTextNode(), position.anchor) {
+                (_, PositionAnchorType::BeforeAnchor) => Some(0),
+                (true, PositionAnchorType::OffsetInAnchor) => u32::try_from(position.offset).ok(),
+                (true, PositionAnchorType::AfterAnchor) => {
+                    let text = DynamicTo::<LayoutText>(node.GetLayoutObject());
+                    Some(unsafe { text.as_ref() }?.OriginalTextLength())
+                }
+                (false, PositionAnchorType::AfterAnchor) => Some(1),
+                _ => None,
+            }
+        }
+        /// Source offset_mapping.cc:70-79,201-218. The resident caller lends
+        /// the canonical node so no global DOM lookup crosses this boundary.
+        pub fn GetInlineFormattingContextForNode(
+            node: &Node,
+            position: &Position,
+        ) -> *mut LayoutBlockFlow {
+            if position.node_id != Some(node.InputId()) {
+                return std::ptr::null_mut();
+            }
+            if !node.IsTextNode() {
+                if !matches!(
+                    position.anchor,
+                    PositionAnchorType::BeforeAnchor | PositionAnchorType::AfterAnchor
+                ) {
+                    return std::ptr::null_mut();
+                }
+                let Some(object) = (unsafe { node.GetLayoutObject().as_ref() }) else {
+                    return std::ptr::null_mut();
+                };
+                if !object.IsText() && !object.IsAtomicInline() {
+                    return std::ptr::null_mut();
+                }
+            }
+            let Some(offset) = Self::DOMOffsetForNode(node, position)
+                .and_then(|offset| i32::try_from(offset).ok())
+            else {
+                return std::ptr::null_mut();
+            };
+            let object = crate::internal::layout_object::AssociatedLayoutObjectOf(
+                node,
+                offset,
+                crate::internal::layout_object::LayoutObjectSide::kRemainingTextIfOnBoundary,
+            );
+            let Some(object) = (unsafe { object.as_ref() }) else {
+                return std::ptr::null_mut();
+            };
+            Self::GetInlineFormattingContextOfObject(object)
+        }
+        fn MappingIndex(units: &[OffsetMappingUnit], offset: u32) -> Option<usize> {
+            let end = units.partition_point(|unit| unit.DOMStart() <= offset);
+            let index = end.checked_sub(1)?;
+            (offset <= units[index].DOMEnd()).then_some(index)
+        }
+        pub fn GetTextContentOffsetForNode(&self, node: &Node, position: &Position) -> Option<u32> {
+            let offset = Self::DOMOffsetForNode(node, position)?;
+            let units = self.GetMappingUnitsForNode(node);
+            let index = Self::MappingIndex(units, offset)?;
+            Some(units[index].ConvertDOMOffsetToTextContent(offset))
+        }
+        /// Source: core/layout/inline/offset_mapping.cc:415-438,440-461.
+        pub fn NonCollapsedBoundaryForNode(
+            &self,
+            node: &Node,
+            position: &Position,
+            forward: bool,
+        ) -> Position {
+            let Some(offset) = Self::DOMOffsetForNode(node, position) else {
+                return Position::default();
+            };
+            let units = self.GetMappingUnitsForNode(node);
+            let Some(index) = Self::MappingIndex(units, offset) else {
+                return Position::default();
+            };
+            if forward {
+                for unit in &units[index..] {
+                    if unit.DOMEnd() > offset && !unit.IsCollapsed() {
+                        return unit.PositionForDOMOffset(offset.max(unit.DOMStart()));
+                    }
+                }
+            } else {
+                for unit in units[..=index].iter().rev() {
+                    if unit.DOMStart() < offset && !unit.IsCollapsed() {
+                        return unit.PositionForDOMOffset(offset.min(unit.DOMEnd()));
+                    }
+                }
+            }
+            Position::default()
+        }
+        /// Source: core/layout/inline/offset_mapping.cc:463-482.
+        pub fn IsAdjacentToNonCollapsedContentForNode(
+            &self,
+            node: &Node,
+            position: &Position,
+            before: bool,
+        ) -> bool {
+            let Some(offset) = Self::DOMOffsetForNode(node, position) else {
+                return false;
+            };
+            let search = if before {
+                offset
+            } else {
+                let Some(previous) = offset.checked_sub(1) else {
+                    return false;
+                };
+                previous
+            };
+            let units = self.GetMappingUnitsForNode(node);
+            let Some(index) = Self::MappingIndex(units, search) else {
+                return false;
+            };
+            let unit = &units[index];
+            !unit.IsCollapsed()
+                && if before {
+                    offset < unit.DOMEnd()
+                } else {
+                    offset > unit.DOMStart()
+                }
+        }
         pub fn GetTextContentOffset(&self, position: &Position) -> Option<u32> {
             unsafe { OffsetMappingGetTextContentOffset(self, position) }
         }
@@ -389,10 +541,37 @@ mod translated {
             unsafe { OffsetMappingGetCharacterBefore(self, position) }
         }
         pub fn GetFirstPosition(&self, offset: u32) -> Position {
-            unsafe { OffsetMappingGetFirstPosition(self, offset) }
+            // Source: core/layout/inline/offset_mapping.cc:492-513. Generated
+            // content has no source node and must not become a DOM anchor.
+            let index = self
+                .units_
+                .partition_point(|unit| unit.TextContentEnd() < offset);
+            for unit in &self.units_[index..] {
+                if unit.TextContentStart() > offset {
+                    break;
+                }
+                if !unit.AssociatedNode().is_null() {
+                    return unit
+                        .PositionForDOMOffset(unit.ConvertTextContentToFirstDOMOffset(offset));
+                }
+            }
+            Position::default()
         }
         pub fn GetLastPosition(&self, offset: u32) -> Position {
-            unsafe { OffsetMappingGetLastPosition(self, offset) }
+            // Source: core/layout/inline/offset_mapping.cc:560-578.
+            let end = self
+                .units_
+                .partition_point(|unit| unit.TextContentStart() <= offset);
+            for unit in self.units_[..end].iter().rev() {
+                if unit.TextContentEnd() < offset {
+                    break;
+                }
+                if !unit.AssociatedNode().is_null() {
+                    return unit
+                        .PositionForDOMOffset(unit.ConvertTextContentToLastDOMOffset(offset));
+                }
+            }
+            Position::default()
         }
 
         // cpp: layoutng_inline/offset_mapping.cc:233-254

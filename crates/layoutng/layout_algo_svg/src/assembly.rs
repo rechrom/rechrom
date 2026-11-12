@@ -64,6 +64,20 @@ fn CreateSvgObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObject
         NodeKind::kSvgHiddenContainer => {
             MakeGarbageCollected(LayoutSVGHiddenContainer::new(element)).cast()
         }
+        NodeKind::kSvgResourceGradient | NodeKind::kSvgResourcePattern => MakeGarbageCollected(
+            crate::layout_svg_resource_paint_server::LayoutSVGResourcePaintServer::new(
+                element,
+                node.InputKind() == NodeKind::kSvgResourcePattern,
+            ),
+        )
+        .cast(),
+        NodeKind::kSvgResourceFilter | NodeKind::kSvgResourceMarker => MakeGarbageCollected(
+            crate::layout_svg_resource_auxiliary::LayoutSVGResourceAuxiliary::new(
+                element,
+                node.InputKind() == NodeKind::kSvgResourceFilter,
+            ),
+        )
+        .cast(),
         NodeKind::kSvgResourceMasker => {
             MakeGarbageCollected(LayoutSVGResourceMasker::new(element)).cast()
         }
@@ -135,9 +149,16 @@ fn LayoutSvgText(
 fn UpdateSvgObjectLayout(object: &mut LayoutObject, info: &SVGLayoutInfo) -> SVGLayoutResult {
     let _trace = browser_tracing::span("layout", "layout_algo_svg.ObjectLayout");
     match object.RuntimeClass() {
+        LayoutObjectClass::SvgResourceAuxiliary => unsafe {
+            &mut *(object as *mut LayoutObject)
+                .cast::<crate::layout_svg_resource_auxiliary::LayoutSVGResourceAuxiliary>()
+        }
+        .UpdateSVGLayout(info),
+
         LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceClipper
-        | LayoutObjectClass::SvgResourceMasker => {
+        | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer => {
             unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGHiddenContainer>() }
                 .UpdateSVGLayout(info)
         }
@@ -171,6 +192,18 @@ fn SvgIsChildAllowed(
     style: &ComputedStyle,
 ) -> bool {
     match object.RuntimeClass() {
+        LayoutObjectClass::SvgResourceAuxiliary => unsafe {
+            &*(object as *const LayoutObject)
+                .cast::<crate::layout_svg_resource_auxiliary::LayoutSVGResourceAuxiliary>()
+        }
+        .IsChildAllowed(child, style),
+
+        LayoutObjectClass::SvgResourcePaintServer => unsafe {
+            &*(object as *const LayoutObject)
+                .cast::<crate::layout_svg_resource_paint_server::LayoutSVGResourcePaintServer>()
+        }
+        .IsChildAllowed(child, style),
+
         LayoutObjectClass::SvgGroup
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
@@ -210,13 +243,84 @@ fn SvgIsChildAllowed(
 // cpp: layoutng_svg/assembly.h:2-2
 // cpp: layoutng_svg/assembly.cc:107-120
 pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
+    assembly.objects.svg_context_reference_box = Some(crate::svg_resources::ObjectBoundingBox);
+    assembly.objects.svg_marker_paints = Some(|object| {
+        if object.RuntimeClass() != LayoutObjectClass::SvgShape {
+            return Vec::new();
+        }
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.MarkerPaints()
+    });
     assembly.algorithms.svg_support.performance_owner = Some("layout_algo_svg");
+    let svg = &mut assembly.algorithms.svg_support;
+    svg.hit_test_reference_box = Some(crate::svg_resources::ReferenceBoxForEffects);
+    svg.hit_test_resolve_clip = Some(|tree, object, reference| {
+        crate::svg_resources::ResolveClipPathTarget(tree, object, reference)
+            .map_or(std::ptr::null(), |clip| {
+                clip as *const _ as *const LayoutObject
+            })
+    });
+    svg.hit_test_clip_units = Some(|object| {
+        assert!(object.RuntimeClass() == LayoutObjectClass::SvgResourceClipper);
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGResourceClipper>() }
+            .UsesObjectBoundingBoxUnits()
+    });
+    svg.hit_test_clip_transform = Some(|object| {
+        assert!(object.RuntimeClass() == LayoutObjectClass::SvgResourceClipper);
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGResourceClipper>() }
+            .ElementTransformIncludingMotion()
+    });
+    svg.hit_test_path = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.GetPath()
+    });
+    svg.hit_test_shape_empty = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.IsShapeEmpty()
+    });
+    svg.hit_test_fill_geometry = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.FillGeometry()
+    });
+    svg.hit_test_stroke_geometry = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.StrokeGeometry()
+    });
+    svg.hit_test_stroke_bounds = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }
+            .HitTestStrokeBoundingBox()
+    });
+    svg.hit_test_stroke_width = Some(|object| {
+        assert!(object.IsSVGShape());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.StrokeWidth()
+    });
+    svg.hit_test_object_bounds_valid = Some(crate::svg_resources::IsObjectBoundingBoxValid);
+    svg.hit_test_viewport = Some(|object| {
+        let viewport =
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGViewportContainer>() };
+        assert!(object.IsSVGViewportContainer());
+        (viewport.Viewport(), viewport.LocalSVGTransform())
+    });
+    svg.hit_test_root_transform = Some(|object| {
+        assert!(object.IsSVGRoot());
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }.ContentTransform()
+    });
+    svg.hit_test_filtered_bounds = Some(|tree, object| {
+        crate::svg_resources::ApplyFiltersToRect(
+            tree,
+            object,
+            crate::svg_resources::DecoratedBoundingBox(object),
+        )
+    });
+    svg.hit_test_has_paint_server = Some(crate::svg_resources::HasPaintServer);
     layoutng_assembly::RegisterSvgRootChildren(SvgRootChildren);
     RegisterSvgInlineTextFontVirtuals(SvgInlineTextScaledFont, SvgInlineTextScalingFactor);
     assembly.objects.svg = Some(CreateSvgObject);
     assembly.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
     assembly.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);
     assembly.objects.svg_group_add_child = Some(SvgGroupAddChild);
+    assembly.objects.svg_shape_style_did_change =
+        Some(crate::layout_svg_shape::SvgShapeStyleDidChange);
     assembly.objects.svg_container_style_did_change =
         Some(crate::layout_svg_group::SvgContainerStyleDidChange);
     assembly.objects.svg_is_child_allowed = Some(SvgIsChildAllowed);
@@ -231,6 +335,41 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.objects.svg_root_add_child = Some(SvgRootAddChild);
     assembly.objects.svg_root_remove_child = Some(SvgRootRemoveChild);
     assembly.objects.svg_root_children = Some(SvgRootChildren);
+    assembly.algorithms.svg_support.object_bounding_box =
+        Some(crate::svg_resources::ObjectBoundingBox);
+    assembly
+        .algorithms
+        .svg_support
+        .resize_observer_bbox_diagnostics =
+        Some(crate::svg_resources::ResizeObserverBBoxDiagnostics);
+    assembly.algorithms.svg_support.stroke_bounding_box =
+        Some(crate::svg_resources::StrokeBoundingBox);
+    assembly.algorithms.svg_support.retained_shape = Some(|object| {
+        if !object.IsSVGShape() {
+            return None;
+        }
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.RetainedShape()
+    });
+    assembly
+        .algorithms
+        .svg_support
+        .foreign_object_physical_location = Some(|object| {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGForeignObject>() }
+            .PhysicalLocation()
+    });
+    assembly.algorithms.svg_support.decorated_bounding_box =
+        Some(crate::svg_resources::DecoratedBoundingBox);
+    assembly.algorithms.svg_support.root_add_visual_overflow = Some(|object| {
+        unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }
+            .AddSVGContentsVisualOverflow()
+    });
+    assembly
+        .algorithms
+        .svg_support
+        .root_visual_overflow_including_filters = Some(|object| {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }
+            .VisualOverflowRectIncludingFilters()
+    });
     assembly.algorithms.svg_support.update_object = Some(UpdateSvgObjectLayout);
     assembly.algorithms.svg_support.local_to_parent_transform = Some(SvgLocalToParentTransform);
     assembly.algorithms.svg_support.paint_geometry = Some(SvgPaintGeometry);
@@ -243,6 +382,8 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     assembly.algorithms.svg_support.root_sizing_info = Some(QuerySvgRootSizing);
     assembly.algorithms.svg_support.set_root_container_size =
         Some(crate::layout_svg_root::SvgRootSetContainerSize);
+    assembly.algorithms.svg_support.set_root_container_scale =
+        Some(crate::layout_svg_root::SvgRootSetContainerScale);
     assembly.algorithms.svg_support.layout_root = Some(SvgRootLayout);
     assembly.algorithms.svg_support.compute_scaled_font = Some(ComputeScaledSvgFont);
     assembly.algorithms.svg_support.screen_font_scale = Some(CalculateScreenFontSizeScalingFactor);
@@ -255,6 +396,12 @@ fn SvgLocalToParentTransform(
     object: &LayoutObject,
 ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
     match object.RuntimeClass() {
+        LayoutObjectClass::SvgResourceAuxiliary => unsafe {
+            &*(object as *const LayoutObject)
+                .cast::<crate::layout_svg_resource_auxiliary::LayoutSVGResourceAuxiliary>()
+        }
+        .LocalToSVGParentTransform(),
+
         LayoutObjectClass::SvgViewportContainer => {
             unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGViewportContainer>() }
                 .LocalToSVGParentTransform()
@@ -263,10 +410,20 @@ fn SvgLocalToParentTransform(
             unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGGroup>() }
                 .LocalToSVGParentTransform()
         }
+        LayoutObjectClass::SvgForeignObject => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGForeignObject>() }
+                .LocalToSVGParentTransform()
+        }
         LayoutObjectClass::SvgRoot => {
             unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }.ContentTransform()
         }
-        _ => object.LocalToSVGParentTransformBase(),
+        LayoutObjectClass::SvgShape
+        | LayoutObjectClass::SvgText
+        | LayoutObjectClass::SvgHiddenContainer
+        | LayoutObjectClass::SvgResourceClipper
+        | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer => crate::svg_viewport::LocalTransform(object),
+        _ => foundation::blink_geometry::transforms::affine_transform::AffineTransform::default(),
     }
 }
 fn SvgPaintGeometry(
@@ -277,6 +434,18 @@ fn SvgPaintGeometry(
     Option<foundation::gfx::RectF>,
 ) {
     match object.RuntimeClass() {
+        LayoutObjectClass::SvgShape => (
+            None,
+            None,
+            Some(crate::svg_resources::DecoratedBoundingBox(object)),
+        ),
+        LayoutObjectClass::SvgResourceAuxiliary => (
+            Some(crate::svg_viewport::Matrix(SvgLocalToParentTransform(
+                object,
+            ))),
+            None,
+            Some(crate::svg_container_layout::VisualRect(object)),
+        ),
         LayoutObjectClass::SvgViewportContainer => {
             let viewport =
                 unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGViewportContainer>() };

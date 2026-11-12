@@ -378,6 +378,11 @@ impl<B: PictureLayerImplTypes> super::tile_based_layer_impl::TileBasedLayerConte
 /// property/viewport/lifecycle fields remain in the separate resident borrow.
 /// Methods are native source queries/callbacks, never cached decisions.
 pub trait PictureLayerReadHost<B: PictureLayerImplTypes> {
+    fn ResourceIdForUIResource(
+        &self,
+        id: super::layer_tree_impl::UIResourceId,
+    ) -> super::layer_tree_impl::ResourceId;
+    fn GetUIResourceSize(&self, id: super::layer_tree_impl::UIResourceId) -> super::geometry::Size;
     fn GetMSAASampleCountForRaster(
         &self,
         list:&<<B as PictureLayerTilingTypes>::RasterSource as PictureRasterSource>::DisplayItemList,

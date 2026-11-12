@@ -117,6 +117,12 @@ impl ModuleResources {
             None
         };
         if self.entries.borrow().contains_key(&key) {
+            browser_tracing::instant_with_text(
+                "javascript",
+                "ModuleFetchReused",
+                url,
+                &[("fetch_tree", fetch_tree as u8 as f64)],
+            );
             if let Some((module_url, dependencies)) = prepared {
                 for dependency in dependencies {
                     self.StartModuleTree(&dependency, &module_url);
@@ -124,6 +130,12 @@ impl ModuleResources {
             }
             return;
         }
+        browser_tracing::instant_with_text(
+            "javascript",
+            "ModuleFetchQueued",
+            url,
+            &[("fetch_tree", fetch_tree as u8 as f64)],
+        );
         let pending = self.resources.Start(URLRequest {
             url: url.to_owned(),
             referrer: referrer.to_owned(),
@@ -207,6 +219,15 @@ impl ModuleResources {
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
     ) -> ModuleState {
+        browser_tracing::instant_with_text(
+            "javascript",
+            "ModuleCompileQueued",
+            &url,
+            &[
+                ("source_bytes", source.len() as f64),
+                ("fetch_tree", fetch_tree as u8 as f64),
+            ],
+        );
         // Capture resolution at the original synchronous compilation point.
         // A later import map must not rebind requests while the worker runs.
         let import_map = self.import_map.borrow().clone();
@@ -279,9 +300,17 @@ impl ModuleResources {
         realm: &JavaScriptRealm,
         budget: usize,
     ) -> usize {
-        let count = budget.min(self.work.borrow().len());
+        // Chromium starts sibling module requests in parallel and each ready
+        // fetch completion remains an independently queued task.  Polling an
+        // earlier still-pending request must therefore not hide a ready sibling
+        // behind it.  Examine the work that existed at turn start, but admit at
+        // most `budget` completed fetch/compile steps as owner tasks.
+        let count = self.work.borrow().len();
         let mut progressed = 0;
         for _ in 0..count {
+            if progressed == budget {
+                break;
+            }
             let key = self.work.borrow_mut().pop_front().unwrap();
             let Some(state) = self.entries.borrow_mut().remove(&key) else {
                 continue;
@@ -373,10 +402,25 @@ impl ModuleResources {
                     },
                     JavaScriptModuleCompilationPoll::Ready(Err(error)) => {
                         progressed += 1;
+                        browser_tracing::instant_with_text(
+                            "javascript",
+                            "ModuleCompileFailed",
+                            &url,
+                            &[("source_bytes", source.len() as f64)],
+                        );
                         ModuleState::Failed(ModuleLoadError::Compilation(error))
                     }
                     JavaScriptModuleCompilationPoll::Ready(Ok(compilation)) => {
                         progressed += 1;
+                        browser_tracing::instant_with_text(
+                            "javascript",
+                            "ModuleCompileReady",
+                            &url,
+                            &[
+                                ("source_bytes", source.len() as f64),
+                                ("requests", compilation.requests.len() as f64),
+                            ],
+                        );
                         self.PrepareCompilation(
                             url,
                             source,
@@ -393,6 +437,15 @@ impl ModuleResources {
                 self.work.borrow_mut().push_back(key.clone());
             }
             self.entries.borrow_mut().insert(key, next);
+        }
+        // URL/worker wakeups may have been coalesced before this bounded owner
+        // turn. A consumed completion always posts the follow-up owner task:
+        // when `work` became empty, that task is what observes the root's
+        // PendingScript transition to ready and executes it. A turn that only
+        // observes pending work does not repost, so this cannot busy-poll the
+        // network or compilation worker.
+        if progressed != 0 {
+            self.resources.RequestWake();
         }
         progressed
     }
@@ -437,7 +490,19 @@ impl ModuleResources {
             .unwrap_or_else(|| Err(Self::ResourceError("", "module graph is not ready")))?;
         let entries = self.entries.borrow();
         match entries.get(&key) {
-            Some(ModuleState::Prepared(module)) => Ok(module.source.clone()),
+            Some(ModuleState::Prepared(module)) => {
+                browser_tracing::instant_with_text(
+                    "javascript",
+                    "ModuleGraphReady",
+                    &module.source.url,
+                    &[
+                        ("script_node", id as f64),
+                        ("source_bytes", module.source.source.len() as f64),
+                        ("direct_dependencies", module.dependencies.len() as f64),
+                    ],
+                );
+                Ok(module.source.clone())
+            }
             _ => unreachable!("a successful graph has a prepared root"),
         }
     }
@@ -467,6 +532,11 @@ impl ModuleResources {
     #[cfg(test)]
     pub(crate) fn ModuleEntryCountForTesting(&self) -> usize {
         self.entries.borrow().len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn SetWakeCallbackForTesting(&self, callback: url_loader::URLWakeCallback) {
+        self.resources.SetWakeCallback(callback);
     }
 
     // cpp: browser/browser.cc:1558-1573

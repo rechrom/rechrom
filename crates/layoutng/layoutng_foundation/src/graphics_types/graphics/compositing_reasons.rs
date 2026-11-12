@@ -444,9 +444,7 @@ impl CompositingReason {
                 "Has a will-change: backdrop-filter compositing hint."
             }
             Self::kWillChangeClipPath => "Has a will-change: clip-path compositing hint.",
-            Self::kWillChangeMixBlendMode => {
-                "Has a will-change: mix-blend-mode compositing hint."
-            }
+            Self::kWillChangeMixBlendMode => "Has a will-change: mix-blend-mode compositing hint.",
             Self::kWillChangeMask => "Has a will-change: mask compositing hint.",
             Self::kWillChangeOther => {
                 "Has a will-change compositing hint other than transform, opacity, filter and backdrop-filter."
@@ -484,9 +482,7 @@ impl CompositingReason {
             Self::kCanvas => {
                 "Is an accelerated canvas, or is a display list backed canvas that was promoted to a layer based on a performance heuristic."
             }
-            Self::kCanvasChild => {
-                "Is the direct child of a canvas with 'layoutSubtree' attribute."
-            }
+            Self::kCanvasChild => "Is the direct child of a canvas with 'layoutSubtree' attribute.",
             Self::kPlugin => "Is an accelerated plugin.",
             Self::kScrollbar => "Is an accelerated scrollbar.",
             Self::kLinkHighlight => "Is a tap highlight on a link.",
@@ -562,7 +558,10 @@ mod tests {
         assert_eq!(ShortNames(reasons), vec!["StickyPosition", "Canvas"]);
         assert_eq!(
             Descriptions(reasons),
-            vec!["Is sticky position.", "Is an accelerated canvas, or is a display list backed canvas that was promoted to a layer based on a performance heuristic."]
+            vec![
+                "Is sticky position.",
+                "Is an accelerated canvas, or is a display list backed canvas that was promoted to a layer based on a performance heuristic."
+            ]
         );
         assert_eq!(ToString(reasons), "StickyPosition,Canvas");
         assert_eq!(reasons.to_string(), "StickyPosition,Canvas");

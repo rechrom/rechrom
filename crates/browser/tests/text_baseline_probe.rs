@@ -1,8 +1,13 @@
 use browser::page::{Page, PageClient};
 use std::{cell::RefCell, rc::Rc};
 
-struct Client;
-impl PageClient for Client {}
+#[derive(Default)]
+struct Client(browser::page::PageChromeState);
+impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        self.0.Apply(effect);
+    }
+}
 
 fn open(url: &str, width: u32, height: u32, scale: f64) -> Page {
     let options = url_loader::DefaultURLLoaderOptions::default();
@@ -20,7 +25,7 @@ fn open(url: &str, width: u32, height: u32, scale: f64) -> Page {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         None,
-        Some(Rc::new(RefCell::new(Client))),
+        Some(Rc::new(RefCell::new(Client::default()))),
     );
     page.Open(url, 16384, 4096).unwrap();
     while page.IsLoading() {

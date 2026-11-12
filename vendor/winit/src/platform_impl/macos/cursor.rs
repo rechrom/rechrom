@@ -50,12 +50,22 @@ pub(crate) fn cursor_from_image(cursor: &CursorImage) -> Retained<NSCursor> {
     let bitmap_data = unsafe { slice::from_raw_parts_mut(bitmap.bitmapData(), cursor.rgba.len()) };
     bitmap_data.copy_from_slice(&cursor.rgba);
 
-    let image = unsafe {
-        NSImage::initWithSize(NSImage::alloc(), NSSize::new(width.into(), height.into()))
-    };
+    // Chromium ui/base/cocoa/cursor_utils.mm::CustomNSCursor: bitmap pixels
+    // remain at their native resolution, while both representations use the
+    // same floored logical size and hotspot.
+    let scale = f64::from(cursor.image_scale_factor);
+    let logical_size = NSSize::new(
+        (f64::from(width) / scale).floor(),
+        (f64::from(height) / scale).floor(),
+    );
+    unsafe { bitmap.setSize(logical_size) };
+    let image = unsafe { NSImage::initWithSize(NSImage::alloc(), logical_size) };
     unsafe { image.addRepresentation(&bitmap) };
 
-    let hotspot = NSPoint::new(cursor.hotspot_x as f64, cursor.hotspot_y as f64);
+    let hotspot = NSPoint::new(
+        (f64::from(cursor.hotspot_x) / scale).floor(),
+        (f64::from(cursor.hotspot_y) / scale).floor(),
+    );
 
     NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, hotspot)
 }

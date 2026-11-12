@@ -187,3 +187,13 @@ impl From<ModifiersState> for crate::keyboard::ModifiersState {
         to_mods
     }
 }
+
+impl From<ModifiersState> for crate::event::Modifiers {
+    fn from(mods: ModifiersState) -> Self {
+        Self {
+            state: mods.into(),
+            caps_lock: Some(mods.caps_lock),
+            pressed_mods: Default::default(),
+        }
+    }
+}

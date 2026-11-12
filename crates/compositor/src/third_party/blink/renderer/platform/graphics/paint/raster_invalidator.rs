@@ -21,6 +21,7 @@ struct PaintChunkInfo<M: RasterInvalidationTypes> {
     #[cfg(debug_assertions)]
     id: <M::Chunk as RasterInvalidationChunk<M>>::Id,
     bounds_in_layer: Rect,
+    opaque_backing_rects_in_layer: Vec<Rect>,
     chunk_to_layer_clip: FloatClipRect,
     chunk_to_layer_transform: M::Transform,
 }
@@ -33,11 +34,23 @@ impl<M: RasterInvalidationTypes> PaintChunkInfo<M> {
         m: &M,
     ) -> Self {
         let chunk = artifact.Chunk(index);
+        let mut opaque_backing_rects_in_layer = Vec::new();
+        for item in artifact.DisplayItemsInChunk(index) {
+            if !item.DrawsContent() || item.RectKnownToBeOpaque().IsEmpty() {
+                continue;
+            }
+            let visual = clip_rect(mapper.MapVisualRect(item.VisualRect()), bounds);
+            if visual.IsEmpty() {
+                continue;
+            }
+            opaque_backing_rects_in_layer.push(visual);
+        }
         let mut result = Self {
             index_in_paint_artifact: index,
             #[cfg(debug_assertions)]
             id: chunk.id(),
             bounds_in_layer: clip_rect(mapper.MapVisualRect(chunk.drawable_bounds()), bounds),
+            opaque_backing_rects_in_layer,
             chunk_to_layer_clip: *mapper.ClipRect(),
             chunk_to_layer_transform: mapper.Transform().clone(),
         };
@@ -57,6 +70,7 @@ impl<M: RasterInvalidationTypes> PaintChunkInfo<M> {
             #[cfg(debug_assertions)]
             id: _artifact.Chunk(index).id(),
             bounds_in_layer: old.bounds_in_layer,
+            opaque_backing_rects_in_layer: old.opaque_backing_rects_in_layer.clone(),
             chunk_to_layer_clip: old.chunk_to_layer_clip,
             chunk_to_layer_transform: old.chunk_to_layer_transform.clone(),
         }
@@ -85,6 +99,40 @@ fn to_float(rect: Rect) -> RectF {
         rect.width as f32,
         rect.height as f32,
     )
+}
+fn find_smallest_local_opaque_backing(
+    backings: &[Rect],
+    rect: Rect,
+    layer_bounds: Size,
+) -> Option<RoundedOpaqueBacking> {
+    let full_layer = Rect::new(0, 0, layer_bounds.width(), layer_bounds.height());
+    let outer = backings
+        .iter()
+        .copied()
+        // A layer-filling background is not the local rounded backing whose
+        // antialias coverage is shared with the changed descendant.
+        .filter(|backing| *backing != full_layer && backing.Contains(rect))
+        .min_by_key(|backing| i64::from(backing.width) * i64::from(backing.height))?;
+    let outer_area = i64::from(outer.width) * i64::from(outer.height);
+    let rect_area = i64::from(rect.width) * i64::from(rect.height);
+    let has_overlapping_sibling = backings.iter().copied().any(|candidate| {
+        if candidate == outer || candidate == full_layer {
+            return false;
+        }
+        let candidate_area = i64::from(candidate.width) * i64::from(candidate.height);
+        if candidate_area * 2 < outer_area || candidate_area > outer_area * 2 {
+            return false;
+        }
+        let mut intersection = candidate;
+        intersection.Intersect(rect);
+        !intersection.IsEmpty()
+            && i64::from(intersection.width) * i64::from(intersection.height) * 5
+                >= rect_area * 4
+    });
+    Some(RoundedOpaqueBacking {
+        rect: outer,
+        has_overlapping_sibling,
+    })
 }
 impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
     pub fn new(m: &M) -> Self {
@@ -259,6 +307,20 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
         callback: &mut dyn RasterInvalidationCallback,
     ) {
         let mut mapper = ChunkToLayerMapper::new(m, &self.layer_state_, self.layer_offset_);
+        // Partial raster starts from the previous frame's pixels. Preserve
+        // the old opaque backing metadata across cached/moved chunks so a
+        // changed descendant in a separate rounded chunk can replay the
+        // smallest enclosing backing with identical antialias coverage.
+        let old_opaque_backings = if offset_changed {
+            Vec::new()
+        } else {
+            self.old_paint_chunks_info_
+                .iter()
+                .flat_map(|info| info.opaque_backing_rects_in_layer.iter().copied())
+                .map(|rect| clip_rect(rect, self.layer_bounds_))
+                .filter(|rect| !rect.IsEmpty())
+                .collect::<Vec<_>>()
+        };
         let mut matched = vec![false; self.old_paint_chunks_info_.len()];
         let mut old_index = 0;
         let translation = 1e-2f32;
@@ -386,6 +448,7 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
                         let mut sink = RasterInvalidatorSink {
                             owner: self,
                             callback,
+                            old_opaque_backings: &old_opaque_backings,
                         };
                         DisplayItemRasterInvalidator::new(
                             &mut sink,
@@ -605,10 +668,18 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
 struct RasterInvalidatorSink<'a, M: RasterInvalidationTypes> {
     owner: &'a mut RasterInvalidator<M>,
     callback: &'a mut dyn RasterInvalidationCallback,
+    old_opaque_backings: &'a [Rect],
 }
 impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSink<'_, M> {
     fn ClipByLayerBounds(&self, rect: Rect) -> Rect {
         clip_rect(rect, self.owner.layer_bounds_)
+    }
+    fn FindRoundedOpaqueBacking(&self, rect: Rect) -> Option<RoundedOpaqueBacking> {
+        find_smallest_local_opaque_backing(
+            self.old_opaque_backings,
+            rect,
+            self.owner.layer_bounds_,
+        )
     }
     fn AddRasterInvalidation(
         &mut self,
@@ -619,6 +690,21 @@ impl<M: RasterInvalidationTypes> RasterInvalidationSink for RasterInvalidatorSin
     ) {
         self.owner
             .AddRasterInvalidation(rect, id, reason, old, self.callback)
+    }
+    fn AddRasterInvalidationForFullReplay(
+        &mut self,
+        rect: Rect,
+        inner: Rect,
+        replay_rect: Rect,
+        id: DisplayItemClientId,
+        reason: Reason,
+        old: ClientIsOldOrNew,
+    ) {
+        self.callback
+            .InvalidateRectForFullReplay(rect, inner, replay_rect);
+        if self.owner.tracking_.is_some() {
+            self.owner.TrackRasterInvalidation(rect, id, reason, old);
+        }
     }
 }
 #[cfg(test)]
@@ -717,6 +803,37 @@ mod tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn rounded_backing_search_ignores_layer_filling_background() {
+        let bounds = Size::new(100, 100);
+        let changed = Rect::new(10, 20, 30, 40);
+        let full_layer = Rect::new(0, 0, 100, 100);
+        assert_eq!(
+            find_smallest_local_opaque_backing(&[full_layer], changed, bounds),
+            None
+        );
+        let local = Rect::new(9, 19, 32, 42);
+        assert_eq!(
+            find_smallest_local_opaque_backing(&[full_layer, local], changed, bounds),
+            Some(RoundedOpaqueBacking {
+                rect: local,
+                has_overlapping_sibling: false,
+            })
+        );
+        let sibling = Rect::new(7, 20, 32, 40);
+        assert_eq!(
+            find_smallest_local_opaque_backing(
+                &[full_layer, local, sibling],
+                changed,
+                bounds,
+            ),
+            Some(RoundedOpaqueBacking {
+                rect: local,
+                has_overlapping_sibling: true,
+            })
+        );
     }
 
     fn run(

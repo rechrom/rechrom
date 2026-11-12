@@ -544,6 +544,83 @@ fn InputGeometry(box_: &LayoutBox) -> ShapeOutsideGeometry {
         .expect("shape outside geometry")
 }
 
+// Source: shape.cc:454-493. Layout owns logical scanning, row intervals and
+// shape-margin policy. The injected service performs only the exact AA draw.
+fn CreatePathShape(
+    box_: &LayoutBox,
+    width: f32,
+    height: f32,
+    writing_mode: WritingMode,
+    margin: f32,
+) -> Box<dyn Shape> {
+    let value =
+        unsafe { box_.StyleRef().ShapeOutside().as_ref() }.expect("resident shape-outside owner");
+    let path = value.Shape().GetPath(
+        &gfx::RectF::new(gfx::PointF::default(), gfx::SizeF::new(width, height)),
+        box_.StyleRef().EffectiveZoom(),
+        1.,
+    );
+    let bounds = path.Bounds();
+    let size = gfx::Size::new(
+        bounds.right().ceil().max(0.) as i32,
+        bounds.bottom().ceil().max(0.) as i32,
+    );
+    let service = layoutng_geometry::shape_coverage::CurrentShapeCoverageRasterizer()
+        .expect("LayoutEngine constructor must install its shape coverage service");
+    let coverage = service.Rasterize(&path, size);
+    let mut logical = size;
+    if !IsHorizontalWritingMode(writing_mode) {
+        logical = gfx::Size::new(size.height(), size.width());
+    }
+    let valid = coverage.as_ref();
+    if let Some(coverage) = valid {
+        assert_eq!(coverage.size, size, "shape coverage size contract");
+        assert_eq!(
+            coverage.alpha.len(),
+            (size.width() as usize).saturating_mul(size.height() as usize),
+            "shape coverage alpha contract"
+        );
+    } else {
+        logical = gfx::Size::default();
+    }
+    let mut intervals = Box::new(RasterShapeIntervals::new(
+        if valid.is_some() {
+            logical.height().max(0) as usize
+        } else {
+            0
+        },
+        0,
+    ));
+    if let Some(coverage) = valid {
+        for y in 0..logical.height() {
+            let (mut left, mut right) = (i32::MAX, i32::MIN);
+            for x in 0..logical.width() {
+                let (px, py) = match writing_mode {
+                    WritingMode::kHorizontalTb => (x, y),
+                    WritingMode::kVerticalRl | WritingMode::kSidewaysRl => {
+                        (size.width() - y - 1, x)
+                    }
+                    WritingMode::kVerticalLr => (y, x),
+                    WritingMode::kSidewaysLr => (y, size.height() - x - 1),
+                };
+                if coverage.alpha[py as usize * size.width() as usize + px as usize] > 0 {
+                    left = left.min(x);
+                    right = x + 1;
+                }
+            }
+            if left < right {
+                *intervals.IntervalAtMut(y) =
+                    layoutng_assembly::internal::shapes::shape_interval::IntShapeInterval::new(
+                        left, right,
+                    );
+            }
+        }
+    }
+    let mut shape = RasterShape::new(intervals, &logical);
+    shape.SetShapeMargin(margin);
+    Box::new(shape)
+}
+
 // cpp: layoutng_float/shape_outside_algorithm.h:12-14
 // cpp: layoutng_float/shape_outside_algorithm.cc:433-520
 pub fn CreateShapeOutside(
@@ -571,6 +648,9 @@ pub fn CreateShapeOutside(
     // C++ unique_ptr<Shape> is null until a case allocates the source-owned
     // concrete shape. The Rust option retains the callback's nullable boundary.
     let shape: Box<dyn Shape> = match geometry.kind {
+        ShapeOutsideKind::kCompiledPath => {
+            CreatePathShape(box_, width, height, writing_mode, margin)
+        }
         // cpp: layoutng_float/shape_outside_algorithm.cc:451-461
         ShapeOutsideKind::kPolygon => {
             let mut points = Vec::with_capacity(geometry.contour.len());

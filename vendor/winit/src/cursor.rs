@@ -207,6 +207,8 @@ pub(crate) struct CursorImage {
     pub(crate) height: u16,
     pub(crate) hotspot_x: u16,
     pub(crate) hotspot_y: u16,
+    #[cfg(target_os = "macos")]
+    pub(crate) image_scale_factor: f32,
 }
 
 impl CursorImage {
@@ -240,7 +242,11 @@ impl CursorImage {
             return Err(BadImage::HotspotOutOfBounds { width, height, hotspot_x, hotspot_y });
         }
 
-        Ok(CursorImage { rgba, width, height, hotspot_x, hotspot_y })
+        Ok(CursorImage {
+            rgba, width, height, hotspot_x, hotspot_y,
+            #[cfg(target_os = "macos")]
+            image_scale_factor: 1.0,
+        })
     }
 }
 

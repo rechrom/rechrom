@@ -294,6 +294,7 @@ fn ConvertWritingMode(value: WritingMode) -> StyleWritingMode {
         WritingMode::kHorizontalTb => StyleWritingMode::kHorizontalTb,
         WritingMode::kVerticalRl => StyleWritingMode::kVerticalRl,
         WritingMode::kVerticalLr => StyleWritingMode::kVerticalLr,
+        WritingMode::kSidewaysLr => StyleWritingMode::kSidewaysLr,
     }
 }
 
@@ -1573,11 +1574,7 @@ fn ApplyTextDecoration(builder: &mut ComputedStyleBuilder, input: &ComputedStyle
         Length::Fixed(decoration.underline_offset)
     };
     builder.SetTextUnderlineOffsetOwned(underline_offset);
-    builder.SetTextDecorationSkipInk(if decoration.skip_ink {
-        ETextDecorationSkipInk::kAuto
-    } else {
-        ETextDecorationSkipInk::kNone
-    });
+    builder.SetTextDecorationSkipInk(decoration.skip_ink);
 }
 
 fn ApplyStyleText(

@@ -25,6 +25,7 @@ impl ReusableLayoutEnvironment {
                 fragmentainer_block_size: input.fragmentainer_block_size,
                 compatibility_mode: input.compatibility_mode,
                 printing: input.printing,
+                should_print_backgrounds: input.should_print_backgrounds,
                 vertical_scroll_enforced: input.vertical_scroll_enforced,
                 fullscreen_element_blocks_layout_view_scroll: input
                     .fullscreen_element_blocks_layout_view_scroll,
@@ -84,6 +85,7 @@ impl ReusableLayoutEnvironment {
             && self.snapshot.fragmentainer_block_size == space.fragmentainer_block_size
             && self.snapshot.compatibility_mode == space.compatibility_mode
             && self.snapshot.printing == space.printing
+            && self.snapshot.should_print_backgrounds == space.should_print_backgrounds
             && self.snapshot.vertical_scroll_enforced == space.vertical_scroll_enforced
             && self.snapshot.fullscreen_element_blocks_layout_view_scroll
                 == space.fullscreen_element_blocks_layout_view_scroll

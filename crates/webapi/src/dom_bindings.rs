@@ -10,8 +10,8 @@ use dom::{Document, DOM};
 use javascript::javascript_runtime::{
     HostCall, HostContinuation, HostFunctionBinding, HostMethodRef, HostObjectId, HostObjectRef,
     HostOperation, HostResult, HostSymbol, HostValue, JavaScriptExceptionKind, JavaScriptFunction,
-    JavaScriptHostBindings, JavaScriptHostRuntime, JavaScriptNull, JavaScriptRealm,
-    JavaScriptValue, WeakJavaScriptRealm,
+    JavaScriptHostBindings, JavaScriptHostObjectNamespace, JavaScriptHostRuntime, JavaScriptNull,
+    JavaScriptRealm, JavaScriptValue, WeakJavaScriptHostObjectNamespace, WeakJavaScriptRealm,
 };
 use layoutng_assembly::internal::layout_input::PaintPathVerb;
 
@@ -19,18 +19,42 @@ use layoutng_assembly::internal::layout_input::PaintPathVerb;
 mod attributes;
 #[path = "dom_custom_elements.rs"]
 mod custom_elements;
+#[path = "dom_editor_commands.rs"]
+mod editor_commands;
+#[path = "dom_element_internals.rs"]
+mod element_internals;
+#[path = "dom_form_validation.rs"]
+mod form_validation;
 #[path = "dom_host_graph.rs"]
 mod host_graph;
+#[path = "dom_input_event.rs"]
+mod input_event;
+#[path = "dom_range_selection.rs"]
+mod range_selection;
 #[path = "dom_services.rs"]
 mod services;
+#[path = "dom_text_control_selection.rs"]
+mod text_control_selection;
 use host_graph::{DOMHostGraph, LiveCollectionIds};
-pub use services::DOMBindingsHost;
+#[path = "dom_abort_signals.rs"]
+mod abort_signals;
+#[path = "dom_event_listener_invocation.rs"]
+mod event_listener_invocation;
+#[path = "dom_event_listeners.rs"]
+mod event_listeners;
+use event_listeners::{Listener, ListenerTargets};
+use interaction::scroll::core::frame::event_handler_registry::EventHandlerRegistryTargets;
+pub use services::{
+    CloseWatcherHost, DOMBindingsHost, DOMSelectionHost, DOMWindowViewConverter,
+    DOMWindowViewProjector, DocumentFocusState, FrameProperty, FramePropertyGetter,
+    TextControlSelectionHost,
+};
 #[path = "viewport_scroll.rs"]
 mod viewport_scroll;
 pub use viewport_scroll::{ViewportScrollBehavior, ViewportScrollState};
-#[path = "dom_mutation_notification.rs"]
-mod mutation_notifications;
-pub use mutation_notifications::MutationNotification;
+#[path = "dom_native_mutation_observers.rs"]
+mod native_mutation_observers;
+pub use native_mutation_observers::DOMNativeMutationObservers;
 
 const GLOBAL_NAMES: &[&str] = &[
     "document",
@@ -38,6 +62,7 @@ const GLOBAL_NAMES: &[&str] = &[
     "__domInstall",
     "__domWrap",
     "window",
+    "event",
     "self",
     "parent",
     "top",
@@ -115,52 +140,196 @@ impl ListenerCallback {
         self.Resolve().as_ref() == Some(callback)
     }
 }
+/// Read-only access to the original Document's live listener registrations.
+/// Retaining this port does not borrow the JavaScript bindings across dispatch
+/// or freeze registrations before synchronous listener reentry.
 #[derive(Clone)]
-struct Listener {
-    // Shared with dispatch snapshots; removal never revives an old registration.
-    active: Rc<Cell<bool>>,
-    target: HostObjectId,
-    kind: String,
-    callback: ListenerCallback,
-    reference_slot: u64,
-    capture: bool,
-    attribute: bool,
-    once: bool,
-    passive: bool,
+pub struct DOMEventListenerInterest {
+    document: dom::persistent_document::DOMOwnerHandle,
+    listeners: ListenerTargets,
+    registry: Rc<EventHandlerRegistryTargets>,
+}
+
+impl DOMEventListenerInterest {
+    /// Frame-wide source EventHandlerRegistry fact, updated by registration.
+    /// This query is constant time and never inspects DOM or listener vectors.
+    pub fn HasPointerRawUpdateEventHandlers(&self) -> bool {
+        self.registry.HasPointerRawUpdateEventHandlers()
+    }
+    pub fn DocumentIdentity(&self) -> dom::persistent_document::DOMOwnerHandle {
+        self.document
+    }
+
+    // Chromium: core/dom/events/event_target.h:414-419;
+    // core/dom/events/event_listener_map.cc:56-62.
+    pub fn HasEventListeners(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target: HostObjectId,
+        event_type: &str,
+    ) -> bool {
+        document == self.document
+            && self
+                .listeners
+                .borrow()
+                .get(&target)
+                .is_some_and(|target| target.HasEventListenersForType(event_type))
+    }
+
+    // Chromium: core/dom/events/event_target.h:432-438;
+    // core/dom/events/event_listener_map.cc:64-76.
+    pub fn HasCapturingEventListeners(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target: HostObjectId,
+        event_type: &str,
+    ) -> bool {
+        document == self.document
+            && self
+                .listeners
+                .borrow()
+                .get(&target)
+                .is_some_and(|target| target.HasCapturingEventListeners(event_type))
+    }
+}
+
+impl interaction::event::EventListenerInterest for DOMEventListenerInterest {
+    fn HasPointerEventHandlers(&self) -> bool {
+        self.registry.HasPointerEventHandlers()
+    }
+    fn HasPointerRawUpdateEventHandlers(&self) -> bool {
+        self.registry.HasPointerRawUpdateEventHandlers()
+    }
+    fn HasTouchEventHandlers(&self) -> bool {
+        self.registry.HasTouchEventHandlers()
+    }
+    fn HasBlockingTouchHandler(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target_node_id: u64,
+    ) -> bool {
+        document == self.document
+            && self
+                .listeners
+                .borrow()
+                .get(&target_node_id)
+                .is_some_and(|target| {
+                    self.registry
+                        .HasBlockingTouchHandler(&target.AsEventTargetRef())
+                })
+    }
+    fn HasAttributeEventListener(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target_node_id: u64,
+        event_type: &str,
+    ) -> bool {
+        document == self.document
+            && self
+                .listeners
+                .borrow()
+                .get(&target_node_id)
+                .is_some_and(|target| target.GetAttributeEventListener(event_type).is_some())
+    }
+    fn HasEventListeners(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target_node_id: u64,
+        event_type: &str,
+    ) -> bool {
+        DOMEventListenerInterest::HasEventListeners(self, document, target_node_id, event_type)
+    }
+
+    fn HasCapturingEventListeners(
+        &self,
+        document: dom::persistent_document::DOMOwnerHandle,
+        target_node_id: u64,
+        event_type: &str,
+    ) -> bool {
+        DOMEventListenerInterest::HasCapturingEventListeners(
+            self,
+            document,
+            target_node_id,
+            event_type,
+        )
+    }
 }
 
 // Scoped ownership adapter for source DOMBindingsHost::change_focus.
 pub type FocusChangeHandler = Rc<dyn Fn(HostObjectId, bool, &mut dyn JavaScriptHostRuntime)>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerCaptureOperation {
+    Set,
+    Release,
+    Has,
+}
+pub type PointerCaptureHandler = Rc<
+    dyn Fn(
+        PointerCaptureOperation,
+        interaction::input::public::common::input::pointer_id::PointerId,
+        HostObjectId,
+    ) -> Result<bool, interaction::PointerCaptureError>,
+>;
+/// Canvas draw commands request a rendering opportunity without fabricating a
+/// DOM attribute/text mutation. Page supplies the scheduler-facing callback.
+pub type CanvasDirtyHandler = Rc<dyn Fn(HostObjectId)>;
 // A source Emit can synchronously reenter JavaScript (image events and
 // mutation notifications). Execute it after releasing the host borrow.
 pub type ScopedDOMMutationEmitter = Rc<
     dyn Fn(&DOMMutation, &mut dyn JavaScriptHostRuntime) -> Result<(), dom::error::DOMException>,
 >;
+/// Lifetime-only binding to the original Document's native execution owners.
+/// Implementations must not retain this binding, Window, realm or executor.
+/// The old Window host retains this lease when a new Window is installed.
+pub trait NativeDOMDocumentOwner {
+    fn DocumentIdentity(&self) -> dom::persistent_document::DOMOwnerHandle;
+}
 pub struct DOMJavaScriptBindings {
     document: Rc<RefCell<DOM>>,
+    form_validation_state: Rc<interaction::input_type::DefaultActionState>,
+    native_document_owner: Option<Rc<dyn NativeDOMDocumentOwner>>,
+    object_namespace: WeakJavaScriptHostObjectNamespace,
     services: services::DOMServices,
     emit_mutation: Rc<RefCell<DOMMutationEmitter>>,
     scoped_emit_mutation: Option<ScopedDOMMutationEmitter>,
     prototypes: HashMap<String, JavaScriptValue>,
     method_wrappers: HashMap<String, JavaScriptFunction>,
     runtime_realm: WeakJavaScriptRealm,
-    ready_state: String,
+    current_event: Rc<RefCell<Option<HostValue>>>,
+    callback_context:
+        Rc<RefCell<Option<javascript::javascript_runtime::JavaScriptCallbackContext>>>,
+    cssom_world: Rc<RefCell<Option<Rc<style::ProductionCSSDOMWrapperWorld>>>>,
+    native_mutation_observers: Rc<DOMNativeMutationObservers>,
     current_script: HostObjectId,
     focused_node: Option<u64>,
     write_document: Option<Box<dyn FnMut(&str) -> bool>>,
     change_focus: Option<FocusChangeHandler>,
+    pointer_capture: Option<PointerCaptureHandler>,
     collections: Rc<RefCell<HashMap<HostObjectId, NodeCollection>>>,
     // cpp: NodeListsNodeData / LiveNodeList collection caching. Index by the
     // actual owner and collection key, never scan every retained collection.
     live_collection_ids: Rc<RefCell<LiveCollectionIds>>,
     iterators: Rc<RefCell<HashMap<HostObjectId, CollectionIterator>>>,
     records: Rc<RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>>,
+    native_record_classes: Rc<RefCell<HashMap<HostObjectId, &'static str>>>,
+    task_attribution_tracker:
+        Rc<std::cell::OnceCell<Rc<foundation::task_attribution::TaskAttributionTracker>>>,
     host_graph: Rc<DOMHostGraph>,
-    next_collection_id: Cell<HostObjectId>,
-    listeners: Rc<RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>>,
+    next_collection_id: Rc<Cell<HostObjectId>>,
+    native_abort: Rc<abort_signals::AbortBindings>,
+    window_native_bindings: Rc<abort_signals::AbortBindings>,
+    listeners: ListenerTargets,
+    event_handler_registry: Rc<EventHandlerRegistryTargets>,
     next_listener_slot: Cell<u64>,
     custom_element_backup_queued: bool,
-    selector_service: RefCell<style::persistent_selector::PersistentSelectorService>,
+    selector_service: Rc<RefCell<style::persistent_selector::PersistentSelectorService>>,
+    // Context registration aliases the canonical DOM element state.
+    canvas_elements: RefCell<HashMap<HostObjectId, Rc<RefCell<canvas::HTMLCanvasElementState>>>>,
+    webgl_contexts: RefCell<HashMap<HostObjectId, webgl::WebGLRenderingContextState>>,
+    canvas_webgl_ids: RefCell<HashMap<HostObjectId, HostObjectId>>,
+    webgl_canvas_ids: RefCell<HashMap<HostObjectId, HostObjectId>>,
+    next_webgl_id: Cell<HostObjectId>,
+    canvas_dirty: Option<CanvasDirtyHandler>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -175,6 +344,56 @@ pub struct DOMHostMemoryDiagnostics {
     pub event_identities: usize,
 }
 impl DOMJavaScriptBindings {
+    pub fn SetCloseWatcherHost(&self, host: CloseWatcherHost) {
+        self.native_abort.BindCloseWatcherHost(host);
+    }
+    pub(crate) fn BindAbortTaskScheduler(&self, scheduler: abort_signals::AbortTaskScheduler) {
+        self.native_abort.BindScheduler(scheduler);
+    }
+    pub fn EventListenerInterest(&self) -> DOMEventListenerInterest {
+        DOMEventListenerInterest {
+            document: self.document.borrow().GetDocument().RootHandle(),
+            listeners: self.listeners.clone(),
+            registry: self.event_handler_registry.clone(),
+        }
+    }
+
+    /// Document's original SelectorQuery cache, shared with native consumers.
+    pub fn SelectorQueryOwner(
+        &self,
+    ) -> Rc<RefCell<style::persistent_selector::PersistentSelectorService>> {
+        self.selector_service.clone()
+    }
+}
+impl DOMJavaScriptBindings {
+    pub fn HasPointerRawUpdateEventHandlers(&self) -> bool {
+        self.event_handler_registry
+            .HasPointerRawUpdateEventHandlers()
+    }
+    pub fn SetCanvasDirtyHandler(&mut self, handler: CanvasDirtyHandler) {
+        self.canvas_dirty = Some(handler);
+    }
+
+    fn NotifyCanvasDirty(&self, context_id: HostObjectId) {
+        if let (Some(handler), Some(dom_node_id)) = (
+            self.canvas_dirty.as_ref(),
+            self.webgl_canvas_ids.borrow().get(&context_id).copied(),
+        ) {
+            handler(dom_node_id);
+        }
+    }
+
+    /// Publish immutable front-buffer snapshots at the Page lifecycle boundary.
+    /// Cross-origin texture/image uploads will flip `origin_clean` when those
+    /// WebGL entry points are added; the current vertical slice accepts only
+    /// same-document shader/buffer input and is therefore origin-clean.
+    pub fn SnapshotCanvasPaintResources(&self) -> Vec<canvas::CanvasPaintResource> {
+        self.document
+            .borrow()
+            .GetDocument()
+            .SnapshotCanvasPaintResources()
+    }
+
     pub fn MemoryDiagnostics(&self) -> DOMHostMemoryDiagnostics {
         let records = self.records.borrow();
         let listeners = self.listeners.borrow();
@@ -184,11 +403,19 @@ impl DOMJavaScriptBindings {
             iterators: self.iterators.borrow().len(),
             result_records: records.len(),
             record_fields: records.values().map(HashMap::len).sum(),
-            listener_targets: listeners.len(),
+            listener_targets: listeners
+                .values()
+                .filter(|target| target.HasEventListeners())
+                .count(),
             listener_entries: listeners
                 .values()
-                .flat_map(|kinds| kinds.values())
-                .map(Vec::len)
+                .map(|target| {
+                    target
+                        .EventTypes()
+                        .iter()
+                        .map(|kind| target.NumberOfEventListeners(kind))
+                        .sum::<usize>()
+                })
                 .sum(),
             events,
             event_identities,
@@ -210,13 +437,13 @@ impl DOMJavaScriptBindings {
     /// EventListenerProperties::blocking_event_listeners analogue used when
     /// deciding whether wheel input may run on the compositor thread.
     pub fn HasBlockingListener(&self, kind: &str) -> bool {
-        self.listeners.borrow().values().any(|kinds| {
-            kinds.get(kind).is_some_and(|listeners| {
-                listeners
-                    .iter()
-                    .any(|listener| listener.active.get() && !listener.passive)
-            })
-        })
+        if kind == "wheel" {
+            return self.event_handler_registry.HasBlockingWheelEventHandlers();
+        }
+        self.listeners
+            .borrow()
+            .values()
+            .any(|target| event_listeners::HasBlockingListener(target, kind))
     }
 
     /// Targets whose active listeners can cancel this event. Geometry belongs
@@ -225,15 +452,20 @@ impl DOMJavaScriptBindings {
         self.listeners
             .borrow()
             .iter()
-            .filter_map(|(target, kinds)| {
-                kinds.get(kind).and_then(|listeners| {
-                    listeners
-                        .iter()
-                        .any(|listener| listener.active.get() && !listener.passive)
-                        .then_some(*target)
+            .filter_map(|(id, target)| {
+                (if kind == "wheel" {
+                    self.event_handler_registry
+                        .HasBlockingWheelHandler(&target.AsEventTargetRef())
+                } else {
+                    event_listeners::HasBlockingListener(target, kind)
                 })
+                .then_some(*id)
             })
             .collect()
+    }
+    pub fn SetBlockingWheelInvalidation(&self, emit: Rc<dyn Fn(Option<u64>)>) {
+        self.event_handler_registry
+            .SetBlockingWheelInvalidation(emit);
     }
 
     // cpp: webapi/dom_bindings.cc:236-240
@@ -242,25 +474,95 @@ impl DOMJavaScriptBindings {
     }
     pub fn WithHost(
         document: Rc<RefCell<DOM>>,
-        emit_mutation: DOMMutationEmitter,
-        host: DOMBindingsHost,
+        mut emit_mutation: DOMMutationEmitter,
+        mut host: DOMBindingsHost,
     ) -> Self {
+        // This is the script binding mutation entry. Frame-owner hooks retain
+        // its explicit InContext fact through released-borrow notification
+        // drains; parser/host mutations enter DOM without this scope.
+        let mutation_document = Rc::downgrade(&document);
+        let emit_mutation: DOMMutationEmitter = Box::new(move |mutation| {
+            let _context = mutation_document.upgrade().map(|document| {
+                document
+                    .borrow()
+                    .GetDocument()
+                    .EnterFrameOwnerCreationContext(
+                        dom::frame_owner_loading::FrameOwnerCreationContext::Script,
+                    )
+            });
+            emit_mutation(mutation);
+        });
+        // Binding this Document to its Window supplies Document constructor's
+        // dom_window_ branch (document.cc:1010), on the canonical owner.
+        document
+            .borrow()
+            .GetDocument()
+            .SetReadyState(dom::document_parser_lifecycle::DocumentReadyState::Loading);
         let collections = Rc::new(RefCell::new(HashMap::new()));
         let live_collection_ids = Rc::new(RefCell::new(HashMap::new()));
         let iterators = Rc::new(RefCell::new(HashMap::new()));
         let records = Rc::new(RefCell::new(HashMap::new()));
         let listeners = Rc::new(RefCell::new(HashMap::new()));
+        if host.event_clock.is_none() {
+            host.event_clock = Some(Rc::new(services::StandaloneEventClock::new()));
+        }
+        let event_clock = host.event_clock.clone();
         let services = services::DOMServices::new(host);
+        let native_record_classes = Rc::new(RefCell::new(HashMap::new()));
         let host_graph = Rc::new(DOMHostGraph::new(
             document.clone(),
             collections.clone(),
             live_collection_ids.clone(),
             iterators.clone(),
             records.clone(),
+            native_record_classes.clone(),
             listeners.clone(),
             services.events.clone(),
         ));
+        let native_mutation_observers =
+            DOMNativeMutationObservers::new(&document, host_graph.clone());
+        let next_collection_id = Rc::new(Cell::new(1 << 62));
+        let current_event = Rc::new(RefCell::new(None));
+        let exception_ids = next_collection_id.clone();
+        let exception_classes = native_record_classes.clone();
+        let exception_records = records.clone();
+        let exception_graph = Rc::downgrade(&host_graph);
+        let native_abort = abort_signals::AbortBindings::new(
+            &document,
+            &host_graph,
+            next_collection_id.clone(),
+            native_record_classes.clone(),
+            listeners.clone(),
+            services.events.clone(),
+            current_event.clone(),
+            services.event_state.clone(),
+            event_clock,
+            Rc::new(move |name, message| {
+                Self::CreateDOMExceptionRecord(
+                    &exception_ids,
+                    &exception_classes,
+                    &exception_records,
+                    &exception_graph
+                        .upgrade()
+                        .expect("live DOMException binding graph"),
+                    HostValue::String(name.into()),
+                    HostValue::String(message.into()),
+                )
+            }),
+        );
+        assert!(host_graph.abort_bindings.set(native_abort.clone()).is_ok());
+        let form_validation_state = Rc::new(interaction::input_type::DefaultActionState::default());
+        form_validation_state
+            .SetValidationPatternEngine(crate::form_validation::CreateValidationPatternEngine());
+        interaction::adapter::page_form_validation::InstallStandaloneInputValueSanitizer(
+            &document,
+            form_validation_state.clone(),
+        );
         Self {
+            form_validation_state,
+            native_mutation_observers,
+            native_document_owner: None,
+            object_namespace: Default::default(),
             services,
             document,
             emit_mutation: Rc::new(RefCell::new(emit_mutation)),
@@ -268,21 +570,35 @@ impl DOMJavaScriptBindings {
             prototypes: HashMap::new(),
             method_wrappers: HashMap::new(),
             runtime_realm: WeakJavaScriptRealm::default(),
-            ready_state: "loading".into(),
+            current_event,
+            callback_context: Default::default(),
+            cssom_world: Default::default(),
             current_script: 0,
             focused_node: None,
             write_document: None,
             change_focus: None,
+            pointer_capture: None,
             collections,
             live_collection_ids,
             iterators,
             records,
+            native_record_classes,
+            task_attribution_tracker: Default::default(),
             host_graph,
-            next_collection_id: Cell::new(1 << 62),
+            next_collection_id,
+            window_native_bindings: native_abort.clone(),
+            native_abort,
             listeners,
+            event_handler_registry: Rc::new(EventHandlerRegistryTargets::default()),
             next_listener_slot: Cell::new(1 << 61),
             custom_element_backup_queued: false,
-            selector_service: RefCell::new(Default::default()),
+            selector_service: Rc::new(RefCell::new(Default::default())),
+            canvas_elements: RefCell::new(HashMap::new()),
+            webgl_contexts: RefCell::new(HashMap::new()),
+            canvas_webgl_ids: RefCell::new(HashMap::new()),
+            webgl_canvas_ids: RefCell::new(HashMap::new()),
+            next_webgl_id: Cell::new(1 << 60),
+            canvas_dirty: None,
         }
     }
 
@@ -298,13 +614,9 @@ impl DOMJavaScriptBindings {
         slot: u64,
         callback: &JavaScriptFunction,
     ) -> ListenerCallback {
-        if self.node(target).is_some() {
-            self.host_graph
-                .ListenerReference(target, slot, Some(callback.clone()));
-            ListenerCallback::Traced(callback.Downgrade())
-        } else {
-            ListenerCallback::Rooted(callback.clone())
-        }
+        self.host_graph
+            .ListenerReference(target, slot, Some(callback.clone()));
+        ListenerCallback::Traced(callback.Downgrade())
     }
     fn RemoveListenerReference(&self, listener: &Listener) {
         if matches!(listener.callback, ListenerCallback::Traced(_)) {
@@ -315,12 +627,127 @@ impl DOMJavaScriptBindings {
 
     // cpp: webapi/dom_bindings.h:33
     // scoped runtime is a Rust reborrow adapter.
+    pub fn BindFormValidationState(
+        &mut self,
+        state: Rc<interaction::input_type::DefaultActionState>,
+    ) {
+        self.form_validation_state = state;
+    }
+    pub fn SetFormValidationHandler(&mut self, handler: Option<services::FormValidationHandler>) {
+        self.services.host.validate_form = handler;
+    }
+    pub fn SetDocumentEditorCommandHandler(
+        &mut self,
+        handler: Option<services::DocumentEditorCommandHandler>,
+    ) {
+        self.services.host.document_editor_command = handler;
+    }
+    pub fn SetDocumentEditorCommandExecutor(
+        &mut self,
+        handler: Option<services::DocumentEditorCommandExecutor>,
+    ) {
+        self.services.host.execute_document_editor_command = handler;
+    }
+    pub fn SetDOMSelectionHost(&mut self, host: Option<services::DOMSelectionHost>) {
+        self.services.host.selection = host;
+    }
+    pub fn SetTextControlSelectionHost(
+        &mut self,
+        host: Option<services::TextControlSelectionHost>,
+    ) {
+        self.services.host.text_control_selection = host;
+    }
     pub fn SetFocusChangeHandler(&mut self, handler: Option<FocusChangeHandler>) {
         self.change_focus = handler;
     }
+    pub fn SetDOMEventTargetResolver(&mut self, resolver: services::DOMEventTargetResolver) {
+        self.services.host.resolve_event_target = Some(resolver);
+    }
+
+    pub fn SetPointerCaptureHandler(&mut self, handler: Option<PointerCaptureHandler>) {
+        self.pointer_capture = handler;
+    }
 
     pub fn SetScopedMutationEmitter(&mut self, emitter: ScopedDOMMutationEmitter) {
-        self.scoped_emit_mutation = Some(emitter);
+        let document = Rc::downgrade(&self.document);
+        self.scoped_emit_mutation = Some(Rc::new(move |mutation, runtime| {
+            let _context = document.upgrade().map(|document| {
+                document
+                    .borrow()
+                    .GetDocument()
+                    .EnterFrameOwnerCreationContext(
+                        dom::frame_owner_loading::FrameOwnerCreationContext::Script,
+                    )
+            });
+            emitter(mutation, runtime)
+        }));
+    }
+
+    pub fn BindNativeDocumentOwner(&mut self, owner: Rc<dyn NativeDOMDocumentOwner>) {
+        assert!(
+            self.native_document_owner.is_none(),
+            "one native owner for this Window binding"
+        );
+        assert_eq!(
+            owner.DocumentIdentity(),
+            self.document.borrow().GetDocument().RootHandle()
+        );
+        self.native_document_owner = Some(owner);
+    }
+
+    pub fn DisassociateWindowDocument(&mut self) {
+        let id = self
+            .document
+            .borrow()
+            .GetDocument()
+            .Node(self.document.borrow().GetDocument().Root())
+            .Id();
+        self.host_graph.SetRoot(id, 0, false);
+    }
+    pub(crate) fn DocumentURLForWindow(&self) -> String {
+        self.document
+            .borrow()
+            .GetDocument()
+            .DocumentURL()
+            .to_owned()
+    }
+    pub fn BindHostObjectNamespace(&mut self, namespace: &JavaScriptHostObjectNamespace) {
+        assert!(
+            self.object_namespace.Upgrade().is_none(),
+            "one namespace for these original bindings"
+        );
+        self.object_namespace = namespace.Downgrade();
+        self.native_abort.BindNamespace(namespace);
+        self.native_mutation_observers
+            .BindHostObjectNamespace(namespace);
+    }
+    pub fn HostObjectNamespace(&self) -> Option<JavaScriptHostObjectNamespace> {
+        self.object_namespace.Upgrade()
+    }
+    /// Reusing an existing Context keeps its installed, original IDL objects;
+    /// it does not evaluate bootstrap or consult replaceable author globals.
+    pub fn CopyWindowIDLBindingsForReuse(&mut self, previous: &Self) {
+        self.window_native_bindings = previous.window_native_bindings.clone();
+        let window_target = previous.ListenerTarget(0);
+        self.listeners.borrow_mut().insert(0, window_target);
+        self.current_event = previous.current_event.clone();
+        self.native_abort
+            .BindCurrentEvent(self.current_event.clone());
+        if let Some(callback) = previous.method_wrappers.get("__callEventHandler") {
+            self.native_abort.BindHandlerWrapper(callback);
+        }
+        if let Some(callback) = previous.method_wrappers.get("__inputDataTransferFileValue") {
+            self.native_abort.BindInputFileProjection(callback);
+        }
+        assert!(self.prototypes.is_empty() && self.method_wrappers.is_empty());
+        self.prototypes = previous.prototypes.clone();
+        self.method_wrappers = previous.method_wrappers.clone();
+        if let Some(delivery) = self.method_wrappers.get("__deliverMutationObserver") {
+            // The retained IDL wrapper table owns this callback. The observer
+            // keeps only its weak identity, as in the initial installation.
+            self.native_mutation_observers.BindScriptDelivery(delivery);
+        }
+        *self.services.event_state.borrow_mut() = previous.services.event_state.borrow().clone();
     }
 
     // cpp: webapi/dom_bindings.h:50
@@ -328,10 +755,23 @@ impl DOMJavaScriptBindings {
     // Retain only the source binding's validity, avoiding a host/realm cycle.
     pub fn BindRuntime(&mut self, realm: &JavaScriptRealm) {
         self.runtime_realm = realm.Downgrade();
+        self.native_abort.BindRuntime(realm);
+        self.native_mutation_observers.BindRuntime(realm);
+    }
+
+    pub fn NativeMutationObservers(&self) -> Rc<DOMNativeMutationObservers> {
+        self.native_mutation_observers.clone()
     }
 
     pub fn SetReadyState(&mut self, state: String) {
-        self.ready_state = state;
+        use dom::document_parser_lifecycle::DocumentReadyState as S;
+        let state = match state.as_str() {
+            "loading" => S::Loading,
+            "interactive" => S::Interactive,
+            "complete" => S::Complete,
+            _ => panic!("source Document ready state"),
+        };
+        self.document.borrow().GetDocument().SetReadyState(state);
     }
 
     pub fn SetCurrentScript(&mut self, id: HostObjectId) {
@@ -374,52 +814,26 @@ impl DOMJavaScriptBindings {
         }
     }
 
+    fn popup_error(error: &dom::error::DOMException) -> HostResult {
+        let name = match error.kind {
+            dom::error::DOMExceptionKind::NotSupportedError => "NotSupportedError",
+            dom::error::DOMExceptionKind::InvalidNodeType => "InvalidNodeTypeError",
+            dom::error::DOMExceptionKind::IndexSizeError => "IndexSizeError",
+            dom::error::DOMExceptionKind::NotFoundError => "NotFoundError",
+            dom::error::DOMExceptionKind::InvalidStateError => "InvalidStateError",
+            _ => return Self::type_error(error.message),
+        };
+        Self::value(HostValue::Record(vec![
+            ("exceptionName".into(), HostValue::String(name.into())),
+            ("message".into(), HostValue::String(error.message.into())),
+        ]))
+    }
     fn type_error(message: &str) -> HostResult {
         HostResult::Failure(JavaScriptExceptionKind::kTypeError, message)
     }
 
     fn node(&self, id: HostObjectId) -> Option<usize> {
         self.document.borrow().GetDocument().FindNodeById(id)
-    }
-
-    // cpp: EventTarget::IsTopLevelNode, event_target.cc:437-451.
-    fn IsTopLevelEventTarget(&self, receiver: HostObjectId) -> bool {
-        if receiver == 0 {
-            return true;
-        }
-        let owner = self.document.borrow();
-        let document = owner.GetDocument();
-        let Some(index) = document.FindNodeById(receiver) else {
-            return false;
-        };
-        let node = document.Node(index);
-        if node.Type() == DOMNodeType::kDocument {
-            return true;
-        }
-        let root = node
-            .OwnerDocumentNode()
-            .and_then(|owner| document.FindNodeById(owner.Id()))
-            .and_then(|doc| {
-                document
-                    .Node(doc)
-                    .Children()
-                    .iter()
-                    .copied()
-                    .find(|&child| document.Node(child).Type() == DOMNodeType::kElement)
-            });
-        root.is_some_and(|root| {
-            root == index
-                || document
-                    .Node(root)
-                    .Children()
-                    .iter()
-                    .copied()
-                    .find(|&child| {
-                        document.Node(child).IsHTMLElement("body")
-                            || document.Node(child).IsHTMLElement("frameset")
-                    })
-                    == Some(index)
-        })
     }
 
     fn method(&self, receiver: HostObjectId, name: &str) -> HostResult {
@@ -433,6 +847,9 @@ impl DOMJavaScriptBindings {
     }
 
     fn get(&self, receiver: HostObjectId, member: &str) -> HostResult {
+        if receiver == 0 && member == "event" {
+            return Self::value(self.current_event.borrow().clone().unwrap_or_default());
+        }
         // cpp: webapi/dom_bindings.cc:269-300
         if let Some(record) = self.records.borrow().get(&receiver) {
             return record
@@ -453,9 +870,8 @@ impl DOMJavaScriptBindings {
                 .listeners
                 .borrow()
                 .get(&receiver)
-                .and_then(|kinds| kinds.get(&member[2..]))
-                .and_then(|listeners| listeners.iter().find(|l| l.attribute))
-                .and_then(|listener| listener.callback.Resolve())
+                .and_then(|target| target.GetAttributeEventListener(&member[2..]))
+                .and_then(|listener| Listener::From(listener.as_ref()).callback.Resolve())
                 .map_or_else(
                     || Self::value(HostValue::Null(JavaScriptNull)),
                     |callback| Self::value(HostValue::JavaScriptFunction(callback)),
@@ -465,9 +881,13 @@ impl DOMJavaScriptBindings {
             if member == "item"
                 || (member == "namedItem"
                     && collection.kind != "snapshot"
-                    && collection.kind != "childNodes")
+                    && collection.kind != "childNodes"
+                    && collection.kind != "labels")
             {
-                let class = if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
+                let class = if matches!(
+                    collection.kind.as_str(),
+                    "snapshot" | "childNodes" | "labels"
+                ) {
                     "NodeList"
                 } else {
                     "HTMLCollection"
@@ -554,13 +974,38 @@ impl DOMJavaScriptBindings {
         // cpp: webapi/dom_bindings.cc:360-388
         if node.Type() == DOMNodeType::kDocument {
             match member {
+                "location" | "cookie" if !document.HasDOMWindow() && index == document.Root() => {
+                    return Self::value(if member == "location" {
+                        HostValue::Null(JavaScriptNull)
+                    } else {
+                        HostValue::String(String::new())
+                    });
+                }
+                "URL" | "documentURI" => {
+                    return Self::value(HostValue::String(document.DocumentURL().to_owned()));
+                }
+                "domain" => {
+                    return Self::value(HostValue::String(if document.HasDOMWindow() {
+                        document.SecurityContext().Origin().Domain()
+                    } else {
+                        String::new()
+                    }));
+                }
                 "activeElement" => {
-                    if let Some(id) = self.focused_node {
+                    let focused = if let Some(read) = &self.services.host.read_document_focus {
+                        read(document.RootHandle().Identity())
+                            .and_then(|focus| focus.active_element)
+                    } else {
+                        self.focused_node
+                    };
+                    if let Some(id) = focused {
                         return Self::value(HostValue::Object(HostObjectRef { id }));
                     }
                     return self.get(receiver, "body");
                 }
-                "readyState" => return Self::value(HostValue::String(self.ready_state.clone())),
+                "readyState" => {
+                    return Self::value(HostValue::String(document.ReadyState().Name().into()));
+                }
                 "currentScript" => {
                     return if self.current_script == 0 {
                         Self::value(HostValue::Null(JavaScriptNull))
@@ -568,21 +1013,25 @@ impl DOMJavaScriptBindings {
                         Self::value(HostValue::Object(HostObjectRef {
                             id: self.current_script,
                         }))
-                    }
+                    };
                 }
                 "defaultView" => {
-                    return Self::value(if receiver == document.Node(document.Root()).Id() {
-                        HostValue::Object(HostObjectRef { id: 0 })
-                    } else {
-                        HostValue::Null(JavaScriptNull)
-                    })
+                    return Self::value(
+                        if document.HasDOMWindow()
+                            && receiver == document.Node(document.Root()).Id()
+                        {
+                            HostValue::Object(HostObjectRef { id: 0 })
+                        } else {
+                            HostValue::Null(JavaScriptNull)
+                        },
+                    );
                 }
                 "fullscreenEnabled" => return Self::value(HostValue::Boolean(true)),
                 "fullscreen" => {
-                    return Self::value(HostValue::Boolean(document.HasFullscreenElements()))
+                    return Self::value(HostValue::Boolean(document.HasFullscreenElements()));
                 }
                 "fullscreenElement" => {
-                    return Self::node_reference(document, document.FullscreenElement())
+                    return Self::node_reference(document, document.FullscreenElement());
                 }
                 "documentElement" | "scrollingElement" | "head" | "body" => {
                     let root = node
@@ -613,12 +1062,12 @@ impl DOMJavaScriptBindings {
         }
         // cpp: webapi/dom_bindings.cc:391-411
         if node.IsHTMLElement("img") {
-            let source = document.CurrentImageSource(index);
+            let loader = document.EnsureHTMLImageLoader(index);
             let selection = document.ResponsiveImageSelectionFor(index);
-            let image = source.and_then(|source| document.ImageResourceFor(source));
+            let image = loader.GetContent().and_then(|content| content.Metadata());
             match member {
                 "complete" => {
-                    return Self::value(HostValue::Boolean(source.is_none() || image.is_some()))
+                    return Self::value(HostValue::Boolean(loader.ImageComplete()));
                 }
                 "naturalWidth" => {
                     return Self::value(HostValue::Number(image.map_or(0.0, |image| {
@@ -628,7 +1077,7 @@ impl DOMJavaScriptBindings {
                                 selection.and_then(|selection| selection.density),
                             )
                             .0
-                    })))
+                    })));
                 }
                 "naturalHeight" => {
                     return Self::value(HostValue::Number(image.map_or(0.0, |image| {
@@ -638,9 +1087,11 @@ impl DOMJavaScriptBindings {
                                 selection.and_then(|selection| selection.density),
                             )
                             .1
-                    })))
+                    })));
                 }
-                "currentSrc" => return Self::value(HostValue::String(source.unwrap_or("").into())),
+                "currentSrc" => {
+                    return Self::value(HostValue::String(document.ImageCurrentSrc(index)));
+                }
                 _ => {}
             }
         }
@@ -675,7 +1126,7 @@ impl DOMJavaScriptBindings {
                             HostValue::String("http://www.w3.org/1998/Math/MathML".into())
                         }
                         DOMNamespace::kNone => HostValue::Null(JavaScriptNull),
-                    })
+                    });
                 }
                 _ => {}
             }
@@ -704,12 +1155,16 @@ impl DOMJavaScriptBindings {
         }
         // cpp: webapi/dom_bindings.cc:443-477
         match member {
-            "nodeType" => Self::value(HostValue::Number(node_type_number(node.Type()))),
-            "nodeName" => Self::value(HostValue::String(node_name(
-                node.Type(),
-                node.Name(),
-                node.Namespace(),
-            ))),
+            "nodeType" => Self::value(HostValue::Number(if node.IsCDATASection() {
+                4.
+            } else {
+                node_type_number(node.Type())
+            })),
+            "nodeName" => Self::value(HostValue::String(if node.IsCDATASection() {
+                "#cdata-section".into()
+            } else {
+                node_name(node.Type(), node.Name(), node.Namespace())
+            })),
             "textContent"
                 if matches!(
                     node.Type(),
@@ -750,7 +1205,7 @@ impl DOMJavaScriptBindings {
                     .into(),
             )),
             "value" if is_control(node) => {
-                Self::value(HostValue::String(document.ControlValue(index)))
+                Self::value(HostValue::String16(document.ControlValueUTF16(index)))
             }
             "value" if node.IsHTMLElement("option") => {
                 Self::value(HostValue::String(document.OptionValue(index)))
@@ -776,6 +1231,38 @@ impl DOMJavaScriptBindings {
         }))
     }
 
+    fn IsEventTargetReceiver(&self, receiver: u64) -> bool {
+        receiver == 0
+            || self.node(receiver).is_some()
+            || self.native_abort.NativeTarget(receiver).is_some()
+    }
+    fn SetEventHandler(&self, receiver: u64, event_type: &str, arguments: &[HostValue]) {
+        let target = self.ListenerTarget(receiver);
+        let previous = target.GetAttributeEventListener(event_type);
+        let listener = if let Some(HostValue::JavaScriptFunction(callback)) = arguments.first() {
+            let slot = self.NewListenerSlot();
+            Some(
+                Rc::new(Listener::new(
+                    receiver,
+                    self.StoreListenerCallback(receiver, slot, callback),
+                    slot,
+                    true,
+                    self.callback_context.borrow().clone(),
+                    self.callback_context.clone(),
+                    Rc::downgrade(&self.native_abort),
+                ))
+                    as interaction::dispatch::core::dom::events::event_listener::EventListenerRef,
+            )
+        } else {
+            None
+        };
+        target.SetAttributeEventListener(event_type, listener);
+        // Replacing the callback keeps the RegisteredEventListener's place
+        // in every source snapshot while updating its one traced edge.
+        if let Some(previous) = previous {
+            self.RemoveListenerReference(Listener::From(previous.as_ref()));
+        }
+    }
     fn set(&mut self, receiver: HostObjectId, member: &str, arguments: &[HostValue]) -> HostResult {
         if member == "selected" {
             let Some(index) = self.node(receiver) else {
@@ -803,44 +1290,7 @@ impl DOMJavaScriptBindings {
         }
         // cpp: webapi/dom_bindings.cc:479-495
         if is_event_handler(member) {
-            let mut targets = self.listeners.borrow_mut();
-            let kinds = targets.entry(receiver).or_default();
-            let listeners = kinds.entry(member[2..].into()).or_default();
-            let position = listeners.iter().position(|listener| listener.attribute);
-            if let Some(HostValue::JavaScriptFunction(callback)) = arguments.first() {
-                if let Some(position) = position {
-                    let listener = &mut listeners[position];
-                    if !listener.callback.Matches(callback) {
-                        listener.active.set(false);
-                        listener.active = Rc::new(Cell::new(true));
-                        listener.callback =
-                            self.StoreListenerCallback(receiver, listener.reference_slot, callback);
-                    }
-                } else {
-                    let reference_slot = self.NewListenerSlot();
-                    listeners.push(Listener {
-                        active: Rc::new(Cell::new(true)),
-                        target: receiver,
-                        kind: member[2..].into(),
-                        callback: self.StoreListenerCallback(receiver, reference_slot, callback),
-                        reference_slot,
-                        capture: false,
-                        attribute: true,
-                        once: false,
-                        passive: false,
-                    });
-                }
-            } else if let Some(position) = position {
-                let listener = listeners.remove(position);
-                listener.active.set(false);
-                self.RemoveListenerReference(&listener);
-            }
-            if listeners.is_empty() {
-                kinds.remove(&member[2..]);
-            }
-            if kinds.is_empty() {
-                targets.remove(&receiver);
-            }
+            self.SetEventHandler(receiver, &member[2..], arguments);
             return HostResult::default();
         }
         // cpp: webapi/dom_bindings.cc:499-555
@@ -891,6 +1341,21 @@ impl DOMJavaScriptBindings {
             "textContent" | "data" | "nodeValue" | "innerHTML" | "value" | "id" | "className"
         ) {
             return Self::unhandled();
+        }
+        // value is a WebIDL DOMString, so isolated UTF-16 surrogates must
+        // survive both the JavaScript bridge and the DOM mutation transaction.
+        if member == "value" && is_control(node) {
+            if let Some(HostValue::String16(units)) = arguments.first() {
+                let units = units.clone();
+                drop(owner);
+                (self.emit_mutation.borrow_mut())(&DOMMutation {
+                    mutation_type: DOMMutationType::kSetControlValue,
+                    target_node_id: receiver,
+                    utf16_value: Some(units.clone()),
+                    ..Default::default()
+                });
+                return Self::value(HostValue::String16(units));
+            }
         }
         let Some(value) = dom_string_argument(arguments.first()) else {
             return Self::type_error(&format!("{member} requires a string-convertible value"));
@@ -950,6 +1415,10 @@ impl DOMJavaScriptBindings {
             }
             .into(),
             value: value.clone(),
+            utf16_value: match arguments.first() {
+                Some(HostValue::String16(units)) => Some(units.clone()),
+                _ => None,
+            },
             ..Default::default()
         });
         Self::value(HostValue::String(value))
@@ -961,6 +1430,713 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> HostResult {
+        if member == "__formElements" {
+            let valid = {
+                let owner = self.document.borrow();
+                let document = owner.GetDocument();
+                document
+                    .FindNodeById(receiver)
+                    .is_some_and(|i| document.Node(i).IsHTMLElement("form"))
+            };
+            return if valid {
+                Self::value(HostValue::Object(self.collection(
+                    receiver,
+                    "formControls",
+                    "",
+                )))
+            } else {
+                Self::type_error("Illegal invocation")
+            };
+        }
+        if matches!(
+            member,
+            "querySelector" | "querySelectorAll" | "matches" | "closest"
+        ) {
+            if let Err(error) = interaction::adapter::page_form_validation::RefreshControlValidity(
+                &self.document,
+                &self.form_validation_state,
+            ) {
+                return Self::type_error(&format!("Form validation service required: {error:?}"));
+            }
+        }
+        if member.starts_with("__internals") {
+            return self.CallElementInternals(receiver, member, arguments);
+        }
+        if matches!(
+            member,
+            "__controlValidity" | "__validityBrand" | "setCustomValidity"
+        ) {
+            return self.CallFormValidation(receiver, member, arguments);
+        }
+        if matches!(
+            member,
+            "__domExceptionName" | "__domExceptionMessage" | "__domExceptionCode"
+        ) {
+            if self.native_record_classes.borrow().get(&receiver) != Some(&"DOMException") {
+                return Self::type_error("Illegal invocation");
+            }
+            let field = match member {
+                "__domExceptionName" => "name",
+                "__domExceptionMessage" => "message",
+                _ => "code",
+            };
+            return self.get(receiver, field);
+        }
+        if receiver == 0 && member == "__createDOMException" {
+            let message = match arguments.first() {
+                Some(HostValue::String(s)) => s.as_str(),
+                _ => return Self::type_error("DOMException message conversion required"),
+            };
+            let name = match arguments.get(1) {
+                Some(HostValue::String(s)) => s.as_str(),
+                _ => return Self::type_error("DOMException name conversion required"),
+            };
+            return Self::value(self.CreateNativeDOMException(name, message));
+        }
+        if let Some(context) = self.webgl_contexts.borrow().get(&receiver).cloned() {
+            let number = |index: usize| match arguments.get(index) {
+                Some(HostValue::Number(value)) => Some(*value),
+                _ => None,
+            };
+            let object = |index: usize| number(index).map(|value| value as u32);
+            return match member {
+                "createShader" => object(0)
+                    .and_then(|kind| context.CreateShader(kind))
+                    .map_or_else(
+                        || Self::value(HostValue::Null(JavaScriptNull)),
+                        |id| Self::value(HostValue::Number(f64::from(id))),
+                    ),
+                "shaderSource" => match (object(0), arguments.get(1)) {
+                    (Some(shader), Some(HostValue::String(source))) => {
+                        context.ShaderSource(shader, source.clone());
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("shaderSource requires shader and source"),
+                },
+                "compileShader" => match object(0) {
+                    Some(shader) => {
+                        context.CompileShader(shader);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("compileShader requires shader"),
+                },
+                "getShaderParameter" => match (object(0), object(1)) {
+                    (Some(shader), Some(parameter)) => Self::value(HostValue::Boolean(
+                        context.ShaderParameter(shader, parameter),
+                    )),
+                    _ => Self::type_error("getShaderParameter requires shader and pname"),
+                },
+                "getShaderInfoLog" => match object(0) {
+                    Some(shader) => Self::value(HostValue::String(context.ShaderInfoLog(shader))),
+                    None => Self::type_error("getShaderInfoLog requires shader"),
+                },
+                "createProgram" => {
+                    Self::value(HostValue::Number(f64::from(context.CreateProgram())))
+                }
+                "attachShader" => match (object(0), object(1)) {
+                    (Some(program), Some(shader)) => {
+                        context.AttachShader(program, shader);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("attachShader requires program and shader"),
+                },
+                "linkProgram" => match object(0) {
+                    Some(program) => {
+                        context.LinkProgram(program);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("linkProgram requires program"),
+                },
+                "getProgramParameter" => match (object(0), object(1)) {
+                    (Some(program), Some(parameter))
+                        if matches!(
+                            parameter,
+                            webgl::ACTIVE_UNIFORMS | webgl::ACTIVE_ATTRIBUTES
+                        ) =>
+                    {
+                        Self::value(HostValue::Number(f64::from(
+                            context.ProgramParameterInteger(program, parameter),
+                        )))
+                    }
+                    (Some(program), Some(parameter)) => Self::value(HostValue::Boolean(
+                        context.ProgramParameter(program, parameter),
+                    )),
+                    _ => Self::type_error("getProgramParameter requires program and pname"),
+                },
+                "getProgramInfoLog" => match object(0) {
+                    Some(program) => {
+                        Self::value(HostValue::String(context.ProgramInfoLog(program)))
+                    }
+                    None => Self::type_error("getProgramInfoLog requires program"),
+                },
+                "deleteShader" => match object(0) {
+                    Some(shader) => {
+                        context.DeleteShader(shader);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("deleteShader requires shader"),
+                },
+                "getActiveUniform" | "getActiveAttrib" => match (object(0), object(1)) {
+                    (Some(program), Some(index)) => {
+                        let info = if member == "getActiveUniform" {
+                            context.ActiveUniform(program, index)
+                        } else {
+                            context.ActiveAttrib(program, index)
+                        };
+                        info.map_or_else(
+                            || Self::value(HostValue::Null(JavaScriptNull)),
+                            |info| {
+                                Self::value(HostValue::Record(vec![
+                                    ("name".into(), HostValue::String(info.name)),
+                                    ("size".into(), HostValue::Number(f64::from(info.size))),
+                                    ("type".into(), HostValue::Number(f64::from(info.kind))),
+                                ]))
+                            },
+                        )
+                    }
+                    _ => Self::type_error("active-info query requires program and index"),
+                },
+                "getUniformLocation" => match (object(0), arguments.get(1)) {
+                    (Some(program), Some(HostValue::String(name))) => {
+                        context.GetUniformLocation(program, name).map_or_else(
+                            || Self::value(HostValue::Null(JavaScriptNull)),
+                            |location| Self::value(HostValue::Number(f64::from(location))),
+                        )
+                    }
+                    _ => Self::type_error("getUniformLocation requires program and name"),
+                },
+                "useProgram" => match object(0) {
+                    Some(program) => {
+                        context.UseProgram(program);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("useProgram requires program"),
+                },
+                "getAttribLocation" => match (object(0), arguments.get(1)) {
+                    (Some(program), Some(HostValue::String(name))) => Self::value(
+                        HostValue::Number(f64::from(context.GetAttribLocation(program, name))),
+                    ),
+                    _ => Self::type_error("getAttribLocation requires program and name"),
+                },
+                "createBuffer" => Self::value(HostValue::Number(f64::from(context.CreateBuffer()))),
+                "bindBuffer" => match (object(0), arguments.get(1)) {
+                    (Some(target), Some(HostValue::Number(buffer))) => {
+                        context.BindBuffer(target, Some(*buffer as u32));
+                        HostResult::default()
+                    }
+                    (Some(target), Some(HostValue::Null(_))) => {
+                        context.BindBuffer(target, None);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("bindBuffer requires target and buffer"),
+                },
+                "bufferData" => match (object(0), arguments.get(1), object(2)) {
+                    (Some(target), Some(HostValue::Bytes(bytes)), Some(usage)) => {
+                        context.BufferData(target, bytes, usage);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("bufferData requires target, bytes and usage"),
+                },
+                "createTexture" => {
+                    Self::value(HostValue::Number(f64::from(context.CreateTexture())))
+                }
+                "bindTexture" => match (object(0), arguments.get(1)) {
+                    (Some(target), Some(HostValue::Number(texture))) => {
+                        context.BindTexture(target, Some(*texture as u32));
+                        HostResult::default()
+                    }
+                    (Some(target), Some(HostValue::Null(_))) => {
+                        context.BindTexture(target, None);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("bindTexture requires target and texture"),
+                },
+                "texParameteri" => match (object(0), object(1), number(2)) {
+                    (Some(target), Some(name), Some(value)) => {
+                        context.TexParameteri(target, name, value as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("texParameteri requires target, pname and value"),
+                },
+                "texImage2D" => match (
+                    object(0),
+                    number(1),
+                    number(2),
+                    number(3),
+                    number(4),
+                    number(5),
+                    object(6),
+                    object(7),
+                    arguments.get(8),
+                ) {
+                    (
+                        Some(target),
+                        Some(level),
+                        Some(internal_format),
+                        Some(width),
+                        Some(height),
+                        Some(border),
+                        Some(format),
+                        Some(kind),
+                        Some(pixels),
+                    ) => {
+                        let pixels = match pixels {
+                            HostValue::Bytes(bytes) => Some(bytes.as_ref()),
+                            HostValue::Null(_) => None,
+                            _ => {
+                                return Self::type_error("texImage2D pixels must be bytes or null");
+                            }
+                        };
+                        context.TexImage2D(
+                            target,
+                            level as i32,
+                            internal_format as i32,
+                            width as i32,
+                            height as i32,
+                            border as i32,
+                            format,
+                            kind,
+                            pixels,
+                        );
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("texImage2D requires nine arguments"),
+                },
+                "enableVertexAttribArray" => match object(0) {
+                    Some(index) => {
+                        context.EnableVertexAttribArray(index);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("enableVertexAttribArray requires index"),
+                },
+                "vertexAttrib2fv" => match (object(0), number(1), number(2)) {
+                    (Some(index), Some(x), Some(y)) => {
+                        context.VertexAttrib2fv(index, &[x as f32, y as f32]);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("vertexAttrib2fv requires index and two values"),
+                },
+                "createVertexArray" => {
+                    Self::value(HostValue::Number(f64::from(context.CreateVertexArray())))
+                }
+                "bindVertexArray" => match arguments.first() {
+                    Some(HostValue::Number(vertex_array)) => {
+                        context.BindVertexArray(Some(*vertex_array as u32));
+                        HostResult::default()
+                    }
+                    Some(HostValue::Null(_)) => {
+                        context.BindVertexArray(None);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("bindVertexArray requires a vertex array or null"),
+                },
+                "vertexAttribPointer" => match (
+                    object(0),
+                    number(1),
+                    object(2),
+                    arguments.get(3),
+                    number(4),
+                    number(5),
+                ) {
+                    (
+                        Some(index),
+                        Some(size),
+                        Some(kind),
+                        Some(HostValue::Boolean(normalized)),
+                        Some(stride),
+                        Some(offset),
+                    ) => {
+                        context.VertexAttribPointer(
+                            index,
+                            size as i32,
+                            kind,
+                            *normalized,
+                            stride as i32,
+                            offset as usize,
+                        );
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("vertexAttribPointer requires six arguments"),
+                },
+                "viewport" => match (number(0), number(1), number(2), number(3)) {
+                    (Some(x), Some(y), Some(width), Some(height)) => {
+                        context.Viewport(x as i32, y as i32, width as i32, height as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("viewport requires four numbers"),
+                },
+                "clearColor" => match (number(0), number(1), number(2), number(3)) {
+                    (Some(r), Some(g), Some(b), Some(a)) => {
+                        context.ClearColor(r as f32, g as f32, b as f32, a as f32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("clearColor requires four numbers"),
+                },
+                "clearDepth" => match number(0) {
+                    Some(depth) => {
+                        context.ClearDepth(depth);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("clearDepth requires a number"),
+                },
+                "clearStencil" => match number(0) {
+                    Some(stencil) => {
+                        context.ClearStencil(stencil as i32);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("clearStencil requires a number"),
+                },
+                "enable" | "disable" | "depthFunc" | "frontFace" | "cullFace" => match object(0) {
+                    Some(value) => {
+                        match member {
+                            "enable" => context.Enable(value),
+                            "disable" => context.Disable(value),
+                            "depthFunc" => context.DepthFunc(value),
+                            "frontFace" => context.FrontFace(value),
+                            "cullFace" => context.CullFace(value),
+                            _ => unreachable!(),
+                        }
+                        HostResult::default()
+                    }
+                    None => Self::type_error("WebGL state call requires an enum"),
+                },
+                "scissor" => match (number(0), number(1), number(2), number(3)) {
+                    (Some(x), Some(y), Some(width), Some(height)) => {
+                        context.Scissor(x as i32, y as i32, width as i32, height as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("scissor requires four numbers"),
+                },
+                "depthMask" => match arguments.first() {
+                    Some(HostValue::Boolean(enabled)) => {
+                        context.DepthMask(*enabled);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("depthMask requires a boolean"),
+                },
+                "colorMask" => match arguments {
+                    [HostValue::Boolean(red), HostValue::Boolean(green), HostValue::Boolean(blue), HostValue::Boolean(alpha), ..] =>
+                    {
+                        context.ColorMask(*red, *green, *blue, *alpha);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("colorMask requires four booleans"),
+                },
+                "blendEquation" => match object(0) {
+                    Some(mode) => {
+                        context.BlendEquation(mode);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("blendEquation requires a mode"),
+                },
+                "blendFuncSeparate" => match (object(0), object(1), object(2), object(3)) {
+                    (
+                        Some(source_rgb),
+                        Some(destination_rgb),
+                        Some(source_alpha),
+                        Some(destination_alpha),
+                    ) => {
+                        context.BlendFuncSeparate(
+                            source_rgb,
+                            destination_rgb,
+                            source_alpha,
+                            destination_alpha,
+                        );
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("blendFuncSeparate requires four enums"),
+                },
+                "bindFramebuffer" => match (object(0), arguments.get(1)) {
+                    (Some(_), Some(HostValue::Null(_))) => {
+                        context.BindDefaultFramebuffer();
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("only the default framebuffer is supported"),
+                },
+                "drawBuffers" => match object(0) {
+                    Some(_) => {
+                        context.DrawDefaultBuffer();
+                        HostResult::default()
+                    }
+                    None => Self::type_error("drawBuffers requires a buffer enum"),
+                },
+                "clear" => match object(0) {
+                    Some(mask) => {
+                        context.Clear(mask);
+                        self.NotifyCanvasDirty(receiver);
+                        HostResult::default()
+                    }
+                    None => Self::type_error("clear requires mask"),
+                },
+                "drawArrays" => match (object(0), number(1), number(2)) {
+                    (Some(mode), Some(first), Some(count)) => {
+                        context.DrawArrays(mode, first as i32, count as i32);
+                        self.NotifyCanvasDirty(receiver);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("drawArrays requires mode, first and count"),
+                },
+                "drawElements" => match (object(0), number(1), object(2), number(3)) {
+                    (Some(mode), Some(count), Some(kind), Some(offset)) => {
+                        context.DrawElements(mode, count as i32, kind, offset as usize);
+                        self.NotifyCanvasDirty(receiver);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("drawElements requires mode, count, type and offset"),
+                },
+                "uniformMatrix2fv" | "uniformMatrix3fv" | "uniformMatrix4fv" => {
+                    match (object(0), arguments.get(1), arguments.get(2)) {
+                        (
+                            Some(location),
+                            Some(HostValue::Boolean(transpose)),
+                            Some(HostValue::Bytes(bytes)),
+                        ) => match webgl_f32_values(bytes) {
+                            Some(values) => {
+                                match member {
+                                    "uniformMatrix2fv" => {
+                                        context.UniformMatrix2fv(location, *transpose, &values)
+                                    }
+                                    "uniformMatrix3fv" => {
+                                        context.UniformMatrix3fv(location, *transpose, &values)
+                                    }
+                                    "uniformMatrix4fv" => {
+                                        context.UniformMatrix4fv(location, *transpose, &values)
+                                    }
+                                    _ => unreachable!(),
+                                }
+                                HostResult::default()
+                            }
+                            None => Self::type_error("uniform matrix data is not Float32-aligned"),
+                        },
+                        _ => Self::type_error(
+                            "uniform matrix call requires location, transpose and values",
+                        ),
+                    }
+                }
+                "uniform1fv" | "uniform2fv" | "uniform3fv" | "uniform4fv" => {
+                    match (object(0), arguments.get(1)) {
+                        (Some(location), Some(HostValue::Bytes(bytes))) => {
+                            match webgl_f32_values(bytes) {
+                                Some(values) => {
+                                    match member {
+                                        "uniform1fv" => context.Uniform1fv(location, &values),
+                                        "uniform2fv" => context.Uniform2fv(location, &values),
+                                        "uniform3fv" => context.Uniform3fv(location, &values),
+                                        "uniform4fv" => context.Uniform4fv(location, &values),
+                                        _ => unreachable!(),
+                                    }
+                                    HostResult::default()
+                                }
+                                None => Self::type_error("uniform data is not Float32-aligned"),
+                            }
+                        }
+                        _ => Self::type_error("uniform vector call requires location and values"),
+                    }
+                }
+                "uniform2f" => match (object(0), number(1), number(2)) {
+                    (Some(location), Some(x), Some(y)) => {
+                        context.Uniform2f(location, x as f32, y as f32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform2f requires location and two values"),
+                },
+                "uniform3f" => match (object(0), number(1), number(2), number(3)) {
+                    (Some(location), Some(x), Some(y), Some(z)) => {
+                        context.Uniform3f(location, x as f32, y as f32, z as f32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform3f requires location and three values"),
+                },
+                "uniform4f" => match (object(0), number(1), number(2), number(3), number(4)) {
+                    (Some(location), Some(x), Some(y), Some(z), Some(w)) => {
+                        context.Uniform4f(location, x as f32, y as f32, z as f32, w as f32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform4f requires location and four values"),
+                },
+                "uniform1f" => match (object(0), number(1)) {
+                    (Some(location), Some(value)) => {
+                        context.Uniform1f(location, value as f32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform1f requires location and value"),
+                },
+                "uniform1i" => match (object(0), number(1)) {
+                    (Some(location), Some(value)) => {
+                        context.Uniform1i(location, value as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform1i requires location and value"),
+                },
+                "uniform2i" => match (object(0), number(1), number(2)) {
+                    (Some(location), Some(x), Some(y)) => {
+                        context.Uniform2i(location, x as i32, y as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform2i requires location and two values"),
+                },
+                "uniform3i" => match (object(0), number(1), number(2), number(3)) {
+                    (Some(location), Some(x), Some(y), Some(z)) => {
+                        context.Uniform3i(location, x as i32, y as i32, z as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform3i requires location and three values"),
+                },
+                "uniform4i" => match (object(0), number(1), number(2), number(3), number(4)) {
+                    (Some(location), Some(x), Some(y), Some(z), Some(w)) => {
+                        context.Uniform4i(location, x as i32, y as i32, z as i32, w as i32);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform4i requires location and four values"),
+                },
+                "uniform1iv" | "uniform2iv" | "uniform3iv" | "uniform4iv" => {
+                    match (object(0), arguments.get(1)) {
+                        (Some(location), Some(HostValue::Bytes(bytes))) => {
+                            match webgl_i32_values(bytes) {
+                                Some(values) => {
+                                    match member {
+                                        "uniform1iv" => context.Uniform1iv(location, &values),
+                                        "uniform2iv" => context.Uniform2iv(location, &values),
+                                        "uniform3iv" => context.Uniform3iv(location, &values),
+                                        "uniform4iv" => context.Uniform4iv(location, &values),
+                                        _ => unreachable!(),
+                                    }
+                                    HostResult::default()
+                                }
+                                None => Self::type_error("uniform data is not Int32-aligned"),
+                            }
+                        }
+                        _ => Self::type_error("uniform vector call requires location and values"),
+                    }
+                }
+                "uniform1ui" => match (object(0), object(1)) {
+                    (Some(location), Some(value)) => {
+                        context.Uniform1ui(location, value);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform1ui requires location and value"),
+                },
+                "uniform2ui" => match (object(0), object(1), object(2)) {
+                    (Some(location), Some(x), Some(y)) => {
+                        context.Uniform2ui(location, x, y);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform2ui requires location and two values"),
+                },
+                "uniform3ui" => match (object(0), object(1), object(2), object(3)) {
+                    (Some(location), Some(x), Some(y), Some(z)) => {
+                        context.Uniform3ui(location, x, y, z);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform3ui requires location and three values"),
+                },
+                "uniform4ui" => match (object(0), object(1), object(2), object(3), object(4)) {
+                    (Some(location), Some(x), Some(y), Some(z), Some(w)) => {
+                        context.Uniform4ui(location, x, y, z, w);
+                        HostResult::default()
+                    }
+                    _ => Self::type_error("uniform4ui requires location and four values"),
+                },
+                "uniform1uiv" | "uniform2uiv" | "uniform3uiv" | "uniform4uiv" => {
+                    match (object(0), arguments.get(1)) {
+                        (Some(location), Some(HostValue::Bytes(bytes))) => {
+                            match webgl_u32_values(bytes) {
+                                Some(values) => {
+                                    match member {
+                                        "uniform1uiv" => context.Uniform1uiv(location, &values),
+                                        "uniform2uiv" => context.Uniform2uiv(location, &values),
+                                        "uniform3uiv" => context.Uniform3uiv(location, &values),
+                                        "uniform4uiv" => context.Uniform4uiv(location, &values),
+                                        _ => unreachable!(),
+                                    }
+                                    HostResult::default()
+                                }
+                                None => Self::type_error("uniform data is not Uint32-aligned"),
+                            }
+                        }
+                        _ => Self::type_error("uniform vector call requires location and values"),
+                    }
+                }
+                "getShaderPrecisionFormat" => Self::value(HostValue::Record(vec![
+                    ("rangeMin".into(), HostValue::Number(127.0)),
+                    ("rangeMax".into(), HostValue::Number(127.0)),
+                    ("precision".into(), HostValue::Number(23.0)),
+                ])),
+                "getParameter" => match object(0) {
+                    Some(webgl::VENDOR) => Self::value(HostValue::String("WebKit".into())),
+                    Some(webgl::RENDERER) => Self::value(HostValue::String("WebKit WebGL".into())),
+                    Some(webgl::VERSION) => Self::value(HostValue::String(
+                        if context.ContextType() == canvas::CanvasContextType::WebGL2 {
+                            "WebGL 2.0 (OpenGL ES 3.0 Chromium)"
+                        } else {
+                            "WebGL 1.0 (OpenGL ES 2.0 Chromium)"
+                        }
+                        .into(),
+                    )),
+                    Some(webgl::SHADING_LANGUAGE_VERSION) => Self::value(HostValue::String(
+                        if context.ContextType() == canvas::CanvasContextType::WebGL2 {
+                            "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"
+                        } else {
+                            "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"
+                        }
+                        .into(),
+                    )),
+                    Some(parameter @ (webgl::VIEWPORT | webgl::SCISSOR_BOX)) => {
+                        let bytes = context
+                            .IntegerParameters(parameter, 4)
+                            .into_iter()
+                            .flat_map(i32::to_ne_bytes)
+                            .collect::<Vec<_>>();
+                        Self::value(HostValue::Bytes(bytes.into()))
+                    }
+                    Some(
+                        parameter @ (webgl::ALIASED_POINT_SIZE_RANGE
+                        | webgl::ALIASED_LINE_WIDTH_RANGE),
+                    ) => {
+                        let bytes = context
+                            .FloatParameters(parameter, 2)
+                            .into_iter()
+                            .flat_map(f32::to_ne_bytes)
+                            .collect::<Vec<_>>();
+                        Self::value(HostValue::Bytes(bytes.into()))
+                    }
+                    Some(parameter) => Self::value(HostValue::Number(f64::from(
+                        context.IntegerParameter(parameter),
+                    ))),
+                    None => Self::type_error("getParameter requires pname"),
+                },
+                "getExtension" => Self::value(HostValue::Null(JavaScriptNull)),
+                "getContextAttributes" => Self::value(HostValue::Record(vec![
+                    ("alpha".into(), HostValue::Boolean(true)),
+                    ("depth".into(), HostValue::Boolean(true)),
+                    ("stencil".into(), HostValue::Boolean(true)),
+                    ("antialias".into(), HostValue::Boolean(true)),
+                    ("premultipliedAlpha".into(), HostValue::Boolean(true)),
+                    ("preserveDrawingBuffer".into(), HostValue::Boolean(false)),
+                    // canvas_context_creation_attributes_core.h:34-39 keeps
+                    // the requested value even if backend admission disables
+                    // the effective low-latency mode used by input routing.
+                    (
+                        "desynchronized".into(),
+                        HostValue::Boolean(context.CreationAttributes().desynchronized_specified),
+                    ),
+                    (
+                        "failIfMajorPerformanceCaveat".into(),
+                        HostValue::Boolean(false),
+                    ),
+                    (
+                        "powerPreference".into(),
+                        HostValue::String("default".into()),
+                    ),
+                ])),
+                "getError" => Self::value(HostValue::Number(f64::from(context.GetError()))),
+                "__snapshot" => context.Snapshot().map_or_else(
+                    || Self::value(HostValue::Null(JavaScriptNull)),
+                    |snapshot| Self::value(HostValue::Bytes(snapshot.pixels.into())),
+                ),
+                _ => Self::unhandled(),
+            };
+        }
         // Opt-in attribution of read/query work hidden inside JS callbacks.
         // Recording observes this native binding only; it never calls JS.
         enum CallProfile {
@@ -1022,7 +2198,10 @@ impl DOMJavaScriptBindings {
                     Self::value(HostValue::String(
                         if collection.kind == "options" {
                             "HTMLOptionsCollection"
-                        } else if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
+                        } else if matches!(
+                            collection.kind.as_str(),
+                            "snapshot" | "childNodes" | "labels"
+                        ) {
                             "NodeList"
                         } else {
                             "HTMLCollection"
@@ -1038,106 +2217,107 @@ impl DOMJavaScriptBindings {
         if let Some(result) = self.CallDOMService(receiver, member, arguments) {
             return result;
         }
+        if matches!(
+            member,
+            "__eventTargetBrand" | "__eventTargetHandlerGet" | "__eventTargetHandlerSet"
+        ) {
+            if !self.IsEventTargetReceiver(receiver) {
+                return Self::type_error("Illegal EventTarget invocation");
+            }
+            if member == "__eventTargetBrand" {
+                return Self::value(HostValue::Boolean(true));
+            }
+            let Some(HostValue::String(kind)) = arguments.first() else {
+                return Self::type_error("EventHandler requires an event type");
+            };
+            if member == "__eventTargetHandlerSet" {
+                self.SetEventHandler(receiver, kind, &arguments[1..]);
+                return HostResult::default();
+            }
+            return self
+                .ListenerTarget(receiver)
+                .GetAttributeEventListener(kind)
+                .and_then(|listener| Listener::From(listener.as_ref()).callback.Resolve())
+                .map_or_else(
+                    || Self::value(HostValue::Null(JavaScriptNull)),
+                    |callback| Self::value(HostValue::JavaScriptFunction(callback)),
+                );
+        }
+        if member == "__abortGetAttributeListener" {
+            return self.get(receiver, "onabort");
+        }
+        if member == "__abortSetAttributeListener" {
+            return self.set(receiver, "onabort", arguments);
+        }
         // cpp: webapi/dom_bindings.cc:743-775
         if matches!(member, "addEventListener" | "removeEventListener") {
-            let (Some(HostValue::String(kind)), Some(HostValue::JavaScriptFunction(callback))) =
-                (arguments.first(), arguments.get(1))
-            else {
-                return Self::type_error(&format!("{member} requires an event type and function"));
+            if !self.IsEventTargetReceiver(receiver) {
+                return Self::type_error("Illegal EventTarget invocation");
+            }
+            let Some(HostValue::String(kind)) = arguments.first() else {
+                return Self::type_error("EventTarget requires an event type");
+            };
+            let callback = match arguments.get(1) {
+                None | Some(HostValue::Null(_)) | Some(HostValue::Undefined(_)) => {
+                    return HostResult::default()
+                }
+                Some(HostValue::JavaScriptFunction(callback)) => callback,
+                _ => return Self::type_error("EventTarget callback conversion required"),
             };
             let capture = match arguments.get(2) {
                 None => false,
                 Some(HostValue::Boolean(capture)) => *capture,
                 _ => return Self::type_error("listener options currently require a boolean"),
             };
-            // Only this target/type bucket can contain an equal registration.
-            // Function identity is checked at the public add/remove boundary,
-            // never by the dispatch snapshot's per-listener liveness check.
-            let matches =
-                |l: &Listener| l.capture == capture && !l.attribute && l.callback.Matches(callback);
+            let target = self.ListenerTarget(receiver);
+            let reference_slot = self.NewListenerSlot();
+            let listener = Rc::new(Listener::new(
+                receiver,
+                ListenerCallback::Rooted(callback.clone()),
+                reference_slot,
+                false,
+                self.callback_context.borrow().clone(),
+                self.callback_context.clone(),
+                Rc::downgrade(&self.native_abort),
+            ));
             if member == "removeEventListener" {
-                let mut targets = self.listeners.borrow_mut();
-                if let Some(kinds) = targets.get_mut(&receiver) {
-                    if let Some(listeners) = kinds.get_mut(kind) {
-                        listeners.retain(|l| {
-                            if matches(l) {
-                                l.active.set(false);
-                                self.RemoveListenerReference(l);
-                                false
-                            } else {
-                                true
-                            }
-                        });
-                        if listeners.is_empty() {
-                            kinds.remove(kind);
-                        }
-                    }
-                    if kinds.is_empty() {
-                        targets.remove(&receiver);
-                    }
-                }
+                target.removeEventListener(kind, Some(listener.as_ref()), capture);
             } else {
-                if self
-                    .listeners
-                    .borrow()
-                    .get(&receiver)
-                    .and_then(|kinds| kinds.get(kind))
-                    .is_some_and(|listeners| listeners.iter().any(matches))
-                {
-                    return HostResult::default();
-                }
-                let once = match arguments.get(3) {
-                    None => false,
-                    Some(HostValue::Boolean(b)) => *b,
+                use interaction::dispatch::core::dom::events::add_event_listener_options_resolved::AddEventListenerOptionsResolved;
+                let mut options = AddEventListenerOptionsResolved::new();
+                options.setCapture(capture);
+                match arguments.get(3) {
+                    None => {}
+                    Some(HostValue::Boolean(once)) => options.setOnce(*once),
                     _ => return Self::type_error("bad_variant_access"),
-                };
-                let passive_specified = match arguments.get(4) {
-                    None | Some(HostValue::Undefined(_)) => None,
-                    Some(HostValue::Boolean(b)) => Some(*b),
-                    _ => return Self::type_error("bad_variant_access"),
-                };
-                // cpp: EventTarget::SetDefaultAddEventListenerOptions. A plain
-                // boolean capture argument never means explicit passive:false.
-                let passive = passive_specified.unwrap_or_else(|| {
-                    matches!(
-                        kind.as_str(),
-                        "wheel" | "mousewheel" | "touchstart" | "touchmove"
-                    ) && self.IsTopLevelEventTarget(receiver)
-                });
-                if kind == "wheel" {
-                    browser_tracing::instant(
-                        "input",
-                        "WheelListenerAdded",
-                        &[
-                            ("target", receiver as f64),
-                            ("capture", capture as u8 as f64),
-                            ("passive", passive as u8 as f64),
-                            (
-                                "passive_specified",
-                                passive_specified.is_some() as u8 as f64,
-                            ),
-                        ],
-                    );
                 }
-                let reference_slot = self.NewListenerSlot();
-                let callback = self.StoreListenerCallback(receiver, reference_slot, callback);
-                self.listeners
-                    .borrow_mut()
-                    .entry(receiver)
-                    .or_default()
-                    .entry(kind.clone())
-                    .or_default()
-                    .push(Listener {
-                        active: Rc::new(Cell::new(true)),
-                        target: receiver,
-                        kind: kind.clone(),
-                        callback,
-                        reference_slot,
-                        capture,
-                        attribute: false,
-                        once,
-                        passive,
-                    });
+                match arguments.get(4) {
+                    None | Some(HostValue::Undefined(_)) => {}
+                    Some(HostValue::Boolean(passive)) => options.setPassive(*passive),
+                    _ => return Self::type_error("bad_variant_access"),
+                }
+                let listener = Rc::new(Listener::new(
+                    receiver,
+                    self.StoreListenerCallback(receiver, reference_slot, callback),
+                    reference_slot,
+                    false,
+                    self.callback_context.borrow().clone(),
+                    self.callback_context.clone(),
+                    Rc::downgrade(&self.native_abort),
+                ));
+                match arguments.get(5) {
+                    None | Some(HostValue::Undefined(_)) | Some(HostValue::Null(_)) => {}
+                    Some(signal) => {
+                        let Some(signal) = self.native_abort.SignalFromValue(signal) else {
+                            self.RemoveListenerReference(&listener);
+                            return Self::type_error("signal is not an AbortSignal");
+                        };
+                        options.setSignal(signal);
+                    }
+                }
+                if !target.addEventListenerWithOptions(kind, Some(listener.clone()), options) {
+                    self.RemoveListenerReference(&listener);
+                }
             }
             return HostResult::default();
         }
@@ -1278,6 +2458,15 @@ impl DOMJavaScriptBindings {
                         arguments
                     {
                         self.method_wrappers.insert(name.clone(), value.clone());
+                        if name == "__callEventHandler" {
+                            self.native_abort.BindHandlerWrapper(value);
+                        }
+                        if name == "__inputDataTransferFileValue" {
+                            self.native_abort.BindInputFileProjection(value);
+                        }
+                        if name == "__deliverMutationObserver" {
+                            self.native_mutation_observers.BindScriptDelivery(value);
+                        }
                         if name == "__eventState" {
                             *self.services.event_state.borrow_mut() = Some(value.clone());
                         }
@@ -1304,9 +2493,38 @@ impl DOMJavaScriptBindings {
                 self.document.borrow().GetDocument().Node(index).Type() == DOMNodeType::kDocument
             });
             if is_document {
+                // Document::write cc:4820-4825 rejects XML before requesting
+                // a parser insertion point (including SVGDocument).
+                let html = {
+                    let owner = self.document.borrow();
+                    let d = owner.GetDocument();
+                    d.DocumentType(d.Root()) == dom::persistent_document::DOMDocumentType::kHTML
+                };
+                if !html {
+                    return Self::popup_error(&dom::error::DOMException {
+                        kind: dom::error::DOMExceptionKind::InvalidStateError,
+                        message: "Only HTML documents support write().",
+                    });
+                }
                 let Some(HostValue::String(markup)) = arguments.first() else {
                     return Self::type_error("document.write requires a string");
                 };
+                if self
+                    .document
+                    .borrow()
+                    .GetDocument()
+                    .ShouldIgnoreOpensAndWrites()
+                {
+                    return HostResult::default();
+                }
+                let _write_scope = self.document.borrow().GetDocument().EnterDocumentWrite();
+                let _frame_creation_context = self
+                    .document
+                    .borrow()
+                    .GetDocument()
+                    .EnterFrameOwnerCreationContext(
+                        dom::frame_owner_loading::FrameOwnerCreationContext::Script,
+                    );
                 if self
                     .write_document
                     .as_mut()
@@ -1329,6 +2547,151 @@ impl DOMJavaScriptBindings {
         };
         let node = document.Node(index);
         match member {
+            // Source: element.cc:10091-10131
+            "setPointerCapture" | "releasePointerCapture" | "hasPointerCapture" => {
+                if node.Type() != DOMNodeType::kElement {
+                    return Self::type_error("pointer capture requires an element receiver");
+                }
+                let Some(HostValue::Number(pointer_id)) = arguments.first() else {
+                    return Self::type_error("pointer capture requires a pointer id");
+                };
+                let Some(handler) = self.pointer_capture.clone() else {
+                    return if member == "hasPointerCapture" {
+                        Self::value(HostValue::Boolean(false))
+                    } else {
+                        HostResult::default()
+                    };
+                };
+                let operation = match member {
+                    "setPointerCapture" => PointerCaptureOperation::Set,
+                    "releasePointerCapture" => PointerCaptureOperation::Release,
+                    _ => PointerCaptureOperation::Has,
+                };
+                let pointer_id = *pointer_id as i32;
+                drop(owner);
+                match handler(operation, pointer_id, receiver) {
+                    Ok(value) => Self::value(HostValue::Boolean(value)),
+                    Err(error) => {
+                        let (name, message) = match error {
+                            interaction::PointerCaptureError::NoActivePointer => (
+                                "NotFoundError",
+                                "No active pointer with the given id is found.",
+                            ),
+                            interaction::PointerCaptureError::InvalidState => {
+                                ("InvalidStateError", "InvalidStateError")
+                            }
+                        };
+                        Self::value(HostValue::Record(vec![
+                            ("exceptionName".into(), HostValue::String(name.into())),
+                            ("message".into(), HostValue::String(message.into())),
+                        ]))
+                    }
+                }
+            }
+            "__canvasDimension" | "__canvasSetDimension" | "getContext"
+                if node.IsHTMLElement("canvas") =>
+            {
+                if member == "getContext" {
+                    let Some(HostValue::String(context_id)) = arguments.first() else {
+                        return Self::type_error("getContext requires a context identifier");
+                    };
+                    let Some(context_type) = canvas::CanvasContextType::FromContextId(context_id)
+                    else {
+                        return Self::value(HostValue::Null(JavaScriptNull));
+                    };
+                    if !matches!(
+                        context_type,
+                        canvas::CanvasContextType::WebGL1 | canvas::CanvasContextType::WebGL2
+                    ) {
+                        return Self::value(HostValue::Null(JavaScriptNull));
+                    }
+                    if !cfg!(feature = "webgl_vertical_slice") {
+                        // Do not make standards feature detection succeed for
+                        // the intentionally incomplete triangle-only slice.
+                        return Self::value(HostValue::Null(JavaScriptNull));
+                    }
+                    if let Some(id) = self.canvas_webgl_ids.borrow().get(&receiver).copied() {
+                        let same_family = self
+                            .webgl_contexts
+                            .borrow()
+                            .get(&id)
+                            .is_some_and(|context| context.ContextType() == context_type);
+                        return if same_family {
+                            Self::value(HostValue::Object(HostObjectRef { id }))
+                        } else {
+                            Self::value(HostValue::Null(JavaScriptNull))
+                        };
+                    }
+                    let mut factory = webgl::WebGLContextFactory::default();
+                    let desynchronized = matches!(arguments.get(1), Some(HostValue::Boolean(true)));
+                    let attributes = canvas::CanvasContextCreationAttributesCore {
+                        desynchronized,
+                        desynchronized_specified: desynchronized,
+                        ..Default::default()
+                    };
+                    let canvas_owner = document.CanvasElementState(index);
+                    let created = canvas_owner
+                        .borrow_mut()
+                        .GetCanvasRenderingContext(&mut factory, context_id, attributes)
+                        .is_some();
+                    let Some(context) = created.then(|| factory.TakeCreated()).flatten() else {
+                        return Self::value(HostValue::Null(JavaScriptNull));
+                    };
+                    self.canvas_elements
+                        .borrow_mut()
+                        .insert(receiver, canvas_owner);
+                    let id = self.next_webgl_id.get();
+                    self.next_webgl_id.set(id + 1);
+                    self.webgl_contexts.borrow_mut().insert(id, context);
+                    self.canvas_webgl_ids.borrow_mut().insert(receiver, id);
+                    self.webgl_canvas_ids.borrow_mut().insert(id, receiver);
+                    return Self::value(HostValue::Object(HostObjectRef { id }));
+                }
+                let Some(HostValue::String(dimension)) = arguments.first() else {
+                    return Self::type_error("canvas dimension name is required");
+                };
+                let default = match dimension.as_str() {
+                    "width" => 300_u32,
+                    "height" => 150_u32,
+                    _ => return Self::type_error("invalid canvas dimension"),
+                };
+                if member == "__canvasDimension" {
+                    let value = node
+                        .FindAttribute(dimension)
+                        .and_then(|attribute| parse_canvas_dimension(&attribute.value))
+                        // html_canvas_element.cc:842-859. The content
+                        // attribute remains untouched, but dimensions above
+                        // signed 31-bit range expose the element default.
+                        .filter(|value| *value <= i32::MAX as u32)
+                        .unwrap_or(default);
+                    return Self::value(HostValue::Number(f64::from(value)));
+                }
+                let Some(HostValue::Number(value)) = arguments.get(1) else {
+                    return Self::type_error("canvas dimension value is required");
+                };
+                if !value.is_finite() || *value < 0.0 || *value > u32::MAX as f64 {
+                    return Self::type_error("canvas dimension is outside unsigned long range");
+                }
+                let value = *value as u32;
+                // The IDL setter stores the dimension default for an unsigned
+                // value outside Blink's 31-bit canvas range. Direct
+                // setAttribute still preserves its original oversized text;
+                // the getter branch above exposes the default in either case.
+                let value = if value > i32::MAX as u32 {
+                    default
+                } else {
+                    value
+                };
+                drop(owner);
+                (self.emit_mutation.borrow_mut())(&DOMMutation {
+                    mutation_type: DOMMutationType::kSetAttribute,
+                    target_node_id: receiver,
+                    name: dimension.clone(),
+                    value: value.to_string(),
+                    ..Default::default()
+                });
+                Self::value(HostValue::Number(f64::from(value)))
+            }
             "isEqualNode" => {
                 let other = match arguments.first() {
                     Some(HostValue::Object(other)) => document.FindNodeById(other.id),
@@ -1403,7 +2766,7 @@ impl DOMJavaScriptBindings {
                             path.close();
                         }
                         PaintPathVerb::kConicTo => {
-                            return Self::type_error("invalid SVG path geometry")
+                            return Self::type_error("invalid SVG path geometry");
                         }
                     }
                 }
@@ -1465,18 +2828,128 @@ impl DOMJavaScriptBindings {
                 Self::node_reference(document, sibling)
             }
             // cpp: webapi/dom_bindings.cc:833-846
+            "stylesheetConstruct" => {
+                if node.Type() != DOMNodeType::kDocument {
+                    return Self::type_error("CSSStyleSheet constructor requires a Document");
+                }
+                drop(owner);
+                let mut owner = self.document.borrow_mut();
+                let document = owner.GetDocumentMut();
+                let sheet = style::ParseCSS("");
+                let identity = match document.RegisterConstructedStyleSheet(sheet) {
+                    Ok(identity) => identity,
+                    Err(_) => return Self::type_error("Could not construct CSSStyleSheet"),
+                };
+                Self::value(HostValue::Number(identity as f64))
+            }
+            "stylesheetReplaceSync" => {
+                let (Some(HostValue::Number(identity)), Some(HostValue::String(text))) =
+                    (arguments.first(), arguments.get(1))
+                else {
+                    return Self::type_error("replaceSync requires a constructed sheet and text");
+                };
+                let raw_identity = *identity;
+                let identity = raw_identity as u64;
+                if identity == 0 || identity as f64 != raw_identity {
+                    return Self::type_error("Invalid constructed stylesheet identity");
+                }
+                let replacement = style::ParseCSS(text);
+                drop(owner);
+                let mut owner = self.document.borrow_mut();
+                let changed = match owner
+                    .GetDocumentMut()
+                    .ReplaceConstructedStyleSheet(identity, replacement)
+                {
+                    Ok(changed) => changed,
+                    Err(_) => return Self::type_error("Unknown constructed stylesheet"),
+                };
+                drop(owner);
+                if changed {
+                    if let Some(invalidate) = self.services.host.invalidate_style.as_mut() {
+                        invalidate();
+                    }
+                }
+                HostResult::default()
+            }
+            "adoptedStyleSheetCount" | "adoptedStyleSheetIdentity" | "setAdoptedStyleSheets" => {
+                if node.Type() != DOMNodeType::kDocument
+                    && (node.Type() != DOMNodeType::kDocumentFragment
+                        || document.ShadowHost(index).is_none())
+                {
+                    return Self::type_error(
+                        "adoptedStyleSheets requires a Document or ShadowRoot",
+                    );
+                }
+                if member == "adoptedStyleSheetCount" {
+                    return Self::value(HostValue::Number(
+                        document.AdoptedStyleSheetsForTreeScope(index).len() as f64,
+                    ));
+                }
+                if member == "adoptedStyleSheetIdentity" {
+                    let Some(HostValue::Number(position)) = arguments.first() else {
+                        return Self::type_error("adopted stylesheet index is required");
+                    };
+                    let sheets = document.AdoptedStyleSheetsForTreeScope(index);
+                    let position = *position as usize;
+                    return Self::value(HostValue::Number(
+                        sheets.get(position).map_or(0, |sheet| sheet.Identity()) as f64,
+                    ));
+                }
+                let mut identities = Vec::with_capacity(arguments.len());
+                for value in arguments {
+                    let HostValue::Number(identity) = value else {
+                        return Self::type_error(
+                            "adoptedStyleSheets requires CSSStyleSheet objects",
+                        );
+                    };
+                    let converted = *identity as u64;
+                    if converted == 0 || converted as f64 != *identity {
+                        return Self::type_error("Invalid constructed stylesheet identity");
+                    }
+                    identities.push(converted);
+                }
+                drop(owner);
+                let mut owner = self.document.borrow_mut();
+                let changed = match owner
+                    .GetDocumentMut()
+                    .SetAdoptedStyleSheets(index, identities)
+                {
+                    Ok(changed) => changed,
+                    Err(_) => {
+                        return Self::type_error("Cannot adopt stylesheet in this tree scope");
+                    }
+                };
+                drop(owner);
+                if changed {
+                    if let Some(invalidate) = self.services.host.invalidate_style.as_mut() {
+                        invalidate();
+                    }
+                }
+                HostResult::default()
+            }
             "stylesheetCount" => Self::value(HostValue::Number(
                 document.StyleSheetsForNode(index).len() as f64,
             )),
-            "stylesheetOwner" | "stylesheetRuleCount" | "stylesheetRuleText" => {
+            "stylesheetOwner"
+            | "stylesheetRuleCount"
+            | "stylesheetRuleText"
+            | "constructedStylesheetRuleCount"
+            | "constructedStylesheetRuleText" => {
+                let constructed = member.starts_with("constructed");
                 let sheets = document.StyleSheetsForNode(index);
                 let Some(HostValue::Number(sheet_index)) = arguments.first() else {
                     return Self::value(HostValue::Null(Default::default()));
                 };
-                if *sheet_index < 0.0 || *sheet_index >= sheets.len() as f64 {
+                let sheet = if constructed {
+                    document.ConstructedStyleSheet(*sheet_index as u64)
+                } else {
+                    (*sheet_index >= 0.0)
+                        .then(|| sheets.get(*sheet_index as usize))
+                        .flatten()
+                };
+                let Some(sheet) = sheet else {
                     return Self::value(HostValue::Null(Default::default()));
-                }
-                let sheet = &sheets[*sheet_index as usize];
+                };
                 if member == "stylesheetOwner" {
                     return Self::value(if sheet.owner_node_id != 0 {
                         HostValue::Object(HostObjectRef {
@@ -1486,7 +2959,7 @@ impl DOMJavaScriptBindings {
                         HostValue::Null(Default::default())
                     });
                 }
-                if member == "stylesheetRuleCount" {
+                if member.ends_with("RuleCount") {
                     return Self::value(HostValue::Number(sheet.rules.len() as f64));
                 }
                 let Some(HostValue::Number(rule_index)) = arguments.get(1) else {
@@ -1507,19 +2980,30 @@ impl DOMJavaScriptBindings {
                 Self::value(HostValue::String(text))
             }
             // cpp: webapi/dom_bindings.cc:847-869
-            "stylesheetInsertRule" | "stylesheetDeleteRule" => {
+            "stylesheetInsertRule"
+            | "stylesheetDeleteRule"
+            | "constructedStylesheetInsertRule"
+            | "constructedStylesheetDeleteRule" => {
+                let constructed = member.starts_with("constructed");
                 let sheets = document.StyleSheetsForNode(index);
                 let (Some(HostValue::Number(sheet_index)), Some(HostValue::Number(rule_index))) =
                     (arguments.first(), arguments.get(1))
                 else {
                     return Self::type_error("Invalid stylesheet index");
                 };
-                if *sheet_index < 0.0 || *sheet_index >= sheets.len() as f64 || *rule_index < 0.0 {
+                if *sheet_index < 0.0 || *rule_index < 0.0 {
                     return Self::type_error("Invalid stylesheet index");
                 }
-                let sheet = &sheets[*sheet_index as usize];
+                let sheet = if constructed {
+                    document.ConstructedStyleSheet(*sheet_index as u64)
+                } else {
+                    sheets.get(*sheet_index as usize)
+                };
+                let Some(sheet) = sheet else {
+                    return Self::type_error("Invalid stylesheet index");
+                };
                 if *rule_index > sheet.rules.len() as f64
-                    || (member == "stylesheetDeleteRule" && *rule_index == sheet.rules.len() as f64)
+                    || (member.ends_with("DeleteRule") && *rule_index == sheet.rules.len() as f64)
                 {
                     return HostResult::Failure(
                         javascript::javascript_runtime::JavaScriptExceptionKind::kRangeError,
@@ -1527,7 +3011,7 @@ impl DOMJavaScriptBindings {
                     );
                 }
                 let index = *rule_index as usize;
-                let sheet = if member == "stylesheetInsertRule" {
+                let sheet = if member.ends_with("InsertRule") {
                     let text = match arguments.get(2) {
                         Some(HostValue::String(text)) => text.as_str(),
                         _ => "",
@@ -1558,7 +3042,22 @@ impl DOMJavaScriptBindings {
                     }
                 };
                 drop(owner);
-                if let Some(emit) = self.services.host.emit_style_sheet.as_mut() {
+                if constructed {
+                    let mut owner = self.document.borrow_mut();
+                    let changed = match owner
+                        .GetDocumentMut()
+                        .ReplaceConstructedStyleSheet(*sheet_index as u64, sheet)
+                    {
+                        Ok(changed) => changed,
+                        Err(_) => return Self::type_error("Unknown constructed stylesheet"),
+                    };
+                    drop(owner);
+                    if changed {
+                        if let Some(invalidate) = self.services.host.invalidate_style.as_mut() {
+                            invalidate();
+                        }
+                    }
+                } else if let Some(emit) = self.services.host.emit_style_sheet.as_mut() {
                     emit(sheet);
                 }
                 Self::value(HostValue::Number(index as f64))
@@ -1788,10 +3287,44 @@ impl DOMJavaScriptBindings {
                 (self.emit_mutation.borrow_mut())(&mutation);
                 Self::value(HostValue::Object(HostObjectRef { id }))
             }
-            "hasFocus" => Self::value(HostValue::Boolean(true)),
+            "hasFocus" => Self::value(HostValue::Boolean(
+                self.services
+                    .host
+                    .read_document_focus
+                    .as_ref()
+                    .and_then(|read| read(document.RootHandle().Identity()))
+                    .is_some_and(|focus| focus.has_focus),
+            )),
             // cpp: element.cc:7768-7888. The DOM owner allocates the
             // ShadowRoot so style/tree-scope identity is not confined to the
             // JavaScript wrapper's WeakMap.
+            "__shadowReferenceTargetGet" | "__shadowReferenceTargetSet" => {
+                if document.ShadowHost(index).is_none() {
+                    return Self::type_error("referenceTarget requires a ShadowRoot");
+                }
+                if member == "__shadowReferenceTargetGet" {
+                    return Self::value(
+                        document
+                            .ShadowReferenceTarget(index)
+                            .map_or(HostValue::Null(JavaScriptNull), |v| {
+                                HostValue::String(v.into())
+                            }),
+                    );
+                }
+                let reference_target = match arguments.first() {
+                    Some(HostValue::String(value)) => Some(value.clone()),
+                    Some(HostValue::Null(_)) => None,
+                    _ => return Self::type_error("referenceTarget requires a nullable DOMString"),
+                };
+                drop(owner);
+                (self.emit_mutation.borrow_mut())(&DOMMutation {
+                    mutation_type: DOMMutationType::kSetShadowReferenceTarget,
+                    target_node_id: receiver,
+                    reference_target,
+                    ..Default::default()
+                });
+                HostResult::default()
+            }
             "attachShadow" => {
                 let (Some(HostValue::String(mode)), Some(HostValue::String(slot_assignment))) =
                     (arguments.first(), arguments.get(1))
@@ -1810,6 +3343,11 @@ impl DOMJavaScriptBindings {
                     child_node_id: document.NextNodeId(),
                     name: slot_assignment.clone(),
                     value: mode.clone(),
+                    bool_value: matches!(arguments.get(2), Some(HostValue::Boolean(true))),
+                    reference_target: match arguments.get(3) {
+                        Some(HostValue::String(value)) => Some(value.clone()),
+                        _ => None,
+                    },
                     ..Default::default()
                 };
                 let id = mutation.child_node_id;
@@ -1840,8 +3378,13 @@ impl DOMJavaScriptBindings {
                         } else {
                             DOMMutationType::kCreateComment
                         };
-                        if let Some(HostValue::String(text)) = arguments.first() {
-                            mutation.value = text.clone();
+                        match arguments.first() {
+                            Some(HostValue::String(text)) => mutation.value = text.clone(),
+                            Some(HostValue::String16(units)) => {
+                                mutation.value = String::from_utf16_lossy(units);
+                                mutation.utf16_value = Some(units.clone());
+                            }
+                            _ => {}
                         }
                     }
                     "createDocumentFragment" => {
@@ -1856,14 +3399,27 @@ impl DOMJavaScriptBindings {
                         if name.is_empty() {
                             return Self::type_error("element name is required");
                         }
+                        mutation.is_value =
+                            match arguments.get(if member == "createElementNS" { 2 } else { 1 }) {
+                                Some(HostValue::String16(value)) => Some(value.clone()),
+                                Some(HostValue::String(value)) => {
+                                    Some(value.encode_utf16().collect::<Vec<_>>().into())
+                                }
+                                _ => None,
+                            };
                         mutation.name = if member == "createElement" {
                             name.to_ascii_lowercase()
                         } else {
                             name.clone()
                         };
                         if member == "createElementNS" {
+                            mutation.bool_value = true;
                             if let Some(HostValue::String(ns)) = arguments.first() {
                                 mutation.namespace_uri = ns.clone();
+                            }
+                            if let Some((prefix, local_name)) = name.split_once(':') {
+                                mutation.prefix = prefix.into();
+                                mutation.name = local_name.into();
                             }
                         }
                     }
@@ -1932,7 +3488,29 @@ impl DOMJavaScriptBindings {
                 let standard_mode = node.Namespace() == DOMNamespace::kHTML
                     && document.GetCompatibilityMode()
                         != dom::persistent_document::CompatibilityMode::kQuirks;
+                let cssom_context =
+                    self.services
+                        .host
+                        .cssom_document
+                        .as_ref()
+                        .map(|(source, policy)| {
+                            source.CSSOMContextForElement(
+                                document,
+                                index,
+                                policy.Get(),
+                                self.cssom_world.borrow().clone(),
+                            )
+                        });
                 if member == "getStyle" {
+                    if let Some(context) = &cssom_context {
+                        return Self::value(HostValue::String(
+                            style::GetInlineCSSDeclarationWithContext(
+                                &inline_style,
+                                property,
+                                context,
+                            ),
+                        ));
+                    }
                     return Self::value(HostValue::String(style::GetInlineCSSDeclaration(
                         &inline_style,
                         property,
@@ -1946,13 +3524,27 @@ impl DOMJavaScriptBindings {
                     Some(HostValue::String(priority)) => priority.as_str(),
                     _ => "",
                 };
-                let Some(result) = style::SetInlineCSSDeclaration(
-                    &inline_style,
-                    property,
-                    value,
-                    priority,
-                    standard_mode,
-                ) else {
+                let result = cssom_context.as_ref().map_or_else(
+                    || {
+                        style::SetInlineCSSDeclaration(
+                            &inline_style,
+                            property,
+                            value,
+                            priority,
+                            standard_mode,
+                        )
+                    },
+                    |context| {
+                        style::SetInlineCSSDeclarationWithContext(
+                            &inline_style,
+                            property,
+                            value,
+                            priority,
+                            context,
+                        )
+                    },
+                );
+                let Some(result) = result else {
                     return HostResult::default();
                 };
                 let (mutation_type, value, inline_style_independent, inline_style) = match result {
@@ -2069,9 +3661,6 @@ impl DOMJavaScriptBindings {
                 if matches!(member, "showModal" | "close") && !node.IsHTMLElement("dialog") {
                     return Self::type_error("dialog method requires a dialog receiver");
                 }
-                if matches!(member, "showPopover" | "hidePopover") && !document.IsPopover(index) {
-                    return Self::type_error("popover method requires a popover receiver");
-                }
                 let mutation = DOMMutation {
                     mutation_type: if matches!(member, "showModal" | "close") {
                         DOMMutationType::kSetDialogModal
@@ -2080,6 +3669,25 @@ impl DOMJavaScriptBindings {
                     },
                     target_node_id: receiver,
                     bool_value: matches!(member, "showModal" | "showPopover"),
+                    utf16_value: if member == "close" {
+                        match arguments.first() {
+                            Some(HostValue::String16(value)) => Some(value.clone()),
+                            Some(HostValue::String(value)) => {
+                                Some(value.encode_utf16().collect::<Vec<_>>().into())
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
+                    source_node_id: if member == "showPopover" {
+                        match arguments.first() {
+                            Some(HostValue::Object(source)) => source.id,
+                            _ => 0,
+                        }
+                    } else {
+                        0
+                    },
                     ..Default::default()
                 };
                 drop(owner);
@@ -2087,7 +3695,7 @@ impl DOMJavaScriptBindings {
                     (self.emit_mutation.borrow_mut())(&mutation)
                 })) {
                     if let Some(error) = payload.downcast_ref::<dom::error::DOMException>() {
-                        return Self::type_error(error.message);
+                        return Self::popup_error(error);
                     }
                     std::panic::resume_unwind(payload);
                 }
@@ -2183,7 +3791,7 @@ impl DOMJavaScriptBindings {
                         _ => {
                             return Self::type_error(
                                 "setAttributeNS requires a valid qualified name",
-                            )
+                            );
                         }
                     }
                 } else {
@@ -2220,14 +3828,32 @@ impl DOMJavaScriptBindings {
                     })
                     .map(|attribute| attribute.value.clone());
                 if member == "getAttribute" {
+                    let value = node
+                        .Attributes()
+                        .iter()
+                        .position(|attribute| {
+                            attribute.local_name == local_name
+                                && attribute.namespace_uri == namespace_uri
+                        })
+                        .map(|i| node.AttributesUTF16()[i].value.clone());
                     return Self::value(
-                        attribute.map_or(HostValue::Null(JavaScriptNull), HostValue::String),
+                        value.map_or(HostValue::Null(JavaScriptNull), HostValue::String16),
                     );
                 }
                 if member == "hasAttribute" {
                     return Self::value(HostValue::Boolean(attribute.is_some()));
                 }
-                let value = if matches!(member, "setAttribute" | "setAttributeNS") {
+                let utf16_value = if matches!(member, "setAttribute" | "setAttributeNS") {
+                    match arguments.get(if namespaced { 2 } else { 1 }) {
+                        Some(HostValue::String16(units)) => Some(units.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let value = if let Some(units) = &utf16_value {
+                    String::from_utf16_lossy(units)
+                } else if matches!(member, "setAttribute" | "setAttributeNS") {
                     let Some(value) =
                         dom_string_argument(arguments.get(if namespaced { 2 } else { 1 }))
                     else {
@@ -2261,6 +3887,7 @@ impl DOMJavaScriptBindings {
                     name: local_name,
                     prefix,
                     value,
+                    utf16_value,
                     namespace_uri,
                     ..Default::default()
                 });
@@ -2271,7 +3898,71 @@ impl DOMJavaScriptBindings {
     }
 }
 
+impl Drop for DOMJavaScriptBindings {
+    fn drop(&mut self) {
+        self.native_abort.ContextDestroyed();
+    }
+}
+
 impl JavaScriptHostBindings for DOMJavaScriptBindings {
+    fn NativeObject(&self, id: HostObjectId) -> Option<Rc<dyn std::any::Any>> {
+        self.native_abort.NativeObject(id).or_else(|| {
+            self.services
+                .events
+                .borrow()
+                .NativeEvent(id)
+                .map(|event| Rc::new(event) as Rc<dyn std::any::Any>)
+        })
+    }
+    fn NativeObjectOwnerIdentity(
+        &self,
+    ) -> Option<javascript::javascript_runtime::HostObjectOwnerIdentity> {
+        Some(javascript::javascript_runtime::HostObjectOwnerIdentity(
+            self.document.borrow().GetDocument().RootHandle().Identity(),
+        ))
+    }
+    fn DocumentHostObjectId(&self) -> Option<HostObjectId> {
+        let owner = self.document.borrow();
+        Some(owner.GetDocument().Node(owner.GetDocument().Root()).Id())
+    }
+    fn BindTaskAttributionTracker(
+        &mut self,
+        tracker: Rc<foundation::task_attribution::TaskAttributionTracker>,
+    ) {
+        if let Some(old) = self.task_attribution_tracker.get() {
+            assert!(Rc::ptr_eq(old, &tracker), "same Window/VM task tracker");
+        } else {
+            assert!(self.task_attribution_tracker.set(tracker).is_ok());
+        }
+    }
+    fn ArgumentPolicy(
+        &self,
+        receiver: HostObjectId,
+        member: &str,
+    ) -> javascript::javascript_runtime::HostArgumentPolicy {
+        use javascript::javascript_runtime::HostArgumentPolicy as P;
+        match member {
+            "execCommand" => P::NativeIdentity,
+            member if member.starts_with("__trustedTypes") => P::NativeIdentity,
+            "__abortControllerAbort" | "__abortStatic" => P::Identity,
+            "__formDataFileRemember"
+            | "__formDataAppendFile"
+            | "__formDataSetFile"
+            | "__formDataEventCreate" => P::NativeIdentity,
+            "__inputDataTransferTypesRemember" => P::Identity,
+            "__inputEventConvertView" => P::Identity,
+            "__navigationCreateNavigateEvent" | "__navigationCreateEntryChangeEvent" => {
+                P::NativeIdentity
+            }
+            member if member.starts_with("__navigation") => P::Identity,
+            "__domInvoke" if receiver == 0 => P::Forwarded {
+                receiver: 0,
+                member: 1,
+                arguments: 2,
+            },
+            _ => P::Values,
+        }
+    }
     fn ObjectTraceSource(
         &self,
     ) -> Option<Rc<dyn javascript::javascript_runtime::HostObjectTraceSource>> {
@@ -2279,6 +3970,14 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
     }
 
     fn PrepareInvocation(&mut self, call: &HostCall<'_>) -> Option<HostContinuation> {
+        if call.symbol == HostSymbol::kNone && call.operation == HostOperation::kGet {
+            if let Some(get) = self
+                .native_abort
+                .PrepareInputIndexedGet(call.receiver, call.member)
+            {
+                return Some(get);
+            }
+        }
         // Reads never dispatch JS or emit a mutation through this seam. Leave
         // their receiver validation to get(), instead of looking up every DOM
         // Proxy receiver once here and again in the actual property read.
@@ -2302,6 +4001,120 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         } else {
             (call.receiver, call.member)
         };
+        if call.operation == HostOperation::kCall {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            if let Some(continuation) = self.PrepareRangeSelection(id, member, arguments) {
+                return Some(continuation);
+            }
+            if let Some(continuation) = self.PrepareTextControlSelection(id, member, arguments) {
+                return Some(continuation);
+            }
+            if let Some(continuation) = self.PrepareEditorCommand(id, member, arguments) {
+                return Some(continuation);
+            }
+        }
+        if call.operation == HostOperation::kCall && member == "__inputEventConvertView" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            let view = arguments.first().cloned().unwrap_or_default();
+            let current = self
+                .services
+                .host
+                .resolve_event_target
+                .as_ref()
+                .and_then(|resolve| resolve(0))
+                .and_then(|target| target.AsAbstractView())
+                .unwrap_or_else(|| self.ListenerTarget(0) as _);
+            let convert = self.services.host.convert_window_view.clone();
+            let bindings = self.native_abort.clone();
+            return Some(Box::new(move |runtime| {
+                let global = runtime.GlobalObject();
+                let owner = if runtime.IsSameObject(&view, &global) {
+                    Some(current)
+                } else {
+                    convert.as_ref().and_then(|convert| convert(&view, runtime))
+                };
+                match owner {
+                    Some(owner) => Self::value(bindings.BindInputView(owner, view)),
+                    None => Self::type_error("UIEvent view requires a Window"),
+                }
+            }));
+        }
+        if call.operation == HostOperation::kCall
+            && matches!(member, "__frameContentWindow" | "__frameContentDocument")
+        {
+            // HTMLFrameOwnerElement::contentWindow/contentDocument. Release
+            // the bindings and DOM borrows before lazily initializing the
+            // child's LocalWindowProxy (which can execute binding bootstrap).
+            let valid = self.node(id).is_some_and(|index| {
+                self.document
+                    .borrow()
+                    .GetDocument()
+                    .Node(index)
+                    .IsHTMLElement("iframe")
+            });
+            if !valid {
+                return Some(Box::new(|_| Self::type_error("Illegal invocation")));
+            }
+            let property = if member == "__frameContentWindow" {
+                FrameProperty::ContentWindow
+            } else {
+                FrameProperty::ContentDocument
+            };
+            let getter = self.services.host.read_frame.clone();
+            return Some(Box::new(move |runtime| {
+                getter.as_ref().map_or_else(
+                    || Self::value(HostValue::Null(JavaScriptNull)),
+                    |getter| getter(id, property, runtime),
+                )
+            }));
+        }
+        if call.operation == HostOperation::kCall
+            && (member.starts_with("__abort")
+                || member.starts_with("__closeWatcher")
+                || member.starts_with("__navigation")
+                || member.starts_with("__trustedTypes")
+                || member.starts_with("__formData")
+                || (member.starts_with("__inputDataTransfer")
+                    && member != "__inputDataTransferSetDragImage")
+                || member == "__eventTargetCreate")
+            && !matches!(
+                member,
+                "__abortGetAttributeListener" | "__abortSetAttributeListener"
+            )
+        {
+            let args = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            return self.native_abort.Prepare(id, member, args);
+        }
+        if id == 0 && call.operation == HostOperation::kCall && member == "__createDOMException" {
+            let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
+                &call.arguments[2..]
+            } else {
+                call.arguments
+            };
+            let message = arguments.first()?.clone();
+            let name = arguments.get(1)?.clone();
+            if !matches!(&message, HostValue::String(_) | HostValue::String16(_))
+                || !matches!(&name, HostValue::String(_) | HostValue::String16(_))
+            {
+                return None;
+            }
+            let value = self.CreateNativeDOMExceptionValues(name.clone(), message.clone());
+            return Some(Box::new(move |runtime| {
+                runtime.CaptureExceptionStack(&value, &name, &message)
+            }));
+        }
         if call.operation == HostOperation::kCall && member == "__domCreateGetter" {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
@@ -2402,6 +4215,33 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 HostResult::default()
             }));
         }
+        if call.operation == HostOperation::kCall
+            && matches!(member, "checkValidity" | "reportValidity")
+        {
+            let allowed = {
+                let owner = self.document.borrow();
+                let d = owner.GetDocument();
+                d.FindNodeById(id).is_some_and(|i| {
+                    d.FormControlClass(i).is_some()
+                        || d.ElementInternalsTargetIsFormAssociated(i)
+                        || d.Node(i).IsHTMLElement("form")
+                })
+            };
+            if !allowed {
+                return Some(Box::new(|_| Self::type_error("Illegal invocation")));
+            }
+            let handler = self.services.host.validate_form.clone();
+            let report = member == "reportValidity";
+            return Some(Box::new(move |runtime| match handler {
+                Some(handler) => match handler(id, report, runtime) {
+                    Ok(value) => Self::value(HostValue::Boolean(value)),
+                    Err(error) => {
+                        Self::type_error(&format!("Form validation service required: {error:?}"))
+                    }
+                },
+                None => Self::type_error("Native validation dispatcher required"),
+            }));
+        }
         if call.operation == HostOperation::kCall && matches!(member, "submit" | "requestSubmit") {
             let arguments = if call.receiver == 0 && call.member == "__domInvoke" {
                 &call.arguments[2..]
@@ -2463,6 +4303,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
             HostOperation::kSet => matches!(
                 member,
                 "checked"
+                    | "files"
                     | "textContent"
                     | "data"
                     | "nodeValue"
@@ -2491,6 +4332,7 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     | "setAttributeNS"
                     | "removeAttribute"
                     | "__setSlotName"
+                    | "__canvasSetDimension"
                     | "assign"
                     | "showModal"
                     | "close"
@@ -2532,8 +4374,22 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 | "removeChild"
                 | "requestFullscreen"
                 | "exitFullscreen"
+                | "showModal"
+                | "close"
+                | "showPopover"
+                | "hidePopover"
+        );
+        let popup_method = matches!(
+            member,
+            "showModal" | "close" | "showPopover" | "hidePopover"
         );
         let document = self.document.clone();
+        let reaction_document = {
+            let owner = document.borrow();
+            HostValue::Object(HostObjectRef {
+                id: owner.GetDocument().Node(owner.GetDocument().Root()).Id(),
+            })
+        };
         Some(Box::new(move |runtime| {
             if reactions.is_some() {
                 document
@@ -2549,7 +4405,11 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                 match emitted {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) if catches_errors => {
-                        outcome = Self::type_error(error.message);
+                        outcome = if popup_method {
+                            Self::popup_error(&error)
+                        } else {
+                            Self::type_error(error.message)
+                        };
                     }
                     Ok(Err(error)) => std::panic::panic_any(error),
                     Err(error) if catches_errors => {
@@ -2562,8 +4422,9 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
                     Err(error) => std::panic::resume_unwind(error),
                 }
             }
+            dom::attribute_lifecycle::DrainAttributeLifecycle(&document);
             if let Some(callback) = reactions {
-                let invoked = runtime.Call(&callback, &HostValue::default(), &[]);
+                let invoked = runtime.Call(&callback, &HostValue::default(), &[reaction_document]);
                 let popped = document
                     .borrow_mut()
                     .GetDocumentMut()
@@ -2584,13 +4445,63 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         GLOBAL_NAMES.iter().map(|name| (*name).into()).collect()
     }
 
+    fn InvokeWithRuntime(
+        &mut self,
+        call: &HostCall<'_>,
+        runtime: &mut dyn JavaScriptHostRuntime,
+    ) -> HostResult {
+        struct WorldScope {
+            slot: Rc<RefCell<Option<Rc<style::ProductionCSSDOMWrapperWorld>>>>,
+            previous: Option<Rc<style::ProductionCSSDOMWrapperWorld>>,
+        }
+        impl Drop for WorldScope {
+            fn drop(&mut self) {
+                *self.slot.borrow_mut() = self.previous.take();
+            }
+        }
+        struct CallbackScope {
+            slot: Rc<RefCell<Option<javascript::javascript_runtime::JavaScriptCallbackContext>>>,
+            previous: Option<javascript::javascript_runtime::JavaScriptCallbackContext>,
+        }
+        impl Drop for CallbackScope {
+            fn drop(&mut self) {
+                *self.slot.borrow_mut() = self.previous.take();
+            }
+        }
+        let slot = self.callback_context.clone();
+        let previous = slot.borrow_mut().replace(runtime.CallbackContext());
+        let _callback_scope = CallbackScope { slot, previous };
+        let slot = self.cssom_world.clone();
+        // This binding is installed only for the actual main-world ScriptState;
+        // no isolated-world constructor is admitted by BindRuntime.
+        let previous = slot
+            .borrow_mut()
+            .replace(Rc::new(style::ProductionCSSDOMWrapperWorld {
+                identity: runtime.RealmIdentity(),
+                world_id: runtime.CallbackContext().WorldId(),
+            }));
+        let _scope = WorldScope { slot, previous };
+        self.Invoke(call)
+    }
     fn Invoke(&mut self, call: &HostCall<'_>) -> HostResult {
+        if self.DocumentHostObjectId() == Some(call.receiver)
+            && call.operation == HostOperation::kGet
+            && matches!(
+                call.member,
+                "URL" | "documentURI" | "domain" | "location" | "cookie"
+            )
+        {
+            // An old Document remains in its original namespace after the
+            // Window's current Document changes. Its URL and detached-Window
+            // state must not be read from the new Window's equal native id.
+            return self.get(call.receiver, call.member);
+        }
         // Blink installs regular IDL attributes/methods on interface prototypes.
         // The wrapper's existing Reflect path must select the own/inherited
         // descriptor and carry the actual ECMAScript receiver. Only genuine
         // exotic records, collections, bound events and globals use projection.
         if matches!(call.operation, HostOperation::kGet | HostOperation::kSet)
-            && self.UsesOrdinaryNodeProperties(call.receiver)
+            && (self.UsesOrdinaryNodeProperties(call.receiver))
         {
             return Self::unhandled();
         }
@@ -2616,17 +4527,50 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
     }
 
     fn UsesOrdinaryProperties(&self, id: HostObjectId) -> bool {
+        if self.DocumentHostObjectId() == Some(id) {
+            return false;
+        }
         // Blink's ordinary IDL Node/Element wrappers use their installed
         // prototype descriptors. Collections and other exotic records still
         // require host property interception.
-        self.UsesOrdinaryNodeProperties(id)
+        (self.native_record_classes.borrow().contains_key(&id)
+            && !self.native_abort.IsInputIndexedObject(id))
+            || self.webgl_contexts.borrow().contains_key(&id)
+            || self.UsesOrdinaryNodeProperties(id)
     }
 
     fn PrototypeFor(&mut self, id: HostObjectId) -> HostResult {
-        if self.services.IsEvent(id) {
+        if let Some(name) = self.services.EventInterfaceName(id) {
             return self
                 .prototypes
-                .get("Event")
+                .get(&name)
+                .cloned()
+                .map_or_else(Self::unhandled, |value| {
+                    Self::value(HostValue::JavaScriptValue(value))
+                });
+        }
+        if let Some(name) = self.native_record_classes.borrow().get(&id) {
+            return self
+                .prototypes
+                .get(*name)
+                .cloned()
+                .map_or_else(Self::unhandled, |value| {
+                    Self::value(HostValue::JavaScriptValue(value))
+                });
+        }
+        if self.webgl_contexts.borrow().contains_key(&id) {
+            let prototype = self
+                .webgl_contexts
+                .borrow()
+                .get(&id)
+                .map(webgl::WebGLRenderingContextState::ContextType)
+                .map_or("WebGLRenderingContext", |kind| match kind {
+                    canvas::CanvasContextType::WebGL2 => "WebGL2RenderingContext",
+                    _ => "WebGLRenderingContext",
+                });
+            return self
+                .prototypes
+                .get(prototype)
                 .cloned()
                 .map_or_else(Self::unhandled, |value| {
                     Self::value(HostValue::JavaScriptValue(value))
@@ -2635,7 +4579,10 @@ impl JavaScriptHostBindings for DOMJavaScriptBindings {
         if let Some(collection) = self.collections.borrow().get(&id) {
             let name = if collection.kind == "options" {
                 "HTMLOptionsCollection"
-            } else if matches!(collection.kind.as_str(), "snapshot" | "childNodes") {
+            } else if matches!(
+                collection.kind.as_str(),
+                "snapshot" | "childNodes" | "labels"
+            ) {
                 "NodeList"
             } else {
                 "HTMLCollection"
@@ -2728,6 +4675,12 @@ fn is_method(node_type: DOMNodeType, member: &str) -> bool {
     if matches!(member, "matches" | "closest") {
         return node_type == DOMNodeType::kElement;
     }
+    if matches!(
+        member,
+        "setPointerCapture" | "releasePointerCapture" | "hasPointerCapture"
+    ) {
+        return node_type == DOMNodeType::kElement;
+    }
     if member == "getElementById" {
         return node_type == DOMNodeType::kDocument;
     }
@@ -2753,6 +4706,11 @@ fn is_event_handler(name: &str) -> bool {
         "onload"
             | "onerror"
             | "onabort"
+            | "onnavigate"
+            | "onnavigatesuccess"
+            | "onnavigateerror"
+            | "oncurrententrychange"
+            | "ondispose"
             | "oninput"
             | "onchange"
             | "onclick"
@@ -2779,6 +4737,47 @@ fn is_character_data(node_type: DOMNodeType) -> bool {
     )
 }
 
+/// HTML's non-negative-integer parser used by canvas width/height reflection.
+fn parse_canvas_dimension(input: &str) -> Option<u32> {
+    canvas::ParseCanvasDimension(input)
+}
+
+fn webgl_f32_values(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % std::mem::size_of::<f32>() != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
+            .collect(),
+    )
+}
+
+fn webgl_i32_values(bytes: &[u8]) -> Option<Vec<i32>> {
+    if bytes.len() % std::mem::size_of::<i32>() != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|chunk| i32::from_ne_bytes(chunk.try_into().unwrap()))
+            .collect(),
+    )
+}
+
+fn webgl_u32_values(bytes: &[u8]) -> Option<Vec<u32>> {
+    if bytes.len() % std::mem::size_of::<u32>() != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|chunk| u32::from_ne_bytes(chunk.try_into().unwrap()))
+            .collect(),
+    )
+}
+
 impl DOMJavaScriptBindings {
     fn StoreCollection(&self, id: HostObjectId, collection: NodeCollection) {
         self.host_graph.Collection(id, &collection);
@@ -2797,6 +4796,82 @@ impl DOMJavaScriptBindings {
             },
         );
         HostObjectRef { id }
+    }
+    /// DOMException.cc:192-208,214-217,264-274. Native construction uses the installed
+    /// prototype identity, never the replaceable global DOMException function.
+    pub(super) fn CreateNativeDOMException(&self, name: &str, message: &str) -> HostValue {
+        self.CreateNativeDOMExceptionValues(
+            HostValue::String(name.into()),
+            HostValue::String(message.into()),
+        )
+    }
+    fn CreateNativeDOMExceptionValues(&self, name: HostValue, message: HostValue) -> HostValue {
+        Self::CreateDOMExceptionRecord(
+            &self.next_collection_id,
+            &self.native_record_classes,
+            &self.records,
+            &self.host_graph,
+            name,
+            message,
+        )
+    }
+    fn CreateDOMExceptionRecord(
+        next_id: &Cell<u64>,
+        classes: &RefCell<HashMap<u64, &'static str>>,
+        records: &RefCell<HashMap<u64, HashMap<String, HostValue>>>,
+        graph: &DOMHostGraph,
+        name: HostValue,
+        message: HostValue,
+    ) -> HostValue {
+        let store_record = |id, fields| {
+            graph.Record(id, &fields);
+            records.borrow_mut().insert(id, fields);
+        };
+        let decoded_name = match &name {
+            HostValue::String(value) => Some(value.clone()),
+            HostValue::String16(value) => String::from_utf16(value).ok(),
+            _ => unreachable!("DOMException name was converted by Web IDL"),
+        };
+        let code = match decoded_name.as_deref().unwrap_or("") {
+            "IndexSizeError" => 1,
+            "HierarchyRequestError" => 3,
+            "WrongDocumentError" => 4,
+            "InvalidCharacterError" => 5,
+            "NoModificationAllowedError" => 7,
+            "NotFoundError" => 8,
+            "NotSupportedError" => 9,
+            "InUseAttributeError" => 10,
+            "InvalidStateError" => 11,
+            "SyntaxError" => 12,
+            "InvalidModificationError" => 13,
+            "NamespaceError" => 14,
+            "InvalidAccessError" => 15,
+            "TypeMismatchError" => 17,
+            "SecurityError" => 18,
+            "NetworkError" => 19,
+            "AbortError" => 20,
+            "URLMismatchError" => 21,
+            "QuotaExceededError" => 22,
+            "TimeoutError" => 23,
+            "InvalidNodeTypeError" => 24,
+            "DataCloneError" => 25,
+            _ => 0,
+        };
+        let id = {
+            let id = next_id.get();
+            next_id.set(id + 1);
+            id
+        };
+        classes.borrow_mut().insert(id, "DOMException");
+        store_record(
+            id,
+            HashMap::from([
+                ("name".into(), name),
+                ("message".into(), message),
+                ("code".into(), HostValue::Number(f64::from(code))),
+            ]),
+        );
+        HostValue::Object(HostObjectRef { id })
     }
     fn StoreRecord(&self, id: HostObjectId, fields: HashMap<String, HostValue>) {
         self.host_graph.Record(id, &fields);
@@ -2859,6 +4934,7 @@ impl DOMJavaScriptBindings {
                 | "getElementsByTagName"
                 | "getElementsByClassName"
                 | "options"
+                | "labels"
         )
         .then(|| document.CollectionMembershipKey())
         .flatten();
@@ -2875,6 +4951,9 @@ impl DOMJavaScriptBindings {
         let Some(root) = document.FindNodeById(collection.root) else {
             return CollectionNodes::Owned(Vec::new());
         };
+        if collection.kind == "formControls" {
+            return CollectionNodes::Shared(document.ListedFormControlNodeIds(root));
+        }
         if collection.kind == "query" {
             let indices = self
                 .selector_service
@@ -2918,6 +4997,12 @@ impl DOMJavaScriptBindings {
         let mut result = Vec::new();
         if collection.kind == "options" {
             result = document.SelectOptionNodeIds(root);
+        } else if collection.kind == "labels" {
+            result = document
+                .ElementInternalsLabels(root)
+                .into_iter()
+                .map(|label| document.Node(label).Id())
+                .collect();
         } else {
             visit(document, root, collection, &mut result);
         }
@@ -3008,6 +5093,12 @@ fn is_void_html_element(name: &str) -> bool {
 // cpp: webapi/dom_bindings.cc:94-130
 fn serialize_node(document: &Document, index: usize, output: &mut String) {
     let node = document.Node(index);
+    if node.IsCDATASection() && !document.IsInHTMLDocument(index) {
+        output.push_str("<![CDATA[");
+        output.push_str(node.Data());
+        output.push_str("]]>");
+        return;
+    }
     if node.Type() == DOMNodeType::kText {
         append_escaped(node.Data(), output, false);
         return;
@@ -3103,6 +5194,7 @@ fn node_name(node_type: DOMNodeType, name: &str, namespace: DOMNamespace) -> Str
 fn dom_string_argument(argument: Option<&HostValue>) -> Option<String> {
     match argument? {
         HostValue::String(value) => Some(value.clone()),
+        HostValue::String16(value) => Some(String::from_utf16_lossy(value)),
         HostValue::Boolean(value) => Some(value.to_string()),
         HostValue::Number(value) => Some(dom_number_string(*value)),
         HostValue::Null(_) => Some("null".into()),
@@ -3695,7 +5787,9 @@ mod tests {
 
     #[test]
     fn selectors_and_collections_keep_live_identity_and_snapshot_semantics() {
-        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML("<main id=root><p id=a name=first class='one two'>text</p><!--comment--><p id=b class=two></p><section><span class=leaf></span></section><input id=field placeholder=hint><svg viewBox='0 0 10 10'><linearGradient id='gradient'/></svg></main>")));
+        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
+            "<main id=root><p id=a name=first class='one two'>text</p><!--comment--><p id=b class=two></p><section><span class=leaf></span></section><input id=field placeholder=hint><svg viewBox='0 0 10 10'><linearGradient id='gradient'/></svg></main>",
+        )));
         let emit_document = document.clone();
         let host = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
             document,
@@ -3754,7 +5848,7 @@ mod tests {
             let invalid=false;try{root.appendChild(root)}catch(e){invalid=e instanceof TypeError}check(invalid && root.parentNode !== null,'invalid cycle');
             a.style.setProperty('color','red');a.style.setProperty('color','blue','important');check(a.getAttribute('style') === 'color: blue !important;' && a.style.getPropertyValue('color') === 'blue','inline style');
             check('transform' in a.style && 'perspective' in a.style && !('notARealProperty' in a.style),'CSS declaration named properties');
-            const separate=document.implementation.createHTMLDocument('title');check(separate.defaultView === null && separate.head.firstChild.textContent === 'title' && separate.hasFocus(),'detached document');
+            const separate=document.implementation.createHTMLDocument('title');check(separate.defaultView === null && separate.head.firstChild.textContent === 'title' && !separate.hasFocus(),'detached document');
             a.className='one\u000btwo';check(!a.matches('.one.two[class~=two]') && root.getElementsByClassName('one\u000btwo').length >= 1 && !a.matches('\u00a0p'),'source CSS and HTML whitespace sets');
             true
         "#,"collections.js");

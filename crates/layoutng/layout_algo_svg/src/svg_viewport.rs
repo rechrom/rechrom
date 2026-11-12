@@ -121,17 +121,16 @@ pub(crate) fn LocalTransform(object: &LayoutObject) -> AffineTransform {
     if !style.HasTransform() {
         return AffineTransform::default();
     }
-    if style.HasOffset() {
-        Unsupported("SVG viewport motion-path transform is not translated");
-    }
-    if style.UsedTransformBox(TransformBoxContext::kSvg) != ETransformBox::kViewBox {
-        Unsupported("SVG container fill-box/stroke-box transform bounds are not translated");
-    }
-    let viewport = ResolveViewport(object);
+    let mut reference = match style.UsedTransformBox(TransformBoxContext::kSvg) {
+        ETransformBox::kFillBox => crate::svg_resources::ObjectBoundingBox(object),
+        ETransformBox::kStrokeBox => crate::svg_resources::StrokeBoundingBox(object),
+        ETransformBox::kViewBox => gfx::RectF::new(gfx::PointF::default(), ResolveViewport(object)),
+        _ => unreachable!("SVG used transform-box is fill-box, stroke-box or view-box"),
+    };
     let zoom = style.EffectiveZoom();
-    let reference = gfx::RectF::new(
-        gfx::PointF::default(),
-        gfx::SizeF::new(viewport.width() * zoom, viewport.height() * zoom),
+    reference = gfx::RectF::new(
+        gfx::PointF::new(reference.x() * zoom, reference.y() * zoom),
+        gfx::SizeF::new(reference.width() * zoom, reference.height() * zoom),
     );
     let mut transform = gfx::Transform::default();
     style.ApplyTransformRectF::<LayoutBox>(
@@ -200,5 +199,8 @@ pub(crate) fn Geometry(
         content_transform: Matrix(content),
         clip,
         disabled,
+        is_document_element: object.IsDocumentElement(),
+        inline_root_pixel_snapping_scale_adjustment:
+            foundation::RuntimeEnabledFeatures::SvgInlineRootPixelSnappingScaleAdjustmentEnabled(),
     }
 }

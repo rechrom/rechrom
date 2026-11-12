@@ -62,10 +62,8 @@ impl BoxDecorationData {
         let should_paint_shadow =
             !paint_info.IsPaintingBackgroundInContentsSpace() && style.box_shadow_count() != 0;
 
-        // Chromium's gap-rule geometry has not crossed the Layout/Paint
-        // boundary. Column rules remain a separate, supported painter and must
-        // not be relabelled as gap decorations.
-        let should_paint_gap_decorations = false;
+        let should_paint_gap_decorations =
+            fragment.paint.gap_rules.is_some() && !paint_info.ShouldSkipGapDecorations();
 
         let mut result = Self {
             has_appearance,

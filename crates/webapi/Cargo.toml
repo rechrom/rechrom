@@ -3,11 +3,18 @@ name = "webapi"
 version = "0.0.1"
 edition = "2021"
 
+[features]
+default = []
+# A verified real-GPU vertical slice used by focused tests. Production keeps
+# WebGL feature detection false until the minimum WebGL1 API is complete.
+webgl_vertical_slice = []
+
 [dependencies]
 style = { path = "../style/style" }
 browser_tracing = { path = "../tracing" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 interaction = { path = "../interaction" }
+navigation_history = { path = "../navigation_history" }
 javascript = { path = "../javascript" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
@@ -19,6 +26,8 @@ percent-encoding = "2.3.2"
 getrandom = "0.4"
 paint = { path = "../paint" }
 skia = { path = "../skia" }
+canvas = { path = "../canvas" }
+webgl = { path = "../webgl" }
 
 [dev-dependencies]
 html = { path = "../html" }

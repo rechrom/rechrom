@@ -1,8 +1,13 @@
 use browser::page::{Page, PageClient};
 use std::{cell::RefCell, rc::Rc};
 
-struct Client;
-impl PageClient for Client {}
+#[derive(Default)]
+struct Client(browser::page::PageChromeState);
+impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        self.0.Apply(effect);
+    }
+}
 
 fn fragment_geometry(
     node: &layoutng_assembly::fragment_tree::FragmentPaintData,
@@ -41,7 +46,7 @@ fn map_pixel_diff_to_paint_records() {
         Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
         constraints,
         None,
-        Some(Rc::new(RefCell::new(Client))),
+        Some(Rc::new(RefCell::new(Client::default()))),
     );
     page.Open(
         "http://127.0.0.1:9555/github-static-oracle-zero.html",

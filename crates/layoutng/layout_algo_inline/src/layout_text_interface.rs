@@ -79,7 +79,6 @@ unsafe extern "Rust" {
     fn LayoutTextPhysicalLinesBoundingBox(this: &LayoutText) -> PhysicalRect;
     fn LayoutTextVisualOverflowRect(this: &LayoutText) -> PhysicalRect;
     fn LayoutTextInvalidateVisualOverflow(this: &mut LayoutText);
-    fn LayoutTextFirstLineBoxTopLeft(this: &LayoutText) -> PhysicalOffset;
     fn LayoutTextSetTextIfNeeded(this: &mut LayoutText, text: String);
     fn LayoutTextForceSetText(this: &mut LayoutText, text: String);
     fn LayoutTextSetTextInternal(this: &mut LayoutText, text: String);
@@ -101,12 +100,17 @@ unsafe extern "Rust" {
     fn LayoutTextResolvedTextLength(this: &LayoutText) -> u32;
     fn LayoutTextHasNonCollapsedText(this: &LayoutText) -> bool;
     fn LayoutTextSetTextWithOffset(this: &mut LayoutText, text: String, diff: &TextDiffRange);
-    fn LayoutTextLocalCaretRect(
-        this: &LayoutText,
-        caret_offset: i32,
-        shape: super::super::caret_rect::CaretShape,
-    ) -> PhysicalRect;
-    fn LayoutTextMomentarilyRevealLastTypedCharacter(this: &mut LayoutText, offset: u32);
+    fn LayoutTextMomentarilyRevealLastTypedCharacter(
+        this: &mut LayoutText,
+        offset: u32,
+        settings: Option<crate::password_echo::PasswordEchoLayoutSettings>,
+        token: crate::password_echo::PasswordEchoTimerToken,
+        scheduler: &dyn crate::password_echo::PasswordEchoTimerScheduler,
+    );
+    fn LayoutTextPasswordEchoTimerFired(
+        this: &mut LayoutText,
+        token: crate::password_echo::PasswordEchoTimerToken,
+    ) -> bool;
     fn LayoutTextIsAllCollapsibleWhitespace(this: &LayoutText) -> bool;
     fn LayoutTextRemoveAndDestroyTextBoxes(this: &mut LayoutText);
     fn LayoutTextFirstAbstractInlineTextBox(this: &mut LayoutText) -> *mut AbstractInlineTextBox;
@@ -232,6 +236,7 @@ pub struct LayoutText {
     pub(crate) previous_logical_starting_point_: Cell<LogicalOffset>,
     pub(crate) inline_items_: InlineItemSpan,
     pub(crate) first_fragment_item_index_: usize,
+    pub(crate) secure_text_timer_: Option<crate::password_echo::SecureTextTimer>,
 }
 
 // cpp: layoutng/internal/layout_text.h:509-513
@@ -265,6 +270,7 @@ impl LayoutText {
             previous_logical_starting_point_: Cell::new(Self::UninitializedLogicalStartingPoint()),
             inline_items_: InlineItemSpan::default(),
             first_fragment_item_index_: 0,
+            secure_text_timer_: None,
         };
         result
             .object_
@@ -350,6 +356,15 @@ impl LayoutText {
     }
     pub fn TextStartOffset(&self) -> u32 {
         self.CheckIsNotDestroyed();
+        #[cfg(feature = "translation_in_progress")]
+        {
+            let fragment = foundation::DynamicTo::<crate::layout_text_fragment::LayoutTextFragment>(
+                self as *const _,
+            );
+            if let Some(fragment) = unsafe { fragment.as_ref() } {
+                return fragment.TextStartOffset();
+            }
+        }
         0
     }
     pub fn PlainText(&self) -> String {
@@ -569,7 +584,18 @@ impl LayoutText {
         unsafe { LayoutTextInvalidateVisualOverflow(self) }
     }
     pub fn FirstLineBoxTopLeft(&self) -> PhysicalOffset {
-        unsafe { LayoutTextFirstLineBoxTopLeft(self) }
+        // Source: core/layout/layout_text.cc:762-776.
+        self.CheckIsNotDestroyed();
+        if !self.IsInLayoutNGInlineFormattingContext() || !self.IsFirstInlineFragmentSafe() {
+            return PhysicalOffset::default();
+        }
+        let mut cursor = layout_fragment::inline_cursor::InlineCursor::default();
+        cursor.MoveToLayoutObject(self);
+        if cursor.IsNotNull() {
+            cursor.Current().OffsetInContainerFragment()
+        } else {
+            PhysicalOffset::default()
+        }
     }
     pub fn SetTextIfNeeded(&mut self, text: String) {
         unsafe { LayoutTextSetTextIfNeeded(self, text) }
@@ -636,15 +662,42 @@ impl LayoutText {
     }
     pub fn LocalCaretRect(
         &self,
-        caret_offset: i32,
-        shape: super::super::caret_rect::CaretShape,
+        _caret_offset: i32,
+        _shape: super::super::caret_rect::CaretShape,
     ) -> PhysicalRect {
-        unsafe { LayoutTextLocalCaretRect(self, caret_offset, shape) }
+        // Source: core/layout/layout_text.cc:715-718. IFC caret geometry is
+        // resolved before this fallback through the resident InlineCursor.
+        self.CheckIsNotDestroyed();
+        PhysicalRect::default()
     }
 
     // cpp: layoutng/internal/layout_text.h:249-268
-    pub fn MomentarilyRevealLastTypedCharacter(&mut self, offset: u32) {
-        unsafe { LayoutTextMomentarilyRevealLastTypedCharacter(self, offset) }
+    // Source: layout_text.cc:1352-1363. Settings and the UserInteraction runner
+    // are explicit document facts; all timer state stays on this LayoutText.
+    pub fn MomentarilyRevealLastTypedCharacter(
+        &mut self,
+        offset: u32,
+        settings: Option<crate::password_echo::PasswordEchoLayoutSettings>,
+        token: crate::password_echo::PasswordEchoTimerToken,
+        scheduler: &dyn crate::password_echo::PasswordEchoTimerScheduler,
+    ) {
+        unsafe {
+            LayoutTextMomentarilyRevealLastTypedCharacter(self, offset, settings, token, scheduler)
+        }
+    }
+    pub(crate) fn PasswordEchoTimerMatches(
+        &self,
+        token: crate::password_echo::PasswordEchoTimerToken,
+    ) -> bool {
+        self.secure_text_timer_
+            .as_ref()
+            .is_some_and(|timer| timer.token == Some(token))
+    }
+    pub(crate) fn PasswordEchoTimerFired(
+        &mut self,
+        token: crate::password_echo::PasswordEchoTimerToken,
+    ) -> bool {
+        unsafe { LayoutTextPasswordEchoTimerFired(self, token) }
     }
     pub fn IsAllCollapsibleWhitespace(&self) -> bool {
         unsafe { LayoutTextIsAllCollapsibleWhitespace(self) }

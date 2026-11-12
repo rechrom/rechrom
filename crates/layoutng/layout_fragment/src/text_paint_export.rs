@@ -295,7 +295,10 @@ pub(super) fn ExportTextCombineEmphasis(
         glyph_runs,
         origin: Offset {
             x,
-            y: base_metrics.Ascent() as f64 + emphasis_offset,
+            y: base_metrics
+                .FixedAscent(FontBaseline::kAlphabeticBaseline)
+                .ToDouble()
+                + emphasis_offset,
         },
         color: crate::internal::boundary::paint_style_export::TextEmphasisColor(style),
     })
@@ -342,25 +345,49 @@ fn ResolveTextPaintBaseline(item: &FragmentItem) -> f64 {
         }
         let wrapper_data = unsafe { &*wrapper_data };
         return Number(LayoutUnit::from_f32(
-            wrapper_data.GetFontMetrics().Ascent() as f32 - wrapper_data.InternalLeading() / 2.0,
+            wrapper_data
+                .GetFontMetrics()
+                .FixedAscent(FontBaseline::kAlphabeticBaseline)
+                .ToFloat()
+                - wrapper_data.InternalLeading() / 2.0,
         ));
     }
     if primary_font.is_null() {
         return 0.0;
     }
-    let ascent = unsafe { &*primary_font }.GetFontMetrics().Ascent();
-    // text_fragment_painter.cc:531-540. Normal text uses the integer
-    // primary-font ascent. `text-fit` is the one HTML branch that scales
-    // that ascent before constructing the LayoutUnit text origin.
+    let ascent = unsafe { &*primary_font }
+        .GetFontMetrics()
+        .FixedAscent(FontBaseline::kAlphabeticBaseline);
+    if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() {
+        let data = unsafe { &*primary_font };
+        let family = data.PlatformData().RawFont().FamilyName();
+        if family.contains("Mona") {
+            let metrics = data.GetFontMetrics();
+            eprintln!(
+                "FONT_PAINT_METRICS family={family:?} size={} float_ascent={} fixed_ascent={} float_descent={} fixed_descent={} line_spacing={} internal_leading={}",
+                data.PlatformData().size(),
+                metrics.FloatAscent(),
+                metrics.FixedAscent(FontBaseline::kAlphabeticBaseline).ToFloat(),
+                metrics.FloatDescent(),
+                metrics.FixedDescent(FontBaseline::kAlphabeticBaseline).ToFloat(),
+                metrics.FloatLineSpacing(),
+                data.InternalLeading(),
+            );
+        }
+    }
+    // text_fragment_painter.cc:531-540. Chromium uses the integer ascent in
+    // its zoom-for-DSF layout coordinates. This CSS-coordinate translation
+    // uses the already device-rounded, dezoomed FixedAscent equivalent;
+    // `text-fit` is the one HTML branch that scales it further.
     let text_fit_scale = if item.IsSvgText() {
         1.0
     } else {
         item.GetTextFitScale()
     };
     if text_fit_scale == 1.0 {
-        ascent as f64
+        ascent.ToDouble()
     } else {
-        Number(LayoutUnit::from_f32(ascent as f32 * text_fit_scale))
+        ascent.ToDouble() * f64::from(text_fit_scale)
     }
 }
 

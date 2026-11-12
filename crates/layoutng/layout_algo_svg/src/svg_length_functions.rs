@@ -25,6 +25,23 @@ pub fn ValueForLength(length: &Length, zoom: f32, dimension: f32) -> f32 {
     FloatValueForLength(length, dimension * zoom) / zoom
 }
 
+// core/svg/svg_length_functions.cc:126-143. StrokeWidth's canonical
+// UnzoomedLength follows a distinct zoom rule from ordinary SVG lengths.
+pub fn ValueForUnzoomedLength(
+    length: &layoutng_style::style::unzoomed_length::UnzoomedLength,
+    zoom: f32,
+    dimension: f32,
+) -> f32 {
+    let length = length.length();
+    if RuntimeEnabledFeatures::SvgNewZoomEnabled() {
+        if !length.HasOnlyFixedAndPercent() {
+            return 0.;
+        }
+        return FloatValueForLength(length, dimension / zoom) * zoom;
+    }
+    ValueForLength(length, 1., dimension)
+}
+
 // cpp: layoutng_svg/svg_length_functions.cc:45-49
 pub fn ValueForLengthWithStyle(length: &Length, style: &ComputedStyle, dimension: f32) -> f32 {
     ValueForLength(length, style.EffectiveZoom(), dimension)

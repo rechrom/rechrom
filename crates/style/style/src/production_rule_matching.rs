@@ -62,6 +62,7 @@ pub(crate) struct ProductionRuleMatchReport {
 }
 
 pub(crate) struct ProductionRuleMatchCollection {
+    pub serialization_declarations: Vec<crate::serialization_style_query::SerializationDeclaration>,
     pub report: ProductionRuleMatchReport,
     pub rules: Vec<ProductionTransferredRule>,
 }
@@ -212,12 +213,11 @@ pub(crate) fn InvalidateProductionRuleSets(
             // CheckIfAnyRuleMatches returns before cascade/pseudo output
             // materialization (ElementRuleCollector's STOP branch). Only the
             // selector checker's capabilities constrain invalidation here;
-            // HasSupportedPseudoTarget belongs to rule-output routing below.
+            // pseudo declarations are routed by the normal collector.
             let reason = if rules.ScopeForRule(data).is_some() {
                 Some("scope")
             } else if ProductionUnsupportedParsedFeature(&data.Rule().Selectors().CopySelectors())
                 .is_some()
-                && !IsUnretainedScrollbarPseudoTarget(data)
             {
                 Some("selector")
             } else if data.Selector().SimpleSelectors().any(|selector| {
@@ -355,9 +355,10 @@ pub(crate) fn InvalidateProductionRuleSets(
 /// Production SelectorChecker capability boundary.
 ///
 /// The generic persistent-query boundary deliberately stays narrower than the
-/// style resolver. Autofill has a retained DOM owner and is implemented by
-/// SelectorChecker, so the production resolver accepts those four typed
-/// pseudo classes while continuing to delegate every other simple selector to
+/// style resolver. Autofill has a retained DOM owner; scrollbar requests carry
+/// their actual part and live scrollbar facts into SelectorChecker. The
+/// production resolver accepts these source-backed pseudos while delegating
+/// every other simple selector to
 /// the shared capability gate. Selector-list arguments are checked
 /// recursively; this keeps `:is(input:autofill)` behind the same typed gate as
 /// a direct `input:autofill` selector.
@@ -370,9 +371,28 @@ pub(crate) fn ProductionUnsupportedParsedFeature(
         if matches!(
             selector.GetPseudoType(),
             kPseudoAutofill
+                | kPseudoOverscrollAreaParent
                 | kPseudoWebKitAutofill
                 | kPseudoAutofillPreviewed
                 | kPseudoAutofillSelected
+                | kPseudoScrollbar
+                | kPseudoScrollbarButton
+                | kPseudoScrollbarCorner
+                | kPseudoScrollbarThumb
+                | kPseudoScrollbarTrack
+                | kPseudoScrollbarTrackPiece
+                | kPseudoResizer
+                | kPseudoWindowInactive
+                | kPseudoHorizontal
+                | kPseudoVertical
+                | kPseudoDecrement
+                | kPseudoIncrement
+                | kPseudoStart
+                | kPseudoEnd
+                | kPseudoDoubleButton
+                | kPseudoSingleButton
+                | kPseudoNoButton
+                | kPseudoCornerPresent
         ) {
             continue;
         }
@@ -510,20 +530,6 @@ pub(crate) fn ProductionPartRuleScopes(
     result
 }
 
-fn IsUnretainedScrollbarPseudoTarget(data: &RuleData<Backend>) -> bool {
-    data.Selector().SimpleSelectors().any(|selector| {
-        matches!(
-            selector.GetPseudoType(),
-            PseudoType::kPseudoScrollbar
-                | PseudoType::kPseudoScrollbarButton
-                | PseudoType::kPseudoScrollbarCorner
-                | PseudoType::kPseudoScrollbarThumb
-                | PseudoType::kPseudoScrollbarTrack
-                | PseudoType::kPseudoScrollbarTrackPiece
-        )
-    })
-}
-
 /// Runs the production element through translated RuleSet buckets and writes
 /// the collector's transferred property sets directly into `cascade_result`.
 ///
@@ -539,9 +545,34 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
     container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
     cascade_result: &mut MatchResult,
 ) -> ProductionRuleMatchCollection {
+    CollectProductionRuleMatchesIntoWithPurpose(
+        inputs,
+        document,
+        element_index,
+        selectors,
+        origin,
+        pseudo,
+        container_runtime,
+        cascade_result,
+        false,
+    )
+}
+
+pub(crate) fn CollectProductionRuleMatchesIntoWithPurpose<'d>(
+    inputs: &[ProductionRuleSetInput],
+    document: &'d Document,
+    element_index: usize,
+    selectors: &mut PersistentSelectorService,
+    origin: CascadeOrigin,
+    pseudo: &ProductionPseudoRequest,
+    container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
+    cascade_result: &mut MatchResult,
+    for_serialization: bool,
+) -> ProductionRuleMatchCollection {
     let node = document.Node(element_index);
     if node.Type() != DOMNodeType::kElement || inputs.is_empty() {
         return ProductionRuleMatchCollection {
+            serialization_declarations: Vec::new(),
             report: ProductionRuleMatchReport::default(),
             rules: Vec::new(),
         };
@@ -557,6 +588,7 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
             document.UAShadowPseudoElement(element_index, "-webkit-input-placeholder")
         else {
             return ProductionRuleMatchCollection {
+                serialization_declarations: Vec::new(),
                 report: ProductionRuleMatchReport::default(),
                 rules: Vec::new(),
             };
@@ -620,6 +652,10 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
         cascade_result,
         EInsideLink::kNotInsideLink,
     );
+    if for_serialization {
+        collector.SetMode(crate::selector_checker::Mode::kCollectingStyleRules);
+        collector.SetSuppressVisited(true);
+    }
     collector.SetPseudoElementStyleRequest(matching_pseudo);
     collector.SetMatchingUARules(origin == CascadeOrigin::kUserAgent);
     if origin == CascadeOrigin::kAuthor {
@@ -640,6 +676,21 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
     report.transferred_property_sets =
         collector.MatchedResult().GetMatchedProperties().len() - first_result;
 
+    let serialization_declarations = if for_serialization {
+        collector
+            .MatchedStyleRuleList()
+            .unwrap_or_default()
+            .into_iter()
+            .map(
+                |rule| crate::serialization_style_query::SerializationDeclaration {
+                    origin: origin,
+                    properties: rule.Properties().clone(),
+                },
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
     let rules = collector
         .MatchedRulesForTest()
         .iter()
@@ -652,7 +703,11 @@ pub(crate) fn CollectProductionRuleMatchesInto<'d>(
             matched: matched.clone(),
         })
         .collect();
-    ProductionRuleMatchCollection { report, rules }
+    ProductionRuleMatchCollection {
+        report,
+        rules,
+        serialization_declarations,
+    }
 }
 
 /// cpp: resolver/style_resolver.cc:715-802,862-879,929-1031;
@@ -673,9 +728,34 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
     container_runtime: Option<&ProductionContainerRuntime<'_>>,
     cascade_result: &mut MatchResult,
 ) -> ProductionRuleMatchCollection {
+    CollectProductionShadowRuleMatchesIntoWithPurpose(
+        inputs,
+        document,
+        element_index,
+        selectors,
+        scope_root,
+        pass,
+        container_runtime,
+        cascade_result,
+        false,
+    )
+}
+
+pub(crate) fn CollectProductionShadowRuleMatchesIntoWithPurpose(
+    inputs: &[ProductionRuleSetInput],
+    document: &Document,
+    element_index: usize,
+    selectors: &mut PersistentSelectorService,
+    scope_root: usize,
+    pass: &ProductionShadowRulePass,
+    container_runtime: Option<&ProductionContainerRuntime<'_>>,
+    cascade_result: &mut MatchResult,
+    for_serialization: bool,
+) -> ProductionRuleMatchCollection {
     let node = document.Node(element_index);
     if node.Type() != DOMNodeType::kElement || inputs.is_empty() {
         return ProductionRuleMatchCollection {
+            serialization_declarations: Vec::new(),
             report: ProductionRuleMatchReport::default(),
             rules: Vec::new(),
         };
@@ -722,6 +802,10 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
         cascade_result,
         EInsideLink::kNotInsideLink,
     );
+    if for_serialization {
+        collector.SetMode(crate::selector_checker::Mode::kCollectingStyleRules);
+        collector.SetSuppressVisited(true);
+    }
     // StyleResolver::MatchElementScopeRules selects the corresponding source
     // RuleSets but begins the transfer/matching scope on the instance itself.
     // Conflating these scopes silently drops SVG use rules in conservative recalc.
@@ -757,6 +841,21 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
     collector.SortAndTransferMatchedRules(CascadeOrigin::kAuthor, false, None);
     report.transferred_property_sets =
         collector.MatchedResult().GetMatchedProperties().len() - first_result;
+    let serialization_declarations = if for_serialization {
+        collector
+            .MatchedStyleRuleList()
+            .unwrap_or_default()
+            .into_iter()
+            .map(
+                |rule| crate::serialization_style_query::SerializationDeclaration {
+                    origin: CascadeOrigin::kAuthor,
+                    properties: rule.Properties().clone(),
+                },
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
     let rules = collector
         .MatchedRulesForTest()
         .iter()
@@ -769,7 +868,11 @@ pub(crate) fn CollectProductionShadowRuleMatchesInto(
             matched: matched.clone(),
         })
         .collect();
-    ProductionRuleMatchCollection { report, rules }
+    ProductionRuleMatchCollection {
+        report,
+        rules,
+        serialization_declarations,
+    }
 }
 
 #[cfg(test)]
@@ -1599,6 +1702,7 @@ mod tests {
             document,
             media: &media,
             states: &states,
+            snapped_dependencies: None,
             stored_custom: &custom,
             current_styles: Some(&current_styles),
             current_custom: None,

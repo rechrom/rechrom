@@ -11,6 +11,7 @@ pub enum ResourceKind {
     kScript,
     #[default]
     kImage,
+    kMedia,
     kFont,
 }
 // cpp: page_mutation/page_mutation.h:27-30
@@ -18,6 +19,16 @@ pub enum ResourceKind {
 pub struct ImageResourceReady {
     pub source: String,
     pub image: PaintImage,
+    /// Same pending content owner created before the request, completed by DOM.
+    pub content: Option<std::rc::Rc<dom::persistent_document::DOMImageResourceContent>>,
+}
+#[derive(Clone)]
+pub struct VideoFrameChanged {
+    pub node_id: u64,
+    pub frame: PaintImage,
+    /// Original multiplanar frame retained for the compositor. `frame` is the
+    /// independent software VideoPainter fallback.
+    pub resource: image_resource::VideoFrameResource,
 }
 #[derive(Clone)]
 pub struct DocumentImageFrameChanged {
@@ -49,9 +60,16 @@ pub struct ResourceLoadFailed {
 #[derive(Clone)]
 pub enum ResourceMutation {
     ImageResourceReady(ImageResourceReady),
+    PlatformImageResourceReady(PaintImage),
+    VideoFrameChanged(VideoFrameChanged),
     DocumentImageFrameChanged(DocumentImageFrameChanged),
     DocumentImageIntrinsicSizeChanged(DocumentImageIntrinsicSizeChanged),
     FontResourceReady(FontResourceReady),
+    /// Original FontFaceCache owner identity, including source removal.
+    FontFaceResourceChanged {
+        owner: u64,
+        font: Option<FontFace>,
+    },
     ResourceLoadFailed(ResourceLoadFailed),
 }
 // cpp: page_mutation/page_mutation.h:45-47
@@ -72,6 +90,10 @@ pub struct ViewportMutation {
 pub struct ScrollMutation {
     pub target_node_id: u64,
     pub offset: Offset,
+    /// Source: mojom::blink::ScrollType. This survives Page coalescing so the
+    /// resident ScrollableArea can distinguish explicit scrolls from layout
+    /// side effects and notify the macOS painted-scrollbar animator.
+    pub scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
 }
 pub use animation::{AnimationCascadeOrigin, AnimationStyleSample, AnimationTick};
 // cpp: page_mutation/page_mutation.h:76-82

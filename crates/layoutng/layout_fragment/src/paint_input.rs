@@ -110,6 +110,10 @@ pub struct ClipPathPaint {
     /// operation distinct from `none` while PrePaint lacks Chromium's exact
     /// ContouredBorderGeometry path construction.
     pub geometry_box_only: bool,
+    /// shape() retains its compiled StyleShape on the canonical style owner.
+    /// PrePaint borrows that owner after resolving the final reference box;
+    /// no normalized command/percentage projection crosses Layout.
+    pub compiled_shape: bool,
     pub inset: Option<ClipPathInset>,
     pub circle: Option<ClipPathCircle>,
     pub ellipse: Option<ClipPathEllipse>,
@@ -135,6 +139,7 @@ impl Default for ClipPathPaint {
             reference_error: None,
             reference_box: ClipPathReferenceBox::kBorderBox,
             geometry_box_only: false,
+            compiled_shape: false,
             inset: None,
             circle: None,
             ellipse: None,
@@ -350,6 +355,7 @@ pub struct PaintReflectionMaskLayer {
     pub document_image_container_key: Option<image_resource::ContainerKey>,
     pub paint_shader: Option<PaintShader>,
     pub image_interpolation_quality: InterpolationQuality,
+    pub dynamic_range_limit: foundation::DynamicRangeLimit,
     pub clip_origin: Offset,
     pub clip_size: Size,
     pub source_origin: Offset,
@@ -368,6 +374,7 @@ impl Default for PaintReflectionMaskLayer {
             document_image_container_key: None,
             paint_shader: None,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            dynamic_range_limit: foundation::DynamicRangeLimit::default(),
             clip_origin: Offset::default(),
             clip_size: Size::default(),
             source_origin: Offset::default(),
@@ -703,6 +710,8 @@ pub struct SvgFilterPrimitive {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SvgFilterGraph {
+    /// Scoped DOM resource identity; detached fixtures may use zero.
+    pub resource_node_id: u64,
     pub id: String,
     pub filter_units: SvgFilterUnits,
     pub primitive_units: SvgFilterUnits,
@@ -877,8 +886,18 @@ pub struct PaintColorStop {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintShader {
     pub kind: PaintShaderKind,
+    /// The SVG resource element belonged to an HTML canvas fallback subtree.
+    /// Privacy-preserving paints may use only those paint-server resources.
+    pub is_in_canvas_subtree: bool,
+    /// Chromium's SVG gradient resource applies forced-dark stop filtering
+    /// only when both the using element and the gradient resource element
+    /// have ForceDark enabled. CSS gradients and SVG patterns leave this off.
+    pub apply_dark_mode: bool,
     pub spread: PaintSpreadMethod,
     pub stops: Vec<PaintColorStop>,
+    /// Source SVGGradient raw stop owner, before the using element's opacity.
+    /// Context paint borrows this same resource even when source opacity is 0.
+    pub svg_context_stops: Option<Arc<Vec<PaintColorStop>>>,
     pub start: Offset,
     pub end: Offset,
     pub linear_angle: Option<f64>,
@@ -920,7 +939,10 @@ impl Default for PaintShader {
     fn default() -> Self {
         Self {
             kind: PaintShaderKind::kLinearGradient,
+            is_in_canvas_subtree: false,
+            apply_dark_mode: false,
             spread: PaintSpreadMethod::kPad,
+            svg_context_stops: None,
             stops: Vec::new(),
             start: Offset::default(),
             end: Offset::default(),
@@ -1297,18 +1319,60 @@ impl PaintTransform {
     }
 }
 
+/// One `border-image-width` side retained until Paint knows the pixel-snapped
+/// border-image area. Chromium resolves percentages and `auto` in
+/// NinePieceImageGrid, after that area is known.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NinePieceImageWidth {
+    Number(f64),
+    Auto,
+    Length {
+        pixels: f64,
+        percentage: f64,
+        calculation: Option<Arc<foundation::CalculationValue>>,
+    },
+}
+
+impl Default for NinePieceImageWidth {
+    fn default() -> Self {
+        Self::Length {
+            pixels: 0.0,
+            percentage: 0.0,
+            calculation: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NinePieceImageWidths {
+    pub top: NinePieceImageWidth,
+    pub right: NinePieceImageWidth,
+    pub bottom: NinePieceImageWidth,
+    pub left: NinePieceImageWidth,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NinePieceImagePaint {
     pub resource_id: u64,
+    /// StyleImage lifecycle state. A pending image suppresses fallback borders,
+    /// while a loaded image that cannot render restores them.
+    pub is_loaded: bool,
+    pub can_render: bool,
     pub image_resolution_scale: f64,
     /// Source image dimensions in the coordinate space used by `slices`.
     /// Generated images use the border-image area, matching StyleImage::ImageSize.
     pub image_size: Size,
+    /// Effective orientation after StyleImage::ForceOrientationIfNecessary.
+    /// Source rectangles remain in this oriented coordinate space.
+    pub image_orientation: image_resource::ImageOrientation,
     /// Generated border images cross the Style/Paint boundary as immutable
     /// shader data. Fetched images continue to use `resource_id`.
     pub shader: Option<Arc<PaintShader>>,
     pub slices: Edges,
-    pub widths: Edges,
+    /// Unresolved width syntax plus the zoomed physical border widths used by
+    /// numeric multipliers. Resolution belongs to NinePieceImageGrid.
+    pub widths: NinePieceImageWidths,
+    pub border_widths: Edges,
     pub outsets: Edges,
     pub horizontal_rule: PaintImageTileRule,
     pub vertical_rule: PaintImageTileRule,
@@ -1318,11 +1382,15 @@ impl Default for NinePieceImagePaint {
     fn default() -> Self {
         Self {
             resource_id: 0,
+            is_loaded: false,
+            can_render: false,
             image_resolution_scale: 1.0,
             image_size: Size::default(),
+            image_orientation: image_resource::ImageOrientation::default(),
             shader: None,
             slices: Edges::default(),
-            widths: Edges::default(),
+            widths: NinePieceImageWidths::default(),
+            border_widths: Edges::default(),
             outsets: Edges::default(),
             horizontal_rule: PaintImageTileRule::kStretch,
             vertical_rule: PaintImageTileRule::kStretch,
@@ -1357,6 +1425,9 @@ pub struct SvgMarkerPrimitive {
     pub fill_even_odd: bool,
     pub non_scaling_stroke: bool,
     pub antialias: bool,
+    /// SVGObjectPainter applies this color filter only while recording an SVG
+    /// mask whose consuming style selects color-interpolation: linearRGB.
+    pub apply_srgb_to_linear_color_filter: bool,
     pub transform: Option<TransformMatrix>,
 }
 
@@ -1364,6 +1435,7 @@ pub struct SvgMarkerPrimitive {
 pub struct SvgPatternImage {
     pub resource_id: u64,
     pub image_interpolation_quality: InterpolationQuality,
+    pub dynamic_range_limit: foundation::DynamicRangeLimit,
     pub destination_offset: Offset,
     pub destination_width: f64,
     pub destination_height: f64,
@@ -1428,6 +1500,7 @@ impl Default for SvgPatternImage {
         Self {
             resource_id: 0,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            dynamic_range_limit: foundation::DynamicRangeLimit::default(),
             destination_offset: Offset::default(),
             destination_width: 0.0,
             destination_height: 0.0,
@@ -1503,10 +1576,20 @@ impl Default for SvgMarkerPrimitive {
             fill_even_odd: false,
             non_scaling_stroke: false,
             antialias: true,
+            apply_srgb_to_linear_color_filter: false,
             transform: None,
         }
     }
 }
+/// Native SVGShapePainter marker selection. Geometry stays with Layout;
+/// Paint borrows the existing resource client's resident subtree by identity.
+#[derive(Clone, Copy, Debug)]
+pub struct SvgMarkerPaint {
+    pub resource_client_id: u64,
+    pub transform: TransformMatrix,
+    pub viewport_clip: Option<layout_fragment::fragment_tree::FragmentPaintRect>,
+}
+
 #[derive(Clone, Default, PartialEq)]
 pub struct SvgMarkerInstance {
     pub resource_id: u64,
@@ -1536,17 +1619,31 @@ pub struct PaintStyleData {
     /// GetCaretShapeFromComputedStyle. Paint uses this both for geometry and
     /// for BoxFragmentPainter's before/after-children ordering.
     pub caret_shape: CaretShape,
+    pub caret_color: Color,
     /// Chromium ComputedStyle::GetInterpolationQuality(), carried unchanged
     /// to every bitmap display item produced for this style.
     pub image_interpolation_quality: InterpolationQuality,
+    /// ComputedStyle::GetDynamicRangeLimit(), carried to image PaintFlags and
+    /// applied to the destination HDR headroom during raster image decode.
+    pub dynamic_range_limit: foundation::DynamicRangeLimit,
     pub text_fill_color: Color,
     pub text_stroke_color: Color,
     pub text_stroke_width: f64,
+    /// ComputedStyle::PrintColorAdjust() == economy. The document-owned
+    /// printing/background preference remains on FragmentPaintData.
+    pub print_color_adjust_economy: bool,
     /// Inputs to StyleEngine::ResolveColorSchemeForEmbedding. Keep these
     /// separate from resolved paint colors because SVG document images use
     /// the embedding element's computed scheme to build their own style tree.
     pub color_scheme_flags_is_normal: bool,
     pub used_dark_color_scheme: bool,
+    /// ComputedStyle::ForceDark(). This is distinct from merely using a dark
+    /// color scheme: Paint uses it to admit paint-time color/image filtering.
+    pub force_dark: bool,
+    /// GraphicsContext::ScopedAutoDarkModeState inherited from SVG roots.
+    /// This pauses solid-color and SVG paint-server filtering, but deliberately
+    /// does not gate independently classified image draws.
+    pub auto_dark_mode_paused: bool,
     pub accent_color: Option<Color>,
     pub clip_path: Option<ClipPathPaint>,
     /// Source-less fixture/detached fallback only. Managed production styles
@@ -1590,6 +1687,7 @@ pub struct PaintStyleData {
     pub svg_stroke_line_join: SvgStrokeLineJoin,
     pub svg_stroke_miter_limit: f64,
     pub svg_fill_even_odd: bool,
+    pub svg_clip_even_odd: bool,
     pub svg_non_scaling_stroke: bool,
     pub svg_shape_antialias: bool,
     pub svg_paint_order: [SvgPaintComponent; 3],
@@ -1726,12 +1824,17 @@ impl Default for PaintStyleData {
         Self {
             color: black,
             caret_shape: CaretShape::kBar,
+            caret_color: black,
             image_interpolation_quality: InterpolationQuality::kInterpolationMedium,
+            dynamic_range_limit: foundation::DynamicRangeLimit::default(),
             text_fill_color: black,
             text_stroke_color: black,
             text_stroke_width: 0.0,
+            print_color_adjust_economy: true,
             color_scheme_flags_is_normal: true,
             used_dark_color_scheme: false,
+            force_dark: false,
+            auto_dark_mode_paused: false,
             accent_color: None,
             clip_path: None,
             filters: Vec::new(),
@@ -1762,6 +1865,7 @@ impl Default for PaintStyleData {
             svg_stroke_line_join: SvgStrokeLineJoin::kMiter,
             svg_stroke_miter_limit: 4.0,
             svg_fill_even_odd: false,
+            svg_clip_even_odd: false,
             svg_non_scaling_stroke: false,
             svg_shape_antialias: true,
             svg_paint_order: [
@@ -1951,6 +2055,13 @@ impl PaintStyle {
         })
     }
 
+    pub fn print_color_adjust_economy(&self) -> bool {
+        self.Source()
+            .map_or(self.data.print_color_adjust_economy, |style| {
+                style.PrintColorAdjust() == foundation::EPrintColorAdjust::kEconomy
+            })
+    }
+
     pub fn caret_shape(&self) -> CaretShape {
         self.Source()
             .map_or(self.data.caret_shape, |style| match style.CaretShape() {
@@ -1959,11 +2070,23 @@ impl PaintStyle {
                 foundation::ECaretShape::kUnderscore => CaretShape::kUnderscore,
             })
     }
+    pub fn caret_color(&self) -> Color {
+        self.Source().map_or(self.data.caret_color, |style| {
+            crate::internal::boundary::paint_style_export::ColorValue(style.ResolvedCaretColor())
+        })
+    }
 
     pub fn image_interpolation_quality(&self) -> foundation::InterpolationQuality {
         self.Source()
             .map_or(self.data.image_interpolation_quality, |style| {
                 style.GetInterpolationQuality()
+            })
+    }
+
+    pub fn dynamic_range_limit(&self) -> foundation::DynamicRangeLimit {
+        self.Source()
+            .map_or(self.data.dynamic_range_limit, |style| {
+                *style.GetDynamicRangeLimit()
             })
     }
 
@@ -1982,6 +2105,15 @@ impl PaintStyle {
                     layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kDark
                 )
             })
+    }
+
+    pub fn force_dark(&self) -> bool {
+        self.Source()
+            .map_or(self.data.force_dark, |style| style.ForceDark())
+    }
+
+    pub fn auto_dark_mode_paused(&self) -> bool {
+        self.data.auto_dark_mode_paused
     }
 
     pub fn background_color(&self) -> Color {
@@ -2121,7 +2253,7 @@ impl PaintStyle {
                 let decoration = &unsafe { &*decorations }[index];
                 crate::internal::boundary::layout_boundary::ExportAppliedTextDecoration(
                     decoration,
-                    style.TextDecorationSkipInk() != foundation::ETextDecorationSkipInk::kNone,
+                    style.TextDecorationSkipInk(),
                 )
             },
         )

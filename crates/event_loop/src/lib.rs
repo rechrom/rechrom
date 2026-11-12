@@ -250,6 +250,23 @@ impl<T, F> EventLoopEngine<T, F> {
         Ok(self.NextWake())
     }
 
+    /// Query the same scheduler queues without promoting or removing tasks.
+    /// An idle deadline uses this to yield to work of higher priority; the
+    /// embedding supplies the current monotonic time just as it does to OnWake.
+    pub fn HasReadyTaskAtOrAbove(&self, priority: TaskPriority, now: Instant) -> bool {
+        !self.stopped
+            && (self.ready[..=priority.index()]
+                .iter()
+                .any(|queue| !queue.is_empty())
+                || self
+                    .delayed
+                    .range(..=(now, u64::MAX))
+                    .any(|(_, task)| task.priority <= priority))
+    }
+    pub fn HasPendingRendering(&self) -> bool {
+        !self.stopped && !self.pending_rendering.is_empty()
+    }
+
     pub fn NextWakeRequest(&mut self, now: Instant) -> WakeRequest {
         if self.stopped {
             return WakeRequest::Stop;

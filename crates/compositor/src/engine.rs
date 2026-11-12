@@ -7,6 +7,9 @@ pub use crate::cc::{
     input::scroll_snap_data::TargetSnapAreaElementIds, trees::scroll_source_type::ScrollSourceType,
 };
 pub use crate::runtime::host_metrics::CustomTrackerResults;
+pub use crate::runtime::main_frame_lifecycle::{
+    CommitDeferralReason, FrameLifecycleMutation, PaintHoldingReason,
+};
 pub use crate::runtime::metadata::FrameTimingDetails as CompositorFrameTimingDetails;
 use crate::{
     adapter::{
@@ -19,7 +22,7 @@ use crate::{
     },
     runtime::{
         paint::TileRasterBufferValue,
-        resources::{RasterReturnedResource, RasterSharedImage},
+        resources::{RasterColorSpace, RasterReturnedResource, RasterSharedImage},
     },
     CompositorFrameSubmission,
 };
@@ -48,6 +51,7 @@ pub trait CompositorRasterProvider: Send + Sync {
         resource: ResourceId,
         size: Size,
         format: &SharedImageFormat,
+        color_space: &RasterColorSpace,
     ) -> io::Result<RasterSharedImage>;
     fn AcquireBufferForRaster(
         &self,
@@ -136,8 +140,64 @@ pub enum ScrollPhase {
     Update,
     End,
 }
+/// Platform-neutral InputHandlerProxy gesture values. Deltas retain Blink's
+/// gesture signs until conversion by the impl input owner.
+#[derive(Clone, Copy, Debug)]
+pub struct CompositorScrollGesture {
+    /// Opaque input-owner dispatch identity, preserved through hit-test continuation.
+    pub dispatch_id: u64,
+    pub position: PointF,
+    pub delta: Vector2dF,
+    pub unconstrained_delta: Vector2dF,
+    pub granularity: crate::adapter::input_types::ScrollGranularity,
+    pub input_type: crate::adapter::input_handler::ScrollInputType,
+    pub is_inertial: bool,
+    pub synthetic: bool,
+    pub target_viewport: bool,
+    pub scroll_element_id: ElementId,
+    pub main_thread_hit_tested_reasons: crate::adapter::input_types::MainThreadHitTestReasons,
+    pub event_timestamp: TimeTicks,
+    pub phase: ScrollPhase,
+}
 #[derive(Clone, Copy, Debug)]
 pub enum CompositorInput {
+    SetPageScaleFactorAndLimits {
+        scale: f32,
+        minimum: f32,
+        maximum: f32,
+    },
+    StartPageScaleAnimation {
+        target: crate::adapter::geometry::Point,
+        use_anchor: bool,
+        scale: f32,
+        duration: crate::adapter::time::TimeDelta,
+    },
+    ScrollGesture(CompositorScrollGesture),
+    PinchGesture {
+        dispatch_id: u64,
+        anchor: PointF,
+        scale: f32,
+        input_type: crate::adapter::input_handler::ScrollInputType,
+        phase: ScrollPhase,
+    },
+    /// ChromeClient -> WebFrameWidget -> LayerTreeHost pending commit state.
+    SetHaveScrollEventHandlers(bool),
+    SetEventListenerProperties {
+        class: crate::cc::input::event_listener_properties::EventListenerClass,
+        properties: crate::cc::input::event_listener_properties::EventListenerProperties,
+    },
+    /// Original wheel remains with its impl owner until canonical DOM dispatch
+    /// acknowledges it; this value contains no DOM/renderer state.
+    WheelDOMAcknowledgement {
+        request: u64,
+        default_prevented: bool,
+    },
+    /// InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest. The id is
+    /// returned by the source main-frame hit test, never selected by Page.
+    ContinueWheelScroll {
+        request: u64,
+        scroll_element_id: Option<ElementId>,
+    },
     Wheel {
         position: PointF,
         delta: Vector2dF,
@@ -145,6 +205,15 @@ pub enum CompositorInput {
         granularity: crate::adapter::input_types::ScrollGranularity,
         is_inertial: bool,
         has_synthetic_phase: bool,
+        event_timestamp: crate::adapter::time::TimeTicks,
+        phase: ScrollPhase,
+    },
+    /// WebFrameWidgetImpl's generated kScrollbar gesture. Values carry the
+    /// original gesture signs; InputHandlerProxy performs cc state conversion.
+    ScrollbarGesture {
+        scroll_element_id: ElementId,
+        delta: Vector2dF,
+        granularity: crate::adapter::input_types::ScrollGranularity,
         event_timestamp: crate::adapter::time::TimeTicks,
         phase: ScrollPhase,
     },
@@ -160,10 +229,111 @@ pub enum CompositorInput {
     },
 }
 
+/// Only the compositor can mint the pending main commit's identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollAnimationCommitToken(pub(crate) u64);
+#[derive(Clone, Copy, Debug)]
+pub struct ScrollAnimationAreaClassification {
+    pub element: ElementId,
+    pub uses_composited_scrolling: bool,
+    pub reasons: crate::cc::input::main_thread_scrolling_reason::MainThreadRepaintReasons,
+}
+/// Ordered Page-to-compositor commands; curves retain the canonical shared
+/// value type while raw input keeps its original Copy event semantics.
+#[derive(Clone, Debug)]
+pub enum CompositorMutation {
+    RequestPresentationTime {
+        request: u64,
+    },
+    FrameLifecycle(FrameLifecycleMutation),
+    Input(CompositorInput),
+    ScrollAnimation(scroll_animation::compositor_mutation::ScrollAnimationMutation),
+    FinalizeScrollAnimations {
+        token: ScrollAnimationCommitToken,
+        commands: Vec<scroll_animation::compositor_mutation::ScrollAnimationMutation>,
+    },
+}
+/// LayerTreeHostClient::UpdateCompositorScrollState, from the same commit
+/// as the preceding scroll deltas. Element/source identities remain native.
+#[derive(Clone, Debug)]
+pub struct CompositorScrollState {
+    pub is_scroll_active: bool,
+    pub scroll_latched_element_id: ElementId,
+    pub source_type: ScrollSourceType,
+    pub done_containers: Vec<ElementId>,
+}
+/// A backend can acknowledge a buffer without knowing a display time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentationUnavailableReason {
+    BackendHasNoTimestamp,
+    OffscreenTarget,
+    DiscardedBeforePresentation,
+}
 #[derive(Clone, Debug)]
 pub enum CompositorMainThreadEffect {
+    /// ProxyImpl::ScheduledActionCommit records this immediately after
+    /// FinishCommit, before the separate PostCommit and draw actions.
+    MainFrameCommitCompleted {
+        commit_finish_time: TimeTicks,
+    },
+    PresentationFeedbackUnavailable {
+        frame_token: u32,
+        surface_id: u64,
+        viz_submission: u64,
+        reason: PresentationUnavailableReason,
+    },
+    PresentationPromiseSwapped {
+        request: u64,
+        frame_token: u32,
+        swap_time: TimeTicks,
+    },
+    PresentationPromiseDidNotSwap {
+        request: u64,
+        failure_time: TimeTicks,
+    },
+    FramePresented {
+        frame_token: u32,
+        details: CompositorFrameTimingDetails,
+    },
+    MainFrameUpdatesDeferralChanged {
+        deferred: bool,
+    },
+    CommitDeferralChanged {
+        deferred: bool,
+        reason: PaintHoldingReason,
+    },
+    MainFrameCommitDeferred {
+        reason: CommitDeferralReason,
+    },
+    ScrollAnimationCommitPrepared {
+        token: ScrollAnimationCommitToken,
+        areas: Vec<ScrollAnimationAreaClassification>,
+    },
+    ScrollAnimationCommitFinalized {
+        token: ScrollAnimationCommitToken,
+    },
+    ScrollAnimationCompleted(scroll_animation::compositor_mutation::ScrollAnimationCompletion),
+    GestureDisposition {
+        dispatch_id: u64,
+        handled: bool,
+    },
+    WheelRequiresDOMAcknowledgement {
+        request: u64,
+    },
+    WheelRequiresMainThreadHitTest {
+        request: u64,
+        position: PointF,
+    },
+    CanvasChildPaintRecords(Arc<canvas::CanvasChildRecordPublication>),
+    UpdateCompositorScrollState(CompositorScrollState),
     LayerTreeFrameSinkLost,
     PageScaleAnimationCompleted,
+    ViewportScaleChanged {
+        scale: f32,
+        delta: f32,
+        pinch_active: bool,
+        inner_scroll_delta: Vector2dF,
+    },
     VideoBeginFrame {
         controller: u64,
         args: BeginFrameArgs,
@@ -213,6 +383,10 @@ pub enum CompositorMainThreadEffect {
 /// Move-only frame output: no separate raster bundle or resource snapshot.
 pub struct CompositorOutput {
     pub frame: Option<CompositorFrameSubmission>,
+    /// The frame was drawn from the source frame consumed by the most recent
+    /// Scheduler COMMIT. This is false for an old active-tree frame submitted
+    /// just before a newly committed pending tree activates in the same turn.
+    pub frame_matches_latest_commit: bool,
     pub main_thread_effects: Vec<CompositorMainThreadEffect>,
     pub needs_begin_frames: bool,
     /// Typed impl tasks remain queued and require another owner-sequence turn.
@@ -286,7 +460,7 @@ impl From<crate::runtime::paint::PaintInputError> for CompositorError {
             E::MissingViewportMetadata => CompositorPaintInputKind::MissingViewportMetadata,
             E::InvalidViewportMetadata { .. } => CompositorPaintInputKind::InvalidViewportMetadata,
             E::MissingStickyConstraint { .. } => CompositorPaintInputKind::MissingStickyConstraint,
-            E::UnsupportedCanvasChild { .. } => CompositorPaintInputKind::UnsupportedCanvasChild,
+            E::InvalidCanvasChild { .. } => CompositorPaintInputKind::UnsupportedCanvasChild,
             E::InvalidRecordRange { .. } => CompositorPaintInputKind::InvalidRecordRange,
             E::MissingScrollCompositorData { .. } => {
                 CompositorPaintInputKind::MissingScrollCompositorData
@@ -322,6 +496,7 @@ impl From<crate::runtime::pac_scroll::PacScrollEffect> for CompositorMainThreadE
                 source,
                 snap,
             },
+            E::DidUpdateCompositorScrollState(state) => Self::UpdateCompositorScrollState(state),
             E::DidChangeScrollbarsHidden { element, hidden } => {
                 Self::ScrollbarsHiddenChanged { element, hidden }
             }
@@ -332,10 +507,27 @@ impl From<crate::runtime::pac_scroll::PacScrollEffect> for CompositorMainThreadE
 /// Public commands intentionally carry no layer, tiling, job or graph owner.
 /// Construction remains explicit until the real canonical assembly is ready;
 /// no command reports success with a fabricated frame or skipped commit.
+/// Immutable source conversion output. Its original records retain their
+/// PaintArtifact/range owners; no mutable compositor service escapes.
+pub type ImmutablePaintRecord =
+    crate::runtime::paint::CpuPaintRecord<crate::runtime::skia::SkRegion>;
+
 pub struct CompositorEngine {
     assembly: crate::runtime::engine_assembly::EngineAssembly,
 }
 impl CompositorEngine {
+    /// PaintRecordBuilder::EndRecording, source paint_record_builder.cc:36-44.
+    /// This is a value-only conversion using the same Page compositor's source
+    /// Paint services. It neither commits nor mutates the resident PAC/tree.
+    pub fn ConvertPaintArtifactSubsetToRecord(
+        &self,
+        artifact: Arc<PaintArtifact>,
+        state: &paint::paint_property_tree::PropertyTreeState,
+    ) -> ImmutablePaintRecord {
+        self.assembly
+            .ConvertPaintArtifactSubsetToRecord(artifact, state)
+    }
+
     pub fn new(
         config: CompositorConfig,
         executors: CompositorExecutors,
@@ -350,6 +542,24 @@ impl CompositorEngine {
     ) -> Result<CompositorOutput, CompositorError> {
         self.assembly.Commit(artifact, viewport)
     }
+    pub fn CommitWithScrollAnimations(
+        &mut self,
+        artifact: Arc<PaintArtifact>,
+        viewport: CompositorViewportState,
+        areas: Vec<ElementId>,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.assembly
+            .CommitWithScrollAnimations(artifact, viewport, areas)
+    }
+    /// Creates the resident cc::SurfaceLayer used by VideoPainter's
+    /// kForeignLayerVideo item. The child frame is submitted separately to Viz
+    /// and identified by `range`; Browser never receives compositor services.
+    pub fn CreateVideoSurfaceForeignLayer(
+        &mut self,
+        range: crate::runtime::types::SurfaceRange,
+    ) -> Arc<dyn paint::ForeignLayer> {
+        self.assembly.CreateVideoSurfaceForeignLayer(range)
+    }
     pub fn SetViewport(
         &mut self,
         viewport: CompositorViewportState,
@@ -360,6 +570,11 @@ impl CompositorEngine {
     /// lifecycle has produced its PaintArtifact.
     pub fn RequestMainFrame(&mut self) -> Result<CompositorOutput, CompositorError> {
         self.assembly.RequestMainFrame()
+    }
+    /// Requests a compositor frame from the resident active tree without
+    /// manufacturing a new PaintArtifact or main-tree commit.
+    pub fn RequestRedraw(&mut self) -> Result<CompositorOutput, CompositorError> {
+        self.assembly.RequestRedraw()
     }
     pub fn FinishMainFrameWithoutUpdates(&mut self) -> Result<CompositorOutput, CompositorError> {
         self.assembly.FinishMainFrameWithoutUpdates()
@@ -372,6 +587,26 @@ impl CompositorEngine {
     }
     pub fn Input(&mut self, input: CompositorInput) -> Result<CompositorOutput, CompositorError> {
         self.assembly.Input(input)
+    }
+    pub fn Mutate(
+        &mut self,
+        mutation: CompositorMutation,
+    ) -> Result<CompositorOutput, CompositorError> {
+        match mutation {
+            CompositorMutation::RequestPresentationTime { request } => {
+                self.assembly.RequestPresentationTime(request)
+            }
+            CompositorMutation::FrameLifecycle(mutation) => {
+                self.assembly.ApplyFrameLifecycle(mutation)
+            }
+            CompositorMutation::Input(input) => self.assembly.Input(input),
+            CompositorMutation::ScrollAnimation(mutation) => {
+                self.assembly.ApplySourceScrollAnimation(mutation)
+            }
+            CompositorMutation::FinalizeScrollAnimations { token, commands } => {
+                self.assembly.FinalizeScrollAnimationCommit(token, commands)
+            }
+        }
     }
     /// Signals that Viz accepted a submitted frame. This does not reclaim
     /// resources; their actual lease returns arrive through ReclaimResources.
@@ -412,8 +647,14 @@ mod public_boundary_tests {
             Arc<PaintArtifact>,
             CompositorViewportState,
         ) -> Result<CompositorOutput, CompositorError> = CompositorEngine::Commit;
+        let _: fn(
+            &mut CompositorEngine,
+            crate::runtime::types::SurfaceRange,
+        ) -> Arc<dyn paint::ForeignLayer> = CompositorEngine::CreateVideoSurfaceForeignLayer;
         let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
             CompositorEngine::RequestMainFrame;
+        let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
+            CompositorEngine::RequestRedraw;
         let _: fn(&mut CompositorEngine) -> Result<CompositorOutput, CompositorError> =
             CompositorEngine::FinishMainFrameWithoutUpdates;
         let _: fn(

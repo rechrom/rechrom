@@ -12,8 +12,8 @@ use crate::{
         geometry::{Rect, Size},
         layer_tree_impl::Color4f,
         recording_source::{
-            LayerRect, RecordingDisplayItemList, RecordingSourceServices, RecordingSourceTypes,
-            ScaleToRoundedLayerRect,
+            LayerRect, PartialRasterFullReplay, RecordingDisplayItemList,
+            RecordingSourceServices, RecordingSourceTypes, ScaleToRoundedLayerRect,
         },
     },
     cc::base::{invalidation_region::InvalidationRegion, region::Region},
@@ -41,6 +41,7 @@ pub struct RecordingSource<B: RecordingSourceTypes> {
     recording_scale_factor_: f32,
     directly_composited_image_info_: Option<B::DirectlyCompositedImageInfo>,
     invalidation_: InvalidationRegion<B::RegionBackend>,
+    full_replays_for_partial_raster_: Vec<PartialRasterFullReplay>,
 }
 
 /// Source: cc/raster/raster_source.cc:26-40. The RasterSource constructor is a
@@ -57,6 +58,7 @@ pub struct RasterSourceFields<'a, B: RecordingSourceTypes> {
     pub slow_down_raster_scale_factor_for_debug: &'a i32,
     pub recording_scale_factor: &'a f32,
     pub directly_composited_image_info: &'a Option<B::DirectlyCompositedImageInfo>,
+    pub full_replays_for_partial_raster: &'a [PartialRasterFullReplay],
 }
 
 // Source: cc/layers/recording_source.h:27-31;
@@ -77,6 +79,7 @@ impl<B: RecordingSourceTypes> Default for RecordingSource<B> {
             recording_scale_factor_: 1.0,
             directly_composited_image_info_: None,
             invalidation_: InvalidationRegion::new(),
+            full_replays_for_partial_raster_: Vec::new(),
         }
     }
 }
@@ -94,6 +97,7 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
             slow_down_raster_scale_factor_for_debug: &self.slow_down_raster_scale_factor_for_debug_,
             recording_scale_factor: &self.recording_scale_factor_,
             directly_composited_image_info: &self.directly_composited_image_info_,
+            full_replays_for_partial_raster: &self.full_replays_for_partial_raster_,
         }
     }
     pub fn new() -> Self {
@@ -171,6 +175,7 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
         self.is_solid_color_ = false;
         self.recorded_bounds_ = Rect::default();
         self.display_list_ = None;
+        self.full_replays_for_partial_raster_.clear();
     }
     pub fn SetSlowdownRasterScaleFactor(&mut self, factor: i32) {
         self.slow_down_raster_scale_factor_for_debug_ = factor;
@@ -194,6 +199,28 @@ impl<B: RecordingSourceTypes> RecordingSource<B> {
             clamped.Intersect(LayerRect(self.size_));
             self.invalidation_.Union(clamped);
         }
+    }
+    pub fn SetNeedsFullReplayForPartialRaster(
+        &mut self,
+        outer: Rect,
+        inner: Rect,
+        replay_rect: Rect,
+    ) {
+        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+            eprintln!(
+                "partial-full-replay-set outer={:?} inner={:?} replay={:?}",
+                outer, inner, replay_rect
+            );
+        }
+        self.full_replays_for_partial_raster_
+            .push(PartialRasterFullReplay {
+                outer,
+                inner,
+                replay_rect,
+            });
+    }
+    pub fn ClearNeedsFullReplayForPartialRaster(&mut self) {
+        self.full_replays_for_partial_raster_.clear();
     }
     pub fn set_force_update(&mut self) {
         self.force_update_ = true;

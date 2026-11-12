@@ -1,6 +1,11 @@
 #![allow(non_snake_case)]
 //! Source Page resource state. Page supplies mutation and event delivery, so
 //! decoding and polling do not replace the source DOM/dirty/task lifecycle.
+#[path = "font_face_resources.rs"]
+mod font_face_resources;
+pub use font_face_resources::FontFaceSourceInput;
+#[path = "raw_resource_fetcher.rs"]
+mod raw_resource_fetcher;
 use crate::{
     resource_loader::{RequireResponse, ResourceLoadResult, ResourceLoader},
     text_decode::DecodeText,
@@ -15,8 +20,9 @@ use image_resource::{
 use layoutng_assembly::internal::layout_input::{ConstraintSpace, FontFace, PaintImage};
 use page_mutation::{
     DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged, FontResourceReady,
-    ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation,
+    ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation, VideoFrameChanged,
 };
+pub use raw_resource_fetcher::RawResourceFetchOptions;
 use resource::{DecodedImageResource, ResourceEngine};
 use std::{
     cell::RefCell,
@@ -38,23 +44,48 @@ pub trait ResourceFetcherClient {
 }
 // cpp: browser/browser.cc:1104-1112
 struct PendingFontFace {
-    metadata: crate::web_fonts::PendingFontFace,
+    metadata: font_face_resources::FontFaceTransportMetadata,
+    owner: Rc<dom::font_loading::FontFace>,
+    sources: Vec<font_face_resources::FaceSource>,
     next_url: usize,
-    loaded: bool,
     selected: bool,
-    resource: Option<ResourceLoader>,
-    decode: Option<decode::DecodeJob<Vec<u8>>>,
+    resource: Option<Rc<crate::font_resource::FontResource>>,
+    decoded: Option<font_engine::SharedFontBytes>,
+    published: bool,
+    dirty: bool,
+    local_face: Option<FontFace>,
+    compiled: Option<Rc<style_parser::font_face_descriptors::CompiledFontFaceDescriptors>>,
 }
 // cpp: browser/browser.cc:1241-1245
+pub struct ImageResourceRequestFacts {
+    pub url: Option<Rc<url::Url>>,
+    pub is_automatic_upgrade: bool,
+    /// The same immutable ResourceBuffer passed into its owning decoder.
+    pub response: Option<Rc<ImageResourceResponseFacts>>,
+}
+pub struct ImageResourceResponseFacts {
+    pub bytes: Arc<[u8]>,
+    pub mime_type: String,
+    pub content_disposition: String,
+}
 struct PendingImage {
     source: String,
     url: String,
     resource: ResourceLoader,
+    content: Rc<dom::persistent_document::DOMImageResourceContent>,
     decode: Option<decode::ImageDecodeJob>,
     is_multipart_response: Option<bool>,
     is_cors_same_origin: Option<bool>,
     content_dpr: Option<f64>,
     blocks_load: bool,
+}
+
+struct PendingVideo {
+    node_id: u64,
+    url: String,
+    resource: ResourceLoader,
+    decode: Option<decode::VideoDecodeJob>,
+    is_cors_same_origin: Option<bool>,
 }
 
 // cpp: third_party/blink/renderer/core/html/link_style.h;
@@ -97,16 +128,10 @@ pub struct StyleSheetImportPoll {
 }
 
 struct DeferredImage {
+    request: Option<URLRequest>,
     source: String,
     url: String,
     referrer_policy: Option<ReferrerPolicy>,
-}
-
-struct ImageEventSubtrees {
-    key: (dom::persistent_document::DOMOwnerHandle, u64),
-    // Include detached trees: an earlier listener can detach a node that is
-    // still present in the original traversal's already captured children.
-    ancestors: HashMap<String, HashSet<usize>>,
 }
 
 struct ReferencedImageOwners {
@@ -165,27 +190,91 @@ pub type ResponsiveImageSelector =
 // same document and constraint handles, not serialized/copied DOM data.
 // cpp: browser/browser.cc:1774-1798
 pub struct ResourceFetcher {
+    raw_fetch: raw_resource_fetcher::RawFetchContext,
+    html_images: html_image_loader::HTMLImageFetchContext,
+    archive: Option<Rc<dyn std::any::Any>>,
     style_sheet_receiver: RefCell<Option<Rc<dyn Fn(&mut Document, CSSStyleSheet)>>>,
     engine: Rc<ResourceEngine>,
+    allow_stale_resources: std::cell::Cell<bool>,
     document: Rc<RefCell<DOM>>,
     constraints: Rc<RefCell<ConstraintSpace>>,
-    base_url: RefCell<String>,
+    base_url: RefCell<Rc<dom::document_base_url::DocumentURLValue>>,
+    image_request_urls: RefCell<HashMap<String, Rc<ImageResourceRequestFacts>>>,
     style_sheet_signatures: RefCell<HashMap<u64, String>>,
     pending_style_sheets: RefCell<Vec<PendingStyleSheet>>,
     loaded_image_sources: RefCell<HashSet<String>>,
-    image_event_sources: RefCell<HashMap<u64, String>>,
-    cached_image_event_sources: RefCell<HashSet<String>>,
-    image_event_subtrees: RefCell<Option<ImageEventSubtrees>>,
     referenced_image_owners: RefCell<Option<ReferencedImageOwners>>,
     pending_images: RefCell<Vec<PendingImage>>,
+    pending_videos: RefCell<Vec<PendingVideo>>,
+    attempted_video_nodes: RefCell<HashSet<u64>>,
     deferred_images: RefCell<Vec<DeferredImage>>,
+    visible_image_sources: RefCell<HashSet<String>>,
     document_image_sources: RefCell<HashMap<u64, String>>,
     responsive_image_selector: RefCell<Option<Rc<ResponsiveImageSelector>>>,
     preload_image_selector: RefCell<Option<Rc<PreloadImageSelector>>>,
     preload_media_matcher: RefCell<Option<Rc<dyn Fn(&str, &ConstraintSpace) -> bool>>>,
     pending_fonts: RefCell<Vec<PendingFontFace>>,
+    font_loading: font_face_resources::FontFetchContext,
+}
+/// ResourceFetcher.h:776-799. The guard owns the exact fetcher and restores
+/// its previous policy across listener reentry and nested clipboard commands.
+pub struct ResourceCacheValidationSuppressor {
+    fetcher: Rc<ResourceFetcher>,
+    previous: bool,
+}
+impl Drop for ResourceCacheValidationSuppressor {
+    fn drop(&mut self) {
+        self.fetcher.allow_stale_resources.set(self.previous);
+    }
 }
 impl ResourceFetcher {
+    /// Document::Shutdown / ResourceFetcher::ClearContext. The original
+    /// resource owner performs synchronous cancellation before the Window's
+    /// task sources are retired; its keepalive transfer remains independent.
+    pub fn DetachDocumentFetchContext(&self) -> io::Result<()> {
+        self.engine.StopFetching()?;
+        self.engine.ClearFetchContext()
+    }
+    /// A native child Document gets its own FetchContext/URL/referrer and
+    /// cancellation owner, sharing only the original transport/decode service
+    /// and immutable Page resource namespace through ResourceEngine::ForDocument.
+    pub fn ForChildDocument(
+        &self,
+        document: Rc<RefCell<DOM>>,
+        constraints: Rc<RefCell<ConstraintSpace>>,
+        base_url: String,
+    ) -> (Rc<Self>, Rc<ResourceEngine>) {
+        let engine = self.engine.ForDocument(base_url.clone());
+        let fetcher = Rc::new(Self::WithEngine(engine.clone(), document, constraints));
+        // Share stateless selection services; each receiving FetchContext still
+        // reads its own Document, constraints, policy and pending requests.
+        *fetcher.responsive_image_selector.borrow_mut() =
+            self.responsive_image_selector.borrow().clone();
+        *fetcher.preload_image_selector.borrow_mut() = self.preload_image_selector.borrow().clone();
+        *fetcher.preload_media_matcher.borrow_mut() = self.preload_media_matcher.borrow().clone();
+        (fetcher, engine)
+    }
+    pub fn SuppressCacheValidation(self: &Rc<Self>) -> ResourceCacheValidationSuppressor {
+        let previous = self.allow_stale_resources.replace(true);
+        ResourceCacheValidationSuppressor {
+            fetcher: self.clone(),
+            previous,
+        }
+    }
+    pub fn HasArchive(&self) -> bool {
+        self.archive.is_some()
+    }
+
+    /// Same execution-context policy used by every outgoing request. HTTP and
+    /// meta-referrer producers update this ResourceEngine owner in place.
+    pub fn ReferrerPolicyReadHandle(
+        &self,
+    ) -> foundation::referrer_policy::ReferrerPolicyReadHandle {
+        self.engine.ReferrerPolicyReadHandle()
+    }
+    pub fn ReferrerPolicy(&self) -> ReferrerPolicy {
+        self.engine.ReferrerPolicy()
+    }
     pub fn MemoryDiagnostics(&self) -> resource::ResourceMemoryDiagnostics {
         self.engine.MemoryDiagnostics()
     }
@@ -194,31 +283,127 @@ impl ResourceFetcher {
         document: Rc<RefCell<DOM>>,
         constraints: Rc<RefCell<ConstraintSpace>>,
     ) -> Self {
-        let current_url = engine.DocumentURL();
+        let base_url = document.borrow().GetDocument().BaseURL();
+        let raw_fetch = raw_resource_fetcher::RawFetchContext::new(
+            document.borrow().GetDocument(),
+            engine.FetchContextDetachedState(),
+        );
         Self {
+            allow_stale_resources: std::cell::Cell::new(false),
+            raw_fetch,
+            html_images: Default::default(),
+            archive: None,
             style_sheet_receiver: RefCell::new(None),
             engine,
             document,
             constraints,
-            base_url: RefCell::new(current_url.clone()),
+            base_url: RefCell::new(base_url),
+            image_request_urls: RefCell::new(HashMap::new()),
             style_sheet_signatures: RefCell::new(HashMap::new()),
             pending_style_sheets: RefCell::new(Vec::new()),
             loaded_image_sources: RefCell::new(HashSet::new()),
-            image_event_sources: RefCell::new(HashMap::new()),
-            cached_image_event_sources: RefCell::new(HashSet::new()),
-            image_event_subtrees: RefCell::new(None),
             referenced_image_owners: RefCell::new(None),
             pending_images: RefCell::new(Vec::new()),
+            pending_videos: RefCell::new(Vec::new()),
+            attempted_video_nodes: RefCell::new(HashSet::new()),
             deferred_images: RefCell::new(Vec::new()),
+            visible_image_sources: RefCell::new(HashSet::new()),
             document_image_sources: RefCell::new(HashMap::new()),
             responsive_image_selector: RefCell::new(None),
             preload_image_selector: RefCell::new(None),
             preload_media_matcher: RefCell::new(None),
             pending_fonts: RefCell::new(Vec::new()),
+            font_loading: font_face_resources::FontFetchContext::default(),
         }
     }
+    pub fn ImageResourceRequest(&self, source: &str) -> Option<Rc<ImageResourceRequestFacts>> {
+        self.image_request_urls.borrow().get(source).cloned()
+    }
+    fn RetainImageResponseURL(
+        &self,
+        source: &str,
+        url: &str,
+        bytes: Arc<[u8]>,
+        mime_type: String,
+        content_disposition: String,
+    ) {
+        let previous = self
+            .image_request_urls
+            .borrow()
+            .get(source)
+            .cloned()
+            .expect("image request precedes response");
+        self.image_request_urls.borrow_mut().insert(
+            source.to_owned(),
+            Rc::new(ImageResourceRequestFacts {
+                url: url::Url::parse(url).ok().map(Rc::new),
+                is_automatic_upgrade: previous.is_automatic_upgrade,
+                response: Some(Rc::new(ImageResourceResponseFacts {
+                    bytes,
+                    mime_type,
+                    content_disposition,
+                })),
+            }),
+        );
+    }
+    fn StartImageRequest(
+        &self,
+        source: &str,
+        request: URLRequest,
+    ) -> (
+        ResourceLoader,
+        Rc<dom::persistent_document::DOMImageResourceContent>,
+    ) {
+        self.StartImageRequestWithReload(source, request, false)
+    }
+    fn StartImageRequestWithReload(
+        &self,
+        source: &str,
+        request: URLRequest,
+        forced_reload: bool,
+    ) -> (
+        ResourceLoader,
+        Rc<dom::persistent_document::DOMImageResourceContent>,
+    ) {
+        self.StartImageRequestWithReloadAndPolicy(
+            source,
+            request,
+            forced_reload,
+            resource::ResourceLoadEventPolicy::Regular,
+        )
+    }
+    fn StartImageRequestWithReloadAndPolicy(
+        &self,
+        source: &str,
+        request: URLRequest,
+        forced_reload: bool,
+        policy: resource::ResourceLoadEventPolicy,
+    ) -> (
+        ResourceLoader,
+        Rc<dom::persistent_document::DOMImageResourceContent>,
+    ) {
+        self.image_request_urls.borrow_mut().insert(
+            source.to_owned(),
+            Rc::new(ImageResourceRequestFacts {
+                url: url::Url::parse(&request.url).ok().map(Rc::new),
+                is_automatic_upgrade: request.is_automatic_upgrade,
+                response: None,
+            }),
+        );
+        let content = self.ImageContentForRequest(source, &request);
+        content.StartDeferred();
+        let resource = if forced_reload && !self.allow_stale_resources.get() {
+            self.engine.ReloadImageWithLoadEventPolicy(request, policy)
+        } else {
+            self.engine.StartWithLoadEventPolicy(request, policy)
+        };
+        if let Some(info) = resource.MediaResourceInfo() {
+            content.SetResourceInfo(info);
+        }
+        (resource, content)
+    }
     pub fn BaseURL(&self) -> String {
-        self.base_url.borrow().clone()
+        self.base_url.borrow().AsStr().to_owned()
     }
     fn IsLoadedImageSource(&self, source: &str) -> bool {
         let Ok(url) = ResolveUrl(&self.base_url.borrow(), source) else {
@@ -238,6 +423,17 @@ impl ResourceFetcher {
     }
     pub fn SetPreloadMediaMatcher(&self, matcher: Rc<dyn Fn(&str, &ConstraintSpace) -> bool>) {
         *self.preload_media_matcher.borrow_mut() = Some(matcher);
+    }
+    /// HTMLLinkElement's original media evaluation, using this loading owner's
+    /// existing Style matcher and viewport, before the DOM transaction reenters JS.
+    pub fn ProcessRenderBlockingDocumentMutations(&self, document: &Document) {
+        self.ProcessFontPreloadMutations(document);
+        for request in document.TakeRenderBlockingDocumentMutations() {
+            let matches = request
+                .Media()
+                .is_none_or(|media| self.PreloadMediaMatches(media));
+            document.ApplyRenderBlockingDocumentMutation(request, matches);
+        }
     }
     pub fn PreloadMediaMatches(&self, query: &str) -> bool {
         if query.trim().is_empty() {
@@ -314,9 +510,6 @@ impl ResourceFetcher {
             .borrow_mut()
             .GetDocumentMut()
             .SetResponsiveImageSelection(node, selection.clone());
-        if changed {
-            self.image_event_subtrees.borrow_mut().take();
-        }
         selection.map(|selection| selection.source)
     }
     /// Page routes prepared rules through its resident CSSOM. The parser can
@@ -335,10 +528,25 @@ impl ResourceFetcher {
     // cpp: browser/browser.cc:775-779
     pub fn SetDocumentURL(&self, url: String) {
         self.engine.SetDocumentURL(url.clone());
-        self.SetBaseURL(url);
+        let mut owner = self.document.borrow_mut();
+        owner.GetDocumentMut().SetDocumentURL(url);
+        self.ConsumeBaseURLChanges(owner.GetDocumentMut());
     }
-    pub fn SetBaseURL(&self, base: String) {
+    pub fn SetBaseURL(&self, base: Rc<dom::document_base_url::DocumentURLValue>) {
         *self.base_url.borrow_mut() = base;
+    }
+    pub fn ConsumeBaseURLChanges(&self, document: &mut Document) {
+        for change in document.TakeBaseURLChanges() {
+            self.SetBaseURL(change.value);
+        }
+    }
+    pub fn SynchronizeDocumentBaseURL(&self) {
+        self.ConsumeBaseURLChanges(self.document.borrow_mut().GetDocumentMut());
+    }
+    /// Complete against the same retained resource/base URL owner, never a
+    /// second DOM base-element scan or a parser in the hit-test adapter.
+    pub fn CompleteURL(&self, value: &str) -> Option<url::Url> {
+        self.base_url.borrow().CompleteURL(value)
     }
     // cpp: browser/browser.cc:766-772
     pub fn AddInitialImage(
@@ -350,19 +558,42 @@ impl ResourceFetcher {
         self.loaded_image_sources
             .borrow_mut()
             .insert(source.clone());
-        self.CommitImage(source, image, client);
+        let url = self
+            .CompleteURL(&source)
+            .map_or_else(|| source.clone(), |url| url.to_string());
+        let content = self.ImageContentForRequest(
+            &source,
+            &URLRequest {
+                url,
+                destination: RequestDestination::kImage,
+                ..Default::default()
+            },
+        );
+        self.CommitImage(source, image, Some(content), client);
     }
     // cpp: browser/browser.cc:1046-1067
     fn CommitImage(
         &self,
         source: String,
         image: PaintImage,
+        content: Option<Rc<dom::persistent_document::DOMImageResourceContent>>,
         client: &mut dyn ResourceFetcherClient,
     ) {
+        if !self.image_request_urls.borrow().contains_key(&source) {
+            self.image_request_urls.borrow_mut().insert(
+                source.clone(),
+                Rc::new(ImageResourceRequestFacts {
+                    url: self.CompleteURL(&source).map(Rc::new),
+                    is_automatic_upgrade: false,
+                    response: None,
+                }),
+            );
+        }
         self.engine.ObserveImageId(image.id);
         client.ApplyResourceMutation(ResourceMutation::ImageResourceReady(ImageResourceReady {
             source,
             image,
+            content,
         }));
     }
     // cpp: browser/browser.cc:1081-1102
@@ -418,7 +649,7 @@ impl ResourceFetcher {
         }
         if d.StyleSheetCanBeActivated(&sheet) {
             for rule in &sheet.font_faces {
-                self.QueueFontFace(rule, base)?;
+                self.QueueCompiledFontFaceInDocument(rule, base, d)?;
             }
         }
         crate::ResolveCSSStyleSheetURLs(&mut sheet, base)?;
@@ -436,6 +667,12 @@ impl ResourceFetcher {
     /// ownership equivalent and deliberately shares ResourceEngine with the
     /// parser so URL requests remain coalesced.
     pub fn QueueReferencedStyleSheets(&self) -> io::Result<usize> {
+        self.QueueStyleSheetCandidates(None)
+    }
+    pub fn QueueStyleSheetForNode(&self, node_id: u64) -> io::Result<usize> {
+        self.QueueStyleSheetCandidates(Some(node_id))
+    }
+    fn QueueStyleSheetCandidates(&self, candidate: Option<u64>) -> io::Result<usize> {
         struct Request {
             owner_node_id: u64,
             signature: String,
@@ -451,7 +688,15 @@ impl ResourceFetcher {
         {
             let owner = self.document.borrow();
             let document = owner.GetDocument();
-            for i in 0..document.NodeCount() {
+            let candidates = if let Some(id) = candidate {
+                let Some(node) = document.FindNodeById(id) else {
+                    return Ok(0);
+                };
+                node..node + 1
+            } else {
+                0..document.NodeCount()
+            };
+            for i in candidates {
                 if !document.IsConnectedToDocument(i) {
                     continue;
                 }
@@ -809,53 +1054,27 @@ impl ResourceFetcher {
     }
     // cpp: browser/browser.cc:1130-1172
     pub fn QueueFontFace(&self, rule: &CSSFontFaceRule, base: &str) -> io::Result<()> {
-        let Some(mut metadata) = crate::web_fonts::QueueFontFace(rule) else {
-            return Ok(());
-        };
-        for url in &mut metadata.urls {
-            *url = ResolveUrl(base, url)?;
-        }
-        if self.pending_fonts.borrow().iter().any(|f| {
-            f.metadata.family.eq_ignore_ascii_case(&metadata.family)
-                && f.metadata.weight == metadata.weight
-                && f.metadata.italic == metadata.italic
-                && f.metadata.urls == metadata.urls
-                && f.metadata.font_feature_settings == metadata.font_feature_settings
-                && f.metadata.unicode_ranges == metadata.unicode_ranges
-        }) {
-            return Ok(());
-        }
-        self.pending_fonts.borrow_mut().push(PendingFontFace {
-            metadata,
-            next_url: 0,
-            loaded: false,
-            // Fetch only after FontEngine reports actual text demand.
-            selected: false,
-            resource: None,
-            decode: None,
-        });
-        Ok(())
+        self.QueueCompiledFontFace(rule, base)
     }
     // Register immutable face descriptors with FontEngine before LayoutText
     // and shaping report actual text demand. Keep dormant definitions resident
     // so later text/style mutations can activate them without another sheet.
     // cpp: core/css/font_face_set_document.cc; core/css/css_font_selector.cc
     pub fn PrepareFontFaces(&self) {
+        let set = self.FontLoadingDocument().FontFaceSet();
         let faces = self.pending_fonts.borrow();
         let metadata = faces
             .iter()
             .enumerate()
+            .filter(|(_, face)| set.Has(&face.owner))
             .map(|(index, face)| font_engine::WebFontFace {
                 rule_id: index as u64,
                 family: face.metadata.family.clone(),
                 weight: face.metadata.weight,
                 italic: face.metadata.italic,
                 unicode_ranges: face.metadata.unicode_ranges.clone(),
-                loaded: face.loaded,
-                failed: !face.loaded
-                    && face.resource.is_none()
-                    && face.decode.is_none()
-                    && face.next_url == face.metadata.urls.len(),
+                loaded: face.owner.LoadStatus() == dom::font_loading::FontFaceLoadStatus::Loaded,
+                failed: face.owner.LoadStatus() == dom::font_loading::FontFaceLoadStatus::Error,
             })
             .collect();
         self.constraints
@@ -869,6 +1088,9 @@ impl ResourceFetcher {
         self.PrepareFontFaces();
         if let Some(queries) = &self.constraints.borrow().font_queries {
             let requested = queries.DrainWebFontRequests();
+            if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some() && !requested.is_empty() {
+                eprintln!("FONT_FACE_DEMAND ids={requested:?}");
+            }
             let mut faces = self.pending_fonts.borrow_mut();
             for id in requested {
                 if let Some(face) = faces.get_mut(id as usize) {
@@ -876,56 +1098,9 @@ impl ResourceFetcher {
                 }
             }
         }
-        for face in &mut *self.pending_fonts.borrow_mut() {
-            if face.resource.is_some() || face.decode.is_some() || !face.selected {
-                continue;
-            }
-            if face.loaded || face.next_url == face.metadata.urls.len() {
-                continue;
-            }
-            face.resource = Some(self.engine.Start(URLRequest {
-                url: face.metadata.urls[face.next_url].clone(),
-                destination: RequestDestination::kFont,
-                ..Default::default()
-            }));
-        }
-    }
-    // cpp: browser/browser.cc:1210-1239
-    fn ApplyFontResult(
-        &self,
-        face: &mut PendingFontFace,
-        decoded: io::Result<Vec<u8>>,
-        client: &mut dyn ResourceFetcherClient,
-    ) {
-        let url = face.metadata.urls[face.next_url].clone();
-        face.next_url += 1;
-        let fail = |message: String, client: &mut dyn ResourceFetcherClient| {
-            client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(ResourceLoadFailed {
-                kind: ResourceKind::kFont,
-                source: None,
-                url: url.clone(),
-                error: message,
-            }))
-        };
-        let decoded = decoded.and_then(font_engine::AcceptDecodedWebFont);
-        match decoded {
-            Ok(bytes) => {
-                client.ApplyResourceMutation(ResourceMutation::FontResourceReady(
-                    FontResourceReady {
-                        font: FontFace {
-                            family: face.metadata.family.clone(),
-                            weight: face.metadata.weight,
-                            italic: face.metadata.italic,
-                            bytes: bytes.into(),
-                            font_feature_settings: face.metadata.font_feature_settings.clone(),
-                            unicode_ranges: face.metadata.unicode_ranges.clone(),
-                            ..Default::default()
-                        },
-                    },
-                ));
-                face.loaded = true;
-            }
-            Err(e) => fail(e.to_string(), client),
+        let count = self.pending_fonts.borrow().len();
+        for index in 0..count {
+            self.StartFontAt(index);
         }
     }
     // cpp: browser/browser.cc:1247-1258
@@ -977,16 +1152,20 @@ impl ResourceFetcher {
                     .position(|image| image.source == source);
                 if let Some(index) = deferred {
                     let image = self.deferred_images.borrow_mut().remove(index);
-                    let resource = self.engine.Start(URLRequest {
-                        url: image.url.clone(),
-                        referrer_policy: image.referrer_policy,
-                        destination: RequestDestination::kImage,
-                        ..Default::default()
-                    });
+                    let (resource, content) = self.StartImageRequest(
+                        &image.source,
+                        image.request.unwrap_or_else(|| URLRequest {
+                            url: image.url.clone(),
+                            referrer_policy: image.referrer_policy,
+                            destination: RequestDestination::kImage,
+                            ..Default::default()
+                        }),
+                    );
                     self.pending_images.borrow_mut().push(PendingImage {
                         source: image.source,
                         url: image.url,
                         resource,
+                        content,
                         decode: None,
                         is_multipart_response: None,
                         is_cors_same_origin: None,
@@ -999,22 +1178,27 @@ impl ResourceFetcher {
         }
         if !blocks_load {
             self.deferred_images.borrow_mut().push(DeferredImage {
+                request: None,
                 source: source.into(),
                 url,
                 referrer_policy,
             });
             return Ok(());
         }
-        let resource = self.engine.Start(URLRequest {
-            url: url.clone(),
-            referrer_policy,
-            destination: RequestDestination::kImage,
-            ..Default::default()
-        });
+        let (resource, content) = self.StartImageRequest(
+            source,
+            URLRequest {
+                url: url.clone(),
+                referrer_policy,
+                destination: RequestDestination::kImage,
+                ..Default::default()
+            },
+        );
         self.pending_images.borrow_mut().push(PendingImage {
             source: source.into(),
             url,
             resource,
+            content,
             decode: None,
             is_multipart_response: None,
             is_cors_same_origin: None,
@@ -1024,26 +1208,53 @@ impl ResourceFetcher {
         Ok(())
     }
 
-    /// Admit a bounded number of deferred lazy requests after window load.
-    /// The cap preserves transport capacity for scripts and other high-priority
-    /// resources while still allowing below-the-fold content to make progress.
-    pub fn StartDeferredImages(&self, max_active: usize) -> usize {
-        let active = self.pending_images.borrow().len();
-        let count = max_active
-            .saturating_sub(active)
-            .min(self.deferred_images.borrow().len());
-        for _ in 0..count {
-            let image = self.deferred_images.borrow_mut().remove(0);
-            let resource = self.engine.Start(URLRequest {
-                url: image.url.clone(),
-                referrer_policy: image.referrer_policy,
-                destination: RequestDestination::kImage,
-                ..Default::default()
-            });
+    /// Promote lazy images whose layout boxes have entered the viewport.
+    ///
+    /// A visible image must not wait behind every earlier below-the-fold image
+    /// in a long document; Blink's lazy-load observer gives these requests
+    /// immediate high-priority admission when their intersection state changes.
+    pub fn StartDeferredImageSources(&self, sources: &HashSet<String>) -> (usize, usize) {
+        if sources.is_empty() {
+            return (0, 0);
+        }
+        let mut promoted = Vec::new();
+        {
+            let mut deferred = self.deferred_images.borrow_mut();
+            let mut index = 0;
+            while index < deferred.len() {
+                if sources.contains(&deferred[index].source) {
+                    promoted.push(deferred.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+        }
+        let count = promoted.len();
+        let mut prioritized = 0;
+        for image in self.pending_images.borrow_mut().iter_mut() {
+            if sources.contains(&image.source) {
+                image
+                    .resource
+                    .SetPriority(url_loader::ResourceLoadPriority::High);
+                prioritized += 1;
+            }
+        }
+        for image in promoted {
+            let (mut resource, content) = self.StartImageRequest(
+                &image.source,
+                image.request.unwrap_or_else(|| URLRequest {
+                    url: image.url.clone(),
+                    referrer_policy: image.referrer_policy,
+                    destination: RequestDestination::kImage,
+                    ..Default::default()
+                }),
+            );
+            resource.SetPriority(url_loader::ResourceLoadPriority::High);
             self.pending_images.borrow_mut().push(PendingImage {
                 source: image.source,
                 url: image.url,
                 resource,
+                content,
                 decode: None,
                 is_multipart_response: None,
                 is_cors_same_origin: None,
@@ -1051,7 +1262,51 @@ impl ResourceFetcher {
                 blocks_load: false,
             });
         }
-        count
+        // A transport wake identifies that some resource progressed, while
+        // this fetcher owns the pending-image collection and polls it with a
+        // bounded completion budget. Keep the current viewport at the front
+        // so unrelated offscreen/cache completions cannot consume every wake
+        // before a just-promoted visible image is observed. Stable ordering
+        // preserves completion/event order within each visibility class.
+        self.pending_images
+            .borrow_mut()
+            .sort_by_key(|image| !sources.contains(&image.source));
+        (count, prioritized)
+    }
+
+    /// Ensure every currently visible image dependency has a request, then
+    /// raise queued work above ordinary offscreen transfers. Style resolution
+    /// normally admits CSS images before Layout, but a newly attached or
+    /// incrementally styled owner can become visible in the frame which first
+    /// exposes its dependency. The visibility transaction is therefore also a
+    /// lossless admission fallback, not only a lazy-image promotion pass.
+    pub fn StartVisibleImageSources(
+        &self,
+        sources: &HashSet<String>,
+    ) -> io::Result<(usize, usize)> {
+        let previous = self.visible_image_sources.replace(sources.clone());
+        if previous != *sources {
+            for image in self.pending_images.borrow_mut().iter_mut() {
+                if previous.contains(&image.source) && !sources.contains(&image.source) {
+                    // Dynamic viewport priority is reversible. Keeping an
+                    // offscreen transfer in the critical class lets the old
+                    // viewport monopolize its reserved connections after a
+                    // long scroll, starving the resources visible now.
+                    image
+                        .resource
+                        .SetPriority(url_loader::ResourceLoadPriority::Normal);
+                }
+            }
+        }
+        for source in sources {
+            if !self.loaded_image_sources.borrow().contains(source) {
+                // Visibility discovery happens after the document's load
+                // accounting snapshot. Admit a missing request without
+                // retroactively holding the load event, then promote it below.
+                self.QueueImageWithPolicy(source, None, false, None)?;
+            }
+        }
+        Ok(self.StartDeferredImageSources(sources))
     }
     // cpp: browser/browser.cc:1260-1291
     fn BeginImageResult(
@@ -1074,14 +1329,28 @@ impl ResourceFetcher {
                 .trim()
                 .eq_ignore_ascii_case("multipart/x-mixed-replace"),
         );
-        image.is_cors_same_origin = Some(self.engine.IsSameOriginWithDocument(&response.final_url));
+        let encoded_data: Arc<[u8]> = Arc::from(response.body);
+        image
+            .content
+            .SetEncodedResource(encoded_data.clone(), response.content_disposition.clone());
+        self.RetainImageResponseURL(
+            &image.source,
+            &response.final_url,
+            encoded_data.clone(),
+            response.mime_type.clone(),
+            response.content_disposition.clone(),
+        );
+        image.is_cors_same_origin = Some(
+            image.content.CORSEnabled()
+                || self.engine.IsSameOriginWithDocument(&response.final_url),
+        );
         image.content_dpr = response.content_dpr;
         ImageResultBoundary(|| {
             let mut container =
                 ContainerKey::new(0, 0, 1.0, self.constraints.borrow().device_pixel_ratio);
             container.view_specification = SVGImageViewSpecification(&image.source).to_owned();
             self.engine
-                .BeginImageDecode(Arc::from(response.body), &response.mime_type, &container)
+                .BeginImageDecode(encoded_data, &response.mime_type, &container)
         })
     }
     fn ApplyImageResult(
@@ -1100,6 +1369,15 @@ impl ResourceFetcher {
             })?;
             let (id, decoded, document_image) = match decoded_resource {
                 DecodedImageResource::Document { resource_id, frame } => {
+                    // SVGImage::FilenameExtension is source "svg"; network
+                    // response size is retained on the same resource info.
+                    image.content.SetDecodedMediaFacts(
+                        Some("svg"),
+                        image.content.EncodedResourceDataSize(),
+                        frame.animation_info.animation_type
+                            == image_resource::PaintImageAnimationType::Animated,
+                        frame.completion_state == image_resource::PaintImageCompletionState::Done,
+                    );
                     let paint_image = PaintImage {
                         id: resource_id,
                         paint_image_id: image_resource::PaintImageId::allocate(),
@@ -1127,6 +1405,7 @@ impl ResourceFetcher {
                 DecodedImageResource::Bitmap {
                     resource_id,
                     image: bitmap,
+                    encoded_data,
                 } => {
                     // BitmapImage retains a concrete decoder/frame owner for
                     // animated formats before it publishes a PaintImage. The
@@ -1141,6 +1420,13 @@ impl ResourceFetcher {
                     {
                         return Err(io::Error::new(io::ErrorKind::Unsupported, error.clone()));
                     }
+                    let animated = matches!(&bitmap.animation, image_resource::PaintImageAnimationMetadata::Known(info) if info.animation_type == image_resource::PaintImageAnimationType::Animated);
+                    image.content.SetDecodedMediaFacts(
+                        bitmap.filename_extension,
+                        encoded_data.len() as u64,
+                        animated,
+                        true,
+                    );
                     let animation_frames = (!bitmap.animation_frames.is_empty()).then(|| {
                         Arc::new(
                             bitmap
@@ -1173,7 +1459,16 @@ impl ResourceFetcher {
                             content_dpr: image.content_dpr,
                             is_cors_same_origin,
                             orientation: bitmap.orientation,
+                            hot_spot: bitmap.hot_spot,
                             alpha_type: bitmap.alpha_type,
+                            // BitmapImage retains its encoded-data generator
+                            // identity after the first frame is available.
+                            // SoftwareImageDecodeCache uses that producer fact
+                            // to create Chromium's mip-sized decode allocation;
+                            // the decoded RGBA bytes remain the immutable
+                            // candidate when the codec cannot decode to scale.
+                            is_lazy_generated: true,
+                            encoded_data: Some(encoded_data),
                             content: PaintImageContent::Bitmap(bitmap.rgba8.into()),
                             animation_frames,
                             ..Default::default()
@@ -1182,21 +1477,46 @@ impl ResourceFetcher {
                     )
                 }
             };
+            image
+                .content
+                .SetBitmapProvider(self.engine.ImageBitmapProvider(id));
             // Source catches validation while committing the decoded image,
             // as well as decoder failures. Keep the consumed id and continue
             // loading other resources after a rejected image.
-            self.CommitImage(image.source.clone(), decoded, client);
+            let metadata = dom::ImageResourceMetadata {
+                id: decoded.id,
+                natural_width: decoded.width as f64 / decoded.resolution_scale,
+                natural_height: decoded.height as f64 / decoded.resolution_scale,
+                resolution_scale: decoded.resolution_scale,
+                orientation: decoded.orientation,
+                known_to_be_opaque: decoded
+                    .BitmapPixels()
+                    .is_some_and(|pixels| pixels.chunks_exact(4).all(|pixel| pixel[3] == 255)),
+                is_cors_same_origin: decoded.is_cors_same_origin,
+            };
+            self.CommitImage(
+                image.source.clone(),
+                decoded,
+                Some(image.content.clone()),
+                client,
+            );
+            self.CompleteHTMLImageContent(&image.content, Some(metadata), false);
             if document_image {
                 self.document_image_sources
                     .borrow_mut()
                     .insert(id, image.source.clone());
             }
-            self.DispatchImageEvents(&image.source, true, client);
             Ok(())
         });
         match decoded {
             Ok(()) => {}
             Err(e) => {
+                self.engine.RemoveImageFromMemoryCache(&image.resource);
+                self.CompleteHTMLImageContent(
+                    &image.content,
+                    None,
+                    image.resource.AccessCheckFailed(),
+                );
                 client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
                     ResourceLoadFailed {
                         kind: ResourceKind::kImage,
@@ -1205,16 +1525,84 @@ impl ResourceFetcher {
                         error: e.to_string(),
                     },
                 ));
-                self.DispatchImageEvents(&image.source, false, client);
+            }
+        }
+    }
+    fn BeginVideoResult(
+        &self,
+        video: &mut PendingVideo,
+        result: ResourceLoadResult,
+    ) -> io::Result<decode::VideoDecodeJob> {
+        let Some(response) = result.response else {
+            return Err(io::Error::other(result.error));
+        };
+        video.is_cors_same_origin = Some(self.engine.IsSameOriginWithDocument(&response.final_url));
+        let declared = response.mime_type.split(';').next().unwrap_or("").trim();
+        let mime_type = if matches!(declared, "video/mp4" | "video/quicktime") {
+            declared
+        } else if video.url.to_ascii_lowercase().ends_with(".mov") {
+            "video/quicktime"
+        } else {
+            "video/mp4"
+        };
+        self.engine
+            .BeginVideoFrameDecode(Arc::from(response.body), mime_type)
+    }
+    fn ApplyVideoResult(
+        &self,
+        video: PendingVideo,
+        result: io::Result<resource::DecodedVideoFrame>,
+        client: &mut dyn ResourceFetcherClient,
+    ) {
+        match result {
+            Ok(decoded) => {
+                let bitmap = decoded.image;
+                client.ApplyResourceMutation(ResourceMutation::VideoFrameChanged(
+                    VideoFrameChanged {
+                        node_id: video.node_id,
+                        frame: PaintImage {
+                            id: decoded.resource_id,
+                            paint_image_id: image_resource::PaintImageId::allocate(),
+                            compositor_metadata: Ok(image_resource::PaintImageMetadata {
+                                animation: image_resource::PaintImageAnimationMetadata::Known(
+                                    image_resource::PaintImageAnimationInfo {
+                                        animation_type:
+                                            image_resource::PaintImageAnimationType::Video,
+                                        repetition_count: image_resource::ANIMATION_NONE,
+                                        frame_count: 1,
+                                    },
+                                ),
+                                completion_state: image_resource::PaintImageCompletionState::Done,
+                                is_multipart: false,
+                            }),
+                            revision: 1,
+                            width: bitmap.width,
+                            height: bitmap.height,
+                            is_cors_same_origin: video.is_cors_same_origin.unwrap_or(false),
+                            orientation: bitmap.orientation,
+                            hot_spot: bitmap.hot_spot,
+                            alpha_type: bitmap.alpha_type,
+                            content: PaintImageContent::Bitmap(Arc::new(bitmap.rgba8)),
+                            ..Default::default()
+                        },
+                        resource: decoded.resource,
+                    },
+                ));
+            }
+            Err(error) => {
+                client.ApplyResourceMutation(ResourceMutation::ResourceLoadFailed(
+                    ResourceLoadFailed {
+                        kind: ResourceKind::kMedia,
+                        source: None,
+                        url: video.url,
+                        error: error.to_string(),
+                    },
+                ));
             }
         }
     }
     /// A changed img request may revisit its previous URL before a queued DOM
     /// event runs. Deduplication must follow the request, not the URL forever.
-    pub fn ResetImageEventSource(&self, id: u64) {
-        self.image_event_sources.borrow_mut().remove(&id);
-    }
-    // cpp: browser/browser.cc:1293-1310
     pub fn DispatchImageEvent(
         &self,
         id: u64,
@@ -1224,140 +1612,19 @@ impl ResourceFetcher {
         if !client.HasJavaScript() {
             return;
         }
-        let source = {
+        let ticket = {
             let owner = self.document.borrow();
             let d = owner.GetDocument();
-            let Some(i) = d.FindNodeById(id) else { return };
-            d.CurrentImageSource(i).unwrap_or("").to_owned()
+            d.FindNodeById(id)
+                .and_then(|node| d.ExistingHTMLImageLoader(node))
+                .and_then(|loader| loader.EventTicket())
         };
-        if source.is_empty() || self.image_event_sources.borrow().get(&id) == Some(&source) {
-            return;
-        }
-        self.image_event_sources.borrow_mut().insert(id, source);
-        client.DispatchImageEvent(id, loaded);
-    }
-    // cpp: browser/browser.cc:1312-1319
-    fn MayHaveImageEvent(&self, i: usize, source: &str) -> bool {
-        let owner = self.document.borrow();
-        let d = owner.GetDocument();
-        let Some(key) = d.CollectionMembershipKey() else {
-            // Revision exhaustion disables reuse, retaining the original walk.
-            return true;
-        };
-        let mut cached = self.image_event_subtrees.borrow_mut();
-        if cached.as_ref().is_none_or(|index| index.key != key) {
-            let mut ancestors: HashMap<String, HashSet<usize>> = HashMap::new();
-            for node in 0..d.NodeCount() {
-                let n = d.Node(node);
-                if !n.IsHTMLElement("img") {
-                    continue;
-                }
-                let Some(source) = d.CurrentImageSource(node) else {
-                    continue;
-                };
-                let nodes = ancestors.entry(source.to_owned()).or_default();
-                let mut ancestor = Some(node);
-                while let Some(a) = ancestor {
-                    // An already indexed ancestor's entire path is present.
-                    if !nodes.insert(a) {
-                        break;
-                    }
-                    ancestor = d.Node(a).Parent().or_else(|| d.ShadowHost(a));
-                }
-            }
-            *cached = Some(ImageEventSubtrees { key, ancestors });
-        }
-        cached
-            .as_ref()
-            .unwrap()
-            .ancestors
-            .get(source)
-            .is_some_and(|nodes| nodes.contains(&i))
-    }
-
-    fn DispatchImageEvents(
-        &self,
-        source: &str,
-        loaded: bool,
-        client: &mut dyn ResourceFetcherClient,
-    ) {
-        if !client.HasJavaScript() {
-            return;
-        }
-        fn visit(
-            resources: &ResourceFetcher,
-            i: usize,
-            source: &str,
-            loaded: bool,
-            client: &mut dyn ResourceFetcherClient,
-        ) {
-            // Recheck after every possible listener/checkpoint mutation. Skip
-            // only subtrees with no matching img; keep the original callback
-            // order and the post-callback children snapshot below.
-            if !resources.MayHaveImageEvent(i, source) {
-                return;
-            }
-            let id = {
-                let owner = resources.document.borrow();
-                let d = owner.GetDocument();
-                let n = d.Node(i);
-                if n.IsHTMLElement("img")
-                    && d.CurrentImageSource(i)
-                        .is_some_and(|current| current == source)
-                {
-                    Some(n.Id())
-                } else {
-                    None
-                }
-            };
-            if let Some(id) = id {
-                resources.DispatchImageEvent(id, loaded, client);
-            }
-            let children = {
-                let owner = resources.document.borrow();
-                let document = owner.GetDocument();
-                // Shadow-including order visits the shadow subtree before the
-                // host's light children. Capture after the callback, as above.
-                document
-                    .ShadowRoot(i)
-                    .into_iter()
-                    .chain(document.Node(i).Children().iter().copied())
-                    .collect::<Vec<_>>()
-            };
-            for c in children {
-                visit(resources, c, source, loaded, client);
-            }
-        }
-        let root = self.document.borrow().GetDocument().Root();
-        visit(self, root, source, loaded, client);
-        // HTMLImageElement starts fetching while detached (`new Image()` is
-        // the common preload path), and Blink delivers its load/error event
-        // without requiring insertion into the document. The rooted walk
-        // above preserves shadow-including document order; finish with the
-        // matching detached image owners in arena creation order.
-        //
-        // Source: third_party/blink/renderer/core/html/html_image_element.cc
-        // ImageLoader::UpdatedHasPendingEvent / DispatchPendingEvent.
-        let detached = {
-            let owner = self.document.borrow();
-            let document = owner.GetDocument();
-            (0..document.NodeCount())
-                .filter_map(|i| {
-                    let node = document.Node(i);
-                    (!document.IsConnectedToDocument(i)
-                        && node.IsHTMLElement("img")
-                        && document
-                            .CurrentImageSource(i)
-                            .is_some_and(|current| current == source))
-                    .then_some(node.Id())
-                })
-                .collect::<Vec<_>>()
-        };
-        for id in detached {
-            self.DispatchImageEvent(id, loaded, client);
+        if ticket.is_some_and(|ticket| {
+            (ticket.event == dom::persistent_document::ImageLoaderEvent::Load) == loaded
+        }) {
+            client.DispatchImageEvent(id, loaded);
         }
     }
-
     // cpp: browser/browser.cc:1359-1393
     pub fn QueueReferencedImages(&self) -> io::Result<bool> {
         let mut requests = Vec::new();
@@ -1399,8 +1666,11 @@ impl ResourceFetcher {
             )>,
         ) {
             let n = d.Node(i);
-            debug_assert!(n.IsHTMLElement("img"));
-            let selection = if let Some(selector) = selector {
+            debug_assert!(
+                n.IsHTMLElement("img")
+                    || d.InputType(i) == Some(dom::persistent_document::DOMInputType::kImage)
+            );
+            let selection = if let Some(selector) = selector.filter(|_| n.IsHTMLElement("img")) {
                 selector(d, i, constraints, is_loaded)
             } else {
                 n.FindAttribute("src")
@@ -1412,25 +1682,6 @@ impl ResourceFetcher {
                         },
                     )
             };
-            if let Some(selection) = selection.as_ref() {
-                if d.ImageResourceFor(&selection.source).is_none() {
-                    let lazy = n
-                        .FindAttribute("loading")
-                        .is_some_and(|loading| loading.value.eq_ignore_ascii_case("lazy"));
-                    let policy = n
-                        .FindAttribute("referrerpolicy")
-                        .and_then(|attribute| ReferrerPolicy::FromString(&attribute.value));
-                    request(
-                        &selection.source,
-                        false,
-                        !lazy,
-                        policy,
-                        admitted,
-                        seen,
-                        requests,
-                    );
-                }
-            }
             selections.push((i, selection));
         }
         {
@@ -1452,7 +1703,9 @@ impl ResourceFetcher {
                     image_nodes: &mut Vec<usize>,
                 ) {
                     order.insert(node, order.len());
-                    if d.Node(node).IsHTMLElement("img") {
+                    if d.Node(node).IsHTMLElement("img")
+                        || d.InputType(node) == Some(dom::persistent_document::DOMInputType::kImage)
+                    {
                         image_nodes.push(node);
                     }
                     // Blink resolves pending resources for shadow descendants
@@ -1470,7 +1723,11 @@ impl ResourceFetcher {
                 // ImageLoader belongs to HTMLImageElement and also operates
                 // while detached. Preserve the previous arena creation order.
                 for node in 0..d.NodeCount() {
-                    if !d.IsConnectedToDocument(node) && d.Node(node).IsHTMLElement("img") {
+                    if !d.IsConnectedToDocument(node)
+                        && (d.Node(node).IsHTMLElement("img")
+                            || d.InputType(node)
+                                == Some(dom::persistent_document::DOMInputType::kImage))
+                    {
                         order.insert(node, order.len());
                         image_nodes.push(node);
                     }
@@ -1558,27 +1815,13 @@ impl ResourceFetcher {
                 cached.take();
             }
         }
-        {
-            let owner = self.document.borrow();
-            let document = owner.GetDocument();
-            let mut cached = self.cached_image_event_sources.borrow_mut();
-            for (_, selection) in &selections {
-                if let Some(selection) = selection {
-                    if document.ImageResourceFor(&selection.source).is_some() {
-                        cached.insert(selection.source.clone());
-                    }
-                }
-            }
-        }
+        let loader_nodes = selections.iter().map(|(node, _)| *node).collect::<Vec<_>>();
         let selection_changed = {
             let mut owner = self.document.borrow_mut();
             let document = owner.GetDocumentMut();
             let mut selection_changed = false;
             for (node, selection) in selections {
                 selection_changed |= document.SetResponsiveImageSelection(node, selection);
-            }
-            if selection_changed {
-                self.image_event_subtrees.borrow_mut().take();
             }
             selection_changed
         };
@@ -1590,10 +1833,86 @@ impl ResourceFetcher {
             };
             self.QueueImageWithPolicy(&source, url.as_deref(), blocks_load, referrer_policy)?;
         }
+        for node in loader_nodes {
+            self.UpdateHTMLImageLoader(
+                node,
+                dom::persistent_document::ImageLoaderUpdate::Normal,
+                false,
+            )?;
+        }
+        self.QueueReferencedVideos()?;
         Ok(selection_changed)
+    }
+    // cpp: core/html/media/html_media_element.cc:1309-1405
+    fn QueueReferencedVideos(&self) -> io::Result<()> {
+        let requests = {
+            let owner = self.document.borrow();
+            let document = owner.GetDocument();
+            let attempted = self.attempted_video_nodes.borrow();
+            (0..document.NodeCount())
+                .filter_map(|index| {
+                    let video = document.Node(index);
+                    if !document.IsConnectedToDocument(index)
+                        || !video.IsHTMLElement("video")
+                        || attempted.contains(&video.Id())
+                        || document.VideoFrameMetadataFor(video.Id()).is_some()
+                    {
+                        return None;
+                    }
+                    let direct = video
+                        .FindAttribute("src")
+                        .filter(|attribute| !attribute.value.is_empty())
+                        .map(|attribute| attribute.value.clone());
+                    let child_source = video.Children().iter().find_map(|&child| {
+                        let source = document.Node(child);
+                        if !source.IsHTMLElement("source")
+                            || source.FindAttribute("type").is_some_and(|kind| {
+                                !matches!(
+                                    kind.value.split(';').next().unwrap_or("").trim(),
+                                    "video/mp4" | "video/quicktime" | ""
+                                )
+                            })
+                        {
+                            return None;
+                        }
+                        source
+                            .FindAttribute("src")
+                            .filter(|attribute| !attribute.value.is_empty())
+                            .map(|attribute| attribute.value.clone())
+                    });
+                    direct.or(child_source).map(|source| (video.Id(), source))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (node_id, source) in requests {
+            let url = ResolveUrl(&self.base_url.borrow(), &source)?;
+            let resource = self.engine.Start(URLRequest {
+                url: url.clone(),
+                destination: RequestDestination::kVideo,
+                ..Default::default()
+            });
+            self.attempted_video_nodes.borrow_mut().insert(node_id);
+            self.pending_videos.borrow_mut().push(PendingVideo {
+                node_id,
+                url,
+                resource,
+                decode: None,
+                is_cors_same_origin: None,
+            });
+        }
+        Ok(())
     }
     pub fn HasPendingImages(&self) -> bool {
         !self.pending_images.borrow().is_empty()
+            || !self.pending_videos.borrow().is_empty()
+            || !self.html_images.tasks.borrow().is_empty()
+            || !self.html_images.ready_events.borrow().is_empty()
+    }
+    /// Viewport observation is useful only while an image can still be
+    /// promoted or reprioritized. Loaded resources must not keep forcing a
+    /// lifecycle geometry pass on every animation/scroll frame.
+    pub fn HasViewportImageWork(&self) -> bool {
+        !self.deferred_images.borrow().is_empty() || !self.pending_images.borrow().is_empty()
     }
     pub fn HasPendingLoadBlockingImages(&self) -> bool {
         self.pending_images
@@ -1613,8 +1932,28 @@ impl ResourceFetcher {
     pub fn ConfigureDocumentImageContainer(
         &self,
         resource_id: image_resource::ImageId,
+        container: ContainerKey,
+        preferred_color_scheme: u8,
+        client: &mut dyn ResourceFetcherClient,
+    ) -> io::Result<bool> {
+        self.ConfigureDocumentImageContainerWithView(
+            resource_id,
+            container,
+            preferred_color_scheme,
+            None,
+            client,
+        )
+    }
+
+    /// An explicit view preserves the caller's SVGImageViewInfo decision.
+    /// `Some("")` denotes SVGImageForContainer::Create's null viewinfo;
+    /// ordinary image uses resolve the resource URL fragment with `None`.
+    pub fn ConfigureDocumentImageContainerWithView(
+        &self,
+        resource_id: image_resource::ImageId,
         mut container: ContainerKey,
         preferred_color_scheme: u8,
+        view_specification: Option<&str>,
         client: &mut dyn ResourceFetcherClient,
     ) -> io::Result<bool> {
         let source = self
@@ -1626,7 +1965,9 @@ impl ResourceFetcher {
         // The resource owner, rather than a paint caller's previous current
         // frame, supplies the view. This prevents one use from inheriting a
         // last-recorded fragment and keeps ContainerKey variant lookup exact.
-        container.view_specification = SVGImageViewSpecification(&source).to_owned();
+        container.view_specification = view_specification
+            .unwrap_or_else(|| SVGImageViewSpecification(&source))
+            .to_owned();
         if !container.preferred_color_scheme_is_explicit {
             container.preferred_color_scheme = preferred_color_scheme;
             container.preferred_color_scheme_is_explicit = true;
@@ -1727,10 +2068,14 @@ impl ResourceFetcher {
     }
     pub fn HasPendingFonts(&self) -> bool {
         self.pending_fonts.borrow().iter().any(|face| {
-            face.resource.is_some()
-                || face.decode.is_some()
-                || (face.selected && !face.loaded && face.next_url < face.metadata.urls.len())
-        })
+            face.selected
+                && face.owner.LoadStatus() == dom::font_loading::FontFaceLoadStatus::Loading
+        }) || self
+            .font_loading
+            .preloads
+            .borrow()
+            .values()
+            .any(|(_, preload)| preload.Finished().is_none() && preload.HasResource())
     }
     /// Poll the current image set once. Page receives mutations/events only for
     /// completed requests; outstanding IO never causes a wait here.
@@ -1744,28 +2089,28 @@ impl ResourceFetcher {
         client: &mut dyn ResourceFetcherClient,
         max_completions: usize,
     ) -> usize {
+        self.RunPendingHTMLImageLoaderTasks();
         let started = std::env::var_os("BROWSER_PROFILE_INPUT")
             .is_some()
             .then(std::time::Instant::now);
         let count = self.pending_images.borrow().len();
         let mut completed = 0;
         let mut admitted = 0;
-        // A cache hit still queues a load event for each ImageLoader owner.
-        // Discovery records sources without calling script; this ordinary
-        // resource turn performs delivery with the same per-element dedupe as
-        // a fresh decode completion.
-        let cached_sources = {
-            let mut pending = self.cached_image_event_sources.borrow_mut();
-            let take = pending.len().min(max_completions);
-            let sources = pending.iter().take(take).cloned().collect::<Vec<_>>();
-            for source in &sources {
-                pending.remove(source);
-            }
-            sources
+        let events = {
+            let mut events = self.html_images.ready_events.borrow_mut();
+            let count = events.len().min(max_completions);
+            events.drain(..count).collect::<Vec<_>>()
         };
-        for source in cached_sources {
-            self.DispatchImageEvents(&source, true, client);
-            completed += 1;
+        for ticket in events {
+            if let Some(_delay) = ticket.loader.BeginEventDispatch(&ticket) {
+                if client.HasJavaScript() {
+                    client.DispatchImageEvent(
+                        ticket.loader.Element().Id(),
+                        ticket.event == dom::persistent_document::ImageLoaderEvent::Load,
+                    );
+                }
+                completed += 1;
+            }
         }
         let mut index = 0;
         for _ in 0..count {
@@ -1805,11 +2150,50 @@ impl ResourceFetcher {
             self.ApplyImageResult(image, result, client);
             completed += 1;
         }
+        let video_count = self.pending_videos.borrow().len();
+        let mut video_index = 0;
+        for _ in 0..video_count {
+            if completed + admitted >= max_completions {
+                break;
+            }
+            let mut video = {
+                let mut videos = self.pending_videos.borrow_mut();
+                if video_index >= videos.len() {
+                    break;
+                }
+                videos.remove(video_index)
+            };
+            let result = if let Some(job) = &mut video.decode {
+                job.poll()
+            } else if video.resource.Poll() {
+                let response = video.resource.TakeResult();
+                match self.BeginVideoResult(&mut video, response) {
+                    Ok(mut job) => {
+                        let result = job.poll();
+                        if result.is_none() {
+                            admitted += 1;
+                        }
+                        video.decode = Some(job);
+                        result
+                    }
+                    Err(error) => Some(Err(error)),
+                }
+            } else {
+                None
+            };
+            let Some(result) = result else {
+                self.pending_videos.borrow_mut().insert(video_index, video);
+                video_index += 1;
+                continue;
+            };
+            self.ApplyVideoResult(video, result, client);
+            completed += 1;
+        }
         if let Some(start) = started {
             if start.elapsed().as_millis() >= 50 {
                 eprintln!(
                     "image-poll-profile initial={count} completed={completed} pending={} ms={:.3}",
-                    self.pending_images.borrow().len(),
+                    self.pending_images.borrow().len() + self.pending_videos.borrow().len(),
                     start.elapsed().as_secs_f64() * 1000.0
                 );
             }
@@ -1827,50 +2211,19 @@ impl ResourceFetcher {
         max_completions: usize,
     ) -> usize {
         self.StartPendingFonts();
-        let count = self.pending_fonts.borrow().len();
+        let resources = self.FontResourcesSnapshot();
         let mut completed = 0;
-        let mut admitted = 0;
-        let mut index = 0;
-        for _ in 0..count {
-            if completed + admitted >= max_completions {
+        for resource in resources {
+            if completed >= max_completions {
                 break;
             }
-            let mut face = {
-                let mut faces = self.pending_fonts.borrow_mut();
-                if index >= faces.len() {
-                    break;
-                }
-                faces.remove(index)
-            };
-            let result = if let Some(job) = &mut face.decode {
-                job.poll()
-            } else if face
-                .resource
-                .as_mut()
-                .is_some_and(|resource| resource.Poll())
-            {
-                let result = face.resource.take().unwrap().TakeResult();
-                if let Some(response) = result.response {
-                    let mut job = self.engine.GetDecodeEngine().BeginFontDecode(response.body);
-                    let result = job.poll();
-                    if result.is_none() {
-                        admitted += 1;
-                    }
-                    face.decode = Some(job);
-                    result
-                } else {
-                    Some(Err(io::Error::other(result.error)))
-                }
-            } else {
-                None
-            };
-            if let Some(result) = result {
-                face.decode = None;
-                self.ApplyFontResult(&mut face, result, client);
+            if resource.Poll() {
                 completed += 1;
             }
-            self.pending_fonts.borrow_mut().insert(index, face);
-            index += 1;
+        }
+        self.CompleteFontResources();
+        for mutation in self.TakeFontResourceMutations() {
+            client.ApplyResourceMutation(mutation);
         }
         self.PrepareFontFaces();
         completed
@@ -1928,3 +2281,6 @@ fn ImageResultBoundary<T>(work: impl FnOnce() -> io::Result<T>) -> io::Result<T>
         }
     }
 }
+
+#[path = "html_image_loader.rs"]
+mod html_image_loader;

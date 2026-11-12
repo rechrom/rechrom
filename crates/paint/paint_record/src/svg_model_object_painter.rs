@@ -9,6 +9,8 @@ use crate::box_fragment_painter::BoxFragmentPainter;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_context::PaintContext;
+use crate::paint_engine::PaintHitTestOpaqueness;
+use crate::paint_info::PaintInfo;
 use crate::PaintPhase;
 
 /// Shared SVG model-object paint operations.
@@ -41,6 +43,14 @@ impl SVGModelObjectPainter {
     /// callers must not substitute the frame rect for culling.
     pub fn VisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
         let fragment = node.fragment.as_deref()?;
+        if let Some(rect) = fragment.paint.svg_visual_rect {
+            return Some(PaintRect {
+                x: node.paint_offset.x + rect.offset.x,
+                y: node.paint_offset.y + rect.offset.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            });
+        }
         // LayoutSVGModelObject::VisualRectInLocalSVGCoordinates() returns the
         // decorated bounding box, not the anonymous NG box's (often empty)
         // ink overflow. Keep that source distinction for translated shapes
@@ -85,6 +95,54 @@ impl SVGModelObjectPainter {
             width: rect.size.width,
             height: rect.size.height,
         })
+    }
+
+    /// Source: svg_model_object_painter.cc:29-40 and
+    /// object_painter.cc:142-178. SVG children are always mixed when visible
+    /// because fill/stroke hit rules cannot prove the whole visual rect opaque.
+    pub fn RecordHitTestData(
+        node: &PaintTreeNode<'_>,
+        context: &RefCell<PaintContext<'_>>,
+        paint_info: &PaintInfo<'_, '_>,
+    ) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("SVG hit-test object must own a fragment");
+        debug_assert!(fragment.paint.is_svg_child);
+        debug_assert_eq!(paint_info.phase, PaintPhase::kForeground);
+        if paint_info.ShouldOmitCompositingInfo() || !fragment.paint.style.visible() {
+            return;
+        }
+        let Some(rect) = Self::VisualRect(node) else {
+            return;
+        };
+        let opaqueness = if fragment.paint.visible_to_hit_testing {
+            PaintHitTestOpaqueness::Mixed
+        } else {
+            PaintHitTestOpaqueness::Transparent
+        };
+        context
+            .borrow_mut()
+            .RecordHitTestData(node, node.EnclosingRect(rect), opaqueness);
+    }
+
+    /// Source: svg_model_object_painter.cc:40-53. The DOM Element relation is
+    /// resolved by Layout; Paint receives only the optional non-null crop ID.
+    pub fn RecordRegionCaptureData(node: &PaintTreeNode<'_>, context: &RefCell<PaintContext<'_>>) {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("SVG region-capture object must own a fragment");
+        let Some(crop_id) = fragment.paint.region_capture_crop_id else {
+            return;
+        };
+        let Some(rect) = Self::VisualRect(node) else {
+            return;
+        };
+        context
+            .borrow_mut()
+            .RecordRegionCaptureData(node, crop_id, node.EnclosingRect(rect));
     }
 
     /// Source: svg_model_object_painter.cc:55-71.

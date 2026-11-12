@@ -20,3 +20,4 @@ layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 [features]
 default = []
 compose_work_profile = []
+metal_surface = ["skia/browser_gpu_metal"]

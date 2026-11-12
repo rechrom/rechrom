@@ -17,6 +17,7 @@ impl LayoutBoxModelObject {
         assert!(!box_.is_null());
         let area = MakeGarbageCollected(PaintLayerScrollableArea::new(unsafe { &mut *box_ }));
         unsafe { &mut *area }.InitializeScrollingBackgroundDisplayItemClient();
+        unsafe { &mut *area }.RegisterWithFrameView();
         self.scrollable_area_ = Member::from_ptr(area);
     }
 

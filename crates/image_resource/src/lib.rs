@@ -11,7 +11,18 @@ use std::{
     time::Duration,
 };
 
+pub mod media_timing;
+
 pub type ImageId = u64;
+
+/// Decoder-owned CUR frame hotspot in image pixels. It remains independent of
+/// a CSS cursor declaration's optional hotspot and image-set scale.
+/// Source: ico_image_decoder.h:51-57; ico_image_decoder.cc:88-103,321-327.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageHotSpot {
+    pub x: i32,
+    pub y: i32,
+}
 
 /// Pixel alpha representation published by the concrete image decoder.
 ///
@@ -189,6 +200,85 @@ impl ImageOrientation {
     }
 }
 
+/// Immutable media frame storage published by the decoder before Paint or
+/// compositor chooses a presentation path.
+///
+/// Source: media/base/video_frame.h and ui/gfx/color_space.h.  NV12 remains in
+/// its decoded Y/UV planes for the accelerated TextureDrawQuad path.  The
+/// software PaintImage is a separate fallback value; it must not replace this
+/// producer color-space identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoPixelFormat {
+    Nv12,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoColorPrimaries {
+    Bt709,
+    Smpte170M,
+    Ebu3213E,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoTransferFunction {
+    /// macOS maps kCVImageBufferTransferFunction_ITU_R_709_2 to Chromium's
+    /// BT709_APPLE transfer first (a pure gamma 1.961 curve).
+    Bt709Apple,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoColorMatrix {
+    Bt709,
+    Smpte170M,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoColorRange {
+    Limited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoColorSpace {
+    pub primaries: VideoColorPrimaries,
+    pub transfer: VideoTransferFunction,
+    pub matrix: VideoColorMatrix,
+    pub range: VideoColorRange,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoFrameResource {
+    pub width: u32,
+    pub height: u32,
+    pub orientation: ImageOrientation,
+    pub format: VideoPixelFormat,
+    pub color_space: VideoColorSpace,
+    pub y_stride: usize,
+    pub uv_stride: usize,
+    pub y_plane: Arc<Vec<u8>>,
+    pub uv_plane: Arc<Vec<u8>>,
+}
+
+impl VideoFrameResource {
+    pub fn Validate(&self) -> bool {
+        let y_rows = self.height as usize;
+        let uv_rows = y_rows.div_ceil(2);
+        let uv_width = (self.width as usize).div_ceil(2).saturating_mul(2);
+        self.width != 0
+            && self.height != 0
+            && self.format == VideoPixelFormat::Nv12
+            && self.y_stride >= self.width as usize
+            && self.uv_stride >= uv_width
+            && self
+                .y_stride
+                .checked_mul(y_rows)
+                .is_some_and(|length| length == self.y_plane.len())
+            && self
+                .uv_stride
+                .checked_mul(uv_rows)
+                .is_some_and(|length| length == self.uv_plane.len())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IntrinsicSize {
     pub width: u32,
@@ -199,6 +289,8 @@ pub struct IntrinsicSize {
 pub struct ContainerKey {
     pub width: u32,
     pub height: u32,
+    /// SVGImage::DrawInfo retains the float container before frame rounding.
+    pub unrounded_size_bits: Option<[u64; 2]>,
     pub zoom_bits: u64,
     pub device_pixel_ratio_bits: u64,
     pub view_specification: String,
@@ -214,6 +306,7 @@ impl ContainerKey {
         Self {
             width,
             height,
+            unrounded_size_bits: None,
             zoom_bits: zoom.to_bits(),
             device_pixel_ratio_bits: device_pixel_ratio.to_bits(),
             view_specification: String::new(),
@@ -222,6 +315,12 @@ impl ContainerKey {
         }
     }
 
+    pub fn unrounded_size(&self) -> (f64, f64) {
+        self.unrounded_size_bits
+            .map_or((f64::from(self.width), f64::from(self.height)), |bits| {
+                (f64::from_bits(bits[0]), f64::from_bits(bits[1]))
+            })
+    }
     pub fn zoom(&self) -> f64 {
         f64::from_bits(self.zoom_bits)
     }
@@ -416,10 +515,20 @@ pub struct PaintImage {
     /// Pixels remain in storage order; each CSS use decides whether to honor
     /// the encoded orientation.
     pub orientation: ImageOrientation,
+    /// BitmapImage::GetHotSpot forwards the selected decoder frame's value.
+    pub hot_spot: Option<ImageHotSpot>,
     /// Alpha representation of bitmap content and every bitmap animation
     /// frame. Document images produce their own raster pixels and keep the
     /// default straight-alpha representation.
     pub alpha_type: PaintImageAlphaType,
+    /// PaintImage::IsLazyGenerated for the concrete producer allocation.
+    /// Encoded/network bitmaps retain generator semantics even when this
+    /// renderer's immutable transport has already published decoded bytes.
+    pub is_lazy_generated: bool,
+    /// Original immutable encoded bytes retained by BitmapImage's generator.
+    /// The software decode cache may ask the codec for a supported reduced
+    /// allocation before falling back to scaling the full decoded frame.
+    pub encoded_data: Option<Arc<[u8]>>,
     pub document_container_key: Option<ContainerKey>,
     pub content: PaintImageContent,
     /// Present only for multi-frame bitmap images. The storage belongs to the
@@ -440,7 +549,10 @@ impl Default for PaintImage {
             content_dpr: None,
             is_cors_same_origin: false,
             orientation: ImageOrientation::default(),
+            hot_spot: None,
             alpha_type: PaintImageAlphaType::default(),
+            is_lazy_generated: false,
+            encoded_data: None,
             document_container_key: None,
             content: PaintImageContent::default(),
             animation_frames: None,
@@ -487,7 +599,7 @@ impl PaintImage {
     }
 
     pub fn IsLazyGenerated(&self) -> bool {
-        matches!(&self.content, PaintImageContent::Document(_))
+        self.is_lazy_generated || matches!(&self.content, PaintImageContent::Document(_))
     }
 
     pub fn IsComplete(&self) -> Result<bool, &PaintImageMetadataUnavailable> {
@@ -498,6 +610,11 @@ impl PaintImage {
         Ok(self.CompositorMetadata()?.is_multipart)
     }
 
+    /// ImageResourceContent::ForceOrientationIfNecessary: opaque-origin
+    /// images always respect EXIF to avoid exposing protected pixel layout.
+    pub fn ForceOrientationIfNecessary(&self, requested: bool) -> bool {
+        !self.is_cors_same_origin || requested
+    }
     pub fn BitmapPixels(&self) -> Option<&Arc<Vec<u8>>> {
         match &self.content {
             PaintImageContent::Bitmap(pixels) => Some(pixels),
@@ -554,6 +671,28 @@ mod paint_image_animation_tests {
         };
         assert!(animated_image.MaybeAnimated());
     }
+
+    #[test]
+    fn lazy_generation_is_a_producer_fact_for_bitmap_content() {
+        let eager = PaintImage {
+            content: PaintImageContent::Bitmap(Arc::new(vec![0; 4])),
+            ..Default::default()
+        };
+        assert!(!eager.IsLazyGenerated());
+        let lazy = PaintImage {
+            is_lazy_generated: true,
+            ..eager
+        };
+        assert!(lazy.IsLazyGenerated());
+        let document = PaintImage {
+            content: PaintImageContent::Document(Arc::new(DocumentPaintContent::new(
+                ContainerKey::new(1, 1, 1., 1.),
+                Arc::new(()) as Arc<dyn DocumentPaintRecord>,
+            ))),
+            ..Default::default()
+        };
+        assert!(document.IsLazyGenerated());
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -609,6 +748,22 @@ pub trait DocumentImage {
         mutation: DocumentImageMutation,
     ) -> io::Result<Vec<DocumentImageEffect>>;
     fn has_active_animation(&self) -> bool;
+    fn concrete_image_size(
+        &self,
+        _multiplier: f32,
+        _default_size: (f32, f32),
+    ) -> io::Result<Option<(f32, f32)>> {
+        Ok(None)
+    }
+    fn frame_for_container(
+        &mut self,
+        _request: DocumentImageBitmapRequest,
+    ) -> io::Result<DocumentImageBitmapFrame> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "document image container frame is not implemented",
+        ))
+    }
 }
 
 pub struct CreatedDocumentImage {
@@ -652,3 +807,53 @@ mod tests {
         assert!(image.BitmapPixels().is_some());
     }
 }
+
+/// Immutable display-oriented, straight-alpha bitmap published by an image
+/// conversion/raster producer. Consumers borrow pixels and retain this owner;
+/// they never receive a mutable bitmap or the producing SVG document.
+#[derive(Clone)]
+pub struct ImmutableImageBitmap {
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: Arc<Vec<u8>>,
+}
+
+/// SVGImageForContainer::Create arguments from EventHandler::SelectCursor.
+/// Size is in device pixels; zoom is the outer image's device scale factor.
+/// The original SVG image retains its view specification and isolated document.
+#[derive(Clone, Copy, Debug)]
+pub struct DocumentImageBitmapRequest {
+    pub width: f32,
+    pub height: f32,
+    pub zoom: f32,
+    pub preferred_color_scheme: u8,
+}
+pub struct DocumentImageBitmapFrame {
+    pub frame: Arc<DocumentImageFrame>,
+    pub width: u32,
+    pub height: u32,
+}
+/// Injected replay/conversion service. It cannot access the live SVG document.
+pub trait ImageBitmapRasterizer {
+    fn Bitmap(&self, image: &PaintImage) -> io::Result<ImmutableImageBitmap>;
+    fn Document(&self, frame: &DocumentImageBitmapFrame) -> io::Result<ImmutableImageBitmap>;
+}
+/// One live image producer identity, shared by its canonical resource content.
+pub trait ImageBitmapProvider {
+    fn ConcreteImageSize(
+        &self,
+        image: &PaintImage,
+        multiplier: f32,
+        default_size: (f32, f32),
+    ) -> io::Result<Option<(f32, f32)>>;
+    fn BitmapForCurrentFrame(
+        &self,
+        image: &PaintImage,
+        container: Option<DocumentImageBitmapRequest>,
+    ) -> io::Result<ImmutableImageBitmap>;
+}
+
+mod content;
+pub use content::{ImageResourceContentLease, ImageResourceContentUpdate, ImageResourceMetadata};
+
+pub mod platform_resources;

@@ -13,6 +13,19 @@ fn NeedsScrollAndScrollTranslation(fragment: &FragmentPaintData) -> bool {
     fragment.paint.IsOverscrollContainer() || fragment.paint.scroll_container.is_some()
 }
 
+// Source: core/paint/paint_property_tree_builder.cc,
+// NeedsEffectIgnoringClipPathAnd2DScale(). Isolation establishes the boundary
+// for descendant blending, but does not by itself require an Effect/saveLayer.
+fn NeedsCssBlendEffect(
+    blend_mode: PaintBlendMode,
+    is_paint_layer: bool,
+    is_stacking_context: bool,
+    has_non_isolated_blending_descendant: bool,
+) -> bool {
+    blend_mode != PaintBlendMode::kNormal
+        || (is_paint_layer && is_stacking_context && has_non_isolated_blending_descendant)
+}
+
 pub(super) struct PaintPropertyTreeBuilder<'a> {
     walk: &'a mut PrePaintTreeWalk,
     previous_paint_result: paint_model::PaintResult,
@@ -47,6 +60,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         scroll_offset: Offset,
         inherited_fixed_background_acts_as_scroll: bool,
         parent_properties: PropertyTreeState,
+        canvas_contents: Option<CanvasContentsContext>,
         inherited_rendering_context_id: u64,
         inherited_should_flatten_transform: bool,
         inherited_can_inherit_backface: bool,
@@ -58,10 +72,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         old_contents_cull_rect: Option<Option<PaintRect>>,
         is_root: bool,
         is_flex_or_grid_item: bool,
-    ) -> Box<PaintTreeNode<'static>> {
+    ) -> PaintTreeNode<'static> {
         self.walk.stats.computed_nodes += 1;
+        fragment
+            .paint
+            .UpdateSourcePaintLayerDescendantDependentFlags();
         let own_key_start = self.walk.next_property_id;
         let inherited = InheritedContext {
+            inside_blocking_wheel_event_handler: false,
+            blocking_wheel_event_handler_changed: false,
             offset: parent_offset,
             paint_space: paint_space_origin,
             clip: parent_clip,
@@ -71,6 +90,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             scroll: scroll_offset,
             fixed_background_acts_as_scroll: inherited_fixed_background_acts_as_scroll,
             properties: parent_properties.clone(),
+            canvas_contents: canvas_contents.clone(),
             rendering_context_id: inherited_rendering_context_id,
             should_flatten_inherited_transform: inherited_should_flatten_transform,
             can_inherit_backface_visibility: inherited_can_inherit_backface,
@@ -80,7 +100,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             root: is_root,
             flex_or_grid_item: is_flex_or_grid_item,
         };
-        let mut node = Box::new(PaintTreeNode::default());
+        let mut node = PaintTreeNode::default();
         node.SetFragment(fragment);
         node.is_root = is_root;
         let local_establishes_fixed_background_containing_block = !is_root
@@ -119,6 +139,18 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let paint_space_origin = geometry.paint_space_origin;
         node.absolute_offset = geometry.absolute_offset;
         node.paint_offset = geometry.paint_offset;
+        // cpp: FragmentPaintPropertyTreeBuilder::UpdateForObjectLocation.
+        // An ancestor can move this object without dirtying its local Layout
+        // geometry. Admit paint invalidation after resolving the inherited
+        // offset, before the invalidator decides whether to reuse its drawing.
+        if old_paint_offset.is_some_and(|old| old != node.paint_offset) {
+            node.fragment
+                .as_mut()
+                .expect("property builder must retain its fragment")
+                .paint
+                .pre_paint_invalidation
+                .should_check_for_paint_invalidation = true;
+        }
         node.directly_composited_container_paint_offset_subpixel_delta =
             geometry.directly_composited_container_paint_offset_subpixel_delta;
         node.pixel_snap_scale = fragment
@@ -225,7 +257,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
 
         let mut has_active_transform_animation = false;
         let mut has_non_composited_transform = false;
-        if geometry.applies_transform {
+        let mut pre_transform = None;
+        let canvas_transform = fragment.paint.ElementCanvasTransformInput();
+        if geometry.applies_transform || canvas_transform.is_some() {
             node.properties.transform_id = self.walk.next_property_id;
             self.walk.next_property_id += 1;
             node.applies_transform = true;
@@ -268,10 +302,23 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 source_roles.push(PaintPropertyRole::TextCombineTransform);
             }
             debug_assert_eq!(source_roles.len(), node.local_transforms.len());
-            let operations: Vec<_> = source_roles
+            let mut operations: Vec<_> = source_roles
                 .into_iter()
                 .zip(node.local_transforms.iter().copied())
                 .collect();
+            if let Some((_, matrix)) = canvas_transform {
+                let index = operations
+                    .iter()
+                    .take_while(|(role, _)| {
+                        matches!(
+                            role,
+                            PaintPropertyRole::PaintOffsetTranslation
+                                | PaintPropertyRole::StickyTranslation
+                        )
+                    })
+                    .count();
+                operations.insert(index, (PaintPropertyRole::ElementCanvasTransform, matrix));
+            }
             let mut flat_transform_context = node.transforms[..inherited_transform_count].to_vec();
             let mut current_rendering_context_id = inherited_rendering_context_id;
             for (index, (role, matrix)) in operations.iter().enumerate() {
@@ -304,7 +351,27 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 let sticky_constraint = (*role == PaintPropertyRole::StickyTranslation)
                     .then_some(fragment.paint.sticky_constraint)
                     .flatten();
-                let parent_transform = node.properties.nodes.transform.clone();
+                let mut parent_transform = node.properties.nodes.transform.clone();
+                if *role == PaintPropertyRole::ElementCanvasTransform {
+                    if let Some(native_canvas) = canvas_transform.and_then(|(canvas, _)| canvas) {
+                        let canvas = canvas_contents.as_ref().filter(|context| context.layout_object == native_canvas)
+                            .expect("canvas FirstFragment ContentsProperties precede its drawable descendants");
+                        parent_transform = canvas.properties.nodes.transform.clone();
+                        node.properties.nodes.clip = canvas.properties.nodes.clip.clone();
+                        node.properties.clip_id = canvas.properties.clip_id;
+                    }
+                }
+                let is_css_transform_property = matches!(
+                    role,
+                    PaintPropertyRole::Transform
+                        | PaintPropertyRole::Offset
+                        | PaintPropertyRole::Scale
+                        | PaintPropertyRole::Rotate
+                        | PaintPropertyRole::Translate
+                );
+                if is_css_transform_property && pre_transform.is_none() {
+                    pre_transform = Some(parent_transform.clone());
+                }
                 let mut compositor = TransformCompositorState(fragment, *role);
                 if let Some(sticky) = sticky_constraint {
                     compositor.sticky_constraint = BuildCompositorStickyConstraint(
@@ -389,9 +456,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 }
                 node.properties.nodes.transform = transform_node;
                 current_rendering_context_id = rendering_context_id;
-                flat_transform_context.push(*matrix);
+                if *role != PaintPropertyRole::ElementCanvasTransform {
+                    // This changes the element's property placement, never its
+                    // child-record pixels (source deliberately omits OnUpdateTransform).
+                    flat_transform_context.push(*matrix);
+                }
             }
         }
+        node.pre_transform =
+            pre_transform.unwrap_or_else(|| node.properties.nodes.transform.clone());
         // Unsupported non-affine transforms are rejected by raster lowering;
         // only a proven coordinate translation changes these property payloads.
         let property_space_delta = if geometry.applies_transform {
@@ -405,6 +478,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.paint_snap_offset = property_space_delta;
         let mut has_filter_that_moves_pixels = false;
         let mut has_perspective = false;
+        let mut isolates_descendant_blending = false;
         let mut primary_effect_reasons = Default::default();
         let mut filter_reasons = Default::default();
         if let Some(style) = style.filter(|_| establishes) {
@@ -420,8 +494,24 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 has_perspective = true;
             }
             node.applies_opacity = MaskAdjustedOpacity(style) != 1.0;
-            node.applies_blend =
-                style.blend_mode() != PaintBlendMode::kNormal || style.isolate_blending();
+            // Source: paint_property_tree_builder.cc
+            // NeedsEffectIgnoringClipPathAnd2DScale(). A CSS isolated group
+            // needs an Effect only when a non-isolated descendant actually
+            // blends. `isolation:isolate` alone merely establishes the
+            // stacking-context boundary and must not introduce a saveLayer.
+            isolates_descendant_blending = node.is_paint_layer
+                && node.is_stacking_context
+                && fragment
+                    .paint
+                    .PaintLayerHasNonIsolatedDescendantWithBlendMode();
+            node.applies_blend = NeedsCssBlendEffect(
+                style.blend_mode(),
+                node.is_paint_layer,
+                node.is_stacking_context,
+                fragment
+                    .paint
+                    .PaintLayerHasNonIsolatedDescendantWithBlendMode(),
+            );
             primary_effect_reasons = CompositingReasonFinder::EffectReasons(fragment);
             filter_reasons = CompositingReasonFinder::FilterReasons(fragment);
             node.applies_filter = !authored_filters.is_empty() || !filter_reasons.IsEmpty();
@@ -483,6 +573,25 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             }
                         }
                         reference
+                    } else if clip_path.compiled_shape {
+                        // Source: ClipPathClipper::GetPathWithObjectZoom and
+                        // StyleShape::GetPath. The actual compiled owner is
+                        // borrowed after the resident reference box is known.
+                        match ResolveComputedShapeClipPath(
+                            style,
+                            reference,
+                            svg_effect_child,
+                            &mut node.local_clip_path,
+                        ) {
+                            Ok((bounds, even_odd)) => {
+                                node.clip_path_even_odd = even_odd;
+                                bounds
+                            }
+                            Err(error) => {
+                                node.clip_path_error.get_or_insert_with(|| error.into());
+                                reference
+                            }
+                        }
                     } else if let Some(graph) = clip_path.reference_graph.as_ref() {
                         if node.clip_path_error.is_none() {
                             node.clip_path_error = graph.unsupported.clone()
@@ -519,8 +628,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         && clip_path.commands.is_empty()
                         && clip_path.polygon_rounding_radius.is_none()
                     {
-                        // shape()/ray() deliberately cross the Layout boundary
-                        // as unsupported operations without a fabricated path.
+                        // An unavailable document resource does not become a
+                        // fabricated empty/basic-shape path.
                         reference
                     } else {
                         node.clip_path_even_odd = clip_path.even_odd;
@@ -745,7 +854,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         )
                     }),
                     backdrop_filter_clip,
-                    isolates_blending: style.isolate_blending(),
+                    isolates_blending: isolates_descendant_blending,
                     has_mask: false,
                     is_mask: false,
                     // Source: core/paint/compositing/compositing_reason_finder.cc:461-462;
@@ -826,7 +935,16 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     id: clip_id,
                     parent: Some(mask_output_clip),
                     local_transform_space: node.properties.nodes.transform.clone(),
-                    rect: Some(PropertySpaceRect(mask_bounds, property_space_delta)),
+                    // Source: paint_property_tree_builder.cc UpdateEffect.
+                    // Chromium retains the precise MaskBoundingBox separately,
+                    // but supplies MaskClip's raster geometry through
+                    // FloatRoundedRect(ToEnclosingRect(combined_clip)).  Using
+                    // the fractional bounds directly clips the first content
+                    // row/column before the mask source is composited.
+                    rect: Some(EnclosingMaskClipRectInPropertySpace(
+                        mask_bounds,
+                        property_space_delta,
+                    )),
                     radii: PaintCornerRadii::default(),
                     clip_path: None,
                     clip_path_error: None,
@@ -1530,6 +1648,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     lifecycle: Default::default(),
                     id: node.properties.scroll_id,
                     owner_client_id: fragment.paint.display_item_client_id,
+                    owner_node_id: u64::try_from(
+                        fragment.paint.display_item_client_owner_node_id,
+                    )
+                    .unwrap_or_default(),
                     parent: parent_properties.nodes.nearest_scroll(),
                     overflow_clip: Some(node.properties.nodes.clip.clone()),
                     container_rect: PropertySpaceRect(local, property_space_delta),
@@ -1701,7 +1823,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     | Display::kInlineGrid
                     | Display::kGridLanes
             );
-        let svg_view_box = SvgViewBoxTransform(fragment);
+        let svg_view_box = SvgTransformToPixelSnappedBorderBox(
+            fragment,
+            node.paint_offset,
+            node.paint_snap_offset,
+            node.pixel_snap_scale,
+        );
         let mut child_properties = node.properties.clone();
         let mut child_transforms = node.transforms.clone();
         let preserves_3d = style.is_some_and(|style| style.preserves_3d());
@@ -1833,6 +1960,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             child_properties.transform_id = id;
             child_transforms.push(TranslationTransform(-scroll_position.x, -scroll_position.y));
         }
+        node.cull_decision_inputs = crate::cull_rect_updater::CullRectDecisionInputs {
+            has_filter_that_moves_pixels,
+            has_perspective,
+            has_active_transform_animation,
+            has_non_composited_transform,
+        };
         let infinite_cull = crate::cull_rect_updater::ShouldUseInfiniteCullRect(
             fragment,
             inherited.subtree_should_use_infinite_cull_rect,
@@ -1880,6 +2013,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.cache = Some(NodeCache {
             inherited,
             children: ChildContext {
+                inside_blocking_wheel_event_handler: fragment
+                    .paint
+                    .inside_blocking_wheel_event_handler,
+                blocking_wheel_event_handler_changed: false,
                 origin: child_origin,
                 paint_space: if has_scroll_translation {
                     Offset {
@@ -1895,6 +2032,14 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 opacity: node.opacity,
                 scroll: child_scroll,
                 fixed_background_acts_as_scroll: node.fixed_background_acts_as_scroll,
+                canvas_contents: fragment
+                    .paint
+                    .CanvasLayoutObjectIdentity()
+                    .map(|layout_object| CanvasContentsContext {
+                        layout_object,
+                        properties: child_properties.clone(),
+                    })
+                    .or(canvas_contents),
                 properties: child_properties,
                 rendering_context_id: child_rendering_context_id,
                 should_flatten_inherited_transform: child_should_flatten,
@@ -1919,7 +2064,35 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             nodes: 1,
             computed_pass: self.walk.walk_generation,
             physical_children: Vec::new(),
+            contains_local_frames: false,
         });
         node
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolation_without_blending_descendants_does_not_create_effect() {
+        assert!(!NeedsCssBlendEffect(
+            PaintBlendMode::kNormal,
+            true,
+            true,
+            false,
+        ));
+        assert!(NeedsCssBlendEffect(
+            PaintBlendMode::kNormal,
+            true,
+            true,
+            true,
+        ));
+        assert!(NeedsCssBlendEffect(
+            PaintBlendMode::kMultiply,
+            false,
+            false,
+            false,
+        ));
     }
 }

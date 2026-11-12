@@ -81,8 +81,6 @@ class MessagePort extends EventTarget {
     this._started = false;
     this._closed = false;
     this._pending = [];
-    this._onmessage = null;
-    this._onmessageerror = null;
   }
   postMessage(message, transfer = []) {
     if (this._closed || !this._peer || this._peer._closed) return;
@@ -104,13 +102,13 @@ class MessagePort extends EventTarget {
       queueTask(() => { if (!this._closed) this.dispatchEvent(new MessageEvent('message', {data})); });
   }
   close() { this._closed = true; this._pending.length = 0; }
-  get onmessage() { return this._onmessage; }
+  get onmessage() { return __domInvoke(this, '__eventTargetHandlerGet', 'message'); }
   set onmessage(callback) {
-    this._onmessage = typeof callback === 'function' ? callback : null;
-    if (this._onmessage) this.start();
+    __domInvoke(this, '__eventTargetHandlerSet', 'message', callback);
+    if (typeof callback === 'function') this.start();
   }
-  get onmessageerror() { return this._onmessageerror; }
-  set onmessageerror(callback) { this._onmessageerror = typeof callback === 'function' ? callback : null; }
+  get onmessageerror() { return __domInvoke(this, '__eventTargetHandlerGet', 'messageerror'); }
+  set onmessageerror(callback) { __domInvoke(this, '__eventTargetHandlerSet', 'messageerror', callback); }
 }
 const messagePortToken = {};
 globalThis.MessagePort = MessagePort;
@@ -154,6 +152,7 @@ globalThis.cancelIdleCallback = function(id) {
   clearTimeout(timer);
 };
 const timeline = [];
+const eventTimingBuffer = [];
 const performanceObservers = new Set();
 let performanceDeliveryQueued = false;
 class PerformanceObserverEntryList {
@@ -165,22 +164,25 @@ class PerformanceObserverEntryList {
 class PerformanceObserver {
   constructor(callback) {
     if (typeof callback !== 'function') throw new TypeError('PerformanceObserver callback must be a function');
-    this._callback = callback; this._types = new Set(); this._records = [];
+    this._callback = callback; this._types = new Set(); this._records = []; this._durationThreshold = 104;
   }
   observe(options = {}) {
     const types = options.entryTypes !== undefined ? Array.from(options.entryTypes, String) :
       options.type !== undefined ? [String(options.type)] : [];
     if (!types.length) throw new TypeError('PerformanceObserver requires type or entryTypes');
+    this._durationThreshold = options.type === 'event' && options.durationThreshold !== undefined
+      ? Math.max(16, Math.round(Number(options.durationThreshold) / 8) * 8) : 104;
     this._types = new Set(types); performanceObservers.add(this);
     if (options.buffered) {
       this._records.push(...timeline.filter(entry => this._types.has(entry.entryType)));
+      if (this._types.has('event')) this._records.push(...eventTimingBuffer.filter(entry => entry.duration >= this._durationThreshold));
       queuePerformanceDelivery();
     }
   }
   disconnect() { performanceObservers.delete(this); this._records = []; this._types.clear(); }
   takeRecords() { const records = this._records; this._records = []; return records; }
 }
-PerformanceObserver.supportedEntryTypes = Object.freeze(['mark','measure','resource','navigation','paint']);
+PerformanceObserver.supportedEntryTypes = Object.freeze(['mark','measure','resource','navigation','paint','event']);
 globalThis.PerformanceObserver = PerformanceObserver;
 globalThis.PerformanceObserverEntryList = PerformanceObserverEntryList;
 function queuePerformanceDelivery() {
@@ -201,6 +203,29 @@ function addPerformanceEntry(entry) {
   queuePerformanceDelivery();
   return entry;
 }
+class PerformanceEventTiming {
+  constructor() { throw new TypeError('Illegal constructor'); }
+  toJSON() {
+    return {name:this.name, entryType:this.entryType, startTime:this.startTime,
+      duration:this.duration, processingStart:this.processingStart,
+      processingEnd:this.processingEnd, cancelable:this.cancelable,
+      interactionId:this.interactionId};
+  }
+}
+globalThis.PerformanceEventTiming = PerformanceEventTiming;
+__bindEventTiming(entry => {
+  Object.setPrototypeOf(entry, PerformanceEventTiming.prototype);
+  const target = entry.target ? new WeakRef(entry.target) : undefined;
+  Object.defineProperty(entry, 'target', {enumerable:true, configurable:false,
+    get() { const node = target?.deref(); return node?.isConnected ? node : null; }});
+  Object.freeze(entry);
+  // Event Timing's 150-entry buffer is independent of getEntries(), and its
+  // default buffering threshold is 104 ms (Performance.cc).
+  if (entry.duration >= 104 && eventTimingBuffer.length < 150) eventTimingBuffer.push(entry);
+  for (const observer of performanceObservers)
+    if (observer._types.has('event') && entry.duration >= observer._durationThreshold) observer._records.push(entry);
+  queuePerformanceDelivery();
+});
 performance.getEntries = () => timeline.slice();
 performance.getEntriesByType = type => timeline.filter(entry => entry.entryType === String(type));
 performance.getEntriesByName = (name,type) => timeline.filter(entry => entry.name === String(name) && (type === undefined || entry.entryType === type));
@@ -241,22 +266,39 @@ class MediaQueryList extends EventTarget {
   }
   addListener(callback) { this.addEventListener('change',callback); }
   removeListener(callback) { this.removeEventListener('change',callback); }
+  get onchange() { return __domInvoke(this, '__eventTargetHandlerGet', 'change'); }
+  set onchange(value) { __domInvoke(this, '__eventTargetHandlerSet', 'change', value); }
 }
 globalThis.MediaQueryList=MediaQueryList;
 globalThis.matchMedia=query=>new MediaQueryList(query);
-const historyEntries = [{state:null, url:location.href}]; let historyIndex = 0;
-globalThis.history = {
-  get state() { return historyEntries[historyIndex].state; },
-  get length() { return historyEntries.length; }, scrollRestoration:'auto',
-  replaceState(state, unused, url) {
-    if (url != null && String(url) !== '') __historyUpdate(String(url));
-    historyEntries[historyIndex] = {state:structuredClone(state), url:location.href};
-  },
-  pushState(state, unused, url) {
-    if (url != null && String(url) !== '') __historyUpdate(String(url));
-    historyEntries.splice(++historyIndex); historyEntries.push({state:structuredClone(state), url:location.href});
+class History {
+  constructor() { throw new TypeError('Illegal constructor'); }
+  get state() { return scrollInvoke(this,'__navigationHistoryState'); }
+  get length() { return scrollInvoke(this,'__navigationHistoryLength'); }
+  get scrollRestoration() { return scrollInvoke(this,'__navigationHistoryScrollRestoration'); }
+  set scrollRestoration(value) {
+    value=String(value);
+    if(value!=='auto'&&value!=='manual')throw new TypeError('Invalid ScrollRestoration');
+    scrollInvoke(this,'__navigationHistorySetScrollRestoration',value);
   }
-};
+  replaceState(state, unused, url) {
+    if(arguments.length<2)throw new TypeError('replaceState requires two arguments');
+    String(unused);
+    scrollInvoke(this,'__navigationHistoryReplaceState',state,url==null?null:String(url));
+  }
+  pushState(state, unused, url) {
+    if(arguments.length<2)throw new TypeError('pushState requires two arguments');
+    String(unused);
+    scrollInvoke(this,'__navigationHistoryPushState',state,url==null?null:String(url));
+  }
+  go(delta=0) {scrollInvoke(this,'__navigationHistoryGo',delta);}
+  back() {scrollInvoke(this,'__navigationHistoryGo',-1);}
+  forward() {scrollInvoke(this,'__navigationHistoryGo',1);}
+}
+globalThis.History=History;
+__domInstall('History',History.prototype);
+Object.defineProperty(History.prototype,Symbol.toStringTag,{value:'History',configurable:true});
+Object.defineProperty(globalThis,'history',{get(){return scrollInvoke(globalThis,'__navigationHistoryWindow');},enumerable:true,configurable:true});
 class TextEncoder {
   get encoding() { return 'utf-8'; }
   encode(value = '') {
@@ -311,25 +353,28 @@ function blobPartBytes(part) {
     return new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
   return new TextEncoder().encode(String(part));
 }
+const blobData = new WeakMap();
 class Blob {
   constructor(parts = [], options = {}) {
     const chunks = Array.from(parts, blobPartBytes);
     const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-    this._bytes = new Uint8Array(size);
+    const bytes = new Uint8Array(size);
     let offset = 0;
-    for (const chunk of chunks) { this._bytes.set(chunk, offset); offset += chunk.byteLength; }
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     const type = String(options.type || '').toLowerCase();
-    this.type = /^[\x20-\x7e]*$/.test(type) ? type : '';
+    blobData.set(this,{bytes,type:/^[\x20-\x7e]*$/.test(type) ? type : ''});
   }
-  get size() { return this._bytes.byteLength; }
+  get _bytes() { const data=blobData.get(this);return data.native?new Uint8Array(scrollInvoke(data.native,'__formDataFileRead')):data.bytes; }
+  get type() { return blobData.get(this).type; }
+  get size() { const data=blobData.get(this);return data.native?scrollInvoke(data.native,'__formDataFileMetadata').size:data.bytes.byteLength; }
   slice(start = 0, end = this.size, type = '') {
     const normalize = value => value < 0 ? Math.max(this.size + value, 0) : Math.min(value, this.size);
     const from = normalize(Number(start) || 0), to = Math.max(from, normalize(Number(end)));
     return new Blob([this._bytes.slice(from, to)], {type});
   }
   async arrayBuffer() {
-    return this._bytes.buffer.slice(this._bytes.byteOffset,
-                                    this._bytes.byteOffset + this._bytes.byteLength);
+    const bytes=this._bytes;
+    return bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset + bytes.byteLength);
   }
   async text() { return new TextDecoder().decode(this._bytes); }
   stream() { throw new DOMException('Blob streams are not implemented', 'NotSupportedError'); }
@@ -341,6 +386,130 @@ class File extends Blob {
   }
 }
 globalThis.Blob = Blob; globalThis.File = File;
+
+// FormData's entry list remains native. JS performs only Web IDL conversion
+// and projection of the existing Blob/File implementation into canonical Files.
+const formDataFiles = new WeakMap();
+function formDataString(value) { if(typeof value==='symbol')throw new TypeError('Cannot convert a Symbol value to a string');return String(value); }
+function formDataFile(blob) {
+  const isFile = blob instanceof File;
+  let file = isFile ? formDataFiles.get(blob) : undefined;
+  if (!file) {
+    const name = isFile ? formDataString(blob.name) : 'blob';
+    const modified = blob instanceof File ? Number(blob.lastModified) : Date.now();
+    const bytes = blobData.get(blob).bytes;
+    file = scrollInvoke(globalThis,'__formDataFileCreate',bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),name,blob.type,modified);
+    // Blob entries are File values; an unchanged File retains its JS identity.
+    if (isFile) {
+      scrollInvoke(file,'__formDataFileRemember',blob);
+      formDataFiles.set(blob,file);
+    }
+  }
+  return file;
+}
+// ControlValue's union conversion shares FormData's native File projection.
+const nativeInternalsSetFormValue=ElementInternals.prototype.setFormValue;
+const nativeInternalsShadowRoot=Object.getOwnPropertyDescriptor(ElementInternals.prototype,'shadowRoot').get;
+ElementInternals.prototype.setFormValue=function(value,state){
+  Reflect.apply(nativeInternalsShadowRoot,this,[]);
+  if(!arguments.length)return Reflect.apply(nativeInternalsSetFormValue,this,[]);
+  const convert=value=>value===null?null:value instanceof FormData?value:value instanceof File?formDataFile(value):formDataString(value);
+  const converted=convert(value);
+  return arguments.length>1?Reflect.apply(nativeInternalsSetFormValue,this,[converted,convert(state)]):Reflect.apply(nativeInternalsSetFormValue,this,[converted]);
+};
+class FormDataFile { constructor() { throw new TypeError('Illegal constructor'); } }
+__domInstall('FormDataFile',FormDataFile.prototype);
+function formDataValue(value) {
+  if (!(value instanceof FormDataFile)) return value;
+  let file = scrollInvoke(value,'__formDataFileOriginal');
+  if (file === undefined) {
+    const metadata = scrollInvoke(value,'__formDataFileIdentity');
+    file=Object.create(File.prototype);
+    blobData.set(file,{native:value,type:metadata.type});
+    Object.defineProperties(file,{name:{get:()=>metadata.name,enumerable:true},lastModified:{get:()=>scrollInvoke(value,'__formDataFileMetadata').lastModified,enumerable:true}});
+    formDataFiles.set(file,value);
+    scrollInvoke(value,'__formDataFileRemember',file);
+  }
+  return file;
+}
+// DataTransfer and FormData project the same canonical File owner. These
+// adapters only bridge the existing File/Blob IDL wrapper, never clipboard data.
+__domWrap('__inputDataTransferFileValue',formDataValue);
+const nativeDataTransferItemAdd=DataTransferItemList.prototype.add;
+DataTransferItemList.prototype.add=function(data,type) {
+  if(arguments.length===1 && data instanceof File)
+    return nativeDataTransferItemAdd.call(this,formDataFile(data));
+  return Reflect.apply(nativeDataTransferItemAdd,this,arguments);
+};
+function formDataAppend(receiver,args,operation) {
+  scrollInvoke(receiver,'__formDataBrand');
+  if (args.length < 2) throw new TypeError('Two arguments are required');
+  const name = formDataString(args[0]), value = args[1];
+  if (blobData.has(value)) {
+    const filename = args.length > 2 ? formDataString(args[2]) : undefined;
+    scrollInvoke(receiver,operation+'File',name,formDataFile(value),args.length>2,filename);
+  } else {
+    if (args.length > 2) throw new TypeError('The value must be a Blob when a filename is supplied');
+    scrollInvoke(receiver,operation,name,formDataString(value));
+  }
+}
+class FormData {
+  constructor(form = undefined, submitter = null) {
+    let data;
+    if (form === undefined) data=scrollInvoke(globalThis,'__formDataCreate');
+    else {
+      if (!(form instanceof HTMLFormElement)) throw new TypeError('The provided value is not an HTMLFormElement');
+      if (submitter !== null && !(submitter instanceof HTMLElement)) throw new TypeError('The provided submitter is not an HTMLElement');
+      data=scrollInvoke(globalThis,'__formDataCreate',form,submitter);
+    }
+    if (new.target !== FormData) Object.setPrototypeOf(data,new.target.prototype);
+    return data;
+  }
+  append(name,value) { formDataAppend(this,arguments,'__formDataAppend'); }
+  set(name,value) { formDataAppend(this,arguments,'__formDataSet'); }
+  delete(name) { scrollInvoke(this,'__formDataBrand');if(!arguments.length)throw new TypeError('One argument is required');scrollInvoke(this,'__formDataDelete',formDataString(name)); }
+  get(name) { scrollInvoke(this,'__formDataBrand');if(!arguments.length)throw new TypeError('One argument is required');return formDataValue(scrollInvoke(this,'__formDataGet',formDataString(name))); }
+  getAll(name) { scrollInvoke(this,'__formDataBrand');if(!arguments.length)throw new TypeError('One argument is required');return scrollInvoke(this,'__formDataGetAll',formDataString(name)).map(formDataValue); }
+  has(name) { scrollInvoke(this,'__formDataBrand');if(!arguments.length)throw new TypeError('One argument is required');return scrollInvoke(this,'__formDataHas',formDataString(name)); }
+  entries() { return formDataIterator(this,'entries'); }
+  keys() { return formDataIterator(this,'keys'); }
+  values() { return formDataIterator(this,'values'); }
+  forEach(callback,thisArg = undefined) {
+    scrollInvoke(this,'__formDataBrand');if(typeof callback!=='function')throw new TypeError('The callback must be callable');
+    for (const [name,value] of formDataIterator(this,'entries')) callback.call(thisArg,value,name,this);
+  }
+}
+function formDataIterator(data,kind) {
+  scrollInvoke(data,'__formDataBrand');let index=0,finished=false;
+  return {
+    next() {
+      if(finished)return {value:undefined,done:true};
+      const entry=scrollInvoke(data,'__formDataEntryAt',index);
+      if(entry===null){finished=true;return {value:undefined,done:true};}
+      ++index;
+      return {value:kind==='keys'?entry[0]:kind==='values'?formDataValue(entry[1]):[entry[0],formDataValue(entry[1])],done:false};
+    },
+    [Symbol.iterator]() { return this; },
+    [Symbol.toStringTag]: 'FormData Iterator'
+  };
+}
+Object.defineProperty(FormData.prototype,Symbol.iterator,{value:FormData.prototype.entries,writable:true,configurable:true});
+Object.defineProperty(FormData.prototype,Symbol.toStringTag,{value:'FormData',configurable:true});
+__domInstall('FormData',FormData.prototype);globalThis.FormData=FormData;
+class FormDataEvent extends Event {
+  constructor(type,options) {
+    if(arguments.length<2||options==null||!('formData' in Object(options)))throw new TypeError('formData is required');
+    const data=options.formData;scrollInvoke(data,'__formDataBrand');
+    const event=scrollInvoke(globalThis,'__formDataEventCreate',formDataString(type),data,!!options.bubbles,!!options.cancelable,!!options.composed);
+    if(new.target!==FormDataEvent)Object.setPrototypeOf(event,new.target.prototype);
+    return event;
+  }
+  get formData() { return scrollInvoke(this,'__formDataEventData'); }
+}
+for(const name of ['type','bubbles','cancelable','composed','isTrusted','defaultPrevented','timeStamp'])Object.defineProperty(FormDataEvent.prototype,name,{get(){return scrollInvoke(this,'__eventAttribute',name);},enumerable:true,configurable:true});
+for(const name of ['preventDefault','stopPropagation','stopImmediatePropagation'])Object.defineProperty(FormDataEvent.prototype,name,{value:function(){scrollInvoke(this,name);},writable:true,enumerable:true,configurable:true});
+__domInstall('FormDataEvent',FormDataEvent.prototype);Object.defineProperty(FormDataEvent.prototype,Symbol.toStringTag,{value:'FormDataEvent',configurable:true});globalThis.FormDataEvent=FormDataEvent;
+
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 globalThis.btoa = value => {
   const text = String(value); let bits=0, count=0, result='';
@@ -423,10 +592,23 @@ for(const key of ['protocol','host','hostname','port','pathname','username','pas
     this.href=p.protocol+'//'+(p.username?p.username+(p.password?':'+p.password:'')+'@':'')+p.host+p.pathname+p.search+p.hash;
   }});
 globalThis.URL=URL;
-Document.prototype.createEvent = function(type) { const event=new Event(''); event.initEvent=function(name,bubbles,cancelable){this.type=String(name);this.bubbles=!!bubbles;this.cancelable=!!cancelable;}; event.initCustomEvent=function(name,bubbles,cancelable,detail){this.initEvent(name,bubbles,cancelable);this.detail=detail;};return event; };
 class DOMException extends Error {
-  constructor(message = '', name = 'Error') { super(message); this.name = name; }
+  constructor(message = '', name = 'Error') {
+    const value = scrollInvoke(globalThis, '__createDOMException', String(message), String(name));
+    if (new.target !== DOMException) Object.setPrototypeOf(value, new.target.prototype);
+    return value;
+  }
+  get name() { return scrollInvoke(this, '__domExceptionName'); }
+  get message() { return scrollInvoke(this, '__domExceptionMessage'); }
+  get code() { return scrollInvoke(this, '__domExceptionCode'); }
 }
+// Source DOMException.idl:47-82 (legacy constants).
+for (const [index, name] of ['INDEX_SIZE_ERR', 'DOMSTRING_SIZE_ERR', 'HIERARCHY_REQUEST_ERR', 'WRONG_DOCUMENT_ERR', 'INVALID_CHARACTER_ERR', 'NO_DATA_ALLOWED_ERR', 'NO_MODIFICATION_ALLOWED_ERR', 'NOT_FOUND_ERR', 'NOT_SUPPORTED_ERR', 'INUSE_ATTRIBUTE_ERR', 'INVALID_STATE_ERR', 'SYNTAX_ERR', 'INVALID_MODIFICATION_ERR', 'NAMESPACE_ERR', 'INVALID_ACCESS_ERR', 'VALIDATION_ERR', 'TYPE_MISMATCH_ERR', 'SECURITY_ERR', 'NETWORK_ERR', 'ABORT_ERR', 'URL_MISMATCH_ERR', 'QUOTA_EXCEEDED_ERR', 'TIMEOUT_ERR', 'INVALID_NODE_TYPE_ERR', 'DATA_CLONE_ERR'].entries()) {
+  Object.defineProperty(DOMException, name, {value:index+1, enumerable:true});
+  Object.defineProperty(DOMException.prototype, name, {value:index+1, enumerable:true});
+}
+Object.defineProperty(DOMException.prototype, Symbol.toStringTag, {value:'DOMException', configurable:true});
+__domInstall('DOMException',DOMException.prototype);
 globalThis.DOMException = DOMException;
 globalThis.crypto = {
   getRandomValues(array) {
@@ -445,23 +627,57 @@ globalThis.crypto = {
     return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);
   }
 };
+// Abort state, composition, algorithms and timeout ownership are native.
 class AbortSignal extends EventTarget {
-  #aborted = false; #reason;
-  get aborted() { return this.#aborted; }
-  get reason() { return this.#reason; }
-  _abort(reason) { if (this.#aborted) return; this.#aborted = true;
-    this.#reason = reason === undefined ? new DOMException('The operation was aborted.', 'AbortError') : reason;
-    this.dispatchEvent(new Event('abort')); }
-  throwIfAborted() { if (this.#aborted) throw this.#reason; }
-  static abort(reason) { const signal = new AbortSignal(); signal._abort(reason); return signal; }
-  static timeout(ms) { const signal = new AbortSignal(); setTimeout(() => signal._abort(new DOMException('The operation timed out.', 'TimeoutError')), ms); return signal; }
-  static any(signals) { const result = new AbortSignal(); for (const signal of signals) {
-    if (signal.aborted) { result._abort(signal.reason); break; }
-    signal.addEventListener('abort', () => result._abort(signal.reason), {once:true});
-  } return result; }
+  constructor() { throw new TypeError('Illegal constructor'); }
+  get aborted() { return scrollInvoke(this, '__abortSignalAborted'); }
+  get reason() { return scrollInvoke(this, '__abortSignalReason'); }
+  get onabort() { return scrollInvoke(this, '__abortGetAttributeListener'); }
+  set onabort(value) { scrollInvoke(this, '__abortSetAttributeListener', value); }
+  throwIfAborted() { scrollInvoke(this, '__abortSignalThrow'); }
+  static abort(reason = undefined) { return scrollInvoke(globalThis, '__abortStatic', reason); }
+  static timeout(milliseconds) {
+    milliseconds = Number(milliseconds);
+    if (!Number.isFinite(milliseconds) || milliseconds < 0 || milliseconds >= 2 ** 64) throw new TypeError('timeout is outside the unsigned long long range');
+    return scrollInvoke(globalThis, '__abortTimeout', Math.trunc(milliseconds));
+  }
+  static any(signals) { return scrollInvoke(globalThis, '__abortAny', ...Array.from(signals)); }
 }
-class AbortController { constructor() { this.signal = new AbortSignal(); } abort(reason) { this.signal._abort(reason); } }
+class AbortController {
+  constructor() {
+    const controller = scrollInvoke(globalThis, '__abortControllerCreate');
+    if (new.target !== AbortController) Object.setPrototypeOf(controller, new.target.prototype);
+    return controller;
+  }
+  get signal() { return scrollInvoke(this, '__abortControllerSignal'); }
+  abort(reason = undefined) { scrollInvoke(this, '__abortControllerAbort', reason); }
+}
+__domInstall('AbortSignal', AbortSignal.prototype);
+__domInstall('AbortController', AbortController.prototype);
+Object.defineProperty(AbortSignal.prototype, Symbol.toStringTag, {value:'AbortSignal', configurable:true});
+Object.defineProperty(AbortController.prototype, Symbol.toStringTag, {value:'AbortController', configurable:true});
 globalThis.AbortSignal = AbortSignal; globalThis.AbortController = AbortController;
+// Source: CloseWatcher.idl and closewatcher/close_watcher.cc. Native state,
+// grouping, cancelability, abort algorithms and dispatch stay on the host.
+class CloseWatcher extends EventTarget {
+  constructor(options = {}) {
+    if (options != null && typeof options !== 'object' && typeof options !== 'function') throw new TypeError('CloseWatcher options must be a dictionary');
+    const signal = options == null ? undefined : options.signal;
+    const watcher = scrollInvoke(globalThis, '__closeWatcherCreate', signal);
+    if (new.target !== CloseWatcher) Object.setPrototypeOf(watcher, new.target.prototype);
+    return watcher;
+  }
+  requestClose() { scrollInvoke(this, '__closeWatcherRequestClose'); }
+  close() { scrollInvoke(this, '__closeWatcherClose'); }
+  destroy() { scrollInvoke(this, '__closeWatcherDestroy'); }
+  get oncancel() { return scrollInvoke(this, '__eventTargetHandlerGet', 'cancel'); }
+  set oncancel(value) { scrollInvoke(this, '__eventTargetHandlerSet', 'cancel', value); }
+  get onclose() { return scrollInvoke(this, '__eventTargetHandlerGet', 'close'); }
+  set onclose(value) { scrollInvoke(this, '__eventTargetHandlerSet', 'close', value); }
+}
+__domInstall('CloseWatcher', CloseWatcher.prototype);
+Object.defineProperty(CloseWatcher.prototype, Symbol.toStringTag, {value:'CloseWatcher', configurable:true});
+globalThis.CloseWatcher = CloseWatcher;
 class CustomEvent extends Event { constructor(type, options = {}) { super(type, options); this.detail = options.detail ?? null; } }
 globalThis.CustomEvent = CustomEvent;
 class Headers {
@@ -631,6 +847,11 @@ for (const [name,value] of Object.entries({UNSENT:0, OPENED:1, HEADERS_RECEIVED:
   Object.defineProperty(XMLHttpRequest, name, {value});
   Object.defineProperty(XMLHttpRequest.prototype, name, {value});
 }
+for (const type of ['loadstart','progress','abort','error','load','timeout','loadend','readystatechange']) Object.defineProperty(XMLHttpRequest.prototype, 'on'+type, {
+  configurable:true, enumerable:true,
+  get() { return scrollInvoke(this, '__eventTargetHandlerGet', type); },
+  set(value) { scrollInvoke(this, '__eventTargetHandlerSet', type, value); }
+});
 globalThis.XMLHttpRequest = XMLHttpRequest;
 class Storage {
   constructor() { this._data = new Map(); }
@@ -645,25 +866,28 @@ globalThis.Storage = Storage;
 globalThis.localStorage = new Storage();
 globalThis.sessionStorage = new Storage();
 class Selection {
-  constructor() { this._ranges = []; }
-  get anchorNode() { return this._ranges[0]?._context || null; }
-  get focusNode() { return this.anchorNode; }
-  get anchorOffset() { return 0; }
-  get focusOffset() { return 0; }
-  get isCollapsed() { return this._ranges.length === 0 || this._ranges[0].collapsed; }
-  get rangeCount() { return this._ranges.length; }
-  get type() { return this._ranges.length === 0 ? 'None' : this.isCollapsed ? 'Caret' : 'Range'; }
-  addRange(range) { if (!(range instanceof Range)) throw new TypeError('Range required'); this._ranges = [range]; }
-  getRangeAt(index) { if (Number(index) !== 0 || !this._ranges.length) throw new RangeError('IndexSizeError'); return this._ranges[0]; }
-  removeAllRanges() { this._ranges = []; }
+  constructor(token) { if(token!==selectionToken)throw new TypeError('Illegal constructor'); }
+  _snapshot(){return scrollInvoke(document,'__selectionSnapshot');}
+  get anchorNode() { return this._snapshot()?.anchorNode || null; }
+  get focusNode() { return this._snapshot()?.focusNode || null; }
+  get anchorOffset() { return this._snapshot()?.anchorOffset || 0; }
+  get focusOffset() { return this._snapshot()?.focusOffset || 0; }
+  get isCollapsed() { return this._snapshot()?.collapsed ?? true; }
+  get rangeCount() { return this._snapshot() ? 1 : 0; }
+  get type() { return this.rangeCount === 0 ? 'None' : this.isCollapsed ? 'Caret' : 'Range'; }
+  addRange(range) { if (!(range instanceof Range)) throw new TypeError('Range required'); scrollInvoke(document,'__selectionAddRange',range); }
+  getRangeAt(index) { return scrollInvoke(document,'__selectionGetRangeAt',Number(index)); }
+  removeAllRanges() { scrollInvoke(document,'__selectionClear'); }
   empty() { this.removeAllRanges(); }
-  collapse(node, offset = 0) { const range = document.createRange(); range.selectNodeContents(node); range.collapse(true); this._ranges = [range]; }
-  selectAllChildren(node) { const range = document.createRange(); range.selectNodeContents(node); this._ranges = [range]; }
+  collapse(node, offset = 0) { if(node==null){this.removeAllRanges();return;}if(!(node instanceof Node))throw new TypeError('Node required');scrollInvoke(document,'__selectionCollapse',node,Number(offset)); }
+  selectAllChildren(node) { if(!(node instanceof Node))throw new TypeError('Node required');scrollInvoke(document,'__selectionSelectAllChildren',node); }
   containsNode() { return false; }
-  deleteFromDocument() {}
-  toString() { return ''; }
+  deleteFromDocument() { scrollInvoke(document,'__selectionDeleteFromDocument'); }
+  toString() { return scrollInvoke(document,'__selectionToString'); }
 }
-const documentSelection = new Selection();
+const selectionToken = {};
+const documentSelection = new Selection(selectionToken);
+Object.defineProperty(Selection.prototype,Symbol.toStringTag,{value:'Selection',configurable:true});
 globalThis.Selection = Selection;
 globalThis.getSelection = () => documentSelection;
 
@@ -722,9 +946,9 @@ function ceCallback(prototype, name) {
     throw new TypeError(name + ' is not a function');
   return callback;
 }
-function ceDrainReactions() {
+function ceDrainReactions(reactionDocument = document) {
   let reaction;
-  while ((reaction = ceInvoke(document, '__ceNext')) !== null) {
+  while ((reaction = ceInvoke(reactionDocument, '__ceNext')) !== null) {
     const definition = ceDefinitions.get(reaction.definition);
     if (!definition) throw new Error('Custom element definition has no script handles');
     const element = reaction.element;
@@ -734,29 +958,32 @@ function ceDrainReactions() {
       try {
         __domUpgradeCustomElement(element, definition.constructor);
         success = true;
-      } catch(error) { ceInvoke(document, '__ceReportException', error); }
+      } catch(error) { ceInvoke(reactionDocument, '__ceReportException', error); }
       finally { ceInvoke(element, '__ceComplete', reaction.definition, success); }
     } else {
       const callback = definition.callbacks[reaction.kind];
       if (callback === undefined) continue;
       const argumentsList = reaction.kind === 'attributeChangedCallback'
-        ? [reaction.name, reaction.oldValue, reaction.newValue, reaction.namespace] : [];
+        ? [reaction.name, reaction.oldValue, reaction.newValue, reaction.namespace]
+        : reaction.kind === 'formAssociatedCallback' ? [reaction.form]
+        : reaction.kind === 'formDisabledCallback' ? [reaction.disabled]
+        : reaction.kind === 'formStateRestoreCallback' ? [formDataValue(reaction.state), 'restore'] : [];
       try { ceApply(callback, element, argumentsList); }
-      catch(error) { ceInvoke(document, '__ceReportException', error); }
+      catch(error) { ceInvoke(reactionDocument, '__ceReportException', error); }
     }
   }
 }
 __domWrap('__customElementReactions', ceDrainReactions);
-__domWrap('__customElementBackupReactions', function() {
-  ceInvoke(document, '__ceBackupStart');
-  ceDrainReactions();
+__domWrap('__customElementBackupReactions', function(reactionDocument) {
+  ceInvoke(reactionDocument, '__ceBackupStart');
+  ceDrainReactions(reactionDocument);
 });
-function ceWithReactions(action) {
-  ceInvoke(document, '__cePush');
+function ceWithReactions(action, reactionDocument = document) {
+  ceInvoke(reactionDocument, '__cePush');
   try { return action(); }
   finally {
-    try { ceDrainReactions(); }
-    finally { ceInvoke(document, '__cePop'); }
+    try { ceDrainReactions(reactionDocument); }
+    finally { ceInvoke(reactionDocument, '__cePop'); }
   }
 }
 class CustomElementRegistry {
@@ -806,11 +1033,14 @@ class CustomElementRegistry {
             callbacks[name] = ceCallback(prototype, name);
         }
       } finally { ceDefinitionRunning = false; }
-      if (formAssociated || disabledFeatures.includes('shadow') || disabledFeatures.includes('internals'))
-        throw new DOMException('Form-associated and disabled-feature definitions are not supported', 'NotSupportedError');
+      if (disabledFeatures.includes('shadow'))
+        throw new DOMException('Disabled shadow definitions are not supported', 'NotSupportedError');
       const flags = ['connectedCallback', 'disconnectedCallback', 'connectedMoveCallback',
-                     'adoptedCallback', 'attributeChangedCallback']
-        .reduce((flags, name, bit) => flags | (callbacks[name] === undefined ? 0 : 1 << bit), 0);
+                     'adoptedCallback', 'attributeChangedCallback', 'formAssociatedCallback',
+                     'formDisabledCallback', 'formResetCallback']
+        .reduce((flags, name, bit) => flags | (callbacks[name] === undefined ? 0 : 1 << bit),
+                (formAssociated ? 256 : 0) | (disabledFeatures.includes('internals') ? 512 : 0)
+                | (callbacks.formStateRestoreCallback === undefined ? 0 : 1024));
       const id = ceInvoke(document, '__ceRegister', name, flags, ...observedAttributes);
       ceDefinitions.set(id, {constructor, callbacks});
       ceConstructors.set(constructor, id);
@@ -850,7 +1080,7 @@ class CustomElementRegistry {
   upgrade(root) {
     ceBrand(this);
     if (!arguments.length) throw new TypeError('upgrade requires a Node');
-    ceWithReactions(() => ceInvoke(root, '__ceUpgrade'));
+    ceWithReactions(() => ceInvoke(root, '__ceUpgrade'), ceInvoke(root, 'ownerDocument') || root);
   }
 }
 for (const member of ['define', 'get', 'getName', 'whenDefined', 'upgrade']) {
@@ -868,14 +1098,14 @@ Document.prototype.createElement = function(name, options) {
     const element = nativeCreateElement.call(this, name, options);
     ceInvoke(element, '__ceUpgrade');
     return element;
-  });
+  }, this);
 };
 Document.prototype.createElementNS = function(namespace, name, options) {
   return ceWithReactions(() => {
     const element = nativeCreateElementNS.call(this, namespace, name, options);
     ceInvoke(element, '__ceUpgrade');
     return element;
-  });
+  }, this);
 };
 
 
@@ -1007,11 +1237,50 @@ Object.defineProperty(globalThis,'__browserUpdateIntersectionObservations',{
   value(){computeIntersectionObservations(intersectionObservers);},
   configurable:true
 });
+function resizeObserverGeometry(target) {
+  const style=getComputedStyle(target);
+  const length=(name,fallback=0)=>{const value=Number.parseFloat(style.getPropertyValue(name));return Number.isFinite(value)?value:fallback};
+  const left=length('border-left-width')+length('padding-left');
+  const right=length('border-right-width')+length('padding-right');
+  const top=length('border-top-width')+length('padding-top');
+  const bottom=length('border-bottom-width')+length('padding-bottom');
+  const resolvedWidth=length('width',NaN),resolvedHeight=length('height',NaN);
+  let content,border,x=left,y=top;
+  if(target.getClientRects().length&&Number.isFinite(resolvedWidth)&&Number.isFinite(resolvedHeight)) {
+    if(style.getPropertyValue('box-sizing')==='border-box') {
+      border={width:resolvedWidth,height:resolvedHeight};
+      content={width:Math.max(0,resolvedWidth-left-right),height:Math.max(0,resolvedHeight-top-bottom)};
+    } else {
+      content={width:resolvedWidth,height:resolvedHeight};
+      border={width:resolvedWidth+left+right,height:resolvedHeight+top+bottom};
+    }
+  } else {
+    content={width:0,height:0};border={width:0,height:0};
+  }
+  // SVG graphics elements do not generate a CSS box. Blink observes their
+  // object bounding box instead; the layout metric boundary consequently has
+  // no content/border dimensions for them.
+  if((!Number.isFinite(resolvedWidth)||!Number.isFinite(resolvedHeight))&&target.getClientRects().length) {
+    const rect=target.getBoundingClientRect();
+    if(rect.width||rect.height) {
+      content={width:rect.width,height:rect.height};border={...content};x=0;y=0;
+    }
+  }
+  const writingMode=style.getPropertyValue('writing-mode');
+  const logical=({width,height})=>/^vertical-|^sideways-/.test(writingMode)
+    ? {inlineSize:height,blockSize:width}
+    : {inlineSize:width,blockSize:height};
+  const scale=Number.isFinite(globalThis.devicePixelRatio)&&globalThis.devicePixelRatio>0
+    ? globalThis.devicePixelRatio : 1;
+  const device={width:Math.round(content.width*scale),height:Math.round(content.height*scale)};
+  return {content,border,device,contentRect:new DOMRectReadOnly(x,y,content.width,content.height),logical};
+}
 class ResizeObserverEntry {
-  constructor(target, rect) {
-    this.target=target; this.contentRect=rect;
-    const size={inlineSize:rect.width,blockSize:rect.height};
-    this.contentBoxSize=[size]; this.borderBoxSize=[size]; this.devicePixelContentBoxSize=[size];
+  constructor(target, geometry) {
+    this.target=target; this.contentRect=geometry.contentRect;
+    this.contentBoxSize=[geometry.logical(geometry.content)];
+    this.borderBoxSize=[geometry.logical(geometry.border)];
+    this.devicePixelContentBoxSize=[geometry.logical(geometry.device)];
   }
 }
 // cpp: third_party/blink/renderer/core/resize_observer/
@@ -1033,15 +1302,17 @@ function queueResizeDelivery(observer) {
   },0);
 }
 function computeResizeObservations(observers) {
-  const rects=new Map();
+  const geometries=new Map();
   for(const observer of observers) {
     const entries=[];
     for(const [target,observation] of observer._observations) {
-      let rect=rects.get(target);
-      if(!rect) {rect=observerRect(target.getBoundingClientRect());rects.set(target,rect);}
-      if(observation.width===rect.width&&observation.height===rect.height)continue;
-      observation.width=rect.width;observation.height=rect.height;
-      entries.push(new ResizeObserverEntry(target,rect));
+      let geometry=geometries.get(target);
+      if(!geometry) {geometry=resizeObserverGeometry(target);geometries.set(target,geometry);}
+      const selected=observation.box==='border-box' ? geometry.border :
+        observation.box==='device-pixel-content-box' ? geometry.device : geometry.content;
+      if(observation.width===selected.width&&observation.height===selected.height)continue;
+      observation.width=selected.width;observation.height=selected.height;
+      entries.push(new ResizeObserverEntry(target,geometry));
     }
     if(entries.length) {observer._records.push(...entries);queueResizeDelivery(observer);}
   }
@@ -1068,4 +1339,180 @@ Object.defineProperty(globalThis,'__browserUpdateResizeObservations',{
   value(){computeResizeObservations(resizeObservers);},
   configurable:true
 });
+// Native Navigation API. Web IDL conversions happen here; entry/event identity,
+// interception, commit and promise settlement remain with their native owners.
+function navigationOptions(options = {}) {
+  options = options == null ? {} : Object(options);
+  const history = options.history === undefined ? 'auto' : String(options.history);
+  if (!['auto','push','replace'].includes(history)) throw new TypeError('Invalid NavigationHistoryBehavior');
+  return [history, options.state, 'state' in options, options.info];
+}
+class Navigation extends EventTarget {
+  constructor() { throw new TypeError('Illegal constructor'); }
+  get currentEntry() { return scrollInvoke(this,'__navigationCurrentEntry'); }
+  get transition() { return scrollInvoke(this,'__navigationTransition'); }
+  get activation() { return scrollInvoke(this,'__navigationActivation'); }
+  get canGoBack() { return scrollInvoke(this,'__navigationCanGoBack'); }
+  get canGoForward() { return scrollInvoke(this,'__navigationCanGoForward'); }
+  entries() { return Array.from(scrollInvoke(this,'__navigationEntries')); }
+  navigate(url,options) { return scrollInvoke(this,'__navigationNavigate',String(url),...navigationOptions(options)); }
+  reload(options = {}) { options=options==null?{}:Object(options);return scrollInvoke(this,'__navigationReload',options.state,'state' in options,options.info); }
+  traverseTo(key,options = {}) { return scrollInvoke(this,'__navigationTraverse',String(key),options?.info); }
+  back(options = {}) { return scrollInvoke(this,'__navigationBack',options?.info); }
+  forward(options = {}) { return scrollInvoke(this,'__navigationForward',options?.info); }
+  updateCurrentEntry(options) {
+    if(options==null || !('state' in Object(options)))throw new TypeError('state is required');
+    scrollInvoke(this,'__navigationUpdateCurrentEntry',options.state);
+  }
+}
+for(const type of ['navigate','navigatesuccess','navigateerror','currententrychange'])Object.defineProperty(Navigation.prototype,'on'+type,{
+  get(){return scrollInvoke(this,'__eventTargetHandlerGet',type);},set(value){scrollInvoke(this,'__eventTargetHandlerSet',type,value);},enumerable:true,configurable:true
+});
+class NavigationHistoryEntry extends EventTarget {
+  constructor(){throw new TypeError('Illegal constructor');}
+  get key(){return scrollInvoke(this,'__navigationEntryKey');}
+  get id(){return scrollInvoke(this,'__navigationEntryId');}
+  get url(){return scrollInvoke(this,'__navigationEntryURL');}
+  get index(){return scrollInvoke(this,'__navigationEntryIndex');}
+  get sameDocument(){return scrollInvoke(this,'__navigationEntrySameDocument');}
+  getState(){return scrollInvoke(this,'__navigationEntryGetState');}
+  get ondispose(){return scrollInvoke(this,'__eventTargetHandlerGet','dispose');}
+  set ondispose(value){scrollInvoke(this,'__eventTargetHandlerSet','dispose',value);}
+}
+class NavigationDestination {
+  constructor(){throw new TypeError('Illegal constructor');}
+  get key(){return scrollInvoke(this,'__navigationDestinationKey');}
+  get id(){return scrollInvoke(this,'__navigationDestinationId');}
+  get url(){return scrollInvoke(this,'__navigationDestinationURL');}
+  get index(){return scrollInvoke(this,'__navigationDestinationIndex');}
+  get sameDocument(){return scrollInvoke(this,'__navigationDestinationSameDocument');}
+  getState(){return scrollInvoke(this,'__navigationDestinationGetState');}
+}
+class NavigationActivation {
+  constructor(){throw new TypeError('Illegal constructor');}
+  get navigationType(){return scrollInvoke(this,'__navigationActivationType');}
+  get entry(){return scrollInvoke(this,'__navigationActivationEntry');}
+  get from(){return scrollInvoke(this,'__navigationActivationFrom');}
+}
+class NavigationTransition {
+  constructor(){throw new TypeError('Illegal constructor');}
+  get navigationType(){return scrollInvoke(this,'__navigationTransitionType');}
+  get from(){return scrollInvoke(this,'__navigationTransitionFrom');}
+  get destination(){return scrollInvoke(this,'__navigationTransitionDestination');}
+  get committed(){return scrollInvoke(this,'__navigationTransitionCommitted');}
+  get finished(){return scrollInvoke(this,'__navigationTransitionFinished');}
+}
+class NavigateEvent extends Event {
+  constructor(type,init) {
+    if(arguments.length<2)throw new TypeError('NavigateEvent requires type and eventInit');
+    type=String(type);init=init==null?{}:Object(init);
+    const bubbles=!!init.bubbles,cancelable=!!init.cancelable,composed=!!init.composed;
+    const canIntercept=!!init.canIntercept,destination=init.destination;
+    if(destination===undefined)throw new TypeError('destination is required');
+    const download=init.downloadRequest,downloadRequest=download==null?null:String(download);
+    const formData=init.formData??null;
+    if(formData!==null&&(typeof globalThis.FormData!=='function'||!(formData instanceof globalThis.FormData)))throw new TypeError('formData must be FormData');
+    const hashChange=!!init.hashChange,hasUAVisualTransition=!!init.hasUAVisualTransition,info=init.info;
+    const navigationType=init.navigationType===undefined?'push':String(init.navigationType);
+    if(!['push','replace','reload','traverse'].includes(navigationType))throw new TypeError('Invalid NavigationType');
+    const signal=init.signal;if(signal===undefined)throw new TypeError('signal is required');
+    const sourceElement=init.sourceElement??null;
+    if(sourceElement!==null&&!(sourceElement instanceof Element))throw new TypeError('sourceElement must be Element');
+    const userInitiated=!!init.userInitiated;
+    const event=scrollInvoke(globalThis,'__navigationCreateNavigateEvent',type,navigationType,destination,signal,canIntercept,userInitiated,hashChange,formData,downloadRequest,info,hasUAVisualTransition,sourceElement,bubbles,cancelable,composed);
+    if(new.target!==NavigateEvent)Object.setPrototypeOf(event,new.target.prototype);
+    return event;
+  }
+  get navigationType(){return scrollInvoke(this,'__navigationEventType');}
+  get destination(){return scrollInvoke(this,'__navigationEventDestination');}
+  get signal(){return scrollInvoke(this,'__navigationEventSignal');}
+  get info(){return scrollInvoke(this,'__navigationEventInfo');}
+  get canIntercept(){return scrollInvoke(this,'__navigationEventCanIntercept');}
+  get userInitiated(){return scrollInvoke(this,'__navigationEventUserInitiated');}
+  get hashChange(){return scrollInvoke(this,'__navigationEventHashChange');}
+  get hasUAVisualTransition(){return scrollInvoke(this,'__navigationEventHasUAVisualTransition');}
+  get formData(){return scrollInvoke(this,'__navigationEventFormData');}
+  get downloadRequest(){return scrollInvoke(this,'__navigationEventDownloadRequest');}
+  get sourceElement(){return scrollInvoke(this,'__navigationEventSourceElement');}
+  intercept(options = {}) {
+    options=options==null?{}:Object(options);
+    const handler=options.handler,precommitHandler=options.precommitHandler;
+    for(const callback of [handler,precommitHandler])if(callback!==undefined&&typeof callback!=='function')throw new TypeError('handler must be callable');
+    const focusReset=options.focusReset===undefined?undefined:String(options.focusReset),scroll=options.scroll===undefined?undefined:String(options.scroll);
+    for(const mode of [focusReset,scroll])if(mode!==undefined&&!['after-transition','manual'].includes(mode))throw new TypeError('Invalid navigation behavior');
+    scrollInvoke(this,'__navigationEventIntercept',handler,precommitHandler,focusReset,scroll);
+  }
+  scroll(){scrollInvoke(this,'__navigationEventScroll');}
+  deferPageSwap(options){if(typeof options?.handler!=='function')throw new TypeError('handler is required');scrollInvoke(this,'__navigationEventDeferPageSwap',options.handler);}
+}
+class NavigationPrecommitController {
+  constructor(){throw new TypeError('Illegal constructor');}
+  redirect(url,options){scrollInvoke(this,'__navigationControllerRedirect',String(url),...navigationOptions(options));}
+  addHandler(handler){if(typeof handler!=='function')throw new TypeError('handler must be callable');scrollInvoke(this,'__navigationControllerAddHandler',handler);}
+}
+class NavigationDeferPageSwapController {
+  constructor(){throw new TypeError('Illegal constructor');}
+  addRestoreCallback(callback){if(typeof callback!=='function')throw new TypeError('callback must be callable');scrollInvoke(this,'__navigationControllerRestore',callback);}
+}
+class ErrorEvent extends Event {
+  constructor(type,init={}) {super(type,init);for(const [name,value] of Object.entries({message:String(init.message??''),filename:String(init.filename??''),lineno:Number(init.lineno??0)>>>0,colno:Number(init.colno??0)>>>0,error:init.error??null}))Object.defineProperty(this,name,{value,enumerable:true,configurable:true});}
+  get message(){return scrollInvoke(this,'__navigationErrorMessage');}
+  get filename(){return scrollInvoke(this,'__navigationErrorFilename');}
+  get lineno(){return scrollInvoke(this,'__navigationErrorLine');}
+  get colno(){return scrollInvoke(this,'__navigationErrorColumn');}
+  get error(){return scrollInvoke(this,'__navigationErrorValue');}
+}
+// PopStateEvent.state is cached on the wrapper in the current world, matching
+// its CachedAttribute IDL. Synthetic events retain the supplied value directly.
+const popStateValues=new WeakMap(), popStateTransitions=new WeakMap();
+class PopStateEvent extends Event {
+  constructor(type,init={}) {
+    if(arguments.length===0)throw new TypeError('PopStateEvent requires type');
+    init=init==null?{}:Object(init);
+    super(String(type),init);
+    const state=init.state;
+    popStateValues.set(this,state===undefined?null:state);
+    popStateTransitions.set(this,!!init.hasUAVisualTransition);
+  }
+  get state(){
+    if(!popStateValues.has(this))popStateValues.set(this,scrollInvoke(this,'__navigationPopStateState'));
+    return popStateValues.get(this);
+  }
+  get hasUAVisualTransition(){return popStateTransitions.has(this)?popStateTransitions.get(this):scrollInvoke(this,'__navigationPopStateHasUAVisualTransition');}
+}
+const hashChangeValues=new WeakMap();
+class HashChangeEvent extends Event {
+  constructor(type,init={}) {
+    if(arguments.length===0)throw new TypeError('HashChangeEvent requires type');
+    init=init==null?{}:Object(init);
+    super(String(type),init);
+    const oldURL=init.oldURL,newURL=init.newURL;
+    hashChangeValues.set(this,[oldURL===undefined?'':String(oldURL),newURL===undefined?'':String(newURL)]);
+  }
+  get oldURL(){return hashChangeValues.has(this)?hashChangeValues.get(this)[0]:scrollInvoke(this,'__navigationHashChangeOldURL');}
+  get newURL(){return hashChangeValues.has(this)?hashChangeValues.get(this)[1]:scrollInvoke(this,'__navigationHashChangeNewURL');}
+}
+class NavigationCurrentEntryChangeEvent extends Event {
+  constructor(type,init) {
+    if(arguments.length<2)throw new TypeError('NavigationCurrentEntryChangeEvent requires type and eventInit');
+    type=String(type);init=init==null?{}:Object(init);
+    const bubbles=!!init.bubbles,cancelable=!!init.cancelable,composed=!!init.composed,from=init.from;
+    if(from===undefined)throw new TypeError('from is required');
+    const kind=init.navigationType,navigationType=kind==null?null:String(kind);
+    if(navigationType!==null&&!['push','replace','reload','traverse'].includes(navigationType))throw new TypeError('Invalid NavigationType');
+    const event=scrollInvoke(globalThis,'__navigationCreateEntryChangeEvent',type,navigationType,from,bubbles,cancelable,composed);
+    if(new.target!==NavigationCurrentEntryChangeEvent)Object.setPrototypeOf(event,new.target.prototype);
+    return event;
+  }
+  get from(){return scrollInvoke(this,'__navigationEntryChangeFrom');}
+  get navigationType(){return scrollInvoke(this,'__navigationEntryChangeType');}
+}
+for(const EventClass of [NavigateEvent,NavigationCurrentEntryChangeEvent]){
+  for(const name of ['type','bubbles','cancelable','composed','isTrusted','defaultPrevented','timeStamp'])Object.defineProperty(EventClass.prototype,name,{get(){return scrollInvoke(this,'__navigationEventBase',name);},enumerable:true,configurable:true});
+  for(const name of ['preventDefault','stopPropagation','stopImmediatePropagation'])Object.defineProperty(EventClass.prototype,name,{value:function(){scrollInvoke(this,name);},writable:true,enumerable:true,configurable:true});
+}
+for(const C of [Navigation,NavigationHistoryEntry,NavigationDestination,NavigationActivation,NavigationTransition,NavigateEvent,NavigationPrecommitController,NavigationDeferPageSwapController,NavigationCurrentEntryChangeEvent,ErrorEvent,PopStateEvent,HashChangeEvent]){
+  __domInstall(C.name,C.prototype);Object.defineProperty(C.prototype,Symbol.toStringTag,{value:C.name,configurable:true});globalThis[C.name]=C;
+}
+Object.defineProperty(globalThis,'navigation',{get(){return scrollInvoke(globalThis,'__navigationWindow');},enumerable:true,configurable:true});
 })()

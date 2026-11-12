@@ -68,6 +68,41 @@ impl URLLoader for ContentDPRLoader {
     }
 }
 
+struct ScrollLazyLoader {
+    requests: Rc<RefCell<Vec<String>>>,
+}
+impl URLLoader for ScrollLazyLoader {
+    fn Load(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+        self.requests.borrow_mut().push(request.url.to_string());
+        let is_document = request.destination == url_loader::RequestDestination::kDocument;
+        Ok(Box::new(Response(Some(URLResponse {
+            final_url: request.url.clone(),
+            status_code: 200,
+            mime_type: if is_document {
+                "text/html".into()
+            } else {
+                "image/svg+xml".into()
+            },
+            body: if is_document {
+                br#"<!doctype html><style>body{margin:0;height:7000px}#lazy{position:absolute;top:5000px;width:200px;height:100px}</style><img id=lazy loading=lazy src=lazy.svg>"#.to_vec()
+            } else {
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"/>"#.to_vec()
+            },
+            ..Default::default()
+        }))))
+    }
+}
+
+struct LazyXHR;
+impl xhr_transport::XMLHttpRequestTransport for LazyXHR {
+    fn Start(
+        &mut self,
+        _: &xhr_transport::XMLHttpRequestData,
+    ) -> io::Result<Box<dyn xhr_transport::XMLHttpRequestOperation>> {
+        Err(io::Error::other("unexpected fixture XHR"))
+    }
+}
+
 fn image(page: &Page, id: u64) -> &LayoutInputReplaced {
     let assembly = browser::CreateLayoutAssembly();
     let _scope = LayoutObjectFactoryScope::new(&assembly.objects);
@@ -98,6 +133,81 @@ fn hero(page: &Page) -> (usize, u64) {
                 .map(|_| (index, document.Node(index).Id()))
         })
         .unwrap()
+}
+
+#[test]
+fn root_scroll_admits_a_deferred_image_in_document_coordinates() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let assembly = browser::CreateLayoutAssembly();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut page = Page::Create(
+            Rc::new(RefCell::new(ScrollLazyLoader {
+                requests: requests.clone(),
+            })),
+            Rc::new(RefCell::new(
+                image_decoder::skia_image_decoder::SkiaImageDecoder,
+            )),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            browser::CreateBrowserConstraints(800, 600),
+            Some(browser::page::ScriptEnvironment {
+                runtime: Box::new(
+                    javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::with_max_stack_size(
+                        4 * 1024 * 1024,
+                    ),
+                ),
+                xhr: Box::new(LazyXHR),
+                user_agent: "lazy-scroll-fixture".into(),
+            }),
+            None,
+        );
+        page.Open("https://lazy-scroll.test/", 16384, 4096).unwrap();
+        for _ in 0..100 {
+            page.RunTask().unwrap();
+            if !page.IsLoading() {
+                break;
+            }
+        }
+        assert!(!page.IsLoading());
+        assert!(
+            !requests
+                .borrow()
+                .iter()
+                .any(|url| url.ends_with("lazy.svg")),
+            "far-offscreen lazy image must remain deferred"
+        );
+
+        let result = page
+            .Evaluate("scrollTo(0,4400)", "lazy-scroll-fixture")
+            .unwrap();
+        assert!(result.Succeeded(), "{:?}", result.exception);
+        let frame_time = std::time::Instant::now();
+        page.UpdateRendering(foundation::begin_frame::BeginFrameArgs {
+            source_id: 1,
+            sequence_number: 1,
+            frame_time,
+            deadline: frame_time + std::time::Duration::from_millis(16),
+            interval: std::time::Duration::from_millis(16),
+        })
+        .unwrap();
+        for _ in 0..100 {
+            page.RunTask().unwrap();
+            if requests
+                .borrow()
+                .iter()
+                .any(|url| url.ends_with("lazy.svg"))
+            {
+                break;
+            }
+        }
+        assert!(
+            requests
+                .borrow()
+                .iter()
+                .any(|url| url.ends_with("lazy.svg")),
+            "scrolling the document viewport over the image must admit its request"
+        );
+    });
 }
 
 #[test]

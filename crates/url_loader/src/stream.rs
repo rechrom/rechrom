@@ -10,9 +10,19 @@ pub struct URLResponseHead {
     pub status_code: i64,
     pub mime_type: String,
     pub content_dpr: Option<f64>,
+    pub content_disposition: String,
+    pub content_language: String,
     pub text_encoding: String,
+    pub request_referrer: Option<String>,
     pub referrer_policy: Option<crate::ReferrerPolicy>,
     pub content_security_policy: Vec<String>,
+    pub content_security_policy_report_only: Vec<String>,
+    pub response_address_space: http_transport::IPAddressSpace,
+    pub permissions_policy: String,
+    pub feature_policy: String,
+    pub document_policy: String,
+    pub document_policy_report_only: String,
+    pub require_document_policy: String,
 }
 #[derive(Debug)]
 pub enum URLLoadEvent {
@@ -33,9 +43,19 @@ impl URLResponse {
             status_code: self.status_code,
             mime_type: self.mime_type.clone(),
             content_dpr: self.content_dpr,
+            content_disposition: self.content_disposition.clone(),
+            content_language: self.content_language.clone(),
             text_encoding: self.text_encoding.clone(),
+            request_referrer: self.request_referrer.clone(),
             referrer_policy: self.referrer_policy,
             content_security_policy: self.content_security_policy.clone(),
+            content_security_policy_report_only: self.content_security_policy_report_only.clone(),
+            response_address_space: self.response_address_space,
+            permissions_policy: self.permissions_policy.clone(),
+            feature_policy: self.feature_policy.clone(),
+            document_policy: self.document_policy.clone(),
+            document_policy_report_only: self.document_policy_report_only.clone(),
+            require_document_policy: self.require_document_policy.clone(),
         }
     }
 }

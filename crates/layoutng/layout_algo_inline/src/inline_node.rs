@@ -154,6 +154,7 @@ impl<'a> ReusingTextShaper<'a> {
                 locale_string,
                 &font.GetFontFeatures(),
                 start_item.Direction(),
+                font.ShapeCacheRevision(),
             );
             let primary_font = font.PrimaryFont();
             let cache = unsafe { &mut *(&*primary_font).GetShapeCachePtrForInline() };
@@ -614,7 +615,10 @@ pub fn InlineNodeFindSvgTextChunks(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1078-1089
-pub fn InlineNodeComputeOffsetMappingIfNeeded(this: &InlineNode) -> *const OffsetMapping {
+#[unsafe(no_mangle)]
+pub extern "Rust" fn InlineNodeComputeOffsetMappingIfNeeded(
+    this: &InlineNode,
+) -> *const OffsetMapping {
     debug_assert!(unsafe { &*this.GetLayoutBlockFlow() }.HasPreparedLayoutInput());
     let data = this.MutableData();
     if unsafe { &*data }.offset_mapping.Get().is_null() {
@@ -661,7 +665,10 @@ pub fn InlineNodeComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut In
 }
 
 // cpp: layoutng_inline/inline_node.cc:1128-1145
-pub fn InlineNodeGetOffsetMapping(block: *mut LayoutBlockFlow) -> *const OffsetMapping {
+#[unsafe(no_mangle)]
+pub extern "Rust" fn InlineNodeGetOffsetMapping(
+    block: *mut LayoutBlockFlow,
+) -> *const OffsetMapping {
     debug_assert!(unsafe { &*block }.HasPreparedLayoutInput());
     if unsafe { &*block }.NeedsLayout() {
         return std::ptr::null();

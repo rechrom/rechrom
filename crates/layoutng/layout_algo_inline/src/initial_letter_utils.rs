@@ -77,11 +77,13 @@ fn ComputeTextInkBounds(
     let text_ink_bounds = LogicalRect::EnclosingRect(&text_ink_float_bounds);
     let font = unsafe { &*style.GetFont() };
     let primary_font = unsafe { &*font.PrimaryFont() };
-    let ascent = primary_font.GetFontMetrics().Ascent();
+    let ascent = primary_font
+        .GetFontMetrics()
+        .FixedAscent(font_engine::FontBaseline::kAlphabeticBaseline);
     if let Some(baseline) = out_baseline {
-        *baseline = LayoutUnit::from_signed(ascent);
+        *baseline = ascent;
     }
-    text_ink_bounds + LogicalOffset::new(LayoutUnit::default(), LayoutUnit::from_signed(ascent))
+    text_ink_bounds + LogicalOffset::new(LayoutUnit::default(), ascent)
 }
 
 // cpp: layoutng_inline/initial_letter_utils.cc:143-196

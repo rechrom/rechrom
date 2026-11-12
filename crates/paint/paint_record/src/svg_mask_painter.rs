@@ -6,6 +6,7 @@ use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
+use crate::paint_auto_dark_mode::ApplyMaskLayerImageAutoDarkMode;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 
@@ -36,6 +37,19 @@ impl SVGMaskPainter {
             .fragment
             .as_deref()
             .expect("SVG mask owner must have a fragment");
+        let mut mask_layers = node.mask_layers.clone();
+        for layer in &mut mask_layers {
+            layer.dynamic_range_limit = fragment.paint.style.dynamic_range_limit();
+        }
+        ApplyMaskLayerImageAutoDarkMode(
+            &fragment.paint.style,
+            fragment
+                .paint
+                .resources
+                .as_deref()
+                .map_or(1.0, |resources| resources.layout_zoom_factor),
+            &mut mask_layers,
+        );
         let _recorder =
             DrawingRecorder::new(context, node, DisplayItemIdType::kSVGMask, visual_rect);
         context.borrow_mut().Append(
@@ -44,7 +58,7 @@ impl SVGMaskPainter {
                 phase: PaintPhase::kMask,
                 node_id: fragment.node_id,
                 rect: visual_rect,
-                mask_layers: node.mask_layers.clone(),
+                mask_layers,
                 ..DisplayItem::default()
             },
             node,
@@ -65,6 +79,9 @@ mod tests {
         fragment.node_id = 11;
         fragment.paint.has_source = true;
         fragment.paint.display_item_client_id = 19;
+        fragment.paint.style.force_dark = true;
+        fragment.paint.style.dynamic_range_limit =
+            foundation::DynamicRangeLimit::from_mix(0.25, 0.5);
         fragment.paint.source_kind = layoutng_assembly::internal::layout_input::NodeKind::kSvgShape;
         fragment.paint.self_ink_overflow =
             Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
@@ -79,11 +96,18 @@ mod tests {
         node.applies_mask = true;
         node.mask_layers = vec![
             DisplayMaskLayer {
+                resource_id: 23,
                 clip_rect: PaintRect {
                     x: 2.0,
                     y: 3.0,
                     width: 4.0,
                     height: 5.0,
+                },
+                source_rect: PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
                 },
                 ..DisplayMaskLayer::default()
             },
@@ -117,6 +141,11 @@ mod tests {
                 width: 17.0,
                 height: 8.0,
             }
+        );
+        assert!(mask.mask_layers[0].use_dark_mode_for_image);
+        assert_eq!(
+            mask.mask_layers[0].dynamic_range_limit,
+            foundation::DynamicRangeLimit::from_mix(0.25, 0.5)
         );
         assert!(output
             .display_items

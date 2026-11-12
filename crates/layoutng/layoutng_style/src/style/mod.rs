@@ -50,6 +50,7 @@ pub mod image_resource_observer;
 pub mod list_style_type_data;
 pub mod max_lines_data;
 pub mod member_copy;
+pub mod menu_list_inner_style;
 pub mod named_grid_lines_map;
 pub mod natural_sizing_info;
 pub mod nine_piece_image;
@@ -61,6 +62,7 @@ pub mod page_size_type;
 pub mod paint_images;
 pub mod position_area;
 pub mod position_try_fallbacks;
+pub mod range_input_style;
 pub mod reference_clip_path_operation;
 pub mod scroll_enums;
 pub mod scroll_marker_group;
@@ -95,6 +97,8 @@ pub mod style_ray;
 pub mod style_reflection;
 pub mod style_scrollbar_color;
 pub mod style_self_alignment_data;
+pub mod style_shape;
+pub mod style_shape_path;
 pub mod style_svg_resource;
 pub mod style_timeline_scope;
 pub mod style_transform;
@@ -122,3 +126,10 @@ pub mod transform_origin;
 pub mod unzoomed_length;
 
 pub mod style_mask_source_image;
+
+pub mod html_image_fallback_helper;
+
+pub mod visual_invalidation_diff;
+
+pub mod compositing_reason_facts;
+mod current_color_invalidation;

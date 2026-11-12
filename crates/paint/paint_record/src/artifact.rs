@@ -246,9 +246,29 @@ pub struct PaintMutationResult {
 
 #[derive(Clone, Default)]
 pub struct PaintRecording {
+    /// Canvas's node IDs retain their canonical document domain across the
+    /// immutable Paint -> Compositor publication. Standalone Paint has no DOM.
+    pub canvas_document: Option<canvas::CanvasDocumentIdentity>,
     /// Source viewport identities published by Paint. None is missing producer
     /// input; the compositor must not invent a visual/layout viewport mode.
     pub compositor_viewport: Option<PaintCompositorViewport>,
+    /// PaintController::SetFirstPainted for this document/frame recording.
+    /// The default document background is excluded; ViewPainter sets this
+    /// explicitly when the effective root background differs from the host
+    /// base color.
+    pub first_painted: bool,
+    /// PaintTiming::MarkFirstContentfulPaint emitted by content painters such
+    /// as HTMLCanvasPainter. Kept distinct from PaintController first-painted.
+    pub first_contentful_painted: bool,
+    /// PaintController::SetImagePainted for the current frame. VideoPainter
+    /// sets this before handing an accelerated frame to its foreign layer.
+    pub image_painted: bool,
+    /// PaintController::SetTextPainted for the current frame. TextPainter
+    /// admits only source substrings that are not empty or all whitespace.
+    pub text_painted: bool,
+    /// ScopedPaintTimingDetectorBlockPaintHook completions, in native walk
+    /// order. These are immutable value records, not Interaction candidates.
+    pub text_paint_observations: Vec<paint_model::paint_timing::TextPaintObservation>,
     /// Source: paint_artifact.cc:44-49. Captured from the original Paint client
     /// together with its debug name at recording time.
     pub client_owner_node_ids: SharedArtifactData<HashMap<usize, i32>>,
@@ -285,7 +305,13 @@ pub struct PaintRecording {
 
 impl PartialEq for PaintRecording {
     fn eq(&self, other: &Self) -> bool {
-        self.caret == other.caret
+        self.canvas_document == other.canvas_document
+            && self.caret == other.caret
+            && self.first_painted == other.first_painted
+            && self.first_contentful_painted == other.first_contentful_painted
+            && self.image_painted == other.image_painted
+            && self.text_painted == other.text_painted
+            && self.text_paint_observations == other.text_paint_observations
             && self.compositor_viewport == other.compositor_viewport
             && self.client_owner_node_ids == other.client_owner_node_ids
             && self.client_debug_names == other.client_debug_names
@@ -475,6 +501,11 @@ impl PaintRecording {
         self.resource_changed_chunks = Arc::new(HashSet::new());
         self.painted_layout_image_resource_ids.clear();
         self.compositor_viewport = None;
+        self.first_painted = false;
+        self.first_contentful_painted = false;
+        self.image_painted = false;
+        self.text_painted = false;
+        self.text_paint_observations.clear();
         self.recording_revision = 0;
         self.resources = None;
         self.caret = None;
@@ -550,6 +581,13 @@ impl PaintRecording {
                 for dependency in self.image_dependencies.dependencies(image.id) {
                     if let Some(record) = revisions.get_mut(dependency.record_index) {
                         record.push((image.id, image.revision));
+                    }
+                }
+            }
+            for canvas in &resources.canvases {
+                for dependency in self.image_dependencies.dependencies(canvas.resource_id) {
+                    if let Some(record) = revisions.get_mut(dependency.record_index) {
+                        record.push((canvas.resource_id, canvas.revision));
                     }
                 }
             }
@@ -796,6 +834,10 @@ mod paint_artifact_tests {
     fn clear_removes_source_and_derived_artifact_state() {
         let mut artifact = artifact();
         artifact.painted_layout_image_resource_ids.insert(9);
+        artifact.first_painted = true;
+        artifact.first_contentful_painted = true;
+        artifact.image_painted = true;
+        artifact.text_painted = true;
         artifact.recording_revision = 44;
         artifact.clear();
         assert!(artifact.IsEmpty());
@@ -803,6 +845,10 @@ mod paint_artifact_tests {
         assert!(artifact.items.is_empty());
         assert!(artifact.client_debug_names.is_empty());
         assert!(artifact.painted_layout_image_resource_ids.is_empty());
+        assert!(!artifact.first_painted);
+        assert!(!artifact.first_contentful_painted);
+        assert!(!artifact.image_painted);
+        assert!(!artifact.text_painted);
         assert_eq!(artifact.recording_revision, 0);
     }
 

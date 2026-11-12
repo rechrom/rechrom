@@ -34,6 +34,19 @@ unsafe extern "C" {
 pub(super) trait LayoutNodeView {
     fn node_name(&self) -> &str;
     fn node_attribute(&self, name: &str) -> Option<&str>;
+    fn marker_container_sizes(
+        &self,
+    ) -> Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes> {
+        None
+    }
+    fn marker_length_values(
+        &self,
+    ) -> std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues> {
+        style_parser::svg_length_parser::SVGMarkerLengthInputs::Parse(|name| {
+            self.node_attribute(name).map(str::to_owned)
+        })
+        .Fallback()
+    }
 }
 impl LayoutNodeView for Element {
     fn node_name(&self) -> &str {
@@ -53,6 +66,16 @@ impl LayoutNodeView for crate::persistent_document::DOMNode {
     fn node_attribute(&self, name: &str) -> Option<&str> {
         self.FindAttribute(name).map(|a| a.value.as_str())
     }
+    fn marker_container_sizes(
+        &self,
+    ) -> Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes> {
+        self.SVGLengthContainerSizes()
+    }
+    fn marker_length_values(
+        &self,
+    ) -> std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues> {
+        self.SVGMarkerLengthValues()
+    }
 }
 pub(super) fn attribute<'a>(element: &'a impl LayoutNodeView, name: &str) -> Option<&'a str> {
     element.node_attribute(name)
@@ -64,7 +87,7 @@ pub(super) fn c_string_bytes(input: &str) -> Vec<u8> {
     bytes
 }
 
-pub(super) fn parse_c_double_prefix(input: &str) -> Option<(f64, usize)> {
+pub(crate) fn parse_c_double_prefix(input: &str) -> Option<(f64, usize)> {
     let bytes = c_string_bytes(input);
     let begin = bytes.as_ptr().cast::<std::ffi::c_char>();
     let mut end = std::ptr::null_mut();
@@ -557,12 +580,67 @@ pub(super) fn element_metadata_svg(
     text_path: Option<SvgTextPathData>,
     data: &mut ElementData,
 ) {
+    data.svg_path_element = node.node_name() == "path";
+    if node.node_name() == "marker" {
+        use layoutng_assembly::internal::layout_input::{SvgMarkerData, SvgMarkerOrient};
+        let angle = |value: &str| {
+            let value = value.trim_end_matches(|c: char| c.is_ascii_whitespace());
+            let (number, multiplier) = if let Some(n) = value.strip_suffix("deg") {
+                (n, 1.)
+            } else if let Some(n) = value.strip_suffix("grad") {
+                (n, 0.9)
+            } else if let Some(n) = value.strip_suffix("rad") {
+                (n, 180. / std::f32::consts::PI)
+            } else if let Some(n) = value.strip_suffix("turn") {
+                (n, 360.)
+            } else {
+                (value, 1.)
+            };
+            if number.len() != value.len()
+                && number
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_whitespace)
+            {
+                return 0.;
+            }
+            number
+                .trim_start_matches(|c: char| c.is_ascii_whitespace())
+                .parse::<f32>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .map_or(0., |n| n * multiplier)
+        };
+        let orient = match attribute(node, "orient").unwrap_or("0") {
+            "auto" => SvgMarkerOrient::Auto,
+            "auto-start-reverse" => SvgMarkerOrient::AutoStartReverse,
+            other => SvgMarkerOrient::Angle(angle(other)),
+        };
+        data.svg_marker = Some(SvgMarkerData {
+            lengths: node.marker_length_values(),
+            container_sizes: node.marker_container_sizes(),
+            stroke_width_units: attribute(node, "markerUnits") != Some("userSpaceOnUse"),
+            orient,
+        });
+    }
+    data.svg_path_length = attribute(node, "pathLength")
+        .and_then(|s| {
+            s.trim_matches(|c: char| c.is_ascii_whitespace())
+                .parse::<f32>()
+                .ok()
+        })
+        .filter(|v| v.is_finite() && *v >= 0.);
+    if node.node_name() == "clipPath" {
+        data.svg_clip_path_object_bounding_box =
+            Some(attribute(node, "clipPathUnits") == Some("objectBoundingBox"));
+    }
+
     if node.node_name() == "use" {
         data.svg_use = Some(SvgUseData::UnbuiltInstance);
     }
 
     // cpp: dom_to_layout/layout_object_tree_builder.cc:379-410
-    if node.node_name() == "svg" {
+    if matches!(node.node_name(), "svg" | "marker") {
         // LayoutSVGRoot::UnscaledNaturalSizingInfo reads SVGSVGElement's
         // intrinsic width/height independently from the viewBox. A viewBox
         // supplies only an aspect ratio; absolute width/height attributes
@@ -629,6 +707,12 @@ pub(super) fn element_metadata_svg(
                 data.natural_aspect_ratio = Some(width / height);
             }
         }
+    }
+
+    if node.node_name() == "marker" {
+        data.natural_width = None;
+        data.natural_height = None;
+        data.natural_aspect_ratio = None;
     }
 
     // cpp: dom_to_layout/layout_object_tree_builder.cc:444-474
@@ -788,14 +872,19 @@ pub(super) fn element_kind_html(
     match node.node_name() {
         "br" => return NodeKind::kLineBreak,
         "wbr" => return NodeKind::kWordBreak,
-        "img" | "canvas" | "video" | "audio" | "iframe" | "embed" | "object" => {
+        "img" if element.html_image_uses_fallback => {}
+        "img" | "canvas" | "video" | "audio" | "iframe" | "fencedframe" | "embed" | "object" => {
             return NodeKind::kReplaced;
         }
         "fieldset" => return NodeKind::kFieldset,
         "legend" => return NodeKind::kLegend,
-        "input" if element.form_control_type == Some(FormControlType::kInputImage) => {
+        "input"
+            if element.form_control_type == Some(FormControlType::kInputImage)
+                && !element.input_image_use_fallback =>
+        {
             return NodeKind::kReplaced;
         }
+        "input" if element.form_control_type == Some(FormControlType::kInputImage) => {}
         "input" | "button" | "select" | "textarea" => return NodeKind::kFormControl,
         "frameset" => return NodeKind::kFrameSet,
         "frame" => return NodeKind::kFrame,
@@ -970,14 +1059,6 @@ pub(super) fn is_block_container_display(display: Display) -> bool {
 // acquire the entire document's resource snapshot (or copy their style) just
 // because some other element refers to an SVG resource. Keep the fixture-only
 // path without a canonical source style conservative.
-pub(super) fn needs_svg_clip_resources(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
-) -> bool {
-    style.ClipPath().is_some_and(|clip| {
-        unsafe { &*clip }.GetType()
-            == layoutng_style::style::clip_path_operation::OperationType::kReference
-    }) || style.HasMask()
-}
 
 pub(super) fn needs_svg_filter_resources(
     style: &layoutng_style::style::computed_style::ComputedStyle,
@@ -999,9 +1080,10 @@ pub(super) fn svg_clip_resource_binding(
     snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
     scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) -> layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
-    if !needs_svg_clip_resources(style) {
-        return Default::default();
-    }
+    // Every native element retains its document/tree-scope resource identity.
+    // Resource definitions need the generation even without their own IRI
+    // properties, because source cycle caching belongs to the target owner.
+    let _ = style;
     // This is a resource binding, not a second representation of clip-path.
     // Chromium ComputedStyle remains the sole owner of the actual operation.
     layoutng_assembly::internal::paint_input::SvgClipResourceBinding {

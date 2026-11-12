@@ -316,6 +316,7 @@ struct ResolvedFontSource {
     weight: f64,
     italic: bool,
     orientation: FontOrientation,
+    device_scale_factor: f32,
     selections: Vec<FontFaceSelection>,
     fonts: Vec<OnceCell<ResolvedFontData>>,
     queries: Rc<RefCell<Option<FontQueryCollector>>>,
@@ -383,6 +384,7 @@ impl FontFallbackSource for ResolvedFontSource {
                     face.unicode_ranges.clone(),
                 ));
                 unsafe { &mut *platform }.SetResourceIdentity(index as u32, &variations);
+                unsafe { &mut *platform }.SetDeviceScaleFactor(self.device_scale_factor);
                 let simple = SimpleFontData::Create(platform);
                 ResolvedFontData {
                     font: Persistent::from_ptr(simple),
@@ -398,6 +400,13 @@ impl FontFallbackSource for ResolvedFontSource {
                 queries.FallbackReadyLimit(&query, true);
             }
         }
+    }
+
+    fn ShapeCacheRevision(&self) -> u64 {
+        self.queries
+            .borrow()
+            .as_ref()
+            .map_or(0, FontQueryCollector::Revision)
     }
 
     fn SystemFallbackRanks(
@@ -478,6 +487,7 @@ pub struct FontResolver {
     fonts_: Vec<InputFontEntry>,
     sources: Vec<Rc<ResolvedFontSource>>,
     queries: Rc<RefCell<Option<FontQueryCollector>>>,
+    device_scale_factor: f32,
 }
 
 // cpp: third_party/blink/renderer/core/css/font_size_functions.cc:132-168
@@ -512,10 +522,23 @@ fn FontAspectValue(
 impl FontResolver {
     // cpp: layoutng/internal/boundary/layout_boundary.cc:146-200
     pub fn new(faces: &[FontFace], backend_factory: Option<Arc<dyn FontBackendFactory>>) -> Self {
+        Self::new_with_device_scale_factor(faces, backend_factory, 1.0)
+    }
+
+    pub fn new_with_device_scale_factor(
+        faces: &[FontFace],
+        backend_factory: Option<Arc<dyn FontBackendFactory>>,
+        device_scale_factor: f32,
+    ) -> Self {
         assert!(
             !faces.is_empty(),
             "font catalog must contain an OpenType face"
         );
+        let device_scale_factor = if device_scale_factor.is_finite() && device_scale_factor > 0.0 {
+            device_scale_factor
+        } else {
+            1.0
+        };
         let faces_ = faces
             .iter()
             .map(|face| {
@@ -545,6 +568,7 @@ impl FontResolver {
             fonts_: Vec::new(),
             sources: Vec::new(),
             queries: Rc::new(RefCell::new(None)),
+            device_scale_factor,
         }
     }
 
@@ -594,6 +618,7 @@ impl FontResolver {
             weight: request.weight,
             italic: request.italic,
             orientation: request.orientation,
+            device_scale_factor: self.device_scale_factor,
             selections: order.to_vec(),
             fonts: order.iter().map(|_| OnceCell::new()).collect(),
             queries: self.queries.clone(),
@@ -1085,11 +1110,13 @@ mod tests {
 
     struct CountingFactory(Arc<AtomicUsize>);
     struct TestBackend;
+    struct DeviceMetricFactory;
+    struct DeviceMetricBackend;
 
     impl FontBackendFactory for CountingFactory {
         fn Create(
             &self,
-            _bytes: &[u8],
+            _bytes: &crate::SharedFontBytes,
             _face_index: u32,
             _variations: &[FontVariation],
             _resolved_family: &str,
@@ -1129,6 +1156,51 @@ mod tests {
         }
     }
 
+    impl FontBackendFactory for DeviceMetricFactory {
+        fn Create(
+            &self,
+            _bytes: &crate::SharedFontBytes,
+            _face_index: u32,
+            _variations: &[FontVariation],
+            _resolved_family: &str,
+            _metrics_family: &str,
+            _weight: f64,
+            _italic: bool,
+        ) -> Arc<dyn FontBackend> {
+            Arc::new(DeviceMetricBackend)
+        }
+    }
+
+    impl FontBackend for DeviceMetricBackend {
+        fn Metrics(&self, size: f32, _bold: bool, _italic: bool) -> FontBackendMetrics {
+            FontBackendMetrics {
+                ascent: size * 0.75,
+                descent: size * 0.25,
+                leading: size * 0.15,
+                x_height: size * 0.5,
+                cap_height: size * 0.7,
+                ..Default::default()
+            }
+        }
+
+        fn GlyphMetrics(
+            &self,
+            _glyph: u16,
+            size: f32,
+            _bold: bool,
+            _italic: bool,
+        ) -> FontBackendGlyphMetrics {
+            FontBackendGlyphMetrics {
+                advance: size * 0.6,
+                ..Default::default()
+            }
+        }
+
+        fn WithVariations(&self, _variations: &[FontVariation]) -> Arc<dyn FontBackend> {
+            Arc::new(Self)
+        }
+    }
+
     fn face(family: &str, character: u32, role: FontFallbackRole) -> FontFace {
         FontFace {
             family: family.to_owned(),
@@ -1156,6 +1228,40 @@ mod tests {
             tag: u32::from_be_bytes(*tag),
             value,
         }
+    }
+
+    #[test]
+    fn device_scaled_metric_rounding_is_dezoomed_to_css_pixels() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let fixture = face("Metric Probe", 'A' as u32, FontFallbackRole::kFamilyOnly);
+        let families = vec!["Metric Probe".to_owned()];
+
+        let mut css_resolver = FontResolver::new_with_device_scale_factor(
+            std::slice::from_ref(&fixture),
+            Some(Arc::new(DeviceMetricFactory)),
+            1.0,
+        );
+        let css_font = css_resolver.Resolve(&request(&families));
+        assert_eq!(
+            unsafe { &*css_font.PrimaryFont() }
+                .GetFontMetrics()
+                .FixedLineSpacing()
+                .ToDouble(),
+            18.0
+        );
+
+        let mut device_resolver = FontResolver::new_with_device_scale_factor(
+            std::slice::from_ref(&fixture),
+            Some(Arc::new(DeviceMetricFactory)),
+            2.0,
+        );
+        let device_font = device_resolver.Resolve(&request(&families));
+        let device_data = unsafe { &*device_font.PrimaryFont() };
+        assert_eq!(device_data.PlatformData().DeviceScaleFactor(), 2.0);
+        assert_eq!(
+            device_data.GetFontMetrics().FixedLineSpacing().ToDouble(),
+            18.5
+        );
     }
 
     fn alternates_description(families: &[(&str, &[u8; 4])]) -> FontDescription {
@@ -1898,5 +2004,79 @@ mod tests {
         assert_ne!(run.glyph_data_[0].glyph(), 0);
         assert_eq!(resolver.FaceIndex(run.font_data_.Get()), 1);
         assert!(resolver.catalog.faces[2].prepared.get().is_none());
+    }
+
+    #[test]
+    fn shape_cache_key_tracks_live_fallback_answers() {
+        use crate::fonts::shaping::ng_shape_cache::{ShapeCacheKey, ShaperResult};
+
+        let _heap = foundation::LayoutHeapScope::new();
+        let requested = face("requested", 'A' as u32, FontFallbackRole::kFamilyOnly);
+        let fallback = face("fallback", 'B' as u32, FontFallbackRole::kText);
+        let queries = FontQueryCollector::default();
+        let fallback_id = crate::SystemFontFaceId("fallback-b".into());
+        queries.RegisterFace(&fallback, fallback_id.clone());
+
+        let mut resolver = FontResolver::new(&[requested, fallback], None);
+        resolver.SetQueryCollector(Some(queries.clone()));
+        let families = vec!["requested".to_owned()];
+        let font = resolver.Resolve(&request(&families)) as *const Font;
+        let text = foundation::String::from_utf16(&['B' as u16]);
+        let locale = foundation::AtomicString::default();
+        let shape = || unsafe {
+            &*crate::HarfBuzzShaper::new(text.clone())
+                .Shape(font, foundation::TextDirection::kLtr)
+        };
+        let all_glyphs_present = |result: &crate::ShapeResult| {
+            result.RunsOrParts().iter().all(|run| {
+                unsafe { &*run.Get() }
+                    .glyph_data_
+                    .data_
+                    .iter()
+                    .all(|glyph| glyph.glyph() != 0)
+            })
+        };
+
+        let primary = unsafe { &*font }.PrimaryFont();
+        let cache = unsafe { &mut *(&*primary).GetShapeCachePtrForInline() };
+        let key = ShapeCacheKey::new(
+            &text,
+            0,
+            1,
+            &locale,
+            &[],
+            foundation::TextDirection::kLtr,
+            unsafe { &*font }.ShapeCacheRevision(),
+        );
+        let provisional = cache.GetOrCreate(&key, &|| ShaperResult {
+            shape_result: shape(),
+            can_cache: true,
+        });
+        assert!(!all_glyphs_present(unsafe { &*provisional }));
+
+        let pending = queries.Drain();
+        assert_eq!(pending.len(), 1);
+        queries.RegisterMatches(
+            &pending[0],
+            &[crate::SystemFontFace {
+                id: fallback_id,
+                face: FontFace::default(),
+            }],
+        );
+        let settled_key = ShapeCacheKey::new(
+            &text,
+            0,
+            1,
+            &locale,
+            &[],
+            foundation::TextDirection::kLtr,
+            unsafe { &*font }.ShapeCacheRevision(),
+        );
+        assert_ne!(key.GetHash(), settled_key.GetHash());
+        let settled = cache.GetOrCreate(&settled_key, &|| ShaperResult {
+            shape_result: shape(),
+            can_cache: true,
+        });
+        assert!(all_glyphs_present(unsafe { &*settled }));
     }
 }

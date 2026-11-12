@@ -73,6 +73,12 @@ pub trait LayerImplReadTree<B: LayerImplTypes>: MainLayerImplTree<B> {
     fn LifecycleAllowsPropertyTreeAccess(&self) -> bool;
 }
 pub trait LayerImplTree<B: LayerImplTypes>: LayerImplReadTree<B> {
+    fn ResourceIdForUIResource(&self, _id: super::layer_tree_impl::UIResourceId) -> ResourceId {
+        ResourceId::default()
+    }
+    fn GetUIResourceSize(&self, _id: super::layer_tree_impl::UIResourceId) -> Size {
+        Size::default()
+    }
     fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B>;
     fn AddLayerShouldPushProperties(&mut self, layer_id: i32);
     fn set_needs_update_draw_properties(&mut self);
@@ -119,6 +125,7 @@ pub struct LayerImplContext<'a, B: LayerImplTypes> {
 }
 pub trait LayerImplSharedQuadState<T> {
     fn opacity(&self) -> f32;
+    fn MultiplyOpacity(&mut self, value: f32);
     fn SetAll(
         &mut self,
         transform: &T,

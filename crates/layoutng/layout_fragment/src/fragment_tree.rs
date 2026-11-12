@@ -3,13 +3,13 @@ use std::sync::{Arc, OnceLock};
 pub use layout_fragment_boundary::{
     BackgroundPaintLocation, CollapsedTableEdge, CollapsedTablePaintData, CollapsedTableSection,
     ColumnRule, ColumnRulePaintData, FieldsetPaintData, FormControlPaintData, FragmentBoxSides,
-    FragmentKind, FragmentPaintRect, FrameSetPaintData, InlineGeometry, InlineGeometryRect,
-    LayoutResultHandle, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
-    PaintResources, PrePaintInvalidation, ReplacedContentPaintData, ScrollContainerPaintData,
-    ScrollSnapAxisPaintData, ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData,
-    ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData, StickyPositionPaintData,
-    StitchedDecorationData, SvgTextPaintData, SvgViewportGeometry, TextCombineEmphasisPaintData,
-    TextCombinePaintData, TextControlCaretMetrics,
+    FragmentKind, FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
+    InlineGeometry, InlineGeometryRect, LayoutResultHandle, MathMLPaintData, MathMLPaintKind,
+    PaintGlyph, PaintGlyphRun, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
+    ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
+    ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
+    SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
+    SvgTextPaintData, SvgViewportGeometry, TextCombineEmphasisPaintData, TextCombinePaintData,
 };
 
 #[path = "pre_paint_revision.rs"]
@@ -26,6 +26,7 @@ use layoutng::internal::layout_input::{
 };
 use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::paint_layer::PaintLayer;
+use layoutng::internal::selection_state::SelectionState;
 
 // The C++ definitions are public API; all layoutng::* names above retain their
 // owner in the later layoutng crate. The Cargo cycle needs an interface split.
@@ -57,6 +58,32 @@ pub type TablePaintData = layout_fragment_boundary::TablePaintData<PaintStyle>;
 pub type CanvasBackgroundPaintData =
     layout_fragment_boundary::CanvasBackgroundPaintData<PaintStyle>;
 
+/// BoxBackgroundPaintContext state for a page border box painting the
+/// document canvas. The positioning size belongs to the LayoutView root while
+/// the offset selects this page inside the stitched paginated document.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageBackgroundPaintData {
+    pub positioning_size: Size,
+    pub positioning_area_offset: Offset,
+    pub border: Edges,
+    pub padding: Edges,
+    pub has_background_fixed_to_viewport: bool,
+}
+
+/// BoxBackgroundPaintContext state for the `@page` background painted by a
+/// page-container fragment. The paint destination is the whole page
+/// container, while image origin/border/padding geometry belongs to its page
+/// border-box child.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageContainerBackgroundPaintData {
+    pub positioning_size: Size,
+    pub root_element_paint_offset: Offset,
+    pub positioning_box_offset: Offset,
+    pub border: Edges,
+    pub padding: Edges,
+    pub has_background_fixed_to_viewport: bool,
+}
+
 /// Assembly specializations preserve the historical non-generic API while
 /// fragment-local storage and sharing remain owned by `layout_fragment`.
 pub type PaintPropertiesHandle = layout_fragment_boundary::PaintPropertiesHandle<PaintProperties>;
@@ -86,6 +113,10 @@ pub struct PaintProperties {
     /// these from style or fragment geometry.
     pub is_inclusive_descendant_of_unbounded_element: bool,
     pub is_printing: bool,
+    /// Host Settings::GetShouldPrintBackgrounds() snapshot. This is distinct
+    /// from printing itself because print-economy color rewriting is disabled
+    /// when the caller explicitly requests backgrounds.
+    pub should_print_backgrounds: bool,
     pub canvas_draw_element_enabled: bool,
     pub is_in_canvas_subtree: bool,
     pub is_overscroll_area_parent: bool,
@@ -103,6 +134,9 @@ pub struct PaintProperties {
     /// layout objects do not have a one-to-one display/type mapping.
     pub is_box_model_object: bool,
     pub is_layout_box: bool,
+    /// PhysicalBoxFragment::kPageContainer. Chromium routes this anonymous
+    /// fragment through ViewPainter rather than ordinary box decoration.
+    pub is_page_container: bool,
     /// PhysicalBoxFragment::kPageBorderBox. This is fragment identity, not a
     /// LayoutObject/style proxy, and selects ScopedPaintState's document-space
     /// LocalBorderBoxProperties path while printing.
@@ -141,6 +175,12 @@ pub struct PaintProperties {
     /// LayoutBoxModelObject::ApplyFiltersToRect(InkOverflowRect()). This is the
     /// exact local-space admission rect used by BoxFragmentPainter::ShouldPaint.
     pub filtered_ink_overflow: Option<FragmentPaintRect>,
+    /// CSSMaskPainter::MaskBoundingBox for ordinary CSS boxes and
+    /// SVGForeignObject, in LayoutObject-local coordinates before the current
+    /// FragmentData paint offset is applied. This is deliberately broader
+    /// than an individual mask layer's clip box: Chromium uses LayersClipMax
+    /// and includes mask-box-image outsets when building MaskClip.
+    pub css_mask_bounding_box: Option<FragmentPaintRect>,
     /// Content box used only by LineBoxFragmentPainter for a `::first-line`
     /// background. None means this line owns no line-box decoration item.
     pub first_line_decoration_rect: Option<FragmentPaintRect>,
@@ -154,6 +194,10 @@ pub struct PaintProperties {
     // BoxPainter::VisualRect uses LayoutBox::SelfVisualOverflowRect(), which
     // is a stitched LayoutBox rect rather than a physical fragment ink rect.
     pub box_self_visual_overflow: Option<FragmentPaintRect>,
+    /// Exact FragmentPainter outline geometry. Some(empty) is authoritative:
+    /// Chromium returns without recording an outline for that fragment.
+    pub self_outline: Option<SelfOutlinePaintData>,
+    pub previous_box_geometry: Option<PreviousBoxGeometry>,
     pub box_fragment_is_inline_box: bool,
     pub display_item_raster_effect_outset: RasterEffectOutset,
     // Chromium DisplayItemClient identity and lifecycle, independently of DOM
@@ -180,6 +224,10 @@ pub struct PaintProperties {
     /// on visible content only.
     pub paint_layer_has_visible_content: bool,
     pub paint_layer_has_self_painting_layer_descendant: bool,
+    /// PaintLayer::HasNonIsolatedDescendantWithBlendMode(). Chromium creates
+    /// an isolation Effect only when this aggregate is true; `isolation:
+    /// isolate` by itself is only a stacking-context boundary.
+    pub paint_layer_has_non_isolated_descendant_with_blend_mode: bool,
     pub paint_layer_is_under_svg_hidden_container: bool,
     /// Source: PaintLayer::SupportsSubsequenceCaching().
     pub paint_layer_supports_subsequence_caching: bool,
@@ -244,6 +292,22 @@ pub struct PaintProperties {
     // cpp: core/paint/box_fragment_painter.cc:394-403
     pub display_item_fragment: u32,
     pub has_source: bool,
+    /// LayoutObject::VisibleToHitTesting(), captured before the immutable
+    /// Layout/Paint boundary. This includes visibility and used pointer-events.
+    pub visible_to_hit_testing: bool,
+    /// LayoutObject::EffectiveAllowedTouchAction(), including the blocking
+    /// touch-handler override applied by LayoutObject.
+    pub effective_allowed_touch_action: foundation::TouchAction,
+    /// LayoutObject::InsideBlockingWheelEventHandler(), consumed by ordinary
+    /// hit-test chunk metadata independently from scroll hit-test records.
+    pub inside_blocking_wheel_event_handler: bool,
+    /// Element::GetRegionCaptureCropId(), exported as the exact token words
+    /// consumed by PaintController's region-capture chunk metadata.
+    pub region_capture_crop_id: Option<[u64; 2]>,
+    pub tracked_element_sub_rects: Vec<crate::internal::layout_input::TrackedElementSubRect>,
+    /// LayoutObject::IsSVGChild(). SVG hit-test opacity cannot be reconstructed
+    /// from the reduced NodeKind set because every SVG child is mixed.
+    pub is_svg_child: bool,
     pub logical_parent_node_id: Option<u64>,
     pub logical_parent_fragment_instance_id: Option<u64>,
     pub logical_tree_order: u64,
@@ -272,6 +336,12 @@ pub struct PaintProperties {
     /// cpp: core/layout/layout_image.h:135-138
     /// cpp: core/paint/image_painter.cc:117-136,184-195
     pub replaced_is_image: bool,
+    /// Immutable software frame currently published by HTMLVideoElement.
+    /// This is deliberately distinct from LayoutImage's resource identity:
+    /// VideoPainter consumes it only for the source software-frame path while
+    /// accelerated video retains kForeignLayerVideo ownership.
+    /// cpp: core/paint/video_painter.cc:99-113
+    pub video_frame_resource_id: Option<image_resource::ImageId>,
     /// ImageElementBase::decoding_mode_ projected from the associated HTML
     /// image. Generated/non-HTML LayoutImages retain kUnspecified.
     pub image_decoding_mode: image_resource::ImageDecodingMode,
@@ -294,6 +364,14 @@ pub struct PaintProperties {
     /// shadows and decorations must not be reconstructed from hard-coded
     /// colors in Paint.
     pub selection_style: PaintStyle,
+    /// LayoutReplaced::GetSelectionState and LocalSelectionVisualRect.  The
+    /// latter may aggregate multiple inline fragment items, so Paint must not
+    /// reconstruct it from the physical box fragment.
+    /// cpp: core/layout/layout_replaced.cc:599-617
+    /// LayoutObject::IsSelected(), including LayoutTextFragment virtual query.
+    pub is_selected: bool,
+    pub replaced_selection_state: SelectionState,
+    pub replaced_local_selection_visual_rect: Option<FragmentPaintRect>,
     /// HighlightStyleUtils::SelectionTextDecoration result. Paint compares its
     /// line set with each originating decoration before applying the selection
     /// phase color; it must not reconstruct highlight inheritance.
@@ -305,6 +383,17 @@ pub struct PaintProperties {
     /// True for an element whose CSS background is painted by the root canvas
     /// painter. Borders, shadows and outlines remain ordinary box decoration.
     pub background_transfers_to_view: bool,
+    /// LayoutBox::BackgroundIsKnownToBeObscured(). Layout computes this after
+    /// foreground opacity is known; Paint uses the retained decision instead
+    /// of re-running replaced-content coverage analysis.
+    pub background_is_known_to_be_obscured: bool,
+    /// LayoutView::StyleRef() projected onto each page border box. Chromium
+    /// paints the document background there instead of the anonymous page
+    /// fragment's own style. None means that no laid-out document element was
+    /// available, in which case the page border box paints no background.
+    pub page_document_background_style: Option<PaintStyle>,
+    pub page_document_background_geometry: Option<PageBackgroundPaintData>,
+    pub page_container_background_geometry: Option<PageContainerBackgroundPaintData>,
     /// Present only on the root LayoutView fragment.
     pub canvas_background: Option<CanvasBackgroundPaintData>,
     /// Root-element geometry/style retained even when the canvas background is
@@ -328,6 +417,7 @@ pub struct PaintProperties {
     /// LayoutView::BackgroundRect(), the positioning area for fixed canvas
     /// backgrounds. Present only on the LayoutView.
     pub view_background_rect: Option<FragmentPaintRect>,
+    pub previous_view_background_rect: Option<FragmentPaintRect>,
     /// LayoutObject::CanCompositeBackgroundAttachmentFixed is the canonical
     /// eligibility decision. It includes the one-layer, clip, shadow,
     /// appearance and border-radius restrictions required by BackgroundClip.
@@ -366,9 +456,9 @@ pub struct PaintProperties {
     /// excluded for hit testing. None means this fragment does not clip
     /// overflow along either axis.
     pub hit_test_overflow_clip: Option<FragmentPaintRect>,
-    /// PhysicalBoxFragment::PixelSnappedScrolledContentOffset(). Interaction
-    /// consumes the source integer snap instead of re-rounding scroll_offset.
-    pub hit_test_scrolled_content_offset: Offset,
+    /// PhysicalBoxFragment::PixelSnappedScrolledContentOffset(). Paint and
+    /// Interaction consume the source snap instead of re-rounding scroll_offset.
+    pub pixel_snapped_scrolled_content_offset: Offset,
     pub scroll_size: Size,
     /// Exact LayoutBox::ScrollsOverflow() input used to choose whether gap
     /// decorations paint in border or scrolling-contents space. This is not
@@ -383,6 +473,11 @@ pub struct PaintProperties {
     pub direction: TextDirection,
     pub first_baseline: Option<f64>,
     pub text_line_top_offset: Option<f64>,
+    /// `TextFragmentPainter::ComputePhysicalBoxGeometry` line-top adjustment,
+    /// captured from the source fragment's `paint_offset + parent_offset`.
+    /// Flattened PaintTreeNode offsets cannot reconstruct that pair after a
+    /// paint offset translation without changing the rounding phase.
+    pub text_line_snap_delta: Option<f64>,
     pub text_line_height: Option<f64>,
     /// FragmentItem::IsEllipsis(). TextDecorationPainter must not infer this
     /// from generated-text kind because other generated runs can be decorated.
@@ -397,19 +492,18 @@ pub struct PaintProperties {
     pub resources: Option<Arc<PaintResources>>,
     pub glyph_runs: Arc<Vec<PaintGlyphRun>>,
     pub text_control_host: Option<u64>,
-    pub text_control_inner_editor: bool,
-    pub text_control_empty_caret: Option<FragmentPaintRect>,
     pub list_marker_symbol: Option<ListStyleType>,
     pub list_marker_inside: bool,
     pub mathml: Option<Arc<MathMLPaintData>>,
     pub frame_set: Option<Arc<FrameSetPaintData>>,
     pub fieldset: Option<Arc<FieldsetPaintData>>,
     pub column_rules: Option<Arc<ColumnRulePaintData>>,
+    /// Final physical gap-rule segments in Chromium's rule-overlap order.
+    pub gap_rules: Option<Arc<GapRulePaintData>>,
     pub collapsed_table: Option<Arc<CollapsedTablePaintData>>,
     pub table: Option<Arc<TablePaintData>>,
     pub scrollbars: Option<Arc<ScrollbarPaintData>>,
     pub form_control: Option<Arc<FormControlPaintData>>,
-    pub text_control_caret_metrics: Option<TextControlCaretMetrics>,
     pub svg_shape: Option<Arc<SvgShapeData>>,
     pub svg_view_box: Option<SvgViewBoxData>,
     pub svg_local_transform: Option<TransformMatrix>,
@@ -435,6 +529,7 @@ impl Default for PaintProperties {
             is_layout_view: false,
             is_inclusive_descendant_of_unbounded_element: false,
             is_printing: false,
+            should_print_backgrounds: false,
             canvas_draw_element_enabled: false,
             is_in_canvas_subtree: false,
             is_overscroll_area_parent: false,
@@ -445,6 +540,7 @@ impl Default for PaintProperties {
             additional_compositing_reasons: Default::default(),
             is_box_model_object: false,
             is_layout_box: false,
+            is_page_container: false,
             is_page_border_box: false,
             is_paginated_root: false,
             is_layout_inline: false,
@@ -468,10 +564,13 @@ impl Default for PaintProperties {
             contents_ink_overflow: None,
             ink_overflow: None,
             filtered_ink_overflow: None,
+            css_mask_bounding_box: None,
             first_line_decoration_rect: None,
             text_glyph_ink: None,
             text_hit_test_bounds: None,
             box_self_visual_overflow: None,
+            self_outline: None,
+            previous_box_geometry: None,
             box_fragment_is_inline_box: false,
             display_item_raster_effect_outset: RasterEffectOutset::kNone,
             display_item_client_id: 0,
@@ -485,6 +584,7 @@ impl Default for PaintProperties {
             paint_layer_has_ancestor_invisible_for_position_visibility: false,
             paint_layer_has_visible_content: false,
             paint_layer_has_self_painting_layer_descendant: false,
+            paint_layer_has_non_isolated_descendant_with_blend_mode: false,
             paint_layer_is_under_svg_hidden_container: false,
             paint_layer_supports_subsequence_caching: false,
             paint_layer_self_or_descendant_needs_repaint: true,
@@ -514,6 +614,12 @@ impl Default for PaintProperties {
             selection_client_is_just_created: std::cell::Cell::new(false),
             display_item_fragment: 0,
             has_source: false,
+            visible_to_hit_testing: true,
+            effective_allowed_touch_action: foundation::TouchAction::kAuto,
+            inside_blocking_wheel_event_handler: false,
+            region_capture_crop_id: None,
+            tracked_element_sub_rects: Vec::new(),
+            is_svg_child: false,
             logical_parent_node_id: None,
             logical_parent_fragment_instance_id: None,
             logical_tree_order: 0,
@@ -527,6 +633,7 @@ impl Default for PaintProperties {
             has_collapsed_borders: false,
             source_kind: NodeKind::kBox,
             replaced_is_image: false,
+            video_frame_resource_id: None,
             image_decoding_mode: Default::default(),
             image_last_painted_id: std::cell::Cell::new(image_resource::PaintImageId::INVALID),
             focused_image_map_area: None,
@@ -534,9 +641,16 @@ impl Default for PaintProperties {
             effective_zoom: 1.0,
             style: PaintStyle::default(),
             selection_style: PaintStyle::default(),
+            is_selected: false,
+            replaced_selection_state: SelectionState::kNone,
+            replaced_local_selection_visual_rect: None,
             selection_text_decoration: None,
             svg_text_decoration_style: None,
             background_transfers_to_view: false,
+            background_is_known_to_be_obscured: false,
+            page_document_background_style: None,
+            page_document_background_geometry: None,
+            page_container_background_geometry: None,
             canvas_background: None,
             view_background_invalidation: None,
             background_paint_location: BackgroundPaintLocation::BorderBox,
@@ -548,6 +662,7 @@ impl Default for PaintProperties {
             background_any_layer_uses_content_box: false,
             scrollable_overflow: None,
             view_background_rect: None,
+            previous_view_background_rect: None,
             can_composite_background_attachment_fixed: false,
             margin: Edges::default(),
             border: Edges::default(),
@@ -572,7 +687,7 @@ impl Default for PaintProperties {
             overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),
             hit_test_overflow_clip: None,
-            hit_test_scrolled_content_offset: Offset::default(),
+            pixel_snapped_scrolled_content_offset: Offset::default(),
             scroll_size: Size::default(),
             scrolls_overflow: false,
             client_size: None,
@@ -581,6 +696,7 @@ impl Default for PaintProperties {
             direction: TextDirection::kLtr,
             first_baseline: None,
             text_line_top_offset: None,
+            text_line_snap_delta: None,
             text_line_height: None,
             is_ellipsis: false,
             text_fit_scale: 1.0,
@@ -590,19 +706,17 @@ impl Default for PaintProperties {
             resources: None,
             glyph_runs: Arc::clone(EMPTY_GLYPH_RUNS.get_or_init(|| Arc::new(Vec::new()))),
             text_control_host: None,
-            text_control_inner_editor: false,
-            text_control_empty_caret: None,
             list_marker_symbol: None,
             list_marker_inside: false,
             mathml: None,
             frame_set: None,
             fieldset: None,
             column_rules: None,
+            gap_rules: None,
             collapsed_table: None,
             table: None,
             scrollbars: None,
             form_control: None,
-            text_control_caret_metrics: None,
             svg_shape: None,
             svg_view_box: None,
             svg_local_transform: None,
@@ -616,6 +730,13 @@ impl Default for PaintProperties {
 
 #[allow(non_snake_case)]
 impl PaintProperties {
+    pub fn LayoutObjectIdentity(
+        &self,
+    ) -> Option<crate::layout_engine::PaintLayoutObjectIdentity<'_>> {
+        self.SourceObject()
+            .map(|object| crate::layout_engine::PaintLayoutObjectIdentity { object })
+    }
+
     pub(crate) fn BindSourceObject(&mut self, object: *const LayoutObject) {
         self.source_object_address = object as usize;
     }
@@ -636,17 +757,56 @@ impl PaintProperties {
         unsafe { self.SourceObjectPointer().as_ref() }
     }
 
-    fn SourcePaintLayer(&self) -> Option<&PaintLayer> {
-        let object = self.SourceObject()?;
+    fn SourcePaintLayerPointer(&self) -> *mut PaintLayer {
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return std::ptr::null_mut();
+        }
         let box_model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
         if box_model.is_null() {
-            return None;
+            return std::ptr::null_mut();
         }
-        unsafe { (&*box_model).Layer().as_ref() }
+        unsafe { (&*box_model).Layer() }
+    }
+
+    fn SourcePaintLayer(&self) -> Option<&PaintLayer> {
+        unsafe { self.SourcePaintLayerPointer().as_ref() }
+    }
+
+    /// Ensure the authoritative source layer is ready before PrePaint reads
+    /// its descendant aggregates. The root pass remains the normal path; this
+    /// per-layer gate covers relationships newly exposed by Rechrom's derived
+    /// (LayoutObject-backed) layer links during the same lifecycle update.
+    pub fn UpdateSourcePaintLayerDescendantDependentFlags(&self) {
+        let layer = self.SourcePaintLayerPointer();
+        if layer.is_null() {
+            return;
+        }
+        unsafe { &mut *layer }.UpdateDescendantDependentFlags();
     }
 
     pub fn HasSource(&self) -> bool {
         self.SourceObject().is_some() || self.has_source
+    }
+    pub fn UpdateInsideBlockingWheelEventHandler(&mut self, inside: bool) -> bool {
+        let changed = self.inside_blocking_wheel_event_handler != inside;
+        let object = self.SourceObjectPointer();
+        if let Some(object) = unsafe { object.as_mut() } {
+            object.UpdateInsideBlockingWheelEventHandler(inside);
+            if changed {
+                object.SetShouldInvalidatePaintForHitTest();
+            }
+        }
+        self.inside_blocking_wheel_event_handler = inside;
+        changed
+    }
+    pub fn InvalidatePaintForHitTest(&self) {
+        let layer = self
+            .SourceObject()
+            .map_or(std::ptr::null_mut(), LayoutObject::PaintingLayerDefault);
+        if let Some(layer) = unsafe { layer.as_mut() } {
+            layer.SetNeedsRepaint();
+        }
     }
 
     pub fn IsLayoutView(&self) -> bool {
@@ -676,6 +836,13 @@ impl PaintProperties {
             .map_or(self.is_printing, LayoutObject::IsPrintingForLayout)
     }
 
+    pub fn ShouldPrintBackgrounds(&self) -> bool {
+        self.SourceObject().map_or(
+            self.should_print_backgrounds,
+            LayoutObject::ShouldPrintBackgroundsForLayout,
+        )
+    }
+
     pub fn CanvasDrawElementEnabled(&self) -> bool {
         self.SourceObject()
             .map_or(self.canvas_draw_element_enabled, |object| {
@@ -683,6 +850,42 @@ impl PaintProperties {
             })
     }
 
+    /// Source NeedsElementCanvasTransform, paint_property_tree_builder.cc:592-608.
+    /// The identity node is required even before an element transform is set.
+    pub fn ElementCanvasTransformInput(&self) -> Option<(Option<usize>, TransformMatrix)> {
+        let object = self.SourceObject()?;
+        if object.IsText()
+            || object.IsSVGChild()
+            || !object.IsBoxModelObject()
+            || !object.IsInCanvasSubtree()
+        {
+            return None;
+        }
+        let node = unsafe { object.GetNode().as_ref()? };
+        if !node.IsElementNode() || !node.InputElementCanvasTransformEnabled() {
+            return None;
+        }
+        let canvas = object.CanvasForDrawingLayoutObjectInfo()?;
+        let element = foundation::DynamicTo::<layoutng::internal::layout_node_metadata::Element>(
+            object.GetNode(),
+        );
+        let matrix = unsafe { element.as_ref()? }
+            .GetUsedCanvasTransform()
+            .map_or_else(
+                || foundation::gfx::Transform::default().GetColMajor(),
+                |m| m.GetColMajor(),
+            );
+        Some((
+            (!canvas.is_null()).then_some(canvas as usize),
+            TransformMatrix { values: matrix },
+        ))
+    }
+    pub fn CanvasLayoutObjectIdentity(&self) -> Option<usize> {
+        let object = self.SourceObject()?;
+        object
+            .IsCanvas()
+            .then_some(object as *const LayoutObject as usize)
+    }
     pub fn IsInCanvasSubtree(&self) -> bool {
         self.SourceObject()
             .map_or(self.is_in_canvas_subtree, LayoutObject::IsInCanvasSubtree)
@@ -843,6 +1046,13 @@ impl PaintProperties {
         self.SourcePaintLayer().map_or(
             self.paint_layer_has_self_painting_layer_descendant,
             PaintLayer::HasSelfPaintingLayerDescendant,
+        )
+    }
+
+    pub fn PaintLayerHasNonIsolatedDescendantWithBlendMode(&self) -> bool {
+        self.SourcePaintLayer().map_or(
+            self.paint_layer_has_non_isolated_descendant_with_blend_mode,
+            PaintLayer::HasNonIsolatedDescendantWithBlendMode,
         )
     }
 

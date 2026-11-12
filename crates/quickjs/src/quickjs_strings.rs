@@ -446,6 +446,46 @@ unsafe fn string_buffer_end(s: *mut StringBuffer) -> JSValue {
     (*s).str = ptr::null_mut();
     JS_MKPTR(JS_TAG_STRING, str.cast())
 }
+/// Embedding UTF-16 boundary. JavaScript strings are code-unit sequences,
+/// including lone surrogates; the UTF-8 convenience API cannot express them.
+pub unsafe fn JS_NewString16(ctx: *mut JSContext, units: &[u16]) -> JSValue {
+    if units.len() > JS_STRING_LEN_MAX as usize {
+        return JS_ThrowInternalError(ctx, c"string too long".as_ptr());
+    }
+    js_new_string16_len(ctx, units.as_ptr(), units.len() as i32)
+}
+
+/// Copy the engine string through its owning package, without exposing its
+/// representation to the embedding. The caller already holds a string value.
+pub unsafe fn JS_CopyString16(value: JSValueConst) -> Vec<u16> {
+    debug_assert!(JS_IsString(value) != 0);
+    if JS_VALUE_GET_TAG(value) == JS_TAG_STRING_ROPE {
+        let rope = JS_VALUE_GET_PTR(value).cast::<JSStringRope>();
+        let mut units = Vec::with_capacity((*rope).len as usize);
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            if JS_VALUE_GET_TAG(value) == JS_TAG_STRING_ROPE {
+                let rope = JS_VALUE_GET_PTR(value).cast::<JSStringRope>();
+                pending.push((*rope).right);
+                pending.push((*rope).left);
+            } else {
+                units.extend(JS_CopyString16(value));
+            }
+        }
+        return units;
+    }
+    let string = JS_VALUE_GET_PTR(value).cast::<JSString>();
+    let len = (*string).len() as usize;
+    if (*string).is_wide_char() != 0 {
+        core::slice::from_raw_parts(ptr::addr_of!((*string).u).cast::<u16>(), len).to_vec()
+    } else {
+        core::slice::from_raw_parts(ptr::addr_of!((*string).u).cast::<u8>(), len)
+            .iter()
+            .map(|&unit| unit as u16)
+            .collect()
+    }
+}
+
 pub unsafe fn JS_NewStringLen(ctx: *mut JSContext, buf: *const c_char, buf_len: usize) -> JSValue {
     let p_start = buf.cast::<u8>();
     let p_end = p_start.add(buf_len);

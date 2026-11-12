@@ -88,6 +88,19 @@ pub fn ResolveUrl(base: &str, href: &str) -> io::Result<String> {
     )))
 }
 
+/// URL parsing consumes a scalar-value string (URL Standard USVString input),
+/// unlike DOM/markup storage which remains WTF-16. Keep that normalization in
+/// the URL owner and return its normalized serialized URL, not a DOM rewrite.
+pub fn ResolveURLUTF16(base: &str, href: &[u16]) -> Vec<u16> {
+    let scalar = char::decode_utf16(href.iter().copied())
+        .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect::<String>();
+    ResolveUrl(base, &scalar)
+        .expect("the URL resolver returns its serialized invalid or valid URL")
+        .encode_utf16()
+        .collect()
+}
+
 // cpp: browser/browser.cc:467-474
 fn Unquote(text: &str) -> &str {
     let text = text.trim_matches(|character: char| character.is_ascii_whitespace());

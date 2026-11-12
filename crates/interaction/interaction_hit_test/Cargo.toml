@@ -1,0 +1,13 @@
+[package]
+name = "interaction_hit_test"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+interaction_input = { path = "../interaction_input" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+paint = { path = "../../paint" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }

@@ -196,6 +196,11 @@ impl LayoutBox {
         overflow_clip_margin
     }
 
+    /// The synchronous source clipping query used by PaintLayer hit testing.
+    pub fn ExpandBorderRectForClipping(&self, rect: &mut PhysicalRect) {
+        rect.Expand(&self.BorderOutsetsForClipping());
+    }
+
     pub fn VisualOverflowRect(&self) -> PhysicalRect {
         self.CheckIsNotDestroyed();
         if !self.VisualOverflowIsSet() {

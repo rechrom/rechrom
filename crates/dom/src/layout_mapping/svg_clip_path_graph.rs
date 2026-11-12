@@ -1755,11 +1755,20 @@ pub fn SVGMaskShape(
 ) -> Result<Option<layoutng_assembly::internal::layout_input::SvgShapeData>, String> {
     use layoutng_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
     let node = document.Node(index);
-    if node.Name() == "path" {
-        if !source.D().is_null() {
+    if matches!(node.Name(), "path" | "line" | "polyline" | "polygon") {
+        if node.Name() == "path" && !source.D().is_null() {
             return Err("CSS d resource geometry".into());
         }
-        return Ok(super::layout_object_tree_builder::SVGShapeDataForResourceNode(node));
+        // LayoutSVGResourceMasker::CreatePaintRecord paints every attached SVG
+        // layout child through SVGObjectPainter.  Reuse the identical geometry
+        // projection used to build those layout objects for path-like children,
+        // including open polyline contours.  An empty/invalid geometry remains
+        // an attached no-op shape rather than turning a supported child kind
+        // into an unsupported mask resource.
+        return Ok(Some(
+            super::layout_object_tree_builder::SVGShapeDataForResourceNode(node)
+                .unwrap_or_default(),
+        ));
     }
     let fixed = |v: SvgClipLength| {
         if v.percentage == 0.0 {

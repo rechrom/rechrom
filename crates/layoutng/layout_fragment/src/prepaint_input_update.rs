@@ -89,11 +89,12 @@ pub(super) fn UpdatePrePaintInputs(
     // Certify each canonical sidecar in place. Do not flatten the source
     // topology into another document-sized Vec first.
     let _object_factory_scope = LayoutObjectFactoryScope::new(objects);
-    fn certify(cursor: PaintFragmentCursor<'_>, tracker: &mut PrePaintRevisionTracker) {
-        tracker.ObserveProductionNode(unsafe { cursor.PaintDataMut() });
-        for child in cursor.Children() {
-            certify(child, tracker);
-        }
+    fn certify(cursor: PaintFragmentCursor<'_>, tracker: &mut PrePaintRevisionTracker) -> bool {
+        let descendant_changed = cursor
+            .Children()
+            .into_iter()
+            .fold(false, |changed, child| certify(child, tracker) || changed);
+        tracker.ObserveProductionNode(unsafe { cursor.PaintDataMut() }, descendant_changed)
     }
     tracker.BeginProductionUpdate();
     certify(PaintFragmentCursor::FromHandle(fragments), tracker);

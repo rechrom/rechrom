@@ -116,10 +116,17 @@ impl ResourceFetcherClient for Client {
             ResourceMutation::FontResourceReady(value) => {
                 self.constraints.borrow_mut().fonts.push(value.font)
             }
+            ResourceMutation::FontFaceResourceChanged {
+                font: Some(font), ..
+            } => self.constraints.borrow_mut().fonts.push(font),
+            ResourceMutation::FontFaceResourceChanged { font: None, .. } => {
+                panic!("fixture has no font set deletion")
+            }
             ResourceMutation::ResourceLoadFailed(value) => {
                 self.DidFailResource(&value.url, &value.error)
             }
-            ResourceMutation::DocumentImageFrameChanged(_)
+            ResourceMutation::VideoFrameChanged(_)
+            | ResourceMutation::DocumentImageFrameChanged(_)
             | ResourceMutation::DocumentImageIntrinsicSizeChanged(_) => {
                 panic!("source no-script fixture has no document images")
             }
@@ -199,6 +206,7 @@ fn body() {
         .Succeeded());
     let mut scheduler =
         ScriptScheduler::new(document.clone(), bindings, loader, current_url.clone());
+    open::script_scheduler::test_support::InstallLifecycleDispatcher(&mut scheduler);
     scheduler.InstallResourceFetcher(resources.clone()).unwrap();
     let mut client = Client {
         document: document.clone(),

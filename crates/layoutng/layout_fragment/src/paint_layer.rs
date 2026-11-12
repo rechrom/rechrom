@@ -60,6 +60,10 @@ pub struct PaintLayer {
     display_item_client_: DisplayItemClient,
     layout_object_: Member<LayoutBoxModelObject>,
     is_self_painting_layer_: bool,
+    // Source paint_layer.h736-742: distinct repaint/clear traversal state.
+    self_needs_repaint_: bool,
+    descendant_needs_repaint_: bool,
+    subtree_needs_clear_repaint_flags_: bool,
     has_visible_content_: bool,
     needs_descendant_dependent_flags_update_: bool,
     needs_visual_overflow_recalc_: bool,
@@ -105,6 +109,9 @@ impl PaintLayer {
             layout_object_: Member::from_ptr(layout_object),
             is_self_painting_layer_: unsafe { &*layout_object }.LayerTypeRequired()
                 == PaintLayerType::kNormalPaintLayer,
+            self_needs_repaint_: false,
+            descendant_needs_repaint_: false,
+            subtree_needs_clear_repaint_flags_: false,
             has_visible_content_: false,
             needs_descendant_dependent_flags_update_: true,
             needs_visual_overflow_recalc_: true,
@@ -483,27 +490,87 @@ impl PaintLayer {
         self.GetLayoutObject().IsStacked()
     }
 
-    /// Source contract: `paint_layer.h:451-457`.
-    ///
-    /// The extracted owner does not duplicate Chromium's two repaint
-    /// bitfields. Their authoritative effect is the invalidation reason on the
-    /// resident PaintLayer client, recursively across the same PaintLayer
-    /// child links (which already stop at display-lock paint boundaries).
+    // Source paint_layer.h451-457; cc2688-2785. These bits live on the
+    // original layer, so a query never walks descendants or substitutes the
+    // DisplayItemClient invalidation reason for painting-container state.
+    pub fn SelfNeedsRepaint(&self) -> bool {
+        self.self_needs_repaint_
+    }
     pub fn SelfOrDescendantNeedsRepaint(&self) -> bool {
-        if self.DisplayItemClient().GetPaintInvalidationReason()
-            != foundation::PaintInvalidationReason::kNone
-        {
-            return true;
+        self.self_needs_repaint_ || self.descendant_needs_repaint_
+    }
+    pub fn SetNeedsRepaint(&mut self) {
+        if self.self_needs_repaint_ {
+            return;
+        }
+        self.self_needs_repaint_ = true;
+        self.display_item_client_
+            .Invalidate(PaintInvalidationReason::kLayout);
+        self.MarkPaintingContainerChainForNeedsRepaint();
+    }
+    pub fn SetDescendantNeedsRepaint(&mut self) {
+        if self.descendant_needs_repaint_ {
+            return;
+        }
+        self.descendant_needs_repaint_ = true;
+        self.MarkPaintingContainerChainForNeedsRepaint();
+    }
+    fn MarkPaintingContainerChainForNeedsRepaint(&mut self) {
+        let original = self as *mut Self;
+        let mut layer = original;
+        let mut layer_is_container = false;
+        let mut next_container_type = self.GetPaintingContainerType();
+        loop {
+            let current = unsafe { &mut *layer };
+            current.subtree_needs_clear_repaint_flags_ = true;
+            let parent = current.Parent();
+            if !parent.is_null()
+                && !current.IsSelfPaintingLayer()
+                && (layer == original || layer_is_container)
+            {
+                unsafe { &mut *parent }.SetNeedsRepaint();
+            }
+            if layer_is_container {
+                if current.descendant_needs_repaint_ {
+                    break;
+                }
+                current.descendant_needs_repaint_ = true;
+                next_container_type = current.GetPaintingContainerType();
+                layer_is_container = false;
+            }
+            if parent.is_null() {
+                break;
+            }
+            if !current.SelfNeedsRepaint()
+                && current.GetLayoutObject().ChildPaintBlockedByDisplayLock()
+            {
+                break;
+            }
+            layer = parent;
+            if next_container_type == PaintingContainerType::kParent
+                || unsafe { &*layer }.GetLayoutObject().IsStackingContext()
+            {
+                layer_is_container = true;
+            }
+        }
+    }
+    pub fn ClearNeedsRepaintRecursively(&mut self) {
+        if !self.subtree_needs_clear_repaint_flags_ {
+            debug_assert!(!self.self_needs_repaint_ && !self.descendant_needs_repaint_);
+            return;
+        }
+        self.self_needs_repaint_ = false;
+        if self.GetLayoutObject().ChildPaintBlockedByDisplayLock() {
+            return;
         }
         let mut child = self.FirstChild();
-        while !child.is_null() {
-            let child_layer = unsafe { &*child };
-            if child_layer.SelfOrDescendantNeedsRepaint() {
-                return true;
-            }
-            child = child_layer.NextSibling();
+        while let Some(layer) = unsafe { child.as_mut() } {
+            let next = layer.NextSibling();
+            layer.ClearNeedsRepaintRecursively();
+            child = next;
         }
-        false
+        self.descendant_needs_repaint_ = false;
+        self.subtree_needs_clear_repaint_flags_ = false;
     }
 
     // Source: core/paint/paint_layer.h:263-289.
@@ -626,6 +693,20 @@ impl PaintLayer {
                 current.needs_descendant_dependent_flags_update_ = true;
             }
             object.SetNeedsPaintPropertyUpdate();
+            layer = current.Parent();
+        }
+    }
+
+    /// Structural layer insertion/removal cannot use the ordinary early-out.
+    /// Rechrom derives layer links from LayoutObject rather than storing
+    /// PaintLayer child pointers, so a newly visible relationship can have a
+    /// dirty immediate parent whose former ancestors were never marked.
+    pub(crate) fn MarkAncestorChainForLayerTreeChange(&mut self) {
+        let mut layer = self as *mut PaintLayer;
+        while !layer.is_null() {
+            let current = unsafe { &mut *layer };
+            current.needs_descendant_dependent_flags_update_ = true;
+            unsafe { &mut *current.layout_object_.Get() }.SetNeedsPaintPropertyUpdate();
             layer = current.Parent();
         }
     }
@@ -1140,8 +1221,7 @@ impl PaintLayer {
         }
         // PaintLayer::SetNeedsRepaint invalidates the layer's own
         // DisplayItemClient before changing painting-container ownership.
-        self.display_item_client_
-            .Invalidate(PaintInvalidationReason::kLayout);
+        self.SetNeedsRepaint();
         self.is_self_painting_layer_ = is_self_painting_layer;
         if is_self_painting_layer {
             self.SetNeedsVisualOverflowRecalc();
@@ -1180,6 +1260,9 @@ mod tests {
             display_item_client_: DisplayItemClient::default(),
             layout_object_: Member::from_ptr(owner),
             is_self_painting_layer_: true,
+            self_needs_repaint_: false,
+            descendant_needs_repaint_: false,
+            subtree_needs_clear_repaint_flags_: false,
             has_visible_content_: false,
             needs_descendant_dependent_flags_update_: true,
             needs_visual_overflow_recalc_: true,

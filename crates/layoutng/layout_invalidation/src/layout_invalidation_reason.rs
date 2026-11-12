@@ -7,6 +7,12 @@ use std::ffi::c_char;
 // the C++ bridge symbols below remain available to mixed-language owners.
 static K_UNKNOWN_REASON: &[u8; 8] = b"Unknown\0";
 
+// cpp: layout_invalidation_reason.cc:41.  Callers pass this source address to
+// invalidation diagnostics; exporting the complete string also satisfies the
+// translated extern-array ABI.
+#[unsafe(export_name = "kSvgChanged")]
+static K_SVG_CHANGED: [u8; 12] = *b"SVG changed\0";
+
 pub fn UnknownReason() -> *const c_char {
     K_UNKNOWN_REASON.as_ptr().cast()
 }

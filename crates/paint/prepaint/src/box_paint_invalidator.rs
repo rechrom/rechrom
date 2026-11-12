@@ -7,7 +7,7 @@ use foundation::{
     AppearanceValue, BorderLineStyle, IsFullPaintInvalidationReason,
     IsLayoutFullPaintInvalidationReason, PaintInvalidationReason,
 };
-use layoutng_assembly::fragment_tree::FragmentPaintData;
+use layoutng_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect, PreviousBoxGeometry};
 use layoutng_assembly::internal::layout_input::{Offset, Size};
 use layoutng_assembly::internal::paint_input::{
     BackgroundBox, BackgroundImageLayer, BackgroundRepeat, BackgroundRepeatRule, BackgroundSizeMode,
@@ -40,29 +40,32 @@ impl BoxPaintInvalidator {
         context: PaintInvalidatorContext,
     ) -> BackgroundInvalidation {
         let mut result = BackgroundInvalidation::default();
+        let previous_geometry = PreviousGeometry(fragment, previous);
         let invalidation = fragment.paint.pre_paint_invalidation;
         if invalidation.background_needs_full_paint_invalidation
             || context.HasSubtreeFullInvalidation()
+            || ShouldInvalidateGapDecorations(fragment, previous)
         {
             result.kind = BackgroundInvalidationType::Full;
             result.invalidate_both_spaces = true;
         } else if HasEffectiveBackground(fragment) {
-            let old_size = previous.map(StitchedSize).unwrap_or_default();
+            let old_size = previous_geometry.map(|old| old.size).unwrap_or_default();
             let new_size = StitchedSize(fragment);
             if fragment.paint.background_any_default_attachment_image
                 && ShouldFullyInvalidateFillLayersOnSizeChange(fragment, old_size, new_size)
             {
                 result.kind = BackgroundInvalidationType::Full;
-            } else if previous.is_some_and(|old| {
+            } else if previous_geometry.is_some_and(|old| {
                 BackgroundUsesContentBox(fragment)
-                    && PhysicalContentBoxSignature(old) != PhysicalContentBoxSignature(fragment)
+                    && (old.content_box.offset, old.content_box.size)
+                        != PhysicalContentBoxSignature(fragment)
             }) {
                 result.kind = BackgroundInvalidationType::Full;
             } else if BackgroundGeometryDependsOnScrollableOverflowRect(fragment)
                 || BackgroundPaintsInContentsSpace(fragment)
             {
                 if let (Some(old), Some(new)) = (
-                    previous.and_then(|old| old.paint.scrollable_overflow),
+                    previous_geometry.map(|old| old.scrollable_overflow),
                     fragment.paint.scrollable_overflow,
                 ) {
                     if ShouldFullyInvalidateBackgroundOnScrollableOverflowChange(fragment, old, new)
@@ -91,7 +94,10 @@ impl BoxPaintInvalidator {
         previous: Option<&FragmentPaintData>,
     ) -> bool {
         match (
-            previous.and_then(|old| old.paint.view_background_rect),
+            fragment
+                .paint
+                .previous_view_background_rect
+                .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
             fragment.paint.view_background_rect,
         ) {
             (Some(old), Some(new)) => old != new,
@@ -158,26 +164,36 @@ impl BoxPaintInvalidator {
             return reason;
         }
 
-        let Some(previous) = previous else {
+        let Some(previous) = PreviousGeometry(fragment, previous) else {
             return reason;
         };
 
         if MaskUsesContentBox(fragment)
-            && PhysicalContentBoxSignature(previous) != PhysicalContentBoxSignature(fragment)
+            && (previous.content_box.offset, previous.content_box.size)
+                != PhysicalContentBoxSignature(fragment)
         {
             return PaintInvalidationReason::kLayout;
         }
 
-        if fragment.paint.replaced_content.is_some()
-            && previous.paint.replaced_content != fragment.paint.replaced_content
+        if fragment
+            .paint
+            .replaced_content
+            .as_ref()
+            .is_some_and(|current| {
+                previous.replaced_content
+                    != Some(FragmentPaintRect {
+                        offset: current.offset,
+                        size: current.size,
+                    })
+            })
         {
             return PaintInvalidationReason::kLayout;
         }
 
-        let previous_size = StitchedSize(previous);
+        let previous_size = previous.size;
         let stitched_size = StitchedSize(fragment);
         if previous_size == stitched_size
-            && previous.paint.box_self_visual_overflow == fragment.paint.box_self_visual_overflow
+            && previous.self_visual_overflow == SelfVisualOverflow(fragment)
         {
             return if IsFullPaintInvalidationReason(reason) {
                 reason
@@ -186,7 +202,7 @@ impl BoxPaintInvalidator {
             };
         }
 
-        if SelfVisualOverflowSize(previous) != previous_size
+        if previous.self_visual_overflow.size != previous_size
             || SelfVisualOverflowSize(fragment) != stitched_size
         {
             return PaintInvalidationReason::kLayout;
@@ -243,13 +259,53 @@ impl BoxPaintInvalidator {
     }
 }
 
+pub(crate) fn PreviousGeometry(
+    fragment: &FragmentPaintData,
+    previous: Option<&FragmentPaintData>,
+) -> Option<PreviousBoxGeometry> {
+    fragment.paint.previous_box_geometry.or_else(|| {
+        // Standalone immutable fixtures have no native LayoutBox owner.
+        previous.map(|old| {
+            let (offset, size) = PhysicalContentBoxSignature(old);
+            PreviousBoxGeometry {
+                size: StitchedSize(old),
+                content_box: FragmentPaintRect { offset, size },
+                self_visual_overflow: SelfVisualOverflow(old),
+                scrollable_overflow: old.paint.scrollable_overflow.unwrap_or(FragmentPaintRect {
+                    offset: Offset::default(),
+                    size: StitchedSize(old),
+                }),
+                replaced_content: old.paint.replaced_content.as_ref().map(|content| {
+                    FragmentPaintRect {
+                        offset: content.offset,
+                        size: content.size,
+                    }
+                }),
+            }
+        })
+    })
+}
+
+fn SelfVisualOverflow(fragment: &FragmentPaintData) -> FragmentPaintRect {
+    fragment
+        .paint
+        .box_self_visual_overflow
+        .unwrap_or(FragmentPaintRect {
+            offset: Offset::default(),
+            size: StitchedSize(fragment),
+        })
+}
+
 fn ComputeViewBackgroundInvalidation(
     fragment: &FragmentPaintData,
     previous: Option<&FragmentPaintData>,
     context: PaintInvalidatorContext,
 ) -> BackgroundInvalidationType {
     let (old_rect, new_rect) = match (
-        previous.and_then(|old| old.paint.view_background_rect),
+        fragment
+            .paint
+            .previous_view_background_rect
+            .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
         fragment.paint.view_background_rect,
     ) {
         (Some(old), Some(new)) => (old, new),
@@ -267,21 +323,35 @@ fn ComputeViewBackgroundInvalidation(
         return BackgroundInvalidationType::Full;
     }
 
-    if let (Some(old), Some(new)) = (
-        previous.and_then(|old| old.paint.view_background_invalidation.as_ref()),
-        fragment.paint.view_background_invalidation.as_ref(),
-    ) {
+    if let Some(new) = fragment.paint.view_background_invalidation.as_ref() {
+        let previous_view =
+            previous.and_then(|old| old.paint.view_background_invalidation.as_ref());
+        let old_geometry = new.previous_document_element_geometry.or_else(|| {
+            previous_view.map(|old| PreviousBoxGeometry {
+                size: old.document_element_size,
+                content_box: old.document_element_content_box,
+                scrollable_overflow: old.document_element_scrollable_overflow.unwrap_or_default(),
+                ..PreviousBoxGeometry::default()
+            })
+        });
+        let Some(old_geometry) = old_geometry else {
+            return if size_changed {
+                BackgroundInvalidationType::Incremental
+            } else {
+                BackgroundInvalidationType::None
+            };
+        };
         let layers = new.style.background_images();
         if ShouldFullyInvalidateBackgroundLayersOnSizeChange(
             new.background_fill_layer_count,
             &layers,
-            old.document_element_size,
+            old_geometry.size,
             new.document_element_size,
         ) {
             return BackgroundInvalidationType::Full;
         }
         if let (Some(old_overflow), Some(new_overflow)) = (
-            old.document_element_scrollable_overflow,
+            Some(old_geometry.scrollable_overflow),
             new.document_element_scrollable_overflow,
         ) {
             if old_overflow != new_overflow && new.background_any_local_attachment_image {
@@ -298,7 +368,7 @@ fn ComputeViewBackgroundInvalidation(
             }
         }
         if new.background_any_layer_uses_content_box
-            && old.document_element_content_box != new.document_element_content_box
+            && old_geometry.content_box != new.document_element_content_box
         {
             return BackgroundInvalidationType::Full;
         }
@@ -333,6 +403,20 @@ fn BackgroundPaintsInBorderBoxSpace(fragment: &FragmentPaintData) -> bool {
 
 fn BackgroundGeometryDependsOnScrollableOverflowRect(fragment: &FragmentPaintData) -> bool {
     HasEffectiveBackground(fragment) && fragment.paint.background_any_local_attachment_image
+}
+
+/// Source: `box_paint_invalidator.cc:467-510,530-534`. The immutable Paint
+/// boundary retains the resolved rule segments with the previous fragment, so
+/// comparing those segments is equivalent to comparing LayoutBox's saved
+/// per-fragment GapGeometry for the purpose of deciding whether to re-record.
+fn ShouldInvalidateGapDecorations(
+    fragment: &FragmentPaintData,
+    previous: Option<&FragmentPaintData>,
+) -> bool {
+    let Some(previous_rules) = previous.and_then(|old| old.paint.gap_rules.as_ref()) else {
+        return false;
+    };
+    fragment.paint.gap_rules.as_ref() != Some(previous_rules)
 }
 
 fn RepeatRule(layer: &BackgroundImageLayer, horizontal: bool) -> BackgroundRepeatRule {
@@ -499,10 +583,12 @@ fn SizeHasFraction(size: Size) -> bool {
 mod tests {
     use super::*;
     use layoutng_assembly::fragment_tree::{
-        BackgroundPaintLocation, CanvasBackgroundPaintData, FragmentPaintRect,
-        ScrollContainerPaintData,
+        BackgroundPaintLocation, CanvasBackgroundPaintData, FragmentPaintRect, GapRule,
+        GapRulePaintData, ScrollContainerPaintData,
     };
+    use layoutng_assembly::internal::layout_input::Edges;
     use layoutng_assembly::internal::paint_input::BackgroundAttachment;
+    use std::sync::Arc;
 
     fn incremental_fragment() -> FragmentPaintData {
         let mut fragment = FragmentPaintData::default();
@@ -542,10 +628,13 @@ mod tests {
         current.size.width = 110.0;
         current.content_size.width = 110.0;
         current.paint.border.right = 1.0;
+        current.paint.previous_box_geometry = PreviousGeometry(&previous, Some(&previous));
         assert_eq!(
             BoxPaintInvalidator::ComputePaintInvalidationReason(
                 &current,
-                Some(&previous),
+                // Production retains this same sidecar through Layout updates.
+                // Only the native previous-box values still describe old size.
+                Some(&current),
                 Some(Offset::default()),
                 Offset::default(),
                 PaintInvalidatorContext::default(),
@@ -610,6 +699,32 @@ mod tests {
     }
 
     #[test]
+    fn changed_gap_rule_geometry_fully_invalidates_all_background_spaces() {
+        let mut previous = incremental_fragment();
+        previous.paint.gap_rules = Some(Arc::new(GapRulePaintData {
+            rules: vec![GapRule::default()],
+        }));
+        let mut current = previous.clone();
+        let mut moved_rule = GapRule::default();
+        moved_rule.offset.x = 3.0;
+        current.paint.gap_rules = Some(Arc::new(GapRulePaintData {
+            rules: vec![moved_rule],
+        }));
+
+        assert_eq!(
+            BoxPaintInvalidator::ComputeBackgroundInvalidation(
+                &current,
+                Some(&previous),
+                PaintInvalidatorContext::default(),
+            ),
+            BackgroundInvalidation {
+                kind: BackgroundInvalidationType::Full,
+                invalidate_both_spaces: true,
+            }
+        );
+    }
+
+    #[test]
     fn contents_background_invalidates_its_scrollable_area_client() {
         let mut fragment = local_background_fragment(120.0);
         fragment.paint.scroll_container = Some(ScrollContainerPaintData {
@@ -666,10 +781,15 @@ mod tests {
         fragment.paint.view_background_invalidation = Some(CanvasBackgroundPaintData {
             style,
             effective_zoom: 1.0,
+            document_element_node_id: 0,
+            previous_document_element_geometry: None,
+            document_element_paint_offset: Offset::default(),
             document_element_size: Size {
                 width: root_width,
                 height: 50.0,
             },
+            document_element_border: Edges::default(),
+            document_element_padding: Edges::default(),
             document_element_content_box: FragmentPaintRect::default(),
             document_element_scrollable_overflow: fragment.paint.scrollable_overflow,
             document_element_has_transform: false,

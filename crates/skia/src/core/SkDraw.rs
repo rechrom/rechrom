@@ -159,6 +159,10 @@ pub struct Draw<'operation> {
     pub fProps: Option<&'operation crate::include::core::SkSurfaceProps::SkSurfaceProps>,
     // Source: src/core/SkDraw.h:254-254
     pub fCtx: Option<&'operation crate::src::core::SkCPUContextImpl::ContextImpl>,
+    /// Picture-device coordinate represented by destination pixel (0, 0).
+    pub fRasterPhaseOrigin: crate::src::core::SkPoint::SkIPoint,
+    /// Backing allocation origin before the draw CTM is normalized for scanning.
+    pub fRasterBackingOrigin: crate::src::core::SkPoint::SkIPoint,
 }
 
 // Source: src/core/SkDraw.h:248-254
@@ -173,6 +177,8 @@ impl Clone for Draw<'_> {
             fRC: self.fRC,
             fProps: self.fProps,
             fCtx: self.fCtx,
+            fRasterPhaseOrigin: self.fRasterPhaseOrigin,
+            fRasterBackingOrigin: self.fRasterBackingOrigin,
         }
     }
     fn clone_from(&mut self, source: &Self) {
@@ -182,6 +188,8 @@ impl Clone for Draw<'_> {
         self.fRC = source.fRC;
         self.fProps = source.fProps;
         self.fCtx = source.fCtx;
+        self.fRasterPhaseOrigin = source.fRasterPhaseOrigin;
+        self.fRasterBackingOrigin = source.fRasterBackingOrigin;
     }
 }
 
@@ -233,6 +241,8 @@ impl Draw<'_> {
             fRC: None,
             fProps: None,
             fCtx: None,
+            fRasterPhaseOrigin: crate::src::core::SkPoint::SkIPoint::make(0, 0),
+            fRasterBackingOrigin: crate::src::core::SkPoint::SkIPoint::make(0, 0),
         }
     }
 }
@@ -777,6 +787,8 @@ impl Draw<'_> {
             fRC: self.fRC,
             fProps: self.fProps,
             fCtx: self.fCtx,
+            fRasterPhaseOrigin: self.fRasterPhaseOrigin,
+            fRasterBackingOrigin: self.fRasterBackingOrigin,
         };
         // Selected upstream configuration leaves SK_SUPPORT_LEGACY_ALPHA_BITMAP_AS_COVERAGE undefined.
         let paint_with_shader =
@@ -873,6 +885,8 @@ impl Draw<'_> {
             fRC: self.fRC,
             fProps: self.fProps,
             fCtx: self.fCtx,
+            fRasterPhaseOrigin: self.fRasterPhaseOrigin,
+            fRasterBackingOrigin: self.fRasterBackingOrigin,
         };
         unsafe { draw.drawRect(&rect, &paint_with_shader, None, None) }?;
         Ok(())
@@ -1488,6 +1502,8 @@ impl Draw<'_> {
     unsafe fn drawDevPath(
         &self,
         raw: &crate::src::core::SkPathRaw::SkPathRaw<'_>,
+        phase_raw: Option<&crate::src::core::SkPathRaw::SkPathRaw<'_>>,
+        phase_even_rounding: bool,
         paint: &crate::src::core::SkPaint::SkPaint,
         coverage: crate::src::core::SkDrawTypes::SkDrawCoverage,
         custom: Option<core::pin::Pin<&mut dyn crate::src::core::SkBlitter::SkBlitter>>,
@@ -1516,6 +1532,30 @@ impl Draw<'_> {
                 if unsafe { filter.filterPath(raw, ctm, clip, blitter.as_mut(), style, None) }? {
                     return Ok(());
                 }
+            }
+            if let Some(phase_raw) = phase_raw.filter(|_| paint.isAntiAlias()) {
+                if do_fill {
+                    unsafe {
+                        SkScan::AntiFillPathRasterClipWithPhase(
+                            phase_raw,
+                            clip,
+                            blitter.as_mut(),
+                            self.fRasterPhaseOrigin,
+                            phase_even_rounding,
+                        );
+                    }
+                } else {
+                    unsafe {
+                        SkScan::AntiHairPathRasterClipWithPhase(
+                            phase_raw,
+                            clip,
+                            blitter.as_mut(),
+                            self.fRasterPhaseOrigin,
+                            paint.getStrokeCap(),
+                        );
+                    }
+                }
+                return Ok(());
             }
             type PathProc = unsafe fn(
                 &crate::src::core::SkPathRaw::SkPathRaw<'_>,
@@ -1612,6 +1652,10 @@ impl Draw<'_> {
         let needs_fill = paint.getPathEffect().is_some()
             || paint.getStyle() != crate::src::core::SkPaint::Style::kFill_Style;
         let mut builder = crate::src::core::SkPathBuilder::SkPathBuilder::new();
+        let phase_enabled = paint.isAntiAlias()
+            && (self.fRasterPhaseOrigin.fX != 0 || self.fRasterPhaseOrigin.fY != 0);
+        let mut phase_path = None;
+        let mut phase_has_residual_translation = false;
         let pdata;
         let raw;
         let mut do_fill = true;
@@ -1638,12 +1682,37 @@ impl Draw<'_> {
                 cull_ptr,
                 ctm,
             );
+            if phase_enabled {
+                let mut phase_matrix = ctm.clone();
+                phase_matrix.postTranslate(
+                    self.fRasterPhaseOrigin.fX as f32,
+                    self.fRasterPhaseOrigin.fY as f32,
+                );
+                phase_has_residual_translation =
+                    phase_matrix.getTranslateX() != 0.0 || phase_matrix.getTranslateY() != 0.0;
+                phase_path = Some(builder.snapshot(Some(&phase_matrix)));
+            }
             builder.transform(ctm);
             raw = SkPathPriv::RawBuilder(&builder, SkResolveConvexity::kYes);
         } else {
             let mut matrix = ctm.clone();
             if let Some(pre) = pre_matrix {
                 matrix.preConcat(pre);
+            }
+            if phase_enabled {
+                let mut phase_matrix = matrix.clone();
+                phase_matrix.postTranslate(
+                    self.fRasterPhaseOrigin.fX as f32,
+                    self.fRasterPhaseOrigin.fY as f32,
+                );
+                phase_path = orig.tryMakeTransform(&phase_matrix);
+                let mut backing_matrix = matrix.clone();
+                backing_matrix.postTranslate(
+                    self.fRasterBackingOrigin.fX as f32,
+                    self.fRasterBackingOrigin.fY as f32,
+                );
+                phase_has_residual_translation =
+                    backing_matrix.getTranslateX() != 0.0 || backing_matrix.getTranslateY() != 0.0;
             }
             if matrix.isIdentity() {
                 raw = SkPathPriv::Raw(orig, SkResolveConvexity::kYes);
@@ -1659,8 +1728,48 @@ impl Draw<'_> {
             }
         }
         let Some(raw) = raw else { return Ok(()) };
+        let mut rrect = crate::src::core::SkRRect::SkRRect::default();
+        let integral_fill_rrect = paint.getStyle() == crate::src::core::SkPaint::Style::kFill_Style
+            && ctm.isTranslate()
+            && ctm.getTranslateX().fract() == 0.0
+            && ctm.getTranslateY().fract() == 0.0
+            && orig.isRRect(Some(&mut rrect))
+            && [
+                rrect.rect().left(),
+                rrect.rect().top(),
+                rrect.rect().right(),
+                rrect.rect().bottom(),
+            ]
+            .into_iter()
+            .all(|value| value.fract() == 0.0)
+            && rrect
+                .all_radii()
+                .iter()
+                .all(|radius| radius.fX.fract() == 0.0 && radius.fY.fract() == 0.0);
+        // Chromium transforms integral, pixel-aligned RRect fills into the tile
+        // device before analytic AA. Re-expanding those paths into picture
+        // coordinates changes conic subdivision rounding at distant tile
+        // origins. Fractional borders retain picture phase.
+        let phase_raw = phase_path
+            .as_ref()
+            .filter(|_| !integral_fill_rrect)
+            .and_then(|path| SkPathPriv::Raw(path, SkResolveConvexity::kYes));
+        // Nested RRect records retain a translation after the tile origin is
+        // restored. Ties-to-even quantization makes their device-space curve
+        // controls match Chrome's observed partial-tile playback output.
+        let phase_even_rounding = paint.getStyle() == crate::src::core::SkPaint::Style::kFill_Style
+            && orig.isRRect(None)
+            && phase_has_residual_translation;
         // Native SK_BUILD_FOR_FUZZER points-count shortcut is inactive in CPU production.
-        self.drawDevPath(&raw, paint, coverage, custom, do_fill)?;
+        self.drawDevPath(
+            &raw,
+            phase_raw.as_ref(),
+            phase_even_rounding,
+            paint,
+            coverage,
+            custom,
+            do_fill,
+        )?;
         Ok(())
     }
 }

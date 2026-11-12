@@ -7,12 +7,14 @@ pub use foundation_base::blink_geometry::geometry::color_channel_keyword::ColorC
 pub use foundation_base::blink_geometry::geometry::path_types::{LineCap, LineJoin, WindRule};
 pub use foundation_base::blink_geometry::geometry::physical_size::AspectRatioFit;
 pub use foundation_base::blink_geometry::geometry::{
-    layout_unit::{kIndefiniteSize, FloorToInt},
+    layout_unit::{kIndefiniteSize, FloorToInt, SnapSizeToPixelAllowingZero},
     LayoutRatioFromSizeF, LayoutUnit, LogicalDirection, MarginStrut, PhysicalDirection,
     PhysicalOffset, PhysicalSize,
 };
 pub use foundation_base::gfx_geometry::Point;
+pub use foundation_base::layout_features::blink_features;
 pub use foundation_base::layout_features::runtime_enabled_features::RuntimeEnabledFeatures;
+pub use foundation_base::range_geometry;
 pub use foundation_base::text::primitives::east_asian_spacing_type::EastAsianSpacingType;
 pub use foundation_base::text::primitives::han_kerning_char_type::HanKerningCharType;
 pub use foundation_base::text::primitives::text_justify::TextJustify;
@@ -23,7 +25,9 @@ pub use foundation_base::text::primitives::{
         IsFlippedBlocksWritingMode, IsFlippedLinesWritingMode, IsHorizontalTypographicMode,
         IsHorizontalWritingMode, IsParallelWritingMode, IsVerticalWritingMode, ToLineWritingMode,
     },
-    writing_mode_utils::{LogicalToLogical, LogicalToPhysical, PhysicalToLogical},
+    writing_mode_utils::{
+        LogicalToLogical, LogicalToPhysical, LogicalToPhysicalSetter, PhysicalToLogical,
+    },
     TabSize, TabSizeValueType, TextDirection, WritingDirectionMode, WritingMode,
 };
 pub use foundation_base::unsupported_layout::UnsupportedLayout;
@@ -36,10 +40,12 @@ pub const RULE_NONZERO: WindRule = WindRule::RULE_NONZERO;
 
 pub mod gfx {
     pub use crate::gfx_ext::{
-        OutsetsF, Rect, RectF, ToEnclosingRect, ToRoundedVector2d, TransposeSize,
+        OutsetsF, Rect, RectF, ScaleToEnclosedRect, ToEnclosingRect, ToRoundedVector2d,
+        TransposeSize,
     };
     pub use crate::gfx_quad_f::QuadF;
     pub use crate::gfx_transform::Transform;
+    pub use foundation_base::gfx_geometry::size_conversions::ToRoundedSize;
     pub use foundation_base::gfx_geometry::*;
 }
 
@@ -50,6 +56,7 @@ pub mod blink_string;
 pub mod calculation_expression_node;
 pub mod calculation_operator;
 pub mod calculation_value;
+pub mod canvas_child_paint_state;
 pub mod casting;
 pub mod clear_collection_scope;
 pub mod color;
@@ -66,7 +73,9 @@ pub mod evaluation_input;
 pub mod gc_heap;
 pub mod gc_member;
 mod gfx_ext;
+pub mod gfx_line_f;
 pub mod gfx_quad_f;
+pub mod gfx_quad_geometry;
 mod gfx_transform;
 pub mod graphics_enums;
 pub mod graphics_types;
@@ -82,6 +91,7 @@ pub mod keywords;
 pub mod layout_boundary_geometry;
 pub mod layout_boundary_style;
 pub mod layout_boundary_transform;
+pub mod layout_hit_test;
 pub mod length;
 pub mod length_box;
 pub mod length_functions;
@@ -89,10 +99,13 @@ pub mod length_point;
 pub mod length_size;
 pub mod math_functions;
 pub mod math_transform;
+pub mod native_path;
+pub mod network_address_space;
 pub mod numeric_conversion;
 pub mod overlay_scrollbar_clip_behavior;
 pub mod paint_invalidation_reason;
 pub mod paint_property_update_reason;
+pub mod paint_rect;
 mod path_forward;
 pub mod physical_conversions;
 mod physical_rect;
@@ -101,6 +114,7 @@ pub mod rapidhash;
 pub mod resolved_underline_position;
 pub mod scoped_css_name;
 pub mod scoped_refptr;
+pub mod shape_path;
 pub mod string_statics;
 pub mod string_view;
 pub mod text_position;
@@ -298,6 +312,19 @@ impl StringBuilder {
         Self::default()
     }
 
+    // Source string_builder.h:267-268; string_builder.cc:148-153.
+    pub fn empty(&self) -> bool {
+        self.units.is_empty()
+    }
+    pub fn length(&self) -> u32 {
+        self.units.len() as u32
+    }
+    pub fn Clear(&mut self) {
+        self.units.clear();
+        self.has_value = false;
+        self.is_8bit = true;
+    }
+
     pub fn Append(&mut self, value: impl std::fmt::Display) {
         for unit in value.to_string().encode_utf16() {
             self.AppendCodeUnit(unit);
@@ -341,6 +368,29 @@ impl StringBuilder {
         self.has_value = true;
     }
 
+    // platform/wtf/text/string_builder.h:255; .cc:65-85.
+    pub fn ToAtomicString(&self) -> AtomicString {
+        AtomicString::from_utf16(&self.units)
+    }
+
+    // Append(StringBuilder), string_builder.h:165-173. Borrow the builder's
+    // live span, without constructing an intermediate String owner.
+    pub fn AppendBuilder(&mut self, value: &StringBuilder) {
+        if value.units.is_empty() {
+            return;
+        }
+        if self.units.is_empty() {
+            self.is_8bit = value.is_8bit;
+        } else if !value.is_8bit && value.units.len() > 1 {
+            self.is_8bit = false;
+        }
+        if value.units.len() == 1 && !self.units.is_empty() {
+            self.AppendCodeUnit(value.units[0]);
+            return;
+        }
+        self.units.extend_from_slice(&value.units);
+        self.has_value = true;
+    }
     // cpp: foundation/blink_base/wtf/text/string_builder.cc:52-60
     pub fn ToString(&self) -> String {
         if self.has_value {
@@ -398,3 +448,92 @@ pub extern "Rust" fn StringBuilderReserve16BitCapacity(builder: &mut StringBuild
     builder.is_8bit = false;
     StringBuilderReserveCapacity(builder, capacity);
 }
+
+pub mod focus;
+pub use focus::{FocusOptions, FocusType};
+
+pub mod editable;
+
+pub mod focusgroup_flags;
+
+pub mod table_focusgroup;
+
+pub mod slider_geometry;
+
+pub mod svg_path_byte_stream;
+
+pub mod popup_types;
+
+pub mod qualified_name;
+pub mod select_content_types;
+pub use qualified_name::QualifiedName;
+
+pub mod spin_button_geometry;
+
+pub mod overscroll;
+
+pub mod anchor_element_utils;
+
+pub mod media_element;
+
+pub mod content_security_policy;
+pub mod nullable_utf16_string;
+pub mod parser_source_line;
+pub mod scrollbar_theme_settings;
+pub mod shared_value;
+pub use nullable_utf16_string::NullableUTF16String;
+
+pub mod number_conversion;
+
+pub mod common_scheme_registry;
+
+pub mod url_escape;
+
+pub mod security;
+
+pub mod origin_access_list;
+
+pub mod editing_marker_scope;
+
+pub mod web_time_ranges;
+
+pub mod fragment_directive;
+
+pub mod file_path;
+
+pub mod network_content_type;
+
+/// Platform-neutral ICU text-search kernel; DOM/FindBuffer policy stays Editing.
+pub use icu_bidi::text_search_icu;
+
+pub mod network_connection_type;
+
+pub mod find_buffer;
+
+pub mod pod_interval_tree;
+
+pub mod scroll_utils;
+
+pub mod emoji_property_data;
+pub mod grapheme_break_property_data;
+
+pub mod language;
+
+pub mod spatial_navigation;
+
+pub mod intersection_observation_state;
+
+pub mod text_parser;
+
+pub mod vtt_geometry;
+
+pub mod css_use_counter;
+
+pub mod referrer_policy;
+
+pub mod task_attribution;
+
+pub mod layout_detach;
+
+pub mod scrollbar_input_state;
+pub mod scrollbar_part;

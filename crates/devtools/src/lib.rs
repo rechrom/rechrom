@@ -138,14 +138,37 @@ pub fn set_insert_text_handler(handler: InsertTextHandler) {
     *insert_text_handler().lock().unwrap() = Some(handler);
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImeCompositionInjection {
+    pub text: String,
+    /// UTF-16 code-unit offsets, matching CDP Input.imeSetComposition.
+    pub selection_start: usize,
+    pub selection_end: usize,
+}
+pub type ImeCompositionHandler =
+    Arc<dyn Fn(ImeCompositionInjection) -> Result<(), String> + Send + Sync>;
+fn ime_composition_handler() -> &'static std::sync::Mutex<Option<ImeCompositionHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<ImeCompositionHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_ime_composition_handler(handler: ImeCompositionHandler) {
+    *ime_composition_handler().lock().unwrap() = Some(handler);
+}
+
 /// CDP-shaped key input, dispatched to the currently focused host Page.
-/// This local transport supports rawKeyDown/keyDown/keyUp, not CDP char events.
+/// The local transport preserves separate rawKeyDown/char/keyUp delivery.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyInjection {
+    /// Input.pdl:139, platform editing commands associated with this key.
+    pub commands: Vec<String>,
     pub event_type: String,
     pub key: String,
     pub code: String,
     pub text: String,
+    pub unmodified_text: String,
+    pub native_virtual_key_code: i32,
+    pub is_system_key: bool,
     pub windows_virtual_key_code: u32,
     pub location: u32,
     pub modifiers: u8,
@@ -160,18 +183,46 @@ fn key_handler() -> &'static std::sync::Mutex<Option<KeyHandler>> {
 pub fn set_key_handler(handler: KeyHandler) {
     *key_handler().lock().unwrap() = Some(handler);
 }
+
+fn last_page_error() -> &'static std::sync::Mutex<Option<Value>> {
+    static LAST_PAGE_ERROR: std::sync::OnceLock<std::sync::Mutex<Option<Value>>> =
+        std::sync::OnceLock::new();
+    LAST_PAGE_ERROR.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Retain the most recent terminal Page producer failure for local diagnostics.
+///
+/// PageError delivery remains owned by the embedding. The DevTools transport
+/// only keeps the already-serialized value so a failure that predates tracing
+/// is still inspectable through `Performance.status`.
+pub fn report_page_error(error: Value) {
+    *last_page_error().lock().unwrap() = Some(error);
+}
+
+fn performance_status() -> Value {
+    let mut status = browser_tracing::status();
+    if let Some(error) = last_page_error().lock().unwrap().clone() {
+        if let Some(status) = status.as_object_mut() {
+            status.insert("last_page_error".into(), error);
+        }
+    }
+    status
+}
 impl KeyInjection {
     fn from_params(params: &Value) -> Result<Self, String> {
         let event_type = params
             .get("type")
             .and_then(Value::as_str)
-            .filter(|t| matches!(*t, "rawKeyDown" | "keyDown" | "keyUp"))
-            .ok_or("type must be rawKeyDown, keyDown or keyUp")?;
+            .filter(|t| matches!(*t, "rawKeyDown" | "keyDown" | "char" | "keyUp"))
+            .ok_or("type must be rawKeyDown, keyDown, char or keyUp")?;
         let key = params
             .get("key")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty() && s.len() <= 256)
-            .ok_or("key must be a nonempty string of at most 256 bytes")?;
+            .map(|v| v.as_str().ok_or("key must be a string"))
+            .transpose()?
+            .unwrap_or("");
+        if key.len() > 256 {
+            return Err("key exceeds 256 bytes".into());
+        }
         let text = params
             .get("text")
             .map(|v| v.as_str().ok_or("text must be a string"))
@@ -182,6 +233,25 @@ impl KeyInjection {
             .map(|v| v.as_str().ok_or("code must be a string"))
             .transpose()?
             .unwrap_or("");
+        let unmodified_text = params
+            .get("unmodifiedText")
+            .map(|v| v.as_str().ok_or("unmodifiedText must be a string"))
+            .transpose()?
+            .unwrap_or(text);
+        let native_virtual_key_code = params
+            .get("nativeVirtualKeyCode")
+            .map(|v| {
+                v.as_i64()
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or("nativeVirtualKeyCode must be a signed 32-bit integer")
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let is_system_key = params
+            .get("isSystemKey")
+            .map(|v| v.as_bool().ok_or("isSystemKey must be a boolean"))
+            .transpose()?
+            .unwrap_or(false);
         if code.len() > 256 {
             return Err("code exceeds 256 bytes".into());
         }
@@ -225,11 +295,32 @@ impl KeyInjection {
             .map(|v| v.as_bool().ok_or("autoRepeat must be a boolean"))
             .transpose()?
             .unwrap_or(false);
+        let commands = params
+            .get("commands")
+            .map(|value| {
+                value
+                    .as_array()
+                    .ok_or("commands must be an array of strings")?
+                    .iter()
+                    .map(|command| {
+                        command
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or("commands must be an array of strings")
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         Ok(Self {
+            commands,
             event_type: event_type.into(),
             key: key.into(),
             code: code.into(),
             text: text.into(),
+            unmodified_text: unmodified_text.into(),
+            native_virtual_key_code,
+            is_system_key,
             windows_virtual_key_code,
             location,
             modifiers: modifiers as u8,
@@ -667,6 +758,36 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
             // This acknowledges queueing, not completion or presentation.
             Ok(json!({}))
         }
+        "Input.imeSetComposition" => {
+            let text = params
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or("text must be a string")?;
+            if text.len() > MAX_BODY {
+                return Err("text exceeds 64 KiB".into());
+            }
+            let utf16_length = text.encode_utf16().count();
+            let offset = |name: &str| -> Result<usize, String> {
+                params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value <= utf16_length)
+                    .ok_or_else(|| format!("{name} must be a UTF-16 offset within text"))
+            };
+            let input = ImeCompositionInjection {
+                text: text.to_owned(),
+                selection_start: offset("selectionStart")?,
+                selection_end: offset("selectionEnd")?,
+            };
+            let compose = ime_composition_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            compose(input)?;
+            Ok(json!({}))
+        }
         "Input.dispatchKeyEvent" => {
             let input = KeyInjection::from_params(&params)?;
             let key = key_handler()
@@ -769,7 +890,7 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
             Ok(json!({"recording_id":browser_tracing::start(options)?}))
         }
         "Tracing.end" => Ok(json!({"recording_id":browser_tracing::stop()?})),
-        "Performance.status" => Ok(browser_tracing::status()),
+        "Performance.status" => Ok(performance_status()),
         "Performance.smoothness" => Ok(smoothness::analyze(&browser_tracing::snapshot(
             recording_id(&params)?,
         )?)),
@@ -1213,7 +1334,10 @@ mod tests {
         let key = KeyInjection::from_params(&json!({"type":"rawKeyDown", "key":"Enter"})).unwrap();
         assert_eq!(key.key, "Enter");
         assert_eq!(key.modifiers, 0);
-        assert!(KeyInjection::from_params(&json!({"type":"char", "key":"a"})).is_err());
+        let character = KeyInjection::from_params(&json!({"type":"char", "text":"a", "unmodifiedText":"a", "nativeVirtualKeyCode":0, "isSystemKey":false})).unwrap();
+        assert_eq!(character.event_type, "char");
+        assert_eq!(character.text, "a");
+        assert_eq!(character.unmodified_text, "a");
         assert!(
             KeyInjection::from_params(&json!({"type":"keyDown", "key":"a", "modifiers":16}))
                 .is_err()

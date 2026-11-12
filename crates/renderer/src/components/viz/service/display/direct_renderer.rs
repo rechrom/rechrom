@@ -45,6 +45,11 @@ pub trait DirectRendererBackend {
         &mut self,
         input: &VizOutput,
     ) -> io::Result<(crate::RenderUpdate, Self::Target)>;
+    /// Whether this root pass is drawing into the currently bound host output
+    /// instead of a render-pass backing.
+    fn IsRootFrameTarget(&self, _id: RenderPassId) -> bool {
+        false
+    }
 
     fn CanPartialSwap(&self) -> bool;
     fn UpdateRenderPassTextures(
@@ -184,7 +189,7 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         let mut requirements = BTreeMap::new();
         for pass in input.Frame().RenderPasses() {
             let root = input.RootDestination(pass.RenderPassId()).is_some();
-            if root && skip_root {
+            if root && (skip_root || self.backend.IsRootFrameTarget(pass.RenderPassId())) {
                 continue;
             }
             requirements.insert(
@@ -266,18 +271,23 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
                 }
             }
         }
+        // SoftwareRenderer binds SoftwareOutputDevice before allocating
+        // non-root render-pass bitmaps. This also selects the single display
+        // root that can draw straight into the host target.
+        self.backend.BindFrameTarget(input, target)?;
+        let bound_at = profile_started.map(|_| std::time::Instant::now());
         self.DecideRenderPassAllocationsForFrame(input, false)?;
-        // SoftwareOutputDevice storage must be bound before root damage and
-        // skip decisions. Ensure only root resources here; child allocation
-        // remains owned by DrawRenderPassAndExecuteCopyRequests.
+        // Multiple host roots remain a compatibility fallback until the
+        // aggregator always materializes one display root. Only those roots
+        // need intermediate resources.
         for pass in input.Frame().RenderPasses() {
-            if input.RootDestination(pass.RenderPassId()).is_some() {
+            if input.RootDestination(pass.RenderPassId()).is_some()
+                && !self.backend.IsRootFrameTarget(pass.RenderPassId())
+            {
                 self.EnsureRenderPassAllocated(pass, true)?;
             }
         }
         let allocated_at = profile_started.map(|_| std::time::Instant::now());
-        self.backend.BindFrameTarget(input, target)?;
-        let bound_at = profile_started.map(|_| std::time::Instant::now());
         let frame = DrawingFrame {
             input,
             device_viewport_size: viewport,
@@ -300,10 +310,11 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
             let framebuffer_damage = self
                 .backend
                 .GetCurrentFramebufferDamage(pass.RenderPassId());
-            let backing_invalid = self
-                .backend
-                .GetRenderPassBackingDrawnRect(pass.RenderPassId())
-                != pass.output_rect;
+            let backing_invalid = !self.backend.IsRootFrameTarget(pass.RenderPassId())
+                && self
+                    .backend
+                    .GetRenderPassBackingDrawnRect(pass.RenderPassId())
+                    != pass.output_rect;
             let skip = damage.IsEmpty()
                 && framebuffer_damage.IsEmpty()
                 && !backing_invalid
@@ -329,11 +340,11 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
             let passes = passes_at.unwrap();
             let finished = finished_at.unwrap();
             eprintln!(
-                "direct-renderer-profile begin_ms={:.3} allocate_ms={:.3} bind_ms={:.3} passes_ms={:.3} finish_ms={:.3} release_ms={:.3}",
+                "direct-renderer-profile begin_ms={:.3} bind_ms={:.3} allocate_ms={:.3} passes_ms={:.3} finish_ms={:.3} release_ms={:.3}",
                 (began - started).as_secs_f64() * 1000.,
-                (allocated - began).as_secs_f64() * 1000.,
-                (bound - allocated).as_secs_f64() * 1000.,
-                (passes - bound).as_secs_f64() * 1000.,
+                (bound - began).as_secs_f64() * 1000.,
+                (allocated - bound).as_secs_f64() * 1000.,
+                (passes - allocated).as_secs_f64() * 1000.,
                 (finished - passes).as_secs_f64() * 1000.,
                 finished.elapsed().as_secs_f64() * 1000.,
             );
@@ -483,7 +494,9 @@ impl<B: DirectRendererBackend> DirectRenderer<B> {
         if !root && scissor.IsEmpty() {
             return Ok(());
         }
-        self.EnsureRenderPassAllocated(pass, root)?;
+        if !root || !self.backend.IsRootFrameTarget(pass.RenderPassId()) {
+            self.EnsureRenderPassAllocated(pass, root)?;
+        }
         if !root
             && !self
                 .backend

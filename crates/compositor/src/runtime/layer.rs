@@ -6,13 +6,16 @@ use crate::{
         layer_impl::LayerImplOwner,
         picture_layer_impl::{PictureLayerImplOwner, PictureLayerImplTypes},
         solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImplTypes,
+        surface_layer_impl::SurfaceLayerImplTypes,
     },
     cc::layers::{
         layer_impl::LayerImpl,
+        painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl,
         picture_layer_impl::PictureLayerImpl,
         scrollbar_layer_impl_base::{ScrollbarLayerImplBase, ScrollbarLayerImplOwner},
         solid_color_layer_impl::SolidColorLayerImpl,
         solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImpl,
+        surface_layer_impl::SurfaceLayerImpl,
     },
 };
 
@@ -21,8 +24,10 @@ use crate::{
 pub enum CompositorLayer<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> {
     Base(LayerImpl<B>),
     SolidColor(SolidColorLayerImpl<B>),
+    Surface(SurfaceLayerImpl<B>),
     Picture(PictureLayerImpl<B>),
     SolidColorScrollbar(SolidColorScrollbarLayerImpl<B>),
+    PaintedScrollbar(PaintedScrollbarLayerImpl<B>),
 }
 impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> LayerImplOwner<B>
     for CompositorLayer<B>
@@ -31,16 +36,20 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> LayerImplOwne
         match self {
             Self::Base(layer) => layer,
             Self::SolidColor(layer) => layer.base(),
+            Self::Surface(layer) => layer.base(),
             Self::Picture(layer) => layer.base(),
             Self::SolidColorScrollbar(layer) => layer.base(),
+            Self::PaintedScrollbar(layer) => layer.base(),
         }
     }
     fn impl_base_mut(&mut self) -> &mut LayerImpl<B> {
         match self {
             Self::Base(layer) => layer,
             Self::SolidColor(layer) => layer.base_mut(),
+            Self::Surface(layer) => layer.base_mut(),
             Self::Picture(layer) => layer.base_mut(),
             Self::SolidColorScrollbar(layer) => layer.base_mut(),
+            Self::PaintedScrollbar(layer) => layer.base_mut(),
         }
     }
 }
@@ -66,17 +75,17 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> ScrollbarLaye
     for CompositorLayer<B>
 {
     fn AsScrollbarBase(&self) -> Option<&ScrollbarLayerImplBase<B>> {
-        if let Self::SolidColorScrollbar(layer) = self {
-            Some(layer.scrollbar_base())
-        } else {
-            None
+        match self {
+            Self::SolidColorScrollbar(layer) => Some(layer.scrollbar_base()),
+            Self::PaintedScrollbar(layer) => Some(layer.scrollbar_base()),
+            _ => None,
         }
     }
     fn AsScrollbarBaseMutable(&mut self) -> Option<&mut ScrollbarLayerImplBase<B>> {
-        if let Self::SolidColorScrollbar(layer) = self {
-            Some(layer.scrollbar_base_mut())
-        } else {
-            None
+        match self {
+            Self::SolidColorScrollbar(layer) => Some(layer.scrollbar_base_mut()),
+            Self::PaintedScrollbar(layer) => Some(layer.scrollbar_base_mut()),
+            _ => None,
         }
     }
 }
@@ -282,8 +291,10 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLay
         match self {
             Self::Base(layer) => layer.GetLayerType(),
             Self::SolidColor(layer) => layer.GetLayerType(),
+            Self::Surface(layer) => layer.GetLayerType(),
             Self::Picture(layer) => layer.GetLayerType(),
             Self::SolidColorScrollbar(layer) => layer.GetLayerType(),
+            Self::PaintedScrollbar(layer) => layer.GetLayerType(),
         }
     }
     fn damage_rect(&self) -> Rect {
@@ -459,6 +470,17 @@ where
     }
     fn LayerPropertyChanged(&self, trees: &PropertyTreesFor<B>) -> bool {
         self.impl_base().LayerPropertyChangedForPropertyTrees(trees)
+            || match self {
+                // ScrollbarLayerImplBase tracks compositor-only opacity and
+                // geometry mutations outside LayerImpl's generic flags. The
+                // native virtual damage path treats those as a changed layer
+                // so DamageTracker includes the thumb's visible rectangle.
+                Self::SolidColorScrollbar(layer) => {
+                    !layer.scrollbar_base().GetDamageReasons().empty()
+                }
+                Self::PaintedScrollbar(layer) => !layer.scrollbar_base().GetDamageReasons().empty(),
+                _ => false,
+            }
     }
     fn bounds(&self, trees: &PropertyTreesFor<B>) -> Size {
         self.impl_base().bounds_for_property_trees(trees)
@@ -477,8 +499,16 @@ where
         &self,
         trees: &PropertyTreesFor<B>,
     ) -> crate::cc::trees::damage_reason::DamageReasonSet {
-        self.impl_base()
-            .GetDamageReasonsForPropertyTrees(trees, || self.damage_rect())
+        match self {
+            // ScrollbarLayerImplBase overrides LayerImpl::GetDamageReasons so
+            // opacity-only fade frames damage the thumb even though the base
+            // layer has no update rect. Preserve that most-derived dispatch.
+            Self::SolidColorScrollbar(layer) => layer.scrollbar_base().GetDamageReasons(),
+            Self::PaintedScrollbar(layer) => layer.scrollbar_base().GetDamageReasons(),
+            _ => self
+                .impl_base()
+                .GetDamageReasonsForPropertyTrees(trees, || self.damage_rect()),
+        }
     }
     fn GetEnclosingVisibleRectInTargetSpace(&self, trees: &PropertyTreesFor<B>) -> Rect {
         match self {
@@ -653,6 +683,8 @@ where
     fn ResetChangeTracking(&mut self) {
         match self {
             Self::Picture(layer) => layer.ResetChangeTracking(),
+            Self::SolidColorScrollbar(layer) => layer.scrollbar_base_mut().ResetChangeTracking(),
+            Self::PaintedScrollbar(layer) => layer.scrollbar_base_mut().ResetChangeTracking(),
             _ => self.impl_base_mut().ResetChangeTracking(),
         }
     }
@@ -749,7 +781,10 @@ where
             Self::SolidColorScrollbar(layer) => {
                 context.WithScrollbar(|c| layer.scrollbar_base_mut().Shutdown(c))
             }
-            Self::Base(_) | Self::SolidColor(_) => {}
+            Self::PaintedScrollbar(layer) => {
+                context.WithScrollbar(|c| layer.scrollbar_base_mut().Shutdown(c))
+            }
+            Self::Base(_) | Self::SolidColor(_) | Self::Surface(_) => {}
         }
     }
 }
@@ -829,6 +864,7 @@ where
     B: crate::adapter::tree_sync::SyncTypes
         + PictureLayerImplTypes
         + SolidColorScrollbarLayerImplTypes
+        + SurfaceLayerImplTypes
         + crate::adapter::layer_tree_impl::LayerTreeTypes<Layer = Self>,
     Self: crate::adapter::layer_tree_impl::LayerTreeLayer<B>,
 {
@@ -849,7 +885,9 @@ where
             B::WithLayerImplContext(tree, c, |id, ctx| match self {
                 Self::Base(layer) => layer.CreateLayerImpl(id, ctx),
                 Self::SolidColor(layer) => layer.CreateLayerImpl(id, ctx),
+                Self::Surface(layer) => layer.CreateLayerImpl(id, ctx),
                 Self::SolidColorScrollbar(layer) => layer.CreateLayerImpl(id, ctx),
+                Self::PaintedScrollbar(layer) => layer.CreateLayerImpl(id, ctx),
                 Self::Picture(_) => unreachable!("picture handled by native constructor above"),
             })
         }
@@ -879,6 +917,20 @@ where
                 source.WithBaseSource(|sc| {
                     c.WithScrollbar(|tc| layer.CopyPropertiesTo(target, sc, tc))
                 });
+            }
+            Self::PaintedScrollbar(layer) => {
+                let Self::PaintedScrollbar(target) = target else {
+                    panic!("native PaintedScrollbarLayerImpl target subtype")
+                };
+                source.WithBaseSource(|sc| {
+                    c.WithScrollbar(|tc| layer.CopyPropertiesTo(target, sc, tc))
+                });
+            }
+            Self::Surface(layer) => {
+                let Self::Surface(target) = target else {
+                    panic!("native SurfaceLayerImpl target subtype")
+                };
+                source.WithBaseSource(|sc| c.WithBase(|tc| layer.CopyPropertiesTo(target, sc, tc)));
             }
             _ => source.WithBaseSource(|sc| {
                 c.WithBase(|tc| {
@@ -1001,6 +1053,9 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLay
         if let Self::SolidColorScrollbar(layer) = self {
             let (base, mut geometry) = layer.scrollbar_base_mut().SplitGeometryFields();
             base.ScrollByWithGeometry(scroll, Some(&mut geometry), c)
+        } else if let Self::PaintedScrollbar(layer) = self {
+            let (base, mut geometry) = layer.scrollbar_base_mut().SplitGeometryFields();
+            base.ScrollByWithGeometry(scroll, Some(&mut geometry), c)
         } else {
             self.impl_base_mut().ScrollBy(scroll, c)
         }
@@ -1011,6 +1066,9 @@ impl<B: PictureLayerImplTypes + SolidColorScrollbarLayerImplTypes> CompositorLay
         c: &mut crate::adapter::layer_impl::LayerImplScrollContext<'_, B>,
     ) {
         if let Self::SolidColorScrollbar(layer) = self {
+            let (base, mut geometry) = layer.scrollbar_base_mut().SplitGeometryFields();
+            base.SetCurrentScrollOffsetWithGeometry(offset, Some(&mut geometry), c)
+        } else if let Self::PaintedScrollbar(layer) = self {
             let (base, mut geometry) = layer.scrollbar_base_mut().SplitGeometryFields();
             base.SetCurrentScrollOffsetWithGeometry(offset, Some(&mut geometry), c)
         } else {
@@ -1099,6 +1157,7 @@ impl<B> HostDrawLayer<B> for CompositorLayer<B>
 where
     B: PictureLayerImplTypes
         + SolidColorScrollbarLayerImplTypes
+        + SurfaceLayerImplTypes
         + HostImplTypes
         + MainLayerTypes<TrackedElementRects = TrackedElementRects>,
 {
@@ -1160,7 +1219,13 @@ where
             Self::SolidColor(layer) => {
                 layer.AppendQuads(append, pass, data, &mut context.BaseContext())
             }
+            Self::Surface(layer) => {
+                layer.AppendQuads(append, pass, data, &mut context.BaseContext())
+            }
             Self::SolidColorScrollbar(layer) => {
+                layer.AppendQuads(append, pass, data, &mut context.BaseContext())
+            }
+            Self::PaintedScrollbar(layer) => {
                 layer.AppendQuads(append, pass, data, &mut context.BaseContext())
             }
             Self::Base(layer) => {

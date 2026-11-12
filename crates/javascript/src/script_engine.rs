@@ -89,6 +89,23 @@ impl ScriptEngine {
         &self.realm
     }
 
+    /// Install the new Window selected by DocumentLoader's commit transaction.
+    /// Chromium DocumentLoader.cc:2849-2867 constructs a new LocalDOMWindow for
+    /// this branch; it does not clear the old global object's properties.
+    ///
+    /// The caller has completed old-Window teardown and released its invocation
+    /// scope before borrowing the engine here. The returned realm retains the
+    /// old Window's bindings and wrappers for their original document lifetime;
+    /// the new host must bind the newly installed Document. Initial-empty-Window
+    /// reuse is a separate commit branch and must not call this operation.
+    pub fn InstallNewWindow(
+        &mut self,
+        global: Rc<RefCell<dyn JavaScriptHostBindings>>,
+    ) -> JavaScriptRealm {
+        let realm = self.runtime.CreateRealm(global);
+        std::mem::replace(&mut self.realm, realm)
+    }
+
     /// Temporary adapter for the existing parser/module scheduler. New Page
     /// code should prefer the complete-task methods on this type.
     pub fn Runtime(&self) -> &dyn JavaScriptRuntime {

@@ -27,6 +27,11 @@ pub(super) fn place(
             "A LayoutObjectTree has exactly one root"
         );
         storage.root.Assign(object);
+        if let Some(view) = unsafe {
+            foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(object).as_mut()
+        } {
+            view.BindEditingSelection(&storage.editing);
+        }
         return;
     }
     let parent_node = unsafe { &*parent }.GetNode().cast::<ContainerNode>();
@@ -167,6 +172,89 @@ pub(super) fn update_subtree(
     true
 }
 
+/// Node::DetachLayoutTree / LayoutObject::Destroy with the same retained
+/// input-owner retirement used by FinishUpdate. This is a local index walk,
+/// never a second DOM tree or a census of every managed allocation.
+#[inline(never)]
+pub(super) fn detach_element_layout_tree(
+    tree: &mut LayoutObjectTree,
+    id: u64,
+    performing_reattach: bool,
+) -> bool {
+    let _heap_scope = LayoutHeapScope::new();
+    let storage = unsafe { &mut *tree.storage_ };
+    assert!(
+        !storage.updating,
+        "DOM detach is outside an attachment transaction"
+    );
+    let roots = storage.InputKeys(id).to_vec();
+    if roots.is_empty() {
+        return false;
+    }
+    let mut affected = roots.clone();
+    let mut seen = std::collections::HashSet::new();
+    let mut position = 0;
+    while position < affected.len() {
+        let key = affected[position].clone();
+        position += 1;
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if let Some(record) = storage.managed.get(&key) {
+            affected.extend_from_slice(storage.ChildKeys(record.object));
+        }
+    }
+    let _factory_scope = LayoutObjectFactoryScope::new(&storage.factories);
+    // Derived destruction owns native children/anonymous objects and its
+    // existing child-before-parent ElementLayoutDetached notification queue.
+    // Keep every allocation/input root pinned until all destruction finishes.
+    for key in roots {
+        let Some(record) = storage.managed.get(&key) else {
+            continue;
+        };
+        let object = unsafe { &mut *record.object };
+        if !object.WasDestroyedForTreeUpdate() {
+            unsafe { &mut *record.node }.SetLayoutObject(std::ptr::null_mut());
+            if let Some(parent) = object.DestroyAndCleanupAnonymousWrappers(performing_reattach) {
+                storage.detached_parent = Some(parent);
+            }
+        }
+    }
+    let mut index = storage
+        .input_index
+        .take()
+        .expect("InputKeys prepared the resident index");
+    let mut retired = Vec::new();
+    for key in affected {
+        let Some(record) = storage.managed.remove(&key) else {
+            continue;
+        };
+        index.Remove(&key, &record);
+        let node = unsafe { &mut *record.node };
+        if storage.last_child.get(&record.parent) == Some(&record.node) {
+            let previous = node.previousSibling();
+            if previous.is_null() {
+                storage.last_child.remove(&record.parent);
+            } else {
+                storage.last_child.insert(record.parent, previous);
+            }
+        }
+        storage.last_child.remove(&record.object);
+        node.DetachForTreeUpdate();
+        if storage.root.Get() == record.object {
+            storage.root.Assign(std::ptr::null_mut());
+        }
+        retired.push((record.object, record.node));
+        storage.stats.removed += 1;
+    }
+    for (object, node) in retired {
+        storage.objects.remove(&object);
+        storage.metadata.remove(&node);
+    }
+    assert!(storage.input_index.set(index).is_ok());
+    true
+}
+
 #[inline(never)]
 pub(super) fn complete_update<T>(
     tree: &mut LayoutObjectTree,
@@ -198,7 +286,9 @@ pub(super) fn complete_update<T>(
                 }
             }
             for node in storage.metadata.values() {
-                unsafe { &mut *node.Get() }.DetachForTreeUpdate();
+                let node = unsafe { &mut *node.Get() };
+                node.SetLayoutObject(std::ptr::null_mut());
+                node.DetachForTreeUpdate();
             }
             storage.root = Persistent::from_ptr(std::ptr::null_mut());
             storage.objects.clear();
@@ -253,7 +343,9 @@ pub(super) fn finish_update(tree: &mut LayoutObjectTree) {
         if !unsafe { &*old.object }.WasDestroyedForTreeUpdate() {
             unsafe { &mut *old.object }.Destroy();
         }
-        unsafe { &mut *old.node }.DetachForTreeUpdate();
+        let node = unsafe { &mut *old.node };
+        node.SetLayoutObject(std::ptr::null_mut());
+        node.DetachForTreeUpdate();
         storage.stats.removed += 1;
         storage.retired.push((old.object, old.node));
     }
@@ -278,6 +370,31 @@ pub(super) fn finish_update(tree: &mut LayoutObjectTree) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immediate_detach_retires_subtree_input_keys_and_preserves_live_sibling() {
+        let space = ConstraintSpace::default();
+        let factories = LayoutObjectFactorySet::default();
+        let mut tree = LayoutObjectTree::new_with_factories(&space, &factories);
+        tree.Update(|tree| {
+            let root = tree.CreateRootDefault(1, &ComputedStyle::default()) as *mut LayoutObject;
+            let parent = tree.AddBoxDefault(unsafe { &mut *root }, 2, &ComputedStyle::default())
+                as *mut LayoutObject;
+            tree.AddBoxDefault(unsafe { &mut *parent }, 3, &ComputedStyle::default());
+            tree.AddBoxDefault(unsafe { &mut *root }, 4, &ComputedStyle::default());
+        });
+        let sibling = tree.GetLayoutObjectForNode(4).unwrap() as *const LayoutObject;
+        assert!(tree.DetachElementLayoutTree(2, false));
+        assert!(!tree.HasManagedInputForNode(2));
+        assert!(!tree.HasManagedInputForNode(3));
+        assert!(tree.GetLayoutObjectForNode(2).is_none());
+        assert!(tree.GetLayoutObjectForNode(3).is_none());
+        assert_eq!(
+            tree.GetLayoutObjectForNode(4).unwrap() as *const LayoutObject,
+            sibling
+        );
+        assert!(!tree.DetachElementLayoutTree(2, false));
+    }
 
     #[test]
     fn narrow_update_rejects_a_stale_derived_child_index_without_mutation() {

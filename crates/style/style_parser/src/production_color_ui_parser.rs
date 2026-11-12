@@ -130,14 +130,32 @@ pub(super) fn Consume<T: TokenStreamTokenizer>(
     }
     match id {
         // cpp: longhands_custom.cc:7475-7483,2090-2123,5563-5569.
-        // CSSCaretColorWithOptionalSecondValue is experimental (stable=false).
         kAccentColor | kCaretColor | kInternalVisitedCaretColor => {
-            if stream.Peek().Id() == kAuto {
+            let first = if stream.Peek().Id() == kAuto {
                 stream.ConsumeIncludingWhitespace();
-                Ok(values::identifier(kAuto))
+                values::identifier(kAuto)
             } else {
-                ConsumeColor(id, stream, mode)
+                ConsumeColor(id, stream, mode)?
+            };
+            if id == kAccentColor
+                || !foundation::RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled(
+                )
+                || stream.AtEnd()
+            {
+                return Ok(first);
             }
+            // longhands_custom.cc:2109-2122. A missing second color leaves
+            // the first intact; the declaration owner rejects trailing tokens.
+            let second = if stream.Peek().Id() == kAuto {
+                stream.ConsumeIncludingWhitespace();
+                values::identifier(kAuto)
+            } else {
+                ConsumeColor(id, stream, mode)?
+            };
+            Ok(values::list(
+                vec![first, second],
+                values::ListSeparator::Space,
+            ))
         }
         // cpp: longhands_custom.cc:5870-5876 delegates OutlineColor:7464-7473.
         kInternalVisitedOutlineColor => {

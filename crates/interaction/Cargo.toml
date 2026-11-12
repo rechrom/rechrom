@@ -2,12 +2,31 @@
 name = "interaction"
 version = "0.0.1"
 edition = "2021"
+publish = false
 
 [dependencies]
 paint = { path = "../paint" }
-layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
-dom = { path = "../dom" }
+# The resident editing adapters call the translated InlineCursor,
+# OffsetMapping, and PhysicalBoxFragment editing queries.  Those source-owned
+# reciprocal modules are assembled behind LayoutNG's translation feature; the
+# Interaction facade must select the same production assembly as Browser.
+layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+dom = { path = "../dom" }
+cssom = { path = "../cssom" }
+interaction_default = { path = "interaction_default" }
+interaction_dispatch = { path = "interaction_dispatch" }
+interaction_hit_test = { path = "interaction_hit_test" }
+interaction_input = { path = "interaction_input" }
+interaction_scroll = { path = "interaction_scroll" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
+image_resource = { path = "../image_resource" }
+font_engine = { path = "../font_engine" }
 
-[dev-dependencies]
 html = { path = "../html" }
+
+navigation_history = { path = "../navigation_history" }
+fileapi = { path = "../fileapi" }
+
+url = "2"
+base64 = "0.22"

@@ -56,6 +56,8 @@ pub trait TileBasedTile: TileLike {
     fn GetResourceId(&self) -> Option<ResourceId>;
     fn GetResourceSize(&self) -> Option<Size>;
     fn GetSolidColor(&self) -> Option<Color4f>;
+    fn TraceContentRect(&self) -> Rect;
+    fn TraceLayerId(&self) -> i32;
 }
 // Source: cc/layers/tile_based_layer_impl.h:97,135-187,208-222.
 // The derived receiver is a call-scoped borrow of the actual fields beside the
@@ -558,6 +560,26 @@ where
         if let Some(tile) = tile.filter(|tile| tile.IsReadyToDraw()) {
             delegate.WillProcessReadyToDrawTile(iter);
             if let Some(resource) = tile.GetResourceId() {
+                if std::env::var("RECHROM_TRACE_TILE_LAYER_POINT")
+                    .ok()
+                    .and_then(|value| {
+                        let (x, y) = value.split_once(',')?;
+                        Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+                    })
+                    .is_some_and(|(x, y)| {
+                        x >= geometry.x
+                            && x < geometry.right()
+                            && y >= geometry.y
+                            && y < geometry.bottom()
+                    })
+                {
+                    eprintln!(
+                        "tile-quad-provenance resource={resource:?} tile_layer={} content={:?} geometry={geometry:?} visible={offset_visible:?} texture={:?}",
+                        tile.TraceLayerId(),
+                        tile.TraceContentRect(),
+                        iter.texture_rect(),
+                    );
+                }
                 let quad = pass.CreateAndAppendTileDrawQuad();
                 pass.TileDrawQuadSetNew(
                     quad,
@@ -725,5 +747,11 @@ where
     }
     fn GetSolidColor(&self) -> Option<Color4f> {
         self.GetSolidColor()
+    }
+    fn TraceContentRect(&self) -> Rect {
+        *self.content_rect()
+    }
+    fn TraceLayerId(&self) -> i32 {
+        self.layer_id()
     }
 }

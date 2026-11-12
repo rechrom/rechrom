@@ -22,8 +22,50 @@ impl LayoutObject {
         unsafe { LayoutObjectHitTestAllPhasesProvider(self, result, location, accumulated_offset) }
     }
 
+    /// Link generated anonymous content to its canonical DOM PseudoElement.
+    /// This is an owner identity, not an additional hit-test tree or geometry.
+    pub fn WithHitTestNodeOwner(&mut self, owner: Option<u64>) -> &mut Self {
+        if let Some(node) = unsafe { self.node_.Get().as_mut() } {
+            node.SetInputHitTestNodeOwner(owner);
+        }
+        self
+    }
     pub fn NodeForHitTest(&self) -> *mut Node {
-        unsafe { LayoutObjectNodeForHitTestProvider(self) }
+        // Source: core/layout/layout_object.cc:4547-4590. Generated content
+        // resolves through its existing anonymous LayoutObject ancestry.
+        self.CheckIsNotDestroyed();
+        let node = self.GetNode();
+        if !node.is_null() {
+            return node;
+        }
+        let mut parent = self.Parent();
+        let Some(parent_object) = (unsafe { parent.as_ref() }) else {
+            return std::ptr::null_mut();
+        };
+        if !matches!(
+            parent_object.StyleRef().StyleType(),
+            PseudoId::kPseudoIdAfter
+                | PseudoId::kPseudoIdBefore
+                | PseudoId::kPseudoIdFirstLetter
+                | PseudoId::kPseudoIdInterestButton
+                | PseudoId::kPseudoIdMarker
+                | PseudoId::kPseudoIdScrollButton
+                | PseudoId::kPseudoIdScrollButtonBlockStart
+                | PseudoId::kPseudoIdScrollButtonInlineStart
+                | PseudoId::kPseudoIdScrollButtonInlineEnd
+                | PseudoId::kPseudoIdScrollButtonBlockEnd
+                | PseudoId::kPseudoIdScrollMarker
+        ) {
+            return std::ptr::null_mut();
+        }
+        while let Some(object) = unsafe { parent.as_ref() } {
+            let node = object.GetNode();
+            if !node.is_null() {
+                return node;
+            }
+            parent = object.Parent();
+        }
+        std::ptr::null_mut()
     }
 
     pub fn UpdateHitTestResult(&self, result: &mut HitTestResult, offset: &PhysicalOffset) {
@@ -53,7 +95,11 @@ impl LayoutObject {
         rect: &mut PhysicalRect,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe { LayoutObjectMapToVisualRectPhysicalProvider(self, ancestor, rect, flags) }
+        self.CheckIsNotDestroyed();
+        let mut float_rect = gfx::RectF::from(*rect);
+        let intersects = self.MapToVisualRectInAncestorSpaceFloat(ancestor, &mut float_rect, flags);
+        *rect = PhysicalRect::EnclosingRect(&float_rect);
+        intersects
     }
 
     #[inline(never)]
@@ -63,7 +109,17 @@ impl LayoutObject {
         rect: &mut gfx::RectF,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe { LayoutObjectMapToVisualRectFloatProvider(self, ancestor, rect, flags) }
+        self.CheckIsNotDestroyed();
+        // GeometryMapper acceleration is not enabled at this boundary. The
+        // source TransformState slow path retains the same geometry semantics.
+        let mut state = TransformState::new(
+            TransformState::kApplyTransformDirection,
+            gfx::QuadF::from(*rect),
+        );
+        let intersects = self.MapToVisualRectInAncestorSpaceInternal(ancestor, &mut state, flags);
+        state.Flatten();
+        *rect = state.LastPlanarQuad().BoundingBox();
+        intersects
     }
 
     #[inline(never)]
@@ -73,7 +129,7 @@ impl LayoutObject {
         state: &mut TransformState,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe { DispatchLayoutObjectMapToVisualRectInternal(self, ancestor, state, flags) }
+        self.MapVisualRectInternalDispatch(ancestor, state, flags)
     }
 
     #[inline(never)]
@@ -87,7 +143,22 @@ impl LayoutObject {
     }
 
     pub fn LocalCaretRect(&self, offset: i32, shape: CaretShape) -> PhysicalRect {
-        unsafe { LayoutObjectLocalCaretRectProvider(self, offset, shape) }
+        // Source virtual dispatch: layout_block.cc:507-525,
+        // layout_inline.cc:253-286, layout_box.cc:3138-3183. Text and the
+        // base LayoutObject return empty rectangles (layout_text.cc:715-718,
+        // layout_object.cc:4170-4173).
+        self.CheckIsNotDestroyed();
+        if let Some(block) = unsafe { foundation::DynamicTo::<LayoutBlock>(self).as_ref() } {
+            block.LocalCaretRect(offset, shape)
+        } else if let Some(inline) = unsafe {
+            foundation::DynamicTo::<crate::internal::layout_inline::LayoutInline>(self).as_ref()
+        } {
+            inline.LocalCaretRect(offset, shape)
+        } else if let Some(box_) = unsafe { foundation::DynamicTo::<LayoutBox>(self).as_ref() } {
+            box_.LocalCaretRect(offset, shape)
+        } else {
+            PhysicalRect::default()
+        }
     }
 
     // This is a fixed-cost hit-test admission predicate. Keep it inlineable so
@@ -106,16 +177,6 @@ impl LayoutObject {
         unsafe { LayoutObjectMapLocalToAncestorProvider(self, ancestor, state, mode) }
     }
 
-    #[inline(never)]
-    pub fn MapAncestorToLocal(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    ) {
-        unsafe { LayoutObjectMapAncestorToLocalProvider(self, ancestor, state, mode) }
-    }
-
     // This is a specifically optimized caller-side path, so the dispatch
     // wrapper remains inlineable despite being physically fragment-owned.
     pub(crate) fn MapToVisualRectInAncestorSpaceInternalFastPath(
@@ -125,14 +186,9 @@ impl LayoutObject {
         flags: VisualRectFlags,
         intersects: &mut bool,
     ) -> bool {
-        unsafe {
-            LayoutObjectMapToVisualRectInAncestorSpaceInternalFastPathProvider(
-                self,
-                ancestor_or_null_for_viewport,
-                rect,
-                flags,
-                intersects,
-            )
-        }
+        let _ = (ancestor_or_null_for_viewport, rect, flags, intersects);
+        // Required canonical Paint-property owner acceleration is deliberately
+        // not enabled; callers use the fully translated source slow path.
+        false
     }
 }

@@ -62,6 +62,7 @@ pub(super) fn SameConstraintScalars(a: &ConstraintSpace, b: &ConstraintSpace) ->
         && a.fragmentainer_block_size == b.fragmentainer_block_size
         && a.compatibility_mode == b.compatibility_mode
         && a.printing == b.printing
+        && a.should_print_backgrounds == b.should_print_backgrounds
         && a.vertical_scroll_enforced == b.vertical_scroll_enforced
         && a.fullscreen_element_blocks_layout_view_scroll
             == b.fullscreen_element_blocks_layout_view_scroll
@@ -74,6 +75,7 @@ pub(super) fn SameConstraintScalars(a: &ConstraintSpace, b: &ConstraintSpace) ->
         && a.canvas_draw_element_enabled == b.canvas_draw_element_enabled
         && a.prefer_non_composited_scrolling_enabled == b.prefer_non_composited_scrolling_enabled
         && a.viewport == b.viewport
+        && a.media_panel_page == b.media_panel_page
         && a.control_theme == b.control_theme
 }
 

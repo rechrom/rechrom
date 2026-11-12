@@ -5,10 +5,11 @@ use font_engine::{
     FontContextVersion, FontEngineHandle, FontMutation, SystemFontProvider, SystemFontResponse,
 };
 use layoutng_assembly::internal::layout_input::ConstraintSpace;
+use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct SystemFontSession {
     engine: FontEngineHandle,
-    provider: Box<dyn SystemFontProvider>,
+    provider: Rc<RefCell<Box<dyn SystemFontProvider>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,7 +29,76 @@ impl SystemFontSession {
         engine: FontEngineHandle,
         provider: Box<dyn SystemFontProvider>,
     ) -> Self {
-        Self { engine, provider }
+        Self {
+            engine,
+            provider: Rc::new(RefCell::new(provider)),
+        }
+    }
+    /// CSSFontSelector is Document-scoped; platform discovery/cache remains
+    /// the same embedding service when DocumentLoader replaces a Document.
+    pub(crate) fn ForDocument(&self, engine: FontEngineHandle) -> Self {
+        Self {
+            engine,
+            provider: self.provider.clone(),
+        }
+    }
+    pub(crate) fn ContextVersion(&self) -> FontContextVersion {
+        self.engine.with_mut(|engine| engine.ContextVersion())
+    }
+    /// LocalFontFaceSource::IsLocalFontAvailable uses an exact unique-name
+    /// query against this same platform font session (local_font_face_source.cc).
+    pub(crate) fn ResolveUniqueName(
+        &mut self,
+        name: &str,
+        constraints: &mut ConstraintSpace,
+    ) -> Option<font_engine::FontFace> {
+        let query = font_engine::SystemFontQuery::MatchUniqueName {
+            name: name.to_owned(),
+        };
+        loop {
+            let pending = self
+                .engine
+                .with_mut(|engine| engine.PrepareSystemQuery(query.clone()));
+            if pending.system_queries.is_empty() {
+                break;
+            }
+            for request in pending.system_queries {
+                let answer = self.provider.borrow_mut().Resolve(&request);
+                self.engine
+                    .with_mut(|engine| {
+                        engine.ApplyMutation(FontMutation::SystemFontResponse(SystemFontResponse {
+                            request,
+                            answer,
+                        }))
+                    })
+                    .expect("native unique-name response");
+            }
+        }
+        constraints.fonts = self.engine.with_mut(|engine| engine.ResolvedFaces());
+        self.engine
+            .with_mut(|engine| engine.ResolvedSystemMatch(&query))
+    }
+    /// Complete explicit synchronous FontEngine misses through the same native
+    /// provider, used by source PlainTextPainter outside a Layout pass.
+    pub(crate) fn CompletePending(
+        &mut self,
+        pending: font_engine::FontPending,
+        constraints: &mut ConstraintSpace,
+    ) -> Result<(), font_engine::FontError> {
+        if !pending.resource_ids.is_empty() {
+            return Err(font_engine::FontError::NoUsableFont);
+        }
+        for request in pending.system_queries {
+            let answer = self.provider.borrow_mut().Resolve(&request);
+            self.engine.with_mut(|engine| {
+                engine.ApplyMutation(FontMutation::SystemFontResponse(SystemFontResponse {
+                    request,
+                    answer,
+                }))
+            })?;
+        }
+        constraints.fonts = self.engine.with_mut(|engine| engine.ResolvedFaces());
+        Ok(())
     }
     pub(crate) fn SetProvider(
         &mut self,
@@ -37,7 +107,7 @@ impl SystemFontSession {
     ) {
         self.EnvironmentChanged(constraints);
         provider.SetContextVersion(self.engine.with_mut(|engine| engine.ContextVersion()));
-        self.provider = provider;
+        *self.provider.borrow_mut() = provider;
     }
     pub(crate) fn EnvironmentChanged(&mut self, constraints: &mut ConstraintSpace) {
         let version = FontContextVersion(
@@ -47,7 +117,7 @@ impl SystemFontSession {
                 .checked_add(1)
                 .expect("font context version exhausted"),
         );
-        self.provider.SetContextVersion(version);
+        self.provider.borrow_mut().SetContextVersion(version);
         self.engine
             .with_mut(|engine| engine.ApplyMutation(FontMutation::EnvironmentChanged(version)))
             .expect("font environment mutation");
@@ -116,7 +186,7 @@ impl SystemFontSession {
                         }
                     };
                     let _resolve = browser_tracing::span("font", name);
-                    let answer = self.provider.Resolve(&request);
+                    let answer = self.provider.borrow_mut().Resolve(&request);
                     admitted |= matches!(&answer, font_engine::SystemFontAnswer::Face(face) if !face.bytes.is_empty());
                     requests += 1;
                     opened_faces += matches!(&answer, font_engine::SystemFontAnswer::Face(face) if !face.bytes.is_empty())
@@ -183,17 +253,67 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
     fonts: &mut SystemFontSession,
     purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
 ) -> bool {
+    LayoutWithSystemFontsAtStageImpl(
+        layout,
+        document,
+        interaction,
+        constraints,
+        fonts,
+        purpose,
+        false,
+    )
+}
+
+/// Page has already attached the current DOM changes to the resident native
+/// tree, released its borrows, and delivered synchronous attachment effects.
+/// Start the first font/layout pass from that exact owner; retries still use
+/// the ordinary synchronization path after font invalidation.
+pub(crate) fn LayoutWithSystemFontsAtStageAfterTreeSynchronization(
+    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    document: &mut dom::DOM,
+    interaction: &dom::UserInteractionState,
+    constraints: &mut ConstraintSpace,
+    fonts: &mut SystemFontSession,
+    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+) -> bool {
+    LayoutWithSystemFontsAtStageImpl(
+        layout,
+        document,
+        interaction,
+        constraints,
+        fonts,
+        purpose,
+        true,
+    )
+}
+
+fn LayoutWithSystemFontsAtStageImpl(
+    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    document: &mut dom::DOM,
+    interaction: &dom::UserInteractionState,
+    constraints: &mut ConstraintSpace,
+    fonts: &mut SystemFontSession,
+    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+    mut tree_synchronized: bool,
+) -> bool {
     let mut updated = false;
     loop {
         // Chromium does not publish a provisional fragment tree while font
         // fallback is still resolving. Keep each retry on the resident source
         // tree, then export exactly once after the query outbox is stable.
-        super::persistent_layout::LayoutDocumentWithEngineWithoutPublication(
-            layout,
-            document,
-            interaction,
-            constraints,
-        );
+        if tree_synchronized {
+            super::persistent_layout::LayoutDocumentWithEngineWithoutPublicationAfterSynchronization(
+                layout,
+            );
+            tree_synchronized = false;
+        } else {
+            super::persistent_layout::LayoutDocumentWithEngineWithoutPublication(
+                layout,
+                document,
+                interaction,
+                constraints,
+            );
+        }
         let completion = fonts.CompletePass(constraints);
         if !completion.changed {
             // The last provisional pass is already the settled native

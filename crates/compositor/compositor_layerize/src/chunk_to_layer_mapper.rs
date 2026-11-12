@@ -159,6 +159,24 @@ impl<'a, M: ChunkGeometryMapper + ?Sized> ChunkToLayerMapper<'a, M> {
         result
     }
 
+    pub fn MapVisualRectWithoutRasterEffectOutset(&self, rect: Rect) -> Rect {
+        if self.has_filter_that_moves_pixels_ {
+            return self.MapVisualRectFromStateWithoutRasterEffectOutset(rect, &self.chunk_state_);
+        }
+        if rect.IsEmpty() {
+            return Rect::default();
+        }
+        let mut mapped_rect = self.mapper_.MapRect(&self.transform_, rect.into());
+        if !rectf_is_empty(mapped_rect) && !self.mapper_.ClipIsInfinite(&self.clip_rect_) {
+            intersect_rectf(&mut mapped_rect, self.mapper_.ClipRect(&self.clip_rect_));
+        }
+        if rectf_is_empty(mapped_rect) {
+            Rect::default()
+        } else {
+            ToEnclosingRect(mapped_rect)
+        }
+    }
+
     // Source: third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.h:40-42,55;
     //         third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.cc:101-122.
     fn MapUsingGeometryMapper(&self, rect: Rect) -> Rect {
@@ -176,6 +194,21 @@ impl<'a, M: ChunkGeometryMapper + ?Sized> ChunkToLayerMapper<'a, M> {
         self.InflateForRasterEffectOutset(&mut result);
         ToEnclosingRect(result)
     }
+    fn MapVisualRectFromStateWithoutRasterEffectOutset(
+        &self,
+        rect: Rect,
+        state: &M::PropertyTreeState,
+    ) -> Rect {
+        let mut visual_rect = self.mapper_.MakeFloatClipRect(rect.into());
+        self.mapper_
+            .LocalToAncestorVisualRect(state, &self.layer_state_, &mut visual_rect);
+        if rectf_is_empty(self.mapper_.ClipRect(&visual_rect)) {
+            return Rect::default();
+        }
+        let mut result = self.mapper_.ClipRect(&visual_rect);
+        result.Offset(-self.layer_offset_.x(), -self.layer_offset_.y());
+        ToEnclosingRect(result)
+    }
 
     // Source: third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.h:44-50.
     pub fn Transform(&self) -> &M::Transform {
@@ -183,6 +216,24 @@ impl<'a, M: ChunkGeometryMapper + ?Sized> ChunkToLayerMapper<'a, M> {
     }
     pub fn ClipRect(&self) -> &M::FloatClipRect {
         &self.clip_rect_
+    }
+
+    /// A changed drawing below an antialiased rounded clip can alter the
+    /// coverage pixels immediately outside the integer-enclosed visual rect.
+    /// Raster-effect outsets already provide that coverage when present.
+    pub fn NeedsRoundedClipAAOutset(&self) -> bool {
+        self.raster_effect_outset_ == RasterEffectOutset::kNone
+            && self.mapper_.ClipHasRadius(&self.clip_rect_)
+    }
+    pub fn HasRoundedClip(&self) -> bool {
+        self.mapper_.ClipHasRadius(&self.clip_rect_)
+    }
+    pub fn RoundedClipHasFractionalRightEdge(&self) -> bool {
+        if !self.HasRoundedClip() || self.mapper_.ClipIsInfinite(&self.clip_rect_) {
+            return false;
+        }
+        let right = self.mapper_.ClipRect(&self.clip_rect_).right();
+        (right - right.round()).abs() > 1e-4
     }
 
     // Source: third_party/blink/renderer/platform/graphics/compositing/chunk_to_layer_mapper.h:56;

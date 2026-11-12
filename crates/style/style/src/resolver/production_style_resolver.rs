@@ -47,7 +47,7 @@ use crate::{
     css_value::CSSValuePayload,
     element_rule_collector::{ElementRuleCollector, MatchRequest, RuleSetGroup, SearchTextRequest},
     media_queries::{forced_colors::ForcedColors, MediaValuesCachedData},
-    persistent_selector::PersistentSelectorService,
+    persistent_selector::{PersistentSelectorBackend, PersistentSelectorService},
     production_css_value::{self, ProductionCSSValueDispatch},
     production_element_rule_collector::{
         ProductionElementResolveContext, ProductionElementRuleCollectorRuntime,
@@ -535,6 +535,35 @@ impl<'a> ProductionInitialStyleHost<'a> {
     }
 }
 
+impl crate::resolver::style_resolver::StyleResolverViewportBackend
+    for ProductionInitialStyleHost<'_>
+{
+    fn ViewportSetZIndex(&self, b: &mut Self::ComputedStyleBuilder, v: i32) {
+        b.SetZIndex(v)
+    }
+    fn ViewportSetForcesStackingContext(&self, b: &mut Self::ComputedStyleBuilder, v: bool) {
+        b.SetForcesStackingContext(v)
+    }
+    fn ViewportSetDisplay(&self, b: &mut Self::ComputedStyleBuilder, v: EDisplay) {
+        b.SetDisplay(v)
+    }
+    fn ViewportSetPosition(&self, b: &mut Self::ComputedStyleBuilder, v: EPosition) {
+        b.SetPosition(v)
+    }
+    fn ViewportSetOverflowX(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow) {
+        b.SetOverflowX(v)
+    }
+    fn ViewportSetOverflowY(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow) {
+        b.SetOverflowY(v)
+    }
+    fn ViewportApplyVisionDeficiencyStyle(
+        &self,
+        _: &Self::StyleEngine,
+        _: &mut Self::ComputedStyleBuilder,
+    ) {
+    }
+}
+
 impl StyleResolverBackend for ProductionInitialStyleHost<'_> {
     type Document = Self;
     type ComputedStyle = Persistent<ComputedStyle>;
@@ -587,7 +616,10 @@ impl StyleResolverBackend for ProductionInitialStyleHost<'_> {
     fn InDesignMode(&self, _document: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(&self, document: &'d Self::Document) -> &'d AtomicString {
+    fn ContentLanguage<'d>(
+        &'d self,
+        document: &'d Self::Document,
+    ) -> &'d AtomicString {
         &document.content_language
     }
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32 {
@@ -793,6 +825,7 @@ struct ProductionResolverElement {
     part: Option<crate::persistent_selector::PersistentPartNames>,
     part_names_map: Option<DOMPartNamesMap>,
     corresponding_element: Option<Box<ProductionResolverElement>>,
+    ultimate_originating_element: Option<Box<ProductionResolverElement>>,
 }
 
 impl ProductionResolverTreeScope {
@@ -859,7 +892,10 @@ impl ProductionResolverElement {
                         .map(AtomicString::from_str),
                 )
             });
+        let origin = document.UltimateOriginatingElement(index);
         Self {
+            ultimate_originating_element: (origin != index)
+                .then(|| Box::new(Self::ForNode(document, origin, media_type, false))),
             index,
             namespace: NamespaceURIFor(document.Node(index).Namespace()),
             shadow_pseudo_id: AtomicString::from_str(document.ShadowPseudoId(index).unwrap_or("")),
@@ -1011,10 +1047,10 @@ struct ProductionElementAnimations {
 struct ProductionResolverCollector<'d> {
     document: &'d Document,
     element: ProductionResolverElement,
-    selectors: Rc<RefCell<PersistentSelectorService>>,
     result: Rc<RefCell<MatchResult>>,
     pending_inputs: Vec<ProductionResolverRuleSetInput>,
     pending_passes: Vec<ProductionResolverRulePass>,
+    vtt_origin: Option<Rc<usize>>,
     scope: Option<Rc<ProductionTreeScope>>,
     matching_ua: bool,
     pseudo: ProductionPseudoRequest,
@@ -1149,6 +1185,7 @@ type InlineDeclarations = Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValue
 /// defaults. Neither owner belongs to a temporary per-element matching host;
 /// inline values live with DOM ElementData, not a resolver source-text cache.
 pub(crate) struct ProductionDeclarationCache {
+    cssom_document: Rc<crate::DocumentCSSOMSource>,
     defaults: StyleResolverDeclarationCache<
         Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>,
     >,
@@ -1156,24 +1193,36 @@ pub(crate) struct ProductionDeclarationCache {
 
 impl Default for ProductionDeclarationCache {
     fn default() -> Self {
-        Self {
-            defaults: StyleResolverDeclarationCache::new(),
-        }
+        Self::new(Default::default())
     }
 }
 
 impl ProductionDeclarationCache {
+    pub(crate) fn new(cssom_document: Rc<crate::DocumentCSSOMSource>) -> Self {
+        Self {
+            cssom_document,
+            defaults: StyleResolverDeclarationCache::new(),
+        }
+    }
     fn Resolve(
         &self,
         document: &Document,
         index: usize,
         mode: crate::parser::css_parser_mode::CSSParserMode,
     ) -> InlineDeclarations {
-        crate::production_style_sheet_projection::ResolveInlineStyle(
-            &document.Node(index).InlineStyle(),
-            mode,
-        )
-        .Declarations()
+        let inline = document.Node(index).InlineStyle();
+        self.cssom_document
+            .ContextForCurrentElement(document, index)
+            .as_ref()
+            .map_or_else(
+                || crate::production_style_sheet_projection::ResolveInlineStyle(&inline, mode),
+                |context| {
+                    crate::production_style_sheet_projection::ResolveInlineStyleWithContext(
+                        &inline, context,
+                    )
+                },
+            )
+            .Declarations()
     }
 }
 
@@ -1218,6 +1267,8 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub pseudo_id: PseudoId,
     pub originating_pseudo_id: PseudoId,
     pub pseudo_argument: Option<AtomicString>,
+    pub scrollbar: Option<Rc<crate::scrollbar_style::ScrollbarStyleState>>,
+    pub scrollbar_part: crate::scrollbar_style::ScrollbarStylePart,
     pub search_text: SearchTextRequest,
     pub originating_style: Option<Persistent<ComputedStyle>>,
     pub subject_node: Option<usize>,
@@ -1246,17 +1297,22 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     /// exposing resolver internals across the Style package boundary.
     pub resolver_batch: Option<Rc<ProductionResolverBatch>>,
     pub declarations: Option<Rc<ProductionDeclarationCache>>,
+    pub vtt_style_sheets: Option<Rc<crate::vtt_style::VTTStyleSheetRules>>,
     /// Document-owned selector handles and compiled-query cache. Each match
     /// still creates a fresh session/backend with live DOM and scope state.
     /// cpp: StyleEngine retains its StyleResolver; per-element collectors
     /// reference the document's existing node owners rather than rebuilding
     /// handles for every node in every ResolveStyle call.
     pub selectors: Option<Rc<RefCell<PersistentSelectorService>>>,
+    /// One live selector backend shared by every origin and pseudo pass for
+    /// this element. Chromium's StyleResolver keeps the equivalent checker
+    /// environment for the complete element resolution.
+    pub selector_backend: Option<Rc<PersistentSelectorBackend<'a>>>,
     /// Document-owned live interaction state consumed by selector matching.
     /// cpp: SelectorChecker::MatchInternalPseudoClass delegates
     /// `:-internal-multi-select-focus` to HTMLOptionElement's retained state;
-    /// Rechrom retains the equivalent active option in the document's
-    /// interaction owner and publishes one snapshot per style update.
+    /// The persistent selector backend reads the canonical per-option DOM
+    /// state directly; this snapshot carries frame/interaction inputs only.
     pub interaction: UserInteractionState,
 }
 
@@ -1281,6 +1337,8 @@ impl ProductionBaseStyleCollaborators<'_> {
             pseudo_id: PseudoId::kPseudoIdNone,
             originating_pseudo_id: PseudoId::kPseudoIdNone,
             pseudo_argument: None,
+            scrollbar: None,
+            scrollbar_part: crate::scrollbar_style::ScrollbarStylePart::kNoPart,
             search_text: SearchTextRequest::kNone,
             originating_style: None,
             subject_node: None,
@@ -1298,7 +1356,9 @@ impl ProductionBaseStyleCollaborators<'_> {
             rule_collections: None,
             resolver_batch: None,
             declarations: None,
+            vtt_style_sheets: None,
             selectors: None,
+            selector_backend: None,
             interaction: UserInteractionState::default(),
         }
     }
@@ -1311,6 +1371,7 @@ impl ProductionBaseStyleCollaborators<'_> {
 pub(crate) struct ProductionResolverBatch {
     empty_rules: Rc<RuleSet<Backend>>,
     media_controls_rules: Rc<RuleSet<Backend>>,
+    media_controls_inputs: Rc<Vec<ProductionResolverRuleSetInput>>,
     forced_colors_media_controls_rules: Rc<RuleSet<Backend>>,
     ua_group_cache: Rc<RefCell<Vec<(u32, RuleSetGroup<Backend>)>>>,
     mathml_namespace: AtomicString,
@@ -1321,10 +1382,28 @@ impl Default for ProductionResolverBatch {
         Self {
             empty_rules: Rc::new(RuleSet::new()),
             media_controls_rules: Rc::new(RuleSet::new()),
+            media_controls_inputs: Rc::new(Vec::new()),
             forced_colors_media_controls_rules: Rc::new(RuleSet::new()),
             ua_group_cache: Rc::new(RefCell::new(Vec::new())),
             mathml_namespace: AtomicString::from_str("http://www.w3.org/1998/Math/MathML"),
         }
+    }
+}
+
+impl ProductionResolverBatch {
+    pub(crate) fn ForMediaControls(
+        normal: Option<ProductionResolverRuleSetInput>,
+        forced: Option<ProductionResolverRuleSetInput>,
+    ) -> Self {
+        let mut batch = Self::default();
+        if let Some(input) = &normal {
+            batch.media_controls_rules = input.rule_set.clone();
+        }
+        if let Some(input) = &forced {
+            batch.forced_colors_media_controls_rules = input.rule_set.clone();
+        }
+        batch.media_controls_inputs = Rc::new(normal.into_iter().chain(forced).collect());
+        batch
     }
 }
 
@@ -1336,6 +1415,7 @@ struct ProductionRuleMatchingHost<'d> {
     document: &'d Document,
     author_rule_sets: Rc<Vec<ProductionResolverRuleSetInput>>,
     selectors: Rc<RefCell<PersistentSelectorService>>,
+    selector_backend: Rc<PersistentSelectorBackend<'d>>,
     html_user_agent_rules: ProductionResolverRuleSetInput,
     svg_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     mathml_user_agent_rules: Option<ProductionResolverRuleSetInput>,
@@ -1343,21 +1423,16 @@ struct ProductionRuleMatchingHost<'d> {
     pseudo_element_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     fullscreen_user_agent_rules: Option<ProductionResolverRuleSetInput>,
     empty_rules: Rc<RuleSet<Backend>>,
-    /// cpp: css_default_style_sheets.cc:288-293,347-363.
-    ///
-    /// CSSDefaultStyleSheets owns distinct media-control RuleSets even before
-    /// the modules layer installs its UAStyleSheetLoader. Rechrom does not yet
-    /// retain that modules resource owner, so these start empty while still
-    /// preserving StyleResolver::MatchUARules' normal/forced-colors selection
-    /// and separate UA-origin transfer. Empty here describes only the current
-    /// contents of these independent sets; it does not stand in for the
-    /// missing media-controls resource loader or internal control DOM.
+    /// The source media-controls loader supplies two compiled RuleSets from
+    /// the same StyleSheetContents: screen and ua-forced-colors.
+    media_controls_inputs: Rc<Vec<ProductionResolverRuleSetInput>>,
     media_controls_rules: Rc<RuleSet<Backend>>,
     forced_colors_media_controls_rules: Rc<RuleSet<Backend>>,
     /// Supplemental forced-colors UA rules, built with Chromium's dedicated
     /// `ua-forced-colors` media-type evaluator.
     forced_color_rules: Option<ProductionResolverRuleSetInput>,
     declarations: Rc<ProductionDeclarationCache>,
+    vtt_style_sheets: Rc<crate::vtt_style::VTTStyleSheetRules>,
     ua_group_cache: Rc<RefCell<Vec<(u32, RuleSetGroup<Backend>)>>>,
     mathml_namespace: AtomicString,
     cascade: ProductionBaseStyleCollaborators<'d>,
@@ -1423,13 +1498,21 @@ impl<'d> ProductionRuleMatchingHost<'d> {
     ) -> Self {
         let matched_properties_cache = cascade.matched_properties_cache.clone().unwrap_or_default();
         let selectors = cascade.selectors.clone().unwrap_or_default();
-        selectors.borrow_mut().interaction = cascade.interaction;
+        if let Some(scrollbar) = cascade.scrollbar.as_ref() {
+            selectors.borrow_mut().page_is_active = scrollbar.page_active;
+        }
+        let selector_backend = cascade.selector_backend.clone().unwrap_or_else(|| {
+            let mut selectors = selectors.borrow_mut();
+            selectors.interaction = cascade.interaction;
+            selectors.StyleMatchSession(document).Backend()
+        });
         let resolver_batch = cascade.resolver_batch.clone().unwrap_or_default();
         Self {
             initial: ProductionInitialStyleHost::new(media, cascade.color_scheme_settings),
             document,
             author_rule_sets,
             selectors,
+            selector_backend,
             html_user_agent_rules,
             svg_user_agent_rules,
             mathml_user_agent_rules,
@@ -1438,11 +1521,13 @@ impl<'d> ProductionRuleMatchingHost<'d> {
             fullscreen_user_agent_rules: cascade.fullscreen_user_agent_rules.clone(),
             empty_rules: resolver_batch.empty_rules.clone(),
             media_controls_rules: resolver_batch.media_controls_rules.clone(),
+            media_controls_inputs: resolver_batch.media_controls_inputs.clone(),
             forced_colors_media_controls_rules: resolver_batch
                 .forced_colors_media_controls_rules
                 .clone(),
             forced_color_rules: cascade.forced_colors_user_agent_rules.clone(),
             declarations: cascade.declarations.clone().unwrap_or_default(),
+            vtt_style_sheets: cascade.vtt_style_sheets.clone().unwrap_or_default(),
             ua_group_cache: resolver_batch.ua_group_cache.clone(),
             mathml_namespace: resolver_batch.mathml_namespace.clone(),
             cascade,
@@ -1592,6 +1677,42 @@ impl<'d> ProductionRuleMatchingHost<'d> {
         let length = |this: &Self, property, percentages, zero| {
             this.AddHTMLLengthPresentationAttribute(properties, property, value, percentages, zero)
         };
+        // cpp: core/html/html_element.cc:384-412. Editing reads the resolved
+        // UserModify value, so contenteditable must enter the ordinary
+        // presentation-hint cascade instead of being reinterpreted by DOM or
+        // Interaction after style resolution.
+        if attribute_name == "contenteditable" {
+            let value = value.to_ascii_lowercase();
+            let user_modify = if value.is_empty() || value == "true" {
+                Some(CSSValueID::kReadWrite)
+            } else if value == "plaintext-only" {
+                Some(CSSValueID::kReadWritePlaintextOnly)
+            } else if value == "false" {
+                Some(CSSValueID::kReadOnly)
+            } else {
+                None
+            };
+            if let Some(user_modify) = user_modify {
+                self.SetLonghandProperty(
+                    properties,
+                    CSSPropertyID::kWebkitUserModify,
+                    user_modify,
+                );
+                if user_modify != CSSValueID::kReadOnly {
+                    self.SetLonghandProperty(
+                        properties,
+                        CSSPropertyID::kOverflowWrap,
+                        CSSValueID::kBreakWord,
+                    );
+                    self.SetLonghandProperty(
+                        properties,
+                        CSSPropertyID::kWebkitLineBreak,
+                        CSSValueID::kAfterWhiteSpace,
+                    );
+                }
+            }
+            return;
+        }
         // cpp: core/html/html_br_element.cc:34-50. `all` is the legacy
         // synonym for CSS `both`; every other non-empty token is parsed by the
         // ordinary clear property parser at the presentation-hint origin.
@@ -2233,7 +2354,10 @@ impl StyleResolverBackend for ProductionRuleMatchingHost<'_> {
     fn InDesignMode(&self, _: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(&self, _: &'d Self::Document) -> &'d AtomicString {
+    fn ContentLanguage<'d>(
+        &'d self,
+        _: &'d Self::Document,
+    ) -> &'d AtomicString {
         &foundation::atomic_string::g_null_atom
     }
     fn LayoutZoomFactor(&self, _: &Self::LocalFrame) -> f32 {
@@ -2381,8 +2505,10 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     type ScopedStyleResolver = ProductionResolverTreeScope;
     type ElementRuleCollector = ProductionResolverCollector<'d>;
     type StyleResolverState = ProductionResolverState;
-    type CSSStyleSheet = ();
-    type TextTrack = ();
+    type CSSStyleSheet = cssom::CSSStyleSheet;
+    // The borrowed element view resolves the original source track through
+    // its DOM VTT dynamic class; it retains no parallel track or sheet list.
+    type TextTrack = ProductionResolverElement;
     type DOMTokenList = crate::persistent_selector::PersistentPartNames;
     type TokenSet = crate::persistent_selector::PersistentPartNames;
     type PartNames = crate::persistent_selector::PersistentPartNames;
@@ -2395,7 +2521,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         &self,
         e: &'e Self::Element,
     ) -> &'e Self::Element {
-        e
+        e.ultimate_originating_element.as_deref().unwrap_or(e)
     }
     fn ElementTreeScope<'e>(&self, element: &'e Self::Element) -> &'e Self::TreeScope {
         &element.tree_scope
@@ -2429,14 +2555,14 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn IsSVGElement(&self, e: &Self::Element) -> bool {
         self.document.Node(e.index).Namespace() == DOMNamespace::kSVG
     }
-    fn IsVTTElement(&self, _: &Self::Element) -> bool {
-        false
+    fn IsVTTElement(&self, element: &Self::Element) -> bool {
+        self.document.IsVTTElement(element.index)
     }
-    fn IsVTTCueBackgroundBox(&self, _: &Self::Element) -> bool {
-        false
+    fn IsVTTCueBackgroundBox(&self, element: &Self::Element) -> bool {
+        self.document.IsVTTCueBackgroundBox(element.index)
     }
-    fn IsPseudoElement(&self, _: &Self::Element) -> bool {
-        false
+    fn IsPseudoElement(&self, e: &Self::Element) -> bool {
+        self.document.PseudoElementFacts(e.index).is_some()
     }
     fn IsStyledElement(&self, e: &Self::Element) -> bool {
         self.document.Node(e.index).Type() == DOMNodeType::kElement
@@ -2461,9 +2587,11 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     }
     fn ElementPseudoIdForStyling(
         &self,
-        _: &Self::Element,
+        e: &Self::Element,
     ) -> layoutng_style::style::computed_style_constants::PseudoId {
-        layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdNone
+        self.document
+            .PseudoElementFacts(e.index)
+            .map_or(PseudoId::kPseudoIdNone, |facts| facts.pseudo_id)
     }
     fn PseudoIdForShadowElementName(
         &self,
@@ -2524,29 +2652,46 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn SlotTreeScope<'s>(&self, slot: &'s Self::HTMLSlotElement) -> &'s Self::TreeScope {
         &slot.scope
     }
-    fn VTTElementTrack<'e>(&self, _: &'e Self::Element) -> Option<&'e Self::TextTrack> {
-        None
+    fn VTTElementTrack<'e>(&self, element: &'e Self::Element) -> Option<&'e Self::TextTrack> {
+        self.document.VTTHasTrack(element.index).then_some(element)
     }
-    fn VTTCueBackgroundBoxTrack<'e>(&self, _: &'e Self::Element) -> Option<&'e Self::TextTrack> {
-        None
+    fn VTTCueBackgroundBoxTrack<'e>(
+        &self,
+        element: &'e Self::Element,
+    ) -> Option<&'e Self::TextTrack> {
+        self.document.VTTHasTrack(element.index).then_some(element)
     }
-    fn TextTrackCSSStyleSheets<'t>(&self, _: &'t Self::TextTrack) -> &'t [Rc<Self::CSSStyleSheet>] {
-        &[]
+    fn ForEachTextTrackCSSStyleSheet(
+        &self,
+        track: &Self::TextTrack,
+        mut visitor: impl FnMut(&Rc<Self::CSSStyleSheet>),
+    ) {
+        self.document.VisitVTTStyleSheets(track.index, &mut visitor);
     }
     fn ElementDocument<'e>(&self, element: &'e Self::Element) -> &'e Self::Document {
         element
     }
-    fn EnsureVTTOriginatingElement<'s>(&self, engine: &'s Self::StyleEngine) -> &'s Self::Element {
-        self.unsupported("vtt-originating-element");
-        engine
+    fn EnsureVTTOriginatingElement(&self, engine: &Self::StyleEngine) -> Rc<Self::Element> {
+        let index = self
+            .document
+            .VTTOriginatingElementForStyle()
+            .expect("VTT stylesheet producer prepares the original private originating element");
+        Rc::new(ProductionResolverElement::ForNode(
+            self.document,
+            index,
+            &engine.media_type,
+            false,
+        ))
     }
     fn RuleSetForSheet(
         &self,
-        _: &Self::StyleEngine,
-        _: &Self::CSSStyleSheet,
+        _engine: &Self::StyleEngine,
+        sheet: &Self::CSSStyleSheet,
     ) -> Option<Rc<Self::RuleSet>> {
-        self.unsupported("vtt-rule-set");
-        None
+        Some(
+            self.vtt_style_sheets
+                .RuleSetForSheet(sheet, self.initial.media),
+        )
     }
     fn GetPart<'e>(&self, element: &'e Self::Element) -> Option<&'e Self::DOMTokenList> {
         element.part.as_ref()
@@ -2913,6 +3058,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     }
 
     fn ClearMatchedRules(&self, collector: &mut Self::ElementRuleCollector) {
+        collector.vtt_origin = None;
         collector.pending_inputs.clear();
         collector.pending_passes.clear();
     }
@@ -3027,7 +3173,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         &self,
         collector: &mut Self::ElementRuleCollector,
         origin: CascadeOrigin,
-        _: bool,
+        is_vtt_embedded_style: bool,
         _: Option<&Self::StyleRuleUsageTracker>,
     ) {
         if collector.pending_inputs.is_empty() {
@@ -3055,12 +3201,8 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         preparation_trace.set("cache_hit", cache_hit as u8 as f64);
         preparation_trace.set("rule_sets", collector.pending_inputs.len() as f64);
         drop(preparation_trace);
-        let session = collector
-            .selectors
-            .borrow_mut()
-            .StyleMatchSession(collector.document);
-        let runtime = ProductionElementRuleCollectorRuntime::with_production_inputs(
-            &session,
+        let runtime = ProductionElementRuleCollectorRuntime::with_production_backend(
+            self.selector_backend.clone(),
             prepared.layers.clone(),
             prepared.implicit_roots.clone(),
             self.cascade.container_runtime,
@@ -3106,8 +3248,12 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
             profile.then(|| browser_tracing::span("style_match", "StyleResolver.MatchRuleBuckets"));
         let mut collector_calls = 0usize;
         for group in &prepared.groups {
-            let scope = collector.scope.as_ref().map(|scope| Rc::new(scope.0));
-            let request = MatchRequest::new(group, scope, None);
+            let scope = if is_vtt_embedded_style {
+                None
+            } else {
+                collector.scope.as_ref().map(|scope| Rc::new(scope.0))
+            };
+            let request = MatchRequest::new(group, scope, collector.vtt_origin.clone());
             for pass in &collector.pending_passes {
                 match pass {
                     ProductionResolverRulePass::Normal => {
@@ -3144,7 +3290,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         let _transfer_trace = profile
             .then(|| browser_tracing::span("style_match", "StyleResolver.TransferMatchedRules"));
         let inputs = &collector.pending_inputs[..];
-        actual.SortAndTransferMatchedRules(origin, false, None);
+        actual.SortAndTransferMatchedRules(origin, is_vtt_embedded_style, None);
         let transferred_property_sets =
             actual.MatchedResult().GetMatchedProperties().len() - first_result;
         {
@@ -3203,9 +3349,23 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
         collector: &mut Self::ElementRuleCollector,
         group: &Self::RuleSetGroup,
         _: Option<&Self::TreeScope>,
-        _: Option<&Self::Element>,
+        vtt_originating_element: Option<&Self::Element>,
         _: Option<&Self::PartNames>,
     ) {
+        if let Some(origin) = vtt_originating_element {
+            collector.vtt_origin = Some(self.selector_backend.handle(origin.index));
+            for rules in group.RuleSets() {
+                collector
+                    .pending_inputs
+                    .push(self.vtt_style_sheets.InputForRules(rules));
+            }
+            if !group.RuleSets().is_empty() {
+                collector
+                    .pending_passes
+                    .push(ProductionResolverRulePass::Normal);
+            }
+            return;
+        }
         let scope_root = collector.scope.as_ref().map(|scope| scope.0);
         for rules in group.RuleSets() {
             if let Some(input) = std::iter::once(&self.html_user_agent_rules)
@@ -3213,6 +3373,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
                 .chain(self.forced_color_rules.iter())
                 .chain(self.pseudo_element_user_agent_rules.iter())
                 .chain(self.fullscreen_user_agent_rules.iter())
+                .chain(self.media_controls_inputs.iter())
                 .chain(self.svg_user_agent_rules.iter())
                 .chain(self.mathml_user_agent_rules.iter())
                 .find(|input| Rc::ptr_eq(rules, &input.rule_set))
@@ -3465,7 +3626,9 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         // HTMLPlugInElement and the specialized HTML constructors set this bit.
         // UA implementation elements and image failure also have callbacks.
         let node = self.document.Node(element.index);
-        node.Namespace() == DOMNamespace::kSVG
+        self.document.HasCustomStyleCallbacks(element.index)
+            || self.document.HasDateTimeEditCustomStyle(element.index)
+            || node.Namespace() == DOMNamespace::kSVG
             || self.document.ShadowPseudoId(element.index).is_some()
             || node.Namespace() == DOMNamespace::kHTML
                 && matches!(
@@ -3577,6 +3740,8 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 self.cascade.pseudo_argument.clone(),
             );
             request.search_text = self.cascade.search_text;
+            request.scrollbar = self.cascade.scrollbar.clone();
+            request.scrollbar_part = self.cascade.scrollbar_part;
             request
         })
     }
@@ -3679,7 +3844,8 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         .then(|| Rc::new(state.element.clone()))
     }
     fn StatePseudoElement(&self, state: &Self::StyleResolverState) -> Option<Rc<Self::Element>> {
-        None
+        self.IsPseudoElement(&state.element)
+            .then(|| Rc::new(state.element.clone()))
     }
     fn StateStyledElement(&self, state: &Self::StyleResolverState) -> Option<Rc<Self::Element>> {
         Some(Rc::new(state.element.clone()))
@@ -4419,6 +4585,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             pseudo_id,
             PseudoId::kPseudoIdBefore
                 | PseudoId::kPseudoIdAfter
+                | PseudoId::kPseudoIdOverscrollAreaParent
                 | PseudoId::kPseudoIdFirstLetter
                 | PseudoId::kPseudoIdPlaceholder
                 | PseudoId::kPseudoIdMarker
@@ -4428,6 +4595,13 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
                 | PseudoId::kPseudoIdHighlight
                 | PseudoId::kPseudoIdSpellingError
                 | PseudoId::kPseudoIdGrammarError
+                | PseudoId::kPseudoIdScrollbar
+                | PseudoId::kPseudoIdScrollbarButton
+                | PseudoId::kPseudoIdScrollbarCorner
+                | PseudoId::kPseudoIdScrollbarThumb
+                | PseudoId::kPseudoIdScrollbarTrack
+                | PseudoId::kPseudoIdScrollbarTrackPiece
+                | PseudoId::kPseudoIdResizer
         ) {
             self.unsupported("base:EnsureUAStyleForPseudoElement");
         }
@@ -4447,10 +4621,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         ProductionResolverCollector {
             document: self.document,
             element: state.element.clone(),
-            selectors: self.selectors.clone(),
             result: cascade.result.clone(),
             pending_inputs: Vec::new(),
             pending_passes: Vec::new(),
+            vtt_origin: None,
             scope: None,
             matching_ua: false,
             pseudo: ProductionPseudoRequest::Element(),
@@ -4483,10 +4657,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         ProductionResolverCollector {
             document: self.document,
             element: state.element.clone(),
-            selectors: self.selectors.clone(),
             result: Rc::new(RefCell::new(result.clone())),
             pending_inputs: Vec::new(),
             pending_passes: Vec::new(),
+            vtt_origin: None,
             scope: None,
             matching_ua: false,
             pseudo: ProductionPseudoRequest::Element(),
@@ -5375,10 +5549,10 @@ pub(crate) fn MatchAllRulesForElement(
     let mut collector = ProductionResolverCollector {
         document: inputs.document,
         element: element.clone(),
-        selectors: host.selectors.clone(),
         result: Rc::new(RefCell::new(MatchResult::default())),
         pending_inputs: Vec::new(),
         pending_passes: Vec::new(),
+        vtt_origin: None,
         scope: None,
         matching_ua: false,
         pseudo: ProductionPseudoRequest::Element(),
@@ -5476,6 +5650,13 @@ pub(crate) fn ApplyBaseStyleForElement(
                 | PseudoId::kPseudoIdHighlight
                 | PseudoId::kPseudoIdSpellingError
                 | PseudoId::kPseudoIdGrammarError
+                | PseudoId::kPseudoIdScrollbar
+                | PseudoId::kPseudoIdScrollbarButton
+                | PseudoId::kPseudoIdScrollbarCorner
+                | PseudoId::kPseudoIdScrollbarThumb
+                | PseudoId::kPseudoIdScrollbarTrack
+                | PseudoId::kPseudoIdScrollbarTrackPiece
+                | PseudoId::kPseudoIdResizer
         )
     {
         return Err(vec![ProductionStyleResolutionFailure::Unsupported(
@@ -5654,6 +5835,14 @@ pub(crate) fn ResolveBaseStyleForElement(
 
 /// Runs the source-aligned `StyleResolver::InitialStyleForElement` path for
 /// the standalone document host and returns the canonical computed style style root.
+pub(crate) fn ViewportStyleForDocument(
+    media: &MediaValuesCachedData,
+    color_scheme: ColorSchemeSettings,
+) -> Persistent<ComputedStyle> {
+    let host = ProductionInitialStyleHost::new(media, color_scheme);
+    StyleResolver::new(&host, &host).StyleForViewport()
+}
+
 pub(crate) fn InitialStyleForDocument(
     media: &MediaValuesCachedData,
     color_scheme: ColorSchemeSettings,

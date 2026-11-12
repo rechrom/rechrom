@@ -160,10 +160,17 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             "construction must not preload the OS font catalog"
         );
         struct Client {
+            chrome: browser::page::PageChromeState,
             emergency: SharedFontBytes,
             text_frames: Rc<RefCell<usize>>,
         }
         impl browser::page::PageClient for Client {
+            fn DidEventHandlerChromeEffect(
+                &mut self,
+                effect: browser::page::EventHandlerChromeEffect,
+            ) {
+                self.chrome.Apply(effect);
+            }
             fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
                 let mut fonts = vec![];
                 collect(&frame.fragments, &mut fonts);
@@ -203,6 +210,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             constraints,
             None,
             Some(Rc::new(RefCell::new(Client {
+                chrome: Default::default(),
                 emergency: emergency.clone(),
                 text_frames: text_frames.clone(),
             }))),

@@ -10,6 +10,15 @@ pub extern "Rust" fn RoundForImpreciseConversionI16(value: f64) -> i16 {
         adjusted as i16
     }
 }
+// Source core/css/css_primitive_value.h:46-53, int instantiation.
+pub fn RoundForImpreciseConversionI32(value: f64) -> i32 {
+    let adjusted = value + if value < 0.0 { -0.01 } else { 0.01 };
+    if adjusted > i32::MAX as f64 || adjusted < i32::MIN as f64 {
+        0
+    } else {
+        adjusted as i32
+    }
+}
 
 #[cfg(test)]
 mod tests {

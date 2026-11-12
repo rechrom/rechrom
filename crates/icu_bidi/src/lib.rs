@@ -1,6 +1,11 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
+pub mod date_time_locale;
+pub mod idna;
+pub mod string_search;
+pub mod text_search_icu;
 pub mod ubidi_ffi;
+pub mod ubrk_ffi;
 
 // C ABI values from the vendored ICU headers used by the C++ tree.
 // cpp: icu_bidi/unicode/ubidi.h:340-340
@@ -11,3 +16,7 @@ pub const USCRIPT_CODE_LIMIT: i32 = 213;
 
 // cpp: icu_bidi/unicode/uscript.h:115-115
 pub const USCRIPT_LATIN: i32 = 25;
+
+pub mod filename_unicode;
+
+pub mod spoof;

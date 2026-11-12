@@ -384,8 +384,14 @@ impl LayoutObject {
     }
 
     // cpp: layoutng/internal/layout_object.h:2121-2121
-    pub fn SubtreeDidChange(&self) {
+    pub fn SubtreeDidChange(&mut self) {
         self.CheckIsNotDestroyed();
+        if self.IsListItem() {
+            let callback = unsafe { self.FactorySet().as_ref() }
+                .and_then(|factory| factory.list_subtree_did_change)
+                .expect("native list class retains its installed SubtreeDidChange virtual");
+            callback(self);
+        }
     }
 
     // cpp: layoutng/internal/layout_object.h:2124-2127

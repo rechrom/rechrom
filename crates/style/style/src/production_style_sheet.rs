@@ -66,6 +66,18 @@ pub enum Feature {
     ContainerRangeSyntax,
     ContainerStyleQuery,
 }
+impl Feature {
+    pub(crate) fn CounterFeature(self) -> foundation::css_use_counter::CSSParserFeature {
+        use foundation::css_use_counter::CSSParserFeature as F;
+        match self {
+            Self::Rule => F::Rule,
+            Self::Property => F::Property,
+            Self::AtRule(id) => F::AtRule(id as i32),
+            Self::ContainerRangeSyntax => F::ContainerRangeSyntax,
+            Self::ContainerStyleQuery => F::ContainerStyleQuery,
+        }
+    }
+}
 pub struct Backend;
 
 /// Owned media environment used while building a production RuleSet.  Keeping
@@ -172,6 +184,7 @@ pub(crate) struct AttributeInvalidation {
 
 #[derive(Default)]
 pub struct ProductionRuleFeatureSet {
+    pub(crate) uses_window_inactive_selector: bool,
     pub(crate) non_descendant_has_invalidation: bool,
     pub(crate) attribute_invalidation: HashMap<AttributeInvalidationKey, AttributeInvalidation>,
     pub(crate) scope_pseudo_states: BTreeSet<PseudoType>,
@@ -200,6 +213,8 @@ fn user_action_features(
             PseudoType::kPseudoHover
                 | PseudoType::kPseudoActive
                 | PseudoType::kPseudoActiveOption
+                | PseudoType::kPseudoOpen
+                | PseudoType::kPseudoFiltered
                 | PseudoType::kPseudoFocus
                 | PseudoType::kPseudoFocusVisible
                 | PseudoType::kPseudoFocusWithin
@@ -1291,6 +1306,26 @@ pub struct LayerStatement {
     pub parent_layers: Vec<LayerSegment>,
     pub source_order: u32,
 }
+// Document parser runtime admission, borrowed only during synchronous parsing.
+thread_local! {
+    static SELECTOR_RUNTIME:std::cell::Cell<*const crate::parser::css_selector_parser::SelectorRuntimeFeatures>=const {std::cell::Cell::new(std::ptr::null())};
+}
+pub(crate) fn ParseStyleSheetWithSelectorRuntime(
+    text: &String,
+    mode: CSSParserMode,
+    runtime: &crate::parser::css_selector_parser::SelectorRuntimeFeatures,
+) -> ProductionStyleSheet {
+    struct Restore(*const crate::parser::css_selector_parser::SelectorRuntimeFeatures);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SELECTOR_RUNTIME.with(|value| value.set(self.0));
+        }
+    }
+    let previous = SELECTOR_RUNTIME.with(|value| value.replace(runtime));
+    let _restore = Restore(previous);
+    ParseStyleSheet(text, mode)
+}
+
 pub fn ParseStyleSheet(text: &String, mode: CSSParserMode) -> ProductionStyleSheet {
     ParseStyleSheetWithURL(text, mode, SourceURL::Null)
 }
@@ -1306,6 +1341,35 @@ pub fn ParseStyleSheetWithBase(
     ParseStyleSheetWithURL(text, mode, SourceURL::FromString(base_url))
 }
 
+/// VTTParser::CollectStyleSheet, cc247-259. Null base, UTF-8, eager
+/// properties and import prohibition belong to the retained parser context.
+pub fn ParseVTTStyleSheet(document: &dom::Document, text: &String) -> Rc<cssom::CSSStyleSheet> {
+    let context = Rc::new(CSSParserContext::<Backend>::new(
+        SourceURL::Null,
+        true,
+        Some(String::from("UTF-8")),
+        if document.GetCompatibilityMode() == dom::persistent_document::CompatibilityMode::kQuirks {
+            CSSParserMode::kHTMLQuirksMode
+        } else {
+            CSSParserMode::kHTMLStandardMode
+        },
+        <Backend as CSSParserContextPlatform>::EmptyReferrer(),
+        document.DocumentType(document.Root()) == dom::persistent_document::DOMDocumentType::kHTML,
+        if document.HasDOMWindow() && document.SecurityContext().IsSecureContext() {
+            SecureContextMode::kSecureContext
+        } else {
+            SecureContextMode::kInsecureContext
+        },
+        None,
+        None,
+        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kOnlyDataUrls,
+    ));
+    let parsed = Rc::new(ParseStyleSheetWithContext(text, context, true));
+    let mut sheet = crate::production_style_sheet_projection::ProjectStyleSheet(&parsed);
+    sheet.AttachParsedBacking(&parsed.source.Utf8(), parsed.clone());
+    Rc::new(sheet)
+}
+
 pub(crate) fn InlineStyleSheetParserContext() -> Rc<CSSParserContext<Backend>> {
     StyleSheetParserContext(CSSParserMode::kHTMLStandardMode, SourceURL::Null)
 }
@@ -1319,7 +1383,7 @@ fn StyleSheetParserContext(
         true,
         None,
         mode,
-        String::from(""),
+        <Backend as CSSParserContextPlatform>::EmptyReferrer(),
         false,
         SecureContextMode::kInsecureContext,
         None,
@@ -1333,19 +1397,37 @@ fn ParseStyleSheetWithURL(
     mode: CSSParserMode,
     base_url: SourceURL,
 ) -> ProductionStyleSheet {
-    let _edges = MediaEdges::new();
     let context = StyleSheetParserContext(mode, base_url);
+    ParseStyleSheetWithContext(text, context, false)
+}
+pub(crate) fn ParseStyleSheetWithContext(
+    text: &String,
+    context: Rc<CSSParserContext<Backend>>,
+    vtt: bool,
+) -> ProductionStyleSheet {
+    let _edges = MediaEdges::new();
     let mut contents = StyleSheetContents::<Backend>::new(context.clone(), String::default(), None);
     let mut observer = SourceObserver {
         source: text.clone(),
         ..SourceObserver::default()
     };
-    CSSParserImpl::<Backend>::ParseStyleSheetForInspector(
-        text,
-        Some(&context),
-        &mut contents,
-        &mut observer,
-    );
+    if vtt {
+        CSSParserImpl::<Backend>::ParseStyleSheetWithObserver(
+            text,
+            &context,
+            &mut contents,
+            CSSDeferPropertyParsing::kNo,
+            false,
+            Some(&mut observer),
+        );
+    } else {
+        CSSParserImpl::<Backend>::ParseStyleSheetForInspector(
+            text,
+            Some(&context),
+            &mut contents,
+            &mut observer,
+        );
+    }
     observer
         .diagnostics
         .extend(VALUE_DIAGNOSTICS.with(|values| std::mem::take(&mut *values.borrow_mut())));
@@ -1923,402 +2005,34 @@ impl CSSParserImplBackend for Backend {
 
 // cpp: at_rule_descriptor_parser.cc:57-86,121-278,335-433.
 // BlockGuard and EnableUnicodeRanges retain the translated token semantics.
-type DescriptorResult = Result<Rc<values::Value>, DiagnosticKind>;
-fn ConsumeFamilyName<T: TokenStreamTokenizer>(
-    stream: &mut CSSParserTokenStream<'_, T>,
-    descriptor: bool,
-) -> Option<String> {
-    if stream.Peek().GetType() == kStringToken {
-        return Some(stream.ConsumeIncludingWhitespace().Value().ToString());
-    }
-    let first = stream.Peek().Value().ToString().Utf8().to_ascii_lowercase();
-    if descriptor
-        && [
-            "serif",
-            "sans-serif",
-            "monospace",
-            "cursive",
-            "fantasy",
-            "system-ui",
-            "ui-serif",
-            "ui-sans-serif",
-            "ui-monospace",
-            "ui-rounded",
-            "math",
-            "fangsong",
-        ]
-        .contains(&first.as_str())
-    {
-        return None;
-    }
-    let mut words = Vec::new();
-    while stream.Peek().GetType() == kIdentToken {
-        words.push(
-            stream
-                .ConsumeIncludingWhitespace()
-                .Value()
-                .ToString()
-                .Utf8(),
-        );
-    }
-    if words.len() == 1
-        && [
-            "inherit",
-            "initial",
-            "unset",
-            "revert",
-            "revert-layer",
-            "default",
-        ]
-        .contains(&first.as_str())
-    {
-        return None;
-    }
-    (!words.is_empty())
-        .then(|| String::from_utf16(&words.join(" ").encode_utf16().collect::<Vec<_>>()))
-}
-fn ConsumeFontSource<T: TokenStreamTokenizer>(
-    stream: &mut CSSParserTokenStream<'_, T>,
-    context: &CSSParserContext<Backend>,
-) -> Result<values::CSSFontFaceSrcValue, DiagnosticKind> {
-    use values::FontFaceResource;
-    let resource = if stream.Peek().FunctionId() == Some(CSSValueID::kLocal) {
-        let mut guard = BlockGuard::new(stream);
-        guard.ConsumeWhitespace();
-        let name = ConsumeFamilyName(&mut guard, false).ok_or(DiagnosticKind::Invalid)?;
-        if !guard.AtEnd() {
-            return Err(DiagnosticKind::Invalid);
-        }
-        FontFaceResource::Local(name)
-    } else if stream.Peek().GetType() == kUrlToken {
-        let url = stream.ConsumeIncludingWhitespace().Value().ToString();
-        FontFaceResource::Url(values::CSSUrlData::new(
-            url.clone(),
-            context.CompleteNonEmptyURL(&url),
-        ))
-    } else if stream.Peek().FunctionId() == Some(CSSValueID::kUrl) {
-        let mut guard = BlockGuard::new(stream);
-        guard.ConsumeWhitespace();
-        if guard.Peek().GetType() != kStringToken {
-            return Err(DiagnosticKind::Invalid);
-        }
-        let url = guard.ConsumeIncludingWhitespace().Value().ToString();
-        if !guard.AtEnd() {
-            return Err(DiagnosticKind::Invalid);
-        }
-        FontFaceResource::Url(values::CSSUrlData::new(
-            url.clone(),
-            context.CompleteNonEmptyURL(&url),
-        ))
-    } else {
-        return Err(DiagnosticKind::Invalid);
-    };
-    stream.ConsumeWhitespace();
-    let mut value = values::CSSFontFaceSrcValue {
-        resource,
-        format: None,
-        technologies: Vec::new(),
-    };
-    if matches!(value.resource, FontFaceResource::Url(_)) {
-        if stream.Peek().FunctionId() == Some(CSSValueID::kFormat) {
-            let mut guard = BlockGuard::new(stream);
-            guard.ConsumeWhitespace();
-            if !matches!(guard.Peek().GetType(), kIdentToken | kStringToken) {
-                return Err(DiagnosticKind::Invalid);
-            }
-            let token = guard.ConsumeIncludingWhitespace();
-            let format = token.Value().ToString();
-            let keyword = format.Utf8().to_ascii_lowercase();
-            let supported = ["collection", "opentype", "truetype", "woff", "woff2"]
-                .contains(&keyword.as_str())
-                || token.GetType() == kStringToken
-                    && [
-                        "woff-variations",
-                        "truetype-variations",
-                        "opentype-variations",
-                        "woff2-variations",
-                    ]
-                    .contains(&keyword.as_str());
-            if !supported || !guard.AtEnd() {
-                return Err(DiagnosticKind::Invalid);
-            }
-            value.format = Some(format);
-        }
-        stream.ConsumeWhitespace();
-        if stream.Peek().FunctionId() == Some(CSSValueID::kTech) {
-            let mut guard = BlockGuard::new(stream);
-            guard.ConsumeWhitespace();
-            loop {
-                let id = guard.Peek().Id();
-                if !matches!(
-                    id,
-                    CSSValueID::kFeaturesOpentype
-                        | CSSValueID::kFeaturesAat
-                        | CSSValueID::kColorCOLRv0
-                        | CSSValueID::kColorCOLRv1
-                        | CSSValueID::kColorSbix
-                        | CSSValueID::kColorCBDT
-                        | CSSValueID::kVariations
-                        | CSSValueID::kPalettes
-                ) {
-                    return Err(DiagnosticKind::Unsupported);
-                }
-                guard.ConsumeIncludingWhitespace();
-                if !value.technologies.contains(&id) {
-                    value.technologies.push(id);
-                }
-                if guard.AtEnd() {
-                    break;
-                }
-                if guard.Peek().GetType() != kCommaToken {
-                    return Err(DiagnosticKind::Invalid);
-                }
-                guard.ConsumeIncludingWhitespace();
-            }
-        }
-    }
-    stream.ConsumeWhitespace();
-    if !stream.AtEnd() && stream.Peek().GetType() != kCommaToken {
-        return Err(DiagnosticKind::Invalid);
-    }
-    Ok(value)
-}
 fn ParseFontFaceDescriptor(
     id: crate::parser::at_rule_descriptors::AtRuleDescriptorID,
     text: &String,
     source_offset: u32,
     context: &CSSParserContext<Backend>,
-) -> DescriptorResult {
-    use crate::css_primitive_value::UnitType;
-    use crate::parser::at_rule_descriptors::AtRuleDescriptorID as D;
-    let mut stream: CSSParserTokenStream<crate::parser::css_tokenizer::CSSTokenizer> =
-        CSSParserTokenStream::new(StringView::from(text), 0);
-    let mut stream = EnableUnicodeRanges::new(&mut stream, id == D::UnicodeRange);
-    stream.ConsumeWhitespace();
-    let value = match id {
-        D::FontFamily => {
-            let family = ConsumeFamilyName(&mut stream, true).ok_or(DiagnosticKind::Invalid)?;
-            Rc::new(values::Value::new(CSSValuePayload::kFontFamilyClass(
-                values::CSSFontFamilyValue(family),
-            )))
-        }
-        D::Src => {
-            let mut sources = Vec::new();
-            loop {
-                let offset = source_offset + stream.LookAheadOffset();
-                match ConsumeFontSource(&mut stream, context) {
-                    Ok(value) => sources.push(Rc::new(values::Value::new(
-                        CSSValuePayload::kFontFaceSrcClass(value),
-                    ))),
-                    Err(kind) => {
-                        ValueDiagnostic(
-                            kind,
-                            offset,
-                            "AtRuleDescriptorParser::ConsumeFontFaceSrc",
-                            256,
-                        );
-                        stream.SkipUntilPeekedTypeIs(&[kCommaToken]);
-                    }
-                }
-                if stream.Peek().GetType() != kCommaToken {
-                    break;
-                }
-                stream.ConsumeIncludingWhitespace();
-            }
-            if sources.is_empty() {
-                return Err(DiagnosticKind::Invalid);
-            }
-            values::list(sources, values::ListSeparator::Comma)
-        }
-        D::UnicodeRange => {
-            let mut ranges = Vec::new();
-            loop {
-                if stream.Peek().GetType() != kUnicodeRangeToken {
-                    return Err(DiagnosticKind::Invalid);
-                }
-                let token = stream.ConsumeIncludingWhitespace();
-                let from = token.UnicodeRangeStart();
-                let to = token.UnicodeRangeEnd();
-                if from < 0 || from > to || to > 0x10ffff {
-                    return Err(DiagnosticKind::Invalid);
-                }
-                ranges.push(Rc::new(values::Value::new(
-                    CSSValuePayload::kUnicodeRangeClass(values::CSSUnicodeRangeValue {
-                        from: from as u32,
-                        to: to as u32,
-                    }),
-                )));
-                if stream.Peek().GetType() != kCommaToken {
-                    break;
-                }
-                stream.ConsumeIncludingWhitespace();
-            }
-            values::list(ranges, values::ListSeparator::Comma)
-        }
-        D::FontDisplay => {
-            let keyword = stream.Peek().Id();
-            if !matches!(
-                keyword,
-                CSSValueID::kAuto
-                    | CSSValueID::kBlock
-                    | CSSValueID::kSwap
-                    | CSSValueID::kFallback
-                    | CSSValueID::kOptional
-            ) {
-                return Err(DiagnosticKind::Invalid);
-            }
-            stream.ConsumeIncludingWhitespace();
-            values::identifier(keyword)
-        }
-        D::FontWeight => {
-            let keyword = stream.Peek().Id();
-            if matches!(
-                keyword,
-                CSSValueID::kNormal | CSSValueID::kBold | CSSValueID::kAuto
-            ) {
-                stream.ConsumeIncludingWhitespace();
-                values::identifier(keyword)
-            } else {
-                let mut weights = Vec::new();
-                for _ in 0..2 {
-                    if stream.Peek().GetType() == kFunctionToken {
-                        return Err(DiagnosticKind::Unsupported);
-                    }
-                    if stream.Peek().GetType() != kNumberToken
-                        || !(1.0..=1000.0).contains(&stream.Peek().NumericValue())
-                    {
-                        return Err(DiagnosticKind::Invalid);
-                    }
-                    weights.push(values::numeric(
-                        stream.ConsumeIncludingWhitespace().NumericValue(),
-                        UnitType::kNumber,
-                    ));
-                    if stream.AtEnd() {
-                        break;
-                    }
-                }
-                if weights.len() == 1 {
-                    weights.remove(0)
-                } else {
-                    values::list(weights, values::ListSeparator::Space)
-                }
-            }
-        }
-        D::FontStyle => {
-            let keyword = stream.Peek().Id();
-            if !matches!(
-                keyword,
-                CSSValueID::kNormal
-                    | CSSValueID::kItalic
-                    | CSSValueID::kAuto
-                    | CSSValueID::kOblique
-            ) {
-                return Err(DiagnosticKind::Invalid);
-            }
-            stream.ConsumeIncludingWhitespace();
-            if keyword == CSSValueID::kOblique && !stream.AtEnd() {
-                return Err(DiagnosticKind::Unsupported);
-            }
-            values::identifier(keyword)
-        }
-        D::FontStretch => {
-            let parsed = crate::parser::production_property_parser::ParseProperty(
-                CSSPropertyID::kFontStretch,
-                text,
-                false,
-                CSSParserMode::kCSSFontFaceRuleMode,
-            )
-            .map_err(|error| match error.kind {
-                crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
-                    DiagnosticKind::Unsupported
-                }
-                _ => DiagnosticKind::Invalid,
-            })?;
-            let value = parsed.first().ok_or(DiagnosticKind::Invalid)?;
-            if value.IsImportant() || value.Value().IsCSSWideKeyword() {
-                return Err(DiagnosticKind::Invalid);
-            }
-            stream.SkipUntilPeekedTypeIs(&[]);
-            value.ValueRef()
-        }
-        D::AscentOverride | D::DescentOverride | D::LineGapOverride | D::SizeAdjust => {
-            if id != D::SizeAdjust && stream.Peek().Id() == CSSValueID::kNormal {
-                stream.ConsumeIncludingWhitespace();
-                values::identifier(CSSValueID::kNormal)
-            } else {
-                if stream.Peek().GetType() == kFunctionToken {
-                    return Err(DiagnosticKind::Unsupported);
-                }
-                if stream.Peek().GetType() != kPercentageToken || stream.Peek().NumericValue() < 0.0
-                {
-                    return Err(DiagnosticKind::Invalid);
-                }
-                values::numeric(
-                    stream.ConsumeIncludingWhitespace().NumericValue(),
-                    UnitType::kPercentage,
-                )
-            }
-        }
-        D::FontVariant => {
-            let mut variants = Vec::new();
-            loop {
-                let id = stream.Peek().Id();
-                if !matches!(
-                    id,
-                    CSSValueID::kNormal | CSSValueID::kSmallCaps | CSSValueID::kAll
-                ) {
-                    return Err(DiagnosticKind::Invalid);
-                }
-                stream.ConsumeIncludingWhitespace();
-                if id == CSSValueID::kAll {
-                    if !variants.is_empty() {
-                        return Err(DiagnosticKind::Invalid);
-                    }
-                    return if stream.AtEnd() {
-                        Ok(values::identifier(id))
-                    } else {
-                        Err(DiagnosticKind::Invalid)
-                    };
-                }
-                variants.push(values::identifier(id));
-                if stream.Peek().GetType() != kCommaToken {
-                    break;
-                }
-                stream.ConsumeIncludingWhitespace();
-            }
-            values::list(variants, values::ListSeparator::Comma)
-        }
-        D::FontFeatureSettings => {
-            let parsed = crate::parser::production_property_parser::ParseProperty(
-                CSSPropertyID::kFontFeatureSettings,
-                text,
-                false,
-                CSSParserMode::kCSSFontFaceRuleMode,
-            )
-            .map_err(|error| match error.kind {
-                crate::parser::production_property_parser::PropertyParseErrorKind::Unsupported => {
-                    DiagnosticKind::Unsupported
-                }
-                _ => DiagnosticKind::Invalid,
-            })?;
-            let value = parsed.first().ok_or(DiagnosticKind::Invalid)?;
-            if value.IsImportant() || value.Value().IsCSSWideKeyword() {
-                return Err(DiagnosticKind::Invalid);
-            }
-            stream.SkipUntilPeekedTypeIs(&[]);
-            value.ValueRef()
-        }
-        D::FontVariationSettings => {
-            return Err(DiagnosticKind::Unsupported);
-        }
-        _ => return Err(DiagnosticKind::Invalid),
+) -> Result<Rc<values::Value>, DiagnosticKind> {
+    use style_parser::font_face_descriptors as font;
+    let kind = |kind| match kind {
+        font::DiagnosticKind::Invalid => DiagnosticKind::Invalid,
+        font::DiagnosticKind::Unsupported => DiagnosticKind::Unsupported,
     };
-    if stream.AtEnd() {
-        Ok(value)
-    } else {
-        Err(DiagnosticKind::Invalid)
-    }
+    font::ParseFontFaceDescriptorWithDiagnostics(
+        id,
+        text,
+        source_offset,
+        context,
+        &mut |error, offset| {
+            ValueDiagnostic(
+                kind(error),
+                offset,
+                "AtRuleDescriptorParser::ConsumeFontFaceSrc",
+                256,
+            )
+        },
+    )
+    .map_err(kind)
 }
+use style_parser::font_face_descriptors::ConsumeFamilyName;
 impl crate::style_rule_keyframe::StyleRuleKeyframeBackend for Backend {
     type ExecutionContext = CSSParserContext<Backend>;
     type PropertySet = CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>;
@@ -2352,21 +2066,7 @@ impl crate::style_rule_keyframe::StyleRuleKeyframeBackend for Backend {
     }
 }
 pub(crate) fn SerializeProperties(set: &CSSPropertyValueSet<ProductionCSSValueDispatch>) -> String {
-    let mut text = std::string::String::new();
-    for index in 0..set.PropertyCount() {
-        let property = set.PropertyAt(index);
-        if index != 0 {
-            text.push(' ');
-        }
-        text.push_str(&property.Name().ToAtomicString().Utf8());
-        text.push_str(": ");
-        text.push_str(&property.Value().CssText().Utf8());
-        if property.IsImportant() {
-            text.push_str(" !important");
-        }
-        text.push(';');
-    }
-    String::from_utf16(&text.encode_utf16().collect::<Vec<_>>())
+    set.AsText()
 }
 
 impl CSSParserImplValueBackend for Backend {
@@ -2582,6 +2282,7 @@ impl CSSParserImplValueBackend for Backend {
                 data,
                 mode: context.Mode(),
                 base_url: context.BaseURL().clone(),
+                resource_fetch_restriction: context.ResourceFetchRestriction(),
             }),
         ))
     }
@@ -2788,16 +2489,32 @@ impl CSSParserImplSheetBackend for Backend {
         base_url: &<Self::Platform as CSSParserContextPlatform>::URL,
         mode: CSSParserMode,
     ) {
-        unavailable("CSSParserImplSheetBackend::TraceBeginStyleSheet")
+        let mut span = browser_tracing::span("style_parser", "CSSParserImpl::ParseStyleSheet");
+        span.set("mode", mode as u8 as f64);
+        PARSER_TRACE_STACK.with(|stack| stack.borrow_mut().push(span));
     }
     fn TraceBeginStyleSheetParse() {
-        unavailable("CSSParserImplSheetBackend::TraceBeginStyleSheetParse")
+        PARSER_TRACE_STACK.with(|stack| {
+            stack.borrow_mut().push(browser_tracing::span(
+                "style_parser",
+                "CSSParserImpl::ParseStyleSheetParse",
+            ))
+        });
     }
     fn TraceEndStyleSheetParse() {
-        unavailable("CSSParserImplSheetBackend::TraceEndStyleSheetParse")
+        PARSER_TRACE_STACK.with(|stack| {
+            stack
+                .borrow_mut()
+                .pop()
+                .expect("balanced stylesheet parse trace");
+        });
     }
     fn TraceEndStyleSheet(token_count: u32, length: u32) {
-        unavailable("CSSParserImplSheetBackend::TraceEndStyleSheet")
+        PARSER_TRACE_STACK.with(|stack| {
+            let mut span = stack.borrow_mut().pop().expect("balanced stylesheet trace");
+            span.set("tokens", token_count as f64);
+            span.set("length", length as f64);
+        });
     }
     fn NewLazyParsingState(
         context: &CSSParserContext<Self::Platform>,
@@ -3077,6 +2794,7 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
             html: true,
             quirks: context.is_some_and(|c| c.Mode() == CSSParserMode::kHTMLQuirksMode),
         };
+        let runtime = SELECTOR_RUNTIME.with(|value| unsafe { value.get().as_ref() });
         let options = SelectorParserOptions {
             namespace_context: sheet.as_ref().map(|sheet| {
                 sheet.as_ref()
@@ -3092,7 +2810,8 @@ fn NewFunctionDeclarationsRule(properties: Rc<CSSPropertyValueSet<Self::ValueBac
             // resource with author-sheet restrictions and silently dropped
             // otherwise valid built-in rules.
             ua_sheet_mode,
-            runtime_context: None,
+            runtime_context: runtime
+                .map(|value| value as &dyn crate::css_selector::CSSSelectorRuntime),
             usage_context: None,
             ident_integer_parser: None,
         };
@@ -3340,10 +3059,12 @@ fn NewViewTransitionRule(properties: Rc<CSSPropertyValueSet<Self::ValueBackend>>
 impl CSSParserContextPlatform for Backend {
     type URL = SourceURL;
     type TextEncoding = Option<String>;
-    type Referrer = String;
-    type ReferrerPolicy = ();
-    type DOMWrapperWorld = Unavailable;
-    type ExecutionContext = Unavailable;
+    type Referrer = style_parser::production_css_execution_context::ProductionCSSReferrer;
+    type ReferrerPolicy = style_parser::production_css_execution_context::CSSReferrerPolicy;
+    type DOMWrapperWorld =
+        style_parser::production_css_execution_context::ProductionCSSDOMWrapperWorld;
+    type ExecutionContext =
+        style_parser::production_css_execution_context::ProductionCSSExecutionContext;
     type WebFeature = Feature;
     type WebDXFeature = Feature;
     fn NullURL() -> Self::URL {
@@ -3359,13 +3080,15 @@ impl CSSParserContextPlatform for Backend {
         encoding.is_some()
     }
     fn EmptyReferrer() -> Self::Referrer {
-        String::from("")
+        Self::Referrer::Empty()
     }
     fn MakeReferrer(referrer: String, policy: Self::ReferrerPolicy) -> Self::Referrer {
-        referrer
+        Self::Referrer { referrer, policy }
     }
     fn StrippedForUseAsReferrer(url: &Self::URL) -> String {
-        url.AsString().cloned().unwrap_or_default()
+        url.AsString().map_or_else(String::new, |value| {
+            crate::cssom_execution_context::StrippedReferrer(&value.Utf8())
+        })
     }
     fn ResolveURL(
         base: &Self::URL,
@@ -3389,7 +3112,11 @@ impl CSSParserContextPlatform for Backend {
         true
     }
     fn CountDeprecation(context: Option<&Rc<Self::ExecutionContext>>, feature: Self::WebFeature) {
-        unavailable("CSSParserContextPlatform::CountDeprecation")
+        if let Some(context) = context.filter(|context| !context.IsContextDestroyed()) {
+            context
+                .UseCounter()
+                .CountDeprecation(feature.CounterFeature());
+        }
     }
 }
 
@@ -3924,6 +3651,18 @@ impl RuleSetBackend for Backend {
         selector: CSSSelectorComplex<'_>,
         scope: Option<&Self::StyleScope>,
     ) -> SelectorPreMatch {
+        // Chromium RuleInvalidationDataVisitor::CollectMetadataFromSelector,
+        // rule_invalidation_data_visitor.cc:403-418. Preserve the compiled
+        // selector metadata through this production RuleSet backend.
+        fn uses_window_inactive(selector: CSSSelectorComplex<'_>) -> bool {
+            selector.SimpleSelectors().any(|simple| {
+                simple.GetPseudoType() == PseudoType::kPseudoWindowInactive
+                    || simple
+                        .SelectorListOrParent()
+                        .is_some_and(|list| list.ComplexSelectors().any(uses_window_inactive))
+            })
+        }
+        features.uses_window_inactive_selector |= uses_window_inactive(selector);
         collect_user_action_features(features, selector, scope);
         collect_attribute_features(features, selector, scope);
         SelectorPreMatch::kMayMatch
@@ -5211,3 +4950,5 @@ mod tests {
         );
     }
 }
+
+thread_local! {static PARSER_TRACE_STACK:RefCell<Vec<browser_tracing::Span>>=const {RefCell::new(Vec::new())};}

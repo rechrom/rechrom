@@ -410,7 +410,12 @@ pub fn ParsePropertyWithContext<
         data.features |= values::CSSVariableData::HAS_REFERENCES;
     }
     if data.NeedsVariableResolution() {
-        let value = values::unparsed_with_base(data, mode, context.BaseURL().clone());
+        let value = values::unparsed_with_context(
+            data,
+            mode,
+            context.BaseURL().clone(),
+            context.ResourceFetchRestriction(),
+        );
         let important = important || parsed_important;
         let longhands = ShorthandFor(id);
         return Ok(if longhands.is_empty() {
@@ -567,6 +572,7 @@ pub fn ParseCustomPropertyWithContext<
         context.Mode(),
         false,
         context.BaseURL().clone(),
+        context.ResourceFetchRestriction(),
     )
 }
 pub fn ConsumeAnchoredFallbackQueryValue<T: TokenStreamTokenizer>(
@@ -591,6 +597,7 @@ pub fn ParseCustomPropertyWithArgumentGrammar(
         mode,
         argument_grammar,
         values::ProductionURL::Null,
+        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
     )
 }
 
@@ -601,6 +608,7 @@ fn ParseCustomPropertyWithArgumentGrammarAndBase(
     mode: CSSParserMode,
     argument_grammar: bool,
     base_url: values::ProductionURL,
+    restriction: crate::css_resource_fetch_restriction::ResourceFetchRestriction,
 ) -> Result<PropertyValue, PropertyParseError> {
     if !name.starts_with("--") || name.chars().count() < 3 {
         return Err(invalid(CSSPropertyID::kVariable));
@@ -613,10 +621,11 @@ fn ParseCustomPropertyWithArgumentGrammarAndBase(
         .filter(|item| !IsTrivia(&item.token))
         .collect::<Vec<_>>();
     let value = if significant.len() == 1 {
-        values::wide(significant[0].token.Id())
-            .unwrap_or_else(|| values::unparsed_with_base(data, mode, base_url.clone()))
+        values::wide(significant[0].token.Id()).unwrap_or_else(|| {
+            values::unparsed_with_context(data, mode, base_url.clone(), restriction)
+        })
     } else {
-        values::unparsed_with_base(data, mode, base_url)
+        values::unparsed_with_context(data, mode, base_url, restriction)
     };
     Ok(PropertyValue::new(
         &CSSPropertyName::custom(foundation::AtomicString::from_str(name)),
@@ -3183,6 +3192,10 @@ fn ConsumePositionLength<T: TokenStreamTokenizer>(
                 | CSSPropertyID::kWebkitTransformOriginY
                 | CSSPropertyID::kWebkitPerspectiveOriginX
                 | CSSPropertyID::kWebkitPerspectiveOriginY
+                | CSSPropertyID::kClipPath
+                | CSSPropertyID::kBorderShape
+                | CSSPropertyID::kShapeOutside
+                | CSSPropertyID::kOffsetPath
         ) {
             use crate::css_math_expression_node::CalculationResultCategory as C;
             return ConsumeMath(
@@ -3933,8 +3946,43 @@ fn ConsumeUrl<
     if stream.IsAttrTainted(start, end) {
         return Err(invalid(id));
     }
+    let url = RestrictFetchURL(url, context);
     let resolved = context.CompleteNonEmptyURL(&url);
     Ok(Some(values::CSSUrlData::new(url, resolved)))
+}
+// css_parsing_utils.cc:1820-1832,2024-2026,3884-3886. An empty
+// non-null URL preserves a failed resource, instead of removing the value.
+pub(crate) fn RestrictFetchURL<P: CSSParserContextPlatform>(
+    url: String,
+    context: &CSSParserContext<P>,
+) -> String {
+    if !url.IsNull()
+        && context.ResourceFetchRestriction()
+            == crate::css_resource_fetch_restriction::ResourceFetchRestriction::kOnlyDataUrls
+    {
+        // KURL::ProtocolIs -> url_util.cc:223-241 removes TAB/LF/CR,
+        // then url_parse.cc:282-299 trims leading C0/space before the scheme.
+        let data = url.Span16().is_some_and(|units| {
+            let mut scheme = units
+                .iter()
+                .copied()
+                .filter(|c| !matches!(c, 9 | 10 | 13))
+                .skip_while(|c| *c <= 32);
+            b"data:".iter().all(|&expected| {
+                scheme.next().is_some_and(|unit| {
+                    (if (65..=90).contains(&unit) {
+                        unit + 32
+                    } else {
+                        unit
+                    }) == expected as u16
+                })
+            })
+        });
+        if !data {
+            return String::from("");
+        }
+    }
+    url
 }
 fn ConsumeContentImage<
     T: TokenStreamTokenizer,
@@ -4263,7 +4311,13 @@ pub(super) fn ConsumeImageSet<
         args.ConsumeWhitespace();
         loop {
             let image = if args.Peek().GetType() == kStringToken {
+                let start = args.LookAheadOffset();
                 let url = args.ConsumeIncludingWhitespace().Value().ToString();
+                let end = args.LookAheadOffset();
+                if args.IsAttrTainted(start, end) {
+                    return Err(invalid(id));
+                }
+                let url = RestrictFetchURL(url, context);
                 values::image_from_url_data(values::CSSUrlData::new(
                     url.clone(),
                     context.CompleteNonEmptyURL(&url),
@@ -5401,19 +5455,21 @@ pub fn ConsumeColor<T: TokenStreamTokenizer>(
         let function = token.FunctionId();
         if function == Some(CSSValueID::kColorMix) {
             // cpp: css_parsing_utils.cc:2215-2301 ConsumeColorMixFunction.
-            // html.css uses the spec default interpolation (Oklab/shorter),
-            // whose grammar omits both `in` and its following comma. Keep the
-            // general two-color/optional-percentage operand grammar typed;
-            // explicit interpolation spaces wait for their computed style converters.
             let mix = {
                 let mut args = BlockGuard::new(stream);
                 args.ConsumeWhitespace();
-                if args.Peek().Id() == CSSValueID::kIn {
-                    return Err(unsupported(
-                        id,
-                        "ConsumeColorInterpolationSpace explicit space",
-                    ));
-                }
+                let (color_interpolation_space, hue_interpolation_method) =
+                    if args.Peek().Id() == CSSValueID::kIn {
+                        let interpolation = ConsumeGradientColorInterpolationMethod(id, &mut args)?
+                            .expect("source `in` begins an interpolation method");
+                        if args.Peek().GetType() != kCommaToken {
+                            return Err(invalid(id));
+                        }
+                        args.ConsumeIncludingWhitespace();
+                        interpolation
+                    } else {
+                        (ColorSpace::kOklab, HueInterpolationMethod::kShorter)
+                    };
                 let (color1, percentage1) = ConsumeColorMixOperand(id, &mut args, mode)?;
                 if args.Peek().GetType() != kCommaToken {
                     return Err(invalid(id));
@@ -5430,7 +5486,14 @@ pub fn ConsumeColor<T: TokenStreamTokenizer>(
                 }) {
                     return Err(invalid(id));
                 }
-                values::color_mix(color1, color2, percentage1, percentage2)
+                values::color_mix(
+                    color1,
+                    color2,
+                    percentage1,
+                    percentage2,
+                    color_interpolation_space,
+                    hue_interpolation_method,
+                )
             };
             stream.ConsumeWhitespace();
             return Ok(mix);
@@ -8607,6 +8670,41 @@ mod tests {
             panic!("color")
         };
         assert_eq!(color.0.Alpha(), 0.5);
+    }
+    #[test]
+    fn color_mix_retains_explicit_interpolation_space_and_hue_method() {
+        let srgb = parse(
+            CSSPropertyID::kBackgroundColor,
+            "color-mix(in srgb, #08872b 12%, #f2f5f3)",
+        );
+        let CSSValuePayload::kColorMixClass(mix) = srgb[0].Value().Payload() else {
+            panic!("color mix")
+        };
+        assert_eq!(mix.color_interpolation_space, ColorSpace::kSRGB);
+        assert_eq!(
+            mix.hue_interpolation_method,
+            HueInterpolationMethod::kShorter
+        );
+        assert_eq!(mix.NormalizePercentages(), Some((0.88, 1.0)));
+        assert!(srgb[0]
+            .Value()
+            .CssText()
+            .Utf8()
+            .starts_with("color-mix(in srgb, "));
+
+        let polar = parse(
+            CSSPropertyID::kColor,
+            "color-mix(in oklch longer hue, red 25%, blue)",
+        );
+        let CSSValuePayload::kColorMixClass(mix) = polar[0].Value().Payload() else {
+            panic!("polar color mix")
+        };
+        assert_eq!(mix.color_interpolation_space, ColorSpace::kOklch);
+        assert_eq!(
+            mix.hue_interpolation_method,
+            HueInterpolationMethod::kLonger
+        );
+        assert_eq!(mix.NormalizePercentages(), Some((0.75, 1.0)));
     }
     #[test]
     fn display_compounds_radius_pairs_and_rgb_token_boundaries_match_source() {

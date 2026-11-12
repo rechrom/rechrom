@@ -36,11 +36,18 @@ impl BasicShape for StylePath {
         let other = unsafe { &*(other as *const dyn BasicShape as *const Self) };
         self.wind_rule == other.wind_rule && self.byte_stream == other.byte_stream
     }
-    fn GetPath(&self, _rect: &gfx::RectF, _zoom: f32, _path_scale: f32) -> Path {
-        // The owning Path package has not been linked: foundation::Path is
-        // deliberately uninhabited. Chromium layout only needs the real shape
-        // payload and HasClipPath here; it does not call this path builder.
-        unimplemented!("StylePath::GetPath requires the owning vector Path package")
+    fn GetPath(&self, rect: &gfx::RectF, zoom: f32, scale: f32) -> Path {
+        use foundation::svg_path_byte_stream::NativePathSink;
+        let mut builder = foundation::shape_path::ShapePathBuilder::default();
+        builder.SetWindRule(self.wind_rule);
+        foundation::svg_path_byte_stream::BuildSvgByteStream(
+            self.byte_stream.Span(),
+            zoom * scale,
+            rect.x(),
+            rect.y(),
+            &mut builder,
+        );
+        builder.Finish()
     }
 }
 

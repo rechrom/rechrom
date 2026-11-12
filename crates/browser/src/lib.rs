@@ -27,9 +27,11 @@ pub mod dom_mutation;
 mod font_catalog;
 mod font_session;
 mod form_submission;
+mod image_bitmap_service;
 #[cfg(test)]
 mod incremental_style_tests;
 pub mod interaction_services;
+mod markup_sanitization;
 pub mod page;
 #[cfg(test)]
 mod page_parser_invalidation_tests;
@@ -38,6 +40,7 @@ mod page_resource_tests;
 #[cfg(test)]
 mod page_tests;
 mod persistent_layout;
+mod plugin_registry;
 pub mod style_services;
 #[cfg(test)]
 mod svg_image_tests;
@@ -64,6 +67,8 @@ pub fn CreateLayoutAssembly() -> LayoutAssembly {
     InstallReplacedAlgorithm(&mut assembly);
     InstallListModule(&mut assembly);
     InstallSvgModule(&mut assembly);
+    assembly.objects.svg_shape_path = Some(paint_skia::svg_shape_path::CreateSvgShapePath);
+    assembly.shape_coverage = Some(&paint_skia::shape_coverage::SkiaShapeCoverageRasterizer);
     #[cfg(feature = "inline_layout")]
     {
         layoutng_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
@@ -188,31 +193,56 @@ pub fn CreateSVGImageDecoderWithConstraints(
     )
 }
 
+/// Browser-process platform-font backend service. Chromium's
+/// FontPlatformData cache survives Document replacement on the renderer main
+/// thread; the embedding retains this bounded service while each Document
+/// keeps its own FontEngine, selection and layout state.
+pub type BrowserFontBackendFactory = Option<std::sync::Arc<dyn font_engine::FontBackendFactory>>;
+
+pub fn CreateBrowserFontBackendFactory() -> BrowserFontBackendFactory {
+    #[cfg(target_vendor = "apple")]
+    {
+        Some(std::sync::Arc::new(
+            raster::SkiaFontBackendFactory::default(),
+        ))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        None
+    }
+}
+
 /// Host viewport, system fonts and theme inputs shared by Page and isolated-document layout.
 pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
+    CreateBrowserConstraintsWithFontBackendFactory(width, height, CreateBrowserFontBackendFactory())
+}
+
+pub fn CreateBrowserConstraintsWithFontBackendFactory(
+    width: u32,
+    height: u32,
+    font_backend_factory: BrowserFontBackendFactory,
+) -> ConstraintSpace {
     let started = std::env::var_os("BROWSER_PROFILE_INPUT")
         .is_some()
         .then(std::time::Instant::now);
     let mut space = ConstraintSpace::default();
-    #[cfg(target_vendor = "apple")]
-    {
-        // Blink's SimpleFontData and HarfBuzzFace take metrics and advances
-        // from the same SkFont strike used by paint. Keep that host service
-        // behind the existing FontBackendFactory package boundary.
-        space.font_backend_factory = Some(std::sync::Arc::new(
-            raster::SkiaFontBackendFactory::default(),
-        ));
-    }
+    // Blink's SimpleFontData and HarfBuzzFace take metrics and advances from
+    // the same SkFont strike used by paint. Keep that host service behind the
+    // existing FontBackendFactory package boundary, but do not recreate its
+    // platform-data cache for every Document navigation.
+    space.font_backend_factory = font_backend_factory;
     space.available_size = Size {
         width: f64::from(width),
         height: f64::from(height),
     };
     space.scrollbar_theme = Some(ScrollbarThemeMetrics {
-        auto_thickness: 15,
-        thin_thickness: 7,
-        minimum_thumb_length: 24,
-        has_buttons: true,
+        auto_thickness: 16,
+        thin_thickness: 14,
+        minimum_thumb_length: 26,
+        has_buttons: false,
         uses_overlay_scrollbars: true,
+        is_solid_color: false,
+        uses_macos_painted_scrollbars: true,
         ..ScrollbarThemeMetrics::default()
     });
     space.control_theme = ControlThemeMetrics {
@@ -238,9 +268,9 @@ pub fn CreateBrowserConstraints(width: u32, height: u32) -> ConstraintSpace {
     // opened or parsed here; query completion happens before publication.
     space.fonts = vec![font_engine::FontFace {
         family: "Rechrom Emergency".into(),
-        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
-            .as_slice()
-            .into(),
+        bytes: font_engine::SharedFontBytes::from_static(include_bytes!(
+            "../../../assets/fonts/Roboto-Regular.ttf"
+        )),
         fallback_role: font_engine::FontFallbackRole::kLastResort,
         ..Default::default()
     }]
@@ -278,7 +308,7 @@ pub fn RenderHtml(source: &str, width: u32, height: u32) -> Vec<u8> {
         url,
         width,
         height,
-        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+        std::rc::Rc::new(RefCell::new(page::NullPageClient::default())),
         options,
         loader,
     )
@@ -322,7 +352,7 @@ pub fn RenderUrl(url: &str, width: u32, height: u32) -> std::io::Result<Vec<u8>>
         url,
         width,
         height,
-        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+        std::rc::Rc::new(RefCell::new(page::NullPageClient::default())),
     )?;
     page.RunTask()?;
     RenderPagePng(&mut page, width, height)
@@ -334,7 +364,7 @@ pub fn LayoutUrl(url: &str, width: u32, height: u32) -> io::Result<LayoutResultH
         url,
         width,
         height,
-        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+        std::rc::Rc::new(RefCell::new(page::NullPageClient::default())),
     )?;
     page.RunTask()?;
     page.CurrentFrame()
@@ -351,7 +381,7 @@ pub fn BuildSourceDisplayListUrl(
         url,
         width,
         height,
-        std::rc::Rc::new(RefCell::new(page::NullPageClient)),
+        std::rc::Rc::new(RefCell::new(page::NullPageClient::default())),
     )?;
     page.RunTask()?;
     page.CurrentFrame()
@@ -579,3 +609,5 @@ mod viewport_font_tests;
 
 #[cfg(test)]
 mod location_navigation_tests;
+
+pub mod storage_partition;

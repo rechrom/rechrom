@@ -5,12 +5,44 @@
 //! delivers messages and routes the returned effects.
 use crate::page_presentation::{Document, FrameProvenance, PageFrame as SubmittedFrame, Scene};
 use crate::{
-    engine::{Output, UserEvent, Viewport},
+    engine::{CopyOutputResult, CopyOutputTarget, Output, UserEvent, Viewport},
     window_surface::{DisplayTarget, PreparedDisplayTarget},
 };
 use browser::page::PageReturnedResource;
 use renderer_skia::RendererSkiaBackend;
-use std::{collections::BTreeMap, io, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    io,
+    sync::{mpsc, Arc},
+    time::Instant,
+};
+
+fn display_root_frame(
+    root: &crate::page_presentation::BrowserRootFrame,
+) -> viz::adapter::DisplayRootFrame {
+    let color = |[red, green, blue, alpha]: [u8; 4]| viz::adapter::Color4f {
+        red: f32::from(red) / 255.0,
+        green: f32::from(green) / 255.0,
+        blue: f32::from(blue) / 255.0,
+        alpha: f32::from(alpha) / 255.0,
+    };
+    viz::adapter::DisplayRootFrame {
+        background_color: color(root.background_color),
+        solid_color_quads: root
+            .solid_color_quads
+            .iter()
+            .map(|quad| viz::adapter::DisplayRootSolidColorQuad {
+                destination: viz::adapter::DeviceRect::new(
+                    quad.destination.x,
+                    quad.destination.y,
+                    quad.destination.width as i32,
+                    quad.destination.height as i32,
+                ),
+                color: color(quad.color),
+            })
+            .collect(),
+    }
+}
 
 pub(crate) enum Message {
     Scene(Scene),
@@ -21,28 +53,53 @@ pub(crate) enum Message {
         frame: crate::begin_frame_source::BeginFrame,
     },
     SwapAck(u64),
+    CopyOutput {
+        expected_viewport: Viewport,
+        target: CopyOutputTarget,
+        /// Page producers that must publish a newer main-frame transaction
+        /// than the one currently resident in Display before this copy can
+        /// read back the active root.
+        fresh_documents: Vec<Document>,
+        reply: mpsc::Sender<Result<CopyOutputResult, String>>,
+    },
     Stop,
 }
-
 pub(crate) enum Effect {
     RequestBeginFrame,
 }
-
+#[derive(Clone)]
+struct PresentationParticipant {
+    frame: viz::adapter::PresentedSurfaceFrame,
+    notify: Arc<dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync>,
+}
 struct PageSurface {
     surface: viz::adapter::SurfaceId,
+    /// Public child identities embedded by this Page's active parent frame.
+    /// They remain Viz-owned resources, not top-level Scene placements.
+    child_surfaces: BTreeSet<viz::adapter::SurfaceId>,
     local_surface_id: compositor::runtime::types::LocalSurfaceId,
     viewport: Viewport,
     provenance: FrameProvenance,
     is_handling_interaction: bool,
     reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
+    child_reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
+    presentation_feedback: Arc<dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync>,
 }
 struct PreparedDisplayFrame {
+    presentation: Vec<PresentationParticipant>,
     output: PreparedDisplayTarget,
     provenance: FrameProvenance,
     sequence: u64,
     viewport: Viewport,
     drag_regions: Vec<crate::chrome::DragRegion>,
     is_handling_interaction: bool,
+}
+
+struct PendingCopyOutput {
+    expected_viewport: Viewport,
+    target: CopyOutputTarget,
+    minimum_main_frame_epochs: Vec<(Document, u64)>,
+    reply: mpsc::Sender<Result<CopyOutputResult, String>>,
 }
 
 pub(crate) struct Display {
@@ -59,6 +116,9 @@ pub(crate) struct Display {
     diagnostic_output: Option<Output>,
     pending_swap: Option<u64>,
     last_rendered_placements: Vec<viz::adapter::SurfacePlacement>,
+    last_presented_frame: Option<(Viewport, FrameProvenance)>,
+    offscreen_frame_ready_notified: bool,
+    pending_copy_outputs: VecDeque<PendingCopyOutput>,
 }
 
 impl Display {
@@ -72,22 +132,38 @@ impl Display {
             pending: None,
             prepared: None,
             sequence: 0,
-            next_surface: 1,
+            // Page producers allocate delegated child SurfaceIds in their own
+            // low public range. Display roots are private embedding surfaces;
+            // keep them in a disjoint range so a child identity can be
+            // submitted verbatim as required by its SurfaceDrawQuad.
+            next_surface: 1_u64 << 63,
             notify: output.notify.clone(),
             diagnostic_output: capture_frames.then_some(output),
             pending_swap: None,
             last_rendered_placements: Vec::new(),
+            last_presented_frame: None,
+            offscreen_frame_ready_notified: false,
+            pending_copy_outputs: VecDeque::new(),
         }
     }
 
     pub(crate) fn Handle(
         &mut self,
         message: Message,
+        post_swap_started: &Arc<dyn Fn() + Send + Sync>,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
         let effects = match message {
-            Message::Stop => return Ok(Vec::new()),
+            Message::Stop => {
+                for request in self.pending_copy_outputs.drain(..) {
+                    let _ = request.reply.send(Err("Display stopped".into()));
+                }
+                return Ok(Vec::new());
+            }
             Message::Scene(scene) => {
+                if self.scene.as_ref() == Some(&scene) {
+                    return Ok(Vec::new());
+                }
                 // A prepared target is an aggregate of the exact root scene
                 // that existed when it was rendered.  It may be waiting
                 // behind the preceding native swap when a tab switch changes
@@ -96,17 +172,16 @@ impl Display {
                 // not ready yet, DrawPending must leave the last *presented*
                 // frame on screen rather than publish an already-rendered
                 // frame for the previous tab.
-                if self.scene.as_ref() != Some(&scene) {
-                    self.target.invalidate_pending_presentations();
-                    self.prepared = None;
-                }
+                self.target.invalidate_pending_presentations();
+                self.prepared = None;
+                self.UpdateCopyOutputsForScene(&scene);
                 self.scene = Some(scene);
                 self.PrunePages();
                 self.pending = Some(());
                 Ok(vec![Effect::RequestBeginFrame])
             }
             Message::Prepare { submitted } => self.Prepare(submitted),
-            Message::Submit { frame } => self.Submit(frame, post_swap_ack),
+            Message::Submit { frame } => self.Submit(frame, post_swap_started, post_swap_ack),
             Message::SwapAck(sequence) => {
                 let accepted = self.pending_swap == Some(sequence);
                 if accepted {
@@ -127,6 +202,79 @@ impl Display {
                         Vec::new()
                     },
                 )
+            }
+            Message::CopyOutput {
+                expected_viewport,
+                target,
+                fresh_documents,
+                reply,
+            } => {
+                let mut minimum_main_frame_epochs = fresh_documents
+                    .into_iter()
+                    .map(|document| {
+                        let next = self
+                            .pages
+                            .get(&document)
+                            .and_then(|page| page.provenance.content)
+                            .map_or(1, |content| content.main_frame_epoch.saturating_add(1));
+                        (document, next)
+                    })
+                    .collect::<Vec<_>>();
+                minimum_main_frame_epochs.sort_unstable_by_key(|(document, _)| *document);
+                minimum_main_frame_epochs.dedup_by_key(|(document, _)| *document);
+                // Page.captureScreenshot reads the active display root.  An
+                // offscreen target retains the pixels from its last completed
+                // swap, so a copy request issued after that swap can complete
+                // immediately only when no Page freshness fence was requested;
+                // waiting for unrelated future damage can leave an otherwise
+                // idle page blocked until the protocol timeout.
+                //
+                // DevTools input, evaluation and CopyOutput share BrowserHost's
+                // ordered ingress, but Page production is asynchronous. A
+                // same-size previous frame is therefore not proof that the
+                // preceding mutation has reached Viz. BrowserHost posts a
+                // normal main-frame transaction to each document below and
+                // this request waits for its provenance instead of redrawing
+                // or reading Page state from the display sequence.
+                // If a resize/scene transition is still pending, retain the
+                // request for the first presentation of that viewport below.
+                if minimum_main_frame_epochs.is_empty() {
+                    if let Some((viewport, provenance)) = self.last_presented_frame {
+                        if viewport == expected_viewport {
+                            let result = self
+                                .target
+                                .copy_output_rgba(viewport, target)
+                                .map(|mut output| {
+                                    output.provenance = Some(provenance);
+                                    output
+                                })
+                                .map_err(|error| error.to_string());
+                            let _ = reply.send(result);
+                            return Ok(Vec::new());
+                        }
+                    }
+                }
+                self.pending_copy_outputs.push_back(PendingCopyOutput {
+                    expected_viewport,
+                    target,
+                    minimum_main_frame_epochs,
+                    reply,
+                });
+                // CopyOutput participates in the ordinary DisplayScheduler
+                // damage path. If the matching Scene has already arrived,
+                // mark it dirty and request a normal BeginFrame. If not, the
+                // later Scene message supplies that damage; never draw the old
+                // viewport merely to satisfy a new-size capture.
+                if self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|scene| scene.viewport == expected_viewport)
+                {
+                    self.pending = Some(());
+                    Ok(vec![Effect::RequestBeginFrame])
+                } else {
+                    Ok(Vec::new())
+                }
             }
         }?;
         Ok(effects)
@@ -156,10 +304,52 @@ impl Display {
         }
     }
 
-    fn DestroyPageSurface(&mut self, page: PageSurface) {
-        if let Some(resources) = self.viz.DestroySurface(page.surface) {
-            Self::Reclaim(&page.reclaim, resources);
+    fn DestroySurface(
+        &mut self,
+        surface: viz::adapter::SurfaceId,
+        reclaim: &Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
+    ) {
+        if let Some(resources) = self.viz.DestroySurface(surface) {
+            Self::Reclaim(reclaim, resources);
         }
+    }
+
+    fn DestroyPageSurface(&mut self, page: PageSurface) {
+        // Remove the parent graph edge before destroying its delegated
+        // children. Surface destruction returns every still-owned resource to
+        // the Page compositor through the same FrameSink reclaim route.
+        self.DestroySurface(page.surface, &page.reclaim);
+        for child in page.child_surfaces {
+            self.DestroySurface(child, &page.child_reclaim);
+        }
+    }
+
+    fn ReclaimUnsubmitted(submitted: &SubmittedFrame) {
+        submitted.ReclaimAll();
+    }
+
+    fn ParentReferencesChild(
+        frame: &compositor::CompositorFrame,
+        child: viz::adapter::SurfaceId,
+    ) -> bool {
+        let runtime_id = viz::adapter::VizEngine::RuntimeSurfaceId(child);
+        frame
+            .metadata
+            .referenced_surfaces
+            .iter()
+            .any(|range| range.start == Some(runtime_id) || range.end == runtime_id)
+            || frame.render_pass_list.iter().any(|pass| {
+                pass.quad_list.iter().any(|quad| {
+                    matches!(
+                        &quad.material,
+                        compositor::runtime::frame::QuadMaterial::Surface {
+                            surface_range,
+                            ..
+                        } if surface_range.start == Some(runtime_id)
+                            || surface_range.end == runtime_id
+                    )
+                })
+            })
     }
 
     fn PrunePages(&mut self) {
@@ -208,28 +398,31 @@ impl Display {
                     "content_sequence",
                     submitted.provenance.content.map_or(0, |c| c.sequence) as f64,
                 ),
+                (
+                    "embedder_revision",
+                    submitted
+                        .provenance
+                        .content
+                        .map_or(0, |content| content.embedder_revision) as f64,
+                ),
+                ("child_frames", submitted.child_frames.len() as f64),
             ],
         );
         let local_surface_id = submitted.frame.local_surface_id;
-        let parameters = submitted
+        let Some(parameters) = submitted
             .frame
             .frame
             .render_pass_list
             .last()
             .map(|pass| (pass.output_rect.width, pass.output_rect.height))
-            .ok_or_else(|| io::Error::other("compositor frame has no root render pass"))?;
+        else {
+            Self::ReclaimUnsubmitted(&submitted);
+            return Err(io::Error::other("compositor frame has no root render pass"));
+        };
         if let Some(current) = self.pages.get(&document) {
             let same_embed = current.local_surface_id.embed_token == local_surface_id.embed_token;
             if same_embed && !local_surface_id.IsSameOrNewerThan(&current.local_surface_id) {
-                submitted.Reclaim(
-                    submitted
-                        .frame
-                        .frame
-                        .resource_list
-                        .iter()
-                        .map(|resource| resource.ToReturnedResource())
-                        .collect(),
-                );
+                Self::ReclaimUnsubmitted(&submitted);
                 return Ok(Vec::new());
             }
             if current.local_surface_id == local_surface_id
@@ -238,6 +431,7 @@ impl Display {
                     current.viewport.height as i32,
                 ) != parameters
             {
+                Self::ReclaimUnsubmitted(&submitted);
                 return Err(io::Error::other(
                     "CompositorFrame dimensions changed without a new LocalSurfaceId",
                 ));
@@ -252,18 +446,19 @@ impl Display {
             .get(&document)
             .and_then(|current| current.provenance.content)
             .and_then(|content| content.resize);
-        let surface = if generation_changed {
-            let previous = self.pages.remove(&document).expect("Page surface exists");
-            self.DestroyPageSurface(previous);
+        let (surface, mut child_surfaces) = if generation_changed {
+            let mut previous = self.pages.remove(&document).expect("Page surface exists");
+            let children = std::mem::take(&mut previous.child_surfaces);
+            self.DestroySurface(previous.surface, &previous.reclaim);
             let surface = viz::adapter::SurfaceId(self.next_surface);
             self.next_surface = self.next_surface.wrapping_add(1).max(1);
-            surface
+            (surface, children)
         } else if let Some(current) = self.pages.get(&document) {
-            current.surface
+            (current.surface, current.child_surfaces.clone())
         } else {
             let surface = viz::adapter::SurfaceId(self.next_surface);
             self.next_surface = self.next_surface.wrapping_add(1).max(1);
-            surface
+            (surface, BTreeSet::new())
         };
         if let (Some(resize), Some(content)) =
             (carried_resize, submitted.provenance.content.as_mut())
@@ -275,22 +470,69 @@ impl Display {
             }
         }
         let reclaim = submitted.reclaim.clone();
+        let child_reclaim = submitted.child_reclaim.clone();
+        let incoming_children = std::mem::take(&mut submitted.child_frames);
+        for child in incoming_children {
+            if !Self::ParentReferencesChild(&submitted.frame.frame, child.surface_id) {
+                Self::Reclaim(
+                    &child_reclaim,
+                    child
+                        .frame
+                        .resource_list
+                        .iter()
+                        .map(|resource| resource.ToReturnedResource())
+                        .collect(),
+                );
+                continue;
+            }
+            let child_surface = child.surface_id;
+            let submission = self
+                .viz
+                .SubmitFrame(child_surface, child.frame)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let returned_resources = submission.returned_resources.len();
+            Self::Reclaim(&child_reclaim, submission.returned_resources);
+            child_surfaces.insert(child_surface);
+            browser_tracing::instant(
+                "frame",
+                "DisplayChildFrameSubmitted",
+                &[
+                    ("surface_id", child_surface.0 as f64),
+                    ("returned_resources", returned_resources as f64),
+                ],
+            );
+        }
+        let retained_children = child_surfaces
+            .iter()
+            .copied()
+            .filter(|child| Self::ParentReferencesChild(&submitted.frame.frame, *child))
+            .collect::<BTreeSet<_>>();
         let submission = self
             .viz
             .SubmitFrame(surface, submitted.frame.frame)
             .map_err(|error| io::Error::other(error.to_string()))?;
         Self::Reclaim(&reclaim, submission.returned_resources);
+        for child in child_surfaces.difference(&retained_children).copied() {
+            self.DestroySurface(child, &child_reclaim);
+        }
         self.pages.insert(
             document,
             PageSurface {
                 surface,
+                child_surfaces: retained_children,
                 local_surface_id,
                 viewport: submitted.viewport,
                 provenance: submitted.provenance,
                 is_handling_interaction: submitted.is_handling_interaction,
                 reclaim,
+                child_reclaim,
+                presentation_feedback: submitted.presentation_feedback,
             },
         );
+        // Source: RenderWidgetHostImpl::OnLocalSurfaceIdChanged. Any accepted
+        // renderer frame clears the one-in-flight VisualProperties gate; the
+        // ACK is deliberately not matched to a resize id or exact size.
+        (submitted.visual_properties_ack)();
         let affects_current_scene = self.scene.as_ref().is_some_and(|scene| {
             scene
                 .placements
@@ -325,6 +567,7 @@ impl Display {
         };
         let viewport = scene.viewport;
         let mut placements = vec![];
+        let mut presentation_routes = BTreeMap::new();
         let mut is_handling_interaction = false;
         let mut stale_surfaces = 0usize;
         let mut missing_surfaces = 0usize;
@@ -350,6 +593,7 @@ impl Display {
                 continue;
             };
             let page = &self.pages[&document];
+            presentation_routes.insert(page.surface, page.presentation_feedback.clone());
             if placement.document.0 == 0
                 && page
                     .provenance
@@ -357,6 +601,20 @@ impl Display {
                     .map_or(0, |content| content.embedder_revision)
                     != scene.toolbar_revision
             {
+                browser_tracing::instant(
+                    "frame",
+                    "DisplayToolbarRevisionPending",
+                    &[
+                        (
+                            "available_revision",
+                            page.provenance
+                                .content
+                                .map_or(0, |content| content.embedder_revision)
+                                as f64,
+                        ),
+                        ("required_revision", scene.toolbar_revision as f64),
+                    ],
+                );
                 // Browser UI and the selected child Surface form one root
                 // commit. Exact matching rejects both directions of the race:
                 // an old toolbar under a new tab and a new toolbar that reaches
@@ -416,10 +674,22 @@ impl Display {
         prepare_trace.set("missing_surfaces", missing_surfaces as f64);
         let output_rect =
             viz::adapter::DeviceRect::new(0, 0, viewport.width as i32, viewport.height as i32);
+        let display_root = display_root_frame(&scene.browser_root);
         let mut aggregate = self
             .viz
-            .Aggregate(output_rect, &placements)
+            .AggregateWithDisplayRoot(output_rect, &placements, &display_root)
             .map_err(|error| io::Error::other(error.to_string()))?;
+        let presentation = self
+            .viz
+            .PresentationFrames(&aggregate)
+            .into_iter()
+            .filter_map(|frame| {
+                presentation_routes
+                    .get(&frame.surface_id)
+                    .cloned()
+                    .map(|notify| PresentationParticipant { frame, notify })
+            })
+            .collect();
         let damage_pixels = aggregate.DamagePixels();
         // Compare the resolved Viz roots that will actually be drawn. A new
         // document can initially select the previous generation's Surface;
@@ -445,8 +715,61 @@ impl Display {
                 })
                 .collect::<Vec<_>>()
                 .join(" | ");
+            let passes = aggregate
+                .Frame()
+                .RenderPasses()
+                .iter()
+                .map(|pass| {
+                    let quads = pass
+                        .Quads()
+                        .iter()
+                        .map(|quad| {
+                            let material = match &quad.material {
+                                compositor::runtime::frame::QuadMaterial::Picture { .. } => {
+                                    "Picture".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::SharedElement { .. } => {
+                                    "SharedElement".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::SolidColor { .. } => {
+                                    "SolidColor".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::DebugBorder { .. } => {
+                                    "DebugBorder".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::Tile { .. } => {
+                                    "Tile".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::Texture {
+                                    is_video_frame,
+                                    ..
+                                } => format!("Texture(video={is_video_frame})"),
+                                compositor::runtime::frame::QuadMaterial::Surface { .. } => {
+                                    "Surface".to_string()
+                                }
+                                compositor::runtime::frame::QuadMaterial::CompositorRenderPass {
+                                    render_pass_id,
+                                    ..
+                                } => format!("RenderPass({})", render_pass_id.0),
+                            };
+                            format!(
+                                "rect={:?} visible={:?} material={material}",
+                                quad.geometry.rect, quad.geometry.visible_rect,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "pass={} output={:?} damage={:?} quads=[{quads}]",
+                        pass.RenderPassId().0,
+                        pass.OutputRect(),
+                        pass.DamageRect(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
             eprintln!(
-                "display-roots sequence={sequence} placements={placements:?} previous={:?} full_redraw={full_redraw} stale={stale_surfaces} roots=[{roots}]",
+                "display-roots sequence={sequence} placements={placements:?} previous={:?} full_redraw={full_redraw} stale={stale_surfaces} roots=[{roots}] passes=[{passes}]",
                 self.last_rendered_placements,
             );
         }
@@ -497,6 +820,7 @@ impl Display {
         prepare_trace.set("direct_root_target", update.direct_root_target as u8 as f64);
         prepare_trace.set("damage_pixels", damage_pixels as f64);
         self.prepared = Some(PreparedDisplayFrame {
+            presentation,
             output,
             provenance,
             sequence,
@@ -551,6 +875,7 @@ impl Display {
     fn Submit(
         &mut self,
         frame: crate::begin_frame_source::BeginFrame,
+        post_swap_started: &Arc<dyn Fn() + Send + Sync>,
         post_swap_ack: &Arc<dyn Fn(u64) + Send + Sync>,
     ) -> io::Result<Vec<Effect>> {
         let _frame = browser_tracing::scope(browser_tracing::Context {
@@ -573,6 +898,10 @@ impl Display {
         frame_trace.set(
             "deadline_ms",
             viz::FrameTiming {
+                frame_id: viz::BeginFrameId {
+                    source_id: frame.source_id,
+                    sequence_number: frame.sequence_number,
+                },
                 frame_time: frame.frame_time,
                 interval: frame.interval,
                 source_deadline: frame.deadline,
@@ -619,6 +948,7 @@ impl Display {
             return Ok(Vec::new());
         };
         let PreparedDisplayFrame {
+            presentation: participants,
             mut output,
             provenance,
             sequence,
@@ -644,10 +974,12 @@ impl Display {
         // Headless capture has no visible native presentation boundary.
         // Submission activates this complete compositor frame; pending or
         // failed candidates never replace the last published frame.
-        if let Some(diagnostic) = &self.diagnostic_output {
-            let mut readback = output.take_readback_rgba(viewport)?;
-            readback.provenance = Some(provenance);
-            diagnostic.publish(readback);
+        if self.target.is_window() {
+            if let Some(diagnostic) = &self.diagnostic_output {
+                let mut readback = output.take_readback_rgba(viewport)?;
+                readback.provenance = Some(provenance);
+                diagnostic.publish(readback);
+            }
         }
         let notify = self.notify.clone();
         let presentation = self.target.is_window();
@@ -656,6 +988,7 @@ impl Display {
         // invoking SwapBuffers: software/native completion can be synchronous.
         // The callback only posts its token; the Display owner consumes it.
         self.pending_swap = Some(sequence);
+        post_swap_started();
         let presented = self.target.present_prepared(
             output,
             sequence,
@@ -681,10 +1014,30 @@ impl Display {
                 }
                 (post_swap_ack)(sequence);
             }),
+            Box::new(move|feedback|{
+                use browser::page::{PagePresentationOutcome as Outcome,PagePresentationUnavailableReason as Reason};
+                let outcome=match feedback{
+                    softbuffer::PresentationFeedback::Presented{timestamp,interval,flags}=>Outcome::Presented{timestamp,interval,flags},
+                    softbuffer::PresentationFeedback::Unavailable(reason)=>Outcome::Unavailable(match reason{
+                        softbuffer::PresentationUnavailableReason::BackendHasNoTimestamp=>Reason::BackendHasNoTimestamp,
+                        softbuffer::PresentationUnavailableReason::DiscardedBeforePresentation=>Reason::DiscardedBeforePresentation,
+                        softbuffer::PresentationUnavailableReason::OffscreenTarget=>Reason::OffscreenTarget,
+                    }),
+                };
+                for participant in participants{
+                    (participant.notify)(browser::page::PageFramePresentationFeedback{surface_id:participant.frame.surface_id.0,viz_submission:participant.frame.submission,frame_token:participant.frame.frame_token,frame_id:participant.frame.frame_id,outcome});
+                }
+            }),
         );
         if let Err(error) = presented {
             self.pending_swap = None;
             return Err(error);
+        }
+        self.last_presented_frame = Some((viewport, provenance));
+        self.FulfillCopyOutputs(viewport, provenance);
+        if !presentation && !self.offscreen_frame_ready_notified {
+            self.offscreen_frame_ready_notified = true;
+            (self.notify)(UserEvent::FrameReady);
         }
         frame_trace.set("submitted", 1.0);
         frame_trace.set(
@@ -728,9 +1081,10 @@ impl Display {
                     provenance.document.0, provenance.document.1,
                     provenance.content.map_or(0, |c| c.sequence), provenance.content.map_or(0, |c| c.recording_revision));
             }
-            // Pixels from this exact prepared candidate are now in the
-            // screenshot mailbox and its offscreen swap completed. This is
-            // neither an on-screen presentation timestamp nor FCP/LCP.
+            // This exact prepared candidate is now the completed offscreen
+            // target. RGBA conversion is deferred until CopyOutput is
+            // requested, like Chromium's DirectRenderer readback path. This
+            // is neither an on-screen presentation timestamp nor FCP/LCP.
             browser_tracing::instant(
                 "frame",
                 "OffscreenFramePublished",
@@ -758,5 +1112,204 @@ impl Display {
             );
         }
         Ok(Vec::new())
+    }
+
+    fn FulfillCopyOutputs(&mut self, viewport: Viewport, provenance: FrameProvenance) {
+        let mut waiting = VecDeque::new();
+        for request in self.pending_copy_outputs.drain(..) {
+            let fresh = request
+                .minimum_main_frame_epochs
+                .iter()
+                .all(|(document, minimum)| {
+                    self.pages
+                        .get(document)
+                        .and_then(|page| page.provenance.content)
+                        .is_some_and(|content| content.main_frame_epoch >= *minimum)
+                });
+            if request.expected_viewport != viewport || !fresh {
+                waiting.push_back(request);
+                continue;
+            }
+            let result = self
+                .target
+                .copy_output_rgba(viewport, request.target)
+                .map(|mut output| {
+                    output.provenance = Some(provenance);
+                    output
+                })
+                .map_err(|error| error.to_string());
+            let _ = request.reply.send(result);
+        }
+        self.pending_copy_outputs = waiting;
+    }
+
+    fn UpdateCopyOutputsForScene(&mut self, scene: &Scene) {
+        let mut waiting = VecDeque::new();
+        for mut request in self.pending_copy_outputs.drain(..) {
+            // A CopyOutputRequest belongs to the active display root, not to a
+            // discarded resize candidate. If a newer BrowserView Scene wins
+            // before the draw, follow that Scene and fulfill from its first
+            // completed presentation. This matches Chromium carrying the copy
+            // request onto the active render pass and avoids returning an old
+            // size or failing rapid resize sampling.
+            request.expected_viewport = scene.viewport;
+            request.minimum_main_frame_epochs.retain(|(document, _)| {
+                scene
+                    .placements
+                    .iter()
+                    .any(|placement| placement.document == *document)
+            });
+            waiting.push_back(request);
+        }
+        self.pending_copy_outputs = waiting;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn viewport(width: u32) -> Viewport {
+        Viewport {
+            width,
+            height: crate::chrome::HEIGHT as u32 + 1,
+            scale: 1.0,
+        }
+    }
+
+    fn scene(viewport: Viewport) -> Scene {
+        Scene {
+            viewport,
+            browser_root: crate::page_presentation::BrowserRootFrame {
+                background_color: [255; 4],
+                solid_color_quads: Vec::new(),
+            },
+            placements: Vec::new(),
+            live_documents: Vec::new(),
+            metadata: Vec::new(),
+            toolbar_revision: 0,
+        }
+    }
+
+    fn output() -> Output {
+        Output {
+            mailbox: Arc::new(Mutex::new(None)),
+            notify: Arc::new(|_| {}),
+        }
+    }
+
+    fn provenance() -> FrameProvenance {
+        FrameProvenance {
+            document: (1, 1),
+            content: None,
+        }
+    }
+
+    fn post_swap_ack() -> Arc<dyn Fn(u64) + Send + Sync> {
+        Arc::new(|_| {})
+    }
+
+    fn post_swap_started() -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(|| {})
+    }
+
+    #[test]
+    fn resize_then_copy_output_waits_for_matching_presentation() {
+        let old = viewport(2);
+        let new = viewport(3);
+        let mut display = Display::New(
+            DisplayTarget::Offscreen {
+                pixels: vec![0xff11_1111; old.width as usize * old.height as usize],
+            },
+            output(),
+            true,
+        );
+        display.scene = Some(scene(old));
+        display.last_presented_frame = Some((old, provenance()));
+        let (reply, result) = mpsc::channel();
+        let post_swap_started = post_swap_started();
+        let post_swap_ack = post_swap_ack();
+
+        let effects = display
+            .Handle(
+                Message::CopyOutput {
+                    expected_viewport: new,
+                    target: CopyOutputTarget::Page,
+                    fresh_documents: Vec::new(),
+                    reply,
+                },
+                &post_swap_started,
+                &post_swap_ack,
+            )
+            .unwrap();
+
+        assert!(effects.is_empty());
+        assert!(result.try_recv().is_err());
+        assert_eq!(display.pending_copy_outputs.len(), 1);
+
+        let effects = display
+            .Handle(
+                Message::Scene(scene(new)),
+                &post_swap_started,
+                &post_swap_ack,
+            )
+            .unwrap();
+        assert!(matches!(effects.as_slice(), [Effect::RequestBeginFrame]));
+        assert!(result.try_recv().is_err());
+
+        display.target = DisplayTarget::Offscreen {
+            pixels: vec![0xff60_5040; new.width as usize * new.height as usize],
+        };
+        display.FulfillCopyOutputs(new, provenance());
+        let captured = result.recv().unwrap().unwrap();
+        assert_eq!((captured.width, captured.height), (3, 1));
+        assert_eq!(captured.pixels, [0x60, 0x50, 0x40, 255].repeat(3));
+        assert!(display.pending_copy_outputs.is_empty());
+    }
+
+    #[test]
+    fn superseded_copy_output_follows_latest_scene() {
+        let expected = viewport(3);
+        let replacement = viewport(4);
+        let mut display = Display::New(
+            DisplayTarget::Offscreen { pixels: Vec::new() },
+            output(),
+            true,
+        );
+        display.scene = Some(scene(expected));
+        let (reply, result) = mpsc::channel();
+        let post_swap_started = post_swap_started();
+        let post_swap_ack = post_swap_ack();
+        display
+            .Handle(
+                Message::CopyOutput {
+                    expected_viewport: expected,
+                    target: CopyOutputTarget::Toolbar,
+                    fresh_documents: Vec::new(),
+                    reply,
+                },
+                &post_swap_started,
+                &post_swap_ack,
+            )
+            .unwrap();
+
+        display
+            .Handle(
+                Message::Scene(scene(replacement)),
+                &post_swap_started,
+                &post_swap_ack,
+            )
+            .unwrap();
+
+        assert!(result.try_recv().is_err());
+        assert_eq!(display.pending_copy_outputs.len(), 1);
+        display.target = DisplayTarget::Offscreen {
+            pixels: vec![0xff30_2010; replacement.width as usize * replacement.height as usize],
+        };
+        display.FulfillCopyOutputs(replacement, provenance());
+        let captured = result.recv().unwrap().unwrap();
+        assert_eq!(captured.width, replacement.width);
+        assert!(display.pending_copy_outputs.is_empty());
     }
 }

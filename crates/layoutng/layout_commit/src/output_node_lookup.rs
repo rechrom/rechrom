@@ -21,6 +21,7 @@ fn output_node_ptr(storage: &LayoutObjectTreeStorage, id: u64) -> Option<*mut La
         .iter()
         .filter_map(|key| storage.managed.get(key))
         .filter(|record| !record.input.style_generated)
+        .filter(|record| !unsafe { &*record.object }.WasDestroyedForTreeUpdate())
         .min_by_key(|record| record.input.kind as i32)
         .map(|record| record.object)
 }

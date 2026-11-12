@@ -35,6 +35,7 @@ atom_manager! {
     // General Use Atoms
     CARD32,
     UTF8_STRING,
+    INCR,
     WM_CHANGE_STATE,
     WM_CLIENT_MACHINE,
     WM_DELETE_WINDOW,
@@ -86,10 +87,17 @@ atom_manager! {
     XdndPosition,
     XdndStatus,
     XdndActionPrivate,
+    XdndActionCopy,
+    XdndActionLink,
+    XdndActionMove,
+    XdndActionList,
     XdndSelection,
     XdndFinished,
     XdndTypeList,
     TextUriList: b"text/uri-list",
+    TextPlain: b"text/plain",
+    TextPlainUtf8: b"text/plain;charset=utf-8",
+    TextHtml: b"text/html",
     None: b"None",
 
     // Miscellaneous Atoms

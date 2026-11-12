@@ -1,6 +1,7 @@
 #![allow(non_snake_case, non_upper_case_globals)]
 
 use super::html_token::{HTMLToken, TokenType};
+use super::parser_content_policy::ParserContentPolicy;
 use crate::html_parser_host::{HTMLParserHost, ParserElementPhase};
 use dom::error::{invalid_argument, logic_error};
 use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMNodeType, PersistentDocument};
@@ -598,21 +599,24 @@ pub struct HTMLConstructionSite<'a> {
     document_: &'a mut PersistentDocument,
     host_: Option<&'a mut dyn HTMLParserHost>,
     open_elements_: Vec<usize>,
+    content_policy_: ParserContentPolicy,
 }
 
 impl<'a> HTMLConstructionSite<'a> {
-    pub(crate) fn IntoOpenElements(self) -> Vec<usize> {
-        self.open_elements_
+    pub(crate) fn IntoOpenElements(self) -> (Vec<usize>, ParserContentPolicy) {
+        (self.open_elements_, self.content_policy_)
     }
     pub(crate) fn Resume(
         document: &'a mut PersistentDocument,
         host: &'a mut dyn HTMLParserHost,
         open_elements: Vec<usize>,
+        content_policy: ParserContentPolicy,
     ) -> Self {
         Self {
             document_: document,
             host_: Some(host),
             open_elements_: open_elements,
+            content_policy_: content_policy,
         }
     }
 
@@ -626,7 +630,15 @@ impl<'a> HTMLConstructionSite<'a> {
             document_: document,
             host_: host,
             open_elements_: Vec::new(),
+            content_policy_: ParserContentPolicy::default(),
         }
+    }
+
+    pub fn SetParserContentPolicy(&mut self, policy: ParserContentPolicy) {
+        self.content_policy_ = policy;
+    }
+    pub fn GetParserContentPolicy(&self) -> ParserContentPolicy {
+        self.content_policy_
     }
 
     // cpp: html/parser/html_construction_site.h:23
@@ -652,7 +664,22 @@ impl<'a> HTMLConstructionSite<'a> {
     // cpp: html/parser/html_construction_site.h:25
     // cpp: html/parser/html_construction_site.cc:228-230
     pub fn CurrentElement(&self) -> Option<usize> {
-        self.open_elements_.last().copied()
+        self.open_elements_
+            .last()
+            .copied()
+            .filter(|node| self.document_.Node(*node).Type() == DOMNodeType::kElement)
+    }
+    pub(crate) fn open_elements_for_fragment(&mut self, fragment: usize) {
+        self.open_elements_.clear();
+        self.PushFragmentRoot(fragment);
+    }
+    pub(crate) fn PushFragmentRoot(&mut self, fragment: usize) {
+        assert!(self.open_elements_.is_empty());
+        assert_eq!(
+            self.document_.Node(fragment).Type(),
+            DOMNodeType::kDocumentFragment
+        );
+        self.open_elements_.push(fragment);
     }
 
     // cpp: html/parser/html_construction_site.h:26
@@ -676,11 +703,81 @@ impl<'a> HTMLConstructionSite<'a> {
         if token.GetType() != TokenType::kStartTag {
             invalid_argument("element insertion requires a start tag");
         }
-        self.InsertElement(
-            AdjustTagName(token.GetName().AsString().Utf8(), node_namespace),
-            AttributesFromToken(token, node_namespace),
+        // html_construction_site.cc:96–110,1225–1276. Strip before the
+        // parser attribute setter and leave disallowed script nodes detached
+        // while keeping them on the stack for their raw-text contents.
+        let raw_name = token.GetName().AsString();
+        let adjusted_name = AdjustTagName(raw_name.Utf8(), node_namespace);
+        let local = if adjusted_name == raw_name.Utf8() {
+            foundation::AtomicString::from_utf16(token.GetName().as_slice())
+        } else {
+            foundation::AtomicString::from_str(&adjusted_name)
+        };
+        let namespace = match node_namespace {
+            DOMNamespace::kHTML => "http://www.w3.org/1999/xhtml",
+            DOMNamespace::kSVG => "http://www.w3.org/2000/svg",
+            DOMNamespace::kMathML => "http://www.w3.org/1998/Math/MathML",
+            DOMNamespace::kNone => "",
+        };
+        let element = self.document_.CreateElementWithQualifiedName(
             node_namespace,
-        )
+            foundation::QualifiedName::new(
+                foundation::AtomicString::default(),
+                local,
+                foundation::AtomicString::from_str(namespace),
+            ),
+            Vec::new(),
+        );
+        let mut names = Vec::new();
+        let mut safe_attributes = Vec::new();
+        for token_attribute in token.Attributes() {
+            let attribute = AdjustAttribute(
+                token_attribute.GetName().Utf8(),
+                String::new(),
+                node_namespace,
+            );
+            if names.iter().any(|existing: &DOMAttribute| {
+                existing.local_name == attribute.local_name
+                    && existing.namespace_uri == attribute.namespace_uri
+            }) {
+                continue;
+            }
+            names.push(attribute.clone());
+            let value = token_attribute.Value();
+            let units = value.Span16().unwrap_or_default();
+            if !self.content_policy_.ScriptingContentIsAllowed()
+                && self
+                    .document_
+                    .Node(element)
+                    .IsScriptingAttributeValue(&attribute, units)
+            {
+                continue;
+            }
+            let raw_attribute_name = token_attribute.GetName();
+            let local = if attribute.prefix.is_empty()
+                && attribute.local_name == raw_attribute_name.Utf8()
+            {
+                raw_attribute_name
+            } else {
+                foundation::AtomicString::from_str(&attribute.local_name)
+            };
+            let name = foundation::QualifiedName::new(
+                foundation::AtomicString::from_str(&attribute.prefix),
+                local,
+                foundation::AtomicString::from_str(&attribute.namespace_uri),
+            );
+            safe_attributes.push((attribute, name, value));
+        }
+        for (attribute, name, value) in safe_attributes {
+            self.document_.ParserSetQualifiedAttributeUTF16(
+                element,
+                attribute,
+                &name,
+                value.Span16().unwrap_or_default(),
+            );
+        }
+        self.AttachElement(element);
+        element
     }
 
     // cpp: html/parser/html_construction_site.h:30-32
@@ -694,14 +791,28 @@ impl<'a> HTMLConstructionSite<'a> {
         let element = self
             .document_
             .CreateElement(node_namespace, name, attributes);
+        self.AttachElement(element);
+        element
+    }
+    // ReconstructTheActiveFormattingElements (html_construction_site.cc:
+    // 1658–1695) retains original qualified names and WTF-16 attributes.
+    pub(crate) fn InsertReconstructedFormattingElement(&mut self, source: usize) -> usize {
+        let element = self.document_.CloneNode(source, false);
+        self.AttachElement(element);
+        element
+    }
+    fn AttachElement(&mut self, element: usize) {
         let parent = self.CurrentNode();
-        self.document_.AppendChild(parent, element);
+        self.document_.BeginParsingChildren(element);
+        let script = name_is_script(self.document_.Node(element));
+        if self.content_policy_.ScriptingContentIsAllowed() || !script {
+            self.document_.AppendChild(parent, element);
+        }
         if self.document_.Node(element).IsHTMLElement("template") {
             self.document_.EnsureTemplateContents(element);
         }
         self.open_elements_.push(element);
         self.Notify(element, ParserElementPhase::kInserted);
-        element
     }
 
     // cpp: html/parser/html_construction_site.h:33
@@ -718,6 +829,26 @@ impl<'a> HTMLConstructionSite<'a> {
     pub fn InsertText(&mut self, data: &str) -> usize {
         let parent = self.CurrentNode();
         self.document_.AppendText(parent, data)
+    }
+
+    pub fn InsertCommentUTF16(&mut self, data: &[u16]) -> usize {
+        let comment = self.document_.CreateCommentUTF16(data);
+        let parent = self.CurrentNode();
+        self.document_.AppendChild(parent, comment);
+        comment
+    }
+    pub fn InsertTextUTF16(&mut self, data: &[u16]) -> usize {
+        let parent = self.CurrentNode();
+        self.document_.AppendTextUTF16(parent, data)
+    }
+    pub fn InsertTextAtFosterParentUTF16(&mut self, data: &[u16]) -> usize {
+        let location = self.FindFosterLocation();
+        if let Some(before) = location.before {
+            return self
+                .document_
+                .InsertTextBeforeUTF16(location.parent, before, data);
+        }
+        self.document_.AppendTextUTF16(location.parent, data)
     }
 
     // cpp: html/parser/html_construction_site.h:57
@@ -775,6 +906,13 @@ impl<'a> HTMLConstructionSite<'a> {
     // cpp: html/parser/html_construction_site.h:35
     // cpp: html/parser/html_construction_site.cc:296-303
     pub fn InsertAtFosterParent(&mut self, child: usize) -> usize {
+        // Disallowed scripts are stack-only nodes (cc:1250–1257), including
+        // error recovery which selects a foster insertion location.
+        if !self.content_policy_.ScriptingContentIsAllowed()
+            && name_is_script(self.document_.Node(child))
+        {
+            return child;
+        }
         let location = self.FindFosterLocation();
         if let Some(before) = location.before {
             self.document_.InsertBefore(location.parent, child, before);
@@ -802,6 +940,7 @@ impl<'a> HTMLConstructionSite<'a> {
         let Some(&node) = self.open_elements_.last() else {
             logic_error("cannot pop an empty open-element stack");
         };
+        self.document_.FinishParsingChildren(node);
         self.Notify(node, ParserElementPhase::kChildrenFinished);
         self.open_elements_.pop();
     }
@@ -819,6 +958,10 @@ impl<'a> HTMLConstructionSite<'a> {
     // cpp: html/parser/html_construction_site.cc:329-345
     pub fn PopUntil(&mut self, html_name: &str) {
         while let Some(&node) = self.open_elements_.last() {
+            if self.document_.Node(node).Type() == DOMNodeType::kDocumentFragment {
+                return;
+            }
+            self.document_.FinishParsingChildren(node);
             self.Notify(node, ParserElementPhase::kChildrenFinished);
             self.open_elements_.pop();
             let element = self.document_.Node(node);
@@ -843,6 +986,7 @@ impl<'a> HTMLConstructionSite<'a> {
             .iter()
             .position(|&element| element == node)
         {
+            self.document_.FinishParsingChildren(node);
             self.open_elements_.remove(index);
         }
     }
@@ -871,6 +1015,7 @@ impl<'a> HTMLConstructionSite<'a> {
             logic_error("open element insertion target is absent");
         };
         self.open_elements_.insert(index + 1, node);
+        self.document_.BeginParsingChildren(node);
     }
 
     // cpp: html/parser/html_construction_site.h:44
@@ -916,4 +1061,9 @@ impl<'a> HTMLConstructionSite<'a> {
     pub fn TakeAllChildren(&mut self, source: usize, destination: usize) {
         self.document_.TakeAllChildren(source, destination);
     }
+}
+
+fn name_is_script(node: &dom::persistent_document::DOMNode) -> bool {
+    (node.Namespace() == DOMNamespace::kHTML || node.Namespace() == DOMNamespace::kSVG)
+        && node.Name() == "script"
 }

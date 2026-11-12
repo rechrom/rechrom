@@ -126,10 +126,9 @@ fn Intrinsic(
     } else {
         Some(Length::Fixed(
             // cpp: css_primitive_value.cc:43-66,328-332 ClampToCSSLengthRange.
-            Pixels(id, b, value, root, media)?.clamp(
-                (foundation::LayoutUnit::Min().ToInt() + 2) as f64,
-                (foundation::LayoutUnit::Max().ToInt() - 2) as f64,
-            ),
+            layoutng_style::css::css_primitive_value::ClampToCSSLengthRange(Pixels(
+                id, b, value, root, media,
+            )?) as f64,
         ))
     };
     Ok(StyleIntrinsicLength::new(

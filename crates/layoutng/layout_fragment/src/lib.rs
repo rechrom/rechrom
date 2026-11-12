@@ -7,6 +7,7 @@ pub mod break_token;
 pub mod break_token_algorithm_data;
 pub mod fragment_builder;
 pub mod fragment_data;
+pub mod fragment_data_iterator;
 pub mod fragment_item;
 pub mod fragment_items;
 pub mod fragment_items_builder;
@@ -28,3 +29,4 @@ pub mod physical_line_box_fragment;
 mod trace_bindings;
 
 pub mod physical_box_fragment;
+mod hit_test_geometry;

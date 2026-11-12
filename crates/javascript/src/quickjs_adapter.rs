@@ -106,6 +106,7 @@ unsafe fn holder_finalizer(_: *mut JSRuntime, value: JSValue) {
 struct TracedObjectData {
     references: HashMap<u64, JSValue>,
     list: Vec<JSValue>,
+    ephemerons: HashMap<u64, JSValue>,
     on_release: Option<Box<dyn FnOnce()>>,
 }
 static TRACED_OBJECT_CLASS: OnceLock<JSClassID> = OnceLock::new();
@@ -121,10 +122,15 @@ unsafe fn traced_object_mark(rt: *mut JSRuntime, value: JSValueConst, mark: Opti
     if let (Some(data), Some(mark)) = (data.as_ref(), mark) {
         super::bridge_profile::gc_work(
             true,
-            data.references.len() + data.list.len(),
-            data.references.capacity() + data.list.len(),
+            data.references.len() + data.list.len() + data.ephemerons.len(),
+            data.references.capacity() + data.list.len() + data.ephemerons.capacity(),
         );
-        for &reference in data.references.values().chain(data.list.iter()) {
+        for &reference in data
+            .references
+            .values()
+            .chain(data.list.iter())
+            .chain(data.ephemerons.values())
+        {
             JS_MarkValue(rt, reference, mark);
         }
     }
@@ -136,13 +142,16 @@ unsafe fn traced_object_finalizer(rt: *mut JSRuntime, value: JSValue) {
         let mut data = Box::from_raw(data);
         super::bridge_profile::gc_work(
             false,
-            data.references.len() + data.list.len(),
-            data.references.capacity() + data.list.len(),
+            data.references.len() + data.list.len() + data.ephemerons.len(),
+            data.references.capacity() + data.list.len() + data.ephemerons.capacity(),
         );
         for (_, reference) in data.references.drain() {
             JS_FreeValueRT(rt, reference);
         }
         for reference in data.list.drain(..) {
+            JS_FreeValueRT(rt, reference);
+        }
+        for (_, reference) in data.ephemerons.drain() {
             JS_FreeValueRT(rt, reference);
         }
         // Internal owner notification only. This callback may enqueue released
@@ -155,6 +164,8 @@ unsafe fn traced_object_finalizer(rt: *mut JSRuntime, value: JSValue) {
 struct CallbackState {
     owner: Weak<EngineOwner>,
     functions: RefCell<Vec<Weak<Holder>>>,
+    native_jobs: RefCell<HashMap<u64, Rc<dyn HostCallable>>>,
+    next_native_job: Cell<u64>,
     function_sweep_threshold: Cell<usize>,
     tracker: RefCell<Option<Box<dyn RejectionTracker>>>,
     tracker_generation: Cell<u64>,
@@ -168,7 +179,21 @@ struct CallbackState {
     intrinsics: HashMap<&'static str, JSValue>,
     proxy_class: JSClassID,
 }
+// A Window Agent owns one heap/job queue and multiple independent Contexts.
+// Values may cross those Contexts by identity; unrelated Agents stay isolated.
+struct AgentOwner {
+    rt: *mut JSRuntime,
+    task_tracker: Rc<foundation::task_attribution::TaskAttributionTracker>,
+}
+impl Drop for AgentOwner {
+    fn drop(&mut self) {
+        unsafe { JS_FreeRuntime(self.rt) };
+    }
+}
 struct EngineOwner {
+    agent: Rc<AgentOwner>,
+    callback_context: crate::javascript_runtime::JavaScriptCallbackContext,
+    task_tracker: Rc<foundation::task_attribution::TaskAttributionTracker>,
     rt: *mut JSRuntime,
     ctx: *mut JSContext,
     callbacks: *mut CallbackState,
@@ -177,9 +202,6 @@ struct EngineOwner {
 impl Drop for EngineOwner {
     fn drop(&mut self) {
         unsafe {
-            JS_SetModuleEmbeddingHooks(self.rt, None, None, ptr::null_mut());
-            JS_SetHostPromiseRejectionTracker(self.rt, None, ptr::null_mut());
-            JS_SetModuleLoaderFunc(self.rt, None, None, ptr::null_mut());
             JS_SetContextOpaque(self.ctx, ptr::null_mut());
             let data = Box::from_raw(self.callbacks);
             for pending in data.pending_dynamic_imports.borrow_mut().drain(..) {
@@ -192,7 +214,6 @@ impl Drop for EngineOwner {
             }
             drop(data);
             JS_FreeContext(self.ctx);
-            JS_FreeRuntime(self.rt);
         }
     }
 }
@@ -271,6 +292,9 @@ impl PartialEq for JsObject {
 }
 impl Eq for JsObject {}
 impl JsString {
+    pub fn to_utf16(&self) -> Vec<u16> {
+        unsafe { JS_CopyString16(self.0.raw) }
+    }
     pub fn to_string_lossy(&self) -> String {
         unsafe {
             let mut len = 0;
@@ -509,13 +533,32 @@ pub struct Context {
     primary: bool,
     pub well_known: WellKnown,
 }
+pub struct WeakContext {
+    owner: Weak<EngineOwner>,
+}
+impl WeakContext {
+    pub fn Upgrade(&self) -> Option<Context> {
+        let owner = self.owner.upgrade()?;
+        if !owner.callback_context.ContextIsValid() {
+            return None;
+        }
+        Some(Context {
+            well_known: WellKnown {
+                owner: owner.clone(),
+            },
+            owner,
+            primary: false,
+        })
+    }
+}
 impl Drop for Context {
     fn drop(&mut self) {
         if self.primary {
+            self.owner.callback_context.Invalidate();
             unsafe {
                 let data = &*self.owner.callbacks;
-                JS_SetHostPromiseRejectionTracker(self.owner.rt, None, ptr::null_mut());
                 data.tracker.borrow_mut().take();
+                data.native_jobs.borrow_mut().clear();
                 data.rejection_events.borrow_mut().clear();
                 // Public opaque finalizers release captures when JS functions
                 // die. Retire still-live closures here to break host-owned
@@ -536,6 +579,46 @@ impl Drop for Context {
     }
 }
 impl Context {
+    pub(super) fn task_attribution_tracker(
+        &self,
+    ) -> Rc<foundation::task_attribution::TaskAttributionTracker> {
+        self.owner.task_tracker.clone()
+    }
+    pub(super) fn is_in_context(&self) -> bool {
+        unsafe { JS_IsInContext(self.owner.ctx) }
+    }
+    pub(super) fn callback_context(&self) -> crate::javascript_runtime::JavaScriptCallbackContext {
+        self.owner.callback_context.clone()
+    }
+    pub(super) fn is_execution_terminating(&self) -> bool {
+        if unsafe { JS_IsUncatchableException(self.owner.ctx) } != 0 {
+            self.owner.callback_context.SetTerminating();
+        }
+        self.owner.callback_context.IsExecutionTerminating()
+    }
+    pub(super) fn Identity(&self) -> u64 {
+        self.owner.ctx as usize as u64
+    }
+    pub fn Downgrade(&self) -> WeakContext {
+        WeakContext {
+            owner: Rc::downgrade(&self.owner),
+        }
+    }
+    /// Copies an ECMAScript ArrayBuffer through QuickJS's public embedding API.
+    /// TypedArray/DataView byte ranges are sliced by Web IDL before crossing
+    /// this boundary, so the host never inspects engine object layouts.
+    pub fn array_buffer_copy(&self, value: &Value) -> Option<Vec<u8>> {
+        let Value::Object(object) = value else {
+            return None;
+        };
+        let mut length = 0;
+        let data = unsafe { JS_GetArrayBuffer(self.owner.ctx, &mut length, object.0.raw) };
+        if data.is_null() {
+            return None;
+        }
+        Some(unsafe { core::slice::from_raw_parts(data, length) }.to_vec())
+    }
+
     pub(super) fn memory_usage(&self) -> JSMemoryUsage {
         let mut usage: JSMemoryUsage = unsafe { std::mem::zeroed() };
         unsafe { JS_ComputeMemoryUsage(self.owner.rt, &mut usage) };
@@ -568,6 +651,10 @@ impl Context {
                 .max(8 * 1024 * 1024),
         );
     }
+    /// Native backtrack budget for the private user-agent regexp context.
+    pub(super) fn set_regexp_backtrack_limit(&mut self, limit: u32) {
+        unsafe { JS_SetRegExpBacktrackLimit(self.owner.rt, limit) }
+    }
     pub fn new() -> Self {
         Self::with_max_stack_size(1024 * 1024)
     }
@@ -582,11 +669,6 @@ impl Context {
             JS_SetMaxStackSize(rt, bytes);
             JS_EnableExceptionMetadata(rt, true);
             JS_SetExceptionMetadataStackReadPolicy(rt, true);
-            let ctx = JS_NewContext(rt);
-            if ctx.is_null() {
-                JS_FreeRuntime(rt);
-                panic!("QuickJS context allocation");
-            }
             let class = JSClassDef {
                 class_name: c"BrowserCapture".as_ptr(),
                 finalizer: Some(holder_finalizer),
@@ -611,63 +693,120 @@ impl Context {
                 0,
                 "traced host class"
             );
-            let ordinary = JS_NewObject(ctx);
-            let object_prototype = JS_GetPrototype(ctx, ordinary);
-            JS_FreeValue(ctx, ordinary);
-            JS_SetClassProto(ctx, traced_object_class(), object_prototype);
-            let callbacks = Box::into_raw(Box::new(CallbackState {
-                owner: Weak::new(),
-                functions: RefCell::new(Vec::new()),
-                function_sweep_threshold: Cell::new(64),
-                tracker: RefCell::new(None),
-                tracker_generation: Cell::new(0),
-                tracker_running: Cell::new(false),
-                rejection_events: RefCell::new(VecDeque::new()),
-                loader: RefCell::new(None),
-                pending_dynamic_imports: RefCell::new(Vec::new()),
-                modules: RefCell::new(HashMap::new()),
-                prepared_modules: RefCell::new(HashMap::new()),
-                last_exception_location: RefCell::new(None),
-                intrinsics: HashMap::new(),
-                proxy_class: 0,
-            }));
-            let owner = Rc::new(EngineOwner {
+            let slot = Rc::new(RefCell::new(None));
+            let agent = Rc::new(AgentOwner {
                 rt,
-                ctx,
-                callbacks,
-                gc_target_bytes: Cell::new(usize::MAX),
+                task_tracker: foundation::task_attribution::TaskAttributionTracker::new(slot),
             });
-            (*callbacks).owner = Rc::downgrade(&owner);
-            JS_SetContextOpaque(ctx, callbacks.cast());
-            JS_SetModuleEmbeddingHooks(
-                rt,
-                Some(dynamic_import),
-                Some(consume_internal_module_promise),
-                callbacks.cast(),
-            );
-            let global = JS_GetGlobalObject(ctx);
-            for name in ["Proxy", "Error", "SyntaxError", "TypeError", "RangeError"] {
-                let key = CString::new(name).unwrap();
-                let value = JS_GetPropertyStr(ctx, global, key.as_ptr());
-                assert_eq!(JS_IsException(value), 0);
-                (*callbacks).intrinsics.insert(name, value);
-            }
-            JS_FreeValue(ctx, global);
-            let mut context = Self {
-                well_known: WellKnown {
-                    owner: owner.clone(),
-                },
-                owner,
-                primary: true,
-            };
-            let target = context.new_object();
-            let handler = context.new_object();
-            let probe = context
-                .new_proxy(target, handler)
-                .expect("proxy class probe");
-            (*callbacks).proxy_class = JS_GetClassID(probe.0.raw);
-            context
+            Self::in_agent(agent)
         }
+    }
+    /// LocalWindowProxy::CreateContext uses the frame Agent's existing isolate.
+    /// Creation is safe during a host callback: it never reborrows the executing
+    /// Context and installs only the new Context's intrinsic and binding state.
+    pub(super) fn new_child(&self) -> Self {
+        unsafe { Self::in_agent(self.owner.agent.clone()) }
+    }
+    pub(super) fn AgentIdentity(&self) -> usize {
+        self.owner.rt as usize
+    }
+    pub(super) fn same_agent(&self, other: &Context) -> bool {
+        Rc::ptr_eq(&self.owner.agent, &other.owner.agent)
+    }
+    unsafe fn in_agent(agent: Rc<AgentOwner>) -> Self {
+        let rt = agent.rt;
+        let ctx = JS_NewContext(rt);
+        assert!(!ctx.is_null(), "QuickJS context allocation");
+        let ordinary = JS_NewObject(ctx);
+        let object_prototype = JS_GetPrototype(ctx, ordinary);
+        JS_FreeValue(ctx, ordinary);
+        JS_SetClassProto(ctx, traced_object_class(), object_prototype);
+        let callbacks = Box::into_raw(Box::new(CallbackState {
+            owner: Weak::new(),
+            functions: RefCell::new(Vec::new()),
+            native_jobs: RefCell::new(HashMap::new()),
+            next_native_job: Cell::new(1),
+            function_sweep_threshold: Cell::new(64),
+            tracker: RefCell::new(None),
+            tracker_generation: Cell::new(0),
+            tracker_running: Cell::new(false),
+            rejection_events: RefCell::new(VecDeque::new()),
+            loader: RefCell::new(None),
+            pending_dynamic_imports: RefCell::new(Vec::new()),
+            modules: RefCell::new(HashMap::new()),
+            prepared_modules: RefCell::new(HashMap::new()),
+            last_exception_location: RefCell::new(None),
+            intrinsics: HashMap::new(),
+            proxy_class: 0,
+        }));
+        let task_tracker = agent.task_tracker.clone();
+        JS_SetContinuationPreservedDataSlot(ctx, task_tracker.Slot());
+        let owner = Rc::new(EngineOwner {
+            agent,
+            callback_context: crate::javascript_runtime::JavaScriptCallbackContext::new(
+                ctx as usize as u64,
+                0,
+            ),
+            task_tracker,
+            rt,
+            ctx,
+            callbacks,
+            gc_target_bytes: Cell::new(usize::MAX),
+        });
+        (*callbacks).owner = Rc::downgrade(&owner);
+        JS_SetContextOpaque(ctx, callbacks.cast());
+        JS_SetModuleEmbeddingHooks(
+            rt,
+            Some(dynamic_import),
+            Some(consume_internal_module_promise),
+            callbacks.cast(),
+        );
+        let global = JS_GetGlobalObject(ctx);
+        for name in [
+            "Proxy",
+            "Error",
+            "SyntaxError",
+            "TypeError",
+            "RangeError",
+            "WeakMap",
+        ] {
+            let key = CString::new(name).unwrap();
+            let value = JS_GetPropertyStr(ctx, global, key.as_ptr());
+            assert_eq!(JS_IsException(value), 0);
+            (*callbacks).intrinsics.insert(name, value);
+        }
+        for (constructor, key) in [("Error", "Error.toString"), ("Object", "Object.toString")] {
+            let constructor_key = CString::new(constructor).unwrap();
+            let constructor = JS_GetPropertyStr(ctx, global, constructor_key.as_ptr());
+            let prototype = JS_GetPropertyStr(ctx, constructor, c"prototype".as_ptr());
+            let to_string = JS_GetPropertyStr(ctx, prototype, c"toString".as_ptr());
+            assert_eq!(JS_IsException(to_string), 0);
+            (*callbacks).intrinsics.insert(key, to_string);
+            JS_FreeValue(ctx, prototype);
+            JS_FreeValue(ctx, constructor);
+        }
+        let weakmap = (&(*callbacks).intrinsics)["WeakMap"];
+        let prototype = JS_GetPropertyStr(ctx, weakmap, c"prototype".as_ptr());
+        assert_eq!(JS_IsException(prototype), 0);
+        let set = JS_GetPropertyStr(ctx, prototype, c"set".as_ptr());
+        assert_eq!(JS_IsException(set), 0);
+        (*callbacks).intrinsics.insert("WeakMap.set", set);
+        JS_FreeValue(ctx, prototype);
+        JS_FreeValue(ctx, global);
+        let mut context = Self {
+            well_known: WellKnown {
+                owner: owner.clone(),
+            },
+            owner,
+            primary: true,
+        };
+        let target = context.new_object();
+        let handler = context.new_object();
+        let probe = context
+            .new_proxy(target, handler)
+            .expect("proxy class probe");
+        (*callbacks).proxy_class = JS_GetClassID(probe.0.raw);
+        context
     }
     unsafe fn borrowed(ctx: *mut JSContext) -> Self {
         let data = &*(JS_GetContextOpaque(ctx) as *const CallbackState);
@@ -703,6 +842,12 @@ impl Context {
             Value::take(&self.owner, JS_GetException(self.owner.ctx))
         }
     }
+    pub fn capture_current_source_location(
+        &self,
+        skip_script_frames: usize,
+    ) -> Option<JSExceptionLocation> {
+        unsafe { JS_CaptureCurrentSourceLocation(self.owner.ctx, skip_script_frames) }
+    }
     pub fn take_exception_location(&mut self) -> Option<JSExceptionLocation> {
         self.data().last_exception_location.borrow_mut().take()
     }
@@ -727,6 +872,17 @@ impl Context {
                 Err(self.take_exception())
             } else {
                 Ok(atom)
+            }
+        }
+    }
+    pub fn intern_utf16(&mut self, units: &[u16]) -> JsString {
+        unsafe {
+            match self
+                .accept(JS_NewString16(self.owner.ctx, units))
+                .expect("host string allocation")
+            {
+                Value::Str(value) => value,
+                _ => unreachable!(),
             }
         }
     }
@@ -873,8 +1029,42 @@ impl Context {
             }
         }
     }
+    /// Web IDL long conversion uses the VM's original ToInt32, including
+    /// observable valueOf/toString and the original thrown value.
+    pub fn to_int32(&mut self, value: &Value) -> JsResult<i32> {
+        let raw = value.checked(self)?;
+        let mut result = 0;
+        unsafe {
+            if JS_ToInt32(self.owner.ctx, &mut result, raw) < 0 {
+                self.accept(JS_EXCEPTION)?;
+                unreachable!();
+            }
+        }
+        Ok(result)
+    }
     pub fn to_rust_string(&mut self, value: &Value) -> JsResult<String> {
         self.to_js_string(value).map(|s| s.to_string_lossy())
+    }
+    /// V8 Exception::CreateMessage runs in a NoScriptNoException scope.
+    pub fn exception_message(&mut self, value: &Value) -> Vec<u16> {
+        let raw = value.checked(self).expect("same VM exception value");
+        unsafe {
+            let raw = JS_NoSideEffectsToString(
+                self.owner.ctx,
+                raw,
+                self.data().intrinsics["Error.toString"],
+                self.data().intrinsics["Object.toString"],
+            );
+            let string = self
+                .accept(raw)
+                .expect("native exception message allocation");
+            let Value::Str(string) = string else {
+                unreachable!("native diagnostic string")
+            };
+            let mut units: Vec<u16> = "Uncaught ".encode_utf16().collect();
+            units.extend(string.to_utf16());
+            units
+        }
     }
     pub fn format_exception(&mut self, value: &Value) -> String {
         self.to_rust_string(value)
@@ -957,6 +1147,62 @@ impl Context {
             match self.accept(value)? {
                 Value::Object(o) => Ok(o),
                 _ => unreachable!(),
+            }
+        }
+    }
+    pub fn new_promise_capability(&mut self) -> JsResult<(Value, Value, Value)> {
+        unsafe {
+            let mut resolving = [JS_UNDEFINED; 2];
+            let promise = JS_NewPromiseCapability(self.owner.ctx, resolving.as_mut_ptr());
+            if JS_IsException(promise) != 0 {
+                for value in resolving {
+                    JS_FreeValue(self.owner.ctx, value);
+                }
+                return self.accept(promise).map(|_| unreachable!());
+            }
+            Ok((
+                Value::take(&self.owner, promise),
+                Value::take(&self.owner, resolving[0]),
+                Value::take(&self.owner, resolving[1]),
+            ))
+        }
+    }
+    /// Blink ScriptPromise::FromV8Value (script_promise.h:211-227): an actual
+    /// Promise is accepted directly, without reading its constructor. Other
+    /// values are adopted by a new native Promise resolver in this realm.
+    pub fn promise_resolve(&mut self, value: &Value) -> JsResult<Value> {
+        let raw = value.checked(self)?;
+        if unsafe { JS_PromiseState(self.owner.ctx, raw) } >= 0 {
+            return Ok(value.clone());
+        }
+        let (promise, resolve, _reject) = self.new_promise_capability()?;
+        self.call(resolve, Value::Undefined, &[value.clone()])?;
+        Ok(promise)
+    }
+    pub fn perform_promise_then(
+        &mut self,
+        promise: &Value,
+        fulfilled: &Value,
+        rejected: &Value,
+    ) -> JsResult<()> {
+        let promise = promise.checked(self)?;
+        let fulfilled = fulfilled.checked(self)?;
+        let rejected = rejected.checked(self)?;
+        unsafe {
+            if JS_PerformPromiseThen(self.owner.ctx, promise, fulfilled, rejected) < 0 {
+                self.accept(JS_EXCEPTION).map(|_| ())
+            } else {
+                Ok(())
+            }
+        }
+    }
+    pub fn mark_promise_handled(&mut self, promise: &Value) -> JsResult<()> {
+        let promise = promise.checked(self)?;
+        unsafe {
+            if JS_MarkPromiseHandled(self.owner.ctx, promise) < 0 {
+                self.accept(JS_EXCEPTION).map(|_| ())
+            } else {
+                Ok(())
             }
         }
     }
@@ -1077,6 +1323,34 @@ impl Context {
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT").is_some();
         self.eval_named_profiled(source, kind, name, profile)
     }
+    /// Compile a real global classic script, retaining UTF-16 (including lone
+    /// surrogates) through QuickJS's own string codec. This is not indirect eval.
+    pub(super) fn eval_classic_utf16(&mut self, source: &[u16], base_url: &str) -> JsResult<Value> {
+        let source = Value::Str(self.intern_utf16(source));
+        unsafe {
+            let mut length = 0;
+            let bytes = JS_ToCStringLen2(self.owner.ctx, &mut length, source.raw(), 0);
+            if bytes.is_null() {
+                return Err(self.take_exception());
+            }
+            let compiled = JS_Eval(
+                self.owner.ctx,
+                bytes,
+                length,
+                c"".as_ptr(),
+                JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY,
+            );
+            JS_FreeCString(self.owner.ctx, bytes);
+            let compiled = self.accept(compiled)?;
+            assert_eq!(
+                JS_SetCompiledScriptBaseURL(self.owner.ctx, compiled.raw(), base_url),
+                0
+            );
+            let result =
+                JS_EvalFunction(self.owner.ctx, JS_DupValue(self.owner.ctx, compiled.raw()));
+            self.accept(result)
+        }
+    }
     fn eval_named_profiled(
         &mut self,
         source: &str,
@@ -1127,7 +1401,11 @@ impl Context {
                 } else {
                     execute_started.elapsed().as_secs_f64() * 1000.0
                 };
-                eprintln!("javascript-evaluate-phase-profile source={:?} bytes={} compile_ms={compile_ms:.3} execute_ms={execute_ms:.3} compile_failed={compile_failed}", name.to_string_lossy(), source.len());
+                eprintln!(
+                    "javascript-evaluate-phase-profile source={:?} bytes={} compile_ms={compile_ms:.3} execute_ms={execute_ms:.3} compile_failed={compile_failed}",
+                    name.to_string_lossy(),
+                    source.len()
+                );
                 self.accept(value)
             } else {
                 self.accept(compiled_or_result)
@@ -1157,6 +1435,18 @@ impl Context {
     }
     pub fn make_plain_error(&mut self, message: &str) -> Value {
         self.make_named_error("Error", message)
+    }
+    pub(super) fn make_error_value(&mut self, message: Value) -> JsResult<Value> {
+        self.make_intrinsic_error_value("Error", message)
+    }
+    pub(super) fn make_intrinsic_error_value(
+        &mut self,
+        name: &'static str,
+        message: Value,
+    ) -> JsResult<Value> {
+        let raw = self.data().intrinsics[name];
+        let function = unsafe { Value::take(&self.owner, JS_DupValue(self.owner.ctx, raw)) };
+        self.call(function, Value::Undefined, &[message])
     }
     fn make_named_error(&mut self, name: &'static str, message: &str) -> Value {
         let raw = self.data().intrinsics[name];
@@ -1188,6 +1478,7 @@ impl Context {
                 Box::into_raw(Box::new(TracedObjectData {
                     references: HashMap::new(),
                     list: Vec::new(),
+                    ephemerons: HashMap::new(),
                     on_release,
                 }))
                 .cast(),
@@ -1235,10 +1526,21 @@ impl Context {
         slot: u64,
         value: Option<&JsObject>,
     ) -> JsResult<Option<JsObject>> {
+        self.set_traced_value_reference(
+            object,
+            slot,
+            value.map(|v| Value::Object(v.clone())).as_ref(),
+        )
+        .map(|old| old.map(|v| v.as_object().expect("host object edge").clone()))
+    }
+    pub(super) fn set_traced_value_reference(
+        &mut self,
+        object: &JsObject,
+        slot: u64,
+        value: Option<&Value>,
+    ) -> JsResult<Option<Value>> {
         let raw = Value::Object(object.clone()).checked(self)?;
-        let target = value
-            .map(|value| Value::Object(value.clone()).checked(self))
-            .transpose()?;
+        let target = value.map(|value| value.checked(self)).transpose()?;
         unsafe {
             let data = JS_GetOpaque2(self.owner.ctx, raw, traced_object_class())
                 .cast::<TracedObjectData>();
@@ -1252,10 +1554,58 @@ impl Context {
             } else {
                 (*data).references.remove(&slot)
             };
+            Ok(old.map(|value| Value::take(&self.owner, value)))
+        }
+    }
+    /// A private intrinsic WeakMap carries the ephemeron into QuickJS's own
+    /// weak-map cycle collector. Neither key nor value is retained in Rust.
+    /// Prepare allocates before the host graph's no-allocation commit phase.
+    pub(super) fn new_ephemeron(&mut self, key: &JsObject, value: &JsObject) -> JsResult<JsObject> {
+        let key = Value::Object(key.clone());
+        let value = Value::Object(value.clone());
+        self.validate_value(&key)?;
+        self.validate_value(&value)?;
+        let constructor = self.data().intrinsics["WeakMap"];
+        let map = unsafe {
+            self.accept(JS_CallConstructor(
+                self.owner.ctx,
+                constructor,
+                0,
+                ptr::null_mut(),
+            ))?
+        };
+        let set = self.data().intrinsics["WeakMap.set"];
+        let set = unsafe { Value::take(&self.owner, JS_DupValue(self.owner.ctx, set)) };
+        self.call(set, map.clone(), &[key, value])?;
+        Ok(map.as_object().expect("intrinsic WeakMap object").clone())
+    }
+    pub(super) fn set_traced_ephemeron(
+        &mut self,
+        object: &JsObject,
+        slot: u64,
+        map: Option<&JsObject>,
+    ) -> JsResult<Option<JsObject>> {
+        let raw = Value::Object(object.clone()).checked(self)?;
+        let map = map
+            .map(|map| Value::Object(map.clone()).checked(self))
+            .transpose()?;
+        unsafe {
+            let data = JS_GetOpaque2(self.owner.ctx, raw, traced_object_class())
+                .cast::<TracedObjectData>();
+            if data.is_null() {
+                return Err(self.take_exception());
+            }
+            let old = if let Some(map) = map {
+                (*data)
+                    .ephemerons
+                    .insert(slot, JS_DupValue(self.owner.ctx, map))
+            } else {
+                (*data).ephemerons.remove(&slot)
+            };
             Ok(old.map(|value| {
                 Value::take(&self.owner, value)
                     .as_object()
-                    .expect("host object edge")
+                    .expect("private WeakMap")
                     .clone()
             }))
         }
@@ -1372,6 +1722,30 @@ impl Context {
             }
         }
     }
+    /// Native Agent jobs carry only an immutable numeric payload in the same
+    /// QuickJS job queue. Creating this envelope cannot run JS/GC while DOM
+    /// still owns the primitive mutation borrow.
+    pub fn enqueue_native_job(&mut self, callable: Rc<dyn HostCallable>) -> JsResult<()> {
+        let id = self.data().next_native_job.get();
+        self.data()
+            .next_native_job
+            .set(id.checked_add(1).expect("native job identity"));
+        self.data().native_jobs.borrow_mut().insert(id, callable);
+        let mut args = unsafe {
+            [
+                JS_NewUint32(self.owner.ctx, id as u32),
+                JS_NewUint32(self.owner.ctx, (id >> 32) as u32),
+            ]
+        };
+        let result =
+            unsafe { JS_EnqueueJob(self.owner.ctx, Some(native_host_job), 2, args.as_mut_ptr()) };
+        if result < 0 {
+            self.data().native_jobs.borrow_mut().remove(&id);
+            Err(self.take_exception())
+        } else {
+            Ok(())
+        }
+    }
     pub fn run_jobs_errors(&mut self) -> Vec<Value> {
         self.run_jobs_errors_profiled(std::env::var_os("BROWSER_PROFILE_INPUT").is_some())
     }
@@ -1412,7 +1786,10 @@ impl Context {
                     traced_jobs += 1;
                 }
                 if n < 0 {
-                    errors.push(Value::take(&self.owner, JS_GetException(ctx)));
+                    errors.push(Value::take(
+                        &Context::borrowed(ctx).owner,
+                        JS_GetException(ctx),
+                    ));
                 }
                 if let Some(elapsed) = elapsed {
                     jobs += 1;
@@ -1422,7 +1799,10 @@ impl Context {
                     // Every job is executed and included in sum/max/count. Bound
                     // diagnostic output by logging only jobs taking at least 1 ms.
                     if elapsed >= 1.0 {
-                        eprintln!("javascript-pending-job-profile index={jobs} execute_ms={elapsed:.3} failed={}", n < 0);
+                        eprintln!(
+                            "javascript-pending-job-profile index={jobs} execute_ms={elapsed:.3} failed={}",
+                            n < 0
+                        );
                     }
                 }
             }
@@ -1434,7 +1814,11 @@ impl Context {
                 // Drain total includes per-job logs, exception ownership and
                 // the final empty-queue check. The enclosing checkpoint timer
                 // also includes this summary's output and error conversion.
-                eprintln!("javascript-job-drain-profile jobs={jobs} errors={} execute_sum_ms={execute_ms:.3} max_ms={max_ms:.3} over_16ms={over_16ms} total_ms={:.3}", errors.len(), started.elapsed().as_secs_f64() * 1000.0);
+                eprintln!(
+                    "javascript-job-drain-profile jobs={jobs} errors={} execute_sum_ms={execute_ms:.3} max_ms={max_ms:.3} over_16ms={over_16ms} total_ms={:.3}",
+                    errors.len(),
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
             }
         }
         errors
@@ -1799,9 +2183,9 @@ unsafe fn rejection_dispatch(
     promise: JSValueConst,
     reason: JSValueConst,
     handled: JS_BOOL,
-    opaque: *mut c_void,
+    _opaque: *mut c_void,
 ) {
-    let data = &*(opaque as *const CallbackState);
+    let data = &*(JS_GetContextOpaque(ctx) as *const CallbackState);
     let mut context = Context::borrowed(ctx);
     let promise = Value::take(&context.owner, JS_DupValue(ctx, promise));
     let reason = Value::take(&context.owner, JS_DupValue(ctx, reason));
@@ -1839,6 +2223,29 @@ unsafe fn rejection_dispatch(
 unsafe fn host_job(ctx: *mut JSContext, argc: i32, argv: *mut JSValueConst) -> JSValue {
     JS_Call(ctx, *argv, JS_UNDEFINED, argc - 1, argv.add(1))
 }
+unsafe fn native_host_job(ctx: *mut JSContext, _: i32, argv: *mut JSValueConst) -> JSValue {
+    let mut context = Context::borrowed(ctx);
+    let mut low = 0u32;
+    let mut high = 0u32;
+    if JS_ToUint32(ctx, &mut low, *argv) < 0 || JS_ToUint32(ctx, &mut high, *argv.add(1)) < 0 {
+        return JS_EXCEPTION;
+    }
+    let id = u64::from(low) | (u64::from(high) << 32);
+    let callable = context.data().native_jobs.borrow_mut().remove(&id);
+    let Some(callable) = callable else {
+        return JS_UNDEFINED;
+    }; // Realm teardown retired the payload.
+    match callable.call(&mut context, &Value::Undefined, &[], &[], &Value::Undefined) {
+        Ok(value) => match value.checked(&mut context) {
+            Ok(raw) => JS_DupValue(ctx, raw),
+            Err(error) => JS_Throw(ctx, JS_DupValue(ctx, error.raw())),
+        },
+        Err(value) => match value.checked(&mut context) {
+            Ok(raw) => JS_Throw(ctx, JS_DupValue(ctx, raw)),
+            Err(error) => JS_Throw(ctx, JS_DupValue(ctx, error.raw())),
+        },
+    }
+}
 unsafe fn dynamic_import(
     ctx: *mut JSContext,
     resolve: JSValueConst,
@@ -1846,9 +2253,9 @@ unsafe fn dynamic_import(
     base: JSValueConst,
     specifier: JSValueConst,
     attributes: JSValueConst,
-    opaque: *mut c_void,
+    _opaque: *mut c_void,
 ) -> i32 {
-    let data = &*opaque.cast::<CallbackState>();
+    let data = &*JS_GetContextOpaque(ctx).cast::<CallbackState>();
     let base_ptr = JS_ToCString(ctx, base);
     let specifier_ptr = JS_ToCString(ctx, specifier);
     if base_ptr.is_null() || specifier_ptr.is_null() {
@@ -1921,9 +2328,9 @@ unsafe fn module_normalize(
     ctx: *mut JSContext,
     base: *const c_char,
     specifier: *const c_char,
-    opaque: *mut c_void,
+    _opaque: *mut c_void,
 ) -> *mut c_char {
-    let data = &*(opaque as *const CallbackState);
+    let data = &*(JS_GetContextOpaque(ctx) as *const CallbackState);
     let base = CStr::from_ptr(base).to_string_lossy();
     let specifier = CStr::from_ptr(specifier).to_string_lossy();
     let resolved = data
@@ -1974,9 +2381,9 @@ unsafe fn set_import_meta(
 unsafe fn module_load(
     ctx: *mut JSContext,
     name: *const c_char,
-    opaque: *mut c_void,
+    _opaque: *mut c_void,
 ) -> *mut JSModuleDef {
-    let data = &*(opaque as *const CallbackState);
+    let data = &*(JS_GetContextOpaque(ctx) as *const CallbackState);
     let name = CStr::from_ptr(name).to_string_lossy().into_owned();
     if let Some(module) = data.modules.borrow().get(&name) {
         return JS_VALUE_GET_PTR(module.raw()).cast();
@@ -2466,3 +2873,5 @@ mod tests {
         assert_eq!(target.eval("1+2").unwrap().as_number(), Some(3.0));
     }
 }
+
+include!("quickjs_adapter_clone.rs");

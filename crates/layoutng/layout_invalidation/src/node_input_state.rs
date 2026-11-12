@@ -10,8 +10,10 @@ use super::{
 #[inline(never)]
 pub(super) fn NewStandaloneNodeData(input: &NodeConstructionData) -> StandaloneNodeData {
     StandaloneNodeData {
+        editing: Default::default(),
         compatibility_mode: CompatibilityMode::kStandards,
         printing: false,
+        should_print_backgrounds: false,
         paginated: false,
         fragmentainer_block_size: None,
         vertical_scroll_enforced: false,
@@ -20,6 +22,7 @@ pub(super) fn NewStandaloneNodeData(input: &NodeConstructionData) -> StandaloneN
         canvas_draw_element_enabled: false,
         prefer_non_composited_scrolling_enabled: false,
         viewport: None,
+        media_panel_page: None,
         minimum_font_physical_size: None,
         scrollbar_theme: None,
         control_theme: ControlThemeMetrics::default(),

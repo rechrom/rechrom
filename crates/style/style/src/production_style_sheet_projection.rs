@@ -241,10 +241,29 @@ pub fn ParseUserAgentCSSWithRole(
     text: &str,
     role: cssom::CSSUserAgentStyleSheetRole,
 ) -> CSSStyleSheet {
-    let mut sheet = ParseCSSWithMode(
-        text,
-        crate::parser::css_parser_mode::CSSParserMode::kUASheetMode,
-    );
+    let mut sheet = if role == cssom::CSSUserAgentStyleSheetRole::kOverscroll {
+        // CSSDefaultStyleSheets requests this resource only for the admitted
+        // internal pseudo. Keep the selector's runtime gate with this parse.
+        let features = crate::parser::css_selector_parser::SelectorRuntimeFeatures {
+            OverscrollGestures: true,
+            ..Default::default()
+        };
+        let parsed = Rc::new(
+            crate::production_style_sheet::ParseStyleSheetWithSelectorRuntime(
+                &foundation::String::FromUtf8(text.as_bytes()),
+                crate::parser::css_parser_mode::CSSParserMode::kUASheetMode,
+                &features,
+            ),
+        );
+        let mut sheet = ProjectStyleSheet(&parsed);
+        sheet.AttachParsedBacking(text, parsed);
+        sheet
+    } else {
+        ParseCSSWithMode(
+            text,
+            crate::parser::css_parser_mode::CSSParserMode::kUASheetMode,
+        )
+    };
     sheet.SetUserAgentStyleSheetRole(role);
     sheet
 }
@@ -323,6 +342,9 @@ pub(crate) struct ParsedInlineStyle {
 }
 
 impl ParsedInlineStyle {
+    pub(crate) fn Properties(&self) -> Rc<CSSPropertyValueSet<ProductionCSSValueDispatch>> {
+        self.properties.clone()
+    }
     pub(crate) fn Declarations(
         &self,
     ) -> Rc<Rc<CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>>> {
@@ -336,7 +358,7 @@ impl ParsedInlineStyle {
     }
 }
 
-fn RetainInlineProperties(
+pub(crate) fn RetainInlineProperties(
     style: &cssom::CSSInlineStyle,
     properties: Rc<CSSPropertyValueSet<ProductionCSSValueDispatch>>,
     mode: crate::parser::css_parser_mode::CSSParserMode,
@@ -354,6 +376,19 @@ pub(crate) fn ResolveInlineStyle(
     style: &cssom::CSSInlineStyle,
     mode: crate::parser::css_parser_mode::CSSParserMode,
 ) -> Rc<ParsedInlineStyle> {
+    ResolveInlineStyleInternal(style, mode, None)
+}
+pub(crate) fn ResolveInlineStyleWithContext(
+    style: &cssom::CSSInlineStyle,
+    context: &crate::DocumentCSSOMContext,
+) -> Rc<ParsedInlineStyle> {
+    ResolveInlineStyleInternal(style, context.InlineMode(), Some(context))
+}
+fn ResolveInlineStyleInternal(
+    style: &cssom::CSSInlineStyle,
+    mode: crate::parser::css_parser_mode::CSSParserMode,
+    context: Option<&crate::DocumentCSSOMContext>,
+) -> Rc<ParsedInlineStyle> {
     let mut trace = browser_tracing::span("style_parser", "StyleResolver.ParseInlineStyle");
     if let Some(parsed) = style
         .ParsedBacking::<ParsedInlineStyle>()
@@ -369,10 +404,11 @@ pub(crate) fn ResolveInlineStyle(
         // no source needs tokenizing before the first CSSOM property write.
         trace.set("empty_init", 1.0);
         crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(&[], mode, false)
+    } else if let Some(context) = context {
+        context.ParseInline(style.SourceTextValue())
     } else {
-        let text = foundation::String::FromUtf8(style.SourceText().as_bytes());
         crate::parser::css_parser_impl::CSSParserImpl::<Backend>::ParseInlineStyleDeclaration(
-            &text,
+            style.SourceTextValue(),
             mode,
             crate::parser::css_parser_context::SecureContextMode::kInsecureContext,
             None,
@@ -430,6 +466,21 @@ pub fn GetInlineCSSDeclaration(
         .map_or_else(String::new, |property| property.Value().CssText().Utf8())
 }
 
+pub fn GetInlineCSSDeclarationWithContext(
+    style: &cssom::CSSInlineStyle,
+    name: &str,
+    context: &crate::DocumentCSSOMContext,
+) -> String {
+    let parsed = ResolveInlineStyleWithContext(style, context);
+    parsed
+        .properties
+        .Properties()
+        .iter()
+        .rev()
+        .find(|property| property.Name().ToAtomicString().EqualsUtf8(name))
+        .map_or_else(String::new, |property| property.Value().CssText().Utf8())
+}
+
 /// Keep the computed style declaration owner across CSSOM -> DOM -> Style. Parsing
 /// an edited value must not reparse the current declaration or discard its
 /// typed result at the attribute boundary.
@@ -440,6 +491,94 @@ pub fn SetInlineCSSDeclaration(
     priority: &str,
     standard_mode: bool,
 ) -> Option<CSSInlineDeclarationMutation> {
+    let important = priority.eq_ignore_ascii_case("important");
+    if !priority.is_empty() && !important {
+        return None;
+    }
+    let id = CSSOMPropertyID(name)?;
+    let custom = foundation::AtomicString::from_str(name);
+    Some(SetInlineCSSPropertyInternal(
+        style,
+        id,
+        Some(&custom),
+        &foundation::String::FromUtf8(value.as_bytes()),
+        important,
+        standard_mode,
+        None,
+    ))
+}
+/// AbstractPropertySetCSSStyleDeclaration::SetPropertyInternal's typed native
+/// entry. The original WTF String goes straight to the actual property parser.
+pub fn SetInlineCSSProperty(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    value: &foundation::String,
+    important: bool,
+    standard_mode: bool,
+) -> CSSInlineDeclarationMutation {
+    assert_ne!(
+        id,
+        foundation::CSSPropertyID::kVariable,
+        "custom properties require their actual AtomicString name"
+    );
+    SetInlineCSSPropertyInternal(style, id, None, value, important, standard_mode, None)
+}
+/// Current-Document InlineCSSStyleDeclaration setter; ContextStyleSheet is the
+/// original Document ElementSheet, not a newly fabricated parser context.
+pub fn SetInlineCSSPropertyWithContext(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    value: &foundation::String,
+    important: bool,
+    context: &crate::DocumentCSSOMContext,
+) -> CSSInlineDeclarationMutation {
+    assert_ne!(
+        id,
+        foundation::CSSPropertyID::kVariable,
+        "custom properties require their actual name"
+    );
+    SetInlineCSSPropertyInternal(
+        style,
+        id,
+        None,
+        value,
+        important,
+        context.InlineMode() == crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+        Some(context),
+    )
+}
+pub fn SetInlineCSSDeclarationWithContext(
+    style: &cssom::CSSInlineStyle,
+    name: &str,
+    value: &str,
+    priority: &str,
+    context: &crate::DocumentCSSOMContext,
+) -> Option<CSSInlineDeclarationMutation> {
+    let important = priority.eq_ignore_ascii_case("important");
+    if !priority.is_empty() && !important {
+        return None;
+    }
+    let id = CSSOMPropertyID(name)?;
+    let custom = foundation::AtomicString::from_str(name);
+    Some(SetInlineCSSPropertyInternal(
+        style,
+        id,
+        Some(&custom),
+        &foundation::String::FromUtf8(value.as_bytes()),
+        important,
+        context.InlineMode() == crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
+        Some(context),
+    ))
+}
+fn SetInlineCSSPropertyInternal(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    custom_name: Option<&foundation::AtomicString>,
+    value: &foundation::String,
+    important: bool,
+    standard_mode: bool,
+    source_context: Option<&crate::DocumentCSSOMContext>,
+) -> CSSInlineDeclarationMutation {
     use crate::{
         css_property_value_set::{ImmutableCSSPropertyValueSet, SetResult},
         parser::{
@@ -447,19 +586,16 @@ pub fn SetInlineCSSDeclaration(
             css_parser_impl::CSSParserImpl,
         },
     };
-    use foundation::{AtomicString, CSSPropertyID, String as CSSString, StringView};
-    let important = priority.eq_ignore_ascii_case("important");
-    if !priority.is_empty() && !important {
-        return None;
-    }
-    let id = CSSOMPropertyID(name)?;
+    use foundation::{CSSPropertyID, StringView};
     let mode = InlineParserMode(standard_mode);
-    let parsed = ResolveInlineStyle(style, mode);
+    let parsed = source_context.map_or_else(
+        || ResolveInlineStyle(style, mode),
+        |context| ResolveInlineStyleWithContext(style, context),
+    );
     let mut properties = parsed.properties.MutableCopy();
-    let custom_name = AtomicString::from_str(name);
-    let result = if value.is_empty() {
+    let result = if value.empty() {
         let removed = if id == CSSPropertyID::kVariable {
-            properties.RemoveProperty(&custom_name, None)
+            properties.RemoveProperty(custom_name.expect("actual custom property name"), None)
         } else {
             properties.RemoveProperty(crate::css_property_names::ResolveCSSPropertyID(id), None)
         };
@@ -469,33 +605,38 @@ pub fn SetInlineCSSDeclaration(
             SetResult::kUnchanged
         }
     } else {
-        let context =
-            CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None);
-        let value = CSSString::FromUtf8(value.as_bytes());
+        let detached = source_context.is_none().then(|| {
+            CSSParserContext::<Backend>::FromMode(mode, SecureContextMode::kInsecureContext, None)
+        });
+        let context = source_context
+            .map(|source| source.ParserContext().as_ref())
+            .unwrap_or_else(|| detached.as_ref().unwrap());
+        let _mode_scope =
+            crate::parser::css_parser_context::ParserModeOverridingScope::new(context, mode);
         if id == CSSPropertyID::kVariable {
             CSSParserImpl::<Backend>::ParseVariableValue(
                 &mut properties,
-                &custom_name,
-                StringView::from(&value),
+                custom_name.expect("actual custom property name"),
+                StringView::from(value),
                 important,
-                Some(&context),
+                Some(context),
                 false,
             )
         } else {
             CSSParserImpl::<Backend>::ParseValue(
                 &mut properties,
                 id,
-                StringView::from(&value),
+                StringView::from(value),
                 important,
-                Some(&context),
+                Some(context),
             )
         }
     };
-    Some(if result >= SetResult::kModifiedExisting {
+    if result >= SetResult::kModifiedExisting {
         // Attribute text is still required by the current DOM mutation input.
         // It is a projection of this property set, never its replacement owner.
-        let text = crate::production_style_sheet::SerializeProperties(&properties).Utf8();
-        let next = cssom::CSSInlineStyle::new(&text);
+        let text = crate::production_style_sheet::SerializeProperties(&properties);
+        let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
         let immutable = ImmutableCSSPropertyValueSet::Create(properties.Properties(), mode, false);
         RetainInlineProperties(&next, immutable, mode);
         if result == SetResult::kModifiedExisting
@@ -510,9 +651,70 @@ pub fn SetInlineCSSDeclaration(
         }
     } else {
         CSSInlineDeclarationMutation::Unchanged
-    })
+    }
 }
 
+/// Element::SetInlineStyleProperty's typed value path. The native editing
+/// command already owns a CSSValue; no value serialization/parsing round trip
+/// is used to mutate the declaration. Attribute text is only its DOM projection.
+pub fn SetInlineCSSPropertyValue(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    value: Rc<crate::css_value::CSSValue<ProductionCSSValueDispatch>>,
+    standard_mode: bool,
+) -> CSSInlineDeclarationMutation {
+    let mode = InlineParserMode(standard_mode);
+    let parsed = ResolveInlineStyle(style, mode);
+    let mut properties = parsed.properties.MutableCopy();
+    if properties
+        .GetPropertyCSSValue(id)
+        .is_some_and(|old| old == value.as_ref())
+        && !properties.PropertyIsImportant(id)
+    {
+        return CSSInlineDeclarationMutation::Unchanged;
+    }
+    properties.SetLonghandPropertyValue(id, value);
+    let text = crate::production_style_sheet::SerializeProperties(&properties);
+    let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
+    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(
+        properties.Properties(),
+        mode,
+        false,
+    );
+    RetainInlineProperties(&next, immutable, mode);
+    if crate::properties::css_property::CSSProperty::Get(id).SupportsIncrementalStyle() {
+        CSSInlineDeclarationMutation::ChangedIndependent(next)
+    } else {
+        CSSInlineDeclarationMutation::Changed(next)
+    }
+}
+
+/// Text adapter for callers that do not own a retained element declaration.
+pub fn RemoveInlineCSSPropertyValue(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    standard_mode: bool,
+) -> CSSInlineDeclarationMutation {
+    let mode = InlineParserMode(standard_mode);
+    let parsed = ResolveInlineStyle(style, mode);
+    let mut properties = parsed.properties.MutableCopy();
+    if !properties.RemoveProperty(id, None) {
+        return CSSInlineDeclarationMutation::Unchanged;
+    }
+    let text = crate::production_style_sheet::SerializeProperties(&properties);
+    let next = cssom::CSSInlineStyle::FromUTF16(text.Span16().unwrap_or_default());
+    let immutable = crate::css_property_value_set::ImmutableCSSPropertyValueSet::Create(
+        properties.Properties(),
+        mode,
+        false,
+    );
+    RetainInlineProperties(&next, immutable, mode);
+    if crate::properties::css_property::CSSProperty::Get(id).SupportsIncrementalStyle() {
+        CSSInlineDeclarationMutation::ChangedIndependent(next)
+    } else {
+        CSSInlineDeclarationMutation::Changed(next)
+    }
+}
 /// Text adapter for callers that do not own a retained element declaration.
 /// The CSSOM operation and its mutation classification have one implementation.
 pub fn SetCSSDeclaration(
@@ -641,7 +843,37 @@ fn ProjectNestedDeclarationsRule(rule: &ProductionNestedDeclarationsRule) -> CSS
     }
 }
 fn ProjectFontFaceRule(rule: &ProductionFontFaceRule) -> CSSFontFaceRule {
+    let compiled = match rule.rule.Properties() {
+        CSSPropertyValueSetRuleHandle::Immutable(set) => set
+            .Properties()
+            .iter()
+            .map(|property| {
+                (
+                    style_parser::at_rule_descriptors::CSSPropertyIDAsAtRuleDescriptor(
+                        property.Name().Id(),
+                    ),
+                    property.ValueRef(),
+                )
+            })
+            .collect(),
+        CSSPropertyValueSetRuleHandle::Mutable(set) => set
+            .borrow()
+            .Properties()
+            .iter()
+            .map(|property| {
+                (
+                    style_parser::at_rule_descriptors::CSSPropertyIDAsAtRuleDescriptor(
+                        property.Name().Id(),
+                    ),
+                    property.ValueRef(),
+                )
+            })
+            .collect(),
+    };
     CSSFontFaceRule {
+        compiled_descriptors: Some(cssom::CSSFontFaceDescriptorBacking::new(Rc::new(
+            style_parser::font_face_descriptors::CompiledFontFaceDescriptors(compiled),
+        ))),
         declaration_text: rule.declaration_source.Utf8(),
         declarations: ProjectDeclarations(rule.rule.Properties()),
         media_conditions: rule
@@ -913,7 +1145,10 @@ mod tests {
         assert_eq!(sheet.rules.len(), 1);
         let rule = &sheet.rules[0];
         assert_eq!(rule.selector_text, "é😀[data-v='a}b']/**/ ");
-        assert_eq!(rule.declaration_text, " width: 12px; unknown-property: 8; color:red!important; color:blue; --Payload: [a;{b:'}'}]; ");
+        assert_eq!(
+            rule.declaration_text,
+            " width: 12px; unknown-property: 8; color:red!important; color:blue; --Payload: [a;{b:'}'}]; "
+        );
         assert!(!rule
             .declarations
             .iter()
@@ -1014,7 +1249,9 @@ mod tests {
 
     #[test]
     fn layers_include_empty_blocks_statements_nested_names_and_stable_anonymous_identity() {
-        let sheet = project("@layer reset, theme; @layer empty {} @media screen { @layer theme { @layer base, widgets; a{width:12px} @media(min-width:700px){b{height:23px}} } } @layer { c{opacity:.5} } d{width:5px}");
+        let sheet = project(
+            "@layer reset, theme; @layer empty {} @media screen { @layer theme { @layer base, widgets; a{width:12px} @media(min-width:700px){b{height:23px}} } } @layer { c{opacity:.5} } d{width:5px}",
+        );
         assert_eq!(
             sheet.layer_order,
             [
@@ -1130,7 +1367,9 @@ mod tests {
 
     #[test]
     fn font_and_keyframe_leaves_keep_anonymous_layer_identity_and_eof_source() {
-        let sheet = project("@font-face{font-family:First;src:url(first)} @keyframes first{from{opacity:0}to{opacity:1}} @layer{@font-face{font-family:Second;src:url(second)} @keyframes second{from{opacity:0}to{opacity:1}} a{width:1px}} @keyframes 'Tail😀'{from{opacity:0!important}to{opacity:1");
+        let sheet = project(
+            "@font-face{font-family:First;src:url(first)} @keyframes first{from{opacity:0}to{opacity:1}} @layer{@font-face{font-family:Second;src:url(second)} @keyframes second{from{opacity:0}to{opacity:1}} a{width:1px}} @keyframes 'Tail😀'{from{opacity:0!important}to{opacity:1",
+        );
         assert_eq!(sheet.layer_order, ["__anonymous_2"]);
         assert_eq!(sheet.rules[0].layer_name, "__anonymous_2");
         assert_eq!(sheet.font_faces[0].layer_name, "");
@@ -1146,4 +1385,21 @@ mod tests {
         assert!(tail.keyframes[0].declarations.is_empty());
         assert_eq!(tail.keyframes[1].declaration_text, "opacity:1");
     }
+}
+
+/// Read the original ElementData inline property set. Resolving its lazy parsed
+/// backing preserves the same declaration owner and avoids string inspection.
+pub fn InlineCSSPropertyIsIdentifier(
+    style: &cssom::CSSInlineStyle,
+    id: foundation::CSSPropertyID,
+    expected: foundation::CSSValueID,
+    standard_mode: bool,
+) -> bool {
+    let parsed = ResolveInlineStyle(style, InlineParserMode(standard_mode));
+    parsed
+        .properties
+        .GetPropertyCSSValue(id)
+        .is_some_and(|value| {
+            value == style_parser::production_css_value::identifier(expected).as_ref()
+        })
 }

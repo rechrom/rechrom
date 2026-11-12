@@ -25,6 +25,7 @@ pub enum CpuFilterQuality {
     kMedium,
     kHigh,
 }
+pub type CpuDynamicRangeLimit = paint::cc::paint::paint_flags::DynamicRangeLimitMixture;
 pub type TargetColorParams = crate::adapter::layer_tree_host_impl::HostTargetColorParams<
     crate::runtime::resources::RasterColorSpace,
 >;
@@ -46,6 +47,7 @@ pub struct CpuPaintRecordImage {
 pub trait CpuPaintImageValue: Send + Sync {
     /// The source PaintImage GetSwSkImage allocation, with actual premul pixels.
     fn GetSwSkImage(&self, frame_index: usize) -> std::io::Result<Arc<Vec<u8>>>;
+    fn GetEncodedData(&self) -> Option<Arc<[u8]>>;
     fn GetPaintRecord(&self) -> Option<CpuPaintRecordImage>;
     fn stable_id(&self) -> crate::adapter::image_animation::PaintImageId;
     fn ShouldAnimate(&self) -> bool;
@@ -70,10 +72,27 @@ pub struct CpuDrawImage {
     pub source_rect: Rect,
     pub filter_quality: CpuFilterQuality,
     pub use_dark_mode: bool,
+    pub dynamic_range_limit: CpuDynamicRangeLimit,
     pub scale: Vector2dF,
     pub matrix_is_decomposable: bool,
     pub frame_index: usize,
     pub target: Option<TargetColorParams>,
+}
+
+pub fn LimitTargetDynamicRange(
+    dynamic_range_limit: CpuDynamicRangeLimit,
+    mut target: TargetColorParams,
+) -> TargetColorParams {
+    if let Some(headroom) = target.hdr_headroom {
+        target.hdr_headroom = Some(dynamic_range_limit.ComputeEffectiveHdrHeadroom(headroom));
+    }
+    target
+}
+
+impl CpuDrawImage {
+    pub fn LimitTargetDynamicRange(&self, mut target: TargetColorParams) -> TargetColorParams {
+        LimitTargetDynamicRange(self.dynamic_range_limit, target)
+    }
 }
 /// Immutable native image-map allocation supplied by true Paint image analysis.
 /// All returned references belong to this allocation, without wrapper copies.
@@ -332,6 +351,9 @@ pub enum CpuPaintOp<R: CpuSkiaBackend> {
         element: ElementId,
         list: Arc<DisplayItemList<CpuPaintTypes<R>>>,
     },
+    /// Source CustomDataOp payload. PaintArtifactCompositor substitutes the
+    /// matching nested canvas snapshot before the record reaches raster.
+    CustomData(u32),
     Noop,
 }
 pub enum CpuPaintStorage<R: CpuSkiaBackend> {
@@ -403,6 +425,32 @@ impl<R: CpuSkiaBackend> Default for CpuPaintRecord<R> {
         Self::Empty
     }
 }
+impl<R: CpuSkiaBackend> CpuPaintOpBuffer<R> {
+    pub fn VisitCustomData(&self, visitor: &mut dyn FnMut(u32)) {
+        for op in self.iter() {
+            match op {
+                CpuPaintOpRef::PaintRecord { op, .. }
+                    if op.r#type == paint::paint_engine::DisplayItemType::kCustomData =>
+                {
+                    visitor(op.custom_data_id)
+                }
+                CpuPaintOpRef::Converted(CpuPaintOp::CustomData(id)) => visitor(*id),
+                CpuPaintOpRef::Converted(CpuPaintOp::Atom(source))
+                    if source.op().r#type == paint::paint_engine::DisplayItemType::kCustomData =>
+                {
+                    visitor(source.op().custom_data_id)
+                }
+                CpuPaintOpRef::Converted(CpuPaintOp::DrawRecord(record)) => {
+                    record.VisitCustomData(visitor)
+                }
+                CpuPaintOpRef::Converted(CpuPaintOp::DrawScrollingContents { list, .. }) => {
+                    list.paint_op_buffer().VisitCustomData(visitor)
+                }
+                _ => {}
+            }
+        }
+    }
+}
 impl<R: CpuSkiaBackend> CpuPaintRecord<R> {
     pub fn from_source(record: PaintRecord, values: Arc<dyn CpuPaintValueServices<R>>) -> Self {
         Self::Buffer(Arc::new(CpuPaintOpBuffer::from_source(record, values)))
@@ -415,6 +463,11 @@ impl<R: CpuSkiaBackend> CpuPaintRecord<R> {
     }
     pub fn is_empty(&self) -> bool {
         self.buffer().is_none_or(|b| b.size() == 0)
+    }
+    pub fn VisitCustomData(&self, visitor: &mut dyn FnMut(u32)) {
+        if let Some(buffer) = self.buffer() {
+            buffer.VisitCustomData(visitor);
+        }
     }
 }
 pub struct CpuPaintTypes<R: CpuSkiaBackend>(PhantomData<fn() -> R>);
@@ -875,7 +928,7 @@ impl<
     ) -> Self {
         // Source: cc/paint/draw_image.cc:74-87. The external image owner has
         // already decomposed its original matrix; this constructor scales that value.
-        let mut target = target.clone();
+        let mut target = self.LimitTargetDynamicRange(target.clone());
         // Source: cc/paint/draw_image.cc:105-113.
         if self.image.0.GetReinterpretAsSRGB() {
             target.color_space = Default::default();
@@ -885,6 +938,7 @@ impl<
             source_rect: self.source_rect,
             filter_quality: self.filter_quality,
             use_dark_mode: self.use_dark_mode,
+            dynamic_range_limit: self.dynamic_range_limit,
             scale: Vector2dF::new(self.scale.x() * scale, self.scale.y() * scale),
             matrix_is_decomposable: self.matrix_is_decomposable,
             frame_index,
@@ -964,6 +1018,7 @@ impl<R: CpuSkiaBackend> Clone for CpuPaintOp<R> {
                 element: *element,
                 list: list.clone(),
             },
+            Self::CustomData(id) => Self::CustomData(*id),
             Self::Noop => Self::Noop,
         }
     }
@@ -1066,6 +1121,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
                 N::kDrawGlyphRun => T::kDrawTextBlob,
                 N::kDrawImageRect => T::kDrawImageRect,
                 N::kDrawPath | N::kStrokePath => T::kDrawPath,
+                N::kCustomData => T::kCustomData,
                 N::kStrokeWavyLine
                 | N::kDrawGradientRect
                 | N::kDrawTiledGradient
@@ -1098,6 +1154,7 @@ impl<'a, R: CpuSkiaBackend> paint::cc::paint::paint_op_buffer_iterator::PaintOpV
                 CpuPaintOp::DrawTransparentColorSrc | CpuPaintOp::DrawColor { .. } => T::kDrawColor,
                 CpuPaintOp::DrawRecord(_) => T::kDrawRecord,
                 CpuPaintOp::DrawScrollingContents { .. } => T::kDrawScrollingContents,
+                CpuPaintOp::CustomData(_) => T::kCustomData,
                 CpuPaintOp::Noop => T::kNoop,
             },
         }

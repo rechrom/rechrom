@@ -4,6 +4,7 @@
 // implement their own dispatch before they can execute through this host.
 #![allow(non_snake_case)]
 
+use crate::break_token_algorithm_data::{BreakTokenAlgorithmData, BreakTokenAlgorithmDataType};
 use crate::internal::layout_block::LayoutBlock;
 use crate::internal::layout_block_flow::LayoutBlockFlow;
 use crate::internal::layout_box::LayoutBox;
@@ -16,7 +17,9 @@ use crate::internal::layout_object::{RecalcScrollableOverflowResult, StyleChange
 use crate::internal::layout_object_child_list::LayoutObjectChildList;
 use crate::internal::layout_object_factory_set::SvgRootChildren;
 use crate::internal::layout_pass_scope::LayoutObjectFactoryScope;
-use crate::internal::layout_replaced::LayoutReplaced;
+use crate::internal::layout_replaced::{
+    LayoutMedia, LayoutReplaced, LayoutVideo, VideoDisplayMode,
+};
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_view::LayoutView;
 use crate::internal::map_coordinates_flags::MapCoordinatesFlags;
@@ -37,6 +40,9 @@ use std::sync::OnceLock;
 type FlexStitchedRowGapIndex =
     fn(*const LayoutObject, &PhysicalBoxFragment, usize, Option<usize>) -> usize;
 static FLEX_STITCHED_ROW_GAP_INDEX: OnceLock<FlexStitchedRowGapIndex> = OnceLock::new();
+type BreakTokenTotalRowGapCount = fn(*const BreakTokenAlgorithmData) -> u32;
+static FLEX_TOTAL_ROW_GAP_COUNT: OnceLock<BreakTokenTotalRowGapCount> = OnceLock::new();
+static GRID_TOTAL_ROW_GAP_COUNT: OnceLock<BreakTokenTotalRowGapCount> = OnceLock::new();
 
 type GridStyleDidChange = fn(
     *mut LayoutObject,
@@ -55,6 +61,7 @@ type ReplacedStyleDidChange = fn(
 );
 static REPLACED_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
 static IMAGE_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
+static VIDEO_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
 type ReplacedRecalcVisualOverflow = fn(*mut LayoutObject);
 static REPLACED_RECALC_VISUAL_OVERFLOW: OnceLock<ReplacedRecalcVisualOverflow> = OnceLock::new();
 static SVG_ROOT_CHILDREN: OnceLock<SvgRootChildren> = OnceLock::new();
@@ -77,6 +84,11 @@ pub fn RegisterImageStyleDidChange(callback: ReplacedStyleDidChange) {
     assert_eq!(*existing as usize, callback as usize);
 }
 
+pub fn RegisterVideoStyleDidChange(callback: ReplacedStyleDidChange) {
+    let existing = VIDEO_STYLE_DID_CHANGE.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
 pub fn RegisterReplacedRecalcVisualOverflow(callback: ReplacedRecalcVisualOverflow) {
     let existing = REPLACED_RECALC_VISUAL_OVERFLOW.get_or_init(|| callback);
     assert_eq!(*existing as usize, callback as usize);
@@ -85,6 +97,33 @@ pub fn RegisterReplacedRecalcVisualOverflow(callback: ReplacedRecalcVisualOverfl
 pub fn RegisterFlexStitchedRowGapIndex(callback: FlexStitchedRowGapIndex) {
     let existing = FLEX_STITCHED_ROW_GAP_INDEX.get_or_init(|| callback);
     assert_eq!(*existing as usize, callback as usize);
+}
+
+pub fn RegisterFlexTotalRowGapCount(callback: BreakTokenTotalRowGapCount) {
+    let existing = FLEX_TOTAL_ROW_GAP_COUNT.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+pub fn RegisterGridTotalRowGapCount(callback: BreakTokenTotalRowGapCount) {
+    let existing = GRID_TOTAL_ROW_GAP_COUNT.get_or_init(|| callback);
+    assert_eq!(*existing as usize, callback as usize);
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(
+    data: *const BreakTokenAlgorithmData,
+) -> u32 {
+    assert!(!data.is_null());
+    let callback = match unsafe { &*data }.Type() {
+        BreakTokenAlgorithmDataType::kFlexData => FLEX_TOTAL_ROW_GAP_COUNT
+            .get()
+            .expect("flex break-token virtual dispatch is not registered"),
+        BreakTokenAlgorithmDataType::kGridData => GRID_TOTAL_ROW_GAP_COUNT
+            .get()
+            .expect("grid break-token virtual dispatch is not registered"),
+        _ => std::process::abort(),
+    };
+    callback(data)
 }
 
 /// LayoutSVGRoot owns its child list in the downstream SVG package. Chromium
@@ -165,6 +204,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> b
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -212,6 +253,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObje
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -239,6 +282,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const Layout
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -292,18 +337,65 @@ block_false_predicates!(
     DispatchLayoutObjectIsFrameSet,
     DispatchLayoutObjectIsLayoutCustom,
     DispatchLayoutObjectIsCustomLayoutLoaded,
-    DispatchLayoutObjectIsLayoutIFrame,
     DispatchLayoutObjectIsCounter,
-    DispatchLayoutObjectIsEmbeddedObject,
     DispatchLayoutObjectIsQuote,
     DispatchLayoutObjectIsRuby,
-    DispatchLayoutObjectIsLayoutEmbeddedContent,
     DispatchLayoutObjectIsLayoutGridLanes,
     DispatchLayoutObjectIsMathML,
-    DispatchLayoutObjectIsMedia,
-    DispatchLayoutObjectIsVideo,
     DispatchLayoutObjectIsViewTransitionRoot,
 );
+
+fn EmbeddedIdentity(
+    object: *const LayoutObject,
+) -> Option<crate::internal::layout_input::EmbeddedContentKind> {
+    if class(object) != LayoutObjectClass::Replaced {
+        return None;
+    }
+    let node = unsafe { &*object }.GetNode();
+    let element = unsafe { foundation::DynamicTo::<Element>(node).as_ref() }?;
+    element.InputElementData().as_ref()?.embedded_content_kind
+}
+// Source layout_embedded_content.h:75-78, layout_iframe.h:48-51,
+// layout_embedded_object.h:62-65. Preserve the native derived identity just
+// as LayoutImage does below, independently of whether a child frame exists.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsLayoutEmbeddedContent(
+    object: *const LayoutObject,
+) -> bool {
+    EmbeddedIdentity(object).is_some()
+}
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsLayoutIFrame(object: *const LayoutObject) -> bool {
+    EmbeddedIdentity(object) == Some(crate::internal::layout_input::EmbeddedContentKind::Frame)
+}
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsEmbeddedObject(object: *const LayoutObject) -> bool {
+    EmbeddedIdentity(object) == Some(crate::internal::layout_input::EmbeddedContentKind::Object)
+}
+
+// cpp: core/layout/layout_media.h:76-78
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsMedia(object: *const LayoutObject) -> bool {
+    if class(object) != LayoutObjectClass::Replaced {
+        return false;
+    }
+    let node = unsafe { &*object }.GetNode();
+    !node.is_null()
+        && !unsafe { &*node }.InputIsStyleGenerated()
+        && unsafe { &*node }.InputIsHTMLMediaElement()
+}
+
+// cpp: core/layout/layout_video.h:83-85
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsVideo(object: *const LayoutObject) -> bool {
+    if class(object) != LayoutObjectClass::Replaced {
+        return false;
+    }
+    let node = unsafe { &*object }.GetNode();
+    !node.is_null()
+        && !unsafe { &*node }.InputIsStyleGenerated()
+        && unsafe { &*node }.InputIsHTMLVideoElement()
+}
 
 // Chromium creates LayoutImage for ordinary HTML images, image-submit
 // controls, and ImageContentData's anonymous generated object. Rechrom keeps
@@ -426,6 +518,9 @@ pub extern "Rust" fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -
 pub extern "Rust" fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(
     object: &LayoutObject,
 ) -> bool {
+    if object.IsVideo() {
+        return true;
+    }
     if class(object) == LayoutObjectClass::View {
         unsafe { &*(object as *const LayoutObject).cast::<LayoutView>() }
             .CanHaveAdditionalCompositingReasons()
@@ -438,6 +533,16 @@ pub extern "Rust" fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(
 pub extern "Rust" fn LayoutObjectAdditionalCompositingReasonsProvider(
     object: &LayoutObject,
 ) -> foundation::CompositingReasons {
+    if object.IsVideo() {
+        let video = unsafe { &*(object as *const LayoutObject).cast::<LayoutVideo>() };
+        return if video.GetDisplayMode() == VideoDisplayMode::Video
+            && video.ElementState().has_compositor_layer
+        {
+            foundation::CompositingReasons::FromReasons(&[foundation::CompositingReason::kVideo])
+        } else {
+            foundation::CompositingReasons::default()
+        };
+    }
     if class(object) == LayoutObjectClass::View {
         unsafe { &*(object as *const LayoutObject).cast::<LayoutView>() }
             .AdditionalCompositingReasons()
@@ -514,6 +619,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> b
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgShape
             | LayoutObjectClass::SvgRoot
@@ -534,6 +641,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObj
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
     )
@@ -547,6 +656,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const Lay
         class(object),
         LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
     )
 }
@@ -557,13 +668,25 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGResourceContainer(
 ) -> bool {
     matches!(
         class(object),
-        LayoutObjectClass::SvgResourceClipper | LayoutObjectClass::SvgResourceMasker
+        LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
     )
 }
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGShape(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgShape
+}
+
+// The authored SVG <image> layout object is not installed by the current
+// factory set. Keep the virtual result false until that concrete source class
+// is connected; document-image SVG decoding is a separate resource path.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectIsSVGImage(object: *const LayoutObject) -> bool {
+    class(object);
+    false
 }
 
 #[unsafe(no_mangle)]
@@ -605,7 +728,10 @@ pub extern "Rust" fn DispatchLayoutObjectLocalToSVGParentTransform(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
+            | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgRoot
     ) {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
@@ -683,8 +809,7 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutO
 }
 
 // LayoutReplaced itself inherits LayoutObject's default. The only override
-// in the translated source hierarchy is SVGForeignObject. LayoutVideo is not
-// a represented source class and must supply its own override when translated.
+// in the source hierarchy are SVGForeignObject and LayoutVideo.
 // cpp: core/layout/layout_object.h:737-740
 // cpp: core/layout/svg/layout_svg_foreign_object.h:62-65
 #[unsafe(no_mangle)]
@@ -692,6 +817,12 @@ pub extern "Rust" fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
     object: *const LayoutObject,
     style: &ComputedStyle,
 ) -> bool {
+    if unsafe { &*object }.IsVideo() {
+        let video = unsafe { &*object.cast::<LayoutVideo>() };
+        return foundation::RuntimeEnabledFeatures::StackingContextIsNotStackedEnabled()
+            && style.GetPosition() == foundation::EPosition::kStatic
+            && video.ElementState().has_controls;
+    }
     match class(object) {
         LayoutObjectClass::SvgForeignObject => {
             unsafe { &*object }.CheckIsNotDestroyed();
@@ -704,6 +835,9 @@ pub extern "Rust" fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
 // cpp: core/layout/layout_replaced.h:70-73
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool {
+    if unsafe { &*object }.IsMedia() {
+        return true;
+    }
     if class(object) == LayoutObjectClass::TableColumn {
         return unsafe { &*object }.StyleRef().Display() == foundation::EDisplay::kTableColumnGroup;
     }
@@ -724,6 +858,9 @@ pub extern "Rust" fn DispatchLayoutObjectIsChildAllowed(
     child: *mut LayoutObject,
     style: &ComputedStyle,
 ) -> bool {
+    if unsafe { &*object }.IsMedia() {
+        return unsafe { &*object.cast::<LayoutMedia>() }.IsChildAllowed(unsafe { &*child }, style);
+    }
     if class(object) == LayoutObjectClass::TableColumn {
         return unsafe { &*child }.IsLayoutTableCol()
             && style.Display() == foundation::EDisplay::kTableColumn;
@@ -735,6 +872,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsChildAllowed(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgInline
@@ -855,6 +994,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -883,6 +1024,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsInitialLetterBox(object: *const Layou
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -922,6 +1065,8 @@ pub extern "Rust" fn DispatchLayoutObjectIsValidColumnSpannerInTree(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -944,6 +1089,11 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
     child: *mut LayoutObject,
     before_child: *mut LayoutObject,
 ) {
+    if unsafe { &*object }.IsMedia() {
+        let children = unsafe { &*object.cast::<LayoutMedia>() }.Children();
+        unsafe { &mut *children }.InsertChildNode(object, child, before_child, true);
+        return;
+    }
     if class(object).IsTableClass() {
         (table_virtuals(object).add_child)(unsafe { &mut *object }, child, before_child);
         return;
@@ -985,6 +1135,8 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject => {
             let objects = LayoutObjectFactoryScope::Objects();
@@ -1039,6 +1191,9 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
 pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
     object: *const LayoutObject,
 ) -> *mut LayoutObjectChildList {
+    if unsafe { &*object }.IsMedia() {
+        return unsafe { &*object.cast::<LayoutMedia>() }.Children();
+    }
     if class(object).IsTableClass() {
         return (table_virtuals(object).virtual_children)(unsafe { &*object });
     }
@@ -1078,6 +1233,8 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -1133,11 +1290,15 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
         LayoutObjectClass::SvgHiddenContainer => "LayoutSVGHiddenContainer",
         LayoutObjectClass::SvgResourceClipper => "LayoutSVGResourceClipper",
         LayoutObjectClass::SvgResourceMasker => "LayoutSVGResourceMasker",
+        LayoutObjectClass::SvgResourcePaintServer => "LayoutSVGResourcePaintServer",
+        LayoutObjectClass::SvgResourceAuxiliary => "LayoutSVGResourceAuxiliary",
         LayoutObjectClass::SvgViewportContainer => "LayoutSVGViewportContainer",
         LayoutObjectClass::SvgForeignObject => "LayoutSVGForeignObject",
         LayoutObjectClass::SvgShape => "LayoutSVGShape",
         LayoutObjectClass::SvgRoot => "LayoutSVGRoot",
         LayoutObjectClass::Fieldset => "LayoutFieldset",
+        LayoutObjectClass::Replaced if unsafe { &*object }.IsVideo() => "LayoutVideo",
+        LayoutObjectClass::Replaced if unsafe { &*object }.IsMedia() => "LayoutMedia",
         LayoutObjectClass::Replaced if IsLayoutImage(object) => "LayoutImage",
         LayoutObjectClass::Replaced => "LayoutInputReplaced",
         LayoutObjectClass::FlexibleBox => "LayoutFlexibleBox",
@@ -1188,6 +1349,8 @@ pub extern "Rust" fn DispatchLayoutBlockFlowCreatesNewFormattingContext(
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -1225,6 +1388,8 @@ pub extern "Rust" fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutB
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -1264,6 +1429,8 @@ pub extern "Rust" fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBo
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -1414,6 +1581,8 @@ fn IsLayoutBlockClass(runtime_class: LayoutObjectClass) -> bool {
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -1432,9 +1601,7 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut Layou
     let runtime_class = class(object);
     // LayoutSVGRoot derives from LayoutReplaced and its source override begins
     // with LayoutReplaced::RecalcVisualOverflow(). The translated SVG package
-    // does not yet add the subsequent unclipped SVG contents rect, but it must
-    // retain this most-derived base dispatch instead of falling through to
-    // LayoutBoxModelObject's inline-only overflow path.
+    // adds the unclipped SVG contents rect after that same base dispatch.
     if matches!(
         runtime_class,
         LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot
@@ -1444,6 +1611,13 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut Layou
             .expect("replaced RecalcVisualOverflow virtual dispatch is not registered")(
             object
         );
+        if runtime_class == LayoutObjectClass::SvgRoot {
+            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+            let add = unsafe { algorithms.as_ref() }
+                .and_then(|a| a.svg_support.root_add_visual_overflow)
+                .expect("native SVGRoot overflow owner is installed");
+            add(unsafe { &mut *object });
+        }
         return;
     }
     if IsLayoutBlockClass(runtime_class) {
@@ -1511,6 +1685,12 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectVisualOverflowRect(
 pub extern "Rust" fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
     object: &LayoutBoxModelObject,
 ) -> PhysicalRect {
+    if object.IsSVGRoot() {
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        return unsafe { algorithms.as_ref() }
+            .and_then(|a| a.svg_support.root_visual_overflow_including_filters)
+            .expect("native SVGRoot filtered overflow owner is installed")(object);
+    }
     LayoutBoxModelObjectApplyFiltersToRect(object, &object.VisualOverflowRect())
 }
 
@@ -1831,6 +2011,8 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper => {
             let factories = LayoutObjectFactoryScope::Objects();
             let update = unsafe { factories.as_ref() }
@@ -1844,19 +2026,38 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
                 context,
             );
         }
-        LayoutObjectClass::SvgForeignObject
-        | LayoutObjectClass::SvgShape
-        | LayoutObjectClass::SvgText => unsafe { &mut *object.cast::<LayoutBlockFlow>() }
-            .StyleDidChange(difference, old_style, new_style, context),
+        LayoutObjectClass::SvgShape => {
+            let update = unsafe { LayoutObjectFactoryScope::Objects().as_ref() }
+                .and_then(|f| f.svg_shape_style_did_change)
+                .expect("SVG shape owns its style/stroke cache lifecycle");
+            update(
+                unsafe { &mut *object.cast::<LayoutBlockFlow>() },
+                difference,
+                old_style,
+                new_style,
+                context,
+            );
+        }
+        LayoutObjectClass::SvgForeignObject | LayoutObjectClass::SvgText => {
+            unsafe { &mut *object.cast::<LayoutBlockFlow>() }
+                .StyleDidChange(difference, old_style, new_style, context)
+        }
         LayoutObjectClass::Block | LayoutObjectClass::FlexibleBox => {
             unsafe { &mut *object.cast::<LayoutBlock>() }
                 .StyleDidChange(difference, old_style, new_style, context)
         }
-        LayoutObjectClass::Replaced if IsLayoutImage(object) => IMAGE_STYLE_DID_CHANGE
+        LayoutObjectClass::Replaced if unsafe { &*object }.IsVideo() => VIDEO_STYLE_DID_CHANGE
             .get()
-            .expect("image StyleDidChange virtual dispatch is not registered")(
+            .expect("video StyleDidChange is registered by its concrete constructor")(
             object, difference, old_style, new_style, context,
         ),
+        LayoutObjectClass::Replaced if IsLayoutImage(object) || unsafe { &*object }.IsMedia() => {
+            IMAGE_STYLE_DID_CHANGE
+                .get()
+                .expect("image StyleDidChange virtual dispatch is not registered")(
+                object, difference, old_style, new_style, context,
+            )
+        }
         LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot => REPLACED_STYLE_DID_CHANGE
             .get()
             .expect("replaced StyleDidChange virtual dispatch is not registered")(
@@ -1927,6 +2128,8 @@ pub extern "Rust" fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObje
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -1961,6 +2164,11 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
     object: *mut LayoutObject,
     old_child: *mut LayoutObject,
 ) {
+    if unsafe { &*object }.IsMedia() {
+        let children = unsafe { &*object.cast::<LayoutMedia>() }.Children();
+        unsafe { &mut *children }.RemoveChildNode(object, old_child, true);
+        return;
+    }
     if class(object).IsTableClass() {
         (table_virtuals(object).remove_child)(unsafe { &mut *object }, old_child);
         return;
@@ -1996,6 +2204,8 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -2036,6 +2246,8 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectCanMergeWith(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -2077,6 +2289,8 @@ pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -2191,6 +2405,8 @@ fn is_box_class(class: LayoutObjectClass) -> bool {
             | LayoutObjectClass::SvgViewportContainer
             | LayoutObjectClass::SvgHiddenContainer
             | LayoutObjectClass::SvgResourceMasker
+            | LayoutObjectClass::SvgResourcePaintServer
+            | LayoutObjectClass::SvgResourceAuxiliary
             | LayoutObjectClass::SvgResourceClipper
             | LayoutObjectClass::SvgForeignObject
             | LayoutObjectClass::SvgShape
@@ -2235,6 +2451,8 @@ pub extern "Rust" fn DispatchLayoutBoxModelUpdateFromStyle(object: *mut LayoutBo
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -2422,6 +2640,8 @@ pub extern "Rust" fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObje
         | LayoutObjectClass::SvgViewportContainer
         | LayoutObjectClass::SvgHiddenContainer
         | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
         | LayoutObjectClass::SvgResourceClipper
         | LayoutObjectClass::SvgForeignObject
         | LayoutObjectClass::SvgShape
@@ -2451,6 +2671,12 @@ pub extern "Rust" fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> Physical
 }
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxPhysicalLocationProvider(box_: &LayoutBox) -> PhysicalOffset {
+    if box_.IsSVGForeignObject() {
+        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+        return unsafe { algorithms.as_ref() }
+            .and_then(|a| a.svg_support.foreign_object_physical_location)
+            .expect("native foreignObject physical location is installed")(box_);
+    }
     if box_.RuntimeClass().IsTableClass() {
         (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).physical_location)(box_)
     } else {
@@ -2462,6 +2688,10 @@ pub extern "Rust" fn LayoutBoxOverflowClipRectProvider(
     box_: &LayoutBox,
     behavior: foundation::OverlayScrollbarClipBehavior,
 ) -> foundation::PhysicalRect {
+    if box_.IsLayoutView() {
+        return unsafe { &*(box_ as *const LayoutBox).cast::<LayoutView>() }
+            .OverflowClipRectWithBehavior(behavior);
+    }
     if box_.RuntimeClass().IsTableClass() {
         (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).overflow_clip_rect)(
             box_, behavior,
@@ -2488,6 +2718,10 @@ pub extern "Rust" fn DispatchLayoutObjectVisualRectRespectsVisibility(
 }
 #[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject) {
+    if unsafe { &*object }.IsVideo() {
+        unsafe { &mut *object.cast::<LayoutVideo>() }.UpdateFromElement();
+        return;
+    }
     if class(object).IsTableClass() {
         (table_virtuals(object).update_from_element)(unsafe { &mut *object });
     } else {
@@ -2553,4 +2787,60 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGViewportContainer(
     object: *const LayoutObject,
 ) -> bool {
     class(object) == LayoutObjectClass::SvgViewportContainer
+}
+
+// Source: core/layout/layout_object.h:2496-2510,3628-3634. The native
+// object class selects the same most-derived source quad override.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn DispatchLayoutObjectQuadsInAncestorInternal(
+    object: &LayoutObject,
+    quads: &mut foundation::Vector<foundation::gfx::QuadF>,
+    ancestor: *const LayoutBoxModelObject,
+    mode: MapCoordinatesFlags,
+    box_type: crate::internal::layout_object::BoxQuadType,
+) {
+    object.CheckIsNotDestroyed();
+    match object.RuntimeClass() {
+        LayoutObjectClass::Text | LayoutObjectClass::SvgInlineText => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutText>() }
+                .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+        }
+        LayoutObjectClass::Inline
+        | LayoutObjectClass::InlineListItem
+        | LayoutObjectClass::InsideListMarker => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutInline>() }
+                .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+        }
+        LayoutObjectClass::View => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutView>() }
+                .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+        }
+        LayoutObjectClass::TableColumn => {
+            (table_virtuals(object).quads_in_ancestor)(object, quads, ancestor, mode, box_type);
+        }
+        LayoutObjectClass::SvgHiddenContainer
+        | LayoutObjectClass::SvgResourceMasker
+        | LayoutObjectClass::SvgResourcePaintServer
+        | LayoutObjectClass::SvgResourceAuxiliary
+        | LayoutObjectClass::SvgResourceClipper => {
+            // Source: core/layout/svg/layout_svg_hidden_container.h:57-62.
+        }
+        LayoutObjectClass::SvgGroup
+        | LayoutObjectClass::SvgViewportContainer
+        | LayoutObjectClass::SvgShape
+        | LayoutObjectClass::SvgText
+        | LayoutObjectClass::SvgInline
+        | LayoutObjectClass::SvgTSpan
+        | LayoutObjectClass::SvgTextPath => {
+            let enumerate = unsafe { object.FactorySet().as_ref() }
+                .and_then(|factory| factory.svg_quads_in_ancestor)
+                .expect("source SVG quad virtual is not installed");
+            enumerate(object, quads, ancestor, mode, box_type);
+        }
+        _ if object.IsBox() => {
+            unsafe { &*(object as *const LayoutObject).cast::<LayoutBox>() }
+                .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+        }
+        _ => object.QuadsInAncestorInternalBase(quads, ancestor, mode, box_type),
+    }
 }

@@ -482,22 +482,19 @@ pub(crate) fn SupportsBaseAppearance(
         return false;
     }
 
+    if let Some((select, dom::persistent_document::DOMSelectUAPartKind::Picker)) =
+        document.SelectUAPart(element)
+    {
+        return document.SelectSupportsBaseAppearance(select, appearance);
+    }
     if node.IsHTMLElement("select") {
-        if appearance == AppearanceValue::kBase
-            && !foundation::RuntimeEnabledFeatures::AppearanceBaseEnabled()
-        {
-            return false;
-        }
-        // CustomizableSelectMultiplePopup is experimental and disabled by the
-        // fixed runtime-feature owner, matching blink-feature() in html.css.
-        let customizable_multiple_popup = false;
-        let multiple = HasNullNamespaceHTMLAttribute(node, "multiple");
-        return customizable_multiple_popup || !(SelectUsesMenuList(node) && multiple);
+        return document.SelectSupportsBaseAppearance(element, appearance);
+    }
+    if node.IsHTMLElement("datalist") {
+        return document.DataListSupportsBaseAppearance(element, appearance);
     }
 
-    if appearance != AppearanceValue::kBase
-        || !foundation::RuntimeEnabledFeatures::AppearanceBaseEnabled()
-    {
+    if appearance != AppearanceValue::kBase || !document.SelectSourceFeatures().appearance_base {
         return false;
     }
     if node.IsHTMLElement("button")
@@ -505,11 +502,6 @@ pub(crate) fn SupportsBaseAppearance(
         || node.IsHTMLElement("progress")
     {
         return true;
-    }
-    if node.IsHTMLElement("datalist") {
-        // CustomizableCombobox depends on AppearanceBase and is experimental
-        // at the fixed revision; Rechrom's runtime owner leaves it disabled.
-        return false;
     }
     document.InputType(element).is_some_and(|input_type| {
         input_type.IsTextFieldInputType()
@@ -707,7 +699,7 @@ pub(crate) struct ProductionStyleCascadeBackend<'a> {
     visited_link_color: Option<foundation::Color>,
     active_link_color: Option<foundation::Color>,
     initial: ComputedStyleHandle,
-    language: &'static AtomicString,
+    language: AtomicString,
     locale: Option<Arc<LayoutLocale>>,
     transparent_image: OnceCell<Rc<ResolverValue<Self>>>,
     document_element: OnceCell<Rc<ProductionElement>>,
@@ -745,7 +737,7 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
         container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
         font_metrics: Option<&'a dyn production_style_builder::FontMetricsResolver>,
     ) -> Self {
-        let language = Box::leak(Box::new(AtomicString::default()));
+        let language = AtomicString::default();
         // cpp: ComputedStyleBuilder's inherited/non-inherited variable data is
         // initialized with the rest of the style.  The Rust port owns those
         // maps beside ComputedStyle, so establish the equivalent base before
@@ -1063,10 +1055,11 @@ impl<'a> ProductionStyleCascadeBackend<'a> {
             if let CSSValuePayload::kUnparsedDeclarationClass(unparsed) = value.Payload() {
                 let mut data = (*unparsed.data).clone();
                 data.is_animation_tainted = true;
-                value = production_css_value::unparsed_with_base(
+                value = production_css_value::unparsed_with_context(
                     data,
                     unparsed.mode,
                     unparsed.base_url.clone(),
+                    unparsed.resource_fetch_restriction,
                 );
             }
         }
@@ -1448,6 +1441,131 @@ pub(crate) fn ApplyInlineProperties(
     }
 }
 
+/// StyleResolver::ComputeValue (style_resolver.cc:3020-3086). The source
+/// clones the already-computed style and applies exactly one declaration with
+/// the existing cascade/substitution owners. It never rematches the element.
+pub(crate) fn ComputeSerializationValue(
+    inputs: ProductionCascadeInputs<'_>,
+    name: &CSSPropertyName,
+    value: Rc<production_css_value::Value>,
+) -> Result<
+    Option<Rc<production_css_value::Value>>,
+    crate::serialization_style_query::SerializationValueError,
+> {
+    use crate::serialization_style_query::SerializationValueError;
+    let backend = ProductionStyleCascadeBackend::new(
+        inputs.document,
+        inputs.media.clone(),
+        inputs.root_font_size,
+        inputs.color_scheme_settings,
+        inputs.system_colors,
+        inputs.text_link_text_color,
+        inputs.link_color,
+        inputs.visited_link_color,
+        inputs.active_link_color,
+        inputs.custom_properties,
+        inputs.parent_custom_properties,
+        inputs.substitution_context,
+        inputs.image_resolver,
+        inputs.property_registry,
+        inputs.function_registry,
+        inputs.container_runtime,
+        inputs.font_metrics,
+    );
+    if let Some(root) = inputs.root_style.clone() {
+        let _ = backend.document_element_style.set(root);
+    }
+    backend.is_document_element.set(inputs.is_document_element);
+    let element = Rc::new(ProductionElement {
+        node: inputs.subject_node,
+        parent: inputs.parent.clone(),
+        root: inputs.root_style.clone(),
+        pseudo_id: inputs.pseudo_id,
+    });
+    let request = ProductionRequest::default();
+    let state = StyleResolverState::new(&backend, &(), element, None, Some(&request));
+    state.CreateNewClonedStyle(ProductionStyleCascadeBackend::style(&inputs.base));
+    state.StyleBuilderMut().SetIsEnsuredInDisplayNone();
+    let scope: Rc<dyn TreeScope> = Rc::new(ProductionScope);
+    let value = if name.IsCustomProperty()
+        && matches!(value.Payload(), CSSValuePayload::kUnparsedDeclarationClass(unparsed) if unparsed.data.NeedsVariableResolution())
+    {
+        StyleCascade::ResolveSubstitutionsForState(
+            &state,
+            &backend,
+            value.clone(),
+            Some(scope.clone()),
+            None,
+        )
+        .unwrap_or(value)
+    } else {
+        value
+    };
+    let mut set =
+        crate::css_property_value_set::MutableCSSPropertyValueSet::new(state.GetParserMode());
+    set.SetPropertyName(name, value, false);
+    let set: Rc<dyn MatchedPropertySet> = Rc::new(CSSPropertyValueSetRuleHandle::Mutable(Rc::new(
+        RefCell::new(set),
+    )));
+    {
+        let mut cascade = StyleCascade::new(&state, &backend);
+        cascade
+            .MutableMatchResult()
+            .BeginAddingAuthorRulesForTreeScope(scope);
+        let mut data = MatchedPropertiesData::default();
+        data.origin = CascadeOrigin::kAuthor;
+        cascade
+            .MutableMatchResult()
+            .AddMatchedProperties(set, None, data);
+        cascade.Apply(CascadeFilter::new());
+    }
+    let fallbacks = backend.take_fallbacks();
+    if !fallbacks.is_empty() {
+        return Err(SerializationValueError::Cascade {
+            property: name.Id(),
+            operations: fallbacks
+                .iter()
+                .map(|fallback| format!("{fallback:?}"))
+                .collect(),
+        });
+    }
+    if state.HasUnsupportedGuaranteedInvalid() {
+        return Ok(None);
+    }
+    if name.IsCustomProperty() {
+        let custom = backend.take_custom_properties();
+        let name = name.ToAtomicString().Utf8();
+        if let Some(value) = custom.registered_values.get(&name) {
+            return Ok(Some(value.clone()));
+        }
+        return Ok(custom.Get(&name).map(|data| {
+            Rc::new(production_css_value::Value::new(
+                CSSValuePayload::kUnparsedDeclarationClass(
+                    production_css_value::CSSUnparsedDeclarationValue {
+                        data: data.clone(),
+                        mode: state.GetParserMode(),
+                        base_url: production_css_value::ProductionURL::Null,
+                        resource_fetch_restriction:
+                            crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
+                    },
+                ),
+            ))
+        }));
+    }
+    let style = state
+        .TakeStyle()
+        .ok_or(SerializationValueError::MissingComputedStyle)?;
+    crate::css_computed_style_declaration::CSSComputedStyleDeclaration::new(
+        Some(ProductionStyleCascadeBackend::style(&style)),
+        crate::css_computed_style_declaration::ComputedStyleValueOptions {
+            value_phase: crate::properties::css_property::CSSValuePhase::kComputedValue,
+            ..Default::default()
+        },
+    )
+    .GetPropertyCSSValue(name.Id())
+    .map_err(SerializationValueError::Computed)
+}
+
 pub(crate) fn ApplyMatchResultWithFilter(
     mut inputs: ProductionCascadeInputs<'_>,
     filter: CascadeFilter,
@@ -1649,8 +1767,11 @@ impl StyleResolverBackend for ProductionStyleCascadeBackend<'_> {
     fn InDesignMode(&self, document: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(&self, document: &'d Self::Document) -> &'d AtomicString {
-        self.language
+    fn ContentLanguage<'d>(
+        &'d self,
+        document: &'d Self::Document,
+    ) -> &'d AtomicString {
+        &self.language
     }
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32 {
         1.0
@@ -1996,7 +2117,9 @@ impl StyleResolverStateBackend for ProductionStyleCascadeBackend<'_> {
         self.media.device_pixel_ratio
     }
     fn DocumentInQuirksMode(&self, document: &Self::Document) -> bool {
-        false
+        self.document.is_some_and(|document| {
+            document.GetCompatibilityMode() == dom::persistent_document::CompatibilityMode::kQuirks
+        })
     }
     fn DocumentElementComputedStyle(
         &self,
@@ -2315,12 +2438,12 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                 true,
                 None,
                 v.mode,
-                String::from(""),
+                style_parser::production_css_execution_context::ProductionCSSReferrer::Empty(),
                 false,
                 crate::parser::css_parser_context::SecureContextMode::kInsecureContext,
                 None,
                 None,
-                crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
+                v.resource_fetch_restriction,
             ))),
             _ => None,
         }
@@ -2360,6 +2483,10 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                         .as_ref()
                         .map(|context| context.BaseURL().clone())
                         .unwrap_or(production_css_value::ProductionURL::Null),
+                    resource_fetch_restriction: context.as_ref().map_or(
+                        crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
+                        |c| c.ResourceFetchRestriction(),
+                    ),
                 },
             ),
         ))
@@ -3476,6 +3603,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
                     data: value.data.clone(),
                     mode: value.mode,
                     base_url: value.base_url.clone(),
+                    resource_fetch_restriction: value.resource_fetch_restriction,
                 },
             ),
         ))
@@ -5228,6 +5356,8 @@ mod tests {
                 data: reference_data.clone(),
                 mode: CSSParserMode::kHTMLStandardMode,
                 base_url: production_css_value::ProductionURL::Null,
+                resource_fetch_restriction:
+                    crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
             }),
             &bounds,
             true,

@@ -13,10 +13,10 @@ use foundation::{
     EInternalOverscrollPosition, EInternalUnbounded, EIsolation, EOverflow, EOverflowWrap,
     EOverlay, EOverscrollContainerType, EPageMarginSafety, EPointerEvents, EPosition, EResize,
     EScrollTargetGroup, EScrollbarWidth, ETableLayout, ETextBoxTrim, ETextCombine,
-    ETransformStyle3D, EUserModify, EUserSelect, EVisibility, EWordBreak, GCedHeapHashSet, HashSet,
-    LayoutUnit, Length, LengthBox, LengthPoint, LineBreak, MakeGarbageCollected, Member,
-    PhysicalToLogical, RuntimeEnabledFeatures, String, TabSize, TabSizeValueType, TextDirection,
-    VectorExt, Visitor, WeakMember, WritingDirectionMode,
+    ETransformStyle3D, EUserModify, EUserSelect, EVisibility, EWordBreak, GCedHeapHashSet,
+    GCedHeapVector, HashSet, LayoutUnit, Length, LengthBox, LengthPoint, LineBreak,
+    MakeGarbageCollected, Member, PhysicalToLogical, RuntimeEnabledFeatures, String, TabSize,
+    TabSizeValueType, TextDirection, VectorExt, Visitor, WeakMember, WritingDirectionMode,
 };
 
 use crate::css::color_scheme_flags::ColorSchemeFlags;
@@ -32,7 +32,7 @@ use super::border_image_length_box::BorderImageLengthBox;
 use super::clip_path_operation::ClipPathOperation;
 use super::color_scheme::mojom;
 use super::computed_grid_track_list::ComputedGridTrackList;
-use super::computed_style_base::{ComputedStyleBase, ComputedStyleBuilderBase};
+use super::computed_style_base::{ComputedStyleBase, ComputedStyleBuilderBase, FieldDifference};
 use super::computed_style_constants::{
     Containment, EContainerType, EFillBox, EFillLayerType, EVerticalAlign, FlexWrapMode,
     GridAutoFlow, InternalGridAutoFlowAlgorithm, InternalGridAutoFlowDirection, ItemPosition,
@@ -247,6 +247,11 @@ pub trait LayoutTreeElement {
 }
 
 impl ComputedStyle {
+    /// The CSS position property reads its retained field, before the
+    /// display-dependent layout convenience conversion (longhands cc10777).
+    pub fn PositionForComputedValue(&self) -> foundation::EPosition {
+        self.PositionInternal()
+    }
     // cpp: core/style/computed_style.cc:2423-2429
     pub fn UsedScrollbarColor(&self) -> *mut StyleScrollbarColor {
         if self.PrefersDefaultScrollbarStyles() {
@@ -308,7 +313,7 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2735
     pub fn HasPropertyDependingOnCurrentColor(&self) -> bool {
-        unsafe { ComputedStyleHasPropertyDependingOnCurrentColor(self) }
+        self.HasPropertyDependingOnCurrentColorSource()
     }
 
     // C++ FunctionRef also borrows its callable and permits captures.
@@ -322,18 +327,93 @@ impl ComputedStyle {
         unsafe { ComputedStyleDecorationColorIncludingFallback(self, visited_link) }
     }
 
-    // cpp: layoutng_style/style/computed_style.h:2783
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:916-929
     pub(crate) fn DiffNeedsReshape(&self, other: &Self, field_diff: u64) -> bool {
-        unsafe { ComputedStyleDiffNeedsReshape(self, other, field_diff) }
+        if field_diff & FieldDifference::kReshape.bits() != 0 {
+            return true;
+        }
+        field_diff & FieldDifference::kBorderWidth.bits() != 0
+            && self.Display() == EDisplay::kInline
+            && self.HasBorder() != other.HasBorder()
     }
 
-    // cpp: layoutng_style/style/computed_style.h:2784-2785
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:931-959
     pub(crate) fn DiffNeedsFullLayoutAndPaintInvalidation(
         &self,
         other: &Self,
-        field_diff: u64,
+        _field_diff: u64,
     ) -> bool {
-        unsafe { ComputedStyleDiffNeedsFullLayoutAndPaintInvalidation(self, other, field_diff) }
+        self.IsDisplayTableType()
+            && self.BorderCollapse() == EBorderCollapse::kCollapse
+            && [
+                (self.BorderTopStyle(), other.BorderTopStyle()),
+                (self.BorderBottomStyle(), other.BorderBottomStyle()),
+                (self.BorderLeftStyle(), other.BorderLeftStyle()),
+                (self.BorderRightStyle(), other.BorderRightStyle()),
+            ]
+            .into_iter()
+            .any(|(old, new)| {
+                matches!(
+                    (old, new),
+                    (EBorderStyle::kHidden, EBorderStyle::kNone)
+                        | (EBorderStyle::kNone, EBorderStyle::kHidden)
+                )
+            })
+    }
+
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:964-1020
+    // Layout Custom's two Document/LayoutWorklet-dependent branches remain at
+    // the Document owner until that currently dormant API is implemented.
+    pub fn DiffNeedsFullLayoutDocumentIndependent(&self, other: &Self, field_diff: u64) -> bool {
+        self.DiffNeedsFullLayoutBeforeWorklets(other, field_diff)
+            || self.DiffNeedsFullLayoutAfterWorklets(other, field_diff)
+    }
+    pub(crate) fn DiffNeedsFullLayoutBeforeWorklets(&self, other: &Self, field_diff: u64) -> bool {
+        if field_diff & FieldDifference::kLayout.bits() != 0 {
+            return true;
+        }
+
+        if field_diff & FieldDifference::kBorderWidth.bits() != 0
+            && (self.BorderTopWidth() != other.BorderTopWidth()
+                || self.BorderRightWidth() != other.BorderRightWidth()
+                || self.BorderBottomWidth() != other.BorderBottomWidth()
+                || self.BorderLeftWidth() != other.BorderLeftWidth())
+        {
+            return true;
+        }
+
+        if field_diff & FieldDifference::kStroke.bits() != 0
+            && (self.HasStroke() != other.HasStroke()
+                || self.StrokeDashArray().is_null() != other.StrokeDashArray().is_null())
+        {
+            return true;
+        }
+
+        false
+    }
+    pub(crate) fn DiffNeedsFullLayoutAfterWorklets(&self, other: &Self, field_diff: u64) -> bool {
+        if field_diff & FieldDifference::kGapDecorations.bits() != 0 {
+            let initial_column = ComputedStyleInitialValues::InitialColumnRuleStyle();
+            let initial_row = ComputedStyleInitialValues::InitialRowRuleStyle();
+            if (self.ColumnRuleStyle() == &initial_column
+                && other.ColumnRuleStyle() != &initial_column)
+                || (self.RowRuleStyle() == &initial_row && other.RowRuleStyle() != &initial_row)
+            {
+                return true;
+            }
+        }
+
+        let animations = |style: &Self| unsafe { style.Animations().Get().as_ref() };
+        CSSAnimationData::TimelineTriggerDataChanged(animations(self), animations(other))
+    }
+
+    // cpp: third_party/blink/renderer/core/style/computed_style.cc:749-780
+    // This is the layout result of VisualInvalidationDiff's three translated,
+    // document-independent stages. Callers retain paint/reshape detail.
+    pub fn VisualInvalidationDiffNeedsLayout(&self, other: &Self, field_diff: u64) -> bool {
+        self.DiffNeedsReshape(other, field_diff)
+            || self.DiffNeedsFullLayoutAndPaintInvalidation(other, field_diff)
+            || self.DiffNeedsFullLayoutDocumentIndependent(other, field_diff)
     }
 
     // cpp: layoutng_style/style/computed_style.h:2786-2787
@@ -349,12 +429,19 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2788-2789
     pub(crate) fn DiffCompositingReasonsChanged(&self, other: &Self, field_diff: u64) -> bool {
-        unsafe { ComputedStyleDiffCompositingReasonsChanged(self, other, field_diff) }
+        self.DiffNon3DCompositingReasonsChanged(other, field_diff)
+            || self.PotentialCompositingReasonsFor3DTransformChanged(other)
+    }
+    pub(crate) fn DiffNon3DCompositingReasonsChanged(&self, other: &Self, field_diff: u64) -> bool {
+        field_diff & FieldDifference::kCompositing.bits() != 0
+            || self.UsedTransformStyle3D() != other.UsedTransformStyle3D()
+            || self.ContainsPaint() != other.ContainsPaint()
+            || self.IsOverflowVisibleAlongBothAxes() != other.IsOverflowVisibleAlongBothAxes()
     }
 
     // cpp: layoutng_style/style/computed_style.h:2790-2791
     pub(crate) fn PotentialCompositingReasonsFor3DTransformChanged(&self, other: &Self) -> bool {
-        unsafe { ComputedStylePotentialCompositingReasonsFor3DTransformChanged(self, other) }
+        self.Potential3DCompositingReasons() != other.Potential3DCompositingReasons()
     }
 
     // cpp: layoutng_style/style/computed_style.h:2793-2794
@@ -372,7 +459,22 @@ impl ComputedStyle {
         properties: &foundation::Vector<AtomicString>,
         other: &Self,
     ) -> bool {
-        unsafe { ComputedStyleCustomPropertiesEqual(self, properties, other) }
+        // Source: core/style/computed_style.cc:1202-1224.
+        if !self.HasVariables() && !other.HasVariables() {
+            return true;
+        }
+        for property_name in properties {
+            if !foundation::ValuesEquivalent(
+                self.GetVariableData(property_name),
+                other.GetVariableData(property_name),
+            ) || !foundation::ValuesEquivalent(
+                self.GetVariableValue(property_name),
+                other.GetVariableValue(property_name),
+            ) {
+                return false;
+            }
+        }
+        true
     }
 
     // cpp: layoutng_style/style/computed_style.h:2455
@@ -456,11 +558,21 @@ impl ComputedStyle {
     }
 
     // cpp: layoutng_style/style/computed_style.h:2802-2803
-    pub(crate) fn GetInternalForcedCurrentColor(
-        &self,
-        is_current_color: Option<&mut bool>,
-    ) -> Color {
-        unsafe { ComputedStyleGetInternalForcedCurrentColor(self, is_current_color) }
+    pub fn GetInternalForcedCurrentColor(&self, is_current_color: Option<&mut bool>) -> Color {
+        // Source: core/style/computed_style.cc:2768-2777. Keep the owning
+        // style's system-color fallback instead of an unavailable host symbol.
+        debug_assert!(!self.InternalForcedColor().IsCurrentColor());
+        if self.Color().IsSystemColorIncludingDeprecated() {
+            if let Some(output) = is_current_color {
+                *output = self.ColorIsCurrentColor();
+            }
+            return self.GetCurrentColor(None);
+        }
+        self.InternalForcedColor().Resolve(
+            Color::default(),
+            self.UsedColorScheme(),
+            is_current_color,
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:2804-2805
@@ -477,9 +589,7 @@ impl ComputedStyle {
         context_paint: &SVGPaint,
         context_visited_paint: &SVGPaint,
     ) -> Color {
-        unsafe {
-            ComputedStyleVisitedDependentContextPaint(self, context_paint, context_visited_paint)
-        }
+        self.VisitedDependentSvgPaint(context_paint, context_visited_paint)
     }
 
     // cpp: layoutng_style/style/computed_style.h:322
@@ -717,12 +827,31 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:920-922
     pub fn ResolvedCaretTextColor(&self) -> Option<Color> {
-        unsafe { ComputedStyleResolvedCaretTextColor(self) }
+        // Source: core/style/computed_style.cc:2823-2834.
+        let color = self.CaretColor().TextColor();
+        if color.IsAutoColor() {
+            return None;
+        }
+        let value = color.ToStyleColor();
+        Some(if self.ShouldForceColor(value) {
+            self.GetInternalForcedCurrentColor(None)
+        } else {
+            value.Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+        })
     }
 
     // cpp: layoutng_style/style/computed_style.h:924-926
     pub fn AccentColorResolved(&self) -> Option<Color> {
-        unsafe { ComputedStyleAccentColorResolved(self) }
+        // Source: core/style/computed_style.cc:2815-2821.
+        let color = self.AccentColor();
+        if color.IsAutoColor() {
+            return None;
+        }
+        Some(
+            color
+                .ToStyleColor()
+                .Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None),
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:928-931
@@ -783,7 +912,11 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:971-972
     pub fn HasVariables(&self) -> bool {
-        unsafe { ComputedStyleHasVariables(self) }
+        // Source: core/style/computed_style.cc:2260-2270.
+        !self.InheritedVariables().IsEmpty()
+            || !self.NonInheritedVariables().IsEmpty()
+            || unsafe { self.InitialData().as_ref() }
+                .is_some_and(|data| data.HasInitialVariables())
     }
 
     // C++ wtf_size_t is a 32-bit count.
@@ -799,17 +932,24 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:975
     pub fn InheritedVariables(&self) -> &StyleInheritedVariables {
-        unsafe { &*ComputedStyleInheritedVariables(self) }
+        self.base_.InheritedVariablesInternal()
     }
 
     // cpp: layoutng_style/style/computed_style.h:976
     pub fn NonInheritedVariables(&self) -> &StyleNonInheritedVariables {
-        unsafe { &*ComputedStyleNonInheritedVariables(self) }
+        self.base_.NonInheritedVariablesInternal()
     }
 
     // cpp: layoutng_style/style/computed_style.h:978-979
     pub fn GetVariableData(&self, name: &AtomicString) -> *mut CSSVariableData {
-        unsafe { ComputedStyleGetVariableData(self, name) }
+        if let Some(data) = self.InheritedVariables().GetData(name) {
+            return data;
+        }
+        if let Some(data) = self.NonInheritedVariables().GetData(name) {
+            return data;
+        }
+        unsafe { self.InitialData().as_ref() }
+            .map_or(std::ptr::null_mut(), |data| data.GetVariableData(name))
     }
 
     // C++ overload taking the inherited-property flag.
@@ -819,12 +959,27 @@ impl ComputedStyle {
         name: &AtomicString,
         is_inherited_property: bool,
     ) -> *mut CSSVariableData {
-        unsafe { ComputedStyleGetVariableDataWithInheritance(self, name, is_inherited_property) }
+        let data = if is_inherited_property {
+            self.InheritedVariables().GetData(name)
+        } else {
+            self.NonInheritedVariables().GetData(name)
+        };
+        data.unwrap_or_else(|| {
+            unsafe { self.InitialData().as_ref() }
+                .map_or(std::ptr::null_mut(), |initial| initial.GetVariableData(name))
+        })
     }
 
     // cpp: layoutng_style/style/computed_style.h:983
     pub fn GetVariableValue(&self, name: &AtomicString) -> *const CSSValue {
-        unsafe { ComputedStyleGetVariableValue(self, name) }
+        if let Some(value) = self.InheritedVariables().GetValue(name) {
+            return value;
+        }
+        if let Some(value) = self.NonInheritedVariables().GetValue(name) {
+            return value;
+        }
+        unsafe { self.InitialData().as_ref() }
+            .map_or(std::ptr::null(), |data| data.GetVariableValue(name))
     }
 
     // C++ overload taking the inherited-property flag.
@@ -834,7 +989,15 @@ impl ComputedStyle {
         name: &AtomicString,
         is_inherited_property: bool,
     ) -> *const CSSValue {
-        unsafe { ComputedStyleGetVariableValueWithInheritance(self, name, is_inherited_property) }
+        let value = if is_inherited_property {
+            self.InheritedVariables().GetValue(name)
+        } else {
+            self.NonInheritedVariables().GetValue(name)
+        };
+        value.unwrap_or_else(|| {
+            unsafe { self.InitialData().as_ref() }
+                .map_or(std::ptr::null(), |initial| initial.GetVariableValue(name))
+        })
     }
 
     // cpp: layoutng_style/style/computed_style.h:347-350
@@ -2949,13 +3112,62 @@ impl ComputedStyle {
         )
     }
 
+    /// Source: longhands_custom.cc:2133-2148,5546-5560 and
+    /// computed_style.cc:2519-2568. Caret clients resolve the anchor's color,
+    /// including auto/currentColor, forced colors and visited alpha privacy.
+    pub fn ResolvedCaretColor(&self) -> Color {
+        let fill = self.CaretColor().FillColor();
+        let current = StyleColor::CurrentColor();
+        let value = if fill.IsAutoColor() {
+            &current
+        } else {
+            fill.ToStyleColor()
+        };
+        let unvisited = if self.ShouldForceColor(value) {
+            self.GetInternalForcedCurrentColor(None)
+        } else {
+            value.Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+        };
+        if self.InsideLink() != EInsideLink::kInsideVisitedLink {
+            return unvisited;
+        }
+        let fill = self.InternalVisitedCaretColor().FillColor();
+        let value = if fill.IsAutoColor() {
+            &current
+        } else {
+            fill.ToStyleColor()
+        };
+        let mut visited = if self.ShouldForceColor(value) {
+            if self
+                .InternalVisitedColor()
+                .IsSystemColorIncludingDeprecated()
+            {
+                self.GetInternalVisitedCurrentColor(None)
+            } else {
+                self.InternalForcedVisitedColor().Resolve(
+                    Color::default(),
+                    self.UsedColorScheme(),
+                    None,
+                )
+            }
+        } else {
+            value.Resolve(
+                self.GetInternalVisitedCurrentColor(None),
+                self.UsedColorScheme(),
+                None,
+            )
+        };
+        visited.SetAlpha(unvisited.Alpha());
+        visited
+    }
+
     // cpp: layoutng_style/style/computed_style.h:2414-2417
     pub fn VisitedDependentContextFill(
         &self,
         context_paint: &SVGPaint,
         context_style: &ComputedStyle,
     ) -> Color {
-        unsafe { ComputedStyleVisitedDependentContextFill(self, context_paint, context_style) }
+        self.VisitedDependentSvgPaint(context_paint, context_style.InternalVisitedFillPaint())
     }
 
     // cpp: layoutng_style/style/computed_style.h:2418-2420
@@ -2964,7 +3176,58 @@ impl ComputedStyle {
         context_paint: &SVGPaint,
         context_style: &ComputedStyle,
     ) -> Color {
-        unsafe { ComputedStyleVisitedDependentContextStroke(self, context_paint, context_style) }
+        self.VisitedDependentSvgPaint(context_paint, context_style.InternalVisitedStrokePaint())
+    }
+
+    // SVG fill/stroke use dedicated visited paint slots. This is the shared
+    // implementation of the ordinary and context-paint paths in
+    // ComputedStyle::VisitedDependentColor / VisitedDependentContextPaint.
+    // Keep the unvisited alpha while replacing only the visited RGB so link
+    // history cannot be inferred from transparency.
+    pub fn VisitedDependentSvgPaint(&self, paint: &SVGPaint, visited_paint: &SVGPaint) -> Color {
+        debug_assert!(paint.HasColor());
+        let unvisited = if self.ShouldForceColor(paint.GetColor()) {
+            if self.Color().IsSystemColorIncludingDeprecated() {
+                self.GetCurrentColor(None)
+            } else {
+                self.InternalForcedColor()
+                    .Resolve(Color::default(), self.UsedColorScheme(), None)
+            }
+        } else {
+            paint
+                .GetColor()
+                .Resolve(self.GetCurrentColor(None), self.UsedColorScheme(), None)
+        };
+        if self.InsideLink() != EInsideLink::kInsideVisitedLink || !visited_paint.HasColor() {
+            return unvisited;
+        }
+        let visited = if self.ShouldForceColor(visited_paint.GetColor()) {
+            if self
+                .InternalVisitedColor()
+                .IsSystemColorIncludingDeprecated()
+            {
+                self.GetInternalVisitedCurrentColor(None)
+            } else {
+                self.InternalForcedVisitedColor().Resolve(
+                    Color::default(),
+                    self.UsedColorScheme(),
+                    None,
+                )
+            }
+        } else {
+            visited_paint.GetColor().Resolve(
+                self.GetInternalVisitedCurrentColor(None),
+                self.UsedColorScheme(),
+                None,
+            )
+        };
+        Color::FromColorSpace(
+            visited.GetColorSpace(),
+            Some(visited.Param0()),
+            Some(visited.Param1()),
+            Some(visited.Param2()),
+            Some(unvisited.Alpha()),
+        )
     }
 
     // cpp: layoutng_style/style/computed_style.h:2422-2441
@@ -2985,8 +3248,14 @@ impl ComputedStyle {
     }
 
     // cpp: layoutng_style/style/computed_style.h:2819
-    fn ShadowListHasCurrentColor(shadows: *const ShadowList) -> bool {
-        unsafe { ComputedStyleShadowListHasCurrentColor(shadows) }
+    // ComputedStyle.cc:2788-2794.
+    pub(crate) fn ShadowListHasCurrentColor(shadows: *const ShadowList) -> bool {
+        unsafe { shadows.as_ref() }.is_some_and(|shadows| {
+            shadows
+                .Shadows()
+                .iter()
+                .any(|shadow| shadow.GetColor().DependsOnCurrentColor())
+        })
     }
 
     // cpp: layoutng_style/style/computed_style.h:1912-1914
@@ -3334,11 +3603,7 @@ impl ComputedStyle {
     // C++ UChar is a UTF-16 code unit, represented here by u16.
     // cpp: layoutng_style/style/computed_style.h:2275-2284
     pub fn IsCollapsibleWhiteSpace(&self, c: u16) -> bool {
-        match c {
-            0x20 | 0x09 => self.ShouldCollapseWhiteSpaces(),
-            0x0a => self.ShouldCollapseBreaks(),
-            _ => false,
-        }
+        white_space::IsCollapsibleWhiteSpace(c, self.GetWhiteSpaceCollapse())
     }
 
     // cpp: layoutng_style/style/computed_style.h:2286-2288
@@ -3413,6 +3678,18 @@ impl ComputedStyle {
     // cpp: layoutng_style/style/computed_style.h:2447-2449
     pub fn HasEffectiveAppearance(&self) -> bool {
         Self::HasEffectiveAppearanceValue(self.EffectiveAppearance())
+    }
+
+    // cpp: core/style/computed_style.h:2964-2969. This read belongs to the
+    // canonical ComputedStyle as well as its builder.
+    pub fn HasBaseAppearanceValue(appearance: AppearanceValue) -> bool {
+        matches!(
+            appearance,
+            AppearanceValue::kBaseSelect | AppearanceValue::kBase
+        )
+    }
+    pub fn HasBaseAppearance(&self) -> bool {
+        Self::HasBaseAppearanceValue(self.Appearance())
     }
 
     // cpp: layoutng_style/style/computed_style.h:2457-2510
@@ -3584,7 +3861,11 @@ impl ComputedStyle {
 
     // cpp: layoutng_style/style/computed_style.h:2609
     pub fn HasBaseEffectiveAppearance(&self) -> bool {
-        unsafe { ComputedStyleHasBaseEffectiveAppearance(self) }
+        debug_assert!(
+            RuntimeEnabledFeatures::AppearanceBaseEnabled()
+                || self.EffectiveAppearance() != AppearanceValue::kBase
+        );
+        Self::HasBaseAppearanceValue(self.EffectiveAppearance())
     }
 
     // cpp: layoutng_style/style/computed_style.h:2624-2626
@@ -3993,8 +4274,7 @@ impl ComputedStyleBuilder {
             RuntimeEnabledFeatures::AppearanceBaseEnabled()
                 || self.Appearance() != AppearanceValue::kBase
         );
-        self.Appearance() == AppearanceValue::kBaseSelect
-            || self.Appearance() == AppearanceValue::kBase
+        ComputedStyle::HasBaseAppearanceValue(self.Appearance())
     }
 
     // cpp: layoutng_style/style/computed_style.h:2972-2974
@@ -4852,22 +5132,10 @@ impl ComputedStyleBuilder {
 }
 
 unsafe extern "Rust" {
-    // cpp: layoutng_style/style/computed_style.h:2846-2848
-    // cpp: layoutng_style/style/computed_style.h:2802-2803
-    fn ComputedStyleGetInternalForcedCurrentColor(
-        style: &ComputedStyle,
-        is_current_color: Option<&mut bool>,
-    ) -> Color;
     // cpp: layoutng_style/style/computed_style.h:2804-2805
     fn ComputedStyleGetInternalForcedVisitedCurrentColor(
         style: &ComputedStyle,
         is_current_color: Option<&mut bool>,
-    ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:2807-2809
-    fn ComputedStyleVisitedDependentContextPaint(
-        style: &ComputedStyle,
-        context_paint: &SVGPaint,
-        context_visited_paint: &SVGPaint,
     ) -> Color;
     // cpp: layoutng_style/style/computed_style.h:819
     fn ComputedStyleDependsOnFunc(
@@ -4879,45 +5147,16 @@ unsafe extern "Rust" {
         style: &ComputedStyle,
         visited_link: bool,
     ) -> StyleColor;
-    // cpp: layoutng_style/style/computed_style.h:2783
-    fn ComputedStyleDiffNeedsReshape(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-        field_diff: u64,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2784-2785
-    fn ComputedStyleDiffNeedsFullLayoutAndPaintInvalidation(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-        field_diff: u64,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2786-2787
     fn ComputedStyleDiffNeedsRecomputeVisualOverflow(
         style: &ComputedStyle,
         other: &ComputedStyle,
         field_diff: u64,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2788-2789
-    fn ComputedStyleDiffCompositingReasonsChanged(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-        field_diff: u64,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2790-2791
-    fn ComputedStylePotentialCompositingReasonsFor3DTransformChanged(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2793-2794
     fn ComputedStylePropertiesEqual(
         style: &ComputedStyle,
         properties: &foundation::Vector<CSSPropertyID>,
-        other: &ComputedStyle,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2795-2796
-    fn ComputedStyleCustomPropertiesEqual(
-        style: &ComputedStyle,
-        properties: &foundation::Vector<AtomicString>,
         other: &ComputedStyle,
     ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:821
@@ -4928,8 +5167,6 @@ unsafe extern "Rust" {
     fn ComputedStyleHighlightPseudoElementStylesHaveVariableReferences(
         style: &ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2735
-    fn ComputedStyleHasPropertyDependingOnCurrentColor(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:778
     fn ComputedStyleListStyleStringValue(style: &ComputedStyle) -> *const AtomicString;
     // cpp: layoutng_style/style/computed_style.h:787-789
@@ -4961,18 +5198,6 @@ unsafe extern "Rust" {
         gap_color: &StyleColor,
         is_column_rule: bool,
     ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:2414-2417
-    fn ComputedStyleVisitedDependentContextFill(
-        style: &ComputedStyle,
-        context_paint: &SVGPaint,
-        context_style: &ComputedStyle,
-    ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:2418-2420
-    fn ComputedStyleVisitedDependentContextStroke(
-        style: &ComputedStyle,
-        context_paint: &SVGPaint,
-        context_style: &ComputedStyle,
-    ) -> Color;
     // cpp: layoutng_style/style/computed_style.h:326
     fn ComputedStyleGetVariableNamesCache(
         style: &ComputedStyle,
@@ -4985,16 +5210,12 @@ unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:2605-2607
     fn ComputedStyleHasAnimationTrigger(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2609
-    fn ComputedStyleHasBaseEffectiveAppearance(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:3544-3545
     fn ComputedStyleBuilderAddPaintImage(
         builder: &mut ComputedStyleBuilder,
         image: *mut StyleImage,
     );
     // cpp: layoutng_style/style/computed_style.h:920-922
-    fn ComputedStyleResolvedCaretTextColor(style: &ComputedStyle) -> Option<Color>;
-    // cpp: layoutng_style/style/computed_style.h:924-926
-    fn ComputedStyleAccentColorResolved(style: &ComputedStyle) -> Option<Color>;
     // cpp: layoutng_style/style/computed_style.h:928-931
     // cpp: layoutng_style/style/computed_style.h:933-936
     // cpp: layoutng_style/style/computed_style.h:938
@@ -5004,40 +5225,12 @@ unsafe extern "Rust" {
     // cpp: layoutng_style/style/computed_style.h:942
     // cpp: layoutng_style/style/computed_style.h:953
     fn ComputedStyleCopyChildDependentFlagsFrom(style: &ComputedStyle, other: &ComputedStyle);
-    // cpp: layoutng_style/style/computed_style.h:971-972
-    fn ComputedStyleHasVariables(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:973
     fn ComputedStyleGetVariableNamesCount(style: &ComputedStyle) -> u32;
     // cpp: layoutng_style/style/computed_style.h:974
     fn ComputedStyleGetVariableNames(
         style: &ComputedStyle,
     ) -> *const foundation::Vector<AtomicString>;
-    // cpp: layoutng_style/style/computed_style.h:975
-    fn ComputedStyleInheritedVariables(style: &ComputedStyle) -> *const StyleInheritedVariables;
-    // cpp: layoutng_style/style/computed_style.h:976
-    fn ComputedStyleNonInheritedVariables(
-        style: &ComputedStyle,
-    ) -> *const StyleNonInheritedVariables;
-    // cpp: layoutng_style/style/computed_style.h:978-979
-    fn ComputedStyleGetVariableData(
-        style: &ComputedStyle,
-        name: &AtomicString,
-    ) -> *mut CSSVariableData;
-    // cpp: layoutng_style/style/computed_style.h:980-981
-    fn ComputedStyleGetVariableDataWithInheritance(
-        style: &ComputedStyle,
-        name: &AtomicString,
-        is_inherited_property: bool,
-    ) -> *mut CSSVariableData;
-    // cpp: layoutng_style/style/computed_style.h:983
-    fn ComputedStyleGetVariableValue(style: &ComputedStyle, name: &AtomicString)
-        -> *const CSSValue;
-    // cpp: layoutng_style/style/computed_style.h:984-985
-    fn ComputedStyleGetVariableValueWithInheritance(
-        style: &ComputedStyle,
-        name: &AtomicString,
-        is_inherited_property: bool,
-    ) -> *const CSSValue;
     // cpp: layoutng_style/style/computed_style.h:410-412
     // cpp: layoutng_style/style/computed_style.h:414-417
     fn ComputedStyleDiffAffectsContainerQueries(
@@ -5050,8 +5243,6 @@ unsafe extern "Rust" {
         edges: &mut BorderEdgeArray,
         sides: PhysicalBoxSides,
     );
-    // cpp: layoutng_style/style/computed_style.h:2819
-    fn ComputedStyleShadowListHasCurrentColor(shadows: *const ShadowList) -> bool;
     // cpp: layoutng_style/style/computed_style.h:1870
     fn ComputedStyleTextDecorationVisualOverflowChanged(
         style: &ComputedStyle,
@@ -5145,6 +5336,14 @@ mod difference_tests {
     }
     fn changed(change: impl FnOnce(&mut ComputedStyleBuilder)) -> &'static ComputedStyle {
         let mut builder = ComputedStyleBuilder::from_style(initial());
+        change(&mut builder);
+        unsafe { &*builder.TakeStyle() }
+    }
+    fn changed_from(
+        base: &ComputedStyle,
+        change: impl FnOnce(&mut ComputedStyleBuilder),
+    ) -> &'static ComputedStyle {
+        let mut builder = ComputedStyleBuilder::from_style(base);
         change(&mut builder);
         unsafe { &*builder.TakeStyle() }
     }
@@ -5306,6 +5505,83 @@ mod difference_tests {
             ComputedStyleBase::FieldInvalidationDiff(initial(), opacity),
             F::kOpacity.bits()
         );
+    }
+
+    #[test]
+    fn visual_invalidation_stroke_presence_matches_computed_style_source() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let black = changed(|builder| {
+            builder.SetStrokePaintOwned(SVGPaint::from_color(Color::kBlack));
+        });
+        let stroke_fields = ComputedStyleBase::FieldInvalidationDiff(initial(), black);
+        assert_ne!(stroke_fields & F::kStroke.bits(), 0);
+        assert!(initial().VisualInvalidationDiffNeedsLayout(black, stroke_fields));
+
+        let white = changed_from(black, |builder| {
+            builder.SetStrokePaintOwned(SVGPaint::from_color(Color::kWhite));
+        });
+        let color_fields = ComputedStyleBase::FieldInvalidationDiff(black, white);
+        assert_ne!(color_fields & F::kStroke.bits(), 0);
+        assert!(!black.VisualInvalidationDiffNeedsLayout(white, color_fields));
+
+        let dashed = changed_from(black, |builder| {
+            let dash = GCedHeapVector::from(vec![Length::Fixed(1.0)]);
+            builder.SetStrokeDashArray(Member::from_ptr(MakeGarbageCollected(dash)));
+        });
+        let dash_fields = ComputedStyleBase::FieldInvalidationDiff(black, dashed);
+        assert_ne!(dash_fields & F::kStroke.bits(), 0);
+        assert!(black.VisualInvalidationDiffNeedsLayout(dashed, dash_fields));
+    }
+
+    #[test]
+    fn visual_invalidation_collapsed_table_none_hidden_matches_source() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let none = changed(|builder| {
+            builder.SetDisplay(EDisplay::kTableCell);
+            builder.SetBorderCollapse(EBorderCollapse::kCollapse);
+            builder.SetBorderTopStyle(EBorderStyle::kNone);
+        });
+        let hidden = changed_from(none, |builder| {
+            builder.SetBorderTopStyle(EBorderStyle::kHidden);
+        });
+        let fields = ComputedStyleBase::FieldInvalidationDiff(none, hidden);
+        assert_ne!(fields & F::kBorderWidth.bits(), 0);
+        assert_eq!(none.BorderTopWidth(), hidden.BorderTopWidth());
+        assert!(none.VisualInvalidationDiffNeedsLayout(hidden, fields));
+        assert!(hidden.VisualInvalidationDiffNeedsLayout(none, fields));
+    }
+
+    #[test]
+    fn visual_invalidation_gap_rule_addition_keeps_source_direction() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let solid = GapDataList::from_value(&EBorderStyle::kSolid);
+        let column = changed(|builder| builder.SetColumnRuleStyle(&solid));
+        let fields = ComputedStyleBase::FieldInvalidationDiff(initial(), column);
+        assert_ne!(fields & F::kGapDecorations.bits(), 0);
+        assert!(initial().VisualInvalidationDiffNeedsLayout(column, fields));
+        assert!(!column.VisualInvalidationDiffNeedsLayout(initial(), fields));
+
+        let row = changed(|builder| builder.SetRowRuleStyle(&solid));
+        let row_fields = ComputedStyleBase::FieldInvalidationDiff(initial(), row);
+        assert_ne!(row_fields & F::kGapDecorations.bits(), 0);
+        assert!(initial().VisualInvalidationDiffNeedsLayout(row, row_fields));
+    }
+
+    #[test]
+    fn visual_invalidation_timeline_trigger_has_no_generated_field_bit() {
+        use super::super::css_timing_data::StyleTimeline;
+
+        let _heap = foundation::LayoutHeapScope::new();
+        let old = changed(|builder| {
+            let _ = builder.AccessAnimations();
+        });
+        let new = changed_from(old, |builder| {
+            *builder.AccessAnimations().TimelineTriggerSourceListMut() =
+                vec![StyleTimeline::Keyword(foundation::CSSValueID::kNone)];
+        });
+        let fields = ComputedStyleBase::FieldInvalidationDiff(old, new);
+        assert_eq!(fields, 0);
+        assert!(old.VisualInvalidationDiffNeedsLayout(new, fields));
     }
 
     #[test]

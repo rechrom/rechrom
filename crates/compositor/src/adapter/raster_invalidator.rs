@@ -21,6 +21,12 @@ pub trait RasterInvalidationItem {
     fn IsTombstone(&self) -> bool;
     fn ScrollbarNeedsUpdateDisplay(&self) -> Option<bool>;
     fn VisualRect(&self) -> Rect;
+    fn RectKnownToBeOpaque(&self) -> Rect {
+        Rect::default()
+    }
+    fn IsBoxDecorationBackground(&self) -> bool {
+        false
+    }
     fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason;
 }
 pub trait RasterInvalidationChunk<M: RasterInvalidationTypes + ?Sized>: PaintChunkView<M> {
@@ -103,6 +109,9 @@ pub trait RasterInvalidationTypes: ChunkGeometryMapper<FloatClipRect = FloatClip
 }
 pub trait RasterInvalidationSink {
     fn ClipByLayerBounds(&self, rect: Rect) -> Rect;
+    fn FindRoundedOpaqueBacking(&self, _rect: Rect) -> Option<RoundedOpaqueBacking> {
+        None
+    }
     fn AddRasterInvalidation(
         &mut self,
         rect: Rect,
@@ -110,8 +119,55 @@ pub trait RasterInvalidationSink {
         reason: PaintInvalidationReason,
         old_or_new: ClientIsOldOrNew,
     );
+    fn AddRasterInvalidationForFullReplay(
+        &mut self,
+        rect: Rect,
+        inner: Rect,
+        replay_rect: Rect,
+        id: DisplayItemClientId,
+        reason: PaintInvalidationReason,
+        old_or_new: ClientIsOldOrNew,
+    ) {
+        let _ = (inner, replay_rect);
+        self.AddRasterInvalidation(rect, id, reason, old_or_new);
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoundedOpaqueBacking {
+    pub rect: Rect,
+    pub has_overlapping_sibling: bool,
 }
 pub trait RasterVisualRectMapper {
     fn MapVisualRect(&self, rect: Rect) -> Rect;
+    fn MapVisualRectWithoutRasterEffectOutset(&self, rect: Rect) -> Rect {
+        self.MapVisualRect(rect)
+    }
+    fn HasRoundedClip(&self) -> bool {
+        false
+    }
+    fn NeedsRoundedClipAAOutset(&self) -> bool {
+        false
+    }
+    fn RoundedClipHasFractionalRightEdge(&self) -> bool {
+        false
+    }
 }
-impl<M:ChunkGeometryMapper+?Sized> RasterVisualRectMapper for crate::third_party::blink::renderer::platform::graphics::compositing::chunk_to_layer_mapper::ChunkToLayerMapper<'_,M>{fn MapVisualRect(&self,rect:Rect)->Rect{Self::MapVisualRect(self,rect)}}
+impl<M: ChunkGeometryMapper + ?Sized> RasterVisualRectMapper
+    for crate::third_party::blink::renderer::platform::graphics::compositing::chunk_to_layer_mapper::ChunkToLayerMapper<'_, M>
+{
+    fn MapVisualRect(&self, rect: Rect) -> Rect {
+        Self::MapVisualRect(self, rect)
+    }
+    fn MapVisualRectWithoutRasterEffectOutset(&self, rect: Rect) -> Rect {
+        Self::MapVisualRectWithoutRasterEffectOutset(self, rect)
+    }
+    fn HasRoundedClip(&self) -> bool {
+        Self::HasRoundedClip(self)
+    }
+    fn NeedsRoundedClipAAOutset(&self) -> bool {
+        Self::NeedsRoundedClipAAOutset(self)
+    }
+    fn RoundedClipHasFractionalRightEdge(&self) -> bool {
+        Self::RoundedClipHasFractionalRightEdge(self)
+    }
+}

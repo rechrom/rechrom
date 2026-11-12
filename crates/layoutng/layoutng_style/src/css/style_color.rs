@@ -223,8 +223,15 @@ impl UnresolvedColorMix {
     pub fn Resolve(&self, current_color: &Color) -> Color {
         let first = ResolveColorOperand(&self.color1_, self.color1_type_, current_color);
         let second = ResolveColorOperand(&self.color2_, self.color2_type_, current_color);
-        debug_assert_eq!(self.color_interpolation_space_, ColorSpace::kOklab);
-        MixInOklab(first, second, self.percentage_, self.alpha_multiplier_)
+        let mut mixed = Color::InterpolateColors(
+            self.color_interpolation_space_,
+            self.hue_interpolation_method_,
+            first,
+            second,
+            self.percentage_ as f32,
+        );
+        mixed.SetAlpha(mixed.Alpha() * self.alpha_multiplier_ as f32);
+        mixed
     }
 }
 
@@ -253,71 +260,6 @@ fn ResolveColorOperand(
             }
         }
     }
-}
-
-// cpp: Color::FromColorMix for the default Oklab interpolation family. CSS
-// Color mixes premultiplied channels, then applies the normalization alpha.
-// Production color operands are retained sRGB colors, so conversion can stay
-// local to the source StyleColor owner without exposing a second CSS matcher.
-fn MixInOklab(first: Color, second: Color, amount: f64, alpha_multiplier: f64) -> Color {
-    fn linear(channel: f64) -> f64 {
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    fn gamma(channel: f64) -> f64 {
-        if channel <= 0.0031308 {
-            12.92 * channel
-        } else {
-            1.055 * channel.powf(1.0 / 2.4) - 0.055
-        }
-    }
-    fn to_oklab(color: Color) -> [f64; 3] {
-        let r = linear(color.Param0() as f64 / 255.0);
-        let g = linear(color.Param1() as f64 / 255.0);
-        let b = linear(color.Param2() as f64 / 255.0);
-        let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
-        let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
-        let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
-        [
-            0.210_454_255_3 * l + 0.793_617_785 * m - 0.004_072_046_8 * s,
-            1.977_998_495_1 * l - 2.428_592_205 * m + 0.450_593_709_9 * s,
-            0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766 * s,
-        ]
-    }
-    fn from_oklab(value: [f64; 3], alpha: f64) -> Color {
-        let l = value[0] + 0.396_337_777_4 * value[1] + 0.215_803_757_3 * value[2];
-        let m = value[0] - 0.105_561_345_8 * value[1] - 0.063_854_172_8 * value[2];
-        let s = value[0] - 0.089_484_177_5 * value[1] - 1.291_485_548 * value[2];
-        let l = l * l * l;
-        let m = m * m * m;
-        let s = s * s * s;
-        Color::FromRGBAFloat(
-            gamma(4.076_741_662_1 * l - 3.307_711_591_3 * m + 0.230_969_929_2 * s) as f32,
-            gamma(-1.268_438_004_6 * l + 2.609_757_401_1 * m - 0.341_319_396_5 * s) as f32,
-            gamma(-0.004_196_086_3 * l - 0.703_418_614_7 * m + 1.707_614_701 * s) as f32,
-            alpha as f32,
-        )
-    }
-
-    let first_weight = 1.0 - amount;
-    let second_weight = amount;
-    let first_alpha = first.Alpha() as f64 * first_weight;
-    let second_alpha = second.Alpha() as f64 * second_weight;
-    let mixed_alpha = first_alpha + second_alpha;
-    let first_lab = to_oklab(first);
-    let second_lab = to_oklab(second);
-    let mut mixed = [0.0; 3];
-    if mixed_alpha > 0.0 {
-        for channel in 0..3 {
-            mixed[channel] = (first_lab[channel] * first_alpha
-                + second_lab[channel] * second_alpha)
-                / mixed_alpha;
-        }
-    }
-    from_oklab(mixed, mixed_alpha * alpha_multiplier)
 }
 
 // cpp: layoutng_style/css/style_color.h:145-158
@@ -828,4 +770,49 @@ unsafe extern "Rust" {
     fn StyleColorIsSystemColorIncludingDeprecated(keyword: CSSValueID) -> bool;
     fn StyleColorIsSystemColor(keyword: CSSValueID) -> bool;
     fn StyleColorEffectiveColorKeyword(value: &StyleColor) -> CSSValueID;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_mix_resolve_uses_the_requested_srgb_space() {
+        let success = StyleColor::from_color(Color::FromRGB(0x08, 0x87, 0x2b));
+        let canvas = StyleColor::from_color(Color::FromRGB(0xf2, 0xf5, 0xf3));
+        let mix = UnresolvedColorMix::new(
+            ColorSpace::kSRGB,
+            HueInterpolationMethod::kShorter,
+            &success,
+            &canvas,
+            0.88,
+            1.0,
+        );
+
+        let result = mix.Resolve(&Color::kTransparent);
+        let (red, green, blue) = result.ToSRGB();
+        assert_eq!(result.GetColorSpace(), ColorSpace::kSRGB);
+        assert!((red - 213.92 / 255.0).abs() < 0.0001, "red={red}");
+        assert!((green - 231.8 / 255.0).abs() < 0.0001, "green={green}");
+        assert!((blue - 219.0 / 255.0).abs() < 0.0001, "blue={blue}");
+        assert_eq!(result.Alpha(), 1.0);
+    }
+
+    #[test]
+    fn color_mix_resolve_applies_normalization_alpha_after_interpolation() {
+        let first = StyleColor::from_color(Color::FromRGBA(255, 0, 0, 128));
+        let second = StyleColor::from_color(Color::FromRGBA(0, 0, 255, 64));
+        let mix = UnresolvedColorMix::new(
+            ColorSpace::kSRGB,
+            HueInterpolationMethod::kShorter,
+            &first,
+            &second,
+            0.25,
+            0.8,
+        );
+
+        let result = mix.Resolve(&Color::kTransparent);
+        let interpolated = 128.0 / 255.0 * 0.75 + 64.0 / 255.0 * 0.25;
+        assert!((result.Alpha() - interpolated * 0.8).abs() < 0.000001);
+    }
 }

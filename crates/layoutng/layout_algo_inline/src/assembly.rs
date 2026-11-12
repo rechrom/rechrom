@@ -20,6 +20,7 @@ use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::layout_text::LayoutText;
 use layoutng::internal::layout_text_combine::LayoutTextCombine;
 use layoutng::internal::min_max_sizes::MinMaxSizesResult;
+use layoutng::internal::selection_state::SelectionState;
 use layoutng::internal::text_combine_style_service::{
     AdjustStyleForCombinedText, AdjustStyleForTextCombine,
 };
@@ -122,6 +123,21 @@ fn AdjustCombinedTextStyle(builder: &mut ComputedStyleBuilder) {
     unsafe { AdjustStyleForCombinedText(builder) };
 }
 
+fn TextFragmentSelectionFacts(
+    text: &LayoutText,
+) -> layoutng::internal::layout_object_factory_set::TextFragmentSelectionFacts {
+    let fragment = unsafe { &*To::<crate::layout_text_fragment::LayoutTextFragment>(text) };
+    let node = unsafe { fragment.AssociatedTextNode().as_ref() };
+    let state = node
+        .and_then(|n| unsafe { n.GetLayoutObject().as_ref() })
+        .map_or(SelectionState::kNone, |o| o.GetSelectionState());
+    layoutng::internal::layout_object_factory_set::TextFragmentSelectionFacts {
+        node_length: node.map(|n| n.length()),
+        state,
+        start: fragment.Start(),
+        length: fragment.FragmentLength(),
+    }
+}
 fn IsTextFragmentSelected(text: &LayoutText) -> bool {
     debug_assert!(text.IsTextFragment());
     layout_text_is_selected(text)
@@ -153,6 +169,7 @@ pub fn InstallInlineAlgorithm(assembly: &mut LayoutAssembly) {
     assembly.objects.update_anonymous_text_combine_style = Some(UpdateAnonymousTextCombineStyle);
     assembly.objects.adjust_combined_text_style = Some(AdjustCombinedTextStyle);
     assembly.objects.is_text_fragment_selected = Some(IsTextFragmentSelected);
+    assembly.objects.text_fragment_selection_facts = Some(TextFragmentSelectionFacts);
     assembly.objects.adjust_text_combine_bounding_box = Some(AdjustTextCombineBoundingBox);
     assembly.objects.recalc_text_combine_contents_ink_overflow =
         Some(RecalcTextCombineContentsInkOverflow);

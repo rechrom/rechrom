@@ -552,6 +552,11 @@ impl<D: CSSValueDispatch> CSSValue<D> {
     pub fn Payload(&self) -> &CSSValuePayload<D> {
         &self.payload_
     }
+    /// Move a uniquely owned temporary parser value into its retained engine
+    /// owner. Payload transfer preserves the same compiled expression tree.
+    pub fn IntoPayload(self) -> CSSValuePayload<D> {
+        self.payload_
+    }
     // cpp: third_party/blink/renderer/core/css/css_value.h:403
     pub fn GetClassType(&self) -> ClassType {
         self.state_.class_type_
@@ -968,7 +973,9 @@ impl<D: CSSValueDispatch> CSSValue<D> {
             }
         }
     }
-    fn ValueListView(&self) -> &D::CSSValueList {
+    /// Source To<CSSValueList> view of this original native subclass. The
+    /// caller must establish IsValueList; no list/value owner is copied.
+    pub fn ValueListView(&self) -> &D::CSSValueList {
         match &self.payload_ {
             CSSValuePayload::kValueListClass(v) => v,
             CSSValuePayload::kFunctionClass(v) => v.AsValueList(),
@@ -1333,6 +1340,13 @@ impl<D: CSSValueDispatch> CSSValue<D> {
 impl<D: CSSValueDispatch> PartialEq for CSSValue<D> {
     fn eq(&self, other: &Self) -> bool {
         if self.GetClassType() != other.GetClassType() {
+            return false;
+        }
+        // CSSCustomIdentValue::Equals (cc118-126) reads its CSSValue base
+        // scope-population bit before comparing original TreeScope identity.
+        if matches!(self.payload_, CSSValuePayload::kCustomIdentClass(_))
+            && self.IsScopedValue() != other.IsScopedValue()
+        {
             return false;
         }
         match (&self.payload_, &other.payload_) {

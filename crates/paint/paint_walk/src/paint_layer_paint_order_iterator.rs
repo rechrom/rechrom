@@ -180,6 +180,9 @@ fn CollectDirectLayerChildren<'n, 'f>(
 ) {
     for child_owner in &parent.children {
         let child = child_owner.as_ref();
+        if child.is_embedded_local_frame_root {
+            continue;
+        }
         if child.is_paint_layer {
             children.push(PaintLayerPaintOrderEntry {
                 layer: child,
@@ -327,9 +330,55 @@ pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
         .entries
         .extend(collector.top_or_view_transition_layers);
     trace.set("children", collector.entries.len() as f64);
+    // Source: PaintLayerStackingNode z-order vectors and overlay-control map.
+    // Retain these exact source-selected owners for input queries; do not sort
+    // a second list in Browser or rebuild a fragment tree for hit testing.
+    let mut canonical_controls = HashMap::<u64, Vec<*const ()>>::new();
+    for child in &collector.entries {
+        let Some(controls) = collector.controls_after.get(&(child.layer as *const _)) else {
+            continue;
+        };
+        let client = child
+            .layer
+            .fragment
+            .as_deref()
+            .unwrap()
+            .paint
+            .paint_layer_client_id;
+        // Fragmented instances retain one source PaintLayer client. Preserve
+        // every selected control in source paint order when those aliases meet;
+        // HashMap iteration or replacing one instance would lose controls.
+        canonical_controls.entry(client).or_default().extend(
+            controls
+                .iter()
+                .map(|entry| entry.layer as *const PaintTreeNode<'_> as *const ()),
+        );
+    }
+    // Every entry was borrowed directly from root's resident child owners.
+    // PrePaint invalidates the cache before exposing a changed topology.
+    unsafe {
+        root.PublishResidentLayerOrder(
+            collector
+                .entries
+                .iter()
+                .map(|entry| entry.layer as *const PaintTreeNode<'_> as *const ())
+                .collect(),
+            canonical_controls,
+        );
+    }
     PaintLayerPaintOrder {
         entries: collector.entries,
         controls_after: collector.controls_after,
+    }
+}
+
+/// Source stacking lists are lazily updated when a never-drawn/cull-skipped
+/// layer is queried. Use the owning collector, including all source ordering
+/// and overlay-control rules, rather than another hit-test sorting algorithm.
+pub fn EnsureResidentHitTestLayerOrder(root: &PaintTreeNode<'_>) {
+    let missing = !root.HasResidentLayerOrder();
+    if missing {
+        CollectPaintLayerChildren(root);
     }
 }
 

@@ -8,15 +8,165 @@ use javascript::javascript_runtime::{
     JavaScriptRuntime,
 };
 
+/// Native CloseWatcher operations are routed to Interaction's canonical
+/// document stack; only the invocation borrows the current JavaScript runtime.
+#[derive(Clone)]
+pub struct CloseWatcherHost {
+    pub create: Rc<
+        dyn Fn(
+            u64,
+            Rc<interaction::dispatch::core::dom::events::event_target::EventTarget>,
+            bool,
+        ) -> Result<
+            Rc<interaction::default::core::html::closewatcher::close_watcher::NativeCloseWatcher>,
+            String,
+        >,
+    >,
+    pub invoke: Rc<
+        dyn Fn(
+            foundation::popup_types::CloseWatcherId,
+            bool,
+            &mut dyn JavaScriptHostRuntime,
+        ) -> Result<(), String>,
+    >,
+    pub destroy: Rc<dyn Fn(foundation::popup_types::CloseWatcherId)>,
+}
+
 // Rust ownership adapter for the callbacks in DOMBindingsHost.
 // Page must supply real resolution and measurement; absent callbacks retain the
 // source's default behavior and do not imply that a Page has been implemented.
+pub type FormValidationHandler = Rc<
+    dyn Fn(
+        HostObjectId,
+        bool,
+        &mut dyn JavaScriptHostRuntime,
+    ) -> Result<bool, interaction::adapter::page_form_validation::ValidationRequired>,
+>;
+
+pub type FormDataConstructor = Rc<
+    dyn Fn(
+        HostObjectId,
+        Option<HostObjectId>,
+        &mut dyn JavaScriptHostRuntime,
+    ) -> Result<
+        Rc<interaction::dispatch::core::fileapi::form_data_object::FormDataObject>,
+        interaction::dispatch::core::fileapi::form_data_object::FormDataConstructionError,
+    >,
+>;
+
 pub type SyntheticEventHandler =
     Rc<dyn Fn(&mut Event, HostObjectId, &mut dyn JavaScriptHostRuntime)>;
+pub type DocumentEditorCommandHandler = Rc<
+    dyn Fn(
+        interaction::DocumentEditorCommandOperation,
+        &str,
+        &str,
+        &mut dyn JavaScriptHostRuntime,
+    ) -> Result<
+        interaction::DocumentEditorCommandResult,
+        interaction::event_dispatcher::EditorCommandError,
+    >,
+>;
+/// WebAPI checks the optional union while Browser holds Interaction's opaque
+/// prepared command transaction. The editing engine never reads script values.
+pub type DocumentEditorCommandValueCheck<'a> =
+    dyn FnMut(bool, &mut dyn JavaScriptHostRuntime) -> Result<String, HostResult> + 'a;
+pub type DocumentEditorCommandExecutor = Rc<
+    dyn Fn(
+        &str,
+        &mut DocumentEditorCommandValueCheck<'_>,
+        &mut dyn JavaScriptHostRuntime,
+    ) -> HostResult,
+>;
+
+/// DOMSelection is owned by Interaction's retained FrameSelection.  WebAPI
+/// only projects boundary values and routes mutations; it never stores a
+/// second selection or derives one from JavaScript wrapper state.
+#[derive(Clone)]
+pub struct DOMSelectionHost {
+    pub read: Rc<dyn Fn() -> Option<interaction::DOMSelectionSnapshot>>,
+    pub write: Rc<dyn Fn(Option<dom::DOMStaticRange>) -> bool>,
+    pub text: Rc<dyn Fn() -> Vec<u16>>,
+}
+
+/// Text-control selection remains owned by Interaction's retained
+/// SelectionState. WebAPI only performs Web IDL conversion and projects the
+/// primitive offsets/direction.
+#[derive(Clone)]
+pub struct TextControlSelectionHost {
+    pub read: Rc<dyn Fn(HostObjectId) -> Option<interaction::TextControlSelectionSnapshot>>,
+    pub write: Rc<dyn Fn(HostObjectId, usize, usize, bool) -> bool>,
+}
+
+pub type DOMEventTargetResolver = Rc<
+    dyn Fn(HostObjectId) -> Option<interaction::dispatch::core::dom::events::event::EventTargetRef>,
+>;
+pub type DOMWindowViewConverter = Rc<
+    dyn Fn(
+        &HostValue,
+        &mut dyn JavaScriptHostRuntime,
+    ) -> Option<interaction::dispatch::core::events::ui_event::AbstractViewRef>,
+>;
+pub type DOMWindowViewProjector = Rc<
+    dyn Fn(&interaction::dispatch::core::events::ui_event::AbstractViewRef) -> Option<HostValue>,
+>;
+
+/// HTMLFrameOwnerElement's nullable browsing-context projections. The host
+/// resolves these from its resident Frame owner, including current security
+/// origin; bindings never create a second Page or infer a document from ids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameProperty {
+    ContentWindow,
+    ContentDocument,
+}
+pub type FramePropertyGetter =
+    Rc<dyn Fn(HostObjectId, FrameProperty, &mut dyn JavaScriptHostRuntime) -> HostResult>;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DocumentFocusState {
+    pub active_element: Option<HostObjectId>,
+    pub has_focus: bool,
+}
 
 #[derive(Default)]
 pub struct DOMBindingsHost {
+    pub execute_document_editor_command: Option<DocumentEditorCommandExecutor>,
+    pub document_editor_command: Option<DocumentEditorCommandHandler>,
+    pub selection: Option<DOMSelectionHost>,
+    pub text_control_selection: Option<TextControlSelectionHost>,
+    /// Maps this original Document's wrapper id to its existing Interaction
+    /// dispatch target. WebAPI never constructs a parallel DOM target owner.
+    pub resolve_event_target: Option<DOMEventTargetResolver>,
+    /// Existing LocalFrame Window/proxy bindings supply cross-realm conversion
+    /// and projection. No WebAPI-owned Window or Frame identity table is made.
+    pub convert_window_view: Option<DOMWindowViewConverter>,
+    pub project_window_view: Option<DOMWindowViewProjector>,
+    /// Original Frame's CSS-to-physical LayoutZoomFactor for drag locations.
+    pub read_layout_zoom: Option<Rc<dyn Fn() -> f32>>,
+    /// Retain the same CachedImage resource; Raster remains embedding-owned.
+    pub retain_drag_image: Option<
+        Rc<
+            dyn Fn(
+                Rc<dom::persistent_document::DOMImageResourceContent>,
+            ) -> Rc<
+                dyn interaction::dispatch::core::clipboard::data_transfer::DragImageResource,
+            >,
+        >,
+    >,
+    /// Live page/frame focus projected for this original Document identity.
+    pub read_document_focus: Option<Rc<dyn Fn(u128) -> Option<DocumentFocusState>>>,
+    pub validate_form: Option<FormValidationHandler>,
+    pub read_frame: Option<FramePropertyGetter>,
+    /// Page supplies its clock domain. Standalone bindings use a real local
+    /// monotonic host clock when no embedding override is supplied.
+    pub event_clock: Option<Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>>,
     pub dispatch_synthetic: Option<SyntheticEventHandler>,
+    /// Same Style source and the fetcher's read-only policy slot. Bindings only
+    /// route the current Document/world; parser decisions remain inside Style.
+    pub cssom_document: Option<(
+        Rc<style::DocumentCSSOMSource>,
+        foundation::referrer_policy::ReferrerPolicyReadHandle,
+    )>,
     pub submit_form: Option<
         Rc<dyn Fn(HostObjectId, Option<HostObjectId>, bool, &mut dyn JavaScriptHostRuntime)>,
     >,
@@ -25,6 +175,9 @@ pub struct DOMBindingsHost {
     /// Update normal style, then ensure the queried element's computed style.
     pub update_style: Option<Box<dyn FnMut(HostObjectId)>>,
     pub emit_style_sheet: Option<Box<dyn FnMut(cssom::CSSStyleSheet)>>,
+    /// A constructed stylesheet or TreeScope adoption changed without a DOM
+    /// node mutation. Page schedules the ordinary style lifecycle.
+    pub invalidate_style: Option<Box<dyn FnMut()>>,
     /// None means this used metric is not applicable (for example CSS width
     /// on a non-replaced inline); CSSOM then serializes the computed value.
     pub read_metric: Option<Box<dyn FnMut(HostObjectId, &str) -> Option<f64>>>,
@@ -43,6 +196,23 @@ pub struct DOMBindingsHost {
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
     pub write_scroll:
         Option<Box<dyn FnMut(HostObjectId, layoutng_assembly::internal::layout_input::Offset)>>,
+    /// Document.fonts reflects the connected resource loader instead of a
+    /// JavaScript-only readiness guess. True means at least one selected face
+    /// still has transport or decode work.
+    pub read_font_loading: Option<Box<dyn FnMut() -> bool>>,
+}
+pub(super) struct StandaloneEventClock(std::time::Instant);
+impl StandaloneEventClock {
+    pub(super) fn new() -> Self {
+        Self(std::time::Instant::now())
+    }
+}
+impl interaction::dispatch::core::dom::events::event::EventClock for StandaloneEventClock {
+    fn Now(&self) -> interaction::input::base::time::time::TimeTicks {
+        interaction::input::base::time::time::TimeTicks::FromInternalValue(
+            self.0.elapsed().as_micros().min((i64::MAX - 1) as u128) as i64 + 1,
+        )
+    }
 }
 
 // cpp: webapi/dom_bindings.h:84-111
@@ -62,11 +232,31 @@ struct BoundEvent {
 }
 
 fn event_path_value(event: &Event, current_target: HostObjectId) -> HostValue {
-    let state = event.dispatch_state.borrow();
-    let nodes = state
-        .path
-        .as_ref()
-        .map_or_else(Vec::new, |path| path.ComposedPath(current_target));
+    let nodes = event.canonical.as_ref().map_or_else(
+        || {
+            let state = event.dispatch_state.borrow();
+            state
+                .path
+                .as_ref()
+                .map_or_else(Vec::new, |path| path.ComposedPath(current_target))
+        },
+        |native| {
+            use interaction::dispatch::core::dom::events::event::EventTargetKind;
+            native
+                .borrow()
+                .BaseEvent()
+                .composedPath(true)
+                .into_iter()
+                .filter_map(|target| match target.Kind() {
+                    EventTargetKind::Window => Some(0),
+                    EventTargetKind::Node => target.NodeId(),
+                    // A generic EventTarget has a singleton path and no DOM
+                    // node identity; its binding identity is currentTarget.
+                    EventTargetKind::Other => Some(current_target),
+                })
+                .collect()
+        },
+    );
     let mut values = Vec::with_capacity(nodes.len() + 1);
     values.push(("length".into(), HostValue::Number(nodes.len() as f64)));
     values.extend(
@@ -85,6 +275,7 @@ fn event_path_value(event: &Event, current_target: HostObjectId) -> HostValue {
 struct SyntheticDispatch {
     identity: u64,
     handle: HostValue,
+    target: HostObjectId,
 }
 
 // Event::Trace owns target/path references. A dispatch supplies a temporary
@@ -93,42 +284,201 @@ struct SyntheticDispatch {
 pub(super) struct BoundEvents {
     records: HashMap<HostObjectId, BoundEvent>,
     identities: HashMap<u64, HostObjectId>,
+    native_identities: HashMap<usize, HostObjectId>,
     active: std::collections::HashSet<HostObjectId>,
     pending: Vec<javascript::javascript_runtime::HostObjectTraceChange>,
 }
 impl BoundEvents {
-    fn Insert(&mut self, id: HostObjectId, bound: BoundEvent) {
+    fn NativeDispatchState(
+        native: &interaction::dispatch::core::dom::events::event::EventRef,
+        fallback_target: HostObjectId,
+    ) -> (HostObjectId, HostObjectId, EventPhase) {
+        use interaction::dispatch::core::dom::events::event::{EventTargetKind, PhaseType};
+
+        let owner = native.borrow();
+        let base = owner.BaseEvent();
+        let project =
+            |target: Option<interaction::dispatch::core::dom::events::event::EventTargetRef>| {
+                target
+                    .and_then(|target| match target.Kind() {
+                        EventTargetKind::Window => Some(0),
+                        EventTargetKind::Node => target.NodeId(),
+                        EventTargetKind::Other => None,
+                    })
+                    .unwrap_or(fallback_target)
+            };
+        let phase = match base.eventPhase() {
+            PhaseType::kNone => EventPhase::kNone,
+            PhaseType::kCapturingPhase => EventPhase::kCapturing,
+            PhaseType::kAtTarget => EventPhase::kAtTarget,
+            PhaseType::kBubblingPhase => EventPhase::kBubbling,
+        };
+        (project(base.target()), project(base.currentTarget()), phase)
+    }
+
+    fn SyncNativeDispatch(
+        &mut self,
+        id: HostObjectId,
+        native: &interaction::dispatch::core::dom::events::event::EventRef,
+        fallback_target: HostObjectId,
+    ) {
+        let (target, current_target, phase) = Self::NativeDispatchState(native, fallback_target);
+        let owner = native.borrow();
+        let base = owner.BaseEvent();
+        let bound = self.records.get_mut(&id).expect("native Event wrapper");
+        bound.event.target_node_id = target;
+        bound.event.current_target_node_id = current_target;
+        bound.event.phase = phase;
+        bound.event.custom_type = base.r#type().into();
+        bound.event.trusted = base.isTrusted();
+        bound.event.default_prevented = base.defaultPrevented();
+        bound.target = target;
+        bound.current_target = current_target;
+        bound.phase = phase;
+        bound.dispatching = base.IsBeingDispatched();
+        drop(owner);
+        self.PublishReferences(id);
+    }
+
+    fn PublishReferences(&mut self, id: HostObjectId) {
         use javascript::javascript_runtime::HostObjectTraceChange as C;
-        let started = self.active.insert(id);
-        {
-            let state = bound.event.dispatch_state.borrow();
-            let mut targets = state.path.as_ref().map_or_else(Vec::new, |path| {
-                path.Nodes().filter(|&id| id != 0).collect()
-            });
-            targets.extend(
-                [
-                    Some(bound.target),
-                    Some(bound.current_target),
-                    bound.event.submitter_node_id,
-                    bound.event.related_target_node_id,
-                ]
-                .into_iter()
-                .flatten()
-                .filter(|&id| id != 0),
-            );
-            self.pending.push(C::ReferenceList {
-                owner: id,
-                targets: targets.into(),
-            });
-            if started {
-                self.pending.push(C::Root {
-                    id,
-                    reason: 6,
-                    rooted: true,
-                });
+        let bound = self.records.get(&id).expect("bound Event");
+        let state = bound.event.dispatch_state.borrow();
+        let mut targets = state.path.as_ref().map_or_else(Vec::new, |path| {
+            path.Nodes().filter(|&id| id != 0).collect()
+        });
+        targets.extend(
+            [
+                Some(bound.target),
+                Some(bound.current_target),
+                bound.event.submitter_node_id,
+                bound.event.related_target_node_id,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|&id| id != 0),
+        );
+        self.pending.push(C::ReferenceList {
+            owner: id,
+            targets: targets.into(),
+        });
+    }
+
+    pub(super) fn NativeEvent(
+        &self,
+        id: u64,
+    ) -> Option<interaction::dispatch::core::dom::events::event::EventRef> {
+        self.records.get(&id)?.event.canonical.clone()
+    }
+    pub(super) fn BindConstructedNative(
+        &mut self,
+        native: &interaction::dispatch::core::dom::events::event::EventRef,
+        allocate: impl FnOnce() -> u64,
+    ) -> u64 {
+        let id = self.BindNative(native, 0, allocate);
+        self.EndNative(id);
+        self.records[&id]
+            .event
+            .dispatch_state
+            .borrow_mut()
+            .final_target = None;
+        id
+    }
+    pub(super) fn BindNative(
+        &mut self,
+        native: &interaction::dispatch::core::dom::events::event::EventRef,
+        target: u64,
+        allocate: impl FnOnce() -> u64,
+    ) -> u64 {
+        let existing = self.native_identities.get(&native.Identity()).copied();
+        if let Some(id) = existing {
+            if self.records[&id].dispatching {
+                self.SyncNativeDispatch(id, native, target);
+                return id;
             }
         }
+        let id = existing.unwrap_or_else(allocate);
+        let identity = existing.map_or(native.Identity() as u64, |id| {
+            self.records[&id].event.identity
+        });
+        let dispatch_state = existing
+            .map(|id| self.records[&id].event.dispatch_state.clone())
+            .unwrap_or_default();
+        {
+            let mut state = dispatch_state.borrow_mut();
+            state.finished = false;
+            state.final_target = None;
+        }
+        let owner = native.borrow();
+        let base = owner.BaseEvent();
+        let (target, current_target, phase) = Self::NativeDispatchState(native, target);
+        let event = Event {
+            r#type: EventType::kCustom,
+            custom_type: base.r#type().into(),
+            interface_name: owner.InterfaceName().into(),
+            canonical: Some(native.clone()),
+            identity,
+            dispatch_state,
+            target_node_id: target,
+            current_target_node_id: current_target,
+            phase,
+            bubbles: base.bubbles(),
+            cancelable: base.cancelable(),
+            composed: base.composed(),
+            trusted: base.isTrusted(),
+            default_prevented: base.defaultPrevented(),
+            ..Default::default()
+        };
+        self.identities.insert(identity, id);
+        self.Insert(
+            id,
+            BoundEvent {
+                event,
+                target,
+                current_target,
+                phase,
+                dispatching: base.IsBeingDispatched(),
+                passive_listener: false,
+                stop_propagation: false,
+                stop_immediate_propagation: false,
+                client_x: 0.0,
+                client_y: 0.0,
+                delta_x: 0.0,
+                delta_y: 0.0,
+            },
+        );
+        id
+    }
+    pub(super) fn SetNativePassive(&mut self, id: u64, passive: bool) {
+        self.records
+            .get_mut(&id)
+            .expect("native Event wrapper")
+            .passive_listener = passive;
+    }
+    pub(super) fn EndNative(&mut self, id: u64) {
+        let bound = self.records.get_mut(&id).expect("native Event wrapper");
+        bound.dispatching = false;
+        bound.phase = EventPhase::kNone;
+        bound.passive_listener = false;
+        let mut state = bound.event.dispatch_state.borrow_mut();
+        state.finished = true;
+        state.final_target = Some(bound.target);
+    }
+    fn Insert(&mut self, id: HostObjectId, bound: BoundEvent) {
+        if let Some(native) = bound.event.canonical.as_ref() {
+            self.native_identities.insert(native.Identity(), id);
+        }
+        use javascript::javascript_runtime::HostObjectTraceChange as C;
+        let started = self.active.insert(id);
         self.records.insert(id, bound);
+        self.PublishReferences(id);
+        if started {
+            self.pending.push(C::Root {
+                id,
+                reason: 6,
+                rooted: true,
+            });
+        }
     }
     pub(super) fn TakeChanges(
         &mut self,
@@ -167,6 +517,9 @@ impl BoundEvents {
     pub(super) fn Retire(&mut self, id: HostObjectId) {
         if let Some(bound) = self.records.remove(&id) {
             self.identities.remove(&bound.event.identity);
+            if let Some(native) = bound.event.canonical.as_ref() {
+                self.native_identities.remove(&native.Identity());
+            }
         }
         self.active.remove(&id);
     }
@@ -182,6 +535,31 @@ pub(super) struct DOMServices {
     next_event_object_id: HostObjectId,
 }
 impl DOMServices {
+    pub(super) fn ActiveSyntheticDispatch(&self) -> Option<(HostValue, HostObjectId)> {
+        self.synthetic
+            .borrow()
+            .as_ref()
+            .map(|dispatch| (dispatch.handle.clone(), dispatch.target))
+    }
+
+    pub(super) fn BindInputEvent(
+        &mut self,
+        event: interaction::dispatch::core::dom::events::event::EventRef,
+    ) -> HostObjectId {
+        let id = self.next_event_object_id;
+        self.next_event_object_id += 1;
+        self.events
+            .borrow_mut()
+            .BindConstructedNative(&event, || id)
+    }
+
+    pub(super) fn EventInterfaceName(&self, id: u64) -> Option<String> {
+        self.events
+            .borrow()
+            .records
+            .get(&id)
+            .map(|event| event.event.interface_name.clone())
+    }
     pub(super) fn MemoryCounts(&self) -> (usize, usize) {
         let events = self.events.borrow();
         (events.records.len(), events.identities.len())
@@ -201,6 +579,112 @@ impl DOMServices {
 }
 
 impl DOMJavaScriptBindings {
+    /// Document lifecycle events originate in Open while it owns the current
+    /// parser runtime. Chromium still creates one native Event before capture,
+    /// target and bubble listener selection; every phase and retained wrapper
+    /// observes that same owner. This restores that canonical edge before the
+    /// direct current-runtime listener path is entered.
+    pub fn PrepareLifecycleEvent(&self, event: &mut Event) {
+        if event.canonical.is_some() {
+            return;
+        }
+        assert!(matches!(
+            event.r#type,
+            EventType::kDOMContentLoaded | EventType::kReadyStateChange | EventType::kLoad
+        ));
+        use interaction::dispatch::core::dom::events::event::{
+            Bubbles, Cancelable, ComposedMode, Event as NativeEvent, EventInterface, EventRef,
+        };
+        let name = if event.custom_type.is_empty() {
+            EventTypeName(event.r#type)
+        } else {
+            &event.custom_type
+        };
+        let timestamp = self
+            .services
+            .host
+            .event_clock
+            .as_ref()
+            .expect("DOM bindings retain their embedding event clock")
+            .Now();
+        let mut native = NativeEvent::new(
+            name,
+            if event.bubbles {
+                Bubbles::kYes
+            } else {
+                Bubbles::kNo
+            },
+            if event.cancelable {
+                Cancelable::kYes
+            } else {
+                Cancelable::kNo
+            },
+            if event.composed {
+                ComposedMode::kComposed
+            } else {
+                ComposedMode::kScoped
+            },
+            timestamp,
+        );
+        native.SetTrusted(event.trusted);
+        event.canonical = Some(EventRef::new(native));
+    }
+
+    /// Open drives document lifecycle propagation while the parser owns the
+    /// current runtime. Keep the translated EventTarget listener selection on
+    /// the same phase/filter state that EventDispatcher would establish for
+    /// each invocation of the canonical Event.
+    pub fn PrepareLifecycleEventInvocation(
+        &self,
+        event: &Event,
+        phase: EventPhase,
+        capture_listeners: bool,
+    ) {
+        use interaction::dispatch::core::dom::events::event::PhaseType;
+        let native = event
+            .canonical
+            .as_ref()
+            .expect("lifecycle dispatch retains the canonical Event");
+        let mut owner = native.borrow_mut();
+        let event = owner.BaseEventMut();
+        if event.eventPhase() == PhaseType::kAtTarget {
+            event.SetFireOnlyCaptureListenersAtTarget(false);
+            event.SetFireOnlyNonCaptureListenersAtTarget(false);
+        }
+        let native_phase = match phase {
+            EventPhase::kNone => PhaseType::kNone,
+            EventPhase::kCapturing => PhaseType::kCapturingPhase,
+            EventPhase::kAtTarget => PhaseType::kAtTarget,
+            EventPhase::kBubbling => PhaseType::kBubblingPhase,
+        };
+        event.SetEventPhase(native_phase);
+        if phase == EventPhase::kAtTarget {
+            if capture_listeners {
+                event.SetFireOnlyCaptureListenersAtTarget(true);
+            } else {
+                event.SetFireOnlyNonCaptureListenersAtTarget(true);
+            }
+        }
+    }
+
+    pub fn FinishLifecycleEvent(&self, event: &Event) {
+        use interaction::dispatch::core::dom::events::event::PhaseType;
+        let native = event
+            .canonical
+            .as_ref()
+            .expect("lifecycle dispatch retains the canonical Event");
+        let mut owner = native.borrow_mut();
+        let event = owner.BaseEventMut();
+        if event.eventPhase() == PhaseType::kAtTarget {
+            event.SetFireOnlyCaptureListenersAtTarget(false);
+            event.SetFireOnlyNonCaptureListenersAtTarget(false);
+        }
+        event.SetEventPhase(PhaseType::kNone);
+        event.SetCurrentTarget(None);
+        event.SetStopPropagation(false);
+        event.SetStopImmediatePropagation(false);
+    }
+
     // cpp: webapi/dom_bindings.cc:1102-1208
     // All host/document borrows end before calling JavaScript. Both entry
     // points preserve the same wrapper, listener and synthetic-event logic.
@@ -211,12 +695,18 @@ impl DOMJavaScriptBindings {
         realm: &JavaScriptRealm,
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) -> EventListenerResult {
-        Self::DispatchEventListenersWithCall(
-            bindings,
-            invocation,
-            &mut |callback, receiver, args| runtime.Call(realm, callback, receiver, args),
-            report_error,
-        )
+        let mut result = None;
+        runtime
+            .WithHostRuntime(realm, &mut |runtime| {
+                result = Some(Self::DispatchEventListenersScoped(
+                    bindings,
+                    invocation,
+                    runtime,
+                    report_error,
+                ));
+            })
+            .expect("current concrete HostRuntime");
+        result.expect("synchronous listener dispatch")
     }
 
     pub fn DispatchEventListenersScoped(
@@ -225,10 +715,14 @@ impl DOMJavaScriptBindings {
         runtime: &mut dyn JavaScriptHostRuntime,
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) -> EventListenerResult {
+        let namespace = bindings.borrow().HostObjectNamespace();
+        let _namespace = namespace
+            .as_ref()
+            .map(|namespace| runtime.EnterHostObjectNamespace(namespace));
         Self::DispatchEventListenersWithCall(
             bindings,
             invocation,
-            &mut |callback, receiver, args| runtime.Call(callback, receiver, args),
+            &RefCell::new(runtime),
             report_error,
         )
     }
@@ -236,37 +730,20 @@ impl DOMJavaScriptBindings {
     fn DispatchEventListenersWithCall(
         bindings: &Rc<RefCell<Self>>,
         invocation: &EventListenerInvocation<'_>,
-        call: &mut dyn FnMut(&JavaScriptFunction, &HostValue, &[HostValue]) -> JavaScriptResult,
+        runtime: &RefCell<&mut dyn JavaScriptHostRuntime>,
         report_error: &mut dyn FnMut(&JavaScriptException),
     ) -> EventListenerResult {
-        let (matching, event_id) = {
+        let (target, event_id) = {
             let mut this = bindings.borrow_mut();
             this.SetFocusedNode(invocation.focused_node_id);
-            let kind = if invocation.event.custom_type.is_empty() {
-                EventTypeName(invocation.event.r#type)
-            } else {
-                &invocation.event.custom_type
-            };
-            let matching: Vec<(Listener, JavaScriptFunction)> = this
+            let Some(target) = this
                 .listeners
                 .borrow()
                 .get(&invocation.current_target_node_id)
-                .and_then(|kinds| kinds.get(kind))
-                .into_iter()
-                .flatten()
-                .filter(|l| l.capture == invocation.capture_listeners)
-                // Dispatch owns a temporary strong callback before once/removal
-                // can revoke the target's traced edge or reenter the collector.
-                .filter_map(|listener| {
-                    listener
-                        .callback
-                        .Resolve()
-                        .map(|callback| (listener.clone(), callback))
-                })
-                .collect();
-            if matching.is_empty() {
+                .cloned()
+            else {
                 return EventListenerResult::default();
-            }
+            };
             let services = &mut this.services;
             let mut events = services.events.borrow_mut();
             let id = if let Some(&id) = events.identities.get(&invocation.event.identity) {
@@ -312,7 +789,7 @@ impl DOMJavaScriptBindings {
                     delta_y: dy,
                 },
             );
-            (matching, id)
+            (target, id)
         };
         let synthetic = {
             let this = bindings.borrow();
@@ -326,37 +803,46 @@ impl DOMJavaScriptBindings {
             .as_ref()
             .map(|(_, handle)| handle.clone())
             .unwrap_or(HostValue::Object(HostObjectRef { id: event_id }));
-        for (listener, callback) in matching {
+        use interaction::dispatch::core::dom::events::{
+            event::{EventRef, PassiveMode},
+            event_listener::{EventListenerRef, ExecutionContext},
+            event_target::ScopedEventListenerInvoker,
+        };
+        struct Invoker<'a> {
+            invoke: RefCell<&'a mut dyn FnMut(&EventListenerRef, &EventRef)>,
+        }
+        impl ScopedEventListenerInvoker for Invoker<'_> {
+            fn Invoke(
+                &self,
+                listener: &EventListenerRef,
+                _: Option<&dyn ExecutionContext>,
+                event: &EventRef,
+            ) {
+                (self.invoke.borrow_mut())(listener, event);
+            }
+        }
+        let native = invocation
+            .event
+            .canonical
+            .as_ref()
+            .expect("listener dispatch retains the canonical Event");
+        let mut invoke = |selected: &EventListenerRef, native: &EventRef| {
+            let listener = Listener::From(selected.as_ref());
+            let Some(callback) = listener.callback.Resolve() else {
+                return;
+            };
+            let passive = !matches!(
+                native.borrow().BaseEvent().HandlingPassive(),
+                PassiveMode::kNotPassive | PassiveMode::kNotPassiveDefault
+            );
             {
-                let mut this = bindings.borrow_mut();
-                // A removed registration stays removed in every in-flight
-                // snapshot, including nested dispatch and remove+readd.
-                if !listener.active.get() {
-                    continue;
-                }
-                if listener.once {
-                    listener.active.set(false);
-                    this.RemoveListenerReference(&listener);
-                    let mut targets = this.listeners.borrow_mut();
-                    if let Some(kinds) = targets.get_mut(&listener.target) {
-                        if let Some(listeners) = kinds.get_mut(&listener.kind) {
-                            listeners.retain(|l| !Rc::ptr_eq(&l.active, &listener.active));
-                            if listeners.is_empty() {
-                                kinds.remove(&listener.kind);
-                            }
-                        }
-                        if kinds.is_empty() {
-                            targets.remove(&listener.target);
-                        }
-                    }
-                }
-                this.services
-                    .events
-                    .borrow_mut()
-                    .records
-                    .get_mut(&event_id)
-                    .unwrap()
-                    .passive_listener = listener.passive;
+                let this = bindings.borrow();
+                let mut events = this.services.events.borrow_mut();
+                let bound = events.records.get_mut(&event_id).unwrap();
+                bound.passive_listener = passive;
+                // EventTarget may select a trusted legacy event type. The
+                // wrapper reads that same temporary source Event::type value.
+                bound.event.custom_type = native.borrow().BaseEvent().r#type().to_owned();
             }
             if synthetic.is_some() {
                 let update = bindings
@@ -365,7 +851,7 @@ impl DOMJavaScriptBindings {
                     .get("__eventState")
                     .cloned();
                 if let Some(update) = update {
-                    call(
+                    runtime.borrow_mut().Call(
                         &update,
                         &HostValue::Object(HostObjectRef { id: 0 }),
                         &[
@@ -377,53 +863,67 @@ impl DOMJavaScriptBindings {
                                 id: invocation.current_target_node_id,
                             }),
                             HostValue::Number(invocation.phase as u8 as f64),
-                            HostValue::Boolean(listener.passive),
+                            HostValue::Boolean(passive),
                             HostValue::Object(HostObjectRef { id: event_id }),
                         ],
                     );
                 }
             }
-            // Attribute event handlers cancel the event on an exact false
-            // return. Keep value coercion in the realm, independent of the
-            // embedding JavaScript engine's opaque result representation.
-            let handler_wrapper = if listener.attribute {
-                bindings
-                    .borrow()
-                    .method_wrappers
-                    .get("__callEventHandler")
-                    .cloned()
-            } else {
-                None
-            };
+            let handler_wrapper = listener
+                .attribute
+                .then(|| {
+                    bindings
+                        .borrow()
+                        .method_wrappers
+                        .get("__callEventHandler")
+                        .cloned()
+                })
+                .flatten();
             let receiver = HostValue::Object(HostObjectRef {
                 id: invocation.current_target_node_id,
             });
-            let result = if let Some(wrapper) = handler_wrapper {
-                call(
-                    &wrapper,
-                    &receiver,
-                    &[
-                        HostValue::JavaScriptFunction(callback.clone()),
-                        argument.clone(),
-                    ],
-                )
-            } else {
-                call(&callback, &receiver, &[argument.clone()])
+            let current_event = bindings.borrow().current_event.clone();
+            let mut report = |runtime: &mut dyn JavaScriptHostRuntime, error: &HostValue| {
+                let diagnostic = runtime.ExceptionMessage(error);
+                let location = diagnostic.location;
+                report_error(&JavaScriptException {
+                    message: String::from_utf16_lossy(&diagnostic.message),
+                    source_name: location
+                        .as_ref()
+                        .map_or_else(String::new, |location| location.source_name.clone()),
+                    line: location
+                        .as_ref()
+                        .map_or(0, |location| location.line as usize),
+                    column: location
+                        .as_ref()
+                        .map_or(0, |location| location.column as usize),
+                    ..Default::default()
+                });
             };
-            if let Some(error) = result.exception {
-                report_error(&error);
+            event_listener_invocation::Invocation {
+                listener,
+                callback: &callback,
+                runtime,
+                receiver,
+                argument: argument.clone(),
+                handler_wrapper,
+                current_event,
+                report_error: RefCell::new(&mut report),
             }
-            if bindings.borrow().services.events.borrow().records[&event_id]
-                .stop_immediate_propagation
-            {
-                break;
-            }
-        }
+            .Invoke(native);
+        };
+        target.FireEventListenersWithInvoker(
+            native,
+            Some(&Invoker {
+                invoke: RefCell::new(&mut invoke),
+            }),
+        );
         let this = bindings.borrow();
         let mut events = this.services.events.borrow_mut();
         let bound = events.records.get_mut(&event_id).unwrap();
         bound.dispatching = false;
         bound.phase = EventPhase::kNone;
+        bound.passive_listener = false;
         EventListenerResult {
             prevent_default: bound.event.default_prevented,
             stop_propagation: bound.stop_propagation,
@@ -433,6 +933,10 @@ impl DOMJavaScriptBindings {
 
     pub fn SetSyntheticEventHandler(&mut self, handler: Option<SyntheticEventHandler>) {
         self.services.host.dispatch_synthetic = handler;
+    }
+
+    pub fn SetFormDataConstructor(&mut self, constructor: Option<FormDataConstructor>) {
+        self.native_abort.BindFormDataConstructor(constructor);
     }
 
     pub fn SetFormSubmissionHandler(
@@ -459,6 +963,40 @@ impl DOMJavaScriptBindings {
         else {
             return invalid();
         };
+        if self.native_abort.NativeTarget(receiver).is_some() {
+            let native = arguments
+                .get(5)
+                .filter(|value| !matches!(value, HostValue::Undefined(_) | HostValue::Null(_)))
+                .or_else(|| {
+                    if matches!(handle, HostValue::Object(_)) {
+                        Some(handle)
+                    } else {
+                        None
+                    }
+                })
+                .and_then(|value| match value {
+                    HostValue::Object(value) => self.services.events.borrow().NativeEvent(value.id),
+                    HostValue::Retained(owner, _) => owner.downcast_ref::<javascript::javascript_runtime::JavaScriptNativeObjectReference>()?.NativeOwner::<interaction::dispatch::core::dom::events::event::EventRef>().map(|event| event.as_ref().clone()),
+                    _ => None,
+                });
+            return self.native_abort.PrepareNativeDispatch(
+                receiver,
+                kind.clone(),
+                *bubbles,
+                *cancelable,
+                *composed,
+                handle.clone(),
+                native,
+                arguments
+                    .get(6)
+                    .is_none_or(|value| !matches!(value, HostValue::Boolean(false))),
+                arguments
+                    .get(7)
+                    .map_or(!matches!(handle, HostValue::Object(_)), |value| {
+                        matches!(value, HostValue::Boolean(true))
+                    }),
+            );
+        }
         let Some(dispatch) = self.services.host.dispatch_synthetic.clone() else {
             return invalid();
         };
@@ -548,6 +1086,7 @@ impl DOMJavaScriptBindings {
             let previous = state.borrow_mut().replace(SyntheticDispatch {
                 identity: event.identity,
                 handle: handle.clone(),
+                target: receiver,
             });
             dispatch(&mut event, receiver, runtime);
             let update = event_state.borrow().clone();
@@ -580,6 +1119,60 @@ impl DOMJavaScriptBindings {
         let events = self.services.events.borrow();
         let bound = events.records.get(&receiver)?;
         let event = &bound.event;
+        if let Some(native) = event.canonical.as_ref() {
+            let owner = native.borrow();
+            let base = owner.BaseEvent();
+            let value = match member {
+                "type" => Some(HostValue::String(base.r#type().into())),
+                "bubbles" => Some(HostValue::Boolean(base.bubbles())),
+                "cancelable" => Some(HostValue::Boolean(base.cancelable())),
+                "composed" => Some(HostValue::Boolean(base.composed())),
+                "isTrusted" => Some(HostValue::Boolean(base.isTrusted())),
+                "defaultPrevented" => Some(HostValue::Boolean(base.defaultPrevented())),
+                _ => None,
+            };
+            if let Some(value) = value {
+                return Some(Self::value(value));
+            }
+            if let Some(input) = owner.AsInputEvent() {
+                if member == "view" {
+                    return Some(self.ProjectInputEventView(receiver, input.view()));
+                }
+                let value = match member {
+                    "data" => Some(
+                        input
+                            .dataUTF16()
+                            .map_or(HostValue::Null(JavaScriptNull), HostValue::String16),
+                    ),
+                    "inputType" => Some(HostValue::String(input.inputType().into())),
+                    "isComposing" => Some(HostValue::Boolean(input.isComposing())),
+                    "detail" => Some(HostValue::Number(input.detail() as f64)),
+                    "sourceCapabilities" => Some(input.sourceCapabilities().map_or(
+                        HostValue::Null(JavaScriptNull),
+                        |capabilities| {
+                            self.native_abort
+                                .InputCapabilitiesValue(receiver, capabilities)
+                        },
+                    )),
+                    "dataTransfer" => Some(
+                        input
+                            .dataTransfer()
+                            .map_or(HostValue::Null(JavaScriptNull), |transfer| {
+                                self.native_abort.InputDataTransferValue(receiver, transfer)
+                            }),
+                    ),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    return Some(Self::value(value));
+                }
+            }
+            if let Some(composition) = owner.AsCompositionEvent() {
+                if member == "data" {
+                    return Some(Self::value(HostValue::String16(composition.dataUTF16())));
+                }
+            }
+        }
         let value = match member {
             "submitter" => event
                 .submitter_node_id
@@ -658,12 +1251,100 @@ impl DOMJavaScriptBindings {
         member: &str,
         arguments: &[HostValue],
     ) -> Option<HostResult> {
+        if let Some(result) = self.CallInputEventService(receiver, member, arguments) {
+            return Some(result);
+        }
+        if member == "__eventBrand" {
+            return Some(if self.services.IsEvent(receiver) {
+                Self::value(HostValue::Boolean(true))
+            } else {
+                Self::type_error("argument is not an Event")
+            });
+        }
+        if member == "__eventInit" {
+            let [HostValue::String(kind), HostValue::Boolean(bubbles), HostValue::Boolean(cancelable), ..] =
+                arguments
+            else {
+                return Some(Self::type_error("Event init conversion required"));
+            };
+            let mut events = self.services.events.borrow_mut();
+            let Some(bound) = events.records.get_mut(&receiver) else {
+                return Some(Self::type_error("Illegal Event invocation"));
+            };
+            let Some(native) = bound.event.canonical.as_ref() else {
+                return Some(Self::type_error("Event has no native owner"));
+            };
+            if native.borrow().BaseEvent().IsBeingDispatched() {
+                return Some(HostResult::default());
+            }
+            native
+                .borrow_mut()
+                .BaseEventMut()
+                .initEvent(kind, *bubbles, *cancelable);
+            bound.event.custom_type = kind.clone();
+            bound.event.bubbles = *bubbles;
+            bound.event.cancelable = *cancelable;
+            bound.event.default_prevented = false;
+            bound.event.trusted = false;
+            bound.stop_propagation = false;
+            bound.stop_immediate_propagation = false;
+            return Some(HostResult::default());
+        }
+        if receiver == 0 && member == "__documentDomainGet" {
+            let owner = self.document.borrow();
+            let origin = owner.GetDocument().SecurityContext().Origin();
+            return Some(Self::value(HostValue::String(origin.Domain())));
+        }
+        if receiver == 0 && member == "__documentDomainSet" {
+            let Some(HostValue::String(domain)) = arguments.first() else {
+                return Some(Self::type_error("document.domain requires a string"));
+            };
+            self.document
+                .borrow()
+                .GetDocument()
+                .SecurityContext()
+                .Origin()
+                .SetDomainFromDOM(domain.clone());
+            return Some(HostResult::default());
+        }
+        if member == "__fontStatus" {
+            let is_document = {
+                let owner = self.document.borrow();
+                let document = owner.GetDocument();
+                document
+                    .FindNodeById(receiver)
+                    .is_some_and(|index| document.Node(index).Type() == DOMNodeType::kDocument)
+            };
+            if !is_document || !arguments.is_empty() {
+                return Some(Self::type_error("Illegal invocation"));
+            }
+            let loading = self
+                .services
+                .host
+                .read_font_loading
+                .as_mut()
+                .is_some_and(|read| read());
+            return Some(Self::value(HostValue::String(
+                if loading { "loading" } else { "loaded" }.into(),
+            )));
+        }
         if member == "__eventAttribute" {
             let Some(HostValue::String(name)) = arguments.first() else {
                 return Some(Self::type_error("Illegal invocation"));
             };
-            if !matches!(name.as_str(), "target" | "currentTarget" | "eventPhase")
-                || !self.services.IsEvent(receiver)
+            if !matches!(
+                name.as_str(),
+                "target"
+                    | "currentTarget"
+                    | "eventPhase"
+                    | "type"
+                    | "bubbles"
+                    | "cancelable"
+                    | "composed"
+                    | "isTrusted"
+                    | "defaultPrevented"
+                    | "timeStamp"
+            ) || !self.services.IsEvent(receiver)
             {
                 return Some(Self::type_error("Illegal invocation"));
             }
@@ -737,11 +1418,21 @@ impl DOMJavaScriptBindings {
             let Ok(id) = id.parse::<u64>() else {
                 return Some(Self::type_error("Invalid mutation observer identity"));
             };
-            self.document
-                .borrow_mut()
-                .GetDocumentMut()
-                .DisconnectMutationObserver(dom::mutation_observers::MutationObserverId(id));
+            self.native_mutation_observers
+                .Disconnect(dom::mutation_observers::MutationObserverId(id));
             return Some(HostResult::default());
+        }
+        if member == "__mutationTakeRecords" {
+            let [HostValue::String(id)] = arguments else {
+                return Some(Self::type_error("Invalid mutation observer identity"));
+            };
+            let Ok(id) = id.parse::<u64>() else {
+                return Some(Self::type_error("Invalid mutation observer identity"));
+            };
+            return Some(Self::value(
+                self.native_mutation_observers
+                    .TakeRecordsValue(self, dom::mutation_observers::MutationObserverId(id)),
+            ));
         }
         if member == "__mutationEmptyNodeList" {
             return Some(Self::value(HostValue::Object(
@@ -784,6 +1475,18 @@ impl DOMJavaScriptBindings {
                     bound.stop_immediate_propagation = true;
                 }
                 _ => return Some(Self::type_error("unknown Event method")),
+            }
+            if let Some(native) = bound.event.canonical.as_ref() {
+                // Event methods update the source owner synchronously, before
+                // the author callback can reenter dispatch or default actions.
+                let mut owner = native.borrow_mut();
+                let event = owner.BaseEventMut();
+                match member {
+                    "preventDefault" => event.preventDefault(),
+                    "stopPropagation" => event.stopPropagation(),
+                    "stopImmediatePropagation" => event.stopImmediatePropagation(),
+                    _ => unreachable!(),
+                }
             }
             return Some(HostResult::default());
         }
@@ -1251,6 +1954,24 @@ mod tests {
         let result = runtime.Evaluate(realm, source, "services-test.js");
         assert!(result.Succeeded(), "{:?}", result.exception);
     }
+    fn native_click(document: Rc<RefCell<DOM>>, target: HostObjectId) -> Event {
+        use interaction::adapter::event::{EventProjection, EventProjectionOptions};
+        use interaction::dispatch::core::dom::events::event::PhaseType;
+        let mut event = MakeSyntheticEvent(EventType::kClick, target);
+        let projection = EventProjection::new(
+            &event,
+            interaction::DomEventTargets::new(document),
+            &EventProjectionOptions::default(),
+        )
+        .unwrap();
+        let native = projection.EventRef();
+        native
+            .borrow_mut()
+            .BaseEventMut()
+            .SetEventPhase(PhaseType::kAtTarget);
+        event.canonical = Some(native);
+        event
+    }
     #[test]
     fn listener_snapshot_reentry_once_passive_errors_and_event_lifetime() {
         let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
@@ -1303,7 +2024,7 @@ mod tests {
             HostValue::Object(o) => o.id,
             _ => panic!("target"),
         };
-        let event = MakeSyntheticEvent(EventType::kClick, target);
+        let event = native_click(document.clone(), target);
         let invocation = EventListenerInvocation {
             event: &event,
             target_node_id: target,
@@ -1325,7 +2046,16 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("listener failed"));
-        check(&mut runtime,&realm,"check(JSON.stringify(log)===JSON.stringify(['first','attribute','error','last']),'snapshot order');check(target.textContent==='changed' && saved.currentTarget===null && saved.eventPhase===0 && saved.defaultPrevented,'retained event');target.removeEventListener('click',added);");
+        check(
+            &mut runtime,
+            &realm,
+            "check(JSON.stringify(log)===JSON.stringify(['first','attribute','error','last']),'snapshot order');check(target.textContent==='changed' && saved.currentTarget===null && saved.eventPhase===0 && saved.defaultPrevented,'retained event');target.removeEventListener('click',added);",
+        );
+        let event = native_click(document.clone(), target);
+        let invocation = EventListenerInvocation {
+            event: &event,
+            ..invocation
+        };
         let result = DOMJavaScriptBindings::DispatchEventListeners(
             &bindings,
             &invocation,
@@ -1334,7 +2064,11 @@ mod tests {
             &mut |_| {},
         );
         assert!(result.prevent_default);
-        check(&mut runtime,&realm,"check(JSON.stringify(log)===JSON.stringify(['first','attribute','error','last','attribute','error','last']),'once and removal');target.onclick=null;check(target.onclick===null,'attribute cleared');");
+        check(
+            &mut runtime,
+            &realm,
+            "check(JSON.stringify(log)===JSON.stringify(['first','attribute','error','last','attribute','error','last']),'once and removal');target.onclick=null;check(target.onclick===null,'attribute cleared');",
+        );
     }
 
     #[test]
@@ -1376,7 +2110,7 @@ mod tests {
             "first,attribute,attribute",
             "first,attribute,attribute,attribute,removed",
         ] {
-            let event = MakeSyntheticEvent(EventType::kClick, target);
+            let event = native_click(document.clone(), target);
             let invocation = EventListenerInvocation {
                 event: &event,
                 target_node_id: target,

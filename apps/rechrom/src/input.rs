@@ -1,9 +1,8 @@
 use crate::engine::Command;
 use interaction::input_event::*;
-use layoutng_assembly::internal::layout_input::Offset;
 use std::time::{Duration, Instant};
 use winit::{
-    event::{ElementState, Ime, MouseScrollDelta, TouchPhase, WindowEvent},
+    event::{DeviceId, ElementState, Ime, MouseScrollDelta, Touch, TouchPhase, WindowEvent},
     keyboard::{Key, KeyLocation, ModifiersState, NamedKey, PhysicalKey},
 };
 
@@ -40,12 +39,135 @@ fn key_location(location: KeyLocation) -> u32 {
     }
 }
 
+/// Platform keyboard fields are carried through as source input facts. The
+/// character remains separate from keydown, including command/control text.
+fn native_keyboard_text(
+    event: &winit::event::KeyEvent,
+) -> (String, String, i32, bool, Option<String>) {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        #[cfg(not(target_os = "macos"))]
+        use winit::platform::scancode::PhysicalKeyExtScancode;
+        let text = event
+            .text
+            .as_ref()
+            .map(|text| {
+                event
+                    .text_with_all_modifiers()
+                    .unwrap_or(text.as_str())
+                    .to_owned()
+            })
+            .unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::KeyEventExtMacOS;
+            let text = event
+                .text_with_all_modifiers()
+                .map(str::to_owned)
+                .unwrap_or(text);
+            return (
+                text,
+                event.unmodified_text().to_owned(),
+                i32::from(event.native_key_code()),
+                event.ime_processed(),
+                event.committed_text().map(str::to_owned),
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let unmodified = event
+                .key_without_modifiers()
+                .to_text()
+                .unwrap_or_default()
+                .to_owned();
+            let native = event
+                .physical_key
+                .to_scancode()
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or_default();
+            return (text, unmodified, native, false, None);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    (
+        event
+            .text
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        String::new(),
+        0,
+        false,
+        None,
+    )
+}
+
+fn native_system_key(modifiers: EventModifiers, key_code: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        modifiers.meta
+            && !(modifiers
+                == EventModifiers {
+                    meta: true,
+                    ..Default::default()
+                }
+                && matches!(key_code, 66 | 73))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = key_code;
+        modifiers.alt
+    }
+}
+
+fn native_windows_key_code(event: &winit::event::KeyEvent, logical_key: &str) -> u32 {
+    use winit::keyboard::KeyCode;
+    if let PhysicalKey::Code(code) = event.physical_key {
+        let keypad = match code {
+            KeyCode::Numpad0 => Some(96),
+            KeyCode::Numpad1 => Some(97),
+            KeyCode::Numpad2 => Some(98),
+            KeyCode::Numpad3 => Some(99),
+            KeyCode::Numpad4 => Some(100),
+            KeyCode::Numpad5 => Some(101),
+            KeyCode::Numpad6 => Some(102),
+            KeyCode::Numpad7 => Some(103),
+            KeyCode::Numpad8 => Some(104),
+            KeyCode::Numpad9 => Some(105),
+            _ => None,
+        };
+        if let Some(code) = keypad {
+            return code;
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        let unmodified = LegacyKeyCode(&key_name(&event.key_without_modifiers()));
+        if unmodified != 0 {
+            return unmodified;
+        }
+    }
+    LegacyKeyCode(logical_key)
+}
+
+// Winit's native contact identity is a (device, u64) pair. Chromium's
+// MotionEvent/WebTouchPoint ID is a bounded signed ID, retained for the life
+// of a contact, independently of the original platform integer's width.
+struct NativeTouchContact {
+    device: DeviceId,
+    native_id: u64,
+    point: TouchPoint,
+}
+
 #[derive(Default)]
 pub struct InputState {
     modifiers: ModifiersState,
     cursor: Offset,
-    pressed: Option<(MouseButton, Offset)>,
-    last_click: Option<(Instant, MouseButton, Offset)>,
+    pressed: Option<(MouseButton, Offset, i32)>,
+    buttons: u16,
+    last_click: Option<(Instant, MouseButton, Offset, i32)>,
     composing: bool,
     pointer_inside: bool,
     last_motion: Option<(Offset, EventModifiers, Option<MouseButton>)>,
@@ -56,6 +178,9 @@ pub struct InputState {
     phase_less_wheel_modifiers: EventModifiers,
     wheel_rails_delta: Offset,
     native_wheel_time_anchor: Option<(f64, Instant)>,
+    native_touches: Vec<NativeTouchContact>,
+    native_touch_devices: Vec<DeviceId>,
+    next_touch_event_id: u32,
 }
 impl InputState {
     #[cfg(target_os = "macos")]
@@ -359,14 +484,154 @@ impl InputState {
         result.push(Command::Input(InputEvent::Wheel(wheel)));
         result
     }
-    fn mouse(&self, r#type: MouseEventType, button: MouseButton) -> Command {
+    fn mouse_with_click_count(
+        &self,
+        r#type: MouseEventType,
+        button: MouseButton,
+        click_count: i32,
+    ) -> Command {
         Command::Input(InputEvent::Mouse(MouseEvent {
             r#type,
             button,
+            buttons: self.buttons,
+            click_count,
             position: self.cursor,
             modifiers: self.modifiers(),
             ..Default::default()
         }))
+    }
+    fn mouse(&self, r#type: MouseEventType, button: MouseButton) -> Command {
+        self.mouse_with_click_count(r#type, button, 0)
+    }
+    fn next_touch_id(&mut self) -> u32 {
+        self.next_touch_event_id = self.next_touch_event_id.wrapping_add(1).max(1);
+        self.next_touch_event_id
+    }
+    // Chromium MotionEvent::Action CANCEL terminates the complete gesture
+    // stream. The platform may report cancellation separately for each finger;
+    // after this packet later cancellations are stale and ignored.
+    fn cancel_native_touches(&mut self, timestamp: Instant) -> Option<Command> {
+        if self.native_touches.is_empty() {
+            return None;
+        }
+        let points = self
+            .native_touches
+            .drain(..)
+            .map(|mut contact| {
+                contact.point.state = TouchPointState::kCancelled;
+                contact.point.movement_x = 0;
+                contact.point.movement_y = 0;
+                contact.point
+            })
+            .collect();
+        let unique_touch_event_id = self.next_touch_id();
+        Some(Command::Input(InputEvent::Touch(TouchEvent {
+            r#type: TouchEventType::kCancel,
+            points,
+            timestamp: Some(timestamp),
+            unique_touch_event_id,
+            modifiers: self.modifiers(),
+            ..Default::default()
+        })))
+    }
+    fn native_touch(&mut self, event: &Touch, scale: f64, timestamp: Instant) -> Option<Command> {
+        let index = self
+            .native_touches
+            .iter()
+            .position(|contact| contact.device == event.device_id && contact.native_id == event.id);
+        if event.phase == TouchPhase::Cancelled {
+            return index.and_then(|_| self.cancel_native_touches(timestamp));
+        }
+        let index = if event.phase == TouchPhase::Started {
+            // Duplicate DOWN is not a new contact; malformed/stale input cannot
+            // replace an active source pointer or silently change its identity.
+            if index.is_some() || self.native_touches.len() == 16 {
+                return None;
+            }
+            let pointer_id = (0..16)
+                .find(|id| {
+                    self.native_touches
+                        .iter()
+                        .all(|c| c.point.pointer_id != *id)
+                })
+                .unwrap();
+            let device_id = if let Some(index) = self
+                .native_touch_devices
+                .iter()
+                .position(|device| *device == event.device_id)
+            {
+                i32::try_from(index).unwrap_or(-1)
+            } else {
+                let index = self.native_touch_devices.len();
+                self.native_touch_devices.push(event.device_id);
+                i32::try_from(index).unwrap_or(-1)
+            };
+            self.native_touches.push(NativeTouchContact {
+                device: event.device_id,
+                native_id: event.id,
+                point: TouchPoint {
+                    pointer_id,
+                    device_id,
+                    ..Default::default()
+                },
+            });
+            self.native_touches.len() - 1
+        } else {
+            index?
+        };
+        for contact in &mut self.native_touches {
+            contact.point.state = TouchPointState::kStationary;
+            contact.point.movement_x = 0;
+            contact.point.movement_y = 0;
+        }
+        let point = &mut self.native_touches[index].point;
+        let position = Offset {
+            x: event.location.x / scale,
+            y: event.location.y / scale,
+        };
+        if event.phase != TouchPhase::Started {
+            point.movement_x = (position.x - point.position.x).round() as i32;
+            point.movement_y = (position.y - point.position.y).round() as i32;
+        }
+        point.position = position;
+        point.pressure = event
+            .force
+            .as_ref()
+            .map_or(f32::NAN, |force| force.normalized().clamp(0., 1.) as f32);
+        // Winit Touch carries no radius, rotation, tool identity, hardware
+        // timestamp, screen position or history. WebTouchPoint defaults (zero
+        // major, unknown force) deliberately retain source unsupported values;
+        // do not infer stylus classification from calibrated force.
+        point.state = match event.phase {
+            TouchPhase::Started => TouchPointState::kPressed,
+            TouchPhase::Moved => TouchPointState::kMoved,
+            TouchPhase::Ended => TouchPointState::kReleased,
+            TouchPhase::Cancelled => unreachable!(),
+        };
+        let kind = match event.phase {
+            TouchPhase::Started => TouchEventType::kStart,
+            TouchPhase::Moved => TouchEventType::kMove,
+            TouchPhase::Ended => TouchEventType::kEnd,
+            TouchPhase::Cancelled => unreachable!(),
+        };
+        let points = self
+            .native_touches
+            .iter()
+            .map(|contact| contact.point.clone())
+            .collect();
+        if kind == TouchEventType::kEnd {
+            self.native_touches.remove(index);
+        }
+        let unique_touch_event_id = self.next_touch_id();
+        Some(Command::Input(InputEvent::Touch(TouchEvent {
+            r#type: kind,
+            points,
+            timestamp: Some(timestamp),
+            modifiers: self.modifiers(),
+            touch_start_or_first_touch_move: kind == TouchEventType::kStart,
+            unique_touch_event_id,
+            ..Default::default()
+        })))
     }
     pub fn event(&mut self, event: &WindowEvent, scale: f64) -> Vec<Command> {
         let mut result = Vec::new();
@@ -374,6 +639,11 @@ impl InputState {
             result.push(end);
         }
         match event {
+            WindowEvent::Touch(touch) => {
+                if let Some(command) = self.native_touch(touch, scale, Instant::now()) {
+                    result.push(command);
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => {
                 if self.modifiers != modifiers.state() {
                     self.last_motion = None;
@@ -388,7 +658,7 @@ impl InputState {
                 let motion = (
                     position,
                     self.modifiers(),
-                    self.pressed.map(|(button, _)| button),
+                    self.pressed.map(|(button, _, _)| button),
                 );
                 // Winit's macOS scrollWheel calls mouse_motion even when the
                 // cursor has not moved. Chromium's RWHVCocoa scrollWheel routes
@@ -419,34 +689,49 @@ impl InputState {
                     _ => return result,
                 };
                 if *state == ElementState::Pressed {
-                    self.pressed = Some((button, self.cursor));
-                    result.push(self.mouse(MouseEventType::kDown, button));
+                    self.buttons |= button.ButtonsMask();
                 } else {
-                    result.push(self.mouse(MouseEventType::kUp, button));
-                    if self.pressed.take().is_some_and(|(down, position)| {
-                        down == button && near(position, self.cursor)
-                    }) {
-                        result.push(self.mouse(
-                            if button == MouseButton::kSecondary {
-                                MouseEventType::kContextMenu
-                            } else {
-                                MouseEventType::kClick
-                            },
-                            button,
-                        ));
-                        let now = Instant::now();
-                        if button == MouseButton::kPrimary
-                            && self.last_click.is_some_and(|(time, last, position)| {
-                                last == button
-                                    && now.duration_since(time) < Duration::from_millis(400)
-                                    && near(position, self.cursor)
-                            })
-                        {
-                            result.push(self.mouse(MouseEventType::kDoubleClick, button));
-                            self.last_click = None;
-                        } else {
-                            self.last_click = Some((now, button, self.cursor));
+                    self.buttons &= !button.ButtonsMask();
+                }
+                if *state == ElementState::Pressed {
+                    let now = Instant::now();
+                    let click_count = self
+                        .last_click
+                        .filter(|(time, last, position, _)| {
+                            *last == button
+                                && now.duration_since(*time) < Duration::from_millis(400)
+                                && near(*position, self.cursor)
+                        })
+                        .map_or(1, |(_, _, _, count)| count.saturating_add(1));
+                    self.pressed = Some((button, self.cursor, click_count));
+                    result.push(self.mouse_with_click_count(
+                        MouseEventType::kDown,
+                        button,
+                        click_count,
+                    ));
+                } else {
+                    let click_count = self
+                        .pressed
+                        .take()
+                        .filter(|(down, position, _)| {
+                            *down == button && near(*position, self.cursor)
+                        })
+                        .map_or(0, |(_, _, count)| count);
+                    result.push(self.mouse_with_click_count(
+                        MouseEventType::kUp,
+                        button,
+                        click_count,
+                    ));
+                    if click_count > 0 {
+                        if button == MouseButton::kSecondary {
+                            result.push(self.mouse_with_click_count(
+                                MouseEventType::kContextMenu,
+                                button,
+                                click_count,
+                            ));
                         }
+                        let now = Instant::now();
+                        self.last_click = Some((now, button, self.cursor, click_count));
                     }
                 }
             }
@@ -466,7 +751,9 @@ impl InputState {
             } if !is_synthetic => {
                 let key = key_name(&event.logical_key);
                 let down = event.state == ElementState::Pressed;
-                if down && !event.repeat {
+                let (mut text, mut unmodified_text, native_key_code, ime_processed, committed_text) =
+                    native_keyboard_text(event);
+                if down && !event.repeat && !ime_processed && !self.composing {
                     let command = self.modifiers.control_key() || self.modifiers.super_key();
                     let shortcut = if command && key.eq_ignore_ascii_case("l") {
                         Some(Command::FocusAddress)
@@ -494,35 +781,66 @@ impl InputState {
                         return result;
                     }
                 }
-                let text = if down
-                    && !self.composing
-                    && !self.modifiers.control_key()
-                    && !self.modifiers.super_key()
+                let key_code = native_windows_key_code(event, &key);
+                // Source WebKeyboardEventBuilder::Build normalizes AppKit's
+                // return/backtab/private-use characters before delivery.
+                #[cfg(target_os = "macos")]
                 {
-                    event
-                        .text
-                        .as_ref()
-                        .map(|text| text.chars().filter(|c| !c.is_control()).collect())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                result.push(Command::Input(InputEvent::Key(KeyEvent {
+                    for value in [&mut text, &mut unmodified_text] {
+                        if key_code == 13 {
+                            *value = "\r".into();
+                        } else if key_code == 9 {
+                            *value = "\t".into();
+                        } else if value.as_str() == "\u{7f}" {
+                            *value = "\u{8}".into();
+                        } else if value.chars().count() == 1
+                            && value
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| ('\u{f700}'..='\u{f7ff}').contains(&ch))
+                        {
+                            *value = "\0".into();
+                        }
+                    }
+                }
+                let native = KeyEvent {
+                    timestamp: Some(Instant::now()),
                     r#type: if down {
                         KeyEventType::kDown
                     } else {
                         KeyEventType::kUp
                     },
+                    edit_commands: crate::native_kill_ring::editing_commands(event),
                     code: physical_code(event.physical_key),
-                    key_code: LegacyKeyCode(&key),
+                    key_code,
+                    unmodified_text,
+                    native_key_code,
+                    ime_processed,
+                    caps_lock: crate::native_keyboard_modifiers::current()
+                        .ok()
+                        .map(|modifiers| modifiers.alpha_lock),
+                    is_system_key: native_system_key(self.modifiers(), key_code),
                     location: key_location(event.location),
-                    is_composing: self.composing,
+                    is_composing: self.composing || ime_processed,
                     key,
                     text,
                     modifiers: self.modifiers(),
                     repeat: event.repeat,
                     ..Default::default()
-                })));
+                };
+                let character_text = committed_text.unwrap_or_else(|| native.text.clone());
+                let char_event = down
+                    && !native.is_composing
+                    && !character_text.is_empty()
+                    && character_text != "\0";
+                result.push(Command::Input(InputEvent::Key(native.clone())));
+                if char_event {
+                    let mut character = native;
+                    character.r#type = KeyEventType::kChar;
+                    character.text = character_text;
+                    character.edit_commands.clear();
+                    result.push(Command::Input(InputEvent::Key(character)));
+                }
             }
             WindowEvent::Ime(Ime::Preedit(data, selection)) => {
                 if !self.composing && !data.is_empty() {
@@ -530,10 +848,23 @@ impl InputState {
                     result.push(composition(CompositionEventType::kStart, ""));
                 }
                 if self.composing {
+                    // winit exposes native preedit selection as UTF-8 byte
+                    // offsets. Convert at the host boundary so Interaction's
+                    // platform-neutral contract remains Blink-compatible UTF-16.
+                    let selection = selection.map(|(start, end)| {
+                        let offset = |offset: usize| {
+                            let mut boundary = offset.min(data.len());
+                            while !data.is_char_boundary(boundary) {
+                                boundary -= 1;
+                            }
+                            data[..boundary].encode_utf16().count()
+                        };
+                        (offset(start), offset(end))
+                    });
                     result.push(Command::Input(InputEvent::Composition(CompositionEvent {
                         r#type: CompositionEventType::kUpdate,
                         data: data.clone(),
-                        selection: *selection,
+                        selection,
                         ..Default::default()
                     })));
                 }
@@ -556,6 +887,9 @@ impl InputState {
                 }
             }
             WindowEvent::Focused(false) => {
+                if let Some(cancel) = self.cancel_native_touches(Instant::now()) {
+                    result.push(cancel);
+                }
                 if self.composing {
                     result.push(composition(CompositionEventType::kEnd, ""));
                     self.composing = false;
@@ -569,6 +903,7 @@ impl InputState {
                 self.last_motion = None;
                 self.modifiers = ModifiersState::empty();
                 self.pressed = None;
+                self.buttons = 0;
             }
             _ => {}
         }
@@ -623,6 +958,49 @@ fn key_name(key: &Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_touch_retains_contacts_ids_and_css_coordinates() {
+        let device_id = DeviceId::dummy();
+        let mut input = InputState::default();
+        let touch = |phase, id, x| {
+            WindowEvent::Touch(Touch {
+                device_id,
+                phase,
+                id,
+                location: winit::dpi::PhysicalPosition::new(x, 80.),
+                force: Some(winit::event::Force::Normalized(0.75)),
+            })
+        };
+        let packet = |commands: Vec<Command>| {
+            let mut commands = commands.into_iter();
+            let Some(Command::Input(InputEvent::Touch(packet))) = commands.next() else {
+                panic!("native touch packet");
+            };
+            assert!(commands.next().is_none());
+            packet
+        };
+        let first = packet(input.event(&touch(TouchPhase::Started, u64::MAX, 100.), 2.));
+        assert_eq!(first.points[0].position, Offset { x: 50., y: 40. });
+        assert_eq!(first.points[0].pressure, 0.75);
+        assert!(first.timestamp.is_some());
+        assert_eq!(first.points[0].device_id, 0);
+        let second = packet(input.event(&touch(TouchPhase::Started, 9, 200.), 2.));
+        assert_eq!(second.points.len(), 2);
+        assert_eq!(second.points[0].pointer_id, first.points[0].pointer_id);
+        assert_eq!(second.points[0].state, TouchPointState::kStationary);
+        assert_ne!(second.points[0].pointer_id, second.points[1].pointer_id);
+        let moved = packet(input.event(&touch(TouchPhase::Moved, u64::MAX, 120.), 2.));
+        assert!(moved.unique_touch_event_id > second.unique_touch_event_id);
+        let up = packet(input.event(&touch(TouchPhase::Ended, u64::MAX, 120.), 2.));
+        assert_eq!(up.points[0].state, TouchPointState::kReleased);
+        let cancel = packet(input.event(&WindowEvent::Focused(false), 2.));
+        assert_eq!(cancel.r#type, TouchEventType::kCancel);
+        assert_eq!(cancel.points.len(), 1);
+        assert_eq!(cancel.points[0].pointer_id, second.points[1].pointer_id);
+        assert!(input.native_touches.is_empty());
+    }
+
     #[test]
     fn repeated_wheel_motion_preserves_coalescing_and_pointer_boundaries() {
         use interaction::frame_aligned_input_queue::FrameAlignedInputQueue;
@@ -663,10 +1041,16 @@ mod tests {
                 queue.Push(input, Instant::now(), 1);
             }
         }
-        let begin = queue.PopFront().unwrap();
+        let mut dispatched = Vec::new();
+        queue.Dispatch(|entry| {
+            dispatched.push(entry);
+            false
+        });
+        let mut dispatched = dispatched.into_iter();
+        let begin = dispatched.next().unwrap();
         assert!(matches!(begin.input, InputEvent::Wheel(event)
             if event.phase == WheelPhase::kBegan && event.delta.y == 4.0));
-        let update = queue.PopFront().unwrap();
+        let update = dispatched.next().unwrap();
         assert!(matches!(update.input, InputEvent::Wheel(event)
             if event.phase == WheelPhase::kChanged && event.delta.y == 4.0));
         assert!(queue.IsEmpty());
@@ -689,13 +1073,27 @@ mod tests {
         );
         assert_eq!(state.event(&motion(42.0), 2.0).len(), 1);
         for button_state in [ElementState::Pressed, ElementState::Released] {
-            state.event(
+            let commands = state.event(
                 &WindowEvent::MouseInput {
                     device_id,
                     state: button_state,
                     button: winit::event::MouseButton::Left,
                 },
                 2.0,
+            );
+            assert_eq!(
+                commands.len(),
+                1,
+                "the source mouse manager generates click/double-click"
+            );
+            let expected = if button_state == ElementState::Pressed {
+                MouseEventType::kDown
+            } else {
+                MouseEventType::kUp
+            };
+            assert!(
+                matches!(&commands[0], Command::Input(InputEvent::Mouse(mouse))
+                if mouse.r#type == expected && mouse.click_count == 1)
             );
             assert_eq!(state.event(&motion(42.0), 2.0).len(), 1);
         }
@@ -828,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_preedit_preserves_utf8_byte_selection_and_cancels_on_focus_loss() {
+    fn ime_preedit_converts_utf8_byte_selection_and_cancels_on_focus_loss() {
         let mut state = InputState::default();
         let commands = state.event(
             &WindowEvent::Ime(Ime::Preedit("你🙂好".into(), Some((3, 7)))),
@@ -836,7 +1234,7 @@ mod tests {
         );
         assert!(
             matches!(&commands[1], Command::Input(InputEvent::Composition(event))
-            if event.r#type == CompositionEventType::kUpdate && event.selection == Some((3, 7)))
+            if event.r#type == CompositionEventType::kUpdate && event.selection == Some((1, 3)))
         );
         let commands = state.event(&WindowEvent::Focused(false), 2.0);
         assert!(
@@ -876,49 +1274,119 @@ mod tests {
 
 /// Native cursor adaptation is deliberately the last boundary: Page/interaction
 /// never depends on winit or platform cursor handles.
-pub fn set_cursor(window: &winit::window::Window, cursor: browser::page::Cursor) {
-    use browser::page::Cursor as C;
+pub fn set_cursor(
+    event_loop: &winit::event_loop::ActiveEventLoop,
+    window: &winit::window::Window,
+    cursor: &interaction::Cursor,
+) -> Result<(), String> {
+    use interaction::cursor::CursorType as C;
+    use interaction::Cursor;
     use winit::window::CursorIcon as W;
-    window.set_cursor_visible(cursor != C::kNone);
-    if cursor == C::kNone {
-        return;
+
+    match cursor {
+        Cursor::Custom {
+            bitmap,
+            hot_spot,
+            image_scale_factor,
+        } => {
+            if !image_scale_factor.is_finite() || *image_scale_factor <= 0.0 {
+                return Err("invalid cursor image scale".into());
+            }
+            let size = bitmap.Size();
+            let width = u16::try_from(size.width).map_err(|_| "invalid cursor width")?;
+            let height = u16::try_from(size.height).map_err(|_| "invalid cursor height")?;
+            let row_bytes = bitmap.RowBytes();
+            let packed_row_bytes = usize::from(width) * 4;
+            let required = row_bytes
+                .checked_mul(usize::from(height))
+                .ok_or("cursor bitmap size overflow")?;
+            let pixels = bitmap.Rgba8();
+            if width == 0 || height == 0 || row_bytes < packed_row_bytes || pixels.len() < required
+            {
+                return Err("invalid cursor bitmap storage".into());
+            }
+            let mut rgba = Vec::with_capacity(packed_row_bytes * usize::from(height));
+            for row in pixels[..required].chunks_exact(row_bytes) {
+                rgba.extend_from_slice(&row[..packed_row_bytes]);
+            }
+            let hotspot_x = u16::try_from(hot_spot.x).map_err(|_| "invalid cursor hotspot x")?;
+            let hotspot_y = u16::try_from(hot_spot.y).map_err(|_| "invalid cursor hotspot y")?;
+            #[cfg(target_os = "macos")]
+            let source = {
+                use winit::platform::macos::CustomCursorExtMacOS;
+                winit::window::CustomCursor::from_rgba_with_scale_factor(
+                    rgba,
+                    width,
+                    height,
+                    hotspot_x,
+                    hotspot_y,
+                    *image_scale_factor,
+                )
+            };
+            #[cfg(not(target_os = "macos"))]
+            let source = {
+                // These winit backends accept native device pixels. Cursor
+                // image scale must match the output's device scale; unlike
+                // AppKit they do not have a separate image logical-size API.
+                if (*image_scale_factor as f64 - window.scale_factor()).abs() > f64::EPSILON {
+                    return Err("native cursor image scale does not match output scale".into());
+                }
+                winit::window::CustomCursor::from_rgba(rgba, width, height, hotspot_x, hotspot_y)
+            };
+            let source = source.map_err(|error| error.to_string())?;
+            window.set_cursor(event_loop.create_custom_cursor(source));
+            window.set_cursor_visible(true);
+        }
+        Cursor::Standard(kind) => {
+            window.set_cursor_visible(*kind != C::kNone);
+            if *kind == C::kNone {
+                return Ok(());
+            }
+            window.set_cursor(match kind {
+                C::kNull | C::kPointer => W::Default,
+                C::kHand => W::Pointer,
+                C::kIBeam => W::Text,
+                C::kVerticalText => W::VerticalText,
+                C::kCross => W::Crosshair,
+                C::kCopy | C::kDndCopy => W::Copy,
+                C::kMove | C::kDndMove => W::Move,
+                C::kCell => W::Cell,
+                C::kContextMenu => W::ContextMenu,
+                C::kAlias | C::kDndLink => W::Alias,
+                C::kProgress => W::Progress,
+                C::kNoDrop | C::kDndNone => W::NoDrop,
+                C::kNotAllowed
+                | C::kEastWestNoResize
+                | C::kNorthSouthNoResize
+                | C::kNorthEastSouthWestNoResize
+                | C::kNorthWestSouthEastNoResize => W::NotAllowed,
+                C::kZoomIn => W::ZoomIn,
+                C::kZoomOut => W::ZoomOut,
+                C::kEastResize | C::kEastPanning => W::EResize,
+                C::kNorthEastResize | C::kNorthEastPanning => W::NeResize,
+                C::kNorthWestResize | C::kNorthWestPanning => W::NwResize,
+                C::kNorthResize | C::kNorthPanning => W::NResize,
+                C::kSouthEastResize | C::kSouthEastPanning => W::SeResize,
+                C::kSouthWestResize | C::kSouthWestPanning => W::SwResize,
+                C::kSouthResize | C::kSouthPanning => W::SResize,
+                C::kWestResize | C::kWestPanning => W::WResize,
+                C::kEastWestResize | C::kMiddlePanningHorizontal => W::EwResize,
+                C::kNorthSouthResize | C::kMiddlePanningVertical => W::NsResize,
+                C::kNorthEastSouthWestResize => W::NeswResize,
+                C::kNorthWestSouthEastResize => W::NwseResize,
+                C::kColumnResize => W::ColResize,
+                C::kRowResize => W::RowResize,
+                C::kWait => W::Wait,
+                C::kHelp => W::Help,
+                C::kMiddlePanning => W::AllScroll,
+                C::kGrab => W::Grab,
+                C::kGrabbing => W::Grabbing,
+                C::kNone => return Ok(()),
+                C::kCustom => return Err("custom cursor type has no bitmap".into()),
+            });
+        }
     }
-    window.set_cursor(match cursor {
-        C::kAuto | C::kDefault | C::kNone => W::Default,
-        C::kPointer => W::Pointer,
-        C::kText => W::Text,
-        C::kVerticalText => W::VerticalText,
-        C::kCrosshair => W::Crosshair,
-        C::kCopy => W::Copy,
-        C::kMove => W::Move,
-        C::kCell => W::Cell,
-        C::kContextMenu => W::ContextMenu,
-        C::kAlias => W::Alias,
-        C::kProgress => W::Progress,
-        C::kNoDrop => W::NoDrop,
-        C::kNotAllowed => W::NotAllowed,
-        C::kZoomIn => W::ZoomIn,
-        C::kZoomOut => W::ZoomOut,
-        C::kEResize => W::EResize,
-        C::kNeResize => W::NeResize,
-        C::kNwResize => W::NwResize,
-        C::kNResize => W::NResize,
-        C::kSeResize => W::SeResize,
-        C::kSwResize => W::SwResize,
-        C::kSResize => W::SResize,
-        C::kWResize => W::WResize,
-        C::kEwResize => W::EwResize,
-        C::kNsResize => W::NsResize,
-        C::kNeswResize => W::NeswResize,
-        C::kNwseResize => W::NwseResize,
-        C::kColResize => W::ColResize,
-        C::kRowResize => W::RowResize,
-        C::kWait => W::Wait,
-        C::kHelp => W::Help,
-        C::kAllScroll => W::AllScroll,
-        C::kGrab => W::Grab,
-        C::kGrabbing => W::Grabbing,
-    });
+    Ok(())
 }
 
 #[cfg(test)]

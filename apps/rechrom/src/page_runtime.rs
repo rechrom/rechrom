@@ -12,11 +12,25 @@ use crate::{
     window_runtime,
 };
 use browser::page::{
-    CompositorMainThreadEffect, CompositorWheelResult, PageRenderPipeline, PageReturnedResource,
+    CompositorMainThreadEffect, CompositorWheelResult, PageChildCompositorFrame,
+    PageRenderPipeline, PageReturnedResource,
 };
 use browser::page::{Page, PageClient};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use foundation::begin_frame::BeginFrameSource;
+use interaction::input::ui::events::gesture_detection::filtered_gesture_provider::GestureTouchActionFilterHandle;
+use interaction::input::{
+    components::input::{
+        fling_controller::{FlingControllerOutput, GeneratedFlingEvent},
+        gesture_event_queue::{
+            DebounceEffect, ForwardedGesture, GestureEventAck, GestureEventQueue,
+        },
+    },
+    public::{
+        common::input::web_mouse_wheel_event::WebMouseWheelEvent,
+        mojom::input::input_event_result::{InputEventResultSource, InputEventResultState},
+    },
+};
 use interaction::input_event::*;
 use page_mutation::PageMutation;
 use std::{
@@ -58,7 +72,23 @@ pub(crate) enum Event {
         title: String,
         loading: bool,
     },
+    HistoryCommitted {
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        load_type: navigation_history::FrameLoadType,
+    },
+    ChildHistoryCommitted {
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        load_type: navigation_history::FrameLoadType,
+    },
+    HistoryStateUpdated(Arc<navigation_history::HistoryItemSnapshot>),
+    NavigationPrepared {
+        token: u64,
+    },
+    HistoryNavigation(i32),
     Navigate(browser::page::NavigationRequest),
+    AuxiliaryNavigationTarget(browser::page::AuxiliaryNavigationTargetRequest),
+    DropNavigate(browser::page::DropNavigationRequest),
+    StartSystemDrag(crate::native_drag::Start),
     Input {
         input: InputEvent,
         target: Option<String>,
@@ -66,11 +96,40 @@ pub(crate) enum Event {
         value: String,
         prevented: bool,
     },
-    Feedback {
-        cursor: browser::page::Cursor,
-        caret: Option<browser::page::CaretRect>,
+    ValidationMessage(browser::page::ValidationMessageUpdate),
+    ValidationMessageVisibility(browser::page::ValidationMessageVisibility),
+    ValidationBubbleSize {
+        width: f64,
+        height: f64,
     },
-    DragRegions(Vec<crate::chrome::DragRegion>),
+    CursorChanged(interaction::Cursor),
+    ControlActivated {
+        target: Option<String>,
+    },
+    EventHandlerChrome(browser::page::EventHandlerChromeEffect),
+    CaptureMouseEventsToWidget(bool),
+    Autoscroll(interaction::adapter::page_mouse_autoscroll::AutoscrollHostEffect),
+    TouchDisposition {
+        unique_touch_event_id: u32,
+        consumed: bool,
+    },
+    FlingDisposition {
+        gesture: WebGestureEvent,
+        result: InputEventResultState,
+    },
+    GestureDisposition {
+        gesture: WebGestureEvent,
+        source: InputEventResultSource,
+        result: InputEventResultState,
+    },
+    Feedback {
+        caret: Option<browser::page::CaretRect>,
+        text_input: Option<interaction::adapter::interaction::TextInputState>,
+    },
+    DragRegions {
+        regions: Vec<crate::chrome::DragRegion>,
+        root_viewport: Option<Viewport>,
+    },
     Error(PageError),
 }
 #[derive(Clone)]
@@ -84,6 +143,10 @@ pub(crate) enum Patch {
         id: String,
         value: String,
     },
+    Text {
+        id: String,
+        value: String,
+    },
     Value {
         id: String,
         value: String,
@@ -94,33 +157,89 @@ pub(crate) enum Patch {
     },
 }
 pub(crate) enum Command {
+    PrepareNavigation { token: u64 },
+    CompleteAuxiliaryNavigationTarget {
+        request_id: u64,
+        accepted: bool,
+    },
+    DirectoryFilesChosen(browser::page::DirectoryEnumerationResult),
+    SystemDragTarget {
+        target: crate::native_drag::Target,
+        action: interaction::default::core::page::drag_controller::DragTargetAction,
+    },
+    SystemDragEnded(crate::native_drag::Completion),
+    BindCompositorPresentationClock(browser::page::PageCompositorClockMapping),
+    EventTimingDidSwap {
+        requests: Vec<u64>,
+        frame_token: u32,
+        swap_time: Instant,
+    },
+    EventTimingDidNotSwap {
+        requests: Vec<u64>,
+        swap_time: Instant,
+    },
+    EventTimingDidCommit(Instant),
+    EventTimingDidPresent(browser::page::PageFramePresentationFeedback),
+    Visibility {
+        visible: bool,
+        changed_at: Instant,
+    },
     Input {
         input: InputEvent,
         queued_at: Instant,
         samples: usize,
     },
     ExternalWheel {
+        document_generation: u64,
         wheel: WheelEvent,
         queued_at: Instant,
         samples: usize,
         effects: Vec<CompositorMainThreadEffect>,
         main_frame_epoch: Option<u64>,
     },
+    ExternalCanonicalWheel {
+        document_generation: u64,
+        event: WebMouseWheelEvent,
+        wheel: WheelEvent,
+        queued_at: Instant,
+        effects: Vec<CompositorMainThreadEffect>,
+        main_frame_epoch: Option<u64>,
+    },
+    FlingDisposition(WebGestureEvent),
+    GestureDisposition(GestureEventAck),
+    ExternalGesture { document_generation: u64, dispatch_id: u64, gesture: WebGestureEvent },
     CompositorEffects {
         effects: Vec<CompositorMainThreadEffect>,
         main_frame_epoch: Option<u64>,
     },
     Main(MainThreadEvent),
     Resize(ResizeRequest),
+    SystemCursorSize(crate::cursor_screen_info::SystemCursorSize),
+    ContextMenuWidgetGeometry(interaction::adapter::page_nonlocated_context_menu_coordinates::NativeContextMenuWidgetGeometry),
+    InteractionTextSettings(crate::interaction_text_settings::InteractionTextSettings),
     ResizeTask,
     Active(bool),
     Patch(Vec<(u64, Patch)>),
     StopLoading,
+    TraverseHistory {
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        state: navigation_history::SessionHistoryState,
+    },
+    SessionHistoryState {
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        state: navigation_history::SessionHistoryState,
+    },
     Evaluate {
         source: String,
         reply: mpsc::Sender<Result<(), String>>,
     },
+    /// Document-sequence half of an offscreen CopyOutput ordering fence. The
+    /// impl input owner posts this only after it has consumed all preceding
+    /// compositor input, so reaching it also follows preceding direct Page
+    /// input in the document queue.
+    CopyOutputFence,
     Wake,
+    ClickActivated { source_document: u128, target_node_id: u64 },
     #[cfg(test)]
     TestTask(Box<dyn FnOnce() + Send>),
     Task,
@@ -129,14 +248,38 @@ pub(crate) enum Command {
     Stop,
 }
 pub(crate) enum ImplCommand {
+    BindGestureTouchActionFilter(GestureTouchActionFilterHandle),
+    WheelAck {
+        document_generation: u64,
+        result: InputEventResultState,
+    },
+    GestureAck {
+        dispatch_id: u64,
+        result: InputEventResultState,
+    },
+    DebounceExpired,
+    DocumentDetached {
+        generation: u64,
+    },
+    StopFling,
+    EventTimingRequests {
+        requests: Vec<u64>,
+        request_main_frame: bool,
+    },
+    RequestEventTimingFrame,
+    PresentationFeedback(browser::page::PageFramePresentationFeedback),
     Tick(BeginFrame),
     Pump,
     RequestMainFrame,
+    /// Cross the compositor input sequence before requesting the document
+    /// main frame used to satisfy an offscreen CopyOutput request.
+    CopyOutputFence,
     FinishMainFrameWithoutUpdates {
         main_frame_epoch: u64,
     },
     Commit {
         artifact: Arc<paint::PaintArtifact>,
+        child_frames: Vec<PageChildCompositorFrame>,
         content: ContentFrameProvenance,
         viewport: Viewport,
     },
@@ -145,6 +288,12 @@ pub(crate) enum ImplCommand {
         queued_at: Instant,
         samples: usize,
     },
+    Gesture {
+        gesture: interaction::input_event::WebGestureEvent,
+        queued_at: Instant,
+        samples: usize,
+    },
+    InputContinuation(compositor::CompositorMutation),
     Reclaim(Vec<PageReturnedResource>),
     Stop,
 }
@@ -239,6 +388,72 @@ impl BeginFrameSource for FrameDemand {
         self.frame_source.set_display(id);
     }
 }
+
+/// Browser-side VisualProperties throttle.
+///
+/// Source: content/browser/renderer_host/render_widget_host_impl.cc
+/// SynchronizeVisualProperties and OnLocalSurfaceIdChanged. Size-changing
+/// updates are limited to one in flight; while its CompositorFrame ACK is
+/// pending only the latest requested properties are retained.
+struct VisualPropertiesThrottle {
+    document_sender: mpsc::Sender<Command>,
+    last_sent: Viewport,
+    ack_pending: bool,
+    pending_latest: Option<ResizeRequest>,
+}
+
+impl VisualPropertiesThrottle {
+    fn new(document_sender: mpsc::Sender<Command>, initial: Viewport) -> Self {
+        Self {
+            document_sender,
+            last_sent: initial,
+            // The renderer is created with initial VisualProperties. Its first
+            // accepted CompositorFrame is the corresponding ACK.
+            ack_pending: true,
+            pending_latest: None,
+        }
+    }
+
+    fn send(&mut self, resize: ResizeRequest) {
+        let size_changed = self.last_sent.width != resize.viewport.width
+            || self.last_sent.height != resize.viewport.height;
+        self.last_sent = resize.viewport;
+        self.ack_pending = size_changed;
+        let _ = self.document_sender.send(Command::Resize(resize));
+    }
+
+    fn resize(&mut self, resize: ResizeRequest) {
+        if self.ack_pending {
+            if let Some(pending) = &mut self.pending_latest {
+                pending.merge(resize);
+            } else {
+                self.pending_latest = Some(resize);
+            }
+            return;
+        }
+        if resize.viewport != self.last_sent {
+            self.send(resize);
+        }
+    }
+
+    fn ack(&mut self) {
+        self.ack_pending = false;
+        let Some(pending) = self.pending_latest.take() else {
+            return;
+        };
+        if pending.viewport != self.last_sent {
+            self.send(pending);
+        }
+    }
+
+    fn hidden(&mut self) {
+        // Source: RenderWidgetHostImpl::WasHidden. A hidden renderer must not
+        // leave a visual-properties ACK blocking its later activation.
+        self.ack_pending = false;
+        self.pending_latest = None;
+    }
+}
+
 pub(crate) struct Handle {
     pub document: Document,
     document_sender: mpsc::Sender<Command>,
@@ -249,6 +464,7 @@ pub(crate) struct Handle {
     controls: bool,
     failure: Arc<Mutex<Option<PageError>>>,
     next_patch_revision: AtomicU64,
+    visual_properties: Arc<Mutex<VisualPropertiesThrottle>>,
 }
 impl Handle {
     pub fn send(&self, command: Command) {
@@ -269,8 +485,24 @@ impl Handle {
     pub fn failed(&self) -> bool {
         self.failure.lock().unwrap().is_some()
     }
+    pub fn copy_output_fence(&self) {
+        if !self.failed() {
+            let _ = self.impl_sender.send(ImplCommand::CopyOutputFence);
+        }
+    }
     pub fn input(&self, input: InputEvent, queued_at: Instant, samples: usize) {
         if self.failed() {
+            return;
+        }
+        if matches!(&input, InputEvent::Key(_)) {
+            let _ = self.impl_sender.send(ImplCommand::StopFling);
+        }
+        if let InputEvent::Gesture(gesture) = &input {
+            let _ = self.impl_sender.send(ImplCommand::Gesture {
+                gesture: gesture.clone(),
+                queued_at,
+                samples,
+            });
             return;
         }
         if !self.controls {
@@ -295,6 +527,15 @@ impl Handle {
             return;
         }
         let was_visible = self.visible.swap(visible, Ordering::AcqRel);
+        if visible != was_visible {
+            self.send(Command::Visibility {
+                visible,
+                changed_at: Instant::now(),
+            });
+        }
+        if !visible {
+            self.visual_properties.lock().unwrap().hidden();
+        }
         if visible && !was_visible {
             self.source.request_begin_frame();
         }
@@ -303,7 +544,17 @@ impl Handle {
         if self.failed() {
             return;
         }
-        self.send(Command::Resize(resize));
+        if self.controls {
+            // BrowserView/ToolbarView consumes native bounds on the browser UI
+            // sequence; RenderWidgetHostImpl's one-in-flight renderer ACK does
+            // not apply to browser chrome. Our controls remain Page-backed,
+            // but their document queue already coalesces adjacent resize work.
+            // Applying the WebContents throttle here would add a renderer ACK
+            // round trip to every browser-root resize.
+            self.send(Command::Resize(resize));
+        } else {
+            self.visual_properties.lock().unwrap().resize(resize);
+        }
     }
     pub fn patch(&self, patch: Patch) -> u64 {
         let revision = self.next_patch_revision.fetch_add(1, Ordering::AcqRel) + 1;
@@ -352,6 +603,12 @@ pub(crate) struct Params {
     pub viewport: Viewport,
     pub request: url_loader::URLRequest,
     pub scripting: bool,
+    pub prefers_reduced_motion: bool,
+    pub system_cursor_size: crate::cursor_screen_info::SystemCursorSize,
+    pub text_settings: crate::interaction_text_settings::InteractionTextSettings,
+    pub font_backend_factory: browser::BrowserFontBackendFactory,
+    pub primary_clipboard: Arc<crate::primary_clipboard::PrimaryClipboard>,
+    pub native_drag_window: bool,
     pub threads: browser::page::PageThreads,
     pub transparent: bool,
     pub controls: bool,
@@ -366,6 +623,14 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
     let controls = params.controls;
     let (doc_sender, doc_receiver) = mpsc::channel();
     let (impl_sender, impl_receiver) = mpsc::channel();
+    let visual_properties = Arc::new(Mutex::new(VisualPropertiesThrottle::new(
+        doc_sender.clone(),
+        params.viewport,
+    )));
+    let visual_properties_ack: Arc<dyn Fn() + Send + Sync> = {
+        let visual_properties = visual_properties.clone();
+        Arc::new(move || visual_properties.lock().unwrap().ack())
+    };
     let requested = Arc::new(AtomicBool::new(false));
     let source = Arc::new(FrameDemand {
         requested: requested.clone(),
@@ -405,7 +670,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         .name(format!("page-compositor-{}-{}", document.0, document.1))
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            crate::engine::set_page_thread_presentation_priority();
+            crate::engine::set_presentation_thread_priority();
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 target_id: if document.0 == 0 { 2 } else { 1 },
                 ..Default::default()
@@ -423,6 +688,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
                     impl_raster_executor,
                     impl_source,
                     impl_frames,
+                    visual_properties_ack,
                 )
             }));
             match result {
@@ -445,7 +711,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         .name(format!("page-document-{}-{}", document.0, document.1))
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            crate::engine::set_page_thread_presentation_priority();
+            crate::engine::set_presentation_thread_priority();
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 target_id: if document.0 == 0 { 2 } else { 1 },
                 ..Default::default()
@@ -485,6 +751,7 @@ pub(crate) fn spawn(params: Params) -> io::Result<Handle> {
         controls,
         failure,
         next_patch_revision: AtomicU64::new(0),
+        visual_properties,
     })
 }
 // Equivalent responsibility to WebContentsImpl::RenderViewTerminated and its
@@ -566,18 +833,36 @@ impl From<io::Error> for RuntimeFailure {
     }
 }
 struct ImplPresentation {
+    input_document_generation: u64,
+    cursor_control:
+        interaction::input::platform::widget::input::cursor_control_handler::CursorControlHandler,
+    gestures: GestureEventQueue,
+    gesture_touch_action: Option<GestureTouchActionFilterHandle>,
     pipeline: PageRenderPipeline,
     frames: mpsc::Sender<window_runtime::Command>,
     document: Document,
+    document_sender: mpsc::Sender<Command>,
+    /// Only requests not yet bound to a cc submission live here. The
+    /// document's WidgetPresentationTiming owns token matching and retries.
+    pending_event_timing_requests: Vec<u64>,
     reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
+    /// VideoFrameSubmitter runs while document resource mutations are applied,
+    /// one sequence before this impl-owned parent producer. Keep each latest
+    /// delegated Surface frame until a root CompositorFrame can carry its
+    /// graph reference into the window-owned Viz service.
+    pending_child_frames: VecDeque<PageChildCompositorFrame>,
     artifact: Option<Arc<paint::PaintArtifact>>,
     content: Option<ContentFrameProvenance>,
     viewport: Viewport,
     needs_publish: bool,
+    revision_redraw_pending: bool,
+    copy_output_redraw_pending: bool,
     required_main_frame_epoch: u64,
     responded_main_frame_epoch: u64,
     required_scroll_sequence: u64,
     pending_resize: Option<ResizeProvenance>,
+    visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
+    presentation_feedback: Arc<dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync>,
 }
 
 impl ImplPresentation {
@@ -585,27 +870,216 @@ impl ImplPresentation {
         pipeline: PageRenderPipeline,
         frames: mpsc::Sender<window_runtime::Command>,
         document: Document,
+        document_sender: mpsc::Sender<Command>,
         reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync>,
         viewport: Viewport,
+        visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
+        presentation_feedback: Arc<
+            dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync,
+        >,
     ) -> Self {
         Self {
+            cursor_control: Default::default(),
+            input_document_generation: 1,
+            gestures: GestureEventQueue::default(),
+            gesture_touch_action: None,
+            presentation_feedback,
             pipeline,
             frames,
             document,
+            document_sender,
+            pending_event_timing_requests: Vec::new(),
             reclaim,
+            pending_child_frames: VecDeque::new(),
             artifact: None,
             content: None,
             viewport,
             needs_publish: false,
+            revision_redraw_pending: false,
+            copy_output_redraw_pending: false,
             required_main_frame_epoch: 0,
             responded_main_frame_epoch: 0,
             required_scroll_sequence: 0,
             pending_resize: None,
+            visual_properties_ack,
         }
     }
 
     fn require_main_frame(&mut self, epoch: u64) {
         self.required_main_frame_epoch = self.required_main_frame_epoch.max(epoch);
+    }
+
+    fn event_timing_did_not_swap(&mut self) {
+        if !self.pending_event_timing_requests.is_empty() {
+            let _ = self.document_sender.send(Command::EventTimingDidNotSwap {
+                requests: std::mem::take(&mut self.pending_event_timing_requests),
+                swap_time: Instant::now(),
+            });
+        }
+    }
+
+    fn deliver_input_effects(
+        &mut self,
+        effects: Vec<CompositorMainThreadEffect>,
+        main: &mpsc::Sender<Command>,
+        epoch: &mut u64,
+    ) -> Option<u64> {
+        self.observe_main_thread_effects(&effects);
+        let requested = effects
+            .iter()
+            .any(|effect| matches!(effect, CompositorMainThreadEffect::BeginMainFrame));
+        let requested_epoch = requested.then(|| {
+            *epoch = epoch.wrapping_add(1).max(1);
+            self.require_main_frame(*epoch);
+            *epoch
+        });
+        if !effects.is_empty() {
+            let _ = main.send(Command::CompositorEffects {
+                effects,
+                main_frame_epoch: requested_epoch,
+            });
+        }
+        requested_epoch
+    }
+
+    /// Assembly only: the input package owns the curve and event generation;
+    /// this Page producer routes typed values through its existing ingress.
+    fn deliver_fling_output(
+        &mut self,
+        output: FlingControllerOutput,
+        main: &mpsc::Sender<Command>,
+        epoch: &mut u64,
+    ) -> Result<(), RuntimeFailure> {
+        for generated in output.generated {
+            match generated {
+                GeneratedFlingEvent::Gesture(mut gesture) => {
+                    if let Some(filter) = &self.gesture_touch_action {
+                        if filter.FilterGeneratedGesture(&mut gesture) {
+                            continue;
+                        }
+                    }
+                    let now = self.pipeline.InputTimeForInstant(Instant::now());
+                    if let Some(dispatch) = self.gestures.DebounceOrForwardEvent(gesture, (), now) {
+                        self.forward_gesture(dispatch, main, epoch)?;
+                    }
+                }
+                GeneratedFlingEvent::Wheel(event) => {
+                    let (mut wheel, result) = self.pipeline.CanonicalFlingWheel(&event)?;
+                    wheel.compositor_owned = result.compositor_owned;
+                    wheel.compositor_nonblocking = result.dom_ack.is_none();
+                    if let Some(request) = result.dom_ack {
+                        wheel.compositor_ack.push(request);
+                    }
+                    self.gesture_acks(&result.gesture_acks, main);
+                    self.observe_main_thread_effects(&result.effects);
+                    let requested = result
+                        .effects
+                        .iter()
+                        .any(|effect| matches!(effect, CompositorMainThreadEffect::BeginMainFrame));
+                    let main_frame_epoch = requested.then(|| {
+                        *epoch = epoch.wrapping_add(1).max(1);
+                        self.require_main_frame(*epoch);
+                        *epoch
+                    });
+                    let _ = main.send(Command::ExternalCanonicalWheel {
+                        document_generation: self.input_document_generation,
+                        event,
+                        wheel,
+                        queued_at: Instant::now(),
+                        effects: result.effects,
+                        main_frame_epoch,
+                    });
+                }
+            }
+        }
+        if let Some(event) = output.acknowledged {
+            let _ = main.send(Command::FlingDisposition(event));
+        }
+        Ok(())
+    }
+
+    fn gesture_acks(&mut self, acks: &[(u64, bool)], main: &mpsc::Sender<Command>) {
+        for &(dispatch_id, handled) in acks {
+            self.ack_gesture(
+                dispatch_id,
+                InputEventResultSource::kCompositorThread,
+                if handled {
+                    InputEventResultState::kConsumed
+                } else {
+                    InputEventResultState::kNotConsumed
+                },
+                main,
+            );
+        }
+    }
+    fn ack_gesture(
+        &mut self,
+        dispatch_id: u64,
+        source: InputEventResultSource,
+        result: InputEventResultState,
+        main: &mpsc::Sender<Command>,
+    ) {
+        for ack in self.gestures.ProcessGestureAck(dispatch_id, source, result) {
+            let _ = main.send(Command::GestureDisposition(ack));
+        }
+    }
+    fn forward_gesture(
+        &mut self,
+        dispatch: ForwardedGesture<()>,
+        main: &mpsc::Sender<Command>,
+        epoch: &mut u64,
+    ) -> Result<(), RuntimeFailure> {
+        use interaction::input::platform::widget::input::cursor_control_handler::CursorControlDisposition;
+        match self.cursor_control.ObserveInputEvent(&dispatch.event) {
+            Some(CursorControlDisposition::MainThread) => {
+                let _ = main.send(Command::ExternalGesture {
+                    document_generation: self.input_document_generation,
+                    dispatch_id: dispatch.dispatch_id,
+                    gesture: dispatch.event,
+                });
+                return Ok(());
+            }
+            Some(CursorControlDisposition::Drop) => {
+                self.ack_gesture(
+                    dispatch.dispatch_id,
+                    InputEventResultSource::kCompositorThread,
+                    InputEventResultState::kNoConsumerExists,
+                    main,
+                );
+                return Ok(());
+            }
+            None => {}
+        }
+        if dispatch.event.IsScrollEvent() {
+            let result = self
+                .pipeline
+                .GestureWithDispatchId(&dispatch.event, dispatch.dispatch_id)?;
+            self.gesture_acks(&result.gesture_acks, main);
+            self.deliver_input_effects(result.effects, main, epoch);
+        } else {
+            let _ = main.send(Command::ExternalGesture {
+                document_generation: self.input_document_generation,
+                dispatch_id: dispatch.dispatch_id,
+                gesture: dispatch.event,
+            });
+        }
+        Ok(())
+    }
+    fn expire_gesture_debounce(
+        &mut self,
+        now: interaction::input::base::time::time::TimeTicks,
+        main: &mpsc::Sender<Command>,
+        epoch: &mut u64,
+    ) -> Result<(), RuntimeFailure> {
+        let effects = self.gestures.ExpireDebounce(now, !self.viewport.valid());
+        for effect in effects {
+            match effect {
+                DebounceEffect::Fling(output) => self.deliver_fling_output(output, main, epoch)?,
+                DebounceEffect::Forward(dispatch) => self.forward_gesture(dispatch, main, epoch)?,
+                DebounceEffect::NotDispatched(_) => {}
+            }
+        }
+        Ok(())
     }
 
     fn main_frame_pending(&self) -> bool {
@@ -634,10 +1108,47 @@ impl ImplPresentation {
     }
 
     fn observe_main_thread_effects(&mut self, effects: &[CompositorMainThreadEffect]) {
+        self.send_event_timing_commit_finishes();
+        let _target_scope = browser_tracing::enabled().then(|| {
+            browser_tracing::scope(browser_tracing::Context {
+                target_id: 1,
+                ..Default::default()
+            })
+        });
         for effect in effects {
-            if let CompositorMainThreadEffect::ScrollOffsetChanged { sequence, .. } = effect {
+            if let CompositorMainThreadEffect::ScrollOffsetChanged {
+                sequence,
+                element,
+                offset,
+                ..
+            } = effect
+            {
                 self.required_scroll_sequence = self.required_scroll_sequence.max(*sequence);
+                // DidCompositorScroll is the canonical impl-side mutation.
+                // Main-thread Page::ScrollApplied observes only its later
+                // reflection, so record the resident active-tree offset here
+                // as well; otherwise compositor-owned scroll motion is absent
+                // from the smoothness report even though pixels moved.
+                browser_tracing::instant(
+                    "input",
+                    "ScrollApplied",
+                    &[
+                        ("scroll_node", element.GetInternalValue() as f64),
+                        ("offset_x", f64::from(offset.x())),
+                        ("offset_y", f64::from(offset.y())),
+                        ("sequence", *sequence as f64),
+                        ("compositor_owned", 1.0),
+                    ],
+                );
             }
+        }
+    }
+
+    fn send_event_timing_commit_finishes(&mut self) {
+        for commit_finish_time in self.pipeline.TakeCommitFinishTimes() {
+            let _ = self
+                .document_sender
+                .send(Command::EventTimingDidCommit(commit_finish_time));
         }
     }
 
@@ -655,12 +1166,36 @@ impl ImplPresentation {
         self.artifact.is_some() && content.main_frame_epoch <= self.responded_main_frame_epoch
     }
 
+    fn queue_child_frames(&mut self, frames: Vec<PageChildCompositorFrame>) {
+        for frame in frames {
+            if let Some(pending) = self
+                .pending_child_frames
+                .iter_mut()
+                .find(|pending| pending.surface_id == frame.surface_id)
+            {
+                // A delegated Surface has one pending frame. Dropping the
+                // superseded move-only frame releases its immutable SharedImage
+                // lease before it ever crosses the FrameSink boundary.
+                *pending = frame;
+            } else {
+                self.pending_child_frames.push_back(frame);
+            }
+        }
+    }
+
     fn commit(
         &mut self,
         artifact: Arc<paint::PaintArtifact>,
+        child_frames: Vec<PageChildCompositorFrame>,
         mut content: ContentFrameProvenance,
         viewport: Viewport,
     ) -> bool {
+        // Queue the child independently of main-frame admission. A rejected
+        // stale artifact may be followed by a newer parent that references the
+        // same stable video Surface, and Chromium retains that latest child
+        // frame at the FrameSink boundary rather than dropping it with the
+        // stale main-tree response.
+        self.queue_child_frames(child_frames);
         // ProxyImpl::data_for_commit_ pairs a commit with the BeginMainFrame
         // that produced it. An older Page artifact cannot satisfy a newer BMF:
         // doing so advances SyncedScrollOffset's reflected slot without the
@@ -672,6 +1207,23 @@ impl ImplPresentation {
         {
             return false;
         }
+        // Chromium attaches CopyOutputRequest to a compositor render pass and
+        // schedules a draw even when the main-thread PaintArtifact is retained
+        // byte-for-byte. The document fence above supplies the fresh commit;
+        // this flag supplies only its normal impl-side SetNeedsRedraw, without
+        // inventing paint damage or a second readback path.
+        if self.copy_output_redraw_pending {
+            self.revision_redraw_pending = true;
+            self.copy_output_redraw_pending = false;
+        }
+        self.revision_redraw_pending |= self.content.is_some_and(|previous| {
+            previous.embedder_revision != content.embedder_revision
+                && self
+                    .artifact
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &artifact))
+                && self.viewport == viewport
+        });
         content.resize = self.pending_resize.take();
         self.artifact = Some(artifact);
         self.content = Some(content);
@@ -712,16 +1264,34 @@ impl ImplPresentation {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(error) => return Err(error.into()),
         }
+        if self.revision_redraw_pending {
+            self.pipeline.RequestRedraw()?;
+            self.revision_redraw_pending = false;
+        }
         self.needs_publish = false;
         self.flush_frames()
     }
 
     fn flush_frames(&mut self) -> Result<bool, RuntimeFailure> {
+        // Completion originates at cc's FinishCommit, including asynchronous
+        // commits progressed by Pump. Preserve its timestamp and send it
+        // before any swap notification for frames produced in the same turn.
+        self.send_event_timing_commit_finishes();
         let Some(content) = self.content else {
             return Ok(false);
         };
+        let frames = self.pipeline.TakeFrames();
+        if frames.is_empty() {
+            // Child SurfaceDrawQuads are published atomically with the next
+            // parent CompositorFrame. Do not drain their move-only resources
+            // while no parent can carry the reference into external Viz.
+            return Ok(false);
+        }
+        let pipeline_child_frames = self.pipeline.TakeChildFrames();
+        self.queue_child_frames(pipeline_child_frames);
+        let mut child_frames = self.pending_child_frames.drain(..).collect::<Vec<_>>();
         let mut submitted = false;
-        for frame in self.pipeline.TakeFrames() {
+        for (index, frame) in frames.into_iter().enumerate() {
             // A frame owns the pixel-space size that cc submitted to its
             // FrameSink.  Do not relabel an older queued frame with a newer
             // Page viewport during resize: Viz surface generations are keyed
@@ -747,25 +1317,57 @@ impl ImplPresentation {
                 })
                 .unwrap_or(self.viewport);
             let is_handling_interaction = frame.frame.metadata.is_handling_interaction;
-            self.frames
-                .send(window_runtime::Command::Display(
-                    crate::display::Message::Prepare {
-                        submitted: PageFrame {
-                            provenance: FrameProvenance {
-                                document: self.document,
-                                content: Some(content),
-                            },
-                            viewport,
-                            is_handling_interaction,
-                            frame,
-                            reclaim: self.reclaim.clone(),
-                        },
+            // ReportTimeSwapPromise::DidSwap runs on the compositor sequence
+            // for this exact frame token. Post it before handing the frame to
+            // Display: a native presenter may return feedback synchronously.
+            // This is a swap timestamp, never a presentation timestamp.
+            if !self.pending_event_timing_requests.is_empty() {
+                let _ = self.document_sender.send(Command::EventTimingDidSwap {
+                    requests: std::mem::take(&mut self.pending_event_timing_requests),
+                    frame_token: frame.frame.metadata.frame_token,
+                    swap_time: Instant::now(),
+                });
+            }
+            let command = window_runtime::Command::Display(crate::display::Message::Prepare {
+                submitted: PageFrame {
+                    provenance: FrameProvenance {
+                        document: self.document,
+                        content: Some(content),
                     },
-                ))
-                .map_err(|_| RuntimeFailure {
+                    viewport,
+                    is_handling_interaction,
+                    // A flush normally contains one root. If cc queued
+                    // more than one, submitting every child before the
+                    // first parent preserves Viz's child-before-parent
+                    // activation invariant for the complete batch.
+                    child_frames: if index == 0 {
+                        std::mem::take(&mut child_frames)
+                    } else {
+                        Vec::new()
+                    },
+                    frame,
+                    reclaim: self.reclaim.clone(),
+                    // Delegated video resources are immutable SharedImage
+                    // leases created outside cc's ResourceProvider. Viz owns
+                    // the sole strong frame reference; replacement/destruction
+                    // drops that lease directly, so returned ids must not be
+                    // routed into the parent cc provider where their numeric
+                    // namespace could collide with a tile resource.
+                    child_reclaim: Arc::new(|_| {}),
+                    visual_properties_ack: self.visual_properties_ack.clone(),
+                    presentation_feedback: self.presentation_feedback.clone(),
+                },
+            });
+            if let Err(mpsc::SendError(window_runtime::Command::Display(
+                crate::display::Message::Prepare { submitted },
+            ))) = self.frames.send(command)
+            {
+                submitted.ReclaimAll();
+                return Err(RuntimeFailure {
                     stage: "compositor",
                     error: io::Error::other("window display stopped"),
-                })?;
+                });
+            }
             submitted = true;
         }
         if submitted {
@@ -774,6 +1376,15 @@ impl ImplPresentation {
             }
         }
         Ok(submitted)
+    }
+}
+
+impl Drop for ImplPresentation {
+    fn drop(&mut self) {
+        // Break unswapped promises on executor failure or teardown as well as
+        // explicit Stop. Already-swapped requests remain owned solely by the
+        // widget timing owner and die with that widget's weak registrations.
+        self.event_timing_did_not_swap();
     }
 }
 
@@ -809,6 +1420,7 @@ fn run_impl(
     raster_executor: Arc<dyn executor::Executor>,
     source: Arc<dyn BeginFrameSource>,
     frames: mpsc::Sender<window_runtime::Command>,
+    visual_properties_ack: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), RuntimeFailure> {
     let pump_pending = Arc::new(AtomicBool::new(false));
     let pump_generation = Arc::new(AtomicU64::new(0));
@@ -828,13 +1440,31 @@ fn run_impl(
     ));
     let mut pipeline =
         PageRenderPipeline::new_external(compositor_executor, raster_executor, transparent);
+    let _ = main.send(Command::BindCompositorPresentationClock(
+        pipeline.PresentationClockMapping(),
+    ));
     pipeline.InitializeViewport(viewport.width, viewport.height, viewport.scale)?;
     let reclaim_sender = self_sender.clone();
     let reclaim: Arc<dyn Fn(Vec<PageReturnedResource>) + Send + Sync> =
         Arc::new(move |resources| {
             let _ = reclaim_sender.send(ImplCommand::Reclaim(resources));
         });
-    let mut presentation = ImplPresentation::new(pipeline, frames, document, reclaim, viewport);
+    let presentation_sender = self_sender.clone();
+    let presentation_feedback: Arc<
+        dyn Fn(browser::page::PageFramePresentationFeedback) + Send + Sync,
+    > = Arc::new(move |feedback| {
+        let _ = presentation_sender.send(ImplCommand::PresentationFeedback(feedback));
+    });
+    let mut presentation = ImplPresentation::new(
+        pipeline,
+        frames,
+        document,
+        main.clone(),
+        reclaim,
+        viewport,
+        visual_properties_ack,
+        presentation_feedback,
+    );
     let mut main_frame_epoch = 0u64;
     let mut queued_commands = VecDeque::new();
     // Once input from a snapshot has run ahead of an already observed
@@ -843,14 +1473,32 @@ fn run_impl(
     let mut tick_due_after_input = false;
     'commands: loop {
         if queued_commands.is_empty() {
-            let Ok(command) = receiver.recv() else {
-                break;
+            let command = if let Some(deadline) = presentation.gestures.NextDebounceDeadline() {
+                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let delay = Duration::from_micros(
+                    deadline
+                        .ToInternalValue()
+                        .saturating_sub(now.ToInternalValue())
+                        .max(0) as u64,
+                );
+                match receiver.recv_timeout(delay) {
+                    Ok(command) => command,
+                    Err(mpsc::RecvTimeoutError::Timeout) => ImplCommand::DebounceExpired,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                let Ok(command) = receiver.recv() else {
+                    break;
+                };
+                command
             };
             queued_commands.push_back(command);
         }
         while let Ok(command) = receiver.try_recv() {
             queued_commands.push_back(command);
         }
+        let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+        presentation.expire_gesture_debounce(now, &main, &mut main_frame_epoch)?;
 
         // Source: cc/scheduler/compositor_priority_experiments.h and
         // content/renderer/input/input_handler_proxy.cc. Input on the impl
@@ -858,19 +1506,32 @@ fn run_impl(
         // accumulate: when the sequence was busy only the newest physical
         // opportunity is useful. Executor wakeups are likewise level
         // triggered because Poll drains every currently posted cc command.
-        let mut compact = VecDeque::with_capacity(queued_commands.len());
-        let mut latest_tick = None;
-        let mut latest_commit = None;
+        let drained = queued_commands.drain(..).collect::<Vec<_>>();
+        let last_tick = drained
+            .iter()
+            .rposition(|pending| matches!(pending, ImplCommand::Tick(_)));
+        let last_commit = drained
+            .iter()
+            .rposition(|pending| matches!(pending, ImplCommand::Commit { .. }));
+        let mut compact = VecDeque::with_capacity(drained.len());
         let mut has_pump = false;
-        for pending in queued_commands.drain(..) {
+        for (index, pending) in drained.into_iter().enumerate() {
             match pending {
-                ImplCommand::Tick(frame) => latest_tick = Some(frame),
+                // BeginFrames are latest-value opportunities, but the newest
+                // one retains its source-sequence position. Moving it to the
+                // tail can let a later deadline Pump overtake an earlier
+                // physical frame; moving it to the front can let it overtake
+                // a ready main-thread commit.
+                ImplCommand::Tick(_) if Some(index) != last_tick => {}
                 // Page can produce several immutable artifacts while the impl
                 // sequence is busy. ProxyMain only needs the newest response
                 // that includes all preceding Page state; admitting every
                 // intermediate artifact makes the emulated main phase block
-                // impl-thread input repeatedly.
-                ImplCommand::Commit { .. } => latest_commit = Some(pending),
+                // impl-thread input repeatedly. The surviving commit must keep
+                // its position relative to Scheduler's deadline Pump and the
+                // next physical Tick: Chromium's single impl sequence never
+                // reverses those already-ready tasks.
+                ImplCommand::Commit { .. } if Some(index) != last_commit => {}
                 ImplCommand::Pump if has_pump => {}
                 ImplCommand::Pump => {
                     has_pump = true;
@@ -926,16 +1587,18 @@ fn run_impl(
         // WheelPhase::kEnded also stalls scroll events and scroll-linked paint.
         // Source: cc/scheduler/scheduler_state_machine.cc
         //         ShouldSendBeginMainFrame / ShouldCommit.
-        if let Some(commit) = latest_commit {
-            compact.push_back(commit);
-        }
-        if let Some(frame) = latest_tick {
-            compact.push_back(ImplCommand::Tick(frame));
-        }
         queued_commands = compact;
 
+        // A document replacement is an input-order barrier. Prioritized
+        // input may run ahead of ordinary tasks within its original document,
+        // but may not overtake that document's target teardown.
+        let input_boundary = queued_commands
+            .iter()
+            .position(|command| matches!(command, ImplCommand::DocumentDetached { .. }))
+            .unwrap_or(queued_commands.len());
         let pending_tick = queued_commands
             .iter()
+            .take(input_boundary)
             .position(|command| matches!(command, ImplCommand::Tick(_)));
         let urgent = queued_commands
             .iter()
@@ -944,9 +1607,9 @@ fn run_impl(
             .or_else(|| {
                 queued_commands
                     .iter()
+                    .take(input_boundary)
                     .position(|command| matches!(command, ImplCommand::Wheel { .. }))
             })
-            .or_else(|| pending_tick)
             .unwrap_or(0);
         let command = queued_commands
             .remove(urgent)
@@ -957,8 +1620,66 @@ fn run_impl(
             tick_due_after_input = false;
         }
         match command {
+            ImplCommand::BindGestureTouchActionFilter(filter) => {
+                presentation.gesture_touch_action = Some(filter)
+            }
+            ImplCommand::WheelAck {
+                document_generation,
+                result,
+            } => {
+                if document_generation == presentation.input_document_generation {
+                    presentation.gestures.OnWheelEventAck(result);
+                }
+            }
+            ImplCommand::GestureAck {
+                dispatch_id,
+                result,
+            } => {
+                presentation.ack_gesture(
+                    dispatch_id,
+                    InputEventResultSource::kMainThread,
+                    result,
+                    &main,
+                );
+            }
+            ImplCommand::DebounceExpired => {
+                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                presentation.expire_gesture_debounce(now, &main, &mut main_frame_epoch)?;
+                let _ = presentation.flush_frames()?;
+            }
+            ImplCommand::DocumentDetached { generation } => {
+                presentation.input_document_generation = generation;
+                presentation.cursor_control = Default::default();
+                // Retire target-bound input without publishing StopFling's
+                // old synthetic WheelEnd to the new document owner.
+                for ack in presentation.gestures.DocumentDetached() {
+                    let _ = main.send(Command::GestureDisposition(ack));
+                }
+            }
+            ImplCommand::StopFling => {
+                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let output = presentation.gestures.StopFling(now);
+                presentation.deliver_fling_output(output, &main, &mut main_frame_epoch)?;
+                let _ = presentation.flush_frames()?;
+            }
             ImplCommand::Stop => {
+                presentation.event_timing_did_not_swap();
                 break 'commands;
+            }
+            ImplCommand::EventTimingRequests {
+                requests,
+                request_main_frame,
+            } => {
+                // Frames already produced before this request belong to the
+                // preceding swap promises. Drain them before admitting it.
+                let _ = presentation.flush_frames()?;
+                presentation.pending_event_timing_requests.extend(requests);
+                // A matching Commit or no-update response follows requests
+                // from a rendering turn. Do not create a newer BMF before
+                // that response arrives: it would reject the valid commit.
+                if request_main_frame {
+                    let _ = self_sender.send(ImplCommand::RequestEventTimingFrame);
+                }
             }
             ImplCommand::Pump => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Pump");
@@ -980,6 +1701,7 @@ fn run_impl(
                         result.effects.len(),
                     );
                 }
+                presentation.gesture_acks(&result.gesture_acks, &main);
                 if !result.effects.is_empty() {
                     presentation.observe_main_thread_effects(&result.effects);
                     let requested = result
@@ -1010,9 +1732,16 @@ fn run_impl(
                     pump_pending.store(false, Ordering::Release);
                 }
             }
-            ImplCommand::RequestMainFrame => {
+            request @ (ImplCommand::RequestMainFrame | ImplCommand::RequestEventTimingFrame) => {
+                if matches!(request, ImplCommand::RequestEventTimingFrame)
+                    && (presentation.pending_event_timing_requests.is_empty()
+                        || presentation.main_frame_pending())
+                {
+                    continue;
+                }
                 let _impl_trace = browser_tracing::span("compositor", "Impl.RequestMainFrame");
                 let result = presentation.pipeline.RequestMainFrame()?;
+                presentation.gesture_acks(&result.gesture_acks, &main);
                 if !result.effects.is_empty() {
                     let direct_main_frame = only_begins_main_frame(&result.effects);
                     presentation.observe_main_thread_effects(&result.effects);
@@ -1040,6 +1769,15 @@ fn run_impl(
                 }
                 let _ = presentation.publish()?;
             }
+            ImplCommand::CopyOutputFence => {
+                // InputHandlerProxy and ProxyMain live on different sequences.
+                // Forwarding the fence from here preserves every earlier impl
+                // input/callback before the document asks cc for the capture
+                // transaction; the document queue supplies the corresponding
+                // ordering for direct mouse/key/text input.
+                presentation.copy_output_redraw_pending = true;
+                let _ = main.send(Command::CopyOutputFence);
+            }
             ImplCommand::FinishMainFrameWithoutUpdates {
                 main_frame_epoch: responded_epoch,
             } => {
@@ -1057,6 +1795,7 @@ fn run_impl(
                 if let Some(result) =
                     presentation.finish_main_frame_without_updates(responded_epoch)?
                 {
+                    presentation.gesture_acks(&result.gesture_acks, &main);
                     presentation.observe_main_thread_effects(&result.effects);
                     let direct_main_frame = only_begins_main_frame(&result.effects);
                     let requested_main_frame = result
@@ -1078,7 +1817,26 @@ fn run_impl(
                         });
                     }
                     let _ = presentation.publish()?;
+                    presentation.event_timing_did_not_swap();
                 }
+            }
+            ImplCommand::PresentationFeedback(feedback) => {
+                // Keep the platform timestamp, interval, failure and flags
+                // intact. WidgetPresentationTiming, on the document owner,
+                // resolves only valid successful presentation feedback.
+                let _ = main.send(Command::EventTimingDidPresent(feedback));
+                let result = presentation
+                    .pipeline
+                    .ReceivePresentationFeedback(feedback)?;
+                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.observe_main_thread_effects(&result.effects);
+                if !result.effects.is_empty() {
+                    let _ = main.send(Command::CompositorEffects {
+                        effects: result.effects,
+                        main_frame_epoch: None,
+                    });
+                }
+                let _ = presentation.flush_frames()?;
             }
             ImplCommand::Reclaim(resources) => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Reclaim");
@@ -1087,8 +1845,12 @@ fn run_impl(
             }
             ImplCommand::Tick(frame) => {
                 let _impl_trace = browser_tracing::span("compositor", "Impl.Tick");
+                let now = presentation.pipeline.InputTimeForInstant(frame.frame_time);
+                let output = presentation.gestures.ProgressFling(now, None);
+                presentation.deliver_fling_output(output, &main, &mut main_frame_epoch)?;
                 if presentation.pipeline.NeedsBeginFrames() {
                     let result = presentation.pipeline.BeginPhysicalFrame(frame.args)?;
+                    presentation.gesture_acks(&result.gesture_acks, &main);
                     if !result.effects.is_empty() {
                         let direct_main_frame = only_begins_main_frame(&result.effects);
                         presentation.observe_main_thread_effects(&result.effects);
@@ -1121,6 +1883,7 @@ fn run_impl(
             }
             ImplCommand::Commit {
                 artifact,
+                child_frames,
                 content,
                 viewport,
             } => {
@@ -1157,6 +1920,7 @@ fn run_impl(
                 let request_main = presentation.needs_main_frame_for(content);
                 if request_main {
                     let result = presentation.pipeline.RequestMainFrame()?;
+                    presentation.gesture_acks(&result.gesture_acks, &main);
                     presentation.observe_main_thread_effects(&result.effects);
                     let requested = result
                         .effects
@@ -1177,16 +1941,84 @@ fn run_impl(
                 let unsolicited = presentation.is_unsolicited(content);
                 impl_trace.set("unsolicited", unsolicited as u8 as f64);
                 if !unsolicited {
-                    let accepted = presentation.commit(artifact, content, viewport);
+                    let accepted = presentation.commit(artifact, child_frames, content, viewport);
                     impl_trace.set("accepted", accepted as u8 as f64);
+                } else {
+                    // The latest delegated video frame remains useful to the
+                    // already-active parent Surface even when this duplicate
+                    // main-tree artifact itself needs no commit.
+                    presentation.queue_child_frames(child_frames);
                 }
                 let _ = presentation.publish()?;
+            }
+            ImplCommand::Gesture {
+                gesture,
+                queued_at,
+                samples,
+            } => {
+                browser_tracing::interval(
+                    "input",
+                    "InputOwnerQueue",
+                    queued_at,
+                    Instant::now(),
+                    &[("samples", samples as f64)],
+                );
+                let now = presentation.pipeline.InputTimeForInstant(Instant::now());
+                let output = presentation.gestures.PassToFlingController(
+                    &gesture,
+                    now,
+                    !presentation.viewport.valid(),
+                );
+                let consumed = output.consumed;
+                presentation.deliver_fling_output(output, &main, &mut main_frame_epoch)?;
+                if !consumed {
+                    if let Some(dispatch) =
+                        presentation
+                            .gestures
+                            .DebounceOrForwardEvent(gesture, (), now)
+                    {
+                        presentation.forward_gesture(dispatch, &main, &mut main_frame_epoch)?;
+                    }
+                }
+                let _ = presentation.flush_frames()?;
+            }
+            ImplCommand::InputContinuation(input) => {
+                let result = presentation.pipeline.ContinueCompositorMutation(input)?;
+                assert!(
+                    result.dom_ack.is_none(),
+                    "source continuation cannot redispatch its DOM wheel"
+                );
+                presentation.gesture_acks(&result.gesture_acks, &main);
+                presentation.observe_main_thread_effects(&result.effects);
+                let requested = result
+                    .effects
+                    .iter()
+                    .any(|effect| matches!(effect, CompositorMainThreadEffect::BeginMainFrame));
+                let epoch = requested.then(|| {
+                    main_frame_epoch = main_frame_epoch.wrapping_add(1).max(1);
+                    presentation.require_main_frame(main_frame_epoch);
+                    main_frame_epoch
+                });
+                if !result.effects.is_empty() {
+                    let _ = main.send(Command::CompositorEffects {
+                        effects: result.effects,
+                        main_frame_epoch: epoch,
+                    });
+                }
+                let _ = presentation.flush_frames()?;
             }
             ImplCommand::Wheel {
                 mut wheel,
                 queued_at,
                 samples,
             } => {
+                let _input_scope = browser_tracing::enabled().then(|| {
+                    browser_tracing::scope(browser_tracing::Context {
+                        target_id: 1,
+                        input_id: browser_tracing::instant_id(queued_at),
+                        ..Default::default()
+                    })
+                });
                 let owner_started = Instant::now();
                 browser_tracing::interval(
                     "input",
@@ -1213,22 +2045,14 @@ fn run_impl(
                 input_trace.set("compositor_owned", result.compositor_owned as u8 as f64);
                 input_trace.set("submitted", result.submitted as u8 as f64);
                 wheel.compositor_owned = result.compositor_owned;
-                // InputHandlerProxy sends a wheel which cannot stay on the
-                // impl thread to Blink and schedules one main-frame commit for
-                // that input transaction.  Establish that commit before Page
-                // queues the frame-aligned event.  Otherwise a physical pulse
-                // which is already in flight can consume Page's BeginFrame
-                // request without ever telling cc that new main-tree state is
-                // coming, leaving the DOM offset ahead of the active tree.
-                // Additional wheel samples join the outstanding transaction.
-                //
-                // Source: content/renderer/input/input_handler_proxy.cc;
-                //         cc/trees/proxy_impl.cc SetNeedsCommitOnImplThread.
-                if !result.compositor_owned && !presentation.main_frame_pending() {
-                    let mut request = presentation.pipeline.RequestMainFrame()?;
-                    result.submitted |= request.submitted;
-                    result.effects.append(&mut request.effects);
+                wheel.compositor_nonblocking = result.dom_ack.is_none();
+                if let Some(request) = result.dom_ack {
+                    wheel.compositor_ack.push(request);
                 }
+                // Blocking raw wheel awaits its canonical DOM ack. The
+                // gesture and any main-thread hit-test callback return to this
+                // same impl InputHandler; no main-thread offset fallback runs.
+                presentation.gesture_acks(&result.gesture_acks, &main);
                 presentation.observe_main_thread_effects(&result.effects);
                 let requested = result
                     .effects
@@ -1240,6 +2064,7 @@ fn run_impl(
                     main_frame_epoch
                 });
                 let _ = main.send(Command::ExternalWheel {
+                    document_generation: presentation.input_document_generation,
                     wheel,
                     queued_at,
                     samples,
@@ -1284,7 +2109,10 @@ fn run_impl(
         {
             pump_pending.store(false, Ordering::Release);
         }
-        if presentation.needs_publish || presentation.pipeline.NeedsBeginFrames() {
+        if presentation.needs_publish
+            || presentation.pipeline.NeedsBeginFrames()
+            || presentation.gestures.fling_in_progress()
+        {
             source.request_begin_frame();
         }
     }
@@ -1456,7 +2284,13 @@ impl DocumentQueue {
             };
             match receiver.recv_timeout(timeout) {
                 Ok(Command::Stop) => return Ok(Command::Stop),
-                Ok(Command::Wake) => self.ordinary(),
+                // A resource/worker completion is already an ordinary task,
+                // not merely a request to ensure that some ordinary task
+                // exists. Page admits one loading completion per task turn;
+                // folding this into an already queued Task can consume that
+                // turn on a different image/script response and permanently
+                // hide this completion.
+                Ok(Command::Wake) => self.post(Command::Wake),
                 Ok(command) => self.post(command),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(mpsc::RecvTimeoutError::Disconnected);
@@ -1476,7 +2310,7 @@ impl DocumentQueue {
             loop {
                 match receiver.try_recv() {
                     Ok(Command::Stop) => return Ok(Command::Stop),
-                    Ok(Command::Wake) => self.ordinary(),
+                    Ok(Command::Wake) => self.post(Command::Wake),
                     Ok(command) => self.post(command),
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -1505,6 +2339,9 @@ impl DocumentQueue {
                     self.patches_queued = false;
                     self.ordinary();
                     return Ok(Command::Patch(std::mem::take(&mut self.pending_patches)));
+                } else if matches!(command, Command::Wake) {
+                    // The completion itself is Page's ordinary task. Work
+                    // left by the bounded turn can enqueue its own next wake.
                 } else {
                     self.ordinary();
                 }
@@ -1514,13 +2351,150 @@ impl DocumentQueue {
     }
 }
 struct Client {
+    document_sender: mpsc::Sender<Command>,
+    controls: bool,
+    native_drag_window: bool,
+    accepts_load_drops: bool,
+    primary_clipboard: Arc<crate::primary_clipboard::PrimaryClipboard>,
     document: Document,
     events: Arc<dyn Fn(Document, Event) + Send + Sync>,
     reporter: ErrorReporter,
 }
+
+fn loading_wake_callback(wake: mpsc::Sender<Command>) -> url_loader::URLWakeCallback {
+    Arc::new(move || {
+        // Resource and compilation completions are distinct networking/
+        // worker tasks in Chromium. Page intentionally admits one loading
+        // completion per task, so coalescing callbacks here can strand every
+        // ready operation except the one that bounded turn happens to poll.
+        let _ = wake.send(Command::Wake);
+    })
+}
+
 impl PageClient for Client {
+    fn DidDispatchClick(&mut self, source_document: u128, target_node_id: u64) {
+        if self.controls {
+            let _ = self.document_sender.send(Command::ClickActivated {
+                source_document,
+                target_node_id,
+            });
+        }
+    }
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        (self.events)(self.document, Event::EventHandlerChrome(effect));
+    }
+
+    fn CurrentKeyboardModifiers(
+        &self,
+    ) -> Result<
+        interaction::core::input::keyboard_event_manager::NativeKeyboardModifiers,
+        &'static str,
+    > {
+        crate::native_keyboard_modifiers::current()
+    }
+    fn DidChangeValidationMessageVisibility(
+        &mut self,
+        event: browser::page::ValidationMessageVisibility,
+    ) {
+        (self.events)(self.document, Event::ValidationMessageVisibility(event));
+    }
+    fn DidChangeValidationMessage(&mut self, update: browser::page::ValidationMessageUpdate) {
+        (self.events)(self.document, Event::ValidationMessage(update));
+    }
+
+    fn EnumerateDroppedDirectory(
+        &self,
+        request: browser::page::DirectoryEnumerationRequest,
+    ) -> bool {
+        let sender = self.document_sender.clone();
+        let directory = request.directory.clone();
+        directory.EnumerateDirectory(Box::new(move |files| {
+            let _ = sender.send(Command::DirectoryFilesChosen(
+                browser::page::DirectoryEnumerationResult { request, files },
+            ));
+        }));
+        true
+    }
+
+    fn CaptureMouseEventsToWidget(&mut self, capture: bool) {
+        (self.events)(self.document, Event::CaptureMouseEventsToWidget(capture));
+    }
+    fn StartSystemDrag(
+        &self,
+        request: interaction::default::core::page::drag_controller::SystemDragRequest,
+    ) -> interaction::default::core::page::drag_controller::SystemDragSupport {
+        use interaction::default::core::page::drag_controller::SystemDragSupport;
+        let support = crate::native_drag::support(self.native_drag_window, &request);
+        if support == SystemDragSupport::Supported {
+            (self.events)(
+                self.document,
+                Event::StartSystemDrag(crate::native_drag::Start {
+                    document: self.document,
+                    request: Arc::new(request),
+                    origin: (0., 0.),
+                    reply: self.document_sender.clone(),
+                }),
+            );
+        }
+        support
+    }
+    fn ReadPrimarySelection(
+        &self,
+    ) -> Result<
+        interaction::default::core::editing::commands::clipboard_commands::PrimaryClipboardSnapshot,
+        interaction::default::core::editing::commands::clipboard_commands::ClipboardHostError,
+    > {
+        use interaction::default::core::editing::commands::clipboard_commands::ClipboardHost;
+        self.primary_clipboard.ReadPrimarySelection()
+    }
+    fn ReadClipboard(
+        &self,
+    ) -> Result<
+        interaction::default::core::editing::commands::clipboard_commands::PrimaryClipboardSnapshot,
+        interaction::default::core::editing::commands::clipboard_commands::ClipboardHostError,
+    > {
+        use interaction::default::core::editing::commands::clipboard_commands::ClipboardHost;
+        self.primary_clipboard.ReadClipboard()
+    }
+    fn WriteClipboard(
+        &self,
+        snapshot: &interaction::default::core::editing::commands::clipboard_commands::PrimaryClipboardSnapshot,
+    ) -> Result<
+        (),
+        interaction::default::core::editing::commands::clipboard_commands::ClipboardHostError,
+    > {
+        use interaction::default::core::editing::commands::clipboard_commands::ClipboardHost;
+        self.primary_clipboard.WriteClipboard(snapshot)
+    }
+    fn DidAutoscroll(
+        &mut self,
+        effect: interaction::adapter::page_mouse_autoscroll::AutoscrollHostEffect,
+    ) {
+        (self.events)(self.document, Event::Autoscroll(effect));
+    }
+    fn DidChangeCursor(&mut self, cursor: interaction::Cursor) {
+        (self.events)(self.document, Event::CursorChanged(cursor));
+    }
+    fn AcceptsLoadDrops(&self) -> bool {
+        self.accepts_load_drops
+    }
+    fn DidRequestDropNavigation(&mut self, request: &browser::page::DropNavigationRequest) {
+        (self.events)(self.document, Event::DropNavigate(request.clone()));
+    }
     fn DidRequestNavigation(&mut self, request: &browser::page::NavigationRequest) {
         (self.events)(self.document, Event::Navigate(request.clone()));
+    }
+    fn DidRequestAuxiliaryNavigationTarget(
+        &mut self,
+        request: &browser::page::AuxiliaryNavigationTargetRequest,
+    ) {
+        (self.events)(
+            self.document,
+            Event::AuxiliaryNavigationTarget(request.clone()),
+        );
+    }
+    fn DidRequestHistoryNavigation(&mut self, delta: i32) {
+        (self.events)(self.document, Event::HistoryNavigation(delta));
     }
     fn DidCommit(&mut self, url: &str) {
         if !url.starts_with("data:") {
@@ -1533,6 +2507,26 @@ impl PageClient for Client {
                 ("tab_id", self.document.0 as f64),
                 ("document_generation", self.document.1 as f64),
             ],
+        );
+    }
+    fn DidCommitHistory(
+        &mut self,
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        load_type: navigation_history::FrameLoadType,
+    ) {
+        (self.events)(self.document, Event::HistoryCommitted { item, load_type });
+    }
+    fn DidUpdateHistoryState(&mut self, item: Arc<navigation_history::HistoryItemSnapshot>) {
+        (self.events)(self.document, Event::HistoryStateUpdated(item));
+    }
+    fn DidCommitChildHistory(
+        &mut self,
+        item: Arc<navigation_history::HistoryItemSnapshot>,
+        load_type: navigation_history::FrameLoadType,
+    ) {
+        (self.events)(
+            self.document,
+            Event::ChildHistoryCommitted { item, load_type },
         );
     }
     fn DidPresentFrame(&mut self, frame: &browser::page::PageFrame) {
@@ -1593,6 +2587,7 @@ fn apply_patch(page: &mut Page, patch: &Patch) -> io::Result<bool> {
     let id = match patch {
         Patch::Attribute { id, .. }
         | Patch::Html { id, .. }
+        | Patch::Text { id, .. }
         | Patch::Value { id, .. }
         | Patch::Focus { id, .. } => id,
     };
@@ -1621,6 +2616,11 @@ fn apply_patch(page: &mut Page, patch: &Patch) -> io::Result<bool> {
             value.clone().unwrap_or_default(),
         ),
         Patch::Html { value, .. } => (DOMMutationType::kSetInnerHTML, String::new(), value.clone()),
+        Patch::Text { value, .. } => (
+            DOMMutationType::kSetTextContent,
+            String::new(),
+            value.clone(),
+        ),
         Patch::Value { value, .. } => (
             DOMMutationType::kSetControlValue,
             String::new(),
@@ -1666,7 +2666,14 @@ fn run_document(
     impl_sender: mpsc::Sender<ImplCommand>,
 ) -> io::Result<()> {
     let mut viewport = params.viewport;
+    let _cursor_metrics_subscription =
+        crate::cursor_screen_info::subscribe(wake.clone(), params.system_cursor_size);
     let client = Rc::new(RefCell::new(Client {
+        document_sender: wake.clone(),
+        controls: params.controls,
+        native_drag_window: params.native_drag_window,
+        accepts_load_drops: params.native_drag_window && !params.controls,
+        primary_clipboard: params.primary_clipboard.clone(),
         document: params.document,
         events: params.events.clone(),
         reporter: reporter.clone(),
@@ -1676,35 +2683,55 @@ fn run_document(
         f64::from(viewport.height) / viewport.scale,
         viewport.scale,
         params.scripting,
+        params.prefers_reduced_motion,
+        &params.text_settings,
+        params.font_backend_factory.clone(),
         client,
         threads,
     )?;
+    // Source ScreenInfos is present before the first document query, including
+    // the empty macOS/Linux source size. Windows updates arrive as host tasks.
+    page.SetSystemCursorSize(
+        params.system_cursor_size.width_dip as f32,
+        params.system_cursor_size.height_dip as f32,
+    )?;
+    // LocalFrameView::BaseBackgroundColor is an embedding choice independent
+    // of CSS. BrowserView paints the toolbar backdrop in its root Viz frame;
+    // ordinary WebContents keep Page's default opaque white base.
+    page.SetShouldPaintBaseBackgroundColor(!params.transparent);
     page.SetExternalCompositor(true);
+    impl_sender
+        .send(ImplCommand::BindGestureTouchActionFilter(
+            page.GestureTouchActionFilterHandle(),
+        ))
+        .map_err(|_| io::Error::other("Page input executor stopped"))?;
     page.SetBeginFrameSource(Some(source.clone()));
-    let wake_pending = Arc::new(AtomicBool::new(false));
-    let pending = wake_pending.clone();
-    page.SetLoadingWakeCallback(Arc::new(move || {
-        if !pending.swap(true, Ordering::AcqRel) {
-            let _ = wake.send(Command::Wake);
-        }
-    }));
+    page.SetLoadingWakeCallback(loading_wake_callback(wake));
     page.OpenRequest(&params.request, 16384, 4096)?;
     let mut patches = VecDeque::new();
     let mut completed_patch_revisions = std::collections::BTreeSet::new();
     let mut ready_embedder_revision = 0u64;
     let mut applied_embedder_revision = 0u64;
-    let mut published = None;
+    let mut published: Option<(u64, u64, u64, u64)> = None;
+    let mut validation_bubble_size = None;
     let mut completed_main_frame_epoch = 0u64;
     let mut status = None;
-    let mut feedback = None;
+    let mut caret_feedback = None;
+    let mut text_input_feedback = None;
     let mut last_memory_report: Option<Instant> = None;
     let mut hovered = Vec::new();
     let mut press_discarded = false;
     let mut resize_event_pending = false;
     let mut pending_resize_provenance: Option<ResizeProvenance> = None;
+    let mut resize_root_viewport = None;
+    let mut copy_output_fence_pending = false;
     let mut queue = DocumentQueue::new();
     loop {
         let command = queue.next(&receiver, page.NextTaskDeadline(Instant::now()));
+        let processing_main_frame = matches!(
+            &command,
+            Ok(Command::Main(MainThreadEvent::BeginFrame { .. }))
+        );
         let frame_context = match &command {
             Ok(Command::Main(MainThreadEvent::BeginFrame { frame, .. })) => {
                 browser_tracing::Context {
@@ -1723,14 +2750,79 @@ fn run_document(
         let _scope = browser_tracing::scope(frame_context);
         match command {
             Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Command::PrepareNavigation { token }) => {
+                page.SaveHistoryState();
+                (params.events)(params.document, Event::NavigationPrepared { token });
+            }
+            Ok(Command::CompleteAuxiliaryNavigationTarget {
+                request_id,
+                accepted,
+            }) => page.CompleteAuxiliaryNavigationTarget(request_id, accepted),
+            Ok(Command::TraverseHistory { item, state }) => {
+                page.TraverseSessionHistory(item, state);
+            }
+            Ok(Command::SessionHistoryState { item, state }) => {
+                page.SetSessionHistoryState(item, state);
+            }
+            Ok(Command::DirectoryFilesChosen(result)) => {
+                page.DirectoryFilesChosen(result)?;
+            }
+            Ok(Command::SystemDragTarget { target, action }) => {
+                let result = page.TargetSystemDrag(
+                    action,
+                    target.position,
+                    target.screen_position,
+                    target.modifiers,
+                    target.observed_at,
+                );
+                match result {
+                    Ok(operation) => {
+                        if target.feedback_generation.load(Ordering::Acquire)
+                            == target.request_token
+                        {
+                            target
+                                .operation
+                                .store(operation.operation as u32, Ordering::Release);
+                        }
+                    }
+                    Err(error) => {
+                        if target.feedback_generation.load(Ordering::Acquire)
+                            == target.request_token
+                        {
+                            target.operation.store(0, Ordering::Release);
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(Command::SystemDragEnded(completion)) => {
+                if completion.document == params.document {
+                    let operation = match completion.outcome {
+                        crate::native_drag::Outcome::Ended(operation) => operation,
+                        crate::native_drag::Outcome::Cancelled | crate::native_drag::Outcome::Failed(_) =>
+                            interaction::dispatch::core::clipboard::data_transfer::DragOperation::None,
+                    };
+                    if let crate::native_drag::Outcome::Failed(failure) = completion.outcome {
+                        eprintln!(
+                            "rechrom-native-drag-failed document={:?} reason={failure:?}",
+                            completion.document
+                        );
+                    }
+                    page.EndSystemDrag(
+                        completion.pointer_id,
+                        completion.position,
+                        completion.screen_position,
+                        completion.completed_at,
+                        operation,
+                    )?;
+                }
+            }
             Ok(Command::Wake) => {
-                wake_pending.store(false, Ordering::Release);
                 page.RunTask()?;
             }
             #[cfg(test)]
             Ok(Command::TestTask(task)) => task(),
             Ok(Command::Task) => {
-                wake_pending.store(false, Ordering::Release);
                 page.RunTask()?;
             }
             Ok(Command::CollectLayoutHeap) => {
@@ -1740,6 +2832,10 @@ fn run_document(
                 foundation::CollectLayoutHeapIncrementally(Duration::from_millis(5));
             }
             Ok(Command::CollectJavaScriptHeap) => page.CollectJavaScriptGarbage(),
+            Ok(Command::CopyOutputFence) => {
+                copy_output_fence_pending = true;
+                source.request_begin_frame();
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 unreachable!("document queue resolves deadlines")
             }
@@ -1790,11 +2886,26 @@ fn run_document(
                     _ => false,
                 };
                 let has_no_artifact = page.CurrentFrame().is_none();
+                let current_frame_was_published = page.CurrentFrame().is_some_and(|frame| {
+                    published.is_some_and(|publication| {
+                        publication.0 == frame.sequence
+                            && publication.1 == frame.compositor_scroll_sequence
+                    })
+                });
                 if first_response_for_epoch
                     && !embedder_revision_changed
+                    && !copy_output_fence_pending
                     && artifact_unchanged
+                    // ProxyMain must finish every BeginMainFrame transaction,
+                    // including the provisional document's first opportunity
+                    // before parsing has produced any PaintArtifact.  Requiring
+                    // a previously published frame here leaves cc permanently
+                    // waiting on main, so the later dirty parse can never ask
+                    // for the BMF that creates the actual first frame.
+                    && (has_no_artifact || current_frame_was_published)
                     && (pending_resize_provenance.is_none() || has_no_artifact)
                 {
+                    send_event_timing_requests(&page, &impl_sender, false)?;
                     impl_sender
                         .send(ImplCommand::FinishMainFrameWithoutUpdates { main_frame_epoch })
                         .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
@@ -1822,6 +2933,43 @@ fn run_document(
                     ],
                 );
             }
+            Ok(Command::BindCompositorPresentationClock(clock)) => {
+                page.BindExternalCompositorPresentationClock(clock)
+            }
+            Ok(Command::EventTimingDidSwap {
+                requests,
+                frame_token,
+                swap_time,
+            }) => page.EventTimingDidSwap(requests, frame_token, swap_time),
+            Ok(Command::EventTimingDidNotSwap {
+                requests,
+                swap_time,
+            }) => page.EventTimingDidNotSwap(requests, swap_time),
+            Ok(Command::EventTimingDidCommit(commit_finish_time)) => {
+                page.EventTimingDidCommit(commit_finish_time)
+            }
+            Ok(Command::EventTimingDidPresent(feedback)) => page.EventTimingDidPresent(feedback),
+            Ok(Command::Visibility {
+                visible,
+                changed_at,
+            }) => {
+                page.NotifyPerformancePageVisibilityChanged(visible, changed_at);
+            }
+            Ok(Command::ClickActivated {
+                source_document,
+                target_node_id,
+            }) => {
+                if params.controls
+                    && page.Document().GetDocument().RootHandle().Identity() == source_document
+                {
+                    (params.events)(
+                        params.document,
+                        Event::ControlActivated {
+                            target: element_id(&page, target_node_id),
+                        },
+                    );
+                }
+            }
             Ok(Command::Input {
                 input,
                 queued_at,
@@ -1834,20 +2982,21 @@ fn run_document(
                     continue;
                 }
                 if press_discarded
-                    && matches!(&input,InputEvent::Mouse(e) if matches!(e.r#type,MouseEventType::kUp|MouseEventType::kClick|MouseEventType::kDoubleClick|MouseEventType::kContextMenu))
+                    && matches!(&input,InputEvent::Mouse(e) if matches!(e.r#type,MouseEventType::kUp|MouseEventType::kContextMenu))
                 {
-                    if matches!(&input,InputEvent::Mouse(e) if e.r#type==MouseEventType::kClick) {
-                        press_discarded = false;
-                    }
+                    // Retain the discarded sequence through any platform
+                    // context-menu notification; the next down starts a new one.
                     continue;
                 }
                 if matches!(&input,InputEvent::Mouse(e) if e.r#type==MouseEventType::kDown) {
                     press_discarded = false;
                 }
-                if interaction::frame_aligned_input_queue::FrameAlignedInputQueue::IsFrameAligned(
-                    &input,
-                ) && !params.controls
-                {
+                if !params.controls {
+                    // Page owns Chromium's MainThreadEventQueue ordering. In
+                    // particular, a non-coalescible mouse-up must flush the
+                    // frame-aligned mouse-move that precedes it before the up
+                    // is dispatched. Calling Dispatch here bypasses that
+                    // barrier and collapses fast native drags to their press.
                     page.QueueFrameInput(input, queued_at, samples)?;
                 } else {
                     let started = Instant::now();
@@ -1855,10 +3004,10 @@ fn run_document(
                     let was_address = params.controls && page.FocusedNodeId() == address;
                     let result = page.Dispatch(&input)?;
                     if params.controls {
-                        if matches!(&input,InputEvent::Mouse(e) if matches!(e.r#type,MouseEventType::kDown|MouseEventType::kDoubleClick) && e.button==MouseButton::kPrimary)
+                        if matches!(&input,InputEvent::Mouse(e) if e.r#type==MouseEventType::kDown && e.button==MouseButton::kPrimary)
                             && result.target_node_id == address
                             && (!was_address
-                                || matches!(&input,InputEvent::Mouse(e) if e.r#type==MouseEventType::kDoubleClick))
+                                || matches!(&input,InputEvent::Mouse(e) if e.click_count==2))
                         {
                             apply_patch(
                                 &mut page,
@@ -1904,32 +3053,6 @@ fn run_document(
                                 prevented: result.default_prevented,
                             },
                         );
-                    } else if !result.default_prevented
-                        && matches!(&input,InputEvent::Mouse(e) if e.r#type==MouseEventType::kClick && e.button==MouseButton::kPrimary)
-                    {
-                        if let Some(link) = result
-                            .target_node_id
-                            .and_then(|id| crate::navigation::link_request(&page, id))
-                        {
-                            (params.events)(
-                                params.document,
-                                Event::Navigate(browser::page::NavigationRequest {
-                                    request: url_loader::URLRequest {
-                                        url: link.url,
-                                        ..Default::default()
-                                    },
-                                    target: if link.disposition
-                                        == crate::navigation::Disposition::NewTab
-                                    {
-                                        "_blank"
-                                    } else {
-                                        ""
-                                    }
-                                    .into(),
-                                    replace_history: false,
-                                }),
-                            );
-                        }
                     }
                     browser_tracing::interval(
                         "input",
@@ -1948,22 +3071,90 @@ fn run_document(
                 }
             }
             Ok(Command::ExternalWheel {
+                document_generation,
                 wheel,
                 queued_at,
                 samples,
                 effects,
                 main_frame_epoch,
             }) => {
-                let requests_main = main_frame_epoch.is_some();
-                page.ApplyCompositorWheelEffects(effects)?;
-                if requests_main {
-                    // Mark the compositor-issued main frame before Page queues
-                    // the wheel. QueueFrameInput requests the same physical
-                    // pulse through BeginFrameSource; this ordering prevents
-                    // that request from manufacturing a second cc commit.
-                    source.request_compositor_main_frame();
+                if document_generation != page.InputDocumentGeneration() {
+                    page.DiscardWheelForDetachedDocument(&wheel)?;
+                    if let Some(main_frame_epoch) = main_frame_epoch {
+                        let _ = impl_sender
+                            .send(ImplCommand::FinishMainFrameWithoutUpdates { main_frame_epoch });
+                    }
+                } else {
+                    let requests_main = main_frame_epoch.is_some();
+                    page.ApplyCompositorWheelEffects(effects)?;
+                    if requests_main {
+                        // Mark the compositor-issued main frame before Page queues
+                        // the wheel. QueueFrameInput requests the same physical
+                        // pulse through BeginFrameSource; this ordering prevents
+                        // that request from manufacturing a second cc commit.
+                        source.request_compositor_main_frame();
+                    }
+                    page.QueueFrameInput(InputEvent::Wheel(wheel), queued_at, samples)?;
                 }
-                page.QueueFrameInput(InputEvent::Wheel(wheel), queued_at, samples)?;
+            }
+            Ok(Command::ExternalCanonicalWheel {
+                document_generation,
+                event,
+                wheel,
+                queued_at,
+                effects,
+                main_frame_epoch,
+            }) => {
+                if document_generation != page.InputDocumentGeneration() {
+                    page.DiscardWheelForDetachedDocument(&wheel)?;
+                    if let Some(main_frame_epoch) = main_frame_epoch {
+                        let _ = impl_sender
+                            .send(ImplCommand::FinishMainFrameWithoutUpdates { main_frame_epoch });
+                    }
+                } else {
+                    page.ApplyCompositorWheelEffects(effects)?;
+                    if main_frame_epoch.is_some() {
+                        source.request_compositor_main_frame();
+                    }
+                    let packet =
+                        interaction::frame_aligned_input_queue::OwnedInputPacket::FromCanonical(
+                            ConvertedWebInputEvent::Wheel(event),
+                        );
+                    page.QueueCanonicalFrameInput(InputEvent::Wheel(wheel), packet, queued_at, 1)?;
+                }
+            }
+            Ok(Command::ExternalGesture {
+                document_generation,
+                dispatch_id,
+                gesture,
+            }) => {
+                if document_generation == page.InputDocumentGeneration() {
+                    page.QueueBrowserGesture(gesture, dispatch_id, Instant::now())?;
+                } else {
+                    let _ = impl_sender.send(ImplCommand::GestureAck {
+                        dispatch_id,
+                        result: InputEventResultState::kNoConsumerExists,
+                    });
+                }
+            }
+            Ok(Command::GestureDisposition(ack)) => {
+                (params.events)(
+                    params.document,
+                    Event::GestureDisposition {
+                        gesture: ack.event,
+                        source: ack.source,
+                        result: ack.result,
+                    },
+                );
+            }
+            Ok(Command::FlingDisposition(gesture)) => {
+                (params.events)(
+                    params.document,
+                    Event::FlingDisposition {
+                        gesture,
+                        result: InputEventResultState::kConsumed,
+                    },
+                );
             }
             Ok(Command::CompositorEffects {
                 effects,
@@ -1978,6 +3169,7 @@ fn run_document(
             Ok(Command::Resize(resize)) => {
                 let started = Instant::now();
                 let next = resize.viewport;
+                resize_root_viewport = Some(resize.root_viewport);
                 browser_tracing::interval(
                     "resize",
                     "ResizeDocumentQueue",
@@ -2008,6 +3200,22 @@ fn run_document(
                 }
                 resize_event_pending = true;
             }
+            Ok(Command::InteractionTextSettings(settings)) => {
+                if let Some(locale) = settings.temporal_locale {
+                    page.SetTemporalInputLocale(locale);
+                }
+                page.SetInteractionTextSettings(
+                    settings.editing_behavior,
+                    &settings.ui_locale,
+                    settings.smart_insert_delete_enabled,
+                );
+            }
+            Ok(Command::ContextMenuWidgetGeometry(geometry)) => {
+                page.SetContextMenuWidgetGeometry(geometry)?;
+            }
+            Ok(Command::SystemCursorSize(size)) => {
+                page.SetSystemCursorSize(size.width_dip as f32, size.height_dip as f32)?;
+            }
             Ok(Command::ResizeTask) => unreachable!("DocumentQueue resolves resize tasks"),
             Ok(Command::Active(active)) => page.SetActive(active)?,
             Ok(Command::Patch(batch)) => patches.extend(batch),
@@ -2015,11 +3223,40 @@ fn run_document(
             Ok(Command::Evaluate { source, reply }) => {
                 let _task = browser_tracing::span("owner_task", "Page.Evaluate");
                 let result = page
-                    .Evaluate(&source, "devtools:Runtime.evaluate")
+                    .EvaluateForInspector(&source, "devtools:Runtime.evaluate")
                     .map_err(|e| e.to_string())
                     .and_then(|r| r.exception.map_or(Ok(()), |e| Err(e.message)));
                 let _ = reply.send(result);
             }
+        }
+        // WidgetInputHandlerManager.cc:505-520 posts its completed main-thread
+        // hit test back to the input owner. WebFrameWidgetImpl.cc:4353-4355
+        // posts injected scrollbar gestures to that same sequenced ingress.
+        // Wheel acknowledgements and scrollbar begin/update/end retain FIFO
+        // order after the synchronous document input transaction completes.
+        for disposition in page.TakeWheelDispositions()? {
+            let _ = impl_sender.send(ImplCommand::WheelAck {
+                document_generation: disposition.document_generation,
+                result: disposition.result,
+            });
+        }
+        for input in page.TakePendingBrowserInputs() {
+            let command = match input {
+                browser::page::PageBrowserInput::DocumentDetached { generation } => {
+                    ImplCommand::DocumentDetached { generation }
+                }
+                browser::page::PageBrowserInput::Compositor(input) => {
+                    ImplCommand::InputContinuation(input)
+                }
+                browser::page::PageBrowserInput::Gesture(gesture) => ImplCommand::Gesture {
+                    gesture,
+                    queued_at: Instant::now(),
+                    samples: 1,
+                },
+            };
+            impl_sender
+                .send(command)
+                .map_err(|_| io::Error::other("Page input executor stopped"))?;
         }
         let count = patches.len();
         for _ in 0..count {
@@ -2030,75 +3267,178 @@ fn run_document(
                 patches.push_back((revision, patch));
             }
         }
+        let previous_ready_embedder_revision = ready_embedder_revision;
         while completed_patch_revisions.remove(&(ready_embedder_revision + 1)) {
             ready_embedder_revision += 1;
+        }
+        if ready_embedder_revision != previous_ready_embedder_revision {
+            // Browser UI state and the root scene are fenced by this revision.
+            // A patch may be a semantic no-op (for example, clicking content
+            // while the omnibox is already unfocused), so DOM invalidation is
+            // not guaranteed to request a lifecycle update. Still run a main
+            // frame: it publishes the resident artifact with the newly
+            // consumed embedder revision and lets Display complete the root
+            // commit. This is the Page-backed equivalent of Chromium's
+            // browser-UI commit acknowledgement.
+            source.request_begin_frame();
+        }
+        // MainThreadEventQueue owns the original and coalesced callbacks.
+        // Publish their completed ACKs in order without waiting on the host.
+        for disposition in page.TakeBrowserGestureDispositions() {
+            let _ = impl_sender.send(ImplCommand::GestureAck {
+                dispatch_id: disposition.dispatch_id,
+                result: if disposition.consumed {
+                    InputEventResultState::kConsumed
+                } else {
+                    InputEventResultState::kNotConsumed
+                },
+            });
+        }
+        for disposition in page.TakeTouchDispositions() {
+            (params.events)(
+                params.document,
+                Event::TouchDisposition {
+                    unique_touch_event_id: disposition.unique_touch_event_id,
+                    consumed: disposition.consumed,
+                },
+            );
         }
         for event in page.TakeDispatchedFrameInputs() {
             let _scope = browser_tracing::scope(browser_tracing::Context {
                 input_id: browser_tracing::instant_id(event.queued_at),
                 ..Default::default()
             });
+            let (kind, compositor_owned, compositor_nonblocking) = match &event.input {
+                InputEvent::Wheel(wheel) => (
+                    1.0,
+                    wheel.compositor_owned as u8 as f64,
+                    wheel.compositor_nonblocking as u8 as f64,
+                ),
+                _ => (0.0, 0.0, 0.0),
+            };
             browser_tracing::interval(
                 "input",
                 "InputQueue",
                 event.queued_at,
                 event.dispatch_started,
-                &[("samples", event.samples as f64), ("frame_aligned", 1.0)],
+                &[
+                    ("samples", event.samples as f64),
+                    ("frame_aligned", 1.0),
+                    ("kind", kind),
+                    ("compositor_owned", compositor_owned),
+                    ("compositor_nonblocking", compositor_nonblocking),
+                ],
             );
             browser_tracing::interval(
                 "input",
                 "InputDispatch",
                 event.dispatch_started,
                 event.dispatch_finished,
-                &[("samples", event.samples as f64), ("frame_aligned", 1.0)],
+                &[
+                    ("samples", event.samples as f64),
+                    ("frame_aligned", 1.0),
+                    ("kind", kind),
+                    ("compositor_owned", compositor_owned),
+                    ("compositor_nonblocking", compositor_nonblocking),
+                ],
             );
         }
-        if let Some(frame) = page.CurrentFrame() {
-            // A host resize invalidates Page and requests BeginMainFrame, but it
-            // does not turn the active PaintArtifact into output for the new
-            // viewport. Chromium keeps the old LocalSurfaceId visible until
-            // the renderer submits a CompositorFrame with the new surface
-            // parameters. Publish again only after Page produces new content
-            // or consumes a new main-frame/scroll transaction.
-            let identity = (
-                frame.sequence,
-                frame.compositor_scroll_sequence,
-                completed_main_frame_epoch,
-                applied_embedder_revision,
-            );
-            if published != Some(identity) {
-                impl_sender
-                    .send(ImplCommand::Commit {
-                        artifact: frame.display_items.clone(),
-                        content: ContentFrameProvenance {
-                            sequence: frame.sequence,
-                            recording_revision: frame.display_items.recording_revision,
-                            main_frame_epoch: completed_main_frame_epoch,
-                            compositor_scroll_sequence: frame.compositor_scroll_sequence,
-                            embedder_revision: applied_embedder_revision,
-                            resize: pending_resize_provenance.take(),
-                        },
-                        viewport,
-                    })
-                    .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
-                published = Some(identity);
-                if params.document.0 == 0 {
+        if params.document.0 == u64::MAX - 1 {
+            // Browser UI reads only its own resident Layout result. The
+            // embedding routes this small immutable size back to the overlay
+            // owner; neither document reaches into the other's engine.
+            if let Some(control) = find_id(&page, "container") {
+                let layout = page.GetLayoutEngine();
+                let size = layout
+                    .Output()
+                    .and_then(|output| output.Node(control))
+                    .and_then(|node| node.ClientRects().into_iter().next())
+                    .map(|rect| (rect.width, rect.height));
+                if let Some((width, height)) = size.filter(|size| {
+                    Some(*size) != validation_bubble_size && size.0 > 0.0 && size.1 > 0.0
+                }) {
+                    validation_bubble_size = Some((width, height));
                     (params.events)(
                         params.document,
-                        Event::DragRegions(drag_regions(&page, viewport)),
+                        Event::ValidationBubbleSize { width, height },
                     );
                 }
-                let next = (page.URL().to_string(), title(&page), page.IsLoading());
-                if status.as_ref() != Some(&next) {
-                    (params.events)(
-                        params.document,
-                        Event::Status {
-                            url: next.0.clone(),
-                            title: next.1.clone(),
-                            loading: next.2,
-                        },
-                    );
-                    status = Some(next);
+            }
+        }
+        // Drain every document turn, including input that makes no paint
+        // changes. Requests precede the matching artifact on the impl queue.
+        // Every independent Page uses its own route; root and embedded Page
+        // domains never borrow another Page's mutable timing state.
+        let has_pending_commit = page.CurrentFrame().is_some_and(|frame| {
+            published
+                != Some((
+                    frame.sequence,
+                    frame.compositor_scroll_sequence,
+                    completed_main_frame_epoch,
+                    applied_embedder_revision,
+                ))
+        });
+        send_event_timing_requests(&page, &impl_sender, !has_pending_commit)?;
+        // ProxyMain admits PaintArtifact state only as the response to the
+        // BeginMainFrame that owns its commit state. Input/resource tasks can
+        // finish Paint before that rendering opportunity reaches the document
+        // queue; retain the new resident artifact here instead of sending it
+        // with the preceding epoch and having ProxyImpl reject it as an
+        // unsolicited commit. The matching BeginMainFrame publishes it below.
+        if processing_main_frame {
+            if let Some(frame) = page.CurrentFrame() {
+                // A host resize invalidates Page and requests BeginMainFrame, but it
+                // does not turn the active PaintArtifact into output for the new
+                // viewport. Chromium keeps the old LocalSurfaceId visible until
+                // the renderer submits a CompositorFrame with the new surface
+                // parameters. Publish again only after Page produces new content
+                // or consumes a new main-frame/scroll transaction.
+                let identity = (
+                    frame.sequence,
+                    frame.compositor_scroll_sequence,
+                    completed_main_frame_epoch,
+                    applied_embedder_revision,
+                );
+                if published != Some(identity) {
+                    let child_frames = page.TakeChildCompositorFrames();
+                    impl_sender
+                        .send(ImplCommand::Commit {
+                            artifact: frame.display_items.clone(),
+                            child_frames,
+                            content: ContentFrameProvenance {
+                                sequence: frame.sequence,
+                                recording_revision: frame.display_items.recording_revision,
+                                main_frame_epoch: completed_main_frame_epoch,
+                                compositor_scroll_sequence: frame.compositor_scroll_sequence,
+                                embedder_revision: applied_embedder_revision,
+                                resize: pending_resize_provenance.take(),
+                            },
+                            viewport,
+                        })
+                        .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
+                    copy_output_fence_pending = false;
+                    published = Some(identity);
+                    if params.document.0 == 0 {
+                        (params.events)(
+                            params.document,
+                            Event::DragRegions {
+                                regions: drag_regions(&page, viewport),
+                                root_viewport: resize_root_viewport.take(),
+                            },
+                        );
+                    }
+                    let next = (page.URL().to_string(), title(&page), page.IsLoading());
+                    if status.as_ref() != Some(&next) {
+                        (params.events)(
+                            params.document,
+                            Event::Status {
+                                url: next.0.clone(),
+                                title: next.1.clone(),
+                                loading: next.2,
+                            },
+                        );
+                        status = Some(next);
+                    }
                 }
             }
         }
@@ -2117,20 +3457,22 @@ fn run_document(
             }
         }
         // Page's document executor can run many resource and BeginFrame tasks
-        // between native input events. Cursor/caret are state feedback, not a
-        // pulse for every owner-thread task; enqueue only a changed value so
-        // the window event loop remains able to consume native mouse/wheel
-        // input while a document is busy.
-        let next_feedback = (page.Cursor(), page.Caret().map(|c| c.rect));
-        if feedback != Some(next_feedback) {
+        // between native input events. Enqueue caret feedback only when its
+        // value changes. Cursor updates arrive through PageClient::SetCursor.
+        let next_caret = page.Caret().map(|c| c.rect);
+        let next_text_input = page.TextInputState();
+        if caret_feedback.as_ref() != Some(&next_caret)
+            || text_input_feedback.as_ref() != Some(&next_text_input)
+        {
             (params.events)(
                 params.document,
                 Event::Feedback {
-                    cursor: next_feedback.0,
-                    caret: next_feedback.1,
+                    caret: next_caret,
+                    text_input: next_text_input.clone(),
                 },
             );
-            feedback = Some(next_feedback);
+            caret_feedback = Some(next_caret);
+            text_input_feedback = Some(next_text_input);
         }
         queue.collection();
         queue.javascript_collection(page.JavaScriptGarbageCollectionRequested());
@@ -2148,6 +3490,22 @@ fn run_document(
                 page.MemoryDiagnostics()
             );
         }
+    }
+    Ok(())
+}
+fn send_event_timing_requests(
+    page: &Page,
+    sender: &mpsc::Sender<ImplCommand>,
+    request_main_frame: bool,
+) -> io::Result<()> {
+    let requests = page.TakeEventTimingPresentationRequests();
+    if !requests.is_empty() {
+        sender
+            .send(ImplCommand::EventTimingRequests {
+                requests,
+                request_main_frame,
+            })
+            .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
     }
     Ok(())
 }
@@ -2282,18 +3640,38 @@ mod queue_tests {
     }
 
     #[test]
+    fn independent_loading_completions_survive_bootstrap_task() {
+        let (sender, receiver) = mpsc::channel();
+        let wake = loading_wake_callback(sender);
+        let mut queue = DocumentQueue::new();
+
+        // An image response and a module worker can become ready before the
+        // owner selects either. They are independent Chromium tasks: the
+        // unrelated bootstrap Task and the first bounded Page turn must not
+        // consume the second completion's identity.
+        wake();
+        wake();
+        assert!(matches!(queue.next(&receiver, None), Ok(Command::Task)));
+        assert!(matches!(queue.next(&receiver, None), Ok(Command::Wake)));
+        assert!(matches!(queue.next(&receiver, None), Ok(Command::Wake)));
+    }
+
+    #[test]
     fn no_update_response_reopens_the_next_begin_main_frame() {
         let (frames, _frame_receiver) = mpsc::channel();
         let mut presentation = ImplPresentation::new(
             PageRenderPipeline::new_external(executor::inline(), executor::inline(), false),
             frames,
             (1, 1),
+            mpsc::channel().0,
             Arc::new(|_| {}),
             Viewport {
                 width: 800,
                 height: 600,
                 scale: 1.0,
             },
+            Arc::new(|| {}),
+            Arc::new(|_| {}),
         );
         let now = Instant::now();
         let frame = |sequence_number: u64| foundation::begin_frame::BeginFrameArgs {
@@ -2406,5 +3784,124 @@ mod queue_tests {
         assert_eq!(resize.viewport.width, 902);
         assert_eq!(resize.queued_at, started);
         assert_eq!(resize.samples, 3);
+    }
+
+    #[test]
+    fn visual_properties_wait_for_one_frame_ack_and_keep_latest() {
+        let (sender, receiver) = mpsc::channel();
+        let initial = Viewport {
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        };
+        let started = Instant::now();
+        let mut throttle = VisualPropertiesThrottle::new(sender, initial);
+        throttle.resize(ResizeRequest::new(
+            Viewport {
+                width: 900,
+                ..initial
+            },
+            started,
+        ));
+        throttle.resize(ResizeRequest::new(
+            Viewport {
+                width: 1000,
+                ..initial
+            },
+            started + Duration::from_millis(1),
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        // Like OnLocalSurfaceIdChanged, the ACK is not tied to an exact resize
+        // id: even an older accepted frame releases the newest pending value.
+        throttle.ack();
+        let Command::Resize(resize) = receiver.recv().unwrap() else {
+            panic!("expected latest visual properties");
+        };
+        assert_eq!(resize.viewport.width, 1000);
+        assert_eq!(resize.queued_at, started);
+        assert_eq!(resize.samples, 2);
+    }
+
+    #[test]
+    fn identical_visual_properties_do_not_create_an_ack_dependency() {
+        let (sender, receiver) = mpsc::channel();
+        let initial = Viewport {
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        };
+        let mut throttle = VisualPropertiesThrottle::new(sender, initial);
+        throttle.ack();
+        throttle.resize(ResizeRequest::new(initial, Instant::now()));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(!throttle.ack_pending);
+    }
+
+    #[test]
+    fn shown_sync_restores_resize_dropped_while_hidden() {
+        let (sender, receiver) = mpsc::channel();
+        let initial = Viewport {
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        };
+        let resized = Viewport {
+            width: 1000,
+            ..initial
+        };
+        let started = Instant::now();
+        let mut throttle = VisualPropertiesThrottle::new(sender, initial);
+
+        // BrowserView accepts the new root viewport while the renderer still
+        // waits for its initial visual-properties ACK.
+        throttle.resize(ResizeRequest::new(resized, started));
+        assert_eq!(throttle.pending_latest.unwrap().viewport, resized);
+
+        // WasHidden releases the ACK and discards the pending transmission.
+        // WasShown/SynchronizeVisualProperties must submit the current value
+        // again even though the tab already stores that root viewport.
+        throttle.hidden();
+        throttle.resize(ResizeRequest::new(
+            resized,
+            started + Duration::from_millis(1),
+        ));
+        let Command::Resize(resize) = receiver.recv().unwrap() else {
+            panic!("expected shown visual-properties synchronization");
+        };
+        assert_eq!(resize.viewport, resized);
+        assert!(throttle.ack_pending);
+        assert!(throttle.pending_latest.is_none());
+    }
+
+    #[test]
+    fn scale_only_visual_properties_are_not_ack_throttled() {
+        let (sender, receiver) = mpsc::channel();
+        let initial = Viewport {
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        };
+        let mut throttle = VisualPropertiesThrottle::new(sender, initial);
+        throttle.ack();
+        for scale in [1.5, 2.0] {
+            throttle.resize(ResizeRequest::new(
+                Viewport { scale, ..initial },
+                Instant::now(),
+            ));
+        }
+        for scale in [1.5, 2.0] {
+            let Command::Resize(resize) = receiver.recv().unwrap() else {
+                panic!("expected scale-only visual properties");
+            };
+            assert_eq!(resize.viewport.scale, scale);
+        }
+        assert!(!throttle.ack_pending);
     }
 }

@@ -979,6 +979,7 @@ fn build_one(document: &FilterDocument<'_>, index: usize) -> SvgFilterGraph {
         Err(error) => (SvgFilterRegion::default(), Some(error)),
     };
     let mut graph = SvgFilterGraph {
+        resource_node_id: element.0.Id(),
         id: attr(element, "id")
             .or(element.id())
             .unwrap_or("")

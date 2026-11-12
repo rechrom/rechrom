@@ -7,7 +7,8 @@ use document_loader::{DecodeText, DocumentLoader, ResolveCSSStyleSheetURLs, Reso
 use document_loader::{RequireResponse, ResourceLoader};
 use dom::persistent_document::DOMNodeType;
 use dom::{Document, DOM};
-use html::html_parser::{HTMLDocumentParser, HTMLParserStatus, ParserScript};
+use html::document_parser::DocumentParser;
+use html::html_parser::{HTMLParserStatus, ParserScript};
 use html::html_parser_host::ParserElementPhase;
 use html::{HTMLParserHost, ParserElementEvent};
 use interaction::event::{EventListenerInvocation, EventPhase, EventType, MakeSyntheticEvent};
@@ -26,6 +27,15 @@ pub trait ScriptLoadClient {
     // Page invalidates caches after Pump,
     // before ready asynchronous scripts can observe the newly parsed nodes.
     fn DidPumpParser(&mut self) {}
+    /// The parser has returned the same arena, and native lifecycle effects
+    /// must dispatch before the next parser script in this exact runtime.
+    fn DidPumpParserWithRuntime(
+        &mut self,
+        _runtime: &mut dyn JavaScriptRuntime,
+        _realm: &JavaScriptRealm,
+    ) {
+        self.DidPumpParser();
+    }
     fn DidReportScriptError(&mut self, _error: &JavaScriptException) {}
     fn DidFailResource(&mut self, _url: &str, _error: &str) {}
     // Diagnostic observers; no engine/runtime behavior is supplied by them.
@@ -35,18 +45,22 @@ pub trait ScriptLoadClient {
     fn DidDispatchLifecycleEvent(&mut self, _name: &str) {}
 }
 
+type RenderBlockingSheet =
+    Rc<dom::render_blocking_resource_manager::StylesheetRenderBlockingRegistration>;
 enum PendingStyle {
     Inline {
         node: u64,
         base: String,
         sheet: Option<cssom::CSSStyleSheet>,
         render_blocking: bool,
+        registration: Option<RenderBlockingSheet>,
         metadata: StyleSheetOwnerMetadata,
     },
     External {
         url: String,
         resource: ResourceLoader,
         render_blocking: bool,
+        registration: Option<RenderBlockingSheet>,
         metadata: StyleSheetOwnerMetadata,
     },
     Parsed {
@@ -54,7 +68,18 @@ enum PendingStyle {
         base: String,
         imports: document_loader::StyleSheetImportLoad,
         render_blocking: bool,
+        registration: Option<RenderBlockingSheet>,
     },
+}
+
+impl PendingStyle {
+    fn Registration(&self) -> Option<RenderBlockingSheet> {
+        match self {
+            Self::Inline { registration, .. }
+            | Self::External { registration, .. }
+            | Self::Parsed { registration, .. } => registration.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +102,8 @@ impl StyleSheetOwnerMetadata {
     }
 }
 struct ParserResources {
+    render_blocking_manager:
+        Option<Rc<RefCell<dom::render_blocking_resource_manager::RenderBlockingResourceManager>>>,
     resources: Rc<ResourceEngine>,
     current_url: String,
     base_url: String,
@@ -105,6 +132,24 @@ struct ParserResources {
     scripting: bool,
     preloads: crate::preload::Preloads,
     preload_csp_seen: bool,
+}
+
+impl ParserResources {
+    fn RegisterRenderBlockingStylesheet(
+        &self,
+        node: u64,
+        critical: bool,
+    ) -> Option<RenderBlockingSheet> {
+        if !critical {
+            return None;
+        }
+        self.render_blocking_manager.as_ref().and_then(|manager| {
+            dom::render_blocking_resource_manager::StylesheetRenderBlockingRegistration::Register(
+                manager,
+                dom::render_blocking_resource_manager::StylesheetOwner(node),
+            )
+        })
+    }
 }
 
 fn ShouldBlockRendering(resources: &ParserResources, alternate: bool, media: &str) -> bool {
@@ -137,23 +182,6 @@ impl HTMLParserHost for ParserHost {
                     }
                 }
             }
-            if node.IsHTMLElement("base")
-                && !resources.base_seen
-                && node.FindAttribute("href").is_some()
-            {
-                // Document::ProcessBaseElement picks the first href even if
-                // invalid or empty; later elements cannot replace its fallback.
-                resources.base_seen = true;
-                resources.base_url =
-                    crate::preload::AcceptedBase(&resources.current_url, attr("href"))
-                        .unwrap_or_else(|| resources.current_url.clone());
-                if let Some(dynamic) = resources.dynamic.as_ref().and_then(|d| d.upgrade()) {
-                    dynamic.SetBaseURL(resources.base_url.clone());
-                }
-                if let Some(page) = &resources.page {
-                    page.SetBaseURL(resources.base_url.clone());
-                }
-            }
             let link_style = node.IsHTMLElement("link").then(|| {
                 html::link_style::ClassifyStyleSheetLink(
                     attr("rel"),
@@ -177,6 +205,10 @@ impl HTMLParserHost for ParserHost {
                 let resource = resources.resources.Start(request);
                 let render_blocking =
                     ShouldBlockRendering(&resources, disposition.alternate, attr("media"));
+                let registration =
+                    resources.RegisterRenderBlockingStylesheet(node.Id(), render_blocking);
+                let render_blocking = registration.is_some()
+                    || (resources.render_blocking_manager.is_none() && render_blocking);
                 browser_tracing::instant_with_text(
                     "loading",
                     "ParserStyleSheetQueued",
@@ -190,6 +222,7 @@ impl HTMLParserHost for ParserHost {
                     ],
                 );
                 resources.styles.push_back(PendingStyle::External {
+                    registration: registration.clone(),
                     url,
                     resource,
                     render_blocking,
@@ -213,9 +246,13 @@ impl HTMLParserHost for ParserHost {
                     .modules
                     .StartModuleLoad(&url, &resources.current_url);
             }
-        } else if node.IsHTMLElement("style") {
+        } else if node.IsStyleElement() {
             let base = resources.base_url.clone();
             let render_blocking = ShouldBlockRendering(&resources, false, attr("media"));
+            let registration =
+                resources.RegisterRenderBlockingStylesheet(node.Id(), render_blocking);
+            let render_blocking = registration.is_some()
+                || (resources.render_blocking_manager.is_none() && render_blocking);
             browser_tracing::instant(
                 "loading",
                 "ParserStyleSheetQueued",
@@ -227,6 +264,7 @@ impl HTMLParserHost for ParserHost {
                 ],
             );
             resources.styles.push_back(PendingStyle::Inline {
+                registration: registration.clone(),
                 node: node.Id(),
                 base,
                 sheet: None,
@@ -271,6 +309,19 @@ impl HTMLParserHost for ParserHost {
         element: usize,
         phase: ParserElementPhase,
     ) {
+        self.0.borrow_mut().render_blocking_manager = document.GetRenderBlockingResourceManager();
+        let font_resources = self.0.borrow().page.clone();
+        if let Some(resources) = font_resources {
+            resources.ProcessFontPreloadMutations(document);
+        }
+        // Source HTMLLinkElement/Element producer decisions run with the parser's
+        // existing live arena, before the next token or script can execute.
+        for request in document.TakeRenderBlockingDocumentMutations() {
+            let matches = request
+                .Media()
+                .is_none_or(|media| (self.0.borrow().render_blocking_media_matches)(media));
+            document.ApplyRenderBlockingDocumentMutation(request, matches);
+        }
         // Template contents are inert. Meta/base do not affect the outer
         // document from a shadow TreeScope; connected shadow images/styles
         // retain their normal resource lifetime.
@@ -283,10 +334,23 @@ impl HTMLParserHost for ParserHost {
         {
             return;
         }
+        {
+            let mut resources = self.0.borrow_mut();
+            resources.base_seen = document.HasBaseElementHref();
+            for change in document.TakeBaseURLChanges() {
+                resources.base_url = change.value.AsStr().to_owned();
+                if let Some(dynamic) = resources.dynamic.as_ref().and_then(|d| d.upgrade()) {
+                    dynamic.SetBaseURL(resources.base_url.clone());
+                }
+                if let Some(page) = &resources.page {
+                    page.SetBaseURL(change.value);
+                }
+            }
+        }
         // Source snapshots the style text at children-finished, before later
         // scripts can mutate/remove it while preceding CSS is still pending.
         let sheet = if phase == ParserElementPhase::kChildrenFinished
-            && document.Node(element).IsHTMLElement("style")
+            && document.Node(element).IsStyleElement()
         {
             let mut css = String::new();
             AppendText(document, element, &mut css);
@@ -363,7 +427,7 @@ impl Drop for ParserArena {
 fn PollParserStyleSheets(
     resources: &Rc<RefCell<ParserResources>>,
     document: &Rc<RefCell<DOM>>,
-    mut parser: Option<&mut HTMLDocumentParser<'_>>,
+    mut parser: Option<&mut DocumentParser<'_, '_>>,
     client: &mut dyn ScriptLoadClient,
 ) -> io::Result<bool> {
     for _ in 0..32 {
@@ -371,12 +435,14 @@ fn PollParserStyleSheets(
         let Some(pending) = pending else {
             return Ok(true);
         };
+        let registration = pending.Registration();
         let (mut sheet, base, imports_complete, render_blocking) = match pending {
             PendingStyle::Parsed {
                 sheet,
                 base,
                 mut imports,
                 render_blocking,
+                ..
             } => {
                 let page = resources
                     .borrow()
@@ -392,6 +458,7 @@ fn PollParserStyleSheets(
                         .borrow_mut()
                         .styles
                         .push_front(PendingStyle::Parsed {
+                            registration: registration.clone(),
                             sheet,
                             base,
                             imports,
@@ -407,6 +474,7 @@ fn PollParserStyleSheets(
                 sheet,
                 metadata,
                 render_blocking,
+                ..
             } => {
                 let read = |d: &Document| {
                     let mut css = String::new();
@@ -431,6 +499,7 @@ fn PollParserStyleSheets(
                 mut resource,
                 render_blocking,
                 metadata,
+                ..
             } => {
                 if !resource.Poll() {
                     browser_tracing::instant(
@@ -449,6 +518,7 @@ fn PollParserStyleSheets(
                         .borrow_mut()
                         .styles
                         .push_front(PendingStyle::External {
+                            registration: registration.clone(),
                             url,
                             resource,
                             render_blocking,
@@ -528,6 +598,7 @@ fn PollParserStyleSheets(
                         .borrow_mut()
                         .styles
                         .push_front(PendingStyle::Parsed {
+                            registration: registration.clone(),
                             sheet,
                             base,
                             imports,
@@ -570,10 +641,12 @@ fn PollParserStyleSheets(
 #[derive(Default)]
 struct ScriptDescriptor {
     is_script: bool,
+    is_html_script: bool,
     src: String,
     script_type: String,
     asynchronous: bool,
     deferred: bool,
+    blocking_render: bool,
     nomodule: bool,
     referrer_policy: Option<url_loader::ReferrerPolicy>,
     source: String,
@@ -585,6 +658,8 @@ pub struct ScriptScheduler {
     tasks: ParserScriptTasks,
     resources: Rc<RefCell<ParserResources>>,
     script_resources: HashMap<u64, ResourceLoader>,
+    render_blocking_scripts:
+        HashMap<u64, Rc<dom::render_blocking_resource_manager::ScriptRenderBlockingRegistration>>,
     prepared_classic_sources: HashMap<u64, io::Result<(String, String)>>,
     async_scripts: Vec<ParserScript>,
     deferred_scripts: Vec<ParserScript>,
@@ -593,6 +668,7 @@ pub struct ScriptScheduler {
     // shared script-work allowance for its nonblocking loading/task turn.
     remaining_script_tasks: Option<usize>,
     document_started: bool,
+    synchronous_parser: bool,
     parsing_finished: bool,
     content_loaded: bool,
     started_scripts: crate::dynamic_scripts::StartedScripts,
@@ -641,6 +717,7 @@ impl ScriptScheduler {
             document,
             bindings,
             resources: Rc::new(RefCell::new(ParserResources {
+                render_blocking_manager: None,
                 resources,
                 base_url: current_url.clone(),
                 current_url,
@@ -659,12 +736,14 @@ impl ScriptScheduler {
                 preload_csp_seen: false,
             })),
             script_resources: HashMap::new(),
+            render_blocking_scripts: HashMap::new(),
             prepared_classic_sources: HashMap::new(),
             async_scripts: Vec::new(),
             deferred_scripts: Vec::new(),
             running_async: false,
             remaining_script_tasks: None,
             document_started: false,
+            synchronous_parser: false,
             parsing_finished: false,
             content_loaded: false,
             started_scripts: Rc::new(RefCell::new(Default::default())),
@@ -672,6 +751,9 @@ impl ScriptScheduler {
             pending_host_errors,
         }
     }
+
+    /// Required before a script-enabled parser reaches document completion.
+    /// The low-level parser adapter has no alternate listener-dispatch path.
 
     pub fn InstallResourceFetcher(
         &mut self,
@@ -687,7 +769,7 @@ impl ScriptScheduler {
                 "page resources must own the parser document",
             ));
         }
-        page.SetBaseURL(self.resources.borrow().base_url.clone());
+        page.SetBaseURL(self.document.borrow().GetDocument().BaseURL());
         self.resources.borrow_mut().page = Some(page);
         Ok(())
     }
@@ -743,7 +825,7 @@ impl ScriptScheduler {
     }
     fn descriptor(
         &self,
-        parser: Option<&mut HTMLDocumentParser<'_>>,
+        parser: Option<&mut DocumentParser<'_, '_>>,
         script: ParserScript,
     ) -> io::Result<ScriptDescriptor> {
         let read = |tree: &Document| {
@@ -758,13 +840,31 @@ impl ScriptScheduler {
             };
             let mut source = String::new();
             AppendText(tree, node, &mut source);
+            let svg = element.IsElement("script", dom::persistent_document::DOMNamespace::kSVG);
+            let svg_href = || {
+                element
+                    .FindAttribute("href")
+                    .filter(|a| a.namespace_uri.is_empty())
+                    .or_else(|| {
+                        element.Attributes().iter().find(|a| {
+                            a.local_name == "href"
+                                && a.namespace_uri == "http://www.w3.org/1999/xlink"
+                        })
+                    })
+                    .map_or_else(String::new, |a| a.value.clone())
+            };
             Ok(ScriptDescriptor {
-                is_script: element.IsHTMLElement("script"),
-                src: attribute("src"),
+                is_script: element.IsHTMLElement("script") || svg,
+                is_html_script: element.IsHTMLElement("script"),
+                src: if svg { svg_href() } else { attribute("src") },
                 script_type: attribute("type"),
                 asynchronous: element.FindAttribute("async").is_some(),
-                deferred: element.FindAttribute("defer").is_some(),
-                nomodule: element.FindAttribute("nomodule").is_some(),
+                deferred: !svg && element.FindAttribute("defer").is_some(),
+                blocking_render: !svg
+                    && dom::render_blocking_resource_manager::HasRenderBlockingToken(&attribute(
+                        "blocking",
+                    )),
+                nomodule: !svg && element.FindAttribute("nomodule").is_some(),
                 referrer_policy: url_loader::ReferrerPolicy::FromString(&attribute(
                     "referrerpolicy",
                 )),
@@ -828,6 +928,15 @@ impl ScriptScheduler {
                     &resources.current_url,
                 );
             }
+            if descriptor.blocking_render
+                && !self.render_blocking_scripts.contains_key(&script.node_id)
+            {
+                if let Some(manager) = &resources.render_blocking_manager {
+                    if let Some(registration) = dom::render_blocking_resource_manager::ScriptRenderBlockingRegistration::Register(manager, dom::render_blocking_resource_manager::ScriptOwner(script.node_id), dom::render_blocking_resource_manager::ScriptRenderBlockingKind::Other) {
+                        self.render_blocking_scripts.insert(script.node_id, registration);
+                    }
+                }
+            }
             return Ok(());
         }
         if descriptor.src.is_empty()
@@ -860,6 +969,17 @@ impl ScriptScheduler {
         );
         self.script_resources
             .insert(script.node_id, resources.resources.Start(request));
+        // HTMLScriptElement.cc445-454: parser-inserted classic scripts block
+        // implicitly unless async/defer; explicit blocking=render also applies.
+        if descriptor.is_html_script
+            && (descriptor.blocking_render || (!descriptor.asynchronous && !descriptor.deferred))
+        {
+            if let Some(manager) = &resources.render_blocking_manager {
+                if let Some(registration) = dom::render_blocking_resource_manager::ScriptRenderBlockingRegistration::Register(manager, dom::render_blocking_resource_manager::ScriptOwner(script.node_id), dom::render_blocking_resource_manager::ScriptRenderBlockingKind::ParserInsertedClassic) {
+                    self.render_blocking_scripts.insert(script.node_id, registration);
+                }
+            }
+        }
         Ok(())
     }
     // cpp: browser/browser.cc:1441-1451
@@ -905,7 +1025,7 @@ impl ScriptScheduler {
     // cpp: browser/browser.cc:1453-1467
     fn run_async(
         &mut self,
-        mut parser: Option<&mut HTMLDocumentParser<'_>>,
+        mut parser: Option<&mut DocumentParser<'_, '_>>,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
         client: &mut dyn ScriptLoadClient,
@@ -973,7 +1093,7 @@ impl ScriptScheduler {
     // cpp: browser/browser.cc:1321-1354
     pub fn FinishStyleSheets(
         &mut self,
-        mut parser: Option<&mut HTMLDocumentParser<'_>>,
+        mut parser: Option<&mut DocumentParser<'_, '_>>,
         runtime: &mut dyn JavaScriptRuntime,
         realm: &JavaScriptRealm,
         client: &mut dyn ScriptLoadClient,
@@ -983,6 +1103,7 @@ impl ScriptScheduler {
             let Some(pending) = pending else {
                 break;
             };
+            let _registration = pending.Registration();
             let loaded = match pending {
                 PendingStyle::Parsed {
                     sheet,
@@ -1107,7 +1228,7 @@ impl ScriptScheduler {
     // cpp: browser/browser.cc:1615-1643
     fn run_script(
         &mut self,
-        mut parser: Option<&mut HTMLDocumentParser<'_>>,
+        mut parser: Option<&mut DocumentParser<'_, '_>>,
         script: ParserScript,
         wait_styles: bool,
         parser_blocking: bool,
@@ -1115,13 +1236,18 @@ impl ScriptScheduler {
         realm: &JavaScriptRealm,
         client: &mut dyn ScriptLoadClient,
     ) -> io::Result<()> {
-        self.ConsumeTaskBudget();
+        if !(parser_blocking && self.synchronous_parser) {
+            self.ConsumeTaskBudget();
+        }
         self.started_scripts.borrow_mut().insert(script.node_id);
         let descriptor = self.descriptor(parser.as_deref_mut(), script)?;
         self.start_script(script, &descriptor)?;
         if wait_styles {
             self.FinishStyleSheets(parser.as_deref_mut(), runtime, realm, client)?;
         }
+        // PendingScript::ExecuteScriptBlock removes the original render blocker
+        // before any compilation/resource error or JavaScript execution.
+        self.render_blocking_scripts.remove(&script.node_id);
         let descriptor = self.descriptor(parser.as_deref_mut(), script)?;
         let module_source = if Self::module(&descriptor, runtime) {
             match self.resources.borrow().modules.ScriptModule(script.node_id) {
@@ -1240,12 +1366,19 @@ impl ScriptScheduler {
         let root = tree.GetDocument().Node(tree.GetDocument().Root()).Id();
         drop(tree);
         let mut event = MakeSyntheticEvent(kind, root);
+        // Document lifecycle dispatch owns one canonical Event across every
+        // listener phase. Open keeps the current parser runtime, while WebAPI
+        // supplies the embedding clock used by the native Interaction owner.
+        self.bindings.borrow().PrepareLifecycleEvent(&mut event);
         let dispatch = |event: &mut interaction::event::Event,
                         current,
                         phase,
                         capture,
                         runtime: &mut dyn JavaScriptRuntime,
                         client: &mut dyn ScriptLoadClient| {
+            self.bindings
+                .borrow()
+                .PrepareLifecycleEventInvocation(event, phase, capture);
             let result = DOMJavaScriptBindings::DispatchEventListeners(
                 &self.bindings,
                 &EventListenerInvocation {
@@ -1298,6 +1431,7 @@ impl ScriptScheduler {
                 dispatch(&mut event, 0, EventPhase::kBubbling, false, runtime, client);
             }
         }
+        self.bindings.borrow().FinishLifecycleEvent(&event);
         runtime.PerformMicrotaskCheckpoint();
         for error in runtime.TakePendingExceptions(realm) {
             client.DidReportScriptError(&error);
@@ -1313,6 +1447,7 @@ impl ScriptScheduler {
         if self.document_started {
             return Err(io::Error::other("document has already been built"));
         }
+        self.synchronous_parser = loader.ForcesSynchronousParsing();
         self.resources.borrow_mut().supports_modules = runtime.SupportsModules();
         let mut host = ParserHost(self.resources.clone());
         loader.EnablePreloadScanning(true);
@@ -1339,7 +1474,12 @@ impl ScriptScheduler {
         let mut host = ParserHost(self.resources.clone());
         let progress = loader.Pump(arena.owner.GetDocumentMut(), &mut host, budget)?;
         if progress.parser_made_progress {
-            client.DidPumpParser();
+            // The feed has released its exclusive parser borrow. Return this
+            // same arena to the embedding for its synchronous DOM lifecycle
+            // effects before any ready async or parser-blocking script runs.
+            DOM::WithDocument(&self.document, arena.owner.GetDocumentMut(), || {
+                client.DidPumpParserWithRuntime(runtime, realm);
+            });
         }
         loader.WithParser(arena.owner.GetDocumentMut(), &mut host, |parser| {
             // Reserve executable parser scripts before async JS can mutate the
@@ -1350,10 +1490,12 @@ impl ScriptScheduler {
                     self.started_scripts.borrow_mut().insert(script.node_id);
                 }
             }
-            self.run_async(Some(parser), runtime, realm, client)?;
+            // Force-synchronous tokenizer pumping is not a ScriptRunner task.
+            // Ready async scripts stay on their independent task source.
+            if !self.synchronous_parser { self.run_async(Some(parser), runtime, realm, client)?; }
             // An async script is a separate ScriptRunner task. Leave the
             // resident parser paused if this turn already ran that task.
-            if !self.HasTaskBudget() { return Ok::<_, io::Error>(()); }
+            if !self.synchronous_parser && !self.HasTaskBudget() { return Ok::<_, io::Error>(()); }
             if progress.parser.status == HTMLParserStatus::kWaitingForScript {
                 if let Some(script) = progress.parser.script {
                     let descriptor = self.descriptor(Some(parser), script)?;
@@ -1450,6 +1592,24 @@ impl ScriptScheduler {
         realm: &JavaScriptRealm,
         client: &mut dyn ScriptLoadClient,
     ) -> io::Result<bool> {
+        let parser_detached = self
+            .document
+            .borrow()
+            .GetDocument()
+            .GetDocumentParser()
+            .is_none();
+        if parser_detached {
+            // HTMLParserScriptRunner::Detach discards parser-blocking/defer
+            // work. The independent ScriptRunner's async scripts still run.
+            self.deferred_scripts.clear();
+            self.parsing_finished = true;
+            self.content_loaded = true;
+            self.run_async(None, runtime, realm, client)?;
+            return Ok(self.async_scripts.is_empty() && !self.HasPendingStyleSheets());
+        }
+        if self.synchronous_parser && !self.content_loaded {
+            return self.PollSynchronousParsingCompletion(runtime, realm, client);
+        }
         if !self.HasTaskBudget() {
             return Ok(false);
         }
@@ -1464,6 +1624,7 @@ impl ScriptScheduler {
             self.DispatchLifecycleEvent(EventType::kReadyStateChange, runtime, realm, client);
             if self.remaining_script_tasks.is_some() {
                 self.ConsumeTaskBudget();
+                self.resources.borrow().resources.RequestWake();
                 return Ok(false);
             }
         }
@@ -1483,6 +1644,7 @@ impl ScriptScheduler {
             // script into a blank first paint even though all render-blocking
             // CSS is ready.
             self.ConsumeTaskBudget();
+            self.resources.borrow().resources.RequestWake();
             return Ok(false);
         }
         if self.remaining_script_tasks.is_some() && !self.resources.borrow().rendering_has_begun {
@@ -1496,6 +1658,7 @@ impl ScriptScheduler {
         }
         // Preserve document order. Only already-ready deferred scripts execute.
         let mut remaining = 16;
+        let mut ran_deferred = false;
         while !self.deferred_scripts.is_empty() && remaining > 0 && self.HasTaskBudget() {
             let script = self.deferred_scripts[0];
             let descriptor = self.descriptor(None, script)?;
@@ -1504,25 +1667,107 @@ impl ScriptScheduler {
             }
             self.deferred_scripts.remove(0);
             self.run_script(None, script, false, false, runtime, realm, client)?;
+            ran_deferred = true;
             remaining -= 1;
         }
         if !self.deferred_scripts.is_empty() {
+            if ran_deferred {
+                self.resources.borrow().resources.RequestWake();
+            }
             return Ok(false);
         }
         if !self.HasTaskBudget() {
+            // SeparateDeferModuleScriptTasks runs the final deferred/module
+            // script in its own task, then lets the parser continue toward
+            // DOMContentLoaded. Our one-script task allowance is consumed by
+            // that final script, so queue the continuation just as we do while
+            // more deferred scripts remain. Without this wake a coalesced
+            // worker/network wake can drain at the last script and leave an
+            // otherwise complete document permanently loading.
+            if ran_deferred {
+                self.resources.borrow().resources.RequestWake();
+            }
             return Ok(false);
         }
         if !self.content_loaded {
-            self.content_loaded = true;
             self.ConsumeTaskBudget();
-            self.DispatchLifecycleEvent(EventType::kDOMContentLoaded, runtime, realm, client);
+            self.FinishParsingAndDispatchDOMContentLoaded(runtime, realm, client);
             // HTMLParserScriptRunner's stable deferred-task mode returns to
             // the event loop; document load is checked on a later Page turn.
             if self.remaining_script_tasks.is_some() {
+                self.resources.borrow().resources.RequestWake();
                 return Ok(false);
             }
         }
         Ok(self.async_scripts.is_empty() && !self.HasPendingStyleSheets())
+    }
+    /// DocumentLoader.cc3519-3523 / HTMLParserScriptRunner.cc456-526.
+    /// A synchronous parser does not yield for the embedding's script budget,
+    /// first-paint gate or an unrelated ready async script. Deferred/module
+    /// scripts retain their own source one-script-per-task feature branch.
+    fn PollSynchronousParsingCompletion(
+        &mut self,
+        runtime: &mut dyn JavaScriptRuntime,
+        realm: &JavaScriptRealm,
+        client: &mut dyn ScriptLoadClient,
+    ) -> io::Result<bool> {
+        if self.remaining_script_tasks.is_none() {
+            self.PumpModules(runtime, realm, 16);
+        }
+        if !self.parsing_finished {
+            self.parsing_finished = true;
+            self.bindings
+                .borrow_mut()
+                .SetReadyState("interactive".into());
+            self.DispatchLifecycleEvent(EventType::kReadyStateChange, runtime, realm, client);
+        }
+        if !PollParserStyleSheets(&self.resources, &self.document, None, client)? {
+            return Ok(false);
+        }
+        while !self.deferred_scripts.is_empty() {
+            let script = self.deferred_scripts[0];
+            let descriptor = self.descriptor(None, script)?;
+            if !self.prepared_script_ready(script, &descriptor, runtime, realm) {
+                return Ok(false);
+            }
+            self.deferred_scripts.remove(0);
+            self.run_script(None, script, false, false, runtime, realm, client)?;
+            if foundation::RuntimeEnabledFeatures::SeparateDeferModuleScriptTasksEnabled()
+                && !self.deferred_scripts.is_empty()
+            {
+                self.resources.borrow().resources.RequestWake();
+                return Ok(false);
+            }
+        }
+        self.FinishParsingAndDispatchDOMContentLoaded(runtime, realm, client);
+        if !self.async_scripts.is_empty() {
+            self.resources.borrow().resources.RequestWake();
+        }
+        Ok(self.async_scripts.is_empty() && !self.HasPendingStyleSheets())
+    }
+    /// Document::FinishedParsing cc8018-8063. Both synchronization policies
+    /// use this one source dispatch/lifetime sequence.
+    fn FinishParsingAndDispatchDOMContentLoaded(
+        &mut self,
+        runtime: &mut dyn JavaScriptRuntime,
+        realm: &JavaScriptRealm,
+        client: &mut dyn ScriptLoadClient,
+    ) {
+        self.content_loaded = true;
+        let parser = self.document.borrow().GetDocument().GetDocumentParser();
+        if let Some(parser) = parser.filter(|parser| !parser.IsDetached()) {
+            // NotifyParserStopped invokes original parser clients. Do not
+            // retain a DOM RefCell borrow across their synchronous reentry.
+            parser.StopParsing();
+        }
+        self.document.borrow().GetDocument().SetParsingState(
+            dom::document_parser_lifecycle::DocumentParsingState::InDOMContentLoaded,
+        );
+        self.DispatchLifecycleEvent(EventType::kDOMContentLoaded, runtime, realm, client);
+        self.document
+            .borrow()
+            .GetDocument()
+            .SetParsingState(dom::document_parser_lifecycle::DocumentParsingState::Finished);
     }
     // cpp: browser/browser.cc:1646-1681
     pub fn ParseDocument(
@@ -1628,6 +1873,7 @@ impl ParserResourceDiscovery {
         Self {
             document,
             resources: Rc::new(RefCell::new(ParserResources {
+                render_blocking_manager: None,
                 resources,
                 current_url: current_url.clone(),
                 base_url: current_url,
@@ -1674,16 +1920,19 @@ impl ParserResourceDiscovery {
         let mut owner = document.borrow_mut();
         let mut host = ParserHost(self.resources.clone());
         let progress = loader.Pump(owner.GetDocumentMut(), &mut host, budget)?;
+        // The embedding's parser effects may synchronously reborrow this
+        // Document, including allocation-driven InputType initialization.
+        drop(owner);
         if progress.parser_made_progress {
             client.DidPumpParser();
         }
         if progress.parser.status == HTMLParserStatus::kWaitingForScript {
+            let mut owner = document.borrow_mut();
             loader.WithParser(owner.GetDocumentMut(), &mut host, |parser| {
                 self.HandleParserScript(parser, progress.parser.script, client);
                 parser.ResumeAfterScript();
             })?;
         }
-        drop(owner);
         PollParserStyleSheets(&self.resources, &self.document, None, client)?;
         Ok(progress)
     }
@@ -1715,7 +1964,7 @@ impl ParserResourceDiscovery {
     }
     fn HandleParserScript(
         &mut self,
-        parser: &mut HTMLDocumentParser<'_>,
+        parser: &mut DocumentParser<'_, '_>,
         script: Option<ParserScript>,
         client: &mut dyn ScriptLoadClient,
     ) {
@@ -1815,6 +2064,7 @@ impl ParserResourceDiscovery {
             let Some(pending) = pending else {
                 return Ok(());
             };
+            let _registration = pending.Registration();
             let (sheet, base, imports_complete) = match pending {
                 PendingStyle::Parsed {
                     sheet,
@@ -2043,7 +2293,7 @@ mod tests {
             document.clone(),
             Box::new(|_| {}),
         )));
-        let scheduler = ScriptScheduler::new(
+        let mut scheduler = ScriptScheduler::new(
             document,
             bindings,
             Rc::new(RefCell::new(MockLoader(Rc::new(RefCell::new(Vec::new()))))),

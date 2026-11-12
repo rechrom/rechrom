@@ -97,6 +97,17 @@ impl StringView {
         &storage.units[self.offset..self.offset + self.length]
     }
 
+    // cpp: foundation/blink_base/wtf/text/string_view.cc:196-207
+    pub fn SubstringContainsOnlyWhitespaceOrEmpty(&self, from: u32, to: u32) -> bool {
+        assert!(from <= to);
+        let from = from as usize;
+        let to = to as usize;
+        assert!(to <= self.length);
+        self.Span16()[from..to]
+            .iter()
+            .all(|character| matches!(*character, 0x20 | 0x09 | 0x0a | 0x0d))
+    }
+
     // cpp: foundation/blink_base/wtf/text/string_view.cc:347-357
     pub fn NextCodePointOffset(&self, index: u32) -> u32 {
         assert!(index < self.length());
@@ -228,6 +239,15 @@ mod tests {
         let view = StringView::new("a😀b", 1, 2);
         assert_eq!(view.length(), 2);
         assert_eq!(view.Span16(), &[0xd83d, 0xde00]);
+    }
+
+    #[test]
+    fn substring_whitespace_matches_ascii_space_definition() {
+        let view = StringView::from(" \t\n\rA");
+        assert!(view.SubstringContainsOnlyWhitespaceOrEmpty(0, 4));
+        assert!(!view.SubstringContainsOnlyWhitespaceOrEmpty(0, 5));
+        assert!(view.SubstringContainsOnlyWhitespaceOrEmpty(5, 5));
+        assert!(!StringView::from("\n\u{8}\u{1b}").SubstringContainsOnlyWhitespaceOrEmpty(0, 3));
     }
 
     #[test]

@@ -66,6 +66,17 @@ fn editing_fixture() -> Page {
         }),
         None,
     );
+    let editing_behavior = if cfg!(target_vendor = "apple") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Mac
+    } else if cfg!(target_os = "windows") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Windows
+    } else if cfg!(target_os = "android") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Android
+    } else {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Unix
+    };
+    page.SetInteractionTextSettings(editing_behavior, c"en-US", cfg!(target_os = "macos"));
+    page.SetSystemCursorSize(0.0, 0.0).unwrap();
     page.Open("https://page.test/page.html", 16384, 4096)
         .unwrap();
     for _ in 0..100 {
@@ -77,17 +88,53 @@ fn editing_fixture() -> Page {
     assert!(!page.IsLoading());
     page
 }
-fn edit_id(page: &Page, name: &str) -> u64 {
+fn edit_index(page: &Page, name: &str) -> usize {
     let owner = page.Document();
     let doc = owner.GetDocument();
-    fn find(doc: &dom::Document, i: usize, name: &str) -> Option<u64> {
+    fn find(doc: &dom::Document, i: usize, name: &str) -> Option<usize> {
         let n = doc.Node(i);
         if n.FindAttribute("id").is_some_and(|a| a.value == name) {
-            return Some(n.Id());
+            return Some(i);
         }
         n.Children().iter().find_map(|&i| find(doc, i, name))
     }
     find(doc, doc.Root(), name).unwrap()
+}
+fn edit_id(page: &Page, name: &str) -> u64 {
+    let owner = page.Document();
+    owner.GetDocument().Node(edit_index(page, name)).Id()
+}
+fn text_control_placeholder_text_id(page: &Page, name: &str) -> u64 {
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    let host = edit_index(page, name);
+    let placeholder = document
+        .TextControlPlaceholderElement(host)
+        .expect("text control placeholder owner");
+    document
+        .Node(placeholder)
+        .Children()
+        .iter()
+        .copied()
+        .find(|&child| document.Node(child).Type() == DOMNodeType::kText)
+        .map(|child| document.Node(child).Id())
+        .expect("placeholder text owner")
+}
+fn text_control_value_text_id(page: &Page, name: &str) -> u64 {
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    let host = edit_index(page, name);
+    let editor = document
+        .TextControlInnerEditorElement(host)
+        .expect("text control editor owner");
+    document
+        .Node(editor)
+        .Children()
+        .iter()
+        .copied()
+        .find(|&child| document.Node(child).Type() == DOMNodeType::kText)
+        .map(|child| document.Node(child).Id())
+        .expect("text control value text owner")
 }
 fn edit_focus(page: &mut Page, id: u64) {
     page.Dispatch(&interaction::input_event::InputEvent::Focus(
@@ -100,11 +147,23 @@ fn edit_focus(page: &mut Page, id: u64) {
 }
 fn edit_key(page: &mut Page, key: &str, shift: bool, control: bool) {
     use interaction::input_event::*;
+    let edit_commands = if cfg!(target_os = "macos") && control && key.eq_ignore_ascii_case("a") {
+        vec![interaction::default::core::editing::commands::editor_command_table::EditingCommandType::SelectAll]
+    } else {
+        Vec::new()
+    };
     page.Dispatch(&InputEvent::Key(KeyEvent {
         key: key.into(),
+        code: DomCodeForKey(key),
+        key_code: LegacyKeyCode(key),
+        // RenderWidgetHostViewCocoa supplies Command-key editing selectors on
+        // this side channel; Blink deliberately omits them from its macOS key
+        // table so the native menu command remains the single source owner.
+        edit_commands,
         modifiers: EventModifiers {
             shift,
-            control,
+            control: control && !cfg!(target_os = "macos"),
+            meta: control && cfg!(target_os = "macos"),
             ..Default::default()
         },
         ..Default::default()
@@ -133,6 +192,142 @@ fn edit_insert(page: &mut Page, text: &str) {
     }))
     .unwrap();
 }
+
+#[test]
+fn first_active_publication_enables_the_focused_caret() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = editing_fixture();
+        page.SetActive(true).unwrap();
+        let id = edit_id(&page, "edit");
+        edit_focus(&mut page, id);
+        assert!(
+            page.Caret().is_some_and(|caret| caret.visible),
+            "the first host active=true must reach FrameSelection"
+        );
+    });
+}
+
+#[test]
+fn mouse_refocus_reactivates_the_text_control_selection_owner() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        use interaction::input_event::MouseEventType as M;
+        use layoutng_assembly::internal::layout_input::Offset;
+
+        let mut page = editing_fixture();
+        assert!(
+            page.Evaluate(
+                "var b=document.createElement('button');b.id='focus-button';b.textContent='button';b.style.cssText='position:absolute;left:400px;top:12px;width:120px;height:48px';document.body.appendChild(b)",
+                "test:focus-button",
+            )
+            .unwrap()
+            .Succeeded()
+        );
+        page.SetActive(true).unwrap();
+        let edit = edit_id(&page, "edit");
+        let button = edit_id(&page, "focus-button");
+
+        edit_focus(&mut page, edit);
+        edit_insert(&mut page, "first");
+        for point in [Offset { x: 430.0, y: 30.0 }, Offset { x: 300.0, y: 40.0 }] {
+            edit_mouse(&mut page, M::kDown, point, false);
+            edit_mouse(&mut page, M::kUp, point, false);
+            assert_eq!(
+                page.FocusedNodeId(),
+                Some(if point.x > 400.0 { button } else { edit })
+            );
+        }
+
+        edit_insert(&mut page, "-second");
+        assert_eq!(edit_value(&page, edit), "first-second");
+        assert_eq!(edit_selection(&page, edit).focus, "first-second".len());
+        assert!(page.Caret().is_some_and(|caret| caret.visible));
+    });
+}
+
+#[test]
+fn document_editor_insert_link_and_format_commands_use_native_undo() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let mut page = editing_fixture();
+        let setup = r#"
+            var old=document.getElementById('command-editor'); if(old) old.remove();
+            var c=document.createElement('div'); c.id='command-editor';
+            c.setAttribute('contenteditable','true'); c.innerHTML='hello';
+            document.body.appendChild(c); c.focus();
+            function selectContents(n, collapsed) {
+                var r=document.createRange(); r.selectNodeContents(n);
+                if(collapsed) r.collapse(false);
+                var s=window.getSelection();s.removeAllRanges();s.addRange(r);
+            }
+            function check(condition, message) { if(!condition) throw new Error(message); }
+            selectContents(c, false);
+        "#;
+        for (name, script) in [
+            (
+                "html",
+                r#"check(document.execCommand('insertHTML',false,'<b id="inserted">world</b>'),'insertHTML accepted');check(c.textContent==='world'&&!!c.querySelector('b'),'native HTML replacement');check(document.execCommand('undo'),'undo accepted');check(c.textContent==='hello','HTML undo');"#,
+            ),
+            (
+                "image",
+                r#"check(document.execCommand('insertImage',false,'literal"quote'),'insertImage accepted');var image=c.querySelector('img');check(image&&image.getAttribute('src')==='literal"quote','literal image attribute');"#,
+            ),
+            (
+                "horizontal rule",
+                r#"check(document.execCommand('insertHorizontalRule',false,'rule"id'),'insertHorizontalRule accepted');var rule=c.querySelector('hr');check(rule&&rule.id==='rule"id','literal rule id');"#,
+            ),
+            (
+                "range link",
+                r#"check(document.execCommand('createLink',false,'https://link.test/'),'createLink accepted');var link=c.querySelector('a');check(link&&link.textContent==='hello'&&link.getAttribute('href')==='https://link.test/','range link');check(document.execCommand('undo'),'link undo accepted');check(!c.querySelector('a')&&c.textContent==='hello','link undo');"#,
+            ),
+            (
+                "caret link",
+                r#"selectContents(c,true);check(document.execCommand('createLink',false,'https://link.test/'),'caret createLink accepted');var link=c.querySelector('a');check(link&&link.textContent==='https://link.test/','caret URL label');check(window.getSelection().toString()==='https://link.test/','caret link selection');"#,
+            ),
+            (
+                "range unlink",
+                r#"c.innerHTML='<a href="/test">hello</a>';selectContents(c.firstChild,false);check(document.execCommand('unlink'),'unlink accepted');check(!c.querySelector('a')&&c.textContent==='hello','unlink keeps text');"#,
+            ),
+            (
+                "caret unlink",
+                r#"c.innerHTML='<a href="/test">hello</a>';selectContents(c.firstChild,true);check(!document.execCommand('unlink'),'caret unlink disabled');check(!!c.querySelector('a'),'source caret unlink leaves link');"#,
+            ),
+            (
+                "remove format",
+                r#"c.innerHTML='<p><a href="/test"><b>hello</b></a></p>';selectContents(c.querySelector('b'),false);check(document.execCommand('removeFormat'),'removeFormat accepted');check(!c.querySelector('b')&&!!c.querySelector('a')&&!!c.querySelector('p')&&c.textContent==='hello','removeFormat preserves link and block');"#,
+            ),
+            (
+                "format block",
+                r#"c.innerHTML='<p>hello</p>';selectContents(c.firstChild,false);check(document.execCommand('formatBlock',false,'<H2>'),'formatBlock accepted');check(!!c.querySelector('h2')&&c.textContent==='hello','formatted heading');check(document.queryCommandValue('formatBlock')==='h2','formatBlock query');check(document.execCommand('undo'),'block undo accepted');check(!!c.querySelector('p')&&!c.querySelector('h2'),'block undo');"#,
+            ),
+            (
+                "format paragraphs",
+                r#"c.innerHTML='<p>hello</p><p>world</p>';selectContents(c,false);check(document.execCommand('formatBlock',false,'pre'),'multi paragraph formatBlock');check(!!c.querySelector('pre')&&c.textContent.indexOf('hello')>=0&&c.textContent.indexOf('world')>=0,'formatted paragraph contents');"#,
+            ),
+            (
+                "unsupported block",
+                r#"check(!document.execCommand('formatBlock',false,'script'),'unsupported block rejected');check(c.textContent==='hello','unsupported block leaves selection');"#,
+            ),
+            (
+                "input HTML",
+                r#"var input=document.getElementById('edit');input.value='old';input.focus();input.setSelectionRange(0,3);check(document.execCommand('insertHTML',false,'<b>hello</b><br>world'),'input insertHTML');check(input.value==='hello world','single line input replaces inserted LF with space: '+JSON.stringify(input.value));"#,
+            ),
+        ] {
+            let source = format!("{setup}\n{script}");
+            let result = page.Evaluate(&source, "test:editor-commands").unwrap();
+            assert!(
+                result.Succeeded(),
+                "{name}: {}",
+                result
+                    .exception
+                    .as_ref()
+                    .map(|e| e.message.as_str())
+                    .unwrap_or("")
+            );
+        }
+    });
+}
 fn edit_mouse(
     page: &mut Page,
     kind: interaction::input_event::MouseEventType,
@@ -140,10 +335,25 @@ fn edit_mouse(
     shift: bool,
 ) {
     use interaction::input_event::*;
+    let dragging = kind == MouseEventType::kMove;
     page.Dispatch(&InputEvent::Mouse(MouseEvent {
         r#type: kind,
-        position: point,
-        button: MouseButton::kPrimary,
+        position: Offset {
+            x: point.x,
+            y: point.y,
+        },
+        // Match native/CDP ingress: a move has no changed button, while the
+        // depressed-buttons mask identifies it as a left-button drag.
+        button: if dragging {
+            MouseButton::kNone
+        } else {
+            MouseButton::kPrimary
+        },
+        buttons: if dragging {
+            MouseButton::kPrimary.ButtonsMask()
+        } else {
+            0
+        },
         modifiers: EventModifiers {
             shift,
             ..Default::default()
@@ -178,7 +388,7 @@ fn placeholder_pseudo_style_reaches_the_raster_output() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = editing_fixture();
-        let placeholder_text_id = edit_id(&page, "hint") | (1 << 53);
+        let placeholder_text_id = text_control_placeholder_text_id(&page, "hint");
         let item = page
             .CurrentFrame()
             .unwrap()
@@ -231,8 +441,7 @@ fn flexed_toolbar_text_control_value_reaches_raster() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let page = editing_fixture();
-        let id = edit_id(&page, "toolbar-input");
-        let value_text_id = id | (1 << 53);
+        let value_text_id = text_control_value_text_id(&page, "toolbar-input");
         let frame = page.CurrentFrame().unwrap();
         let item = frame
             .display_items
@@ -269,7 +478,7 @@ fn paint_only_placeholder_color_change_rejects_the_cached_glyph_run() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let mut page = editing_fixture();
-        let placeholder_text_id = edit_id(&page, "hint") | (1 << 53);
+        let placeholder_text_id = text_control_placeholder_text_id(&page, "hint");
         let color = |page: &Page| {
             page.CurrentFrame()
                 .unwrap()
@@ -538,14 +747,14 @@ fn text_control_hit_test_round_trips_shaped_unicode_positions_and_transforms() {
             }
             let mut positions = Vec::new();
             edit_key(&mut page, "Home", false, false);
-            for byte in text
+            for utf16_offset in text
                 .char_indices()
-                .map(|(i, _)| i)
-                .chain(std::iter::once(text.len()))
+                .map(|(byte, _)| text[..byte].encode_utf16().count())
+                .chain(std::iter::once(text.encode_utf16().count()))
             {
                 let c = page.Caret().unwrap().rect;
                 positions.push((
-                    byte,
+                    utf16_offset,
                     Offset {
                         x: c.x,
                         y: c.y + c.height * 0.5,
@@ -574,6 +783,13 @@ fn text_control_preedit_replaces_previous_range_and_preserves_source_selection()
         let mut page = editing_fixture();
         let id = edit_id(&page, "edit");
         edit_focus(&mut page, id);
+        assert!(page
+            .Evaluate(
+                "window.__compositionData=[];document.getElementById('edit').addEventListener('compositionupdate',event=>__compositionData.push(['update',event.data]));document.getElementById('edit').addEventListener('compositionend',event=>__compositionData.push(['end',event.data]))",
+                "test:composition-data",
+            )
+            .unwrap()
+            .Succeeded());
         edit_insert(&mut page, "AB");
         edit_key(&mut page, "ArrowLeft", false, false);
         let send = |page: &mut Page, kind, data: &str, selection| {
@@ -603,9 +819,34 @@ fn text_control_preedit_replaces_previous_range_and_preserves_source_selection()
         assert_eq!(edit_value(&page, id), "AB");
         send(&mut page, CompositionEventType::kEnd, "你", None);
         assert_eq!(edit_value(&page, id), "A你B");
-        assert_eq!(edit_selection(&page, id).focus, 4);
+        // CommitText(relative_caret = 0) collapses immediately after the
+        // committed text; the following insertion must therefore precede B.
+        assert_eq!(edit_selection(&page, id).focus, 2);
         edit_insert(&mut page, "!");
         assert_eq!(edit_value(&page, id), "A你!B");
+        send(
+            &mut page,
+            CompositionEventType::kUpdate,
+            "hao",
+            Some((3, 3)),
+        );
+        send(&mut page, CompositionEventType::kEnd, "好", None);
+        assert_eq!(edit_value(&page, id), "A你!好B");
+        let composition_data = page
+            .Evaluate(
+                "if(JSON.stringify(__compositionData)!==JSON.stringify([['update','ni'],['update','你好'],['update',''],['end',''],['update','hao'],['update','好'],['end','好']]))throw new Error(JSON.stringify(__compositionData))",
+                "test:composition-data",
+            )
+            .unwrap();
+        assert!(
+            composition_data.Succeeded(),
+            "{}",
+            composition_data
+                .exception
+                .as_ref()
+                .map(|exception| exception.message.as_str())
+                .unwrap_or("")
+        );
     });
 }
 
@@ -616,6 +857,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         use interaction::input_event::MouseEventType as M;
         use layoutng_assembly::internal::layout_input::Offset;
         let mut page = editing_fixture();
+        page.SetActive(true).unwrap();
         let id = edit_id(&page, "edit");
         edit_focus(&mut page, id);
         edit_insert(&mut page, "Wide text");
@@ -628,12 +870,35 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         };
         let b = Offset { x: end.x, y: a.y };
         edit_mouse(&mut page, M::kDown, a, false);
-        edit_mouse(&mut page, M::kMove, b, false);
+        // A real drag spans rendering opportunities. Blink recomputes hover
+        // from the retained MouseEventManager during BeginMainFrame; that
+        // synthetic move must preserve the pressed button and the drag owner.
+        let frame_time = std::time::Instant::now();
+        page.UpdateRendering(foundation::begin_frame::BeginFrameArgs {
+            source_id: 1,
+            sequence_number: 1,
+            frame_time,
+            deadline: frame_time + std::time::Duration::from_millis(16),
+            interval: std::time::Duration::from_millis(16),
+        })
+        .unwrap();
+        page.QueueFrameInput(
+            interaction::input_event::InputEvent::Mouse(interaction::input_event::MouseEvent {
+                r#type: M::kMove,
+                position: interaction::input_event::Offset { x: b.x, y: b.y },
+                button: interaction::input_event::MouseButton::kNone,
+                buttons: interaction::input_event::MouseButton::kPrimary.ButtonsMask(),
+                ..Default::default()
+            }),
+            std::time::Instant::now(),
+            1,
+        )
+        .unwrap();
         edit_mouse(&mut page, M::kUp, b, false);
         assert_eq!(edit_selection(&page, id).Start(), 0);
         assert_eq!(edit_selection(&page, id).End(), 9);
         let blue_pixels = |page: &Page| {
-            let Some(selection_color) = page
+            let Some((selection_color, selection_rect)) = page
                 .CurrentFrame()
                 .unwrap()
                 .display_items
@@ -646,7 +911,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
                         && item.color.blue > item.color.green
                         && item.color.green > item.color.red
                 })
-                .map(|item| item.color)
+                .map(|item| (item.color, item.rect))
             else {
                 return 0;
             };
@@ -665,17 +930,19 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
                 480,
                 1.0,
             );
-            pixels
+            let exact = pixels
                 .chunks_exact(4)
                 .filter(|pixel| pixel[..3] == expected)
-                .count()
+                .count();
+            let _ = selection_rect;
+            exact
         };
         assert!(page.Caret().is_none());
-        assert!(
-            blue_pixels(&page) > 100,
-            "selection must reach actual raster output"
-        );
         let selected_pixels = blue_pixels(&page);
+        assert!(
+            selected_pixels > 100,
+            "selection must reach actual raster output: {selected_pixels} exact pixels"
+        );
         std::thread::sleep(std::time::Duration::from_millis(550));
         page.RunTask().unwrap();
         assert_eq!(
@@ -690,6 +957,8 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
         edit_key(&mut page, "ArrowRight", true, false);
         assert!(blue_pixels(&page) > 20);
         edit_key(&mut page, "a", false, true);
+        assert_eq!(edit_selection(&page, id).Start(), 0);
+        assert_eq!(edit_selection(&page, id).End(), 9);
         assert!(blue_pixels(&page) > 100);
         edit_insert(&mut page, "你");
         assert_eq!(edit_value(&page, id), "你");
@@ -716,14 +985,22 @@ fn text_control_multiline_hit_test_and_trailing_newline_caret() {
         let first = page.Caret().unwrap().rect;
         edit_insert(&mut page, "AB\n你D");
         let second = page.Caret().unwrap().rect;
-        assert!(second.y > first.y);
+        assert!(
+            second.y > first.y,
+            "multiline caret must advance: first={first:?}, second={second:?}, value={:?}, selection={:?}",
+            edit_value(&page, id),
+            edit_selection(&page, id),
+        );
         let point = Offset {
             x: second.x,
             y: second.y + second.height * 0.5,
         };
         edit_mouse(&mut page, M::kDown, point, false);
         edit_mouse(&mut page, M::kUp, point, false);
-        assert_eq!(edit_selection(&page, id).focus, "AB\n你D".len());
+        assert_eq!(
+            edit_selection(&page, id).focus,
+            "AB\n你D".encode_utf16().count()
+        );
         edit_insert(&mut page, "\n");
         let trailing = page.Caret().unwrap().rect;
         assert!(

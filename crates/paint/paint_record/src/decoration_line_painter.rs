@@ -78,7 +78,10 @@ pub fn DrawLineAsStroke(geometry: &DecorationGeometry, mut item: DisplayItem) ->
         width: f64::from(p2.0 - p1.0),
         height: f64::from(p2.1 - p1.1),
     };
-    item.decoration_thickness = f64::from(stroke_data.Thickness());
+    // Keep the source decoration geometry separate from the integer-snapped
+    // backend stroke width. Ink-skip dilation consumes the former, while
+    // StyledStrokeData supplies the latter for rasterization.
+    item.decoration_thickness = f64::from(geometry.Thickness());
     item.antialias = geometry.antialias;
     let mut decoration_dash_intervals = Vec::new();
     let mut decoration_dash_offset = 0.0;
@@ -339,6 +342,28 @@ mod tests {
         assert_eq!(item.dash_offset, 1.0);
         assert_eq!(item.decoration_thickness, 2.0);
         assert_eq!(item.decoration_dash_intervals, vec![6.0, 4.666666507720947]);
+    }
+
+    #[test]
+    fn dashed_line_keeps_raw_geometry_thickness_for_ink_skip_dilation() {
+        let geometry = DecorationGeometry::Make(
+            StrokeStyle::kDashedStroke,
+            &gfx::RectF::new(gfx::PointF::new(2.75, 4.2), gfx::SizeF::new(37.5, 1.6)),
+            0.0,
+            0.0,
+            None,
+        );
+        let item = DrawLineAsStroke(
+            &geometry,
+            DisplayItem {
+                decoration_thickness: f64::from(geometry.Thickness()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(item.decoration_thickness, f64::from(geometry.Thickness()));
+        // Chromium rounds only GeometryInfo::dash_thickness for dash fitting;
+        // StrokeData keeps StyledStrokeData::Thickness() for PaintFlags.
+        assert_eq!(item.stroke_width, f64::from(geometry.Thickness()));
     }
 
     #[test]

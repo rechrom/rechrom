@@ -31,6 +31,9 @@ impl LayoutSVGViewportContainer {
             local_to_parent_transform: AffineTransform::default(),
         }
     }
+    pub fn LocalSVGTransform(&self) -> AffineTransform {
+        svg_viewport::LocalTransform(self)
+    }
     pub fn Viewport(&self) -> gfx::RectF {
         self.viewport
     }

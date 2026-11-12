@@ -17,12 +17,11 @@ use crate::paint_layer_paint_order_iterator::{
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintPhase;
 use crate::PaintRect;
+use paint_model::paint_flags::{PaintFlag, PaintFlags};
 use paint_model::PaintResult;
 use paint_record::{
-    box_fragment_painter::GetHitTestOpaqueness,
-    paint_chunker::DisplayItemClientInfo,
-    paint_engine::PaintHitTestOpaqueness,
-    scoped_paint_state::{ContentsVisualRect, CullRectInTransform},
+    box_fragment_painter::GetHitTestOpaqueness, paint_chunker::DisplayItemClientInfo,
+    paint_engine::PaintHitTestOpaqueness, scoped_paint_state::ContentsVisualRect,
     SubsequenceRecorder,
 };
 
@@ -128,8 +127,12 @@ fn CullAdmission(
         // pre-existing admission. Chromium layers always export both values.
         return (PaintResult::kFullyPainted, should_paint_content, false);
     };
-    let visual_rect = FragmentRect(visual_rect);
-    let self_cull_rect = CullRectInTransform(self_cull_rect, &layer.properties.nodes.transform);
+    let mut visual_rect = FragmentRect(visual_rect);
+    // Source: PaintLayerPainter::FirstFragmentVisualRect(). Layout exports
+    // the local virtual overflow; apply this PrePaint pass's FragmentData
+    // paint offset here, after property-tree construction, as Chromium does.
+    visual_rect.x += layer.paint_offset.x;
+    visual_rect.y += layer.paint_offset.y;
     let self_intersects = Intersects(self_cull_rect, visual_rect);
     let mut result = if self_cull_rect.contains(visual_rect) {
         PaintResult::kFullyPainted
@@ -141,10 +144,6 @@ fn CullAdmission(
         if let (Some(contents), Some(contents_cull_rect)) =
             (ContentsVisualRect(layer), layer.cull_rect)
         {
-            let contents_cull_rect = CullRectInTransform(
-                contents_cull_rect,
-                &layer.contents_properties.nodes.transform,
-            );
             if !contents_cull_rect.contains(contents) {
                 result = PaintResult::kMayBeClippedByCullRect;
             }
@@ -168,6 +167,9 @@ fn CullAdmission(
 fn HasEscapingChildLayer(parent: &PaintTreeNode<'_>) -> bool {
     for child_owner in &parent.children {
         let child = child_owner.as_ref();
+        if child.is_embedded_local_frame_root {
+            continue;
+        }
         if child.is_paint_layer {
             if child.escapes_ancestor_geometry {
                 return true;
@@ -188,6 +190,9 @@ fn CollectDirectPaintLayerChildren<'n, 'f>(
     output: &mut Vec<&'n PaintTreeNode<'f>>,
 ) {
     for child in &root.children {
+        if child.is_embedded_local_frame_root {
+            continue;
+        }
         if child.is_paint_layer {
             output.push(child);
         } else {
@@ -201,14 +206,18 @@ fn CollectDirectPaintLayerChildren<'n, 'f>(
 /// These source branches cover property boundaries, non-trivial descendant
 /// layer trees, compositor hit-test opaqueness and sparse merged bounds
 /// without creating proxy scopes.
-/// The ordinary Rechrom paint walk has no special kOmitCompositingInfo entry;
-/// that source-only admission branch remains unclaimed in the manifest.
-fn ShouldCreateSubsequence(layer: &PaintTreeNode<'_>, context: &RefCell<PaintContext<'_>>) -> bool {
+/// Special recording preserves source's kOmitCompositingInfo cache exclusion.
+fn ShouldCreateSubsequence(
+    layer: &PaintTreeNode<'_>,
+    context: &RefCell<PaintContext<'_>>,
+    paint_flags: PaintFlags,
+) -> bool {
     let fragment = layer
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
     if fragment.paint.IsPrinting()
+        || paint_flags & PaintFlag::kOmitCompositingInfo != 0
         || context.borrow().IsSkippingCache()
         || !layer.supports_subsequence_caching
     {
@@ -275,6 +284,7 @@ pub struct PaintLayerPainter<'n, 'f, 'c, 'o> {
     layer: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
     inherited_geometry: Vec<&'n PaintTreeNode<'f>>,
+    paint_flags: PaintFlags,
 }
 
 impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
@@ -287,7 +297,17 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             layer,
             context,
             inherited_geometry,
+            paint_flags: PaintFlag::kNoFlag,
         }
+    }
+
+    /// PaintLayerPainter::Paint(context, paint_flags), source.cc:289-333.
+    pub fn WithFlags(mut self, flags: PaintFlags) -> Self {
+        self.paint_flags = flags;
+        self
+    }
+    fn PaintInfo(&self, phase: PaintPhase) -> PaintInfo<'c, 'o> {
+        PaintInfo::new_with_flags(self.context, phase, false, self.paint_flags)
     }
 
     fn UsesInheritedGeometry(&self, ancestor: &PaintTreeNode<'f>) -> bool {
@@ -352,6 +372,12 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             self.context.borrow_mut().walk_metrics.skipped_hidden += 1;
             return PaintResult::kFullyPainted;
         }
+        // Source: paint_layer_painter.cc:330-333. This is Layout's actual
+        // selection state, not intersection with selection geometry.
+        let selection_drag_image_only = self.paint_flags & PaintFlag::kSelectionDragImageOnly != 0;
+        if selection_drag_image_only && !fragment.paint.is_selected {
+            return PaintResult::kFullyPainted;
+        }
         // Source: core/paint/paint_layer_painter.cc:334-348. The document-wide
         // opacity fact is resolved once by PaintEngine from the immutable root;
         // nested layer scopes retain Chromium's exact depth/reset behavior.
@@ -379,7 +405,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         // Source: paint_layer_painter.cc:412-424. The scope is declared before
         // all paint-state scopes so its Drop closes the subsequence last.
         let subsequence_recorder = if should_paint_content
-            && ShouldCreateSubsequence(self.layer, self.context)
+            && ShouldCreateSubsequence(self.layer, self.context, self.paint_flags)
         {
             let fragment = self
                 .layer
@@ -456,10 +482,10 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             }
         }
 
-        if should_paint_content {
+        if should_paint_content && !selection_drag_image_only {
             BoxFragmentPainter::PaintFragment(
                 self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kSelfBlockBackgroundOnly),
+                &self.PaintInfo(PaintPhase::kSelfBlockBackgroundOnly),
             );
         }
         self.context
@@ -491,7 +517,11 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 self.layer,
                 crate::display_item_id::DisplayItemIdType::kLayerChunkForeground,
             );
-            self.PaintForegroundPhases();
+            if selection_drag_image_only {
+                self.PaintWithPhase(self.layer, &self.PaintInfo(PaintPhase::kSelectionDragImage));
+            } else {
+                self.PaintForegroundPhases();
+            }
         }
         // Blink paints the self outline with LocalBorderBoxProperties, outside
         // ScopedBoxContentsPaintState (box_fragment_painter.cc:759-799). Mirror
@@ -501,7 +531,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         if self.layer.is_self_painting_layer && self.layer.paints_outline {
             BoxFragmentPainter::PaintFragment(
                 self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kSelfOutlineOnly),
+                &self.PaintInfo(PaintPhase::kSelfOutlineOnly),
             );
         }
         self.context
@@ -520,7 +550,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         {
             self.PaintWithPhase(
                 self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kOverlayOverflowControls),
+                &self.PaintInfo(PaintPhase::kOverlayOverflowControls),
             );
         }
 
@@ -539,10 +569,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         self.context.borrow_mut().EndCssClip(self.layer);
         self.context.borrow_mut().EndMaskClip(self.layer);
         if should_paint_content && self.layer.applies_mask {
-            BoxFragmentPainter::PaintFragment(
-                self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kMask),
-            );
+            BoxFragmentPainter::PaintFragment(self.layer, &self.PaintInfo(PaintPhase::kMask));
         }
         self.context.borrow_mut().EndEffectsAfterFilter(self.layer);
         self.context.borrow_mut().EndGeometry(self.layer);
@@ -587,7 +614,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
     fn PaintForegroundPhases(&self) {
         self.PaintWithPhase(
             self.layer,
-            &PaintInfo::new(self.context, PaintPhase::kDescendantBlockBackgroundsOnly),
+            &self.PaintInfo(PaintPhase::kDescendantBlockBackgroundsOnly),
         );
         if self
             .layer
@@ -599,28 +626,61 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         {
             self.PaintWithPhase(
                 self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kForcedColorsModeBackplate),
+                &self.PaintInfo(PaintPhase::kForcedColorsModeBackplate),
             );
         }
         if self.layer.needs_float_phase {
-            self.PaintWithPhase(
-                self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kFloat),
-            );
+            self.PaintWithPhase(self.layer, &self.PaintInfo(PaintPhase::kFloat));
         }
-        self.PaintWithPhase(
-            self.layer,
-            &PaintInfo::new(self.context, PaintPhase::kForeground),
-        );
+        self.PaintWithPhase(self.layer, &self.PaintInfo(PaintPhase::kForeground));
         if self.layer.needs_outline_phase {
             self.PaintWithPhase(
                 self.layer,
-                &PaintInfo::new(self.context, PaintPhase::kDescendantOutlinesOnly),
+                &self.PaintInfo(PaintPhase::kDescendantOutlinesOnly),
             );
         }
     }
 
-    fn PaintWithPhase(&self, node: &PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
+    fn PaintWithPhase<'p>(&self, node: &PaintTreeNode<'f>, paint_info: &PaintInfo<'p, 'o>) {
+        let mut dispatched_info = *paint_info;
+        dispatched_info.svg_resource_painter = Some(PaintSvgResourceSubtree);
+        let paint_info = &dispatched_info;
+        let fragment = node.fragment.as_deref().expect("native Paint owner");
+        if fragment.paint.svg_hidden_container
+            && !paint_info.IsSvgResourceRoot(fragment.paint.display_item_client_id)
+        {
+            return;
+        }
+        let mut transformed_context = paint_info.GetSvgContextPaints().map(|paints| {
+            let mut result = *paints;
+            for transform in &node.local_transforms {
+                result.transform =
+                    crate::geometry_mapper::MultiplyTransforms(&result.transform, transform);
+            }
+            result
+        });
+        if let Some(source) = node.SourceCursor().filter(|source| source.IsSvgUse()) {
+            let rect = source
+                .SvgContextReferenceBox()
+                .expect("native SVG use geometry");
+            transformed_context = Some(paint_record::svg_context_paints::SvgContextPaints::New(
+                &fragment.paint.style,
+                PaintRect {
+                    x: rect.x() as f64,
+                    y: rect.y() as f64,
+                    width: rect.width() as f64,
+                    height: rect.height() as f64,
+                },
+                paint_info.GetSvgContextPaints(),
+                Default::default(),
+            ));
+        }
+        let paint_info = if let Some(paints) = &transformed_context {
+            dispatched_info.WithSvgContextPaints(paints)
+        } else {
+            dispatched_info
+        };
+        let paint_info = &paint_info;
         self.context.borrow_mut().walk_metrics.phase_visits += 1;
         if node
             .fragment
@@ -647,7 +707,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             self.context.borrow_mut().walk_metrics.skipped_phase += 1;
             return;
         }
-        if !crate::scoped_svg_paint_state::ScopedSVGPaintState::ShouldPaint(node) {
+        if !crate::scoped_svg_paint_state::ScopedSVGPaintState::ShouldPaint(node, paint_info) {
             return;
         }
         if crate::phase::ShouldSkipPhase(
@@ -665,6 +725,12 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
+        let is_svg_root = crate::svg_root_painter::SVGRootPainter::IsRoot(node);
+        if is_svg_root
+            && !crate::svg_root_painter::SVGRootPainter::ShouldPaintSubtree(node, paint_info)
+        {
+            return;
+        }
         // BoxFragmentPainter::PaintInternal owns child traversal in Chromium.
         // Rechrom keeps traversal in paint_walk, so mirror its ShouldPaint gate
         // here as well as at the recording entry; a culled box must suppress
@@ -678,7 +744,12 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         if !is_svg_container && !BoxFragmentPainter::ShouldPaintFragment(node, paint_info) {
             return;
         }
-        let enter_node = !std::ptr::eq(node, self.layer);
+        let _text_paint_timing = paint_record::paint_context::ScopedTextPaintAggregation::new(
+            self.context,
+            node,
+            phase == PaintPhase::kForeground && !paint_info.IsRenderingResourceSubtree(),
+        );
+        let enter_node = !std::ptr::eq(node, self.layer) || paint_info.IsRenderingResourceSubtree();
         if !enter_node
             && matches!(
                 phase,
@@ -746,14 +817,41 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         // the adjusted contents CullRect alive across the resident child walk.
         let contents_paint_info = *contents_paint_state.GetPaintInfo();
         if phase == PaintPhase::kForeground
-            && crate::svg_container_painter::SVGContainerPainter::NeedsReferenceFilterChunk(node)
+            && (crate::svg_container_painter::SVGContainerPainter::NeedsReferenceFilterChunk(node)
+                || crate::scoped_svg_paint_state::ScopedSVGPaintState::NeedsReferenceFilterChunk(
+                    node, paint_info,
+                ))
         {
             self.context.borrow_mut().EnsureChunk();
         }
 
         for child_owner in &node.children {
             let child = child_owner.as_ref();
+            if child.is_embedded_local_frame_root {
+                // EmbeddedContentPainter::PaintReplaced -> LocalFrameView::Paint
+                // -> FramePainter::Paint: the child's entire PaintLayer tree
+                // paints at the replaced foreground position using this same
+                // PaintController/GraphicsContext. Properties already carry
+                // the frame location, so no bitmap or extra offset is applied.
+                if phase == PaintPhase::kForeground
+                    && !node.child_paint_blocked_by_display_lock
+                    && node.fragment.as_deref().unwrap().paint.style.visible()
+                    && !(paint_info.GetPaintFlags() & PaintFlag::kPrivacyPreserving != 0
+                        && child.embedded_frame_is_cross_origin)
+                {
+                    PaintLayerPainter::new(child, self.context, Vec::new())
+                        .WithFlags(paint_info.GetPaintFlags())
+                        .Paint();
+                }
+                continue;
+            }
             if child.is_paint_layer {
+                if contents_paint_info.IsRenderingResourceSubtree() {
+                    self.PaintAllPhasesAtomically(child, &contents_paint_info);
+                }
+                continue;
+            }
+            if !BoxFragmentPainter::ShouldPaintChildFragment(node, child) {
                 continue;
             }
             // Chromium's early child cull here belongs to FragmentItems. A
@@ -855,7 +953,11 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
     }
 
     // Source: core/paint/box_fragment_painter.cc:1805-1836.
-    fn PaintAllPhasesAtomically(&self, node: &PaintTreeNode<'f>, paint_info: &PaintInfo<'c, 'o>) {
+    fn PaintAllPhasesAtomically<'p>(
+        &self,
+        node: &PaintTreeNode<'f>,
+        paint_info: &PaintInfo<'p, 'o>,
+    ) {
         if matches!(
             paint_info.phase,
             PaintPhase::kSelectionDragImage | PaintPhase::kTextClip
@@ -912,7 +1014,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             .BeginEscapableGeometry(self.layer, None);
         self.PaintWithPhase(
             self.layer,
-            &PaintInfo::new(self.context, PaintPhase::kOverlayOverflowControls),
+            &self.PaintInfo(PaintPhase::kOverlayOverflowControls),
         );
         self.context.borrow_mut().EndEscapableGeometry(self.layer);
         self.context.borrow_mut().EndFilter(self.layer);
@@ -939,7 +1041,8 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 self.SuspendGeometryForEscapingChild();
             }
             let child_painter =
-                PaintLayerPainter::new(child.layer, self.context, child.property_ancestors.clone());
+                PaintLayerPainter::new(child.layer, self.context, child.property_ancestors.clone())
+                    .WithFlags(self.paint_flags);
             if child.layer.is_stacking_context {
                 result.Include(child_painter.Paint());
             } else {
@@ -964,6 +1067,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     scroller.property_ancestors.clone(),
                 )
+                .WithFlags(self.paint_flags)
                 .PaintOverlayOverflowControls();
                 result.Include(scroller.layer.previous_paint_result.get());
                 if escapes_current_geometry {
@@ -980,7 +1084,10 @@ mod tests {
     use super::*;
     use layoutng_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect, PaintResources};
     use layoutng_assembly::internal::layout_input::{Offset, Size};
+    use paint_model::geometry_mapper::TranslationTransform;
+    use paint_model::paint_property_tree::TransformPaintPropertyNode;
     use paint_record::{DisplayItem, PaintRecording};
+    use std::sync::Arc;
 
     fn cull_layer(
         self_visual_rect: PaintRect,
@@ -1071,6 +1178,78 @@ mod tests {
         assert_eq!(
             CullAdmission(&clipped, true),
             (PaintResult::kMayBeClippedByCullRect, true, false)
+        );
+    }
+
+    #[test]
+    fn cull_admission_compares_local_property_space_rectangles() {
+        let local_visual_rect = PaintRect {
+            x: 0.0,
+            y: 3.0,
+            width: 100.0,
+            height: 20.0,
+        };
+        let local_cull_rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 52.0,
+        };
+        let mut layer = cull_layer(
+            local_visual_rect,
+            local_visual_rect,
+            local_cull_rect,
+            local_cull_rect,
+        );
+
+        // The property translation owns the integral offset, leaving a zero
+        // residual FragmentData paint offset. The cull and resulting visual
+        // rectangles therefore remain in this local property space.
+        let translated = |parent: Arc<TransformPaintPropertyNode>, id| {
+            Arc::new(TransformPaintPropertyNode {
+                lifecycle: Default::default(),
+                id,
+                parent: Some(parent.clone()),
+                matrix: TranslationTransform(0.0, 52.0),
+                ..(*parent).clone()
+            })
+        };
+        layer.properties.nodes.transform =
+            translated(layer.properties.nodes.transform.clone(), 101);
+        layer.contents_properties.nodes.transform =
+            translated(layer.contents_properties.nodes.transform.clone(), 102);
+
+        assert_eq!(
+            CullAdmission(&layer, true),
+            (PaintResult::kFullyPainted, true, false)
+        );
+    }
+
+    #[test]
+    fn cull_admission_applies_current_fragment_paint_offset() {
+        let local_visual_rect = PaintRect {
+            x: 0.0,
+            y: 3.0,
+            width: 100.0,
+            height: 20.0,
+        };
+        let property_space_cull = PaintRect {
+            x: 0.0,
+            y: 52.0,
+            width: 320.0,
+            height: 52.0,
+        };
+        let mut layer = cull_layer(
+            local_visual_rect,
+            local_visual_rect,
+            property_space_cull,
+            property_space_cull,
+        );
+        layer.paint_offset = Offset { x: 0.0, y: 52.25 };
+
+        assert_eq!(
+            CullAdmission(&layer, true),
+            (PaintResult::kFullyPainted, true, false)
         );
     }
 
@@ -1230,12 +1409,20 @@ mod tests {
         let mut output = PaintRecording::default();
         let context = RefCell::new(PaintContext::new(&mut output));
 
-        assert!(ShouldCreateSubsequence(&node, &context));
+        assert!(ShouldCreateSubsequence(&node, &context, PaintFlag::kNoFlag));
         context.borrow_mut().BeginSkippingCache();
-        assert!(!ShouldCreateSubsequence(&node, &context));
+        assert!(!ShouldCreateSubsequence(
+            &node,
+            &context,
+            PaintFlag::kNoFlag
+        ));
         context.borrow_mut().EndSkippingCache();
         node.supports_subsequence_caching = false;
-        assert!(!ShouldCreateSubsequence(&node, &context));
+        assert!(!ShouldCreateSubsequence(
+            &node,
+            &context,
+            PaintFlag::kNoFlag
+        ));
     }
 
     #[test]
@@ -1253,7 +1440,7 @@ mod tests {
         );
         context.borrow_mut().EnsureChunk();
 
-        assert!(ShouldCreateSubsequence(&node, &context));
+        assert!(ShouldCreateSubsequence(&node, &context, PaintFlag::kNoFlag));
     }
 
     #[test]
@@ -1288,7 +1475,11 @@ mod tests {
             &node,
         );
 
-        assert!(!ShouldCreateSubsequence(&node, &context));
+        assert!(!ShouldCreateSubsequence(
+            &node,
+            &context,
+            PaintFlag::kNoFlag
+        ));
         node.fragment
             .as_mut()
             .unwrap()
@@ -1298,6 +1489,14 @@ mod tests {
             .unwrap()
             .offset
             .x = 2000.0;
-        assert!(ShouldCreateSubsequence(&node, &context));
+        assert!(ShouldCreateSubsequence(&node, &context, PaintFlag::kNoFlag));
     }
+}
+
+// Source SVGObjectPainter::PaintResourceSubtree (cc:93-102) and explicit
+// SVGContainerPainter(marker) dispatch (svg_shape_painter.cc:282-323).
+fn PaintSvgResourceSubtree(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) {
+    PaintLayerPainter::new(node, info.context, Vec::new())
+        .WithFlags(info.GetPaintFlags())
+        .PaintWithPhase(node, info);
 }

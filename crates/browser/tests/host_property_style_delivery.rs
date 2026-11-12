@@ -39,8 +39,11 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
         Err(io::Error::other("unexpected property fixture XHR"))
     }
 }
-struct ErrorClient(Rc<RefCell<Vec<String>>>);
+struct ErrorClient(Rc<RefCell<Vec<String>>>, browser::page::PageChromeState);
 impl PageClient for ErrorClient {
+    fn DidEventHandlerChromeEffect(&mut self, effect: browser::page::EventHandlerChromeEffect) {
+        self.1.Apply(effect);
+    }
     fn DidReportScriptError(&mut self, error: &JavaScriptException) {
         self.0.borrow_mut().push(error.message.clone());
     }
@@ -87,7 +90,10 @@ fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
             xhr: Box::new(XHR),
             user_agent: "host-property-style-delivery-fixture".into(),
         }),
-        Some(Rc::new(RefCell::new(ErrorClient(errors.clone())))),
+        Some(Rc::new(RefCell::new(ErrorClient(
+            errors.clone(),
+            Default::default(),
+        )))),
     );
     page.Open("https://host-property-style-delivery.test/", 16384, 4096)
         .unwrap();

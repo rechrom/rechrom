@@ -833,12 +833,14 @@ impl<B: ResourcePoolTypes> ResourcePool<B> {
         new_invalidated_rect: &Rect,
         previous_content_id: u64,
         total_invalidated_rect: &mut Rect,
+        unavailable_previous_content: &mut bool,
         raster_color_space: &B::ColorSpace,
         debug_name: &str,
     ) -> InUsePoolResource<B> {
         debug_assert!(new_content_id != 0);
         debug_assert!(previous_content_id != 0);
         *total_invalidated_rect = Rect::default();
+        *unavailable_previous_content = false;
         let mut iter_resource_to_return = None;
         let mut minimum_area = 0;
         for (index, resource) in self.unused_resources_.iter().enumerate() {
@@ -864,6 +866,13 @@ impl<B: ResourcePoolTypes> ResourcePool<B> {
         }
         for resource in self.busy_resources_.iter().flatten() {
             if resource.content_id() == previous_content_id {
+                *unavailable_previous_content = true;
+                if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+                    eprintln!(
+                        "partial-resource busy previous={} new={} requested={:?}",
+                        previous_content_id, new_content_id, new_invalidated_rect
+                    );
+                }
                 Self::UpdateResourceContentIdAndInvalidation(
                     resource,
                     new_content_id,
@@ -873,6 +882,13 @@ impl<B: ResourcePoolTypes> ResourcePool<B> {
         }
         for resource in self.in_use_resources_.values().flatten() {
             if resource.content_id() == previous_content_id {
+                *unavailable_previous_content = true;
+                if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+                    eprintln!(
+                        "partial-resource in-use previous={} new={} requested={:?}",
+                        previous_content_id, new_content_id, new_invalidated_rect
+                    );
+                }
                 Self::UpdateResourceContentIdAndInvalidation(
                     resource,
                     new_content_id,

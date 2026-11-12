@@ -42,6 +42,41 @@ impl HostUIResourceBitmap for UIBitmap {
         self.0.row_bytes()
     }
 }
+
+pub struct RawUIBitmap {
+    size: Size,
+    pixels: Vec<u8>,
+    row_bytes: usize,
+    opaque: bool,
+}
+impl RawUIBitmap {
+    pub fn new(size: Size, pixels: Vec<u8>, row_bytes: usize, opaque: bool) -> Self {
+        debug_assert_eq!(pixels.len(), row_bytes * size.height().max(0) as usize);
+        Self {
+            size,
+            pixels,
+            row_bytes,
+            opaque,
+        }
+    }
+}
+impl HostUIResourceBitmap for RawUIBitmap {
+    fn GetFormat(&self) -> HostUIBitmapFormat {
+        HostUIBitmapFormat::RGBA8
+    }
+    fn GetSize(&self) -> Size {
+        self.size
+    }
+    fn GetOpaque(&self) -> bool {
+        self.opaque
+    }
+    fn GetPixels(&self) -> &[u8] {
+        &self.pixels
+    }
+    fn row_bytes(&self) -> usize {
+        self.row_bytes
+    }
+}
 /// This file only uses native SkImageInfo::MakeN32Premul. The external Skia
 /// factory supplies its actual dimensions and minRowBytes value, without a
 /// compositor-side bytes-per-pixel or allocation calculation.

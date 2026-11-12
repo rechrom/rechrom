@@ -1411,6 +1411,15 @@ impl<T> RootSlot for RootCell<T> {
 pub struct BasicPersistent<T, const WEAK: bool> {
     slot: Arc<RootCell<T>>,
 }
+impl<T, const WEAK: bool> std::fmt::Debug for BasicPersistent<T, WEAK> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BasicPersistent")
+            .field("pointer", &self.slot.pointer.load(Ordering::Relaxed))
+            .field("weak", &WEAK)
+            .finish()
+    }
+}
 pub type Persistent<T> = BasicPersistent<T, false>;
 pub type WeakPersistent<T> = BasicPersistent<T, true>;
 

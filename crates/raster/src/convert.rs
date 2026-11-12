@@ -120,6 +120,16 @@ impl ToSkia for layoutng_assembly::internal::layout_input::TextDecorationStyle {
         }
     }
 }
+impl ToSkia for foundation::ETextDecorationSkipInk {
+    type Output = target::TextDecorationSkipInk;
+    fn to_skia(&self) -> Self::Output {
+        match self {
+            Self::kNone => target::TextDecorationSkipInk::kNone,
+            Self::kAll => target::TextDecorationSkipInk::kAll,
+            Self::kAuto => target::TextDecorationSkipInk::kAuto,
+        }
+    }
+}
 impl ToSkia for layoutng_assembly::internal::layout_input::FontSmoothing {
     type Output = target::FontSmoothing;
     fn to_skia(&self) -> Self::Output {
@@ -149,6 +159,20 @@ impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyph {
             canvas_rotation: self.canvas_rotation.to_skia(),
             offset: self.offset.to_skia(),
             advance: self.advance.to_skia(),
+        }
+    }
+}
+impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyphRun {
+    type Output = target::TextInkSkipRun;
+    fn to_skia(&self) -> Self::Output {
+        target::TextInkSkipRun {
+            font_face_index: self.font_face_index,
+            font_variations: self.font_variations.to_skia(),
+            font_size: self.font_size,
+            baseline: self.baseline,
+            synthetic_bold: self.synthetic_bold,
+            synthetic_italic: self.synthetic_italic,
+            glyphs: self.glyphs.as_ref().to_vec().to_skia(),
         }
     }
 }
@@ -409,6 +433,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
             fill_even_odd: self.fill_even_odd,
             non_scaling_stroke: self.non_scaling_stroke,
             antialias: self.antialias,
+            apply_srgb_to_linear_color_filter: self.apply_srgb_to_linear_color_filter,
             transform: self.transform.unwrap_or_default().to_skia(),
         }
     }
@@ -419,6 +444,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternImage {
         target::SvgPatternImage {
             resource_id: self.resource_id,
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            dynamic_range_limit: self.dynamic_range_limit.to_skia(),
             destination: target::PaintRect {
                 x: self.destination_offset.x,
                 y: self.destination_offset.y,
@@ -513,6 +539,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
         target::PaintShader {
             flags_alpha: 1.,
             kind: self.kind.to_skia(),
+            apply_dark_mode: self.apply_dark_mode,
             spread: self.spread.to_skia(),
             stops: self.stops.to_skia(),
             start: self.start.to_skia(),
@@ -571,6 +598,17 @@ impl ToSkia for layoutng_assembly::internal::paint_input::InterpolationQuality {
             Self::kInterpolationNone => target::ImageInterpolationQuality::kNone,
             Self::kInterpolationLow => target::ImageInterpolationQuality::kLow,
             Self::kInterpolationMedium => target::ImageInterpolationQuality::kMedium,
+        }
+    }
+}
+impl ToSkia for foundation::DynamicRangeLimit {
+    type Output = target::DynamicRangeLimit;
+    fn to_skia(&self) -> Self::Output {
+        // cc::PaintFlags stores each explicit mixture weight in seven bits.
+        let quantize = |value: f32| ((0.5 + 127.0 * value) as u32) as f32 / 127.0;
+        target::DynamicRangeLimit {
+            standard_mix: quantize(self.standard_mix),
+            constrained_high_mix: quantize(self.constrained_high_mix),
         }
     }
 }
@@ -645,6 +683,7 @@ impl ToSkia for paint::paint_engine::DisplayItemType {
             Self::kDrawScrollbarThumb => target::CommandKind::kDrawScrollbarThumb,
             Self::kDrawScrollbarButton => target::CommandKind::kDrawScrollbarButton,
             Self::kDrawScrollbarCorner => target::CommandKind::kDrawScrollbarCorner,
+            Self::kCustomData => target::CommandKind::kCustomData,
         }
     }
 }
@@ -674,7 +713,9 @@ impl ToSkia for paint::paint_engine::DisplayMaskLayer {
         target::MaskLayer {
             resource_id: self.resource_id.to_skia(),
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            dynamic_range_limit: self.dynamic_range_limit.to_skia(),
             image_orientation: self.image_orientation.to_skia(),
+            use_dark_mode_for_image: self.use_dark_mode_for_image,
             paint_shader: self.paint_shader.to_skia(),
             clip_rect: self.clip_rect.to_skia(),
             clip_radii: self.clip_radii.to_skia(),
@@ -720,8 +761,10 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             miter_limit: self.miter_limit.to_skia(),
             antialias: self.antialias.to_skia(),
             non_scaling_stroke: self.non_scaling_stroke.to_skia(),
+            apply_srgb_to_linear_color_filter: false,
             paint_shader: self.paint_shader.to_skia(),
             blend_mode: self.blend_mode.to_skia(),
+            source_overwrite: self.source_overwrite,
             // Paint DisplayItems carry PrePaint's canonical filter value and
             // paint playback consumes it before command projection.
             filters: Vec::new(),
@@ -729,7 +772,9 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             round_cap: self.round_cap.to_skia(),
             resource_id: self.resource_id.to_skia(),
             image_interpolation_quality: self.image_interpolation_quality.to_skia(),
+            dynamic_range_limit: self.dynamic_range_limit.to_skia(),
             image_orientation: self.image_orientation.to_skia(),
+            use_dark_mode_for_image: self.use_dark_mode_for_image.to_skia(),
             repeat_x: self.repeat_x.to_skia(),
             repeat_y: self.repeat_y.to_skia(),
             tile_scale: self.tile_scale.to_skia(),
@@ -742,6 +787,13 @@ impl ToSkia for paint::paint_engine::DisplayItem {
             shadow_has_opaque_background: self.shadow_has_opaque_background.to_skia(),
             is_text_decoration: self.is_text_decoration.to_skia(),
             stroke_glyphs: self.stroke_glyphs.to_skia(),
+            decoration_thickness: self.decoration_thickness,
+            skip_ink: self.skip_ink.to_skia(),
+            decoration_ink_bounds: self.decoration_ink_bounds.to_skia(),
+            decoration_ink_baseline: self.decoration_ink_baseline,
+            decoration_text_origin: self.decoration_text_origin.to_skia(),
+            decoration_text_fit_scale: self.decoration_text_fit_scale,
+            decoration_ink_runs: self.decoration_ink_runs.as_ref().to_vec().to_skia(),
             opacity: self.opacity.to_skia(),
             transform: self.transform.to_skia(),
             font_face_index: self.font_face_index.to_skia(),
@@ -793,6 +845,17 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
                         )
                     })
                 })
+                .chain(r.canvases.iter().map(|canvas| {
+                    // CanvasRenderingContext publishes premultiplied front-
+                    // buffer RGBA8, matching StaticBitmapImage's paint path.
+                    target::Image::shared_with_alpha_type(
+                        canvas.resource_id,
+                        canvas.width,
+                        canvas.height,
+                        target::ImageAlphaType::Premultiplied,
+                        &canvas.pixels,
+                    )
+                }))
                 .collect(),
         }),
     }
@@ -801,10 +864,57 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
 #[cfg(test)]
 mod font_identity_tests {
     use super::*;
-    use layoutng_assembly::fragment_tree::{PaintGlyph, PaintResources};
+    use foundation::ETextDecorationSkipInk;
+    use layoutng_assembly::fragment_tree::{PaintGlyph, PaintGlyphRun, PaintResources};
     use layoutng_assembly::internal::layout_input::{FontFace, FontVariation, Offset};
     use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact};
     use std::sync::Arc;
+
+    #[test]
+    fn paint_to_raster_command_preserves_image_decode_flags() {
+        let command = DisplayItem {
+            r#type: DisplayItemType::kDrawImageRect,
+            use_dark_mode_for_image: true,
+            dynamic_range_limit: foundation::DynamicRangeLimit::from_mix(0.25, 0.5),
+            ..Default::default()
+        }
+        .to_skia();
+        assert!(command.use_dark_mode_for_image);
+        assert_eq!(command.dynamic_range_limit.standard_mix, 32.0 / 127.0);
+        assert_eq!(
+            command.dynamic_range_limit.constrained_high_mix,
+            64.0 / 127.0
+        );
+
+        let mask = paint::paint_engine::DisplayMaskLayer {
+            use_dark_mode_for_image: true,
+            dynamic_range_limit: foundation::DynamicRangeLimit::from_mix(0.75, 0.125),
+            ..Default::default()
+        }
+        .to_skia();
+        assert!(mask.use_dark_mode_for_image);
+        assert_eq!(mask.dynamic_range_limit.standard_mix, 95.0 / 127.0);
+        assert_eq!(mask.dynamic_range_limit.constrained_high_mix, 16.0 / 127.0);
+
+        let mut target = compositor_core::runtime::paint::TargetColorParams::default();
+        target.hdr_headroom = Some(4.0);
+        let limited = compositor_core::runtime::paint::LimitTargetDynamicRange(
+            compositor_core::runtime::paint::CpuDynamicRangeLimit::new(0.25, 0.5),
+            target,
+        );
+        assert_eq!(limited.hdr_headroom, Some(1.5));
+    }
+
+    #[test]
+    fn paint_to_raster_command_preserves_source_replacement() {
+        let command = DisplayItem {
+            r#type: DisplayItemType::kDrawRect,
+            source_overwrite: true,
+            ..Default::default()
+        }
+        .to_skia();
+        assert!(command.source_overwrite);
+    }
 
     #[test]
     fn paint_to_skia_preserves_exact_face_and_glyph_identity() {
@@ -869,6 +979,67 @@ mod font_identity_tests {
         assert_eq!(command.glyphs[0].offset.x, 2.5);
         assert_eq!(command.glyphs[0].offset.y, -1.0);
         assert!(command.synthetic_bold && command.synthetic_italic);
+    }
+
+    #[test]
+    fn paint_to_skia_preserves_decoration_ink_inputs_and_fallback_runs() {
+        let fallback_runs = Arc::new(vec![
+            PaintGlyphRun {
+                font_face_index: 2,
+                font_size: 18.0,
+                baseline: 14.0,
+                glyphs: Arc::new(vec![PaintGlyph {
+                    id: 84,
+                    character_index: 3,
+                    offset: Offset { x: 7.0, y: 0.0 },
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            PaintGlyphRun {
+                font_face_index: 5,
+                font_size: 19.0,
+                baseline: 14.0,
+                synthetic_italic: true,
+                glyphs: Arc::new(vec![PaintGlyph {
+                    id: 91,
+                    character_index: 4,
+                    offset: Offset { x: 17.5, y: -0.25 },
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        ]);
+        let command = DisplayItem {
+            is_text_decoration: true,
+            decoration_thickness: 2.25,
+            skip_ink: ETextDecorationSkipInk::kAll,
+            decoration_ink_bounds: Some(paint::paint_engine::PaintRect {
+                x: 4.0,
+                y: 31.0,
+                width: 80.0,
+                height: 3.0,
+            }),
+            decoration_ink_baseline: 28.0,
+            decoration_text_origin: Offset { x: 4.0, y: 14.0 },
+            decoration_text_fit_scale: 0.875,
+            decoration_ink_runs: fallback_runs,
+            ..Default::default()
+        }
+        .to_skia();
+
+        assert_eq!(command.skip_ink, target::TextDecorationSkipInk::kAll);
+        assert_eq!(command.decoration_thickness, 2.25);
+        assert_eq!(command.decoration_ink_bounds.unwrap().y, 31.0);
+        assert_eq!(command.decoration_ink_baseline, 28.0);
+        assert_eq!(command.decoration_text_origin.x, 4.0);
+        assert_eq!(command.decoration_text_fit_scale, 0.875);
+        assert_eq!(command.decoration_ink_runs.len(), 2);
+        assert_eq!(command.decoration_ink_runs[0].font_face_index, 2);
+        assert_eq!(command.decoration_ink_runs[0].glyphs[0].id, 84);
+        assert_eq!(command.decoration_ink_runs[1].font_face_index, 5);
+        assert!(command.decoration_ink_runs[1].synthetic_italic);
+        assert_eq!(command.decoration_ink_runs[1].glyphs[0].offset.x, 17.5);
     }
 
     #[test]
@@ -1000,5 +1171,41 @@ mod font_identity_tests {
         }
         let selected = render_selected_source(collection.into(), 1);
         assert_eq!(selected, render_selected_source(reference.into(), 0));
+    }
+}
+
+#[cfg(test)]
+mod canvas_resource_tests {
+    use super::*;
+    use canvas::CanvasPaintResource;
+    use layoutng_assembly::fragment_tree::PaintResources;
+    use paint::paint_engine::PaintArtifact;
+    use std::sync::Arc;
+
+    #[test]
+    fn canvas_snapshot_enters_raster_catalog_as_premultiplied_image() {
+        let pixels = Arc::new(vec![10, 20, 30, 40]);
+        let artifact = PaintArtifact {
+            resources: Some(Arc::new(PaintResources {
+                canvases: vec![CanvasPaintResource {
+                    dom_node_id: 9,
+                    resource_id: 1 << 63,
+                    revision: 4,
+                    width: 1,
+                    height: 1,
+                    origin_clean: true,
+                    is_clear: false,
+                    pixels: pixels.clone(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let converted = resources(&artifact);
+        let image = &converted.resources.unwrap().images[0];
+        assert_eq!(image.id, 1 << 63);
+        assert_eq!(image.alpha_type, target::ImageAlphaType::Premultiplied);
+        assert!(Arc::ptr_eq(image.shared_pixels().unwrap(), &pixels));
     }
 }

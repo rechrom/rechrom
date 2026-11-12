@@ -26,11 +26,11 @@ use super::window::WinitWindow;
 use super::DEVICE_ID;
 use crate::dpi::{LogicalPosition, LogicalSize};
 use crate::event::{
-    DeviceEvent, ElementState, Ime, KeyEvent, MacOSMouseWheelMetadata, Modifiers, MouseButton, MouseScrollDelta, TouchPhase,
-    WindowEvent,
+    DeviceEvent, ElementState, Ime, KeyEvent, MacOSMouseWheelMetadata, Modifiers, MouseButton,
+    MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
-use crate::platform::macos::OptionAsAlt;
+use crate::platform::macos::{ImeTextState, OptionAsAlt};
 
 // CGEventTypes.h: CGEventField is uint32_t; CGEventGetIntegerValueField returns
 // int64_t. The CGEvent remains borrowed from its live NSEvent during this call.
@@ -78,8 +78,9 @@ fn profile_native_wheel(event: &NSEvent, scale: f64, fields: Option<(bool, i64, 
     let event_age_ms = unsafe { NSProcessInfo::processInfo().systemUptime() - timestamp } * 1000.0;
     // Compare the dispatched CG fields against Cocoa's scrollingDelta source.
     // Reuse the extraction above instead of reading the native CGEvent twice.
-    let (continuous, point_x, point_y) = fields.map_or((None, None, None), |(continuous, x, y)|
-        (Some(continuous), Some(x), Some(y)));
+    let (continuous, point_x, point_y) = fields.map_or((None, None, None), |(continuous, x, y)| {
+        (Some(continuous), Some(x), Some(y))
+    });
     unsafe {
         eprintln!(
             "native-wheel-profile timestamp_s={timestamp:.9} event_age_ms={event_age_ms:.3} cocoa_x={:.9} cocoa_y={:.9} cg_point_x={point_x:?} cg_point_y={point_y:?} continuous={continuous:?} precise={} native_phase=0x{:x} momentum_phase=0x{:x} scale={scale}",
@@ -97,7 +98,10 @@ struct CursorState {
 
 impl Default for CursorState {
     fn default() -> Self {
-        Self { visible: true, cursor: default_cursor() }
+        Self {
+            visible: true,
+            cursor: default_cursor(),
+        }
     }
 }
 
@@ -187,8 +191,17 @@ pub struct ViewState {
     /// True if the current key event should be forwarded
     /// to the application, even during IME
     forward_key_to_app: Cell<bool>,
+    // Preserve AppKit key-binding selectors through the queued KeyboardInput.
+    edit_commands: RefCell<Vec<String>>,
+    // Raw keydown must precede composition/commit notifications originating
+    // from its interpretKeyEvents call, even when the IME consumes the key.
+    key_down_ime_events: RefCell<Option<Vec<Ime>>>,
+    key_down_inserted_text: RefCell<Option<String>>,
 
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
+    available_text: RefCell<Retained<NSString>>,
+    text_selection_range: Cell<NSRange>,
+    marked_range: Cell<NSRange>,
     accepts_first_mouse: bool,
 
     // Weak reference because the window keeps a strong reference to the view
@@ -307,20 +320,13 @@ declare_class!(
         #[method(markedRange)]
         fn marked_range(&self) -> NSRange {
             trace_scope!("markedRange");
-            let length = self.ivars().marked_text.borrow().length();
-            if length > 0 {
-                NSRange::new(0, length)
-            } else {
-                // Documented to return `{NSNotFound, 0}` if there is no marked range.
-                NSRange::new(NSNotFound as NSUInteger, 0)
-            }
+            self.ivars().marked_range.get()
         }
 
         #[method(selectedRange)]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
-            // Documented to return `{NSNotFound, 0}` if there is no selection.
-            NSRange::new(NSNotFound as NSUInteger, 0)
+            self.ivars().text_selection_range.get()
         }
 
         #[method(setMarkedText:selectedRange:replacementRange:)]
@@ -328,9 +334,8 @@ declare_class!(
             &self,
             string: &NSObject,
             selected_range: NSRange,
-            _replacement_range: NSRange,
+            replacement_range: NSRange,
         ) {
-            // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
@@ -363,9 +368,42 @@ declare_class!(
 
             if unsafe { self.hasMarkedText() } {
                 self.ivars().ime_state.set(ImeState::Preedit);
+                let old_marked = self.ivars().marked_range.get();
+                let current_selection = self.ivars().text_selection_range.get();
+                let location = if replacement_range.location != NSNotFound as NSUInteger {
+                    replacement_range.location
+                } else if old_marked.location != NSNotFound as NSUInteger {
+                    old_marked.location
+                } else {
+                    current_selection.location
+                };
+                let marked = NSRange::new(
+                    if location == NSNotFound as NSUInteger {
+                        0
+                    } else {
+                        location
+                    },
+                    string.length(),
+                );
+                self.ivars().marked_range.set(marked);
+                if selected_range.location != NSNotFound as NSUInteger {
+                    self.ivars().text_selection_range.set(NSRange::new(
+                        marked.location.saturating_add(selected_range.location),
+                        selected_range.length,
+                    ));
+                }
             } else {
                 // In case the preedit was cleared, set IME into the Ground state.
                 self.ivars().ime_state.set(ImeState::Ground);
+                let marked = self.ivars().marked_range.replace(NSRange::new(
+                    NSNotFound as NSUInteger,
+                    0,
+                ));
+                if marked.location != NSNotFound as NSUInteger {
+                    self.ivars()
+                        .text_selection_range
+                        .set(NSRange::new(marked.location, 0));
+                }
             }
 
             let cursor_range = if string.is_empty() {
@@ -395,6 +433,9 @@ declare_class!(
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
             *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+            self.ivars()
+                .marked_range
+                .set(NSRange::new(NSNotFound as NSUInteger, 0));
 
             let input_context = self.inputContext().expect("input context");
             input_context.discardMarkedText();
@@ -417,17 +458,38 @@ declare_class!(
         #[method_id(attributedSubstringForProposedRange:actualRange:)]
         fn attributed_substring_for_proposed_range(
             &self,
-            _range: NSRange,
-            _actual_range: *mut NSRange,
+            range: NSRange,
+            actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
-            None
+            if range.location == NSNotFound as NSUInteger {
+                None
+            } else {
+                let text = self.ivars().available_text.borrow();
+                let length = text.length();
+                let start = range.location.min(length);
+                let end = range.end().min(length).max(start);
+                let actual = NSRange::new(start, end - start);
+                if !actual_range.is_null() {
+                    unsafe { *actual_range = actual };
+                }
+                let substring = unsafe { text.substringWithRange(actual) };
+                Some(NSAttributedString::initWithString(
+                    NSAttributedString::alloc(),
+                    &substring,
+                ))
+            }
         }
 
         #[method(characterIndexForPoint:)]
         fn character_index_for_point(&self, _point: NSPoint) -> NSUInteger {
             trace_scope!("characterIndexForPoint:");
-            0
+            let selection = self.ivars().text_selection_range.get();
+            if selection.location == NSNotFound as NSUInteger {
+                0
+            } else {
+                selection.location
+            }
         }
 
         #[method(firstRectForCharacterRange:actualRange:)]
@@ -463,19 +525,41 @@ declare_class!(
             };
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
+            let committed_length = string.encode_utf16().count() as NSUInteger;
 
-            // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+            // Source RenderWidgetHostViewCocoa sends marked/multi-unit text
+            // through IME commitment. A single unmarked UTF-16 character is
+            // the corresponding Char event, retaining the native key fields.
+            if self.is_ime_enabled() && !is_control && (unsafe { self.hasMarkedText() } || string.encode_utf16().count() > 1) {
+                let marked = self.ivars().marked_range.get();
+                let selection = self.ivars().text_selection_range.get();
+                let insertion = if marked.location != NSNotFound as NSUInteger {
+                    marked.location
+                } else {
+                    selection.location
+                };
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
+                *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+                self.ivars()
+                    .marked_range
+                    .set(NSRange::new(NSNotFound as NSUInteger, 0));
+                if insertion != NSNotFound as NSUInteger {
+                    self.ivars().text_selection_range.set(NSRange::new(
+                        insertion.saturating_add(committed_length),
+                        0,
+                    ));
+                }
+            } else if !is_control && self.ivars().key_down_ime_events.borrow().is_some() {
+                self.ivars().key_down_inserted_text.replace(Some(string));
             }
         }
 
         // Basically, we're sent this message whenever a keyboard event that doesn't generate a "human
         // readable" character happens, i.e. newlines, tabs, and Ctrl+C.
         #[method(doCommandBySelector:)]
-        fn do_command_by_selector(&self, _command: Sel) {
+        fn do_command_by_selector(&self, command: Sel) {
             trace_scope!("doCommandBySelector:");
             // We shouldn't forward any character from just committed text, since we'll end up sending
             // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
@@ -484,6 +568,10 @@ declare_class!(
                 return;
             }
 
+            let selector = command.name();
+            if selector != "noop:" {
+                self.ivars().edit_commands.borrow_mut().push(selector.to_owned());
+            }
             self.ivars().forward_key_to_app.set(true);
 
             if unsafe { self.hasMarkedText() } && self.ivars().ime_state.get() == ImeState::Preedit
@@ -511,7 +599,10 @@ declare_class!(
 
             // Get the characters from the event.
             let old_ime_state = self.ivars().ime_state.get();
+            let previous_ime_events = self.ivars().key_down_ime_events.replace(Some(Vec::new()));
+            let previous_inserted_text = self.ivars().key_down_inserted_text.take();
             self.ivars().forward_key_to_app.set(false);
+            self.ivars().edit_commands.borrow_mut().clear();
             let event = replace_event(event, self.option_as_alt());
 
             // The `interpretKeyEvents` function might call
@@ -544,13 +635,31 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
-            if !had_ime_input || self.ivars().forward_key_to_app.get() {
-                let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
-                self.queue_event(WindowEvent::KeyboardInput {
-                    device_id: DEVICE_ID,
-                    event: key_event,
-                    is_synthetic: false,
-                });
+            let ime_events = self.ivars().key_down_ime_events.replace(previous_ime_events).unwrap_or_default();
+            let mut key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
+            key_event.platform_specific.edit_commands = self.ivars().edit_commands.take();
+            key_event.platform_specific.committed_text = self.ivars().key_down_inserted_text.replace(previous_inserted_text);
+            // Old/new marked text always produces a Process raw keydown.
+            // Commands requested while committing run after the IME effects,
+            // with the same balancing keyup/real keydown sequence as Chromium.
+            let delayed_key = had_ime_input && self.ivars().forward_key_to_app.get() && !unsafe { self.hasMarkedText() };
+            let original = delayed_key.then(|| key_event.clone());
+            key_event.platform_specific.ime_processed = had_ime_input;
+            if had_ime_input { key_event.platform_specific.edit_commands.clear(); }
+            self.queue_event(WindowEvent::KeyboardInput {
+                device_id: DEVICE_ID,
+                event: key_event,
+                is_synthetic: false,
+            });
+            for event in ime_events {
+                self.queue_event(WindowEvent::Ime(event));
+            }
+            if let Some(original) = original {
+                let mut release = original.clone();
+                release.state = ElementState::Released;
+                release.text = None;
+                self.queue_event(WindowEvent::KeyboardInput { device_id: DEVICE_ID, event: release, is_synthetic: false });
+                self.queue_event(WindowEvent::KeyboardInput { device_id: DEVICE_ID, event: original, is_synthetic: false });
             }
         }
 
@@ -561,17 +670,11 @@ declare_class!(
             let event = replace_event(event, self.option_as_alt());
             self.update_modifiers(&event, false);
 
-            // We want to send keyboard input when we are currently in the ground state.
-            if matches!(
-                self.ivars().ime_state.get(),
-                ImeState::Ground | ImeState::Disabled
-            ) {
-                self.queue_event(WindowEvent::KeyboardInput {
-                    device_id: DEVICE_ID,
-                    event: create_key_event(&event, false, false),
-                    is_synthetic: false,
-                });
-            }
+            self.queue_event(WindowEvent::KeyboardInput {
+                device_id: DEVICE_ID,
+                event: create_key_event(&event, false, false),
+                is_synthetic: false,
+            });
         }
 
         #[method(flagsChanged:)]
@@ -895,7 +998,13 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            edit_commands: Default::default(),
+            key_down_ime_events: Default::default(),
+            key_down_inserted_text: Default::default(),
             marked_text: Default::default(),
+            available_text: RefCell::new(NSString::from_str("")),
+            text_selection_range: Cell::new(NSRange::new(NSNotFound as NSUInteger, 0)),
+            marked_range: Cell::new(NSRange::new(NSNotFound as NSUInteger, 0)),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
@@ -924,11 +1033,26 @@ impl WinitView {
         // (which is incompatible with `frameDidChange:`)
         //
         // unsafe { msg_send_id![self, window] }
-        self.ivars()._ns_window.load().expect("view to have a window")
+        self.ivars()
+            ._ns_window
+            .load()
+            .expect("view to have a window")
     }
 
     fn queue_event(&self, event: WindowEvent) {
-        self.ivars().app_delegate.maybe_queue_window_event(self.window().id(), event);
+        let event = match event {
+            WindowEvent::Ime(event) => {
+                if let Some(pending) = self.ivars().key_down_ime_events.borrow_mut().as_mut() {
+                    pending.push(event);
+                    return;
+                }
+                WindowEvent::Ime(event)
+            }
+            event => event,
+        };
+        self.ivars()
+            .app_delegate
+            .maybe_queue_window_event(self.window().id(), event);
     }
 
     fn scale_factor(&self) -> f64 {
@@ -980,6 +1104,9 @@ impl WinitView {
 
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+        self.ivars()
+            .marked_range
+            .set(NSRange::new(NSNotFound as NSUInteger, 0));
 
         if self.ivars().ime_state.get() != ImeState::Disabled {
             self.ivars().ime_state.set(ImeState::Disabled);
@@ -990,6 +1117,30 @@ impl WinitView {
     pub(super) fn set_ime_cursor_area(&self, position: NSPoint, size: NSSize) {
         self.ivars().ime_position.set(position);
         self.ivars().ime_size.set(size);
+        let input_context = self.inputContext().expect("input context");
+        input_context.invalidateCharacterCoordinates();
+    }
+
+    pub(super) fn set_ime_text_state(&self, state: Option<ImeTextState>) {
+        let invalid = NSRange::new(NSNotFound as NSUInteger, 0);
+        let Some(state) = state else {
+            *self.ivars().available_text.borrow_mut() = NSString::from_str("");
+            self.ivars().text_selection_range.set(invalid);
+            self.ivars().marked_range.set(invalid);
+            return;
+        };
+        let text = NSString::from_str(&state.text);
+        let length = text.length();
+        let range = |range: std::ops::Range<usize>| {
+            let start = (range.start as NSUInteger).min(length);
+            let end = (range.end as NSUInteger).min(length).max(start);
+            NSRange::new(start, end - start)
+        };
+        *self.ivars().available_text.borrow_mut() = text;
+        self.ivars().text_selection_range.set(range(state.selection));
+        self.ivars()
+            .marked_range
+            .set(state.composition.map(range).unwrap_or(invalid));
         let input_context = self.inputContext().expect("input context");
         input_context.invalidateCharacterCoordinates();
     }
@@ -1053,14 +1204,20 @@ impl WinitView {
                     platform_specific: KeyEventExtra {
                         text_with_all_modifiers: None,
                         key_without_modifiers: logical_key.clone(),
+                        edit_commands: Vec::new(),
+                        ime_processed: false,
+                        native_key_code: scancode,
+                        unmodified_text: String::new(),
+                        committed_text: None,
                     },
                 };
 
                 let location_mask = ModLocationMask::from_location(event.location);
 
                 let mut phys_mod_state = self.ivars().phys_modifiers.borrow_mut();
-                let phys_mod =
-                    phys_mod_state.entry(logical_key).or_insert(ModLocationMask::empty());
+                let phys_mod = phys_mod_state
+                    .entry(logical_key)
+                    .or_insert(ModLocationMask::empty());
 
                 let is_active = current_modifiers.state().contains(event_modifier);
                 let mut events = VecDeque::with_capacity(2);
@@ -1210,7 +1367,9 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
 
     if ignore_alt_characters {
         let ns_chars = unsafe {
-            event.charactersIgnoringModifiers().expect("expected characters to be non-null")
+            event
+                .charactersIgnoringModifiers()
+                .expect("expected characters to be non-null")
         };
 
         unsafe {

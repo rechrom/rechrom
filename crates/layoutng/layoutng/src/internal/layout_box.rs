@@ -1,4 +1,9 @@
 #![allow(non_snake_case)]
+#[path = "../../../layout_fragment/src/layout_box_visual_rect.rs"]
+mod layout_fragment_visual_rect;
+
+#[path = "../../../layout_fragment/src/layout_box_caret.rs"]
+mod layout_fragment_box_caret;
 
 use foundation::graphics_types;
 use std::cell::Cell;
@@ -141,6 +146,19 @@ use layout_algo_block_column_spanner_admission::{
     LayoutBoxIsValidColumnSpannerInTree, LayoutBoxShouldPreventColumnSpannerDescendants,
 };
 
+#[path = "../../../layout_algo_block/src/layout_box_autoscroll.rs"]
+mod layout_algo_block_layout_box_autoscroll;
+use layout_algo_block_layout_box_autoscroll::{
+    LayoutBoxAutoscroll, LayoutBoxAutoscrollScrollingBox, LayoutBoxCalculateAutoscrollDirection,
+    LayoutBoxCalculateAutoscrollDirectionForRootRect, LayoutBoxFindAutoscrollable,
+    LayoutBoxFindAutoscrollableInFrame, LayoutBoxScrollIntoOwnArea, LayoutBoxScrollRectToVisible,
+    LayoutBoxScrollRectToVisibleWithMargin,
+};
+pub use layout_algo_block_layout_box_autoscroll::{
+    NativeScrollOffset, NativeScrollResult, ScrollAlignment, ScrollAlignmentBehavior,
+    ScrollIntoViewParams,
+};
+
 // The base-first Rust representation cannot use C++'s LayoutBox virtual
 // table. Keep the flex overflow conversion at this call boundary so callers
 // through BlockNode and LayoutBox observe LayoutFlexibleBox's override.
@@ -196,9 +214,6 @@ unsafe extern "Rust" {
 
     // The source LayoutBox default is empty; derived table cells may override it.
     fn InvalidateLayoutResultCacheAfterMeasureProvider(box_: &LayoutBox);
-    // Flex/grid identities belong to algorithm owners outside the selected package.
-    fn LayoutBoxIsFlexibleBoxProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxIsLayoutGridProvider(box_: &LayoutBox) -> bool;
     // LayoutView and its viewport geometry belong to a pending owner in this package.
     fn LayoutBoxEffectiveRootScrollerViewportSizeProvider(box_: &LayoutBox) -> PhysicalSize;
     fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutBox) -> bool;
@@ -239,21 +254,10 @@ unsafe extern "Rust" {
     ) -> bool;
     fn LayoutBoxHasHitTestableOverflowProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxInvalidateItemsProvider(result: &LayoutResult);
-    fn LayoutBoxAutoscrollProvider(box_: &mut LayoutBox, offset: &PhysicalOffset) -> bool;
-    fn LayoutBoxCalculateAutoscrollDirectionProvider(
-        box_: &LayoutBox,
-        point: &gfx::PointF,
-    ) -> PhysicalOffset;
-    fn LayoutBoxFindAutoscrollableProvider(
-        object: *mut LayoutObject,
-        middle_click: bool,
-    ) -> *mut LayoutBox;
-    fn LayoutBoxHasHorizontallyScrollableAncestorProvider(object: *mut LayoutObject) -> bool;
     fn LayoutBoxPositionForPointInFragmentsProvider(
         box_: &LayoutBox,
         offset: &PhysicalOffset,
     ) -> PositionWithAffinity;
-    fn LayoutBoxReadingFlowNodesProvider(box_: &LayoutBox) -> *const GCedHeapVector<Member<Node>>;
     fn LayoutBoxHitTestOverflowControlProvider(
         box_: &LayoutBox,
         result: &mut HitTestResult,
@@ -283,27 +287,11 @@ unsafe extern "Rust" {
         max_depth: u32,
     ) -> bool;
     fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxInflateVisualRectForFilterProvider(box_: &LayoutBox, state: &mut TransformState);
     fn LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxComputeBackgroundPaintLocationProvider(
         box_: &LayoutBox,
         needs_root_element_group: bool,
     ) -> BackgroundPaintLocation;
-    fn LayoutBoxMapContentsRectToBoxSpaceProvider(
-        box_: &LayoutBox,
-        state: &mut TransformState,
-        accumulation: TransformAccumulation,
-        contents: &LayoutObject,
-        flags: VisualRectFlags,
-    ) -> bool;
-    fn LayoutBoxMapVisualRectToContainerProvider(
-        box_: &LayoutBox,
-        container: *const LayoutObject,
-        offset: &PhysicalOffset,
-        ancestor: *const LayoutObject,
-        flags: VisualRectFlags,
-        state: &mut TransformState,
-    ) -> bool;
     fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(box_: &LayoutBox) -> *const BoxStrut;
     fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
         box_: &mut LayoutBox,
@@ -316,26 +304,9 @@ unsafe extern "Rust" {
         box_: &mut LayoutBox,
         old_style: &ComputedStyle,
     );
-    fn LayoutBoxInflateVisualRectForFilterUnderContainerProvider(
-        box_: &LayoutBox,
-        state: &mut TransformState,
-        container: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-    );
     fn LayoutBoxPaintProvider(box_: &LayoutBox, info: &PaintInfo);
-    fn LayoutBoxLocalCaretRectProvider(
-        box_: &LayoutBox,
-        offset: i32,
-        shape: CaretShape,
-    ) -> PhysicalRect;
     fn LayoutBoxInvalidatePaintProvider(box_: &LayoutBox, context: &PaintInvalidatorContext);
     fn LayoutBoxGetCustomLayoutChildProvider(box_: &LayoutBox) -> *mut CustomLayoutChild;
-    fn LayoutBoxMapToVisualRectInAncestorSpaceInternalProvider(
-        box_: &LayoutBox,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: VisualRectFlags,
-    ) -> bool;
     fn LayoutBoxBackgroundIsKnownToBeOpaqueInRectProvider(
         box_: &LayoutBox,
         rect: &PhysicalRect,
@@ -551,9 +522,7 @@ impl LayoutBox {
         state: &mut TransformState,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe {
-            LayoutBoxMapToVisualRectInAncestorSpaceInternalProvider(self, ancestor, state, flags)
-        }
+        self.MapVisualRectInternalSource(ancestor, state, flags)
     }
 
     // cpp: layoutng/internal/layout_box.h:936-936
@@ -567,7 +536,7 @@ impl LayoutBox {
     }
 
     pub fn LocalCaretRect(&self, offset: i32, shape: CaretShape) -> PhysicalRect {
-        unsafe { LayoutBoxLocalCaretRectProvider(self, offset, shape) }
+        layout_fragment_box_caret::LayoutBoxLocalCaretRectProvider(self, offset, shape)
     }
 
     pub fn ComputeResourcePriority(&self) -> ResourcePriority {
@@ -586,9 +555,17 @@ impl LayoutBox {
         contents: &LayoutObject,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe {
-            LayoutBoxMapContentsRectToBoxSpaceProvider(self, state, accumulation, contents, flags)
+        self.CheckIsNotDestroyed();
+        if !self.HasClipRelatedProperty() {
+            return true;
         }
+        if self.ContainedContentsScroll(contents) {
+            state.Move(
+                -self.ScrolledContentOffset(),
+                TransformState::kFlattenTransform,
+            );
+        }
+        self.ApplyBoxClips(state, accumulation, flags)
     }
 
     pub fn MapVisualRectToContainer(
@@ -599,11 +576,7 @@ impl LayoutBox {
         flags: VisualRectFlags,
         state: &mut TransformState,
     ) -> bool {
-        unsafe {
-            LayoutBoxMapVisualRectToContainerProvider(
-                self, container, offset, ancestor, flags, state,
-            )
-        }
+        self.MapVisualRectToContainerSource(container, offset, ancestor, flags, state)
     }
 
     pub fn InvalidateLayoutResultCacheAfterMeasure(&self) {
@@ -633,11 +606,7 @@ impl LayoutBox {
         container: &LayoutObject,
         ancestor: *const LayoutBoxModelObject,
     ) {
-        unsafe {
-            LayoutBoxInflateVisualRectForFilterUnderContainerProvider(
-                self, state, container, ancestor,
-            )
-        }
+        self.InflateVisualRectForFilterUnderContainerSource(state, container, ancestor)
     }
 
     // cpp: layoutng/internal/layout_box.h:327-327,424-424,433-433,442-450
@@ -690,19 +659,90 @@ impl LayoutBox {
     }
 
     pub fn Autoscroll(&mut self, offset: &PhysicalOffset) -> bool {
-        unsafe { LayoutBoxAutoscrollProvider(self, offset) }
+        LayoutBoxAutoscroll(self, offset).DidScroll()
     }
 
     pub fn CalculateAutoscrollDirection(&self, point: &gfx::PointF) -> PhysicalOffset {
-        unsafe { LayoutBoxCalculateAutoscrollDirectionProvider(self, point) }
+        LayoutBoxCalculateAutoscrollDirection(self, point, PhysicalOffset::default())
     }
 
     pub fn FindAutoscrollable(object: *mut LayoutObject, middle_click: bool) -> *mut LayoutBox {
-        unsafe { LayoutBoxFindAutoscrollableProvider(object, middle_click) }
+        LayoutBoxFindAutoscrollable(object, middle_click)
+    }
+
+    pub fn ScrollRectToVisible(
+        &self,
+        rect: PhysicalRect,
+        params: ScrollIntoViewParams,
+    ) -> NativeScrollResult {
+        LayoutBoxScrollRectToVisible(self, rect, params)
+    }
+    pub(crate) fn ScrollIntoOwnArea(
+        &self,
+        rect: PhysicalRect,
+        margin: PhysicalBoxStrut,
+        params: ScrollIntoViewParams,
+    ) -> NativeScrollResult {
+        LayoutBoxScrollIntoOwnArea(self, rect, margin, params)
+    }
+
+    pub(crate) fn ScrollRectToVisibleWithMargin(
+        &self,
+        rect: PhysicalRect,
+        params: ScrollIntoViewParams,
+        margin: PhysicalBoxStrut,
+    ) -> NativeScrollResult {
+        LayoutBoxScrollRectToVisibleWithMargin(self, rect, params, margin)
+    }
+
+    pub fn AutoscrollWithResult(&self, position: &PhysicalOffset) -> NativeScrollResult {
+        LayoutBoxAutoscroll(self, position)
+    }
+
+    pub fn CalculateAutoscrollDirectionInRootFrame(
+        &self,
+        point: &gfx::PointF,
+        root_frame_offset: PhysicalOffset,
+    ) -> PhysicalOffset {
+        LayoutBoxCalculateAutoscrollDirection(self, point, root_frame_offset)
+    }
+    pub fn AutoscrollScrollingBox(&self) -> Option<PhysicalRect> {
+        LayoutBoxAutoscrollScrollingBox(self)
+    }
+    pub(crate) fn FindAutoscrollableInFrame(
+        object: *mut LayoutObject,
+        middle_click: bool,
+    ) -> (*mut LayoutBox, bool) {
+        LayoutBoxFindAutoscrollableInFrame(object, middle_click)
+    }
+    pub fn CalculateAutoscrollDirectionForRootRect(
+        &self,
+        point: &gfx::PointF,
+        belt: PhysicalRect,
+    ) -> PhysicalOffset {
+        LayoutBoxCalculateAutoscrollDirectionForRootRect(point, belt)
     }
 
     pub fn HasHorizontallyScrollableAncestor(object: *mut LayoutObject) -> bool {
-        unsafe { LayoutBoxHasHorizontallyScrollableAncestorProvider(object) }
+        // Source: core/layout/layout_box.cc:1710-1737. A resident Layout tree
+        // belongs to one Page/document domain. Its root has no LocalOwner in
+        // another domain; frame input is routed before entering this engine.
+        let mut current = object;
+        while let Some(object) = unsafe { current.as_ref() } {
+            let box_ = foundation::DynamicTo::<LayoutBox>(current);
+            if unsafe { box_.as_ref() }.is_some_and(|box_| box_.HasScrollableOverflowX()) {
+                return true;
+            }
+            if !matches!(
+                object.StyleRef().OverscrollBehaviorX(),
+                foundation::style_constants::EOverscrollBehavior::kAuto
+                    | foundation::style_constants::EOverscrollBehavior::kChain
+            ) {
+                break;
+            }
+            current = object.Parent();
+        }
+        false
     }
 
     // cpp: layoutng/internal/layout_box.h:771-771,849-849,948-956
@@ -710,8 +750,19 @@ impl LayoutBox {
         unsafe { LayoutBoxPositionForPointInFragmentsProvider(self, offset) }
     }
 
-    pub fn ReadingFlowNodes(&self) -> &GCedHeapVector<Member<Node>> {
-        unsafe { &*LayoutBoxReadingFlowNodesProvider(self) }
+    // Chromium: core/layout/layout_box.cc:4693-4701. Read the canonical
+    // fragment's retained order; do not bypass it through an unimplemented
+    // embedding provider. A borrowed empty slice replaces the GC static vector.
+    pub fn ReadingFlowNodes(&self) -> &[Member<Node>] {
+        self.CheckIsNotDestroyed();
+        let fragment = self.GetPhysicalFragment(0);
+        let Some(fragment) = (unsafe { fragment.as_ref() }) else {
+            return &[];
+        };
+        let nodes = fragment.ReadingFlowNodes();
+        unsafe { nodes.as_ref() }
+            .map(|nodes| nodes.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn HitTestOverflowControl(
@@ -776,7 +827,7 @@ impl LayoutBox {
     }
 
     pub fn InflateVisualRectForFilter(&self, state: &mut TransformState) {
-        unsafe { LayoutBoxInflateVisualRectForFilterProvider(self, state) }
+        self.InflateVisualRectForFilterSource(state)
     }
 
     pub fn BackgroundClipBorderBoxIsEquivalentToPaddingBox(&self) -> bool {
@@ -1787,15 +1838,15 @@ impl LayoutBox {
         self.CheckIsNotDestroyed();
         match self.StyleRef().ReadingFlow() {
             EReadingFlow::kNormal => false,
-            EReadingFlow::kFlexVisual | EReadingFlow::kFlexFlow => unsafe {
-                LayoutBoxIsFlexibleBoxProvider(self)
-            },
-            EReadingFlow::kGridRows | EReadingFlow::kGridColumns | EReadingFlow::kGridOrder => unsafe {
-                LayoutBoxIsLayoutGridProvider(self)
-            },
+            EReadingFlow::kFlexVisual | EReadingFlow::kFlexFlow => {
+                self.RuntimeClass() == LayoutObjectClass::FlexibleBox
+            }
+            EReadingFlow::kGridRows | EReadingFlow::kGridColumns | EReadingFlow::kGridOrder => {
+                self.RuntimeClass() == LayoutObjectClass::Grid
+            }
             EReadingFlow::kSourceOrder => {
                 self.IsLayoutBlock()
-                    || unsafe { LayoutBoxIsFlexibleBoxProvider(self) }
+                    || self.RuntimeClass() == LayoutObjectClass::FlexibleBox
                     || self.IsLayoutGridOrGridLanes()
             }
             _ => false,

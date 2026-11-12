@@ -188,9 +188,13 @@ fn BasicShapeAndBox<T: TokenStreamTokenizer>(
     use CSSValueID::*;
     let shape = match s.Peek().FunctionId() {
         Some(kPolygon) => effects_parser::Polygon(id, s, mode)?,
-        Some(kCircle | kEllipse | kInset | kRect | kXywh | kPath | kShape) => {
-            return Err(unsupported(id, "BorderShape BasicShape/Path owner"))
-        }
+        Some(kCircle) => effects_parser::Circle(id, s, mode)?,
+        Some(kEllipse) => effects_parser::Ellipse(id, s, mode)?,
+        Some(kInset) => effects_parser::Inset(id, s, mode)?,
+        Some(kRect) => effects_parser::Rect(id, s, mode)?,
+        Some(kXywh) => effects_parser::Xywh(id, s, mode)?,
+        Some(kPath) => effects_parser::Path(id, s)?,
+        Some(kShape) => effects_parser::ShapeFunction(id, s, mode)?,
         _ => return Ok(None),
     };
     if matches!(

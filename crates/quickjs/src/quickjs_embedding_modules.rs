@@ -2,6 +2,72 @@
 // A host may compile an unresolved module graph, choose dynamic import policy,
 // and explicitly consume the real synchronous module-internal Promise.
 use std::sync::Mutex;
+// Opt-in ScriptOrigin host metadata. Out-of-line storage leaves the official
+// bytecode layout and ordinary JS_Eval behavior unchanged. Each nested
+// function shares its source Script's captured module-resolution base URL.
+static SCRIPT_BASE_URLS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<(usize, usize), String>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+pub unsafe fn JS_SetCompiledScriptBaseURL(
+    ctx: *mut JSContext,
+    script: JSValueConst,
+    base_url: &str,
+) -> i32 {
+    if JS_VALUE_GET_TAG(script) != JS_TAG_FUNCTION_BYTECODE {
+        return -1;
+    }
+    let mut pending = vec![JS_VALUE_GET_PTR(script).cast::<JSFunctionBytecode>()];
+    let mut urls = SCRIPT_BASE_URLS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    while let Some(bytecode) = pending.pop() {
+        urls.insert(((*ctx).rt as usize, bytecode as usize), base_url.to_owned());
+        for index in 0..(*bytecode).cpool_count {
+            let value = *(*bytecode).cpool.add(index as usize);
+            if JS_VALUE_GET_TAG(value) == JS_TAG_FUNCTION_BYTECODE {
+                pending.push(JS_VALUE_GET_PTR(value).cast());
+            }
+        }
+    }
+    0
+}
+unsafe fn js_host_active_script_base_url(ctx: *mut JSContext) -> Option<String> {
+    let urls = SCRIPT_BASE_URLS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if urls.is_empty() {
+        return None;
+    }
+    let mut frame = (*(*ctx).rt).current_stack_frame;
+    while !frame.is_null() {
+        let bytecode = JS_GetFunctionBytecode((*frame).cur_func);
+        if !bytecode.is_null() {
+            if let Some(url) = urls.get(&((*ctx).rt as usize, bytecode as usize)) {
+                return Some(url.clone());
+            }
+            if (*bytecode).is_direct_or_indirect_eval() == 0 {
+                return None;
+            }
+        }
+        frame = (*frame).prev_frame;
+    }
+    None
+}
+unsafe fn js_host_inherit_script_base_url(ctx: *mut JSContext, bytecode: *mut JSFunctionBytecode) {
+    if let Some(url) = js_host_active_script_base_url(ctx) {
+        SCRIPT_BASE_URLS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(((*ctx).rt as usize, bytecode as usize), url);
+    }
+}
+unsafe fn js_host_free_script_base_url(rt: *mut JSRuntime, bytecode: *mut JSFunctionBytecode) {
+    SCRIPT_BASE_URLS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&(rt as usize, bytecode as usize));
+}
 
 /// Has an effect only with MODULE | COMPILE_ONLY. Ordinary JS_Eval follows C.
 pub const JS_EVAL_FLAG_HOST_NO_RESOLVE: i32 = 1 << 24;
@@ -70,6 +136,10 @@ pub unsafe fn JS_HostResumeDynamicImport(
     JS_LoadModuleInternal(ctx, base, specifier, resolving.as_mut_ptr(), attributes);
 }
 unsafe fn js_clear_module_embedding_hooks(runtime: *mut JSRuntime) {
+    SCRIPT_BASE_URLS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|(owner, _), _| *owner != runtime as usize);
     JS_SetModuleEmbeddingHooks(runtime, None, None, ptr::null_mut());
 }
 fn js_module_embedding_hooks(runtime: *mut JSRuntime) -> Option<ModuleEmbeddingHooks> {
@@ -92,15 +162,26 @@ unsafe fn js_host_dynamic_import_or_enqueue(
 ) -> i32 {
     if let Some(hooks) = js_module_embedding_hooks((*ctx).rt) {
         if let Some(callback) = hooks.dynamic_import {
-            return callback(
+            let base_url = js_host_active_script_base_url(ctx);
+            let base = if let Some(base_url) = base_url {
+                JS_NewStringLen(ctx, base_url.as_ptr().cast(), base_url.len())
+            } else {
+                JS_DupValue(ctx, *argv.add(2))
+            };
+            if JS_IsException(base) != 0 {
+                return -1;
+            }
+            let result = callback(
                 ctx,
                 *argv,
                 *argv.add(1),
-                *argv.add(2),
+                base,
                 *argv.add(3),
                 *argv.add(4),
                 hooks.opaque as *mut c_void,
             );
+            JS_FreeValue(ctx, base);
+            return result;
         }
     }
     JS_EnqueueJob(ctx, Some(js_dynamic_import_job), argc, argv)
@@ -166,4 +247,21 @@ pub unsafe fn JS_MarkPromiseHandled(ctx: *mut JSContext, promise: JSValueConst) 
         (*state).is_handled = 1;
     }
     0
+}
+
+/// Embedding equivalent of PerformPromiseThen. The existing intrinsic owns
+/// reaction allocation and the Agent job queue. No author `then` getter or
+/// Promise constructor is consulted and no result Promise is exposed.
+pub unsafe fn JS_PerformPromiseThen(
+    ctx: *mut JSContext,
+    promise: JSValueConst,
+    fulfilled: JSValueConst,
+    rejected: JSValueConst,
+) -> i32 {
+    if JS_GetOpaque2(ctx, promise, JS_CLASS_PROMISE as JSClassID).is_null() {
+        return -1;
+    }
+    let mut handlers = [fulfilled, rejected];
+    let mut capability = [JS_UNDEFINED; 2];
+    perform_promise_then(ctx, promise, handlers.as_mut_ptr(), capability.as_mut_ptr())
 }

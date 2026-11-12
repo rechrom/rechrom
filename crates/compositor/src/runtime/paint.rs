@@ -23,7 +23,7 @@ mod conversion_values;
 mod scroll_nodes;
 mod scrollbar;
 pub use artifact_nodes::{CpuCanvasSnapshot, CpuLayersAsJson};
-pub use scrollbar::Scrollbar;
+pub use scrollbar::{Scrollbar, ScrollbarCanvas};
 mod reasons;
 pub use conversion_values::CpuConversionRecorder;
 pub use reasons::CpuCompositingReasons;

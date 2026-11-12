@@ -351,3 +351,23 @@ impl<R: RoundedRectTransformBackend> crate::adapter::paint_chunks_to_cc_layer::C
         self.MapPoint(point)
     }
 }
+
+impl<R: RoundedRectTransformBackend>
+    paint_model::geometry_mapper_source::matrix::GeometryMapperMatrix for Transform<R>
+{
+    fn ToGeometryMapperMatrix(
+        &self,
+    ) -> paint_model::geometry_mapper_source::matrix::SharedGeometryTransform {
+        paint_model::geometry_mapper_source::matrix::SharedGeometryTransform::FromSource(
+            self.source.clone(),
+        )
+    }
+    fn FromGeometryMapperMatrix(
+        value: paint_model::geometry_mapper_source::matrix::SharedGeometryTransform,
+    ) -> Self {
+        Self {
+            source: value.into_source(),
+            backend: PhantomData,
+        }
+    }
+}

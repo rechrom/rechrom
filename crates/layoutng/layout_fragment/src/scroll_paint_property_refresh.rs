@@ -5,6 +5,7 @@
 //! depend on concrete LayoutObject types.
 
 use super::*;
+use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 
 #[inline(never)]
 pub(super) fn refresh_scroll_paint_properties(
@@ -131,28 +132,26 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
                 if fragment.paint.scrollbars.is_some() {
                     assert!(!area.is_null());
                     let area = unsafe { &*area };
-                    let theme = layout_box.ScrollbarThemeForLayout();
                     let data = Arc::make_mut(fragment.paint.scrollbars.as_mut().unwrap());
                     if let Some(axis) = data.horizontal.as_mut() {
                         let scrollbar = area.HorizontalScrollbar();
                         if !scrollbar.is_null() {
-                            SetScrollbarThumb(
-                                axis,
-                                unsafe { &*scrollbar },
-                                theme.has_buttons,
-                                theme.minimum_thumb_length as f64,
+                            axis.painted_opacity = area.ScrollbarPaintedOpacity(
+                                ScrollbarOrientation::kHorizontalScrollbar,
                             );
+                            axis.painted_thumb_width =
+                                area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar });
+                            SetScrollbarThumb(axis, unsafe { &*scrollbar });
                         }
                     }
                     if let Some(axis) = data.vertical.as_mut() {
                         let scrollbar = area.VerticalScrollbar();
                         if !scrollbar.is_null() {
-                            SetScrollbarThumb(
-                                axis,
-                                unsafe { &*scrollbar },
-                                theme.has_buttons,
-                                theme.minimum_thumb_length as f64,
-                            );
+                            axis.painted_opacity = area
+                                .ScrollbarPaintedOpacity(ScrollbarOrientation::kVerticalScrollbar);
+                            axis.painted_thumb_width =
+                                area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar });
+                            SetScrollbarThumb(axis, unsafe { &*scrollbar });
                         }
                     }
                 }

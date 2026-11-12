@@ -60,7 +60,10 @@ fn registration_failure_is_atomic_and_preserves_original_definition() {
         CustomElementCallbacks::default(),
     );
     assert_eq!(duplicate, Err(RegistrationError::DuplicateName));
-    assert_eq!(d.CustomElementDefinitionForName("x-atomic"), Some(&before));
+    assert!(std::rc::Rc::ptr_eq(
+        &d.CustomElementDefinitionForName("x-atomic").unwrap(),
+        &before,
+    ));
     let unsupported = d.RegisterCustomElementDefinition(
         CustomElementDescriptor {
             name: "x-button".into(),

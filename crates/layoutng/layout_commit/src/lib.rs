@@ -2,7 +2,7 @@
 
 //! Typed boundary between resident LayoutNG state and downstream publication.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 pub mod trace;
 pub use trace::{span as trace_span, TracePhase};
@@ -17,16 +17,17 @@ pub enum LayoutUpdateKind {
 
 /// Opaque client set produced by Paint after its artifact is complete.
 /// Layout consumes it to advance source DisplayItemClient state.
+#[derive(Clone)]
 pub struct PaintClientCommit {
-    used_clients: HashSet<u64>,
-    pending_delayed_paint_invalidations: HashSet<u64>,
+    used_clients: Arc<HashSet<u64>>,
+    pending_delayed_paint_invalidations: Arc<HashSet<u64>>,
 }
 
 impl PaintClientCommit {
     pub fn FromClientSet(used_clients: HashSet<u64>) -> Self {
         Self {
-            used_clients,
-            pending_delayed_paint_invalidations: HashSet::new(),
+            used_clients: Arc::new(used_clients),
+            pending_delayed_paint_invalidations: Arc::new(HashSet::new()),
         }
     }
 
@@ -35,8 +36,8 @@ impl PaintClientCommit {
         pending_delayed_paint_invalidations: HashSet<u64>,
     ) -> Self {
         Self {
-            used_clients,
-            pending_delayed_paint_invalidations,
+            used_clients: Arc::new(used_clients),
+            pending_delayed_paint_invalidations: Arc::new(pending_delayed_paint_invalidations),
         }
     }
 

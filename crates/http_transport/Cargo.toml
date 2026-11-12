@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+fetch_policy = { path = "../fetch_policy" }
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 browser_tracing = { path = "../tracing" }
 base64 = "0.22"
 bytes = "1"

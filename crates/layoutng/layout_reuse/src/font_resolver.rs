@@ -35,8 +35,12 @@ pub(super) fn EngineFontResolver(space: &ConstraintSpace) -> Box<dyn FontResolve
     if let Some(engine) = &space.font_engine {
         return Box::new(SharedEngineFontResolver(engine.clone()));
     }
-    let mut engine =
-        font_engine::FontEngine::FromFaces(&space.fonts, space.font_backend_factory.clone());
+    let metric_scale = space.device_pixel_ratio / space.layout_zoom_factor.max(f64::MIN_POSITIVE);
+    let mut engine = font_engine::FontEngine::FromFacesWithDeviceScaleFactor(
+        &space.fonts,
+        space.font_backend_factory.clone(),
+        metric_scale as f32,
+    );
     engine.SetQueryCollector(space.font_queries.clone());
     Box::new(engine)
 }

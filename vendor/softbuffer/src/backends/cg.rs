@@ -351,6 +351,7 @@ impl<D, W> CGImpl<D, W> {
         prepared: PreparedBuffer,
         callback: crate::PresentCallback,
         observer: Option<crate::NativeTransactionObserver>,
+        presentation_callback: Option<crate::PresentationCallback>,
     ) -> Result<(), SoftBufferError> {
         let (surface, lease) = prepared.native.finish_with_lease()?;
         let generation = self.next_presentation_generation();
@@ -359,6 +360,7 @@ impl<D, W> CGImpl<D, W> {
             surface,
             _lease: lease,
             callback,
+            presentation_callback,
             observer,
             presentation: self.presentation.clone(),
             generation,
@@ -594,6 +596,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
             surface,
             _lease: lease,
             callback,
+            presentation_callback: None,
             observer,
             presentation: self.imp.presentation.clone(),
             generation,
@@ -633,6 +636,7 @@ struct MainThreadPresent {
     surface: iosurface::SendSurface,
     _lease: std::sync::Arc<()>,
     callback: crate::PresentCallback,
+    presentation_callback: Option<crate::PresentationCallback>,
     observer: Option<crate::NativeTransactionObserver>,
     presentation: std::sync::Arc<NativePresentationState>,
     generation: u64,
@@ -644,7 +648,10 @@ impl MainThreadPresent {
         let _main =
             MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
         let started = std::time::Instant::now();
-        if self.presentation.generation.load(std::sync::atomic::Ordering::Acquire)
+        if self
+            .presentation
+            .generation
+            .load(std::sync::atomic::Ordering::Acquire)
             != self.generation
         {
             // The browser root changed after this IOSurface was queued for the
@@ -652,6 +659,11 @@ impl MainThreadPresent {
             // scheduler and its pool lease without letting an obsolete root
             // transaction land after the input that replaced it.
             (self.callback)(started, std::time::Instant::now());
+            if let Some(presentation) = self.presentation_callback {
+                presentation(crate::PresentationFeedback::Unavailable(
+                    crate::PresentationUnavailableReason::DiscardedBeforePresentation,
+                ));
+            }
             return;
         }
         if let Some(observer) = &self.observer {
@@ -703,6 +715,11 @@ impl MainThreadPresent {
         // swap pending until the CA completion skips the following VSync and
         // turns adjacent trackpad deltas into one visible 33 ms step.
         (self.callback)(started, std::time::Instant::now());
+        if let Some(presentation) = self.presentation_callback {
+            presentation(crate::PresentationFeedback::Unavailable(
+                crate::PresentationUnavailableReason::BackendHasNoTimestamp,
+            ));
+        }
     }
 }
 

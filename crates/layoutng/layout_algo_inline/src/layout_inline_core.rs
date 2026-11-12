@@ -70,7 +70,11 @@ pub extern "Rust" fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
         return true;
     }
     let element = DynamicTo::<Element>(this.GetNode());
-    !element.is_null() && unsafe { &*element }.InputMayBeImplicitAnchor()
+    !element.is_null()
+        && (unsafe { &*element }.InputMayBeImplicitAnchor()
+            || !unsafe { &*element }
+                .InputTrackedElementSubRects()
+                .is_empty())
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:60-71

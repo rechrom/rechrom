@@ -24,10 +24,13 @@ pub(super) struct DOMHostGraph {
     live_ids: Rc<RefCell<LiveCollectionIds>>,
     iterators: Rc<RefCell<HashMap<HostObjectId, CollectionIterator>>>,
     records: Rc<RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>>,
-    listeners: Rc<RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>>,
+    native_record_classes: Rc<RefCell<HashMap<HostObjectId, &'static str>>>,
+    listeners: ListenerTargets,
     events: Rc<RefCell<services::BoundEvents>>,
     retire: RefCell<Vec<HostObjectId>>,
     reaction_roots: RefCell<std::collections::HashSet<HostObjectId>>,
+    listener_roots: RefCell<HashMap<HostObjectId, usize>>,
+    pub(super) abort_bindings: std::cell::OnceCell<Rc<super::abort_signals::AbortBindings>>,
 }
 impl DOMHostGraph {
     pub(super) fn new(
@@ -36,7 +39,8 @@ impl DOMHostGraph {
         live_ids: Rc<RefCell<LiveCollectionIds>>,
         iterators: Rc<RefCell<HashMap<HostObjectId, CollectionIterator>>>,
         records: Rc<RefCell<HashMap<HostObjectId, HashMap<String, HostValue>>>>,
-        listeners: Rc<RefCell<HashMap<HostObjectId, HashMap<String, Vec<Listener>>>>>,
+        native_record_classes: Rc<RefCell<HashMap<HostObjectId, &'static str>>>,
+        listeners: ListenerTargets,
         events: Rc<RefCell<services::BoundEvents>>,
     ) -> Self {
         Self {
@@ -45,12 +49,15 @@ impl DOMHostGraph {
             live_ids,
             iterators,
             records,
+            native_record_classes,
             listeners,
             events,
             streams: Default::default(),
             pending: Default::default(),
             retire: Default::default(),
             reaction_roots: Default::default(),
+            listener_roots: Default::default(),
+            abort_bindings: Default::default(),
         }
     }
     pub(super) fn SetRoot(&self, id: HostObjectId, reason: u64, rooted: bool) {
@@ -66,11 +73,65 @@ impl DOMHostGraph {
         slot: u64,
         function: Option<JavaScriptFunction>,
     ) {
-        self.pending.borrow_mut().push(C::FunctionReference {
+        let present = function.is_some();
+        let mut changes = self.pending.borrow_mut();
+        if present {
+            changes.extend([
+                C::Object { id: slot },
+                C::FunctionReference {
+                    owner: slot,
+                    slot: 0,
+                    function,
+                },
+            ]);
+        }
+        let owner = if owner == 0 {
+            let id = 1 << 60;
+            changes.extend([
+                C::Object { id },
+                C::Root {
+                    id,
+                    reason: 8,
+                    rooted: true,
+                },
+            ]);
+            id
+        } else {
+            owner
+        };
+        changes.push(C::Reference {
             owner,
             slot,
-            function,
+            target: present.then_some(slot),
         });
+    }
+    pub(super) fn ClearListenerReferences(&self, owner: u64) {
+        self.Publish([C::ClearReferenceRange {
+            owner: if owner == 0 { 1 << 60 } else { owner },
+            first_slot: 1 << 61,
+            end_slot: 1 << 62,
+        }]);
+    }
+    pub(super) fn Publish(&self, changes: impl IntoIterator<Item = C>) {
+        self.pending.borrow_mut().extend(changes);
+    }
+    pub(super) fn KeepListenerCells(self: &Rc<Self>, cells: Vec<u64>) -> ListenerCellRoots {
+        let mut counts = self.listener_roots.borrow_mut();
+        for &id in &cells {
+            let count = counts.entry(id).or_default();
+            if *count == 0 {
+                self.pending.borrow_mut().push(C::Root {
+                    id,
+                    reason: 9,
+                    rooted: true,
+                });
+            }
+            *count += 1;
+        }
+        ListenerCellRoots {
+            graph: self.clone(),
+            cells,
+        }
     }
     pub(super) fn Collection(&self, id: HostObjectId, collection: &NodeCollection) {
         let mut pending = self.pending.borrow_mut();
@@ -143,10 +204,11 @@ impl DOMHostGraph {
             return;
         };
         for id in self.retire.borrow_mut().drain(..) {
-            if let Some(kinds) = listeners.remove(&id) {
-                for listener in kinds.into_values().flatten() {
-                    listener.active.set(false);
-                }
+            if let Some(abort) = self.abort_bindings.get() {
+                abort.Retire(id);
+            }
+            if let Some(target) = listeners.remove(&id) {
+                target.RemoveAllEventListeners();
             }
             if let Some(collection) = collections.remove(&id) {
                 if collection.kind != "snapshot" {
@@ -171,7 +233,29 @@ impl DOMHostGraph {
             events.Retire(id);
             iterators.remove(&id);
             records.remove(&id);
+            self.native_record_classes.borrow_mut().remove(&id);
             self.pending.borrow_mut().push(C::Retire { id });
+        }
+    }
+}
+pub(super) struct ListenerCellRoots {
+    graph: Rc<DOMHostGraph>,
+    cells: Vec<u64>,
+}
+impl Drop for ListenerCellRoots {
+    fn drop(&mut self) {
+        let mut counts = self.graph.listener_roots.borrow_mut();
+        for &id in &self.cells {
+            let count = counts.get_mut(&id).expect("live listener stack root");
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&id);
+                self.graph.pending.borrow_mut().push(C::Root {
+                    id,
+                    reason: 9,
+                    rooted: false,
+                });
+            }
         }
     }
 }
@@ -182,6 +266,13 @@ impl HostObjectTraceSource for DOMHostGraph {
         // once per arena; its stream moves with the document while parsing.
         if let Ok(mut owner) = self.document.try_borrow_mut() {
             let document = owner.GetDocumentMut();
+            for (owner, target) in document.ElementInternalsAnchorReferences() {
+                self.pending.borrow_mut().push(C::Reference {
+                    owner,
+                    slot: u64::MAX - 7,
+                    target,
+                });
+            }
             let pending = document
                 .PendingCustomElementReferenceRoots()
                 .into_iter()
@@ -261,12 +352,15 @@ impl HostObjectTraceSource for DOMHostGraph {
         changes
     }
     fn Released(&self, ids: &[HostObjectId]) {
+        if let Some(abort) = self.abort_bindings.get() {
+            abort.WeakKeysReleased(ids);
+        }
         // DOM storage stays with DOM. Binding records and listener metadata
         // can retire after their owner cell dies, outside collector callbacks.
         self.retire.borrow_mut().extend(
             ids.iter()
                 .copied()
-                .filter(|id| (*id >= 1 << 62) || self.listeners.borrow().contains_key(id)),
+                .filter(|id| (*id >= 1 << 61) || self.listeners.borrow().contains_key(id)),
         );
     }
 }

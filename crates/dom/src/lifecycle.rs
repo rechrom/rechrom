@@ -2,7 +2,7 @@
 
 use crate::{style_state::StyleUpdateImpact, DOM};
 use cssom::CSSDeclaration;
-use layoutng_assembly::internal::layout_input::Offset;
+use layoutng_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
 
 /// Lifecycle admission uses the document's existing accumulated impact and
 /// geometry revision; these methods do not resolve or copy a separate tree.
@@ -43,6 +43,25 @@ impl DOM {
                 paint: true,
                 ..Default::default()
             });
+    }
+
+    pub fn SetRegionCaptureCropId(&mut self, node_id: u64, crop_id: [u64; 2]) -> bool {
+        self.GetDocumentMut()
+            .SetRegionCaptureCropId(node_id, crop_id)
+    }
+
+    pub fn SetTrackedElementSubRect(
+        &mut self,
+        node_id: u64,
+        tracked: TrackedElementSubRect,
+    ) -> bool {
+        self.GetDocumentMut()
+            .SetTrackedElementSubRect(node_id, tracked)
+    }
+
+    pub fn ClearTrackedElementSubRect(&mut self, node_id: u64, feature: i32) -> bool {
+        self.GetDocumentMut()
+            .ClearTrackedElementSubRect(node_id, feature)
     }
 
     pub fn DidCommitPaint(&mut self) {

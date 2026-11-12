@@ -962,9 +962,11 @@ re-exported as a compatibility package.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
-from Chromium's five-value source `WritingMode`; the source-to-artifact adapter
-is the only place where sideways modes collapse to their physical vertical
-direction.
+from Chromium's five-value source `WritingMode`: `sideways-rl` collapses to its
+paint-equivalent `vertical-rl`, while `sideways-lr` remains distinct because
+text rotation and selection-bound edge orientation differ from `vertical-lr`.
+The source-to-artifact adapter is the only place where that equivalence is
+applied.
 
 `layout_algo_inline_assembly` is a compile-only composition profile used to
 verify the same reciprocal inline source set. It is not a performance owner;

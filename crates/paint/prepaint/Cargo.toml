@@ -8,6 +8,8 @@ browser_tracing = { path = "../../tracing" }
 font_engine = { path = "../../font_engine" }
 foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
 image_resource = { path = "../../image_resource" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }
 layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
 paint_model = { path = "../paint_model" }
 paint_reuse = { path = "../paint_reuse" }

@@ -127,6 +127,7 @@ pub extern "Rust" fn LayoutTextWillBeDestroyed(this: &mut LayoutText) {
         .lock()
         .expect("selection display-item client map poisoned")
         .remove(&(this as *const LayoutText as usize));
+    this.secure_text_timer_.take();
     this.RemoveAndDestroyTextBoxes();
     this.valid_ng_items_ = false;
     this.Remove();
@@ -223,6 +224,10 @@ pub extern "Rust" fn LayoutTextHasInlineFragments(this: &LayoutText) -> bool {
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextOriginalText(this: &LayoutText) -> String {
     this.CheckIsNotDestroyed();
+    let fragment = DynamicTo::<crate::layout_text_fragment::LayoutTextFragment>(this as *const _);
+    if let Some(fragment) = unsafe { fragment.as_ref() } {
+        return fragment.OriginalText();
+    }
     let text_node = DynamicTo::<Text>(this.GetNode());
     if text_node.is_null() {
         String::default()
@@ -405,14 +410,27 @@ pub extern "Rust" fn LayoutTextSecureText(
     if plain.empty() {
         return (plain.clone(), TextOffsetMap::default());
     }
+    let last_typed_character_offset = this
+        .secure_text_timer_
+        .as_ref()
+        .filter(|timer| timer.token.is_some())
+        .and_then(|timer| timer.last_typed_character_offset);
     let view = StringView::from(plain);
     let mut secured = Vec::with_capacity(plain.length() as usize);
     let mut offset_map = TextOffsetMap::default();
     let mut offset = 0;
     while offset < plain.length() {
         let cluster_size = LengthOfGraphemeCluster(&view, offset);
-        offset += cluster_size;
+        let next_offset = offset + cluster_size;
+        if last_typed_character_offset.is_some_and(|last| offset <= last && last < next_offset) {
+            secured.extend_from_slice(
+                &plain.Span16().expect("UTF-16 plain text")[offset as usize..next_offset as usize],
+            );
+            offset = next_offset;
+            continue;
+        }
         secured.push(mask);
+        offset = next_offset;
         if cluster_size != 1 {
             offset_map.Append(offset, secured.len() as u32);
         }
@@ -499,6 +517,13 @@ pub extern "Rust" fn LayoutTextTextDidChangeWithoutInvalidation(this: &mut Layou
     };
     this.text_ = this.TransformAndSecureText(&original, &mut offset_map);
     this.SetVariableLengthTransformResult(original.length() as usize, &offset_map);
+    if let Some(timer) = this
+        .secure_text_timer_
+        .as_mut()
+        .filter(|timer| timer.token.is_some())
+    {
+        timer.Invalidate();
+    }
     this.valid_ng_items_ = false;
     this.ClearHasNoControlItems();
     this.SetNeedsCollectInlines();
@@ -570,3 +595,138 @@ pub extern "Rust" fn LayoutTextSetPreviousLogicalStartingPoint(
     this.CheckIsNotDestroyed();
     this.previous_logical_starting_point_.set(*point);
 }
+
+#[path = "layout_text_editing_queries.rs"]
+mod editing_queries;
+
+#[path = "layout_text_quad_geometry.rs"]
+mod quad_geometry;
+
+// Source: core/layout/layout_text.cc:1352-1363, SecureTextTimer::RestartWithNewText
+// cc:126-132. Called before the canonical Text::insertData/replaceData mutation.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextMomentarilyRevealLastTypedCharacter(
+    this: &mut LayoutText,
+    offset: u32,
+    settings: Option<layoutng::password_echo::PasswordEchoLayoutSettings>,
+    token: layoutng::password_echo::PasswordEchoTimerToken,
+    scheduler: &dyn layoutng::password_echo::PasswordEchoTimerScheduler,
+) {
+    this.CheckIsNotDestroyed();
+    let timer = this
+        .secure_text_timer_
+        .get_or_insert_with(layoutng::password_echo::SecureTextTimer::new);
+    timer.last_typed_character_offset = Some(offset);
+    if let Some(settings) = settings {
+        timer.Stop();
+        timer.token = Some(token);
+        timer.handle =
+            Some(scheduler.StartUserInteractionOneShot(settings.duration_seconds, token));
+    }
+}
+// Source: SecureTextTimer::Fired, core/layout/layout_text.cc:138-142. Expiry
+// first clears the one-shot's active state, then forces the same source text
+// transform/invalidation path; no substring is retained by the timer.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextPasswordEchoTimerFired(
+    this: &mut LayoutText,
+    token: layoutng::password_echo::PasswordEchoTimerToken,
+) -> bool {
+    this.CheckIsNotDestroyed();
+    if !this.PasswordEchoTimerMatches(token) {
+        return false;
+    }
+    this.secure_text_timer_
+        .as_mut()
+        .expect("active password timer")
+        .Stop();
+    this.ForceSetText(this.TransformedText().clone());
+    true
+}
+
+// Source core/layout/layout_text.cc1110-1157. Status comes from the same
+// committed LayoutSelection; cursor/shape/fragment owners remain borrowed.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextLocalSelectionVisualRect(
+    this: &LayoutText,
+) -> foundation::PhysicalRect {
+    use foundation::{gfx, PhysicalRect};
+    this.CheckIsNotDestroyed();
+    debug_assert!(!this.NeedsLayout());
+    if !layout_text_is_selected(this) {
+        return PhysicalRect::default();
+    }
+    if !this.IsInLayoutNGInlineFormattingContext() {
+        return PhysicalRect::default();
+    }
+    let view = unsafe { this.View().as_ref() }.expect("source selected text FrameSelection");
+    let editing = view.EditingSelection();
+    let selection = editing.selections.layout_selection.borrow();
+    let mut rect = PhysicalRect::default();
+    let mut cursor = InlineCursor::default();
+    cursor.MoveToLayoutObject(this);
+    while cursor.IsNotNull() {
+        if !cursor.Current().IsHiddenForPaint() {
+            let item = unsafe { &*cursor.CurrentItem() };
+            let generated = cursor.Current().IsLayoutGeneratedText();
+            let mut status = if generated {
+                if cursor.Current().IsEllipsis() {
+                    layoutng::layout_selection::InlineSelectionStatus::default()
+                } else {
+                    let offset = item.StartOffsetInContainer(&cursor);
+                    if offset == 0 {
+                        layoutng::layout_selection::InlineSelectionStatus::default()
+                    } else {
+                        selection.ComputeInlineSelectionStatus(
+                            this,
+                            offset - 1,
+                            offset,
+                            cursor.IsBeforeSoftLineBreak(),
+                        )
+                    }
+                }
+            } else {
+                let offsets = cursor.Current().TextOffset();
+                selection.ComputeInlineSelectionStatus(
+                    this,
+                    offsets.start,
+                    offsets.end,
+                    cursor.IsBeforeSoftLineBreak(),
+                )
+            };
+            if generated && status.start < status.end {
+                status.start = 0;
+                status.end = item.TextLength();
+            }
+            if status.start != status.end {
+                let mut item_rect = cursor.CurrentLocalSelectionRectForText(
+                    status.start,
+                    status.end,
+                    status.select_soft_line_break,
+                );
+                if this.IsSVGInlineText() {
+                    let mut float_rect = gfx::RectF::from(item_rect);
+                    let offset = unsafe { &*item.GetSvgFragmentData() }
+                        .rect
+                        .OffsetFromOrigin();
+                    float_rect.Offset(offset.x(), offset.y());
+                    if item.HasSvgTransformForBoundingBox() {
+                        float_rect = item.BuildSvgTransformForBoundingBox().MapRect(float_rect);
+                    }
+                    let scale = this.SvgScalingFactor();
+                    if scale != 1.0 {
+                        float_rect.Scale(1.0 / scale, 1.0 / scale);
+                    }
+                    item_rect = PhysicalRect::EnclosingRect(&float_rect);
+                } else {
+                    item_rect.offset += cursor.Current().OffsetInContainerFragment();
+                }
+                rect.Unite(&item_rect);
+            }
+        }
+        cursor.MoveToNextForSameLayoutObject();
+    }
+    rect
+}
+
+use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;

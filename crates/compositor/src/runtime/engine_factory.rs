@@ -457,12 +457,14 @@ impl FactoryOptions {
         // layer_tree_settings.cc. Apple platforms enable root elastic
         // overscroll; the compositor keeps the live helper/controller state.
         settings.enable_elastic_overscroll_on_root = cfg!(target_vendor = "apple");
-        // Blink selects 512 px macOS tiles for its GPU-backed production
-        // raster path. This embedding currently supplies CPU raster buffers,
-        // where the same choice makes each task four times larger and delays
-        // visible tiles during a fast scroll. Keep cc's 256 px CPU default;
-        // the GPU embedding can apply Blink's platform choice when it owns
-        // the corresponding raster capability.
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc:245-274. macOS uses 512 px tiles on
+        // high-DPI displays. This is selected from the initial DSF, independent
+        // of whether the tile buffer is GPU- or CPU-backed.
+        #[cfg(target_vendor = "apple")]
+        if config.initial_device_scale_factor >= 2.0 {
+            settings.default_tile_size = crate::adapter::geometry::Size::new(512, 512);
+        }
         // Chromium's default 3000/2000 px interest-area/skewport pair is
         // tuned for its production GPU raster latency. Keep the identical
         // priority-rect algorithm for this CPU embedding, but give it the
@@ -498,9 +500,22 @@ impl FactoryOptions {
         // Source: third_party/blink/renderer/platform/widget/compositing/layer_tree_settings.cc:364.
         settings.use_layer_lists = true;
         // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc. Renderer widgets enable hit-test
+        // opaqueness together with recorded-bounds tiling. RecordingSource
+        // then intersects a sparse layer with its display-list bounds instead
+        // of allocating tiles across the layer's full layout bounds.
+        settings.enable_hit_test_opaqueness = true;
+        // Source: third_party/blink/renderer/platform/widget/compositing/
         //         layer_tree_settings.cc:374-379. Production renderer widgets
         // use ProxyImpl scheduling, including the late-scroll deadline mode.
         settings.single_thread_proxy_scheduler = false;
+        // Source: third_party/blink/renderer/platform/widget/compositing/
+        //         layer_tree_settings.cc. Renderer widgets enable partial
+        // raster whenever the selected platform raster backend supports it.
+        // The injected host-memory backend supports preserved-pixel replay;
+        // leaving the generic cc default disabled changes rounded clip pixels
+        // after asynchronous image invalidations and defeats tile reuse.
+        settings.use_partial_raster = true;
         // Chromium enables fractional commit deltas only when the experimental
         // FractionalScrollOffsets runtime feature is enabled. That feature is
         // disabled by default; keep cc's source default so Blink receives
@@ -510,13 +525,21 @@ impl FactoryOptions {
         // Source: content/public/common/content_features.cc:521.
         settings.commit_fractional_scroll_deltas = false;
         // Source: third_party/blink/renderer/platform/widget/compositing/
-        //         layer_tree_settings.cc:65-85,472-493 and
+        //         layer_tree_settings.cc:472-499 and
         //         ui/theme/overlay_scrollbar_constants.cc:12-20.
-        // The browser constraint theme uses desktop overlay scrollbars, so cc
-        // owns their visibility and fade lifecycle rather than leaving the
-        // solid-color thumb permanently visible.
-        settings.scrollbar_animator =
-            crate::cc::trees::layer_tree_settings::ScrollbarAnimator::AURA_OVERLAY;
+        // Aura's thinning controller is selected only by Chromium's desktop
+        // overlay-scrollbar branch. macOS uses Blink-painted scrollbars and
+        // must not apply Aura's idle_thickness_scale to their native bitmap.
+        #[cfg(target_vendor = "apple")]
+        {
+            settings.scrollbar_animator =
+                crate::cc::trees::layer_tree_settings::ScrollbarAnimator::ANDROID_OVERLAY;
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            settings.scrollbar_animator =
+                crate::cc::trees::layer_tree_settings::ScrollbarAnimator::AURA_OVERLAY;
+        }
         settings.scrollbar_fade_delay = crate::adapter::time::TimeDelta::Milliseconds(500);
         settings.scrollbar_fade_duration = crate::adapter::time::TimeDelta::Milliseconds(200);
         settings.scrollbar_thinning_duration = crate::adapter::time::TimeDelta::Milliseconds(200);

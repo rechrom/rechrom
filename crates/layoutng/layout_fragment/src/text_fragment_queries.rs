@@ -123,7 +123,10 @@ pub(super) fn text_selection_range_rect(
     }
     let start = start.max(item.StartOffset());
     let end = end.min(item.EndOffset());
-    if start >= end {
+    // HighlightPainter constructs SelectionPaintState even when an empty
+    // fragment range owns a document-selection endpoint. Its bounds recorder
+    // still needs the line-height-expanded zero-width selection rectangle.
+    if start > end {
         return None;
     }
     let mut inline = layout_fragment::inline_cursor::InlineCursor::new_with_items(container, items);

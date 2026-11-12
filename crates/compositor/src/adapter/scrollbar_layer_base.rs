@@ -13,6 +13,14 @@ use std::sync::Arc;
 pub trait ScrollbarLayerTypes: MainLayerTypes<Layer: ScrollbarLayerImplTarget<Self>> {
     type ScrollbarCanvas: ?Sized;
     type Scrollbar: Scrollbar<Self::ScrollbarCanvas> + Send + Sync + 'static;
+    /// Source: PaintedScrollbarLayer::RasterizeScrollbarPart. The concrete CPU
+    /// family supplies the transparent bitmap/canvas allocation while cc owns
+    /// repaint policy and UI-resource lifetime.
+    fn RasterizeScrollbarThumb(
+        scrollbar: &Self::Scrollbar,
+        logical_size: super::geometry::Size,
+        pixel_size: super::geometry::Size,
+    ) -> <Self as super::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap;
     /// Optional same-package constructor capabilities. The default CPU family
     /// declares absence for owners outside its canonical closure. A capability
     /// is the exact native constructor function, never a replacement algorithm.

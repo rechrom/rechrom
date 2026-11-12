@@ -1,4 +1,9 @@
 #![allow(non_snake_case)]
+#[path = "../../layout_fragment/src/layout_inline_visual_rect.rs"]
+mod visual_rect;
+
+#[path = "layout_inline_caret.rs"]
+mod layout_inline_caret;
 
 use foundation::graphics_types;
 use std::ops::{Deref, DerefMut};
@@ -25,19 +30,29 @@ use super::super::layout_object::{
     LayoutObject, LocalRectForBoxQuad, PaintInfo, StyleChangeContext,
 };
 use super::super::layout_object_child_list::LayoutObjectChildList;
+use super::super::layout_text::LayoutText;
 use super::super::loader::resource::image_resource_observer::{
     CanDeferInvalidation, WrappedImagePtr,
 };
 use super::super::map_coordinates_flags::MapCoordinatesFlags;
 use super::super::outline_geometry::OutlineOutsetExtent;
 use super::super::outline_info::LayoutOutlineInfo;
-use super::super::outline_rect_collector::{OutlineRectCollector, UnionOutlineRectCollector};
+use super::super::outline_rect_collector::{
+    OutlineRectCollector, UnionOutlineRectCollector, VectorOutlineRectCollector,
+};
 use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
 
 #[path = "../../layout_fragment/src/inline_client_geometry.rs"]
 mod layout_fragment_inline_client_geometry;
 pub(crate) use layout_fragment_inline_client_geometry::{
     InlineClientGeometry, LayoutInlineClientRectsInContainers,
+};
+
+#[path = "../../layout_fragment/src/inline_quad_geometry.rs"]
+mod layout_fragment_inline_quad_geometry;
+use layout_fragment_inline_quad_geometry::{
+    LayoutInlineMarginOutsets, LayoutInlineQuadsForSelfInternal,
+    LayoutInlineQuadsInAncestorInternal,
 };
 
 // Non-inline methods live mainly in //src/layoutng_inline. Declarations with
@@ -50,8 +65,6 @@ unsafe extern "Rust" {
         child: *mut LayoutObject,
         before: *mut LayoutObject,
     );
-    fn LayoutInlineMarginOutsets(this: &LayoutInline) -> PhysicalBoxStrut;
-    fn LayoutInlineLocalBoundingBoxRectF(this: &LayoutInline) -> gfx::RectF;
     fn LayoutInlineLocalBoundingBoxRectForAccessibility(
         this: &LayoutInline,
         include_descendants: IncludeDescendants,
@@ -66,11 +79,6 @@ unsafe extern "Rust" {
     fn LayoutInlineClearFirstInlineFragmentItemIndex(this: &mut LayoutInline);
     fn LayoutInlineSetFirstInlineFragmentItemIndex(this: &mut LayoutInline, index: usize);
     fn LayoutInlineUpdateShouldCreateBoxFragment(this: &mut LayoutInline);
-    fn LayoutInlineLocalCaretRect(
-        this: &LayoutInline,
-        offset: i32,
-        shape: CaretShape,
-    ) -> PhysicalRect;
     fn LayoutInlineHitTestCulledInline(
         this: &mut LayoutInline,
         result: &mut HitTestResult,
@@ -78,11 +86,6 @@ unsafe extern "Rust" {
         offset: &PhysicalOffset,
         cursor: &InlineCursor,
     ) -> bool;
-    fn LayoutInlineFirstLineBoxTopLeftInternal(this: &LayoutInline) -> Option<PhysicalOffset>;
-    fn LayoutInlineAbsoluteBoundingBoxRectHandlingEmptyInline(
-        this: &LayoutInline,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalRect;
     fn LayoutInlineDebugRect(this: &LayoutInline) -> PhysicalRect;
     fn LayoutInlineWillBeDestroyed(this: &mut LayoutInline);
     fn LayoutInlineInLayoutNGInlineFormattingContextWillChange(
@@ -99,21 +102,6 @@ unsafe extern "Rust" {
     fn LayoutInlineInvalidateDisplayItemClients(
         this: &LayoutInline,
         reason: foundation::PaintInvalidationReason,
-    );
-    fn LayoutInlineQuadsInAncestorInternal(
-        this: &LayoutInline,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-        box_type: BoxQuadType,
-    );
-    fn LayoutInlineQuadsForSelfInternal(
-        this: &LayoutInline,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-        map_to_ancestor: bool,
-        box_type: BoxQuadType,
     );
     fn LayoutInlineComputeInitialShouldCreateBoxFragment(this: &LayoutInline) -> bool;
     fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
@@ -145,12 +133,6 @@ unsafe extern "Rust" {
     fn LayoutInlineLayerTypeRequired(this: &LayoutInline) -> PaintLayerType;
     fn LayoutInlineOffsetPoint(this: &LayoutInline, element: *const Element) -> PhysicalOffset;
     fn LayoutInlineBoundingBoxRelativeToFirstFragment(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlineMapToVisualRectInAncestorSpaceInternal(
-        this: &LayoutInline,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: VisualRectFlags,
-    ) -> bool;
     fn LayoutInlinePositionForPoint(
         this: &LayoutInline,
         point: &PhysicalOffset,
@@ -170,7 +152,6 @@ unsafe extern "Rust" {
         this: &mut LayoutInline,
         regions: &mut Vector<DraggableRegionValue>,
     );
-    fn LayoutInlineAnchorPhysicalLocation(this: &LayoutInline) -> PhysicalOffset;
 }
 
 // LayoutInline construction and its non-inline methods are implemented by
@@ -234,7 +215,7 @@ impl LayoutInline {
         self.AddChild(child, std::ptr::null_mut())
     }
     pub fn MarginOutsets(&self) -> PhysicalBoxStrut {
-        unsafe { LayoutInlineMarginOutsets(self) }
+        LayoutInlineMarginOutsets(self)
     }
     /// cpp: core/layout/layout_inline.cc:430-508. Enumerate source border
     /// rectangles even when Paint culled this inline. The boundary maps each
@@ -244,7 +225,23 @@ impl LayoutInline {
     }
 
     pub fn LocalBoundingBoxRectF(&self) -> gfx::RectF {
-        unsafe { LayoutInlineLocalBoundingBoxRectF(self) }
+        // Source: core/layout/layout_inline.cc:904-919.
+        self.CheckIsNotDestroyed();
+        let mut quads = Vector::new();
+        self.QuadsForSelfInternalDefault(
+            &mut quads,
+            std::ptr::null(),
+            MapCoordinatesFlags::default(),
+            false,
+        );
+        let Some(first) = quads.first() else {
+            return gfx::RectF::default();
+        };
+        let mut result = first.BoundingBox();
+        for quad in &quads[1..] {
+            result.Union(quad.BoundingBox());
+        }
+        result
     }
     pub fn LocalBoundingBoxRectForAccessibility(
         &self,
@@ -369,7 +366,7 @@ impl LayoutInline {
         unsafe { LayoutInlineUpdateShouldCreateBoxFragment(self) }
     }
     pub fn LocalCaretRect(&self, offset: i32, shape: CaretShape) -> PhysicalRect {
-        unsafe { LayoutInlineLocalCaretRect(self, offset, shape) }
+        layout_inline_caret::LayoutInlineLocalCaretRect(self, offset, shape)
     }
     pub fn HitTestCulledInline(
         &mut self,
@@ -388,7 +385,23 @@ impl LayoutInline {
         &self,
         mode: MapCoordinatesFlags,
     ) -> PhysicalRect {
-        unsafe { LayoutInlineAbsoluteBoundingBoxRectHandlingEmptyInline(self, mode) }
+        // Source: core/layout/layout_inline.cc:542-552. The source override
+        // accepts flags but uses the default local-to-absolute conversion.
+        let _ = mode;
+        self.CheckIsNotDestroyed();
+        let mut collector = VectorOutlineRectCollector::default();
+        self.AddOutlineRects(
+            &mut collector,
+            std::ptr::null_mut(),
+            &PhysicalOffset::default(),
+            OutlineType::kIncludeBlockInkOverflow,
+        );
+        let mut rect =
+            layoutng_geometry::geometry::physical_rect::UnionRect(&collector.TakeRects());
+        if rect.IsEmpty() {
+            rect.offset = self.AnchorPhysicalLocation();
+        }
+        self.LocalToAbsoluteRect(&rect, MapCoordinatesFlags::default())
     }
     pub fn AbsoluteBoundingBoxRectHandlingEmptyInlineDefault(&self) -> PhysicalRect {
         self.AbsoluteBoundingBoxRectHandlingEmptyInline(MapCoordinatesFlags::empty())
@@ -423,7 +436,7 @@ impl LayoutInline {
         mode: MapCoordinatesFlags,
         box_type: BoxQuadType,
     ) {
-        unsafe { LayoutInlineQuadsInAncestorInternal(self, quads, ancestor, mode, box_type) }
+        LayoutInlineQuadsInAncestorInternal(self, quads, ancestor, mode, box_type)
     }
 
     // cpp: layoutng/internal/layout_inline.h:232-248
@@ -435,9 +448,7 @@ impl LayoutInline {
         map_to_ancestor: bool,
         box_type: BoxQuadType,
     ) {
-        unsafe {
-            LayoutInlineQuadsForSelfInternal(self, quads, ancestor, mode, map_to_ancestor, box_type)
-        }
+        LayoutInlineQuadsForSelfInternal(self, quads, ancestor, mode, map_to_ancestor, box_type)
     }
     fn QuadsForSelfInternalDefault(
         &self,
@@ -550,13 +561,13 @@ impl LayoutInline {
     fn BoundingBoxRelativeToFirstFragment(&self) -> PhysicalRect {
         unsafe { LayoutInlineBoundingBoxRelativeToFirstFragment(self) }
     }
-    fn MapToVisualRectInAncestorSpaceInternal(
+    pub fn MapToVisualRectInAncestorSpaceInternal(
         &self,
         ancestor: *const LayoutBoxModelObject,
         state: &mut TransformState,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe { LayoutInlineMapToVisualRectInAncestorSpaceInternal(self, ancestor, state, flags) }
+        self.MapVisualRectInternalSource(ancestor, state, flags)
     }
     fn PositionForPoint(&self, point: &PhysicalOffset) -> PositionWithAffinity {
         unsafe { LayoutInlinePositionForPoint(self, point) }
@@ -574,10 +585,44 @@ impl LayoutInline {
         unsafe { LayoutInlineAddDraggableRegions(self, regions) }
     }
     fn FirstLineBoxTopLeftInternal(&self) -> Option<PhysicalOffset> {
-        unsafe { LayoutInlineFirstLineBoxTopLeftInternal(self) }
+        // Source: core/layout/layout_inline.cc:506-517.
+        self.CheckIsNotDestroyed();
+        if !self.IsInLayoutNGInlineFormattingContext() {
+            return None;
+        }
+        let mut cursor = InlineCursor::default();
+        cursor.MoveToIncludingCulledInline(self);
+        cursor
+            .IsNotNull()
+            .then(|| cursor.CurrentOffsetInFirstContainerFragment())
     }
     fn AnchorPhysicalLocation(&self) -> PhysicalOffset {
-        unsafe { LayoutInlineAnchorPhysicalLocation(self) }
+        // Source: core/layout/layout_inline.cc:519-540.
+        self.CheckIsNotDestroyed();
+        if let Some(location) = self.FirstLineBoxTopLeftInternal() {
+            return location;
+        }
+        if let Some(sibling) = unsafe { self.NextSibling().as_ref() } {
+            if sibling.IsLayoutInline() {
+                return unsafe { &*(sibling as *const LayoutObject as *const LayoutInline) }
+                    .AnchorPhysicalLocation();
+            }
+            if sibling.IsText() {
+                return unsafe { &*(sibling as *const LayoutObject as *const LayoutText) }
+                    .FirstLineBoxTopLeft();
+            }
+            if sibling.IsBox() {
+                return unsafe { &*(sibling as *const LayoutObject as *const LayoutBox) }
+                    .PhysicalLocation();
+            }
+        }
+        if let Some(parent) =
+            unsafe { self.Parent().as_ref() }.filter(|parent| parent.IsLayoutInline())
+        {
+            return unsafe { &*(parent as *const LayoutObject as *const LayoutInline) }
+                .AnchorPhysicalLocation();
+        }
+        PhysicalOffset::default()
     }
 
     // cpp: layoutng/internal/layout_inline.h:322-332

@@ -1,6 +1,5 @@
-use std::io;
 use std::os::raw::*;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::Utf8Error;
 use std::sync::Arc;
 
@@ -13,7 +12,7 @@ use super::{util, CookieResultExt, X11Error, XConnection};
 
 #[derive(Debug, Clone, Copy)]
 pub enum DndState {
-    Accepted,
+    Accepted(u32),
     Rejected,
 }
 
@@ -21,20 +20,11 @@ pub enum DndState {
 pub enum DndDataParseError {
     EmptyData,
     InvalidUtf8(#[allow(dead_code)] Utf8Error),
-    HostnameSpecified(#[allow(dead_code)] String),
-    UnexpectedProtocol(#[allow(dead_code)] String),
-    UnresolvablePath(#[allow(dead_code)] io::Error),
 }
 
 impl From<Utf8Error> for DndDataParseError {
     fn from(e: Utf8Error) -> Self {
         DndDataParseError::InvalidUtf8(e)
-    }
-}
-
-impl From<io::Error> for DndDataParseError {
-    fn from(e: io::Error) -> Self {
-        DndDataParseError::UnresolvablePath(e)
     }
 }
 
@@ -45,20 +35,55 @@ pub struct Dnd {
     pub type_list: Option<Vec<xproto::Atom>>,
     // Populated by XdndPosition event handler
     pub source_window: Option<xproto::Window>,
-    // Populated by SelectionNotify event handler (triggered by XdndPosition event handler)
-    pub result: Option<Result<Vec<PathBuf>, DndDataParseError>>,
+    pub target_window: Option<xproto::Window>,
+    pub incremental: bool,
+    pub incremental_data: Vec<u8>,
+    pub incremental_discard: bool,
+    pub source_action_list: bool,
+    pub native: Option<crate::event::NativeDragDropEvent>,
+    pub pending_types: Vec<xproto::Atom>,
+    pub type_mimes: Vec<(xproto::Atom, String)>,
+    pub selected_type: Option<xproto::Atom>,
+    pub entered: bool,
+    pub pending_drop: bool,
 }
 
 impl Dnd {
     pub fn new(xconn: Arc<XConnection>) -> Result<Self, X11Error> {
-        Ok(Dnd { xconn, version: None, type_list: None, source_window: None, result: None })
+        Ok(Dnd {
+            xconn,
+            version: None,
+            type_list: None,
+            source_window: None,
+            target_window: None,
+            incremental: false,
+            incremental_data: Vec::new(),
+            incremental_discard: false,
+            source_action_list: false,
+            native: None,
+            pending_types: Vec::new(),
+            type_mimes: Vec::new(),
+            selected_type: None,
+            entered: false,
+            pending_drop: false,
+        })
     }
 
     pub fn reset(&mut self) {
         self.version = None;
         self.type_list = None;
         self.source_window = None;
-        self.result = None;
+        self.target_window = None;
+        self.incremental = false;
+        self.incremental_data.clear();
+        self.incremental_discard = false;
+        self.source_action_list = false;
+        self.native = None;
+        self.pending_types.clear();
+        self.type_mimes.clear();
+        self.selected_type = None;
+        self.entered = false;
+        self.pending_drop = false;
     }
 
     pub unsafe fn send_status(
@@ -69,17 +94,25 @@ impl Dnd {
     ) -> Result<(), X11Error> {
         let atoms = self.xconn.atoms();
         let (accepted, action) = match state {
-            DndState::Accepted => (1, atoms[XdndActionPrivate]),
+            DndState::Accepted(operation) => (
+                1,
+                match operation {
+                    1 => atoms[XdndActionCopy],
+                    2 => atoms[XdndActionLink],
+                    16 => atoms[XdndActionMove],
+                    _ => atoms[DndNone],
+                },
+            ),
             DndState::Rejected => (0, atoms[DndNone]),
         };
         self.xconn
-            .send_client_msg(target_window, target_window, atoms[XdndStatus] as _, None, [
-                this_window,
-                accepted,
-                0,
-                0,
-                action as _,
-            ])?
+            .send_client_msg(
+                target_window,
+                target_window,
+                atoms[XdndStatus] as _,
+                None,
+                [this_window, accepted | 2, 0, 0, action as _],
+            )?
             .ignore_error();
 
         Ok(())
@@ -93,17 +126,25 @@ impl Dnd {
     ) -> Result<(), X11Error> {
         let atoms = self.xconn.atoms();
         let (accepted, action) = match state {
-            DndState::Accepted => (1, atoms[XdndActionPrivate]),
+            DndState::Accepted(operation) => (
+                1,
+                match operation {
+                    1 => atoms[XdndActionCopy],
+                    2 => atoms[XdndActionLink],
+                    16 => atoms[XdndActionMove],
+                    _ => atoms[DndNone],
+                },
+            ),
             DndState::Rejected => (0, atoms[DndNone]),
         };
         self.xconn
-            .send_client_msg(target_window, target_window, atoms[XdndFinished] as _, None, [
-                this_window,
-                accepted,
-                action as _,
-                0,
-                0,
-            ])?
+            .send_client_msg(
+                target_window,
+                target_window,
+                atoms[XdndFinished] as _,
+                None,
+                [this_window, accepted, action as _, 0, 0],
+            )?
             .ignore_error();
 
         Ok(())
@@ -128,47 +169,59 @@ impl Dnd {
             .convert_selection(
                 window,
                 atoms[XdndSelection],
-                atoms[TextUriList],
+                self.selected_type.unwrap_or(atoms[TextUriList]),
                 atoms[XdndSelection],
                 time,
             )
             .expect_then_ignore_error("Failed to send XdndSelection event")
     }
 
-    pub unsafe fn read_data(
-        &self,
-        window: xproto::Window,
-    ) -> Result<Vec<c_uchar>, util::GetPropertyError> {
+    pub unsafe fn read_data(&self, window: xproto::Window) -> Option<Vec<c_uchar>> {
         let atoms = self.xconn.atoms();
-        self.xconn.get_property(window, atoms[XdndSelection], atoms[TextUriList])
+        let selected = self.selected_type?;
+        let reply = self
+            .xconn
+            .xcb_connection()
+            .get_property(
+                false,
+                window,
+                atoms[XdndSelection],
+                selected,
+                0,
+                64 * 1024 * 1024 / 4,
+            )
+            .ok()?
+            .reply()
+            .ok()?;
+        (reply.type_ == selected && reply.format == 8 && reply.bytes_after == 0)
+            .then_some(reply.value)
     }
 
     pub fn parse_data(&self, data: &mut [c_uchar]) -> Result<Vec<PathBuf>, DndDataParseError> {
-        if !data.is_empty() {
-            let mut path_list = Vec::new();
-            let decoded = percent_decode(data).decode_utf8()?.into_owned();
-            for uri in decoded.split("\r\n").filter(|u| !u.is_empty()) {
-                // The format is specified as protocol://host/path
-                // However, it's typically simply protocol:///path
-                let path_str = if uri.starts_with("file://") {
-                    let path_str = uri.replace("file://", "");
-                    if !path_str.starts_with('/') {
-                        // A hostname is specified
-                        // Supporting this case is beyond the scope of my mental health
-                        return Err(DndDataParseError::HostnameSpecified(path_str));
-                    }
-                    path_str
-                } else {
-                    // Only the file protocol is supported
-                    return Err(DndDataParseError::UnexpectedProtocol(uri.to_owned()));
-                };
-
-                let path = Path::new(&path_str).canonicalize()?;
-                path_list.push(path);
-            }
-            Ok(path_list)
-        } else {
-            Err(DndDataParseError::EmptyData)
+        use std::os::unix::ffi::OsStringExt;
+        if data.is_empty() {
+            return Err(DndDataParseError::EmptyData);
         }
+        let text = std::str::from_utf8(data)?;
+        Ok(text
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| {
+                let rest = line.trim().strip_prefix("file://")?;
+                let path = if rest.starts_with('/') {
+                    rest
+                } else {
+                    rest.strip_prefix("localhost")?
+                };
+                if !path.starts_with('/') {
+                    return None;
+                }
+                let decoded: Vec<u8> = percent_decode(path.as_bytes()).collect();
+                if decoded.contains(&0) {
+                    return None;
+                }
+                Some(std::ffi::OsString::from_vec(decoded).into())
+            })
+            .collect())
     }
 }

@@ -17,3 +17,15 @@ pub struct PaintCompositorViewport {
     pub layout_scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
     pub scroll_translation_nodes: Vec<Arc<TransformPaintPropertyNode>>,
 }
+
+/// VisualViewport's source-owned constructor identity and scalar state. These
+/// values do not expose its owner or Paint's derived property-node storage.
+#[derive(Clone, Copy, Debug)]
+pub struct PaintVisualViewportState {
+    pub unique_id: u64,
+    pub scale: f32,
+    pub offset: foundation::gfx::Vector2dF,
+    pub size: foundation::gfx::Size,
+    pub contents_size: foundation::gfx::Size,
+    pub maximum_scroll_offset: foundation::gfx::Vector2dF,
+}

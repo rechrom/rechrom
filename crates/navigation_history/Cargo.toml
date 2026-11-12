@@ -1,0 +1,10 @@
+[package]
+name = "navigation_history"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+fileapi = { path = "../fileapi" }
+getrandom = "0.4"
+sha2 = "0.10"

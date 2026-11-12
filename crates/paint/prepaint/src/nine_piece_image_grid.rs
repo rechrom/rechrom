@@ -1,12 +1,16 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
+use foundation::{EvaluationInput, LayoutUnit};
+use layoutng_assembly::fragment_tree::FragmentBoxSides;
 use layoutng_assembly::internal::layout_input::{Edges, Offset, Size};
-use layoutng_assembly::internal::paint_input::{NinePieceImagePaint, PaintImageTileRule};
+use layoutng_assembly::internal::paint_input::{
+    NinePieceImagePaint, NinePieceImageWidth, PaintImageTileRule,
+};
 
 use paint_model::PaintRect;
 
-// cpp: paint/nine_piece_image_grid.h:7-18
+// cpp: paint/nine_piece_image_grid.h:22-34
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NinePiece {
     kTopLeft,
@@ -21,7 +25,7 @@ pub enum NinePiece {
     kCount,
 }
 
-// cpp: paint/nine_piece_image_grid.h:20-28
+// cpp: paint/nine_piece_image_grid.h:74-91
 pub struct NinePieceDrawInfo {
     pub is_drawable: bool,
     pub is_corner_piece: bool,
@@ -46,12 +50,10 @@ impl Default for NinePieceDrawInfo {
     }
 }
 
-// cpp: paint/nine_piece_image_grid.cc:11-13
 fn IsFiniteNonnegative(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
-// cpp: paint/nine_piece_image_grid.cc:15-22
 fn ValidateEdges(edges: &Edges, name: &str) {
     if !IsFiniteNonnegative(edges.top)
         || !IsFiniteNonnegative(edges.right)
@@ -62,7 +64,66 @@ fn ValidateEdges(edges: &Edges, name: &str) {
     }
 }
 
-// cpp: paint/nine_piece_image_grid.cc:25-32
+fn QuantizeLayoutUnit(value: f64) -> f64 {
+    LayoutUnit::from_f32(value as f32).ToDouble()
+}
+
+// cpp: paint/nine_piece_image_grid.cc:15-24
+fn ComputeEdgeWidth(
+    width: &NinePieceImageWidth,
+    border_side: f64,
+    image_side: f64,
+    box_extent: f64,
+) -> f64 {
+    let resolved = match width {
+        NinePieceImageWidth::Number(number) => number * border_side,
+        NinePieceImageWidth::Auto => image_side,
+        NinePieceImageWidth::Length {
+            pixels,
+            percentage,
+            calculation,
+        } => calculation.as_ref().map_or_else(
+            || pixels + box_extent * percentage / 100.0,
+            |calculation| {
+                f64::from(calculation.Evaluate(box_extent as f32, &EvaluationInput::default()))
+            },
+        ),
+    };
+    QuantizeLayoutUnit(resolved.max(0.0))
+}
+
+fn SnapToPixel(value: f64, scale: f64) -> f64 {
+    (value * scale + 0.5).floor() / scale
+}
+
+fn FloorToPixel(value: f64, scale: f64) -> f64 {
+    (value * scale).floor() / scale
+}
+
+// cpp: paint/nine_piece_image_grid.cc:41-75
+fn SnapEdgeWidths(edge_widths: &Edges, box_size: Size, pixel_snap_scale: f64) -> Edges {
+    let mut snapped = Edges::default();
+    let epsilon = f64::from(LayoutUnit::Epsilon());
+    if box_size.width - edge_widths.left - edge_widths.right <= epsilon {
+        snapped.left = SnapToPixel(edge_widths.left, pixel_snap_scale);
+        snapped.right = (box_size.width - snapped.left).max(0.0);
+    } else {
+        snapped.left = FloorToPixel(edge_widths.left, pixel_snap_scale);
+        snapped.right = FloorToPixel(edge_widths.right, pixel_snap_scale);
+    }
+    if box_size.height - edge_widths.top - edge_widths.bottom <= epsilon {
+        snapped.top = SnapToPixel(edge_widths.top, pixel_snap_scale);
+        snapped.bottom = (box_size.height - snapped.top).max(0.0);
+    } else {
+        snapped.top = FloorToPixel(edge_widths.top, pixel_snap_scale);
+        snapped.bottom = FloorToPixel(edge_widths.bottom, pixel_snap_scale);
+    }
+    debug_assert!(snapped.left + snapped.right <= box_size.width + epsilon);
+    debug_assert!(snapped.top + snapped.bottom <= box_size.height + epsilon);
+    snapped
+}
+
+// cpp: paint/nine_piece_image_grid.cc:159-191
 fn Subrect(rect: &PaintRect, offset_x: f64, offset_y: f64, width: f64, height: f64) -> PaintRect {
     let base_x = if offset_x < 0.0 {
         rect.x + rect.width
@@ -82,7 +143,6 @@ fn Subrect(rect: &PaintRect, offset_x: f64, offset_y: f64, width: f64, height: f
     }
 }
 
-// cpp: paint/nine_piece_image_grid.cc:35-37
 fn ImageRect(size: Size) -> PaintRect {
     PaintRect {
         x: 0.0,
@@ -92,7 +152,7 @@ fn ImageRect(size: Size) -> PaintRect {
     }
 }
 
-// cpp: paint/nine_piece_image_grid.h:41-46
+// cpp: paint/nine_piece_image_grid.h:93-99
 #[derive(Default)]
 struct Edge {
     slice: f64,
@@ -100,12 +160,12 @@ struct Edge {
 }
 
 impl Edge {
-    // cpp: paint/nine_piece_image_grid.h:44
+    // cpp: paint/nine_piece_image_grid.h:95
     fn IsDrawable(&self) -> bool {
         self.slice > 0.0 && self.width > 0.0
     }
 
-    // cpp: paint/nine_piece_image_grid.h:45
+    // cpp: paint/nine_piece_image_grid.h:96
     fn Scale(&self) -> f64 {
         if self.IsDrawable() {
             self.width / self.slice
@@ -115,7 +175,7 @@ impl Edge {
     }
 }
 
-// cpp: paint/nine_piece_image_grid.h:32-61
+// cpp: paint/nine_piece_image_grid.h:62-117
 pub struct NinePieceImageGrid {
     area: PaintRect,
     image_size: Size,
@@ -130,13 +190,15 @@ pub struct NinePieceImageGrid {
 }
 
 impl NinePieceImageGrid {
-    // cpp: paint/nine_piece_image_grid.h:34-36
-    // cpp: paint/nine_piece_image_grid.cc:41-84
+    // cpp: paint/nine_piece_image_grid.h:66-72
+    // cpp: paint/nine_piece_image_grid.cc:79-157
     pub fn new(
         input: &NinePieceImagePaint,
         image_size: Size,
         zoom: f64,
         border_image_area: PaintRect,
+        sides_to_include: FragmentBoxSides,
+        pixel_snap_scale: f64,
     ) -> Self {
         let mut grid = Self {
             area: border_image_area,
@@ -156,6 +218,10 @@ impl NinePieceImageGrid {
             || image_size.height <= 0.0
             || !grid.zoom.is_finite()
             || grid.zoom <= 0.0
+            || !input.image_resolution_scale.is_finite()
+            || input.image_resolution_scale <= 0.0
+            || !pixel_snap_scale.is_finite()
+            || pixel_snap_scale <= 0.0
             || !grid.area.x.is_finite()
             || !grid.area.y.is_finite()
             || !grid.area.width.is_finite()
@@ -166,18 +232,49 @@ impl NinePieceImageGrid {
             panic!("nine-piece image geometry is invalid");
         }
         ValidateEdges(&input.slices, "nine-piece slices");
-        ValidateEdges(&input.widths, "nine-piece widths");
+        ValidateEdges(&input.border_widths, "nine-piece border widths");
         ValidateEdges(&input.outsets, "nine-piece outsets");
         grid.top.slice = input.slices.top.min(image_size.height);
         grid.right.slice = input.slices.right.min(image_size.width);
         grid.bottom.slice = input.slices.bottom.min(image_size.height);
         grid.left.slice = input.slices.left.min(image_size.width);
-        grid.top.width = input.widths.top;
-        grid.right.width = input.widths.right;
-        grid.bottom.width = input.widths.bottom;
-        grid.left.width = input.widths.left;
-        let horizontal_sum = grid.left.width + grid.right.width;
-        let vertical_sum = grid.top.width + grid.bottom.width;
+        let auto_x = zoom / input.image_resolution_scale;
+        let auto_y = zoom / input.image_resolution_scale;
+        let mut resolved_widths = Edges::default();
+        if sides_to_include.top {
+            resolved_widths.top = ComputeEdgeWidth(
+                &input.widths.top,
+                input.border_widths.top,
+                grid.top.slice * auto_y,
+                grid.area.height,
+            );
+        }
+        if sides_to_include.right {
+            resolved_widths.right = ComputeEdgeWidth(
+                &input.widths.right,
+                input.border_widths.right,
+                grid.right.slice * auto_x,
+                grid.area.width,
+            );
+        }
+        if sides_to_include.bottom {
+            resolved_widths.bottom = ComputeEdgeWidth(
+                &input.widths.bottom,
+                input.border_widths.bottom,
+                grid.bottom.slice * auto_y,
+                grid.area.height,
+            );
+        }
+        if sides_to_include.left {
+            resolved_widths.left = ComputeEdgeWidth(
+                &input.widths.left,
+                input.border_widths.left,
+                grid.left.slice * auto_x,
+                grid.area.width,
+            );
+        }
+        let horizontal_sum = resolved_widths.left + resolved_widths.right;
+        let vertical_sum = resolved_widths.top + resolved_widths.bottom;
         let mut scale = 1.0_f64;
         if horizontal_sum > 0.0 {
             scale = scale.min(grid.area.width / horizontal_sum);
@@ -186,16 +283,28 @@ impl NinePieceImageGrid {
             scale = scale.min(grid.area.height / vertical_sum);
         }
         if scale < 1.0 {
-            grid.top.width *= scale;
-            grid.right.width *= scale;
-            grid.bottom.width *= scale;
-            grid.left.width *= scale;
+            resolved_widths.top = QuantizeLayoutUnit(resolved_widths.top * scale);
+            resolved_widths.right = QuantizeLayoutUnit(resolved_widths.right * scale);
+            resolved_widths.bottom = QuantizeLayoutUnit(resolved_widths.bottom * scale);
+            resolved_widths.left = QuantizeLayoutUnit(resolved_widths.left * scale);
         }
+        let snapped_widths = SnapEdgeWidths(
+            &resolved_widths,
+            Size {
+                width: grid.area.width,
+                height: grid.area.height,
+            },
+            pixel_snap_scale,
+        );
+        grid.top.width = snapped_widths.top;
+        grid.right.width = snapped_widths.right;
+        grid.bottom.width = snapped_widths.bottom;
+        grid.left.width = snapped_widths.left;
         grid
     }
 
-    // cpp: paint/nine_piece_image_grid.h:48
-    // cpp: paint/nine_piece_image_grid.cc:86-119
+    // cpp: paint/nine_piece_image_grid.h:102
+    // cpp: paint/nine_piece_image_grid.cc:193-238
     fn SetCorner(&self, output: &mut NinePieceDrawInfo, piece: NinePiece) {
         let image = ImageRect(self.image_size);
         match piece {
@@ -259,8 +368,8 @@ impl NinePieceImageGrid {
         }
     }
 
-    // cpp: paint/nine_piece_image_grid.h:49
-    // cpp: paint/nine_piece_image_grid.cc:121-174
+    // cpp: paint/nine_piece_image_grid.h:103
+    // cpp: paint/nine_piece_image_grid.cc:240-317
     fn SetEdge(&self, output: &mut NinePieceDrawInfo, piece: NinePiece) {
         let image = ImageRect(self.image_size);
         let source_width = self.image_size.width - self.left.slice - self.right.slice;
@@ -353,8 +462,8 @@ impl NinePieceImageGrid {
         }
     }
 
-    // cpp: paint/nine_piece_image_grid.h:50
-    // cpp: paint/nine_piece_image_grid.cc:176-201
+    // cpp: paint/nine_piece_image_grid.h:104
+    // cpp: paint/nine_piece_image_grid.cc:319-366
     fn SetMiddle(&self, output: &mut NinePieceDrawInfo) {
         let source_width = self.image_size.width - self.left.slice - self.right.slice;
         let source_height = self.image_size.height - self.top.slice - self.bottom.slice;
@@ -406,8 +515,8 @@ impl NinePieceImageGrid {
         output.vertical_rule = self.vertical_rule;
     }
 
-    // cpp: paint/nine_piece_image_grid.h:38
-    // cpp: paint/nine_piece_image_grid.cc:203-215
+    // cpp: paint/nine_piece_image_grid.h:91
+    // cpp: paint/nine_piece_image_grid.cc:368-383
     pub fn GetDrawInfo(&self, piece: NinePiece) -> NinePieceDrawInfo {
         let mut output = NinePieceDrawInfo::default();
         output.is_corner_piece = matches!(
@@ -425,5 +534,97 @@ impl NinePieceImageGrid {
             self.SetEdge(&mut output, piece);
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layoutng_assembly::internal::paint_input::NinePieceImageWidths;
+
+    fn Slices(value: f64) -> Edges {
+        Edges {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    #[test]
+    fn ResolvesPercentWidthsAgainstSnappedAreaBeforeFlooring() {
+        let percent = || NinePieceImageWidth::Length {
+            pixels: 0.0,
+            percentage: 10.0,
+            calculation: None,
+        };
+        let input = NinePieceImagePaint {
+            image_resolution_scale: 1.0,
+            slices: Slices(10.0),
+            widths: NinePieceImageWidths {
+                top: percent(),
+                right: percent(),
+                bottom: percent(),
+                left: percent(),
+            },
+            ..Default::default()
+        };
+        let grid = NinePieceImageGrid::new(
+            &input,
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+            1.0,
+            PaintRect {
+                width: 101.0,
+                height: 51.0,
+                ..Default::default()
+            },
+            FragmentBoxSides::default(),
+            1.0,
+        );
+        assert_eq!(grid.left.width, 10.0);
+        assert_eq!(grid.right.width, 10.0);
+        assert_eq!(grid.top.width, 5.0);
+        assert_eq!(grid.bottom.width, 5.0);
+    }
+
+    #[test]
+    fn GivesAbuttingRoundingPixelToStartingEdge() {
+        let input = NinePieceImagePaint {
+            image_resolution_scale: 1.0,
+            slices: Slices(4.0),
+            widths: NinePieceImageWidths {
+                top: NinePieceImageWidth::Auto,
+                right: NinePieceImageWidth::Auto,
+                bottom: NinePieceImageWidth::Auto,
+                left: NinePieceImageWidth::Auto,
+            },
+            ..Default::default()
+        };
+        let make_grid = |pixel_snap_scale| {
+            NinePieceImageGrid::new(
+                &input,
+                Size {
+                    width: 10.0,
+                    height: 10.0,
+                },
+                1.0,
+                PaintRect {
+                    width: 5.0,
+                    height: 5.0,
+                    ..Default::default()
+                },
+                FragmentBoxSides::default(),
+                pixel_snap_scale,
+            )
+        };
+        let css_pixel_grid = make_grid(1.0);
+        assert_eq!(css_pixel_grid.left.width, 3.0);
+        assert_eq!(css_pixel_grid.right.width, 2.0);
+        let high_density_grid = make_grid(2.0);
+        assert_eq!(high_density_grid.left.width, 2.5);
+        assert_eq!(high_density_grid.right.width, 2.5);
     }
 }

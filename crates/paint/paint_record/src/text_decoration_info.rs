@@ -108,6 +108,7 @@ pub struct TextDecorationFragmentContext {
 pub fn ComputeTextDecorationFragmentContext(
     cursor: &InlineCursor,
 ) -> TextDecorationFragmentContext {
+    assert!(foundation::RuntimeEnabledFeatures::CSSTextDecorationInsetEnabled());
     let mut fragment_context = TextDecorationFragmentContext {
         fragment_cursor: cursor,
         ..TextDecorationFragmentContext::default()
@@ -247,7 +248,6 @@ fn TextDecorationStyleToStrokeStyle(decoration_style: ETextDecorationStyle) -> S
 }
 
 // Source: third_party/blink/renderer/core/paint/text_decoration_info.cc:164-175.
-#[cfg(not(target_vendor = "apple"))]
 fn MakeSpellingGrammarWave(effective_zoom: f32) -> WaveDefinition {
     let wavelength = 6.0 * effective_zoom;
     WaveDefinition {
@@ -255,6 +255,67 @@ fn MakeSpellingGrammarWave(effective_zoom: f32) -> WaveDefinition {
         control_point_distance: 5.0 * effective_zoom,
         phase: -0.75 * wavelength,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpellingGrammarPlatform {
+    Android { native_ui: bool },
+    Apple,
+    Other,
+}
+
+fn CurrentSpellingGrammarPlatform() -> SpellingGrammarPlatform {
+    #[cfg(target_os = "android")]
+    {
+        return SpellingGrammarPlatform::Android {
+            native_ui: foundation::blink_features::AndroidSpellcheckNativeUiEnabled(),
+        };
+    }
+    #[cfg(all(not(target_os = "android"), target_vendor = "apple"))]
+    {
+        return SpellingGrammarPlatform::Apple;
+    }
+    #[cfg(all(not(target_os = "android"), not(target_vendor = "apple")))]
+    {
+        SpellingGrammarPlatform::Other
+    }
+}
+
+fn SpellingGrammarLineStyle(
+    platform: SpellingGrammarPlatform,
+    effective_zoom: f32,
+) -> (StrokeStyle, bool, Option<WaveDefinition>) {
+    match platform {
+        SpellingGrammarPlatform::Android { native_ui: true } => {
+            (StrokeStyle::kSolidStroke, true, None)
+        }
+        SpellingGrammarPlatform::Apple => (StrokeStyle::kDottedStroke, true, None),
+        SpellingGrammarPlatform::Android { native_ui: false } | SpellingGrammarPlatform::Other => (
+            StrokeStyle::kWavyStroke,
+            false,
+            Some(MakeSpellingGrammarWave(effective_zoom)),
+        ),
+    }
+}
+
+fn SpellingGrammarThickness(platform: SpellingGrammarPlatform, effective_zoom: f32) -> f32 {
+    match platform {
+        SpellingGrammarPlatform::Android { native_ui: true } => 2.5 * effective_zoom,
+        SpellingGrammarPlatform::Apple => 2.0 * effective_zoom,
+        SpellingGrammarPlatform::Android { native_ui: false } | SpellingGrammarPlatform::Other => {
+            effective_zoom
+        }
+    }
+}
+
+pub fn CurrentSpellingGrammarLineStyle(
+    effective_zoom: f32,
+) -> (StrokeStyle, bool, Option<WaveDefinition>) {
+    SpellingGrammarLineStyle(CurrentSpellingGrammarPlatform(), effective_zoom)
+}
+
+pub fn CurrentSpellingGrammarThickness(effective_zoom: f32) -> f32 {
+    SpellingGrammarThickness(CurrentSpellingGrammarPlatform(), effective_zoom)
 }
 
 // Source: third_party/blink/renderer/core/paint/text_decoration_info.h:106-248.
@@ -597,18 +658,7 @@ impl<'a> TextDecorationInfo<'a> {
     // Source: third_party/blink/renderer/core/paint/text_decoration_info.cc:658-681.
     fn ComputeThickness(&self, decoration: &ResolvedDecoration<'_>) -> f32 {
         if decoration.HasSpellingOrGrammarError() {
-            #[cfg(target_os = "android")]
-            {
-                unimplemented!("Android source spellcheck feature state is not bridged")
-            }
-            #[cfg(target_vendor = "apple")]
-            {
-                return 2.0 * decoration.effective_zoom;
-            }
-            #[cfg(all(not(target_os = "android"), not(target_vendor = "apple")))]
-            {
-                return decoration.effective_zoom;
-            }
+            return CurrentSpellingGrammarThickness(decoration.effective_zoom);
         }
         let thickness = ComputeDecorationThickness(
             &decoration.applied_text_decoration.Thickness(),
@@ -643,20 +693,11 @@ impl<'a> TextDecorationInfo<'a> {
         let style = if line == TextDecorationLine::kSpellingError
             || line == TextDecorationLine::kGrammarError
         {
-            #[cfg(target_vendor = "apple")]
-            {
-                antialias = true;
-                StrokeStyle::kDottedStroke
-            }
-            #[cfg(all(not(target_vendor = "apple"), not(target_os = "android")))]
-            {
-                custom_wave = Some(MakeSpellingGrammarWave(decoration.effective_zoom));
-                StrokeStyle::kWavyStroke
-            }
-            #[cfg(target_os = "android")]
-            {
-                unimplemented!("Android source spellcheck feature state is not bridged")
-            }
+            let (style, force_antialias, wave) =
+                CurrentSpellingGrammarLineStyle(decoration.effective_zoom);
+            antialias |= force_antialias;
+            custom_wave = wave;
+            style
         } else {
             TextDecorationStyleToStrokeStyle(decoration.applied_text_decoration.Style())
         };
@@ -925,6 +966,53 @@ mod tests {
         assert_eq!(ResolveInsetForFragment(3.0, 5.0), 0.0);
         assert_eq!(ResolveInsetForFragment(-2.0, 0.0), -2.0);
         assert_eq!(ResolveInsetForFragment(-2.0, 5.0), 0.0);
+    }
+
+    #[test]
+    fn spelling_grammar_platform_styles_and_thickness_match_source() {
+        let zoom = 2.0;
+        let (style, antialias, wave) =
+            SpellingGrammarLineStyle(SpellingGrammarPlatform::Android { native_ui: true }, zoom);
+        assert_eq!(style, StrokeStyle::kSolidStroke);
+        assert!(antialias);
+        assert!(wave.is_none());
+        assert_eq!(
+            SpellingGrammarThickness(SpellingGrammarPlatform::Android { native_ui: true }, zoom),
+            5.0
+        );
+
+        let (style, antialias, wave) =
+            SpellingGrammarLineStyle(SpellingGrammarPlatform::Android { native_ui: false }, zoom);
+        assert_eq!(style, StrokeStyle::kWavyStroke);
+        assert!(!antialias);
+        let wave = wave.expect("legacy Android spelling marker is wavy");
+        assert_eq!(wave.wavelength, 12.0);
+        assert_eq!(wave.control_point_distance, 10.0);
+        assert_eq!(wave.phase, -9.0);
+        assert_eq!(
+            SpellingGrammarThickness(SpellingGrammarPlatform::Android { native_ui: false }, zoom),
+            2.0
+        );
+
+        let (style, antialias, wave) =
+            SpellingGrammarLineStyle(SpellingGrammarPlatform::Apple, zoom);
+        assert_eq!(style, StrokeStyle::kDottedStroke);
+        assert!(antialias);
+        assert!(wave.is_none());
+        assert_eq!(
+            SpellingGrammarThickness(SpellingGrammarPlatform::Apple, zoom),
+            4.0
+        );
+
+        let (style, antialias, wave) =
+            SpellingGrammarLineStyle(SpellingGrammarPlatform::Other, zoom);
+        assert_eq!(style, StrokeStyle::kWavyStroke);
+        assert!(!antialias);
+        assert!(wave.is_some());
+        assert_eq!(
+            SpellingGrammarThickness(SpellingGrammarPlatform::Other, zoom),
+            2.0
+        );
     }
 
     #[test]

@@ -52,9 +52,9 @@ mod layout_reuse_managed_object_compatibility;
 #[path = "../../../layout_reuse/src/paint_only_font_binding.rs"]
 mod layout_reuse_paint_only_font_binding;
 use layout_invalidation_managed_input_admission::{
-    ControlPaintStateChanged, GeometryMetadataEqual, ImagePaintStateChanged,
-    LayoutImageNaturalSizeChangeIsPaintOnly, LayoutImageNaturalSizeChanged, NonStyleInputsEqual,
-    RetainInputStyles,
+    ControlPaintStateChanged, ElementCaptureStateChanged, GeometryMetadataEqual,
+    ImagePaintStateChanged, LayoutImageNaturalSizeChangeIsPaintOnly, LayoutImageNaturalSizeChanged,
+    NonStyleInputsEqual, RetainInputStyles,
 };
 use layout_reuse_managed_input_index::BuildManagedInputIndex;
 use layout_reuse_paint_only_font_binding::PreservePaintOnlyFontBinding;
@@ -126,6 +126,8 @@ struct ManagedInputIndex {
 }
 
 pub struct LayoutObjectTreeStorage {
+    detached_elements: std::rc::Rc<std::cell::RefCell<Vec<u64>>>,
+    detached_parent: Option<foundation::layout_detach::LayoutDetachedParent>,
     fonts: Box<dyn FontResolver>,
     factories: LayoutObjectFactorySet,
     // Canonical allocation roots, indexed for removal by the exact retired
@@ -154,6 +156,8 @@ impl LayoutObjectTreeStorage {
         let _heap_scope = LayoutHeapScope::new();
         let fonts = ConstructionFontResolver(space);
         Self {
+            detached_elements: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            detached_parent: None,
             fonts,
             factories: *factories,
             metadata: HashMap::new(),
@@ -237,6 +241,9 @@ impl LayoutObjectTree {
     pub(crate) fn OutputScrollOffsets(&self) -> Vec<(u64, super::layout_input::Offset)> {
         layout_commit_scroll_offset_snapshot::output_scroll_offsets(self)
     }
+    pub(crate) fn CommitResidentScrollOffsets(&mut self) {
+        layout_commit_scroll_offset_snapshot::commit_resident_scroll_offsets(self)
+    }
     // cpp: layoutng/internal/layout_object_builder.h:22-23
     pub fn new(space: &ConstraintSpace) -> Self {
         unsafe { LayoutObjectTreeNew(space) }
@@ -290,12 +297,31 @@ impl LayoutObjectTree {
         layout_invalidation_package::finish_update(self)
     }
 
+    pub(crate) fn HasManagedInputForNode(&self, node_id: u64) -> bool {
+        !unsafe { &*self.storage_ }.InputKeys(node_id).is_empty()
+    }
+    pub(crate) fn DetachElementLayoutTree(
+        &mut self,
+        node_id: u64,
+        performing_reattach: bool,
+    ) -> bool {
+        layout_invalidation_package::detach_element_layout_tree(self, node_id, performing_reattach)
+    }
+
     pub(crate) fn Reattach(&mut self, node_ids: &[u64]) {
         layout_invalidation_package::reattach(self, node_ids)
     }
 
     pub fn UpdateStats(&self) -> &LayoutTreeUpdateStats {
         &unsafe { &*self.storage_ }.stats
+    }
+    pub(crate) fn TakeDetachedParent(
+        &mut self,
+    ) -> Option<foundation::layout_detach::LayoutDetachedParent> {
+        unsafe { &mut *self.storage_ }.detached_parent.take()
+    }
+    pub(crate) fn TakeDetachedElements(&mut self) -> Vec<u64> {
+        std::mem::take(&mut *unsafe { &*self.storage_ }.detached_elements.borrow_mut())
     }
 
     pub(crate) fn HasRoot(&self) -> bool {
@@ -530,7 +556,21 @@ impl LayoutObjectTree {
         &mut self,
         state: std::rc::Rc<crate::editing_state::LayoutEditingState>,
     ) {
-        unsafe { &mut *self.storage_ }.editing = state;
+        let storage = unsafe { &mut *self.storage_ };
+        if !std::rc::Rc::ptr_eq(&storage.editing, &state) {
+            state
+                .selections
+                .layout_selection
+                .borrow_mut()
+                .SetHasPendingSelection();
+        }
+        storage.editing = state;
+        if let Some(view) = unsafe {
+            foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(storage.root.Get())
+                .as_mut()
+        } {
+            view.BindEditingSelection(&storage.editing);
+        }
     }
     pub fn EditingState(&self) -> std::rc::Rc<crate::editing_state::LayoutEditingState> {
         unsafe { &*self.storage_ }.editing.clone()
@@ -553,8 +593,12 @@ impl LayoutObjectTree {
     /// Source: third_party/blink/renderer/core/editing/layout_selection.cc:
     ///         217-334, 954-977;
     ///         core/paint/object_paint_invalidator.cc:96-116.
-    pub fn InvalidateSelectionPaint(&mut self, id: u64) -> bool {
+    pub fn InvalidateSelectionPaint(&mut self, id: u64) -> Vec<*mut LayoutObject> {
         layout_invalidation_input_updates::invalidate_selection_paint(self, id)
+    }
+
+    pub(crate) fn InvalidateCaretTextPaint(&mut self, id: u64) -> Vec<*mut LayoutObject> {
+        layout_invalidation_input_updates::invalidate_caret_text_paint(self, id)
     }
 
     /// Deliver ImageResourceObserver::ImageChanged to source document-image
@@ -568,8 +612,13 @@ impl LayoutObjectTree {
 
     /// Synchronize ordinary scroll paint metadata while retaining geometry,
     /// node identity and the owning tree's source descriptor.
-    pub fn UpdateScrollOffset(&mut self, id: u64, offset: super::layout_input::Offset) -> bool {
-        layout_fragment_scroll_input::update_scroll_offset(self, id, offset)
+    pub fn UpdateScrollOffset(
+        &mut self,
+        id: u64,
+        offset: super::layout_input::Offset,
+        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    ) -> bool {
+        layout_fragment_scroll_input::update_scroll_offset(self, id, offset, scroll_type)
     }
 
     /// Retain the compositor-admitted visibility bit on the source scroll owner.
@@ -603,6 +652,14 @@ impl LayoutObjectTree {
         element: Option<ElementData>,
     ) -> Option<NodeInputUpdate> {
         layout_invalidation_node_input::update_node_input(self, id, style, element)
+    }
+
+    pub(crate) fn UpdateVideoLayoutState(
+        &mut self,
+        id: u64,
+        state: super::layout_input::VideoLayoutState,
+    ) -> Option<*mut LayoutObject> {
+        layout_invalidation_node_input::update_video_layout_state(self, id, state)
     }
 
     /// Element::RecalcOwnStyle installs local style/theme inputs on existing
@@ -644,6 +701,31 @@ impl LayoutObjectTree {
         let root = unsafe { &mut *self.storage_ }.root.Get();
         assert!(!root.is_null(), "LayoutObjectTree has no root");
         unsafe { &mut *root }
+    }
+
+    /// Native Node::GetLayoutObject identity lookup. Reuses the resident
+    /// attachment index; resource consumers never traverse a copied hit tree.
+    pub fn GetLayoutObjectForNode(&self, node_id: u64) -> Option<&LayoutObject> {
+        let storage = unsafe { &*self.storage_ };
+        storage.InputKeys(node_id).iter().find_map(|key| {
+            let managed = storage.managed.get(key)?;
+            if managed.input.style_generated {
+                return None;
+            }
+            unsafe { managed.object.as_ref() }.filter(|object| !object.WasDestroyedForTreeUpdate())
+        })
+    }
+
+    pub fn GetLayoutObjectForNodeMut(&mut self, node_id: u64) -> Option<&mut LayoutObject> {
+        let storage = unsafe { &mut *self.storage_ };
+        let keys = storage.InputKeys(node_id).to_vec();
+        keys.into_iter().find_map(|key| {
+            let managed = storage.managed.get_mut(&key)?;
+            if managed.input.style_generated {
+                return None;
+            }
+            unsafe { managed.object.as_mut() }.filter(|object| !object.WasDestroyedForTreeUpdate())
+        })
     }
 
     // cpp: layoutng/internal/layout_object_builder.h:73-73

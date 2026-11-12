@@ -8,3 +8,8 @@ pub mod link_style;
 pub mod parser;
 pub mod preload_scanner;
 pub use html_parser_host::{HTMLParserHost, ParserElementEvent, ParserElementPhase};
+
+pub mod document_parser;
+pub mod xml_document_parser;
+
+pub mod markup_fragment;

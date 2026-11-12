@@ -108,6 +108,38 @@ impl<Owner: Eq + Hash> CSSOM<Owner> {
         self.constructed_style_sheets.get(&identity)
     }
 
+    /// Replace the contents owned by one constructed CSSStyleSheet while
+    /// preserving the JavaScript-visible wrapper identity. Constructed sheets
+    /// are inactive until adopted, so only an active replacement advances the
+    /// collection generation and notifies StyleEngine.
+    pub fn ReplaceConstructedStyleSheet(
+        &mut self,
+        identity: u64,
+        mut sheet: CSSStyleSheet,
+        receive: impl FnOnce(CSSOMEvent),
+    ) -> Result<bool, CSSOMAdoptionError> {
+        if sheet.owner_node_id != 0 {
+            return Err(CSSOMAdoptionError::StyleSheetHasOwnerNode);
+        }
+        let Some(existing) = self.constructed_style_sheets.get(&identity) else {
+            return Err(CSSOMAdoptionError::UnknownConstructedStyleSheet);
+        };
+        if existing == &sheet {
+            return Ok(false);
+        }
+        sheet.PrepareOwnerReplacement(existing);
+        debug_assert_eq!(sheet.Identity(), identity);
+        self.constructed_style_sheets.insert(identity, sheet);
+        if self.IsConstructedStyleSheetAdopted(identity) {
+            self.generation = self
+                .generation
+                .checked_add(1)
+                .expect("CSSOM generation exhausted");
+            receive(CSSOMEvent::StyleSheetChanged);
+        }
+        Ok(true)
+    }
+
     pub fn SetAdoptedStyleSheets(
         &mut self,
         scope: Owner,

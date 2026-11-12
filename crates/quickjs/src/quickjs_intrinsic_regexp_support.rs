@@ -70,7 +70,9 @@ unsafe fn lre_exec(
         check_timeout: lre_check_timeout,
         realloc: lre_realloc,
     };
-    crate::libregexp::lre_exec(
+    let ctx = opaque.cast::<JSContext>();
+    crate::libregexp::lre_exec_with_backtrack_limit(
         capture, bytecode, text, index, len, wide, ptr::addr_of_mut!(host).cast(),
+        (*(*ctx).rt).regexp_backtrack_limit,
     )
 }

@@ -13,6 +13,15 @@ pub fn AddImageResource(
     source: String,
     image: PaintImage,
 ) {
+    AddImageResourceWithContent(owner, constraints, source, image, None);
+}
+pub fn AddImageResourceWithContent(
+    owner: &mut DOM,
+    constraints: &mut ConstraintSpace,
+    source: String,
+    image: PaintImage,
+    content: Option<std::rc::Rc<crate::persistent_document::DOMImageResourceContent>>,
+) {
     if source.is_empty() {
         invalid_argument("image source must not be empty");
     }
@@ -57,9 +66,14 @@ pub fn AddImageResource(
     owner
         .GetDocumentMut()
         .SetImageResourceContentDPR(image.id, image.content_dpr);
-    // Resource-owned facts are visible when SetImageResource performs the
-    // synchronous ImageResourceContent client notification, as in Blink.
-    owner.GetDocumentMut().SetImageResource(
+    // Populate the same canonical content before synchronous completion
+    // notification; Style and input retain this immutable decoder value.
+    let content = content
+        .or_else(|| owner.GetDocument().ImageResourceContentFor(&source))
+        .unwrap_or_else(crate::persistent_document::DOMImageResourceContent::Pending);
+    content.SetIsSVGImage(is_document_image);
+    content.SetImageSnapshot(std::sync::Arc::new(image.clone()));
+    owner.GetDocumentMut().SetImageResourceWithContent(
         source,
         ImageResourceMetadata {
             id: image.id,
@@ -70,6 +84,7 @@ pub fn AddImageResource(
             known_to_be_opaque,
             is_cors_same_origin: image.is_cors_same_origin,
         },
+        Some(content),
     );
     constraints.images.push(image);
 }

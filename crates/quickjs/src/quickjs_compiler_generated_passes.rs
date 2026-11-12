@@ -11713,6 +11713,7 @@ vm_block = 1; continue;
 }
 // C line 36160
 3 => {
+js_host_inherit_script_base_url(ctx, b);
 return JSValue { u: JSValueUnion { ptr: ((b) as *mut c_void) }, tag: (((JS_TAG_FUNCTION_BYTECODE as i32)) as i64) };
 }
 // C line 36159

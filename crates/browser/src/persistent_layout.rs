@@ -7,6 +7,35 @@ use layoutng_assembly::{
     internal::layout_input::ConstraintSpace,
     layout_engine::{LayoutEngine, PaintFragmentCursor},
 };
+/// Document::UpdateStyleAndLayoutTree's attachment stage. The document emits
+/// its existing incremental mutations into the same resident LayoutObject tree;
+/// this stage does not calculate or publish fragment geometry.
+pub(crate) fn SynchronizeLayoutTreeWithEngine(
+    engine: &mut LayoutEngine,
+    owner: &mut DOM,
+    interaction: &UserInteractionState,
+    constraints: &ConstraintSpace,
+) {
+    let _trace = browser_tracing::span("layout", "Page.SynchronizeLayoutTree");
+    owner.EmitConstraints(constraints, |mutation| {
+        engine.ApplyMutation(mutation);
+    });
+    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
+    RecordLayoutDetachEffects(engine, owner);
+}
+fn RecordLayoutDetachEffects(engine: &mut LayoutEngine, owner: &DOM) {
+    let queue = owner.GetDocument().AttributeLifecycle();
+    for id in engine.TakeDetachedElements() {
+        queue.RecordElementLayoutDetached(id);
+    }
+}
+/// Document::Shutdown uses the same native destruction and identity effects
+/// as an ordinary tree-sync detach, before StyleEngine::DidDetach.
+pub(crate) fn DetachDocumentLayoutTreeWithEngine(engine: &mut LayoutEngine, owner: &DOM) {
+    engine
+        .ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::DetachDocumentLayoutTree);
+    RecordLayoutDetachEffects(engine, owner);
+}
 
 // cpp: browser/browser.cc:1733-1743
 pub fn LayoutPersistentDocument(
@@ -54,12 +83,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
         .is_some()
         .then(std::time::Instant::now);
     let mut heap_scope = foundation::LayoutHeapScope::new();
-    let synchronize = browser_tracing::span("layout", "Page.SynchronizeLayoutTree");
-    owner.EmitConstraints(constraints, |mutation| {
-        engine.ApplyMutation(mutation);
-    });
-    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
-    drop(synchronize);
+    SynchronizeLayoutTreeWithEngine(engine, owner, interaction, constraints);
     let build_done = profile.map(|start| start.elapsed());
     let updated = match purpose {
         layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint => {
@@ -98,11 +122,24 @@ pub(crate) fn LayoutDocumentWithEngineWithoutPublication(
 ) {
     let _trace = browser_tracing::span("layout", "Page.LayoutWithoutPublication");
     let mut heap_scope = foundation::LayoutHeapScope::new();
-    owner.EmitConstraints(constraints, |mutation| {
-        engine.ApplyMutation(mutation);
-    });
-    owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
-    engine.RunLayoutWithoutPublication();
+    SynchronizeLayoutTreeWithEngine(engine, owner, interaction, constraints);
+    engine.RunProvisionalLayoutWithoutPublication();
+    heap_scope.DeferCollection();
+}
+
+/// Continue the provisional pass after Page has synchronized the native tree
+/// and released the DOM borrow to run synchronous HTML attachment callbacks.
+/// The callback boundary must sit between LayoutObject attachment and layout;
+/// this entry point avoids repeating the incremental tree synchronization.
+pub(crate) fn LayoutDocumentWithEngineWithoutPublicationAfterSynchronization(
+    engine: &mut LayoutEngine,
+) {
+    let _trace = browser_tracing::span(
+        "layout",
+        "Page.LayoutWithoutPublicationAfterSynchronization",
+    );
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    engine.RunProvisionalLayoutWithoutPublication();
     heap_scope.DeferCollection();
 }
 
@@ -114,6 +151,16 @@ pub(crate) fn MeasurementInputsMatch(
     interaction: &UserInteractionState,
 ) -> bool {
     use layoutng_assembly::layout_engine::LayoutMutation;
+    // Clean geometry alone does not certify DOM-owned editing metadata.
+    // The ordinary synchronization transaction applies these local deltas.
+    if !owner
+        .GetDocument()
+        .StyleState()
+        .editing_input_nodes
+        .is_empty()
+    {
+        return false;
+    }
     let nodes = owner
         .GetDocument()
         .StyleState()
@@ -187,6 +234,7 @@ pub(crate) fn PopulatePaintDataWithEngine(
         return engine.TakeLayoutResult();
     }
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
+    RecordLayoutDetachEffects(engine, owner);
     if !engine.PopulatePaintData() {
         return None;
     }
@@ -231,7 +279,11 @@ pub(crate) fn LayoutPersistentScrollDocument(
     engine: &mut LayoutEngine,
     owner: &mut DOM,
     constraints: &ConstraintSpace,
-    changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
+    changes: &[(
+        u64,
+        layoutng_assembly::internal::layout_input::Offset,
+        layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    )],
     fragments: &mut LayoutResultHandle,
     scroll_only: bool,
 ) -> bool {
@@ -250,7 +302,11 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     engine: &mut LayoutEngine,
     owner: &mut DOM,
     constraints: &ConstraintSpace,
-    changes: &[(u64, layoutng_assembly::internal::layout_input::Offset)],
+    changes: &[(
+        u64,
+        layoutng_assembly::internal::layout_input::Offset,
+        layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    )],
     fragments: &mut LayoutResultHandle,
     scroll_only: bool,
 ) -> Option<ScrollLayoutUpdate> {
@@ -273,7 +329,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     let root = PaintFragmentCursor::FromHandle(fragments);
     let cull_rect_changed_enough = changes
         .iter()
-        .any(|&(id, offset)| changed_enough(root, id, offset));
+        .any(|&(id, offset, _)| changed_enough(root, id, offset));
     // CullRectUpdater runs during each PrePaint lifecycle. Its hysteresis
     // decides whether the changed offset requires a fresh projection; a wheel
     // phase does not defer that decision until the gesture ends.
@@ -282,7 +338,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
         node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
     }
     if !owner.GetDocument().StyleState().impact.IsEmpty()
-        || !changes.iter().all(|&(id, _)| contains(root, id))
+        || !changes.iter().all(|&(id, _, _)| contains(root, id))
     {
         return None;
     }
@@ -293,9 +349,9 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     // quiet instead of pausing the gesture at each cull-rect refresh.
     let mut heap_scope = foundation::LayoutHeapScope::new();
     heap_scope.DeferCollection();
-    for &(id, offset) in changes {
+    for &(id, offset, scroll_type) in changes {
         let mut applied = false;
-        if !owner.EmitScrollOffset(id, offset, |mutation| {
+        if !owner.EmitScrollOffset(id, offset, scroll_type, |mutation| {
             applied = engine.ApplyMutation(mutation);
         }) || !applied
         {
@@ -395,7 +451,7 @@ mod tests {
                     &mut engine,
                     &mut owner,
                     &cs,
-                    &[(id, offset)],
+                    &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                     &mut fragments,
                     true,
                 ),
@@ -523,7 +579,7 @@ mod tests {
                     &mut engine,
                     &mut owner,
                     &cs,
-                    &[(id, offset)],
+                    &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                     &mut fragments,
                     false,
                 ));
@@ -588,7 +644,7 @@ mod tests {
                         &mut engine,
                         &mut owner,
                         &cs,
-                        &[(id, offset)],
+                        &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                         &mut fragments,
                         false,
                     ),
@@ -666,7 +722,7 @@ mod tests {
                                 &mut engine,
                                 &mut owner,
                                 &cs,
-                                &[(scroller_id, offset)],
+                                &[(scroller_id, offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                                 &mut persistent,
                                 true,
                             ));

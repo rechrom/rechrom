@@ -52,6 +52,19 @@ impl DefaultURLLoader {
 }
 
 impl URLLoader for DefaultURLLoader {
+    fn LoadKeepalive(&mut self, request: &URLRequest) -> io::Result<Box<dyn URLLoadOperation>> {
+        if request.url.starts_with("http://") || request.url.starts_with("https://") {
+            return Ok(Box::new(crate::http::HTTPURLLoad::new(
+                request,
+                &mut self.http,
+            )?));
+        }
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native keepalive transport requires HTTP(S)",
+        ))
+    }
+
     fn LoadStream(
         &mut self,
         request: &URLRequest,

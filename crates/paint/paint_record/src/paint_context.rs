@@ -24,6 +24,41 @@ use crate::PaintRecording;
 use crate::PaintRect;
 use layoutng_assembly::internal::layout_input::Offset;
 
+struct TextPaintAggregation {
+    node_id: u64,
+    identity: u64,
+    rect: PaintRect,
+    properties: PropertyTreeState,
+    color_is_fully_transparent: bool,
+    has_text_shadow: bool,
+    has_text_stroke: bool,
+    ignore_depth: i32,
+    document_element_is_invisible: bool,
+}
+/// Matches ScopedPaintTimingDetectorBlockPaintHook's stack lifetime. This
+/// guard owns no layout geometry and runs no callback into another engine.
+pub struct ScopedTextPaintAggregation<'c, 'o> {
+    context: &'c std::cell::RefCell<PaintContext<'o>>,
+    active: bool,
+}
+impl<'c, 'o> ScopedTextPaintAggregation<'c, 'o> {
+    pub fn new(
+        context: &'c std::cell::RefCell<PaintContext<'o>>,
+        node: &PaintTreeNode<'_>,
+        foreground: bool,
+    ) -> Self {
+        let active = foreground && context.borrow_mut().BeginTextPaintAggregation(node);
+        Self { context, active }
+    }
+}
+impl Drop for ScopedTextPaintAggregation<'_, '_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.context.borrow_mut().EndTextPaintAggregation();
+        }
+    }
+}
+
 pub struct PaintContext<'o> {
     output: &'o mut PaintRecording,
     paint_controller: crate::PaintController,
@@ -31,12 +66,20 @@ pub struct PaintContext<'o> {
     /// recording. The committed PaintArtifact retains final immutable drawing
     /// payloads, never LayoutResult or FragmentItem pointers.
     text_sources: HashMap<u64, PaintFragmentCursor<'o>>,
+    svg_resource_root: Option<&'o PaintTreeNode<'static>>,
     /// Multiple paint phases and decorations for one FragmentItem share the
     /// single payload built from ShapeResult during this recording.
     text_runs: HashMap<u64, Arc<Vec<PaintGlyphRun>>>,
     pub walk_metrics: paint_model::PaintWalkMetrics,
     pub caret: Option<crate::paint_engine::CaretPosition>,
+    pub drag_caret: Option<crate::paint_engine::CaretPosition>,
+    pub drag_caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
+    pub text_control_selection:
+        Option<layoutng_assembly::editing_state::TextControlSelectionPaintState>,
     pub document_selection: Option<layoutng_assembly::editing_state::DocumentSelection>,
+    pub document_composition_markers:
+        std::rc::Rc<[layoutng_assembly::editing_state::DocumentCompositionMarker]>,
+    pub selection_handles_visible: bool,
     pub caret_local_rect: Option<layoutng_assembly::caret::geometry::LocalCaretRect>,
     /// Effective FrameCaret shape for this recording. IME composition forces
     /// this to bar independently of the owner's computed caret-shape.
@@ -59,9 +102,110 @@ pub struct PaintContext<'o> {
     paint_under_invalidation_checking: bool,
     skipping_cache_count: usize,
     document_element_is_invisible: bool,
+    /// Resident compositor-owned layers keyed by their source DOM/Layout
+    /// node.  Paint retains only the type-erased strong owner, matching
+    /// Blink's LayoutObject -> cc::Layer hand-off without introducing a
+    /// compositor dependency below paint_record.
+    foreign_layers: HashMap<u64, Arc<dyn crate::ForeignLayer>>,
+    text_paint_aggregations: Vec<TextPaintAggregation>,
+    paint_timing_root_properties: Option<PropertyTreeState>,
 }
 
 impl<'o> PaintContext<'o> {
+    pub fn BindPaintTimingRoot(&mut self, root: &PaintTreeNode<'_>) {
+        self.paint_timing_root_properties = Some(root.properties.nodes.clone());
+    }
+    fn BeginTextPaintAggregation(&mut self, node: &PaintTreeNode<'_>) -> bool {
+        use crate::ignore_paint_timing_scope::IgnorePaintTimingScope as Ignore;
+        if Ignore::IgnoreDepth() > 1 {
+            return false;
+        }
+        let Some((node_id, identity)) = node
+            .SourceCursor()
+            .and_then(|cursor| cursor.TextPaintTimingAggregator())
+        else {
+            return false;
+        };
+        let fragment = node.fragment.as_deref().expect("source Paint fragment");
+        let style = &fragment.paint.style;
+        self.text_paint_aggregations.push(TextPaintAggregation {
+            node_id,
+            identity,
+            rect: PaintRect::default(),
+            properties: node.properties.nodes.clone(),
+            color_is_fully_transparent: style.color().alpha <= 0.0,
+            has_text_shadow: style.text_shadow_count() != 0,
+            has_text_stroke: style.text_stroke_width() != 0.0,
+            ignore_depth: Ignore::IgnoreDepth(),
+            document_element_is_invisible: Ignore::IsDocumentElementInvisible(),
+        });
+        true
+    }
+    pub fn NotifyTextPaint(&mut self, visual_rect: PaintRect) {
+        if crate::ignore_paint_timing_scope::IgnorePaintTimingScope::ShouldIgnore() {
+            return;
+        }
+        if let Some(aggregation) = self.text_paint_aggregations.last_mut() {
+            aggregation.rect.union(visual_rect);
+        }
+    }
+    fn EndTextPaintAggregation(&mut self) {
+        use paint_model::geometry_mapper_source::{
+            float_clip_rect::FloatClipRect,
+            geometry_mapper::GeometryMapper,
+            native::{NativeGeometryMapperContext, NativeGeometryState},
+        };
+        let aggregation = self
+            .text_paint_aggregations
+            .pop()
+            .expect("matching text paint scope");
+        if aggregation.rect.is_empty() {
+            return;
+        }
+        let root = self
+            .paint_timing_root_properties
+            .as_ref()
+            .expect("timing root bound before native Paint");
+        let rect = aggregation.rect;
+        let mut mapped = FloatClipRect::FromRect(paint_model::source_geometry::RectF::new(
+            rect.x as f32,
+            rect.y as f32,
+            rect.width as f32,
+            rect.height as f32,
+        ));
+        let context = NativeGeometryMapperContext {
+            singular_transform_fix:
+                foundation::RuntimeEnabledFeatures::GeometryMapperSingularTransformFixEnabled(),
+        };
+        GeometryMapper::<NativeGeometryMapperContext>::LocalToAncestorVisualRect(
+            &context,
+            &NativeGeometryState::from_state(&aggregation.properties),
+            &NativeGeometryState::from_state(root),
+            &mut mapped,
+            foundation::OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
+            Default::default(),
+        );
+        let mapped = mapped.Rect();
+        self.output
+            .text_paint_observations
+            .push(paint_model::paint_timing::TextPaintObservation {
+                node_id: aggregation.node_id,
+                layout_object_identity: aggregation.identity,
+                frame_visual_rect: aggregation.rect,
+                local_root_visual_rect: PaintRect {
+                    x: mapped.x() as f64,
+                    y: mapped.y() as f64,
+                    width: mapped.width() as f64,
+                    height: mapped.height() as f64,
+                },
+                color_is_fully_transparent: aggregation.color_is_fully_transparent,
+                has_text_shadow: aggregation.has_text_shadow,
+                has_text_stroke: aggregation.has_text_stroke,
+                ignore_depth: aggregation.ignore_depth,
+                document_element_is_invisible: aggregation.document_element_is_invisible,
+            });
+    }
+
     /// Record the LayoutImage paint entry independently from whether its
     /// ImagePainter later emits a DrawImage operation.
     pub fn RecordPaintedLayoutImage(&mut self, image_id: image_resource::ImageId) {
@@ -69,6 +213,36 @@ impl<'o> PaintContext<'o> {
             self.output
                 .painted_layout_image_resource_ids
                 .insert(image_id);
+        }
+    }
+
+    /// Source: paint_controller.cc:884-887. Paint timing suppression is
+    /// thread-local in Blink and in Rechrom's translated scope.
+    pub fn SetFirstPainted(&mut self) {
+        if crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IgnoreDepth() == 0 {
+            self.output.first_painted = true;
+        }
+    }
+
+    /// Source: html_canvas_painter.cc:48-50. Contentful timing is a document
+    /// signal and remains independent from PaintController::SetFirstPainted.
+    pub fn SetFirstContentfulPaint(&mut self) {
+        if crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IgnoreDepth() == 0 {
+            self.output.first_contentful_painted = true;
+        }
+    }
+
+    /// Source: paint_controller.cc:893-897 and video_painter.cc:58-62.
+    pub fn SetImagePainted(&mut self) {
+        if crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IgnoreDepth() == 0 {
+            self.output.image_painted = true;
+        }
+    }
+
+    /// Source: paint_controller.cc:889-892 and text_painter.cc:419-422.
+    pub fn SetTextPainted(&mut self) {
+        if crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IgnoreDepth() == 0 {
+            self.output.text_painted = true;
         }
     }
 
@@ -82,15 +256,35 @@ impl<'o> PaintContext<'o> {
     pub fn EnsureChunk(&mut self) {
         self.paint_controller.EnsureChunk(self.output);
     }
+
+    pub(crate) fn RecordSelectionBounds(
+        &mut self,
+        start: Option<paint_chunk::PaintSelectionBound>,
+        end: Option<paint_chunk::PaintSelectionBound>,
+    ) {
+        self.paint_controller
+            .RecordSelection(self.output, start, end);
+    }
+
+    pub(crate) fn RecordAnySelectionWasPainted(&mut self) {
+        self.paint_controller
+            .RecordAnySelectionWasPainted(self.output);
+    }
     pub fn new(output: &'o mut PaintRecording) -> Self {
         Self {
             output,
             paint_controller: crate::PaintController::default(),
             text_sources: HashMap::default(),
+            svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: None,
+            drag_caret: None,
+            drag_caret_local_rect: None,
+            text_control_selection: None,
             document_selection: None,
+            document_composition_markers: Default::default(),
+            selection_handles_visible: false,
             caret_local_rect: None,
             caret_shape: None,
             drawing_recorder: None,
@@ -99,6 +293,9 @@ impl<'o> PaintContext<'o> {
                 foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
             skipping_cache_count: 0,
             document_element_is_invisible: false,
+            foreign_layers: HashMap::default(),
+            text_paint_aggregations: Vec::new(),
+            paint_timing_root_properties: None,
         }
     }
 
@@ -135,10 +332,16 @@ impl<'o> PaintContext<'o> {
             output,
             paint_controller,
             text_sources: HashMap::default(),
+            svg_resource_root: None,
             text_runs: HashMap::default(),
             walk_metrics: Default::default(),
             caret: editing.caret,
+            drag_caret: editing.drag_caret,
+            drag_caret_local_rect: None,
+            text_control_selection: editing.text_control_selection,
             document_selection: editing.document_selection,
+            document_composition_markers: editing.document_composition_markers,
+            selection_handles_visible: editing.selection_handles_visible,
             caret_local_rect: None,
             caret_shape: None,
             drawing_recorder: None,
@@ -147,7 +350,18 @@ impl<'o> PaintContext<'o> {
                 foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
             skipping_cache_count: 0,
             document_element_is_invisible: false,
+            foreign_layers: HashMap::default(),
+            text_paint_aggregations: Vec::new(),
+            paint_timing_root_properties: None,
         }
+    }
+
+    pub fn BindForeignLayers(&mut self, layers: &HashMap<u64, Arc<dyn crate::ForeignLayer>>) {
+        self.foreign_layers = layers.clone();
+    }
+
+    pub fn ForeignLayerForNode(&self, node_id: u64) -> Option<Arc<dyn crate::ForeignLayer>> {
+        self.foreign_layers.get(&node_id).cloned()
     }
 
     pub fn PaintUnderInvalidationCheckingEnabled(&self) -> bool {
@@ -200,7 +414,11 @@ impl<'o> PaintContext<'o> {
             output,
             crate::paint_engine::EditingPaintState {
                 caret,
+                drag_caret: None,
+                text_control_selection: None,
                 document_selection: None,
+                selection_handles_visible: false,
+                document_composition_markers: Default::default(),
             },
         )
     }
@@ -211,6 +429,12 @@ impl<'o> PaintContext<'o> {
     /// Index source FragmentItem cursors without copying their shape or child
     /// topology. The cursor lifetime is deliberately tied to this PaintContext
     /// and therefore cannot escape into the committed artifact.
+    pub fn BindSvgResourceTree(&mut self, root: &'o PaintTreeNode<'static>) {
+        self.svg_resource_root = Some(root);
+    }
+    pub fn SvgResourceNode(&self, client: u64) -> Option<&'o PaintTreeNode<'static>> {
+        self.svg_resource_root?.SvgResourceNode(client)
+    }
     pub fn BindTextSources(&mut self, root: PaintFragmentCursor<'o>) {
         fn collect<'a>(
             cursor: PaintFragmentCursor<'a>,
@@ -740,6 +964,192 @@ impl<'o> PaintContext<'o> {
                 scroll_translation: Some(scroll_translation),
                 scrolling_contents_cull_rect,
             },
+        );
+    }
+
+    /// Source: object_painter.cc:142-158 and paint_controller.cc:159-174.
+    /// The caller selects the source visual rect and SVG/box opacity policy;
+    /// this boundary supplies the canonical display-item identity and Layout
+    /// event-handler facts retained on the immutable fragment.
+    pub fn RecordHitTestData(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        rect: PaintRect,
+        opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
+    ) {
+        let fragment = node.fragment.as_deref().expect("hit-test fragment");
+        self.RecordHitTestDataWithClient(
+            node,
+            fragment.paint.display_item_client_id,
+            DisplayItemClientInfo::from_fragment(fragment),
+            rect,
+            opaqueness,
+        );
+    }
+
+    pub(crate) fn RecordHitTestDataWithClient(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        client_id: u64,
+        client: DisplayItemClientInfo,
+        rect: PaintRect,
+        opaqueness: crate::paint_engine::PaintHitTestOpaqueness,
+    ) {
+        let fragment = node.fragment.as_deref().expect("hit-test fragment");
+        let id = DisplayItemId {
+            client_id,
+            r#type: DisplayItemIdType::kHitTest,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        if client_id == fragment.paint.display_item_client_id {
+            self.output.RecordDebugInfo(
+                id.client_id as usize,
+                fragment.paint.display_item_client_debug_name.clone(),
+                fragment.paint.display_item_client_owner_node_id,
+            );
+        }
+        self.paint_controller.RecordHitTestData(
+            self.output,
+            id,
+            client,
+            rect,
+            fragment.paint.effective_allowed_touch_action,
+            fragment.paint.inside_blocking_wheel_event_handler,
+            opaqueness,
+        );
+    }
+
+    /// Source: svg_model_object_painter.cc:40-53 and
+    /// paint_controller.cc:176-188.
+    pub fn RecordRegionCaptureData(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        crop_id: [u64; 2],
+        rect: PaintRect,
+    ) {
+        let fragment = node.fragment.as_deref().expect("region-capture fragment");
+        self.RecordRegionCaptureDataWithClient(
+            node,
+            fragment.paint.display_item_client_id,
+            DisplayItemClientInfo::from_fragment(fragment),
+            crop_id,
+            rect,
+        );
+    }
+
+    pub(crate) fn RecordRegionCaptureDataWithClient(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        client_id: u64,
+        client: DisplayItemClientInfo,
+        crop_id: [u64; 2],
+        rect: PaintRect,
+    ) {
+        debug_assert_ne!(crop_id, [0; 2]);
+        let fragment = node.fragment.as_deref().expect("region-capture fragment");
+        let id = DisplayItemId {
+            client_id,
+            r#type: DisplayItemIdType::kRegionCapture,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        if client_id == fragment.paint.display_item_client_id {
+            self.output.RecordDebugInfo(
+                id.client_id as usize,
+                fragment.paint.display_item_client_debug_name.clone(),
+                fragment.paint.display_item_client_owner_node_id,
+            );
+        }
+        self.paint_controller
+            .RecordRegionCaptureData(self.output, id, client, crop_id, rect);
+    }
+
+    /// Source: box_painter.cc:30-33 and paint_controller.cc:190-202.
+    pub fn RecordTrackedElementData(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        element_paint_rect: PaintRect,
+        sub_rects: &[layoutng_assembly::internal::layout_input::TrackedElementSubRect],
+    ) {
+        let fragment = node.fragment.as_deref().expect("tracked-element fragment");
+        self.RecordTrackedElementDataWithClient(
+            node,
+            fragment.paint.display_item_client_id,
+            DisplayItemClientInfo::from_fragment(fragment),
+            element_paint_rect,
+            sub_rects,
+        );
+    }
+
+    pub(crate) fn RecordTrackedElementDataWithClient(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        client_id: u64,
+        client: DisplayItemClientInfo,
+        element_paint_rect: PaintRect,
+        sub_rects: &[layoutng_assembly::internal::layout_input::TrackedElementSubRect],
+    ) {
+        use layoutng_assembly::internal::layout_input::{
+            TrackedElementFrameToken, TrackedElementSubRectType,
+        };
+        use paint_chunk::{
+            PaintFrameToken, PaintTrackedElementRelativeRect, PaintTrackedElementSubRect,
+            PaintTrackedElementSubRectType,
+        };
+
+        let frame_token = |token: TrackedElementFrameToken| match token {
+            TrackedElementFrameToken::Local(value) => PaintFrameToken::Local(value),
+            TrackedElementFrameToken::Remote(value) => PaintFrameToken::Remote(value),
+        };
+        let converted = sub_rects
+            .iter()
+            .map(|sub_rect| PaintTrackedElementSubRect {
+                feature: sub_rect.feature,
+                id: sub_rect.id,
+                should_add_to_compositor_frame_metadata: sub_rect
+                    .should_add_to_compositor_frame_metadata,
+                should_exclude_fixed_and_sticky_occlusions: sub_rect
+                    .should_exclude_fixed_and_sticky_occlusions,
+                sub_rect: sub_rect
+                    .sub_rect
+                    .map(|relative| PaintTrackedElementRelativeRect {
+                        rect: PaintRect {
+                            x: f64::from(relative.x),
+                            y: f64::from(relative.y),
+                            width: f64::from(relative.width),
+                            height: f64::from(relative.height),
+                        },
+                        r#type: match relative.r#type {
+                            TrackedElementSubRectType::IntersectWithElementRect => {
+                                PaintTrackedElementSubRectType::IntersectWithElementRect
+                            }
+                            TrackedElementSubRectType::NoIntersection => {
+                                PaintTrackedElementSubRectType::NoIntersection
+                            }
+                        },
+                    }),
+                frame_token: sub_rect.frame_token.map(frame_token),
+                parent_frame_token: sub_rect.parent_frame_token.map(PaintFrameToken::Local),
+            })
+            .collect::<Vec<_>>();
+        let fragment = node.fragment.as_deref().expect("tracked-element fragment");
+        let id = DisplayItemId {
+            client_id,
+            r#type: DisplayItemIdType::kTrackedElement,
+            fragment: fragment.paint.display_item_fragment,
+        };
+        if client_id == fragment.paint.display_item_client_id {
+            self.output.RecordDebugInfo(
+                id.client_id as usize,
+                fragment.paint.display_item_client_debug_name.clone(),
+                fragment.paint.display_item_client_owner_node_id,
+            );
+        }
+        self.paint_controller.RecordTrackedElementData(
+            self.output,
+            id,
+            client,
+            element_paint_rect,
+            &converted,
         );
     }
 
@@ -1390,6 +1800,32 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         Self { context, previous }
     }
 
+    pub fn drag_caret(
+        context: &'c std::cell::RefCell<PaintContext<'o>>,
+        caret: crate::paint_engine::CaretPosition,
+        node: &PaintTreeNode<'_>,
+    ) -> Self {
+        let fragment = node.fragment.as_deref().expect("drag caret fragment");
+        let mut borrowed = context.borrow_mut();
+        let previous = borrowed.chunk_properties();
+        let mut properties = previous.clone();
+        properties.clip = node.contents_properties.nodes.clip.clone();
+        borrowed.update_chunk_id_and_properties_raw(
+            DisplayItemId {
+                client_id: caret.display_item_client_id,
+                r#type: DisplayItemIdType::kDragCaret,
+                fragment: fragment.paint.display_item_fragment,
+            },
+            DisplayItemClientInfo {
+                is_cacheable: caret.display_item_client_is_cacheable,
+                invalidation_reason: Some(caret.display_item_client_invalidation_reason),
+                is_just_created: caret.display_item_client_is_just_created,
+            },
+            properties,
+        );
+        Self { context, previous }
+    }
+
     pub fn caret(
         context: &'c std::cell::RefCell<PaintContext<'o>>,
         caret: crate::paint_engine::CaretPosition,
@@ -1613,6 +2049,25 @@ mod opaque_record_tests {
         PaintCornerRadii, PaintCornerRadius, PaintShader,
     };
     use paint_chunk::PaintChunker;
+
+    #[test]
+    fn text_paint_timing_signal_honors_ignore_scope() {
+        let mut output = PaintRecording::default();
+        {
+            let mut context = PaintContext::new(&mut output);
+            context.SetTextPainted();
+        }
+        assert!(output.text_painted);
+
+        let mut ignored = PaintRecording::default();
+        {
+            let _scope = crate::ignore_paint_timing_scope::IgnorePaintTimingScope::new();
+            crate::ignore_paint_timing_scope::IgnorePaintTimingScope::IncrementIgnoreDepth();
+            let mut context = PaintContext::new(&mut ignored);
+            context.SetTextPainted();
+        }
+        assert!(!ignored.text_painted);
+    }
 
     #[test]
     fn scoped_chunk_transform_changes_only_transform_and_restores_properties() {

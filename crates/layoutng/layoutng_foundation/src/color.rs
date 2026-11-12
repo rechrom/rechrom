@@ -277,6 +277,12 @@ impl Color {
     // The fixed Chromium revision has baked gamut mapping disabled by default;
     // this returns extended sRGB and leaves final destination-gamut clipping to
     // the paint backend, just like Color::toSkColor4f().
+    // Chromium color.cc:914-916: toSkColor4f().toSkColor(), destination sRGB.
+    pub fn Rgb(&self) -> u32 {
+        let (r, g, b) = self.ToSRGB();
+        let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+        (channel(self.Alpha()) << 24) | (channel(r) << 16) | (channel(g) << 8) | channel(b)
+    }
     pub fn ToSRGB(&self) -> (f32, f32, f32) {
         match self.color_space_ {
             ColorSpace::kSRGB => (self.param0_, self.param1_, self.param2_),

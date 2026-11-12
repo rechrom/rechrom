@@ -8,6 +8,8 @@ pub mod metadata;
 
 pub mod layer;
 
+pub mod canvas_child_record;
+pub(crate) mod main_frame_lifecycle;
 pub mod main_host;
 pub mod paint;
 pub mod paint_services;
@@ -119,3 +121,5 @@ pub(crate) mod activation;
 pub(crate) mod scrollbar;
 
 pub(crate) mod software_image_decode_cache;
+
+pub(crate) mod report_time_swap_promise;

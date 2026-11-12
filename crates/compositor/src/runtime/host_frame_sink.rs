@@ -311,7 +311,7 @@ impl HostImplGServices<CompositorTypes> for HostFrameSinkServices {
             image.scale.y() * scale_adjustment,
         );
         result.frame_index = frame_index;
-        result.target = Some(color);
+        result.target = Some(image.LimitTargetDynamicRange(color));
         result
     }
     fn SendExplicitDecodeRequestsImmediately(&self) -> bool {

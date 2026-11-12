@@ -4,6 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::internal::layout_input::FontFace;
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -114,22 +115,31 @@ fn pixels(page: &mut Page) -> Vec<u32> {
 }
 
 fn root_scroll_state(
-    node: &layoutng_assembly::fragment_tree::FragmentPaintData,
+    fragments: &layoutng_assembly::fragment_tree::LayoutResultHandle,
 ) -> Option<(
     layoutng_assembly::internal::layout_input::Offset,
     Option<layoutng_assembly::internal::layout_input::Offset>,
 )> {
-    if node.paint.scroll_size.height > node.size.height && node.paint_cull_scroll_offset.is_some() {
-        return Some((node.paint.scroll_offset, node.paint_cull_scroll_offset));
+    fn find(
+        node: PaintFragmentCursor<'_>,
+    ) -> Option<(
+        layoutng_assembly::internal::layout_input::Offset,
+        Option<layoutng_assembly::internal::layout_input::Offset>,
+    )> {
+        if node.paint.scroll_size.height > node.size.height
+            && node.paint_cull_scroll_offset.is_some()
+        {
+            return Some((node.paint.scroll_offset, node.paint_cull_scroll_offset));
+        }
+        node.Children().find_map(find)
     }
-    node.children.iter().find_map(root_scroll_state)
+    find(PaintFragmentCursor::FromHandle(fragments))
 }
 
 #[test]
 fn phased_wheel_refreshes_cull_projection_during_scroll() {
     test_thread::run(|| {
-        use interaction::input_event::{WheelEvent, WheelPhase};
-        use layoutng_assembly::internal::layout_input::Offset;
+        use interaction::input_event::{Offset, WheelEvent, WheelPhase};
 
         let mut page = fixture("body{height:3000px}", "<div></div>", true);
         let initial = root_scroll_state(&page.CurrentFrame().unwrap().fragments)
@@ -182,18 +192,18 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
             }
             check(&mut page, "if(document.getElementById('sticky').getBoundingClientRect().y!==0)throw Error('root sticky');if(document.getElementById('fixed').getBoundingClientRect().y!==7)throw Error('fixed');if(document.getElementById('fixedsticky').getBoundingClientRect().y!==50)throw Error('fixed ancestor sticky');");
             let tree = &page.CurrentFrame().unwrap().fragments;
-            fn sticky(node: &layoutng_assembly::fragment_tree::FragmentPaintData) {
+            fn sticky(node: PaintFragmentCursor<'_>) {
                 if let Some(constraint) = node.paint.sticky_constraint {
                     if let Some(axis) = constraint.vertical {
                         assert_eq!(axis.current_sticky_offset, node.paint.sticky_offset.y,
                             "native matrix and compositor recorded basis must be published together");
                     }
                 }
-                for child in &node.children {
+                for child in node.Children() {
                     sticky(child);
                 }
             }
-            sticky(tree);
+            sticky(PaintFragmentCursor::FromHandle(tree));
             // Validate the sticky basis published in Paint property state.
             let artifact = &page.CurrentFrame().unwrap().display_items;
             let mut transforms = std::collections::HashMap::new();
@@ -249,14 +259,14 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
 #[test]
 fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
     test_thread::run(|| {
-        use interaction::input_event::{InputEvent, WheelEvent, WheelPhase};
+        use interaction::input_event::{InputEvent, Offset as InputOffset, WheelEvent, WheelPhase};
         use layoutng_assembly::internal::layout_input::Offset;
         let mut page = fixture("body{height:230px}", "<div></div>", true);
         let wheel = WheelEvent {
             compositor_owned: true,
             phase: WheelPhase::kBegan,
-            delta: Offset { x: 0., y: 80. },
-            position: Offset { x: 20., y: 20. },
+            delta: InputOffset { x: 0., y: 80. },
+            position: InputOffset { x: 20., y: 20. },
             ..Default::default()
         };
         let result = page.Dispatch(&InputEvent::Wheel(wheel.clone())).unwrap();
@@ -266,10 +276,7 @@ fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
             &mut page,
             "if(scrollY!==0)throw Error('async default applied twice');",
         );
-        let owner = page
-            .CurrentFrame()
-            .unwrap()
-            .fragments
+        let owner = PaintFragmentCursor::FromHandle(&page.CurrentFrame().unwrap().fragments)
             .paint
             .display_item_client_id;
         page.ApplyCompositorScrollDelta(1, owner, Offset { x: 0., y: 80. })

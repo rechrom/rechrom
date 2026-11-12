@@ -217,6 +217,7 @@ impl DiscardableImageTypes for CpuDiscardableBackend {
     type FloatRect = ImageFloatRectValue;
     type Matrix = ImageMapMatrix;
     type FilterQuality = CpuFilterQuality;
+    type DynamicRangeLimit = CpuDynamicRangeLimit;
     type DecodingMode = ImageDecodingMode;
     type WorkletInput = Arc<CpuWorkletInput>;
     type CompletionState = CompletionState;
@@ -234,6 +235,7 @@ impl DiscardableImageTypes for CpuDiscardableBackend {
         dark: bool,
         source: ImageRectValue,
         quality: CpuFilterQuality,
+        dynamic_range_limit: CpuDynamicRangeLimit,
         m: ImageMapMatrix,
     ) -> CpuDrawImage {
         let source = source.0;
@@ -270,6 +272,7 @@ impl DiscardableImageTypes for CpuDiscardableBackend {
             source_rect: source,
             filter_quality: quality,
             use_dark_mode: dark,
+            dynamic_range_limit,
             scale,
             matrix_is_decomposable: decomposable,
             frame_index: kDefaultFrameIndex,
@@ -540,10 +543,14 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
             CpuPaintOpRef::Converted(CpuPaintOp::DrawScrollingContents { list, .. }) => {
                 self.HasDiscardableImages(list.paint_op_buffer())
             }
-            CpuPaintOpRef::PaintRecord { op, .. }
+            CpuPaintOpRef::PaintRecord { op, record }
                 if op.r#type == paint::paint_engine::DisplayItemType::kDrawImageRect =>
             {
-                true
+                super::metadata::image_usage(
+                    record,
+                    op.resource_id,
+                    &mut crate::adapter::layer_tree_host_impl::ContentColorUsage::kSRGB,
+                )
             }
             _ => super::metadata::flag_images(
                 op,
@@ -595,6 +602,18 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
     }
     fn FlagUseDarkMode(&self, op: Self::Flags<'_>) -> bool {
         super::metadata::flags(op).is_some_and(|f| f.useDarkModeForImage())
+    }
+    fn FlagDynamicRangeLimit(&self, op: Self::Flags<'_>) -> CpuDynamicRangeLimit {
+        if let Some(flags) = super::metadata::flags(op) {
+            return flags.getDynamicRangeLimit();
+        }
+        match op {
+            CpuPaintOpRef::PaintRecord { op, .. } => CpuDynamicRangeLimit::new(
+                op.dynamic_range_limit.standard_mix,
+                op.dynamic_range_limit.constrained_high_mix,
+            ),
+            _ => CpuDynamicRangeLimit::default(),
+        }
     }
     fn PreserveDiscardableImageMapQuality(&self) -> bool {
         true
@@ -771,7 +790,9 @@ impl DiscardableImageBackend<CpuPaintOpBuffer<SkRegion>> for CpuDiscardableBacke
         _: MapShader<'_>,
         _: &ImageMapMatrix,
     ) -> Option<ImageFloatRectValue> {
-        unreachable!("animated pattern records require their actual timeline/record owner and are rejected before PAC")
+        unreachable!(
+            "animated pattern records require their actual timeline/record owner and are rejected before PAC"
+        )
     }
     fn ShaderRecord<'a>(&'a self, _: MapShader<'a>) -> &'a CpuPaintOpBuffer<SkRegion> {
         unreachable!("no accepted animated pattern owner")
@@ -1119,7 +1140,7 @@ pub(crate) fn raster_state(
                 let p = path.single_path().expect("validated path union capability");
                 c.clip_path(p, *difference, *antialias)
             }
-            CpuPaintOp::Noop => {}
+            CpuPaintOp::CustomData(_) | CpuPaintOp::Noop => {}
             _ => unreachable!("draw op is not a state op"),
         },
     }

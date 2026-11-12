@@ -115,10 +115,14 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
     }
 }
 struct Client {
+    chrome: crate::page::PageChromeState,
     trace: Rc<RefCell<Vec<String>>>,
     frames: Rc<RefCell<Vec<Vec<u8>>>>,
 }
 impl PageClient for Client {
+    fn DidEventHandlerChromeEffect(&mut self, effect: crate::page::EventHandlerChromeEffect) {
+        self.chrome.Apply(effect);
+    }
     fn DidCommit(&mut self, url: &str) {
         self.trace.borrow_mut().push(format!("commit\t{url}"));
     }
@@ -267,6 +271,7 @@ fn create_page(
             user_agent: "source-fixture".into(),
         }),
         Some(Rc::new(RefCell::new(Client {
+            chrome: Default::default(),
             trace: trace.clone(),
             frames: frames.clone(),
         }))),
@@ -395,7 +400,11 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
             Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
             crate::CreateBrowserConstraints(160, 96),
             None,
-            Some(Rc::new(RefCell::new(Client { trace, frames }))),
+            Some(Rc::new(RefCell::new(Client {
+                chrome: Default::default(),
+                trace,
+                frames,
+            }))),
         );
         page.SetPreferredColorScheme(PreferredColorScheme::kDark);
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
@@ -432,7 +441,11 @@ fn css_semibold_font_selection_matches_repository_chromium() {
                 xhr: Box::new(XHR),
                 user_agent: "source-fixture".into(),
             }),
-            Some(Rc::new(RefCell::new(Client { trace, frames }))),
+            Some(Rc::new(RefCell::new(Client {
+                chrome: Default::default(),
+                trace,
+                frames,
+            }))),
         );
         page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
             .unwrap();
@@ -716,6 +729,8 @@ fn viewport_scroll_reaches_window_and_updates_client_rects() {
         page.Apply(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: root_element,
             offset: Offset { x: 0.0, y: 1000.0 },
+            scroll_type:
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         for _ in 0..4 {
@@ -755,7 +770,7 @@ fn mouse_move_dispatches_dom_boundary_events_in_chromium_order() {
             page.Dispatch(&interaction::input_event::InputEvent::Mouse(
                 interaction::input_event::MouseEvent {
                     r#type: interaction::input_event::MouseEventType::kMove,
-                    position: layoutng_assembly::internal::layout_input::Offset { x, y: 25.0 },
+                    position: interaction::input_event::Offset { x, y: 25.0 },
                     ..Default::default()
                 },
             ))
@@ -795,7 +810,7 @@ fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
         page.Dispatch(&interaction::input_event::InputEvent::Mouse(
             interaction::input_event::MouseEvent {
                 r#type: interaction::input_event::MouseEventType::kMove,
-                position: layoutng_assembly::internal::layout_input::Offset { x: 25.0, y: 25.0 },
+                position: interaction::input_event::Offset { x: 25.0, y: 25.0 },
                 ..Default::default()
             },
         ))
@@ -907,6 +922,8 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         page.Apply(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: find(&page, "s"),
             offset: Offset { x: 0.0, y: 3.0 },
+            scroll_type:
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         assert!(snapshot.PtrEq(&page.CurrentFrame().unwrap().fragments));
@@ -927,6 +944,8 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
         page.Apply(PageMutation::ScrollMutation(ScrollMutation {
             target_node_id: find(&page, "s"),
             offset: Offset { x: 0.0, y: 6.0 },
+            scroll_type:
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         assert_eq!(
@@ -1135,6 +1154,7 @@ fn without_javascript(mode: &str) {
         space,
         None,
         Some(Rc::new(RefCell::new(Client {
+            chrome: Default::default(),
             trace: trace.clone(),
             frames: frames.clone(),
         }))),
@@ -1201,15 +1221,39 @@ fn without_javascript(mode: &str) {
         let d = owner.GetDocument();
         find(d, d.Root(), id).unwrap()
     };
-    page.Dispatch(&interaction::input_event::InputEvent::Mouse(
-        interaction::input_event::MouseEvent {
-            r#type: interaction::input_event::MouseEventType::kClick,
-            button: interaction::input_event::MouseButton::kPrimary,
-            target_node_id: Some(find(&page, "check")),
-            ..Default::default()
-        },
-    ))
-    .unwrap();
+    let position = {
+        let layout = page.GetLayoutEngine();
+        let rect = layout
+            .Output()
+            .unwrap()
+            .Node(find(&page, "check"))
+            .unwrap()
+            .HTMLBoundingClientRectNoLifecycleUpdate(1.0);
+        interaction::input_event::Offset {
+            x: f64::from(rect.x() + rect.width() / 2.0),
+            y: f64::from(rect.y() + rect.height() / 2.0),
+        }
+    };
+    for kind in [
+        interaction::input_event::MouseEventType::kDown,
+        interaction::input_event::MouseEventType::kUp,
+    ] {
+        page.Dispatch(&interaction::input_event::InputEvent::Mouse(
+            interaction::input_event::MouseEvent {
+                r#type: kind,
+                position,
+                button: interaction::input_event::MouseButton::kPrimary,
+                buttons: if kind == interaction::input_event::MouseEventType::kDown {
+                    1
+                } else {
+                    0
+                },
+                click_count: 1,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    }
     record(&page, "click");
     page.Apply(page_mutation::PageMutation::DOMMutation(
         dom::dom_mutation::DOMMutation {
@@ -1271,21 +1315,25 @@ fn decode_image_fixture(
     match input.bytes {
         b"zero" => Ok(DecodedImage::default()),
         b"short" => Ok(DecodedImage {
+            filename_extension: None,
             animation: Default::default(),
             alpha_type: Default::default(),
             width: 2,
             height: 2,
             orientation: Default::default(),
+            hot_spot: None,
             animation_frames: Vec::new(),
             rgba8: vec![255, 0, 0, 255],
         }),
         b"failure" => Err(io::Error::other("fixture decoder failed")),
         b"good" => Ok(DecodedImage {
+            filename_extension: None,
             animation: Default::default(),
             alpha_type: Default::default(),
             width: 2,
             height: 1,
             orientation: Default::default(),
+            hot_spot: None,
             animation_frames: Vec::new(),
             rgba8: vec![255, 0, 0, 255, 0, 255, 0, 255],
         }),
@@ -1413,6 +1461,7 @@ fn create_image_fixture_page(
     let images = Rc::new(RefCell::new(FixtureImageDecoder));
     let documents = Rc::new(RefCell::new(FixtureImageDecoder));
     let client = Rc::new(RefCell::new(Client {
+        chrome: Default::default(),
         trace: trace.clone(),
         frames: frames.clone(),
     }));
@@ -1740,6 +1789,47 @@ fn unchanged_style_text_does_not_overwrite_cssom_rule_edits() {
 
         assert!(page.Evaluate("var sheet=document.getElementById('sheet').sheet;sheet.insertRule('#box{width:70px}',sheet.cssRules.length);document.documentElement.className='unused';if(getComputedStyle(document.getElementById('box')).width!=='70px')throw Error('CSSOM edit lost');", "fixture:cssom-cache").unwrap().Succeeded());
         assert!(page.Evaluate("document.getElementById('sheet').textContent='#box{width:90px;height:20px}';if(getComputedStyle(document.getElementById('box')).width!=='90px')throw Error('style text edit ignored');", "fixture:cssom-source").unwrap().Succeeded());
+    });
+}
+
+#[test]
+fn css_animation_definition_samples_at_animation_origin_and_is_removed_with_name() {
+    crate::test_thread::run(|| {
+        let root = std::env::temp_dir().join(format!(
+            "rechrom-css-animation-definition-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("page.html"),
+            r#"<!doctype html><style>
+              @keyframes reveal { from { opacity:0 } to { opacity:1 } }
+              #box { width:20px; height:20px; background:blue; opacity:0 }
+              #box.run { animation:reveal 0s both }
+            </style><div id=box class=run></div>"#,
+        )
+        .unwrap();
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        let mut page = create_page(&root, &trace, &frames);
+        page.OpenSynchronously("https://page.test/page.html", 16384, 4096)
+            .unwrap();
+
+        let visible = page
+            .Evaluate(
+                "if(getComputedStyle(document.getElementById('box')).opacity!=='1')throw Error('CSS animation sample missing')",
+                "fixture:css-animation-sample",
+            )
+            .unwrap();
+        assert!(visible.Succeeded(), "{:?}", visible.exception);
+        let removed = page
+            .Evaluate(
+                "document.getElementById('box').className='';if(getComputedStyle(document.getElementById('box')).opacity!=='0')throw Error('removed CSS animation sample survived')",
+                "fixture:css-animation-remove",
+            )
+            .unwrap();
+        assert!(removed.Succeeded(), "{:?}", removed.exception);
+        std::fs::remove_dir_all(root).unwrap();
     });
 }
 

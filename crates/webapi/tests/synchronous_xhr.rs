@@ -29,6 +29,7 @@ impl XMLHttpRequestTransport for RecordingTransport {
             final_url: "https://example.test/sync".into(),
             mime_type: "text/plain".into(),
             body: b"reply".to_vec(),
+            ..Default::default()
         }))))
     }
 }

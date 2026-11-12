@@ -94,3 +94,14 @@ pub mod style_resolver;
 pub mod style_resolver_state;
 pub mod style_resolver_stats;
 pub mod viewport_style_resolver;
+
+pub mod computed_style_utils;
+pub mod css_value_from_computed_style;
+
+mod computed_alignment_values;
+
+mod computed_keyword_values;
+
+mod computed_scalar_values;
+
+mod computed_font_values;

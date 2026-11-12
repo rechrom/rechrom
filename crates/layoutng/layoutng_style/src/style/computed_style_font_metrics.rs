@@ -9,7 +9,12 @@ impl ComputedStyleBuilder {
     pub fn FontHeight(&self) -> LayoutUnit {
         let font_data = unsafe { (&*self.GetFont()).PrimaryFont() };
         if !font_data.is_null() {
-            return LayoutUnit::from_signed(unsafe { (&*font_data).GetFontMetrics().Height() });
+            return unsafe {
+                (&*font_data)
+                    .GetFontMetrics()
+                    .GetFontHeight(FontBaseline::kAlphabeticBaseline)
+                    .LineHeight()
+            };
         }
         LayoutUnit::default()
     }
@@ -57,7 +62,7 @@ impl ComputedStyle {
         if line_height.IsAuto() {
             let primary_font = font.PrimaryFont();
             if !primary_font.is_null() {
-                return unsafe { (&*primary_font).GetFontMetrics().LineSpacing() } as f32;
+                return unsafe { (&*primary_font).GetFontMetrics().FloatLineSpacing() };
             }
             return 0.0;
         }

@@ -14,6 +14,7 @@ use crate::adapter::{
     property_types::{MaskFilterInfo, SubtreeCaptureId, ViewTransitionElementResourceId},
     render_surface_impl::{RenderSurfaceRenderPass, RenderSurfaceTypes},
     solid_color_layer_impl::{SolidColorLayerImplTypes, SolidColorRenderPass},
+    surface_layer_impl::{SurfaceLayerImplTypes, SurfaceRenderPass},
     tile_based_layer_impl::{
         TileBasedLayerImplTypes, TileBasedRenderPass, TileBasedSharedQuadState,
     },
@@ -131,6 +132,9 @@ impl<T: Clone> LayerImplSharedQuadState<T> for SharedQuadState<T> {
     fn opacity(&self) -> f32 {
         self.opacity
     }
+    fn MultiplyOpacity(&mut self, value: f32) {
+        self.opacity *= value;
+    }
     fn SetAll(
         &mut self,
         transform: &T,
@@ -222,6 +226,31 @@ pub enum QuadMaterial<L> {
         nearest_neighbor: bool,
         force_anti_aliasing_off: bool,
     },
+    /// Source: components/viz/common/quads/texture_draw_quad.h. Modern video
+    /// frames use this material with one multiplanar SharedImage resource;
+    /// kYuvVideoContent was removed upstream.
+    Texture {
+        resource_id: ResourceId,
+        /// Source: TextureDrawQuad::is_tex_coord_rect_normalized. Video uses
+        /// normalized coordinates; painted scrollbar UI resources use pixels.
+        tex_coord_rect: RectF,
+        is_tex_coord_rect_normalized: bool,
+        background_color: Color4f,
+        nearest_neighbor: bool,
+        secure_output_only: bool,
+        is_video_frame: bool,
+        force_rgbx: bool,
+    },
+    /// Source: components/viz/common/quads/surface_draw_quad.h:16-60.
+    /// The referenced frame remains owned by Viz; this quad only carries the
+    /// immutable range and embedding policy emitted by cc::SurfaceLayerImpl.
+    Surface {
+        surface_range: crate::runtime::types::SurfaceRange,
+        default_background_color: Color4f,
+        stretch_content_to_fill_bounds: bool,
+        is_reflection: bool,
+        allow_merge: bool,
+    },
     CompositorRenderPass {
         render_pass_id: RenderPassId,
         mask_resource_id: ResourceId,
@@ -281,6 +310,38 @@ impl<L> Clone for QuadMaterial<L> {
                 nearest_neighbor: *nearest_neighbor,
                 force_anti_aliasing_off: *force_anti_aliasing_off,
             },
+            Self::Texture {
+                resource_id,
+                tex_coord_rect,
+                is_tex_coord_rect_normalized,
+                background_color,
+                nearest_neighbor,
+                secure_output_only,
+                is_video_frame,
+                force_rgbx,
+            } => Self::Texture {
+                resource_id: *resource_id,
+                tex_coord_rect: *tex_coord_rect,
+                is_tex_coord_rect_normalized: *is_tex_coord_rect_normalized,
+                background_color: *background_color,
+                nearest_neighbor: *nearest_neighbor,
+                secure_output_only: *secure_output_only,
+                is_video_frame: *is_video_frame,
+                force_rgbx: *force_rgbx,
+            },
+            Self::Surface {
+                surface_range,
+                default_background_color,
+                stretch_content_to_fill_bounds,
+                is_reflection,
+                allow_merge,
+            } => Self::Surface {
+                surface_range: *surface_range,
+                default_background_color: *default_background_color,
+                stretch_content_to_fill_bounds: *stretch_content_to_fill_bounds,
+                is_reflection: *is_reflection,
+                allow_merge: *allow_merge,
+            },
             Self::CompositorRenderPass {
                 render_pass_id,
                 mask_resource_id,
@@ -321,7 +382,9 @@ impl<L> Clone for DrawQuad<L> {
 impl<L> LayerImplDrawQuad for DrawQuad<L> {
     fn resource_id(&self) -> ResourceId {
         match self.material {
-            QuadMaterial::Tile { resource_id, .. } => resource_id,
+            QuadMaterial::Tile { resource_id, .. } | QuadMaterial::Texture { resource_id, .. } => {
+                resource_id
+            }
             QuadMaterial::CompositorRenderPass {
                 mask_resource_id, ..
             } => mask_resource_id,
@@ -438,6 +501,62 @@ impl<V: FrameValueTypes> CompositorRenderPass<V> {
             material,
         };
     }
+
+    /// Appends the current Chromium video quad shape. The caller owns resource
+    /// import/release and the shared state, matching VideoResourceUpdater.
+    pub fn AppendTextureQuad(
+        &mut self,
+        shared: SharedQuadStateHandle,
+        rect: Rect,
+        visible: Rect,
+        needs_blending: bool,
+        resource_id: ResourceId,
+        tex_coord_rect: RectF,
+        is_tex_coord_rect_normalized: bool,
+        background_color: Color4f,
+        nearest_neighbor: bool,
+        secure_output_only: bool,
+        is_video_frame: bool,
+        force_rgbx: bool,
+    ) {
+        assert_ne!(resource_id, ResourceId::default());
+        let material = QuadMaterial::Texture {
+            resource_id,
+            tex_coord_rect,
+            is_tex_coord_rect_normalized,
+            background_color,
+            nearest_neighbor,
+            secure_output_only,
+            is_video_frame,
+            force_rgbx,
+        };
+        let quad = self.AppendMaterial(material.clone());
+        self.SetQuad(quad, shared, rect, visible, needs_blending, material);
+    }
+
+    /// Source: components/viz/common/quads/surface_draw_quad.cc:23-35,37-53.
+    pub fn AppendSurfaceQuad(
+        &mut self,
+        shared: SharedQuadStateHandle,
+        rect: Rect,
+        visible: Rect,
+        needs_blending: bool,
+        surface_range: crate::runtime::types::SurfaceRange,
+        default_background_color: Color4f,
+        stretch_content_to_fill_bounds: bool,
+        is_reflection: bool,
+        allow_merge: bool,
+    ) {
+        let material = QuadMaterial::Surface {
+            surface_range,
+            default_background_color,
+            stretch_content_to_fill_bounds,
+            is_reflection,
+            allow_merge,
+        };
+        let quad = self.AppendMaterial(material.clone());
+        self.SetQuad(quad, shared, rect, visible, needs_blending, material);
+    }
     pub fn SetNew(
         &mut self,
         id: RenderPassId,
@@ -546,6 +665,62 @@ impl<B: FrameTypes + SolidColorLayerImplTypes> SolidColorRenderPass<B> for Compo
                 color,
                 force_anti_aliasing_off,
             },
+        );
+    }
+    fn AppendScrollbarTextureQuad(
+        &mut self,
+        state: SharedQuadStateHandle,
+        rect: Rect,
+        visible: Rect,
+        resource: ResourceId,
+        tex_coord_rect: RectF,
+        background: Color4f,
+    ) {
+        self.AppendTextureQuad(
+            state,
+            rect,
+            visible,
+            true,
+            resource,
+            tex_coord_rect,
+            false,
+            background,
+            false,
+            false,
+            false,
+            false,
+        );
+    }
+}
+impl<B> SurfaceRenderPass<B> for CompositorRenderPass<B>
+where
+    B: FrameTypes
+        + SurfaceLayerImplTypes<
+            SurfaceRange = crate::runtime::types::SurfaceRange,
+            SurfaceId = crate::runtime::types::SurfaceId,
+        >,
+{
+    fn AppendSurfaceDrawQuad(
+        &mut self,
+        state: B::SharedQuadStateHandle,
+        rect: Rect,
+        visible: Rect,
+        range: &B::SurfaceRange,
+        background_color: Color4f,
+        stretch_content_to_fill_bounds: bool,
+        is_reflection: bool,
+        allow_merge: bool,
+    ) {
+        self.AppendSurfaceQuad(
+            state,
+            rect,
+            visible,
+            true,
+            *range,
+            background_color,
+            stretch_content_to_fill_bounds,
+            is_reflection,
+            allow_merge,
         );
     }
 }

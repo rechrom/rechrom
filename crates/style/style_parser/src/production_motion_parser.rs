@@ -86,6 +86,7 @@ fn Path<T: TokenStreamTokenizer>(
     if shape.is_none() {
         shape = match s.Peek().FunctionId() {
             Some(kPath) => Some(super::effects_parser::Path(id, s)?),
+            Some(kShape) => Some(super::effects_parser::ShapeFunction(id, s, mode)?),
             Some(kCircle) => Some(super::effects_parser::Circle(id, s, mode)?),
             Some(kEllipse) => Some(super::effects_parser::Ellipse(id, s, mode)?),
             Some(kInset) => Some(super::effects_parser::Inset(id, s, mode)?),

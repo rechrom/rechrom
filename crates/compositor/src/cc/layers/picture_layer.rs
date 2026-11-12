@@ -137,8 +137,13 @@ impl<B: PictureLayerTypes> PictureLayer<B> {
     // Source: cc/layers/picture_layer.h:71;
     //         cc/layers/picture_layer.cc:76-78.
     fn CreateRasterSource(&self, c: &mut LayerContext<'_, B>) -> Arc<Raster<B>> {
-        let recording = self.GetRecordingSourceForTesting(c);
-        recording.CreateRasterSource(&*c.DerivedServices())
+        let source = {
+            let recording = self.GetRecordingSourceForTesting(c);
+            recording.CreateRasterSource(&*c.DerivedServices())
+        };
+        self.GetRecordingSourceForTestingMutable(c)
+            .ClearNeedsFullReplayForPartialRaster();
+        source
     }
     // Source: cc/layers/picture_layer.h:50-51;
     //         cc/layers/picture_layer.cc:100-107.
@@ -152,6 +157,16 @@ impl<B: PictureLayerTypes> PictureLayer<B> {
             c.HostMut(self.base_.host_id().unwrap())
                 .SetNeedsUpdateLayers();
         }
+    }
+    pub fn SetNeedsFullReplayForPartialRaster(
+        &self,
+        outer: Rect,
+        inner: Rect,
+        replay_rect: Rect,
+        c: &mut LayerContext<'_, B>,
+    ) {
+        self.GetRecordingSourceForTestingMutable(c)
+            .SetNeedsFullReplayForPartialRaster(outer, inner, replay_rect);
     }
     // Source: cc/layers/picture_layer.h:31;
     //         cc/layers/picture_layer.cc:174-177.

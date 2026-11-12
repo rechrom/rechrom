@@ -5,6 +5,10 @@ use std::{
     collections::HashMap,
     io,
     rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 type Replies = Rc<RefCell<HashMap<String, Rc<RefCell<Option<io::Result<URLResponse>>>>>>>;
@@ -174,6 +178,34 @@ fn graph_loading_yields_reuses_shared_requests_and_executes_real_cyclic_records(
         "if(answer!==5) throw Error('cyclic graph');",
     );
     assert_eq!(requests.borrow().len(), 3, "linking must not fetch");
+}
+
+#[test]
+fn bounded_pump_skips_pending_siblings_and_reposts_remaining_graph_work() {
+    let (modules, mut runtime, realm, _, requests, _) = setup();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let observed_wakes = wakes.clone();
+    modules.SetWakeCallbackForTesting(Arc::new(move || {
+        observed_wakes.fetch_add(1, Ordering::Relaxed);
+    }));
+
+    // The first request deliberately remains pending. Chromium's parallel
+    // descendant fetch completions are independent tasks, so it cannot hide
+    // the already-ready inline sibling behind its queue position.
+    modules.StartExternalScript(1, "https://test/pending.js", "https://test/page");
+    modules.StartInlineScript(
+        2,
+        "globalThis.readySibling=true;",
+        "https://test/page",
+        "https://test/page",
+    );
+    assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(modules.Pump(&mut runtime, &realm, 1), 1);
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        1,
+        "remaining graph work must retain an owner task after a bounded completion"
+    );
 }
 
 #[test]

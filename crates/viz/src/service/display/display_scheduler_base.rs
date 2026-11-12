@@ -22,9 +22,9 @@ pub trait DisplaySchedulerClient {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplaySchedulerDrawResult {
+    kUnknown,
     kDrawn,
+    kMayDrawLate,
+    kDrawnLate,
     kDidNotDraw,
-    kNotVisible,
-    kOutputSurfaceLost,
-    kSwapsThrottled,
 }

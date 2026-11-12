@@ -31,7 +31,7 @@ fn MakeDegenerateCornerSquare(radius: &mut PaintCornerRadius) {
 }
 
 // Source: FloatRoundedRect::ConstrainRadii
-fn Normalize(radii: &mut PaintCornerRadii, size: Size) {
+pub(crate) fn Normalize(radii: &mut PaintCornerRadii, size: Size) {
     if !size.width.is_finite() || !size.height.is_finite() || size.width < 0.0 || size.height < 0.0
     {
         panic!("rounded rectangle size is invalid");

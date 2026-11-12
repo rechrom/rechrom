@@ -1572,6 +1572,18 @@ impl<B: CSSParserImplSheetBackend> CSSParserImpl<'_, B> {
         defer: CSSDeferPropertyParsing,
         allow_import_rules: bool,
     ) -> ParseSheetResult {
+        Self::ParseStyleSheetWithObserver(text, context, sheet, defer, allow_import_rules, None)
+    }
+    /// Same ParseSheet owner with an optional source observer. The observer
+    /// records ranges while grammar runs; no second traversal or token parse.
+    pub fn ParseStyleSheetWithObserver(
+        text: &String,
+        context: &CSSParserContext<B::Platform>,
+        sheet: &mut B::StyleSheetContents,
+        defer: CSSDeferPropertyParsing,
+        allow_import_rules: bool,
+        observer: Option<&mut B::CSSParserObserver>,
+    ) -> ParseSheetResult {
         let mut _timer = None;
         if let Some(document) = context.GetDocument() {
             if let Some(view) = B::DocumentView(&document) {
@@ -1591,6 +1603,7 @@ impl<B: CSSParserImplSheetBackend> CSSParserImpl<'_, B> {
         };
         let mut parser = CSSParserImpl::<B>::new(Some(context), Some(sheet));
         parser.lazy_state_ = lazy.as_mut();
+        parser.observer_ = observer;
         let mut result = ParseSheetResult::kSucceeded;
         let first_rule_valid = parser.ConsumeRuleListWithParser(
             &mut stream,
@@ -4189,13 +4202,19 @@ mod tests {
         fn CreateIdentifier(_: CSSValueID) -> Rc<CSSValue<Self>> {
             unreachable!()
         }
-        fn DeclarationPropertyValueSet(_: &()) -> Option<&CSSPropertyValueSet<Self>> {
+        fn DeclarationWithPropertyValueSet<R>(
+            _: &(),
+            _: impl FnOnce(Option<&CSSPropertyValueSet<Self>>) -> R,
+        ) -> R {
             unreachable!()
         }
         fn DeclarationPropertyMatches(_: &(), _: CSSPropertyID, _: &CSSValue<Self>) -> bool {
             unreachable!()
         }
-        fn NewCSSStyleDeclaration(_: Option<&()>, _: &MutableCSSPropertyValueSet<Self>) -> Rc<()> {
+        fn NewCSSStyleDeclaration(
+            _: Option<&()>,
+            _: Rc<std::cell::RefCell<MutableCSSPropertyValueSet<Self>>>,
+        ) -> Rc<()> {
             unreachable!()
         }
     }

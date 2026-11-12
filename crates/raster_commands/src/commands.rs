@@ -96,6 +96,15 @@ pub enum TextDecorationStyle {
 }
 
 #[repr(i32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDecorationSkipInk {
+    kNone,
+    kAll,
+    #[default]
+    kAuto,
+}
+
+#[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontSmoothing {
     kAuto,
@@ -117,6 +126,20 @@ pub struct PaintGlyph {
     pub canvas_rotation: u8,
     pub offset: Offset,
     pub advance: f64,
+}
+
+/// One immutable fallback-font run used by TextPainter::ClipDecorationLine.
+/// Raster resolves the already selected face index; it never performs font
+/// fallback or shaping at replay time.
+#[derive(Clone, Default, PartialEq)]
+pub struct TextInkSkipRun {
+    pub font_face_index: u32,
+    pub font_variations: Vec<FontVariation>,
+    pub font_size: f64,
+    pub baseline: f64,
+    pub synthetic_bold: bool,
+    pub synthetic_italic: bool,
+    pub glyphs: Vec<PaintGlyph>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -352,6 +375,7 @@ pub struct SvgPatternPrimitive {
     pub fill_even_odd: bool,
     pub non_scaling_stroke: bool,
     pub antialias: bool,
+    pub apply_srgb_to_linear_color_filter: bool,
     pub transform: TransformMatrix,
 }
 
@@ -359,6 +383,7 @@ pub struct SvgPatternPrimitive {
 pub struct SvgPatternImage {
     pub resource_id: u64,
     pub image_interpolation_quality: ImageInterpolationQuality,
+    pub dynamic_range_limit: DynamicRangeLimit,
     pub destination: PaintRect,
     pub source: PaintRect,
     pub transform: TransformMatrix,
@@ -402,6 +427,7 @@ pub struct PaintShader {
     /// ScopedRasterFlags alpha; independent of the immutable pattern owner.
     pub flags_alpha: f32,
     pub kind: PaintShaderKind,
+    pub apply_dark_mode: bool,
     pub spread: PaintSpreadMethod,
     pub stops: Vec<PaintColorStop>,
     pub start: Offset,
@@ -442,6 +468,7 @@ impl Default for PaintShader {
         Self {
             flags_alpha: 1.,
             kind: PaintShaderKind::kLinearGradient,
+            apply_dark_mode: false,
             spread: PaintSpreadMethod::kPad,
             stops: Vec::new(),
             start: Offset::default(),
@@ -552,6 +579,9 @@ pub enum CommandKind {
     kDrawScrollbarThumb,
     kDrawScrollbarButton,
     kDrawScrollbarCorner,
+    /// cc::CustomDataOp without a playback callback is intentionally a no-op.
+    /// Nested canvas records are normally substituted by the compositor first.
+    kCustomData,
 }
 
 /// cc::PaintFlags::FilterQuality carried by immutable raster commands.
@@ -562,6 +592,21 @@ pub enum ImageInterpolationQuality {
     kLow = 1,
     #[default]
     kMedium = 2,
+}
+
+/// cc::PaintFlags::DynamicRangeLimitMixture. A zero mixture is `kHigh` and
+/// therefore leaves the destination headroom unconstrained.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DynamicRangeLimit {
+    pub standard_mix: f32,
+    pub constrained_high_mix: f32,
+}
+
+impl DynamicRangeLimit {
+    pub fn ComputeEffectiveHdrHeadroom(self, target: f32) -> f32 {
+        let high_mix = 1.0 - self.standard_mix - self.constrained_high_mix;
+        self.constrained_high_mix * target.min(1.0) + high_mix * target
+    }
 }
 
 /// Effective EXIF orientation for one image draw. The resource bytes stay in
@@ -593,7 +638,9 @@ impl ImageOrientation {
 pub struct MaskLayer {
     pub resource_id: u64,
     pub image_interpolation_quality: ImageInterpolationQuality,
+    pub dynamic_range_limit: DynamicRangeLimit,
     pub image_orientation: ImageOrientation,
+    pub use_dark_mode_for_image: bool,
     pub paint_shader: Option<PaintShader>,
     pub clip_rect: PaintRect,
     pub clip_radii: PaintCornerRadii,
@@ -614,7 +661,9 @@ impl Default for MaskLayer {
         Self {
             resource_id: 0,
             image_interpolation_quality: ImageInterpolationQuality::kMedium,
+            dynamic_range_limit: DynamicRangeLimit::default(),
             image_orientation: ImageOrientation::kDefault,
+            use_dark_mode_for_image: false,
             paint_shader: None,
             clip_rect: PaintRect::default(),
             clip_radii: PaintCornerRadii::default(),
@@ -662,14 +711,19 @@ pub struct DrawCommand {
     pub miter_limit: f64,
     pub antialias: bool,
     pub non_scaling_stroke: bool,
+    pub apply_srgb_to_linear_color_filter: bool,
     pub paint_shader: Option<PaintShader>,
     pub blend_mode: PaintBlendMode,
+    pub source_overwrite: bool,
     pub filters: Vec<PaintFilterOperation>,
     pub mask_layers: Vec<MaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
     pub image_interpolation_quality: ImageInterpolationQuality,
+    pub dynamic_range_limit: DynamicRangeLimit,
     pub image_orientation: ImageOrientation,
+    /// cc::PaintFlags::useDarkModeForImage(), consumed by the decode cache.
+    pub use_dark_mode_for_image: bool,
     pub repeat_x: bool,
     pub repeat_y: bool,
     pub tile_scale: Offset,
@@ -682,6 +736,15 @@ pub struct DrawCommand {
     pub shadow_has_opaque_background: bool,
     pub is_text_decoration: bool,
     pub stroke_glyphs: bool,
+    /// Chromium DecorationGeometry::Thickness(), distinct from the total
+    /// bounds of double/wavy decorations and from an SVG stroke width.
+    pub decoration_thickness: f64,
+    pub skip_ink: TextDecorationSkipInk,
+    pub decoration_ink_bounds: Option<PaintRect>,
+    pub decoration_ink_baseline: f64,
+    pub decoration_text_origin: Offset,
+    pub decoration_text_fit_scale: f64,
+    pub decoration_ink_runs: Vec<TextInkSkipRun>,
     pub opacity: f32,
     pub transform: TransformMatrix,
     pub font_face_index: u32,
@@ -722,14 +785,18 @@ impl Default for DrawCommand {
             miter_limit: 4.0,
             antialias: true,
             non_scaling_stroke: false,
+            apply_srgb_to_linear_color_filter: false,
             paint_shader: None,
             blend_mode: PaintBlendMode::kNormal,
+            source_overwrite: false,
             filters: Vec::new(),
             mask_layers: Vec::new(),
             round_cap: false,
             resource_id: 0,
             image_interpolation_quality: ImageInterpolationQuality::kMedium,
+            dynamic_range_limit: DynamicRangeLimit::default(),
             image_orientation: ImageOrientation::kDefault,
+            use_dark_mode_for_image: false,
             repeat_x: false,
             repeat_y: false,
             tile_scale: Offset { x: 1.0, y: 1.0 },
@@ -742,6 +809,13 @@ impl Default for DrawCommand {
             shadow_has_opaque_background: false,
             is_text_decoration: false,
             stroke_glyphs: false,
+            decoration_thickness: 0.0,
+            skip_ink: TextDecorationSkipInk::kNone,
+            decoration_ink_bounds: None,
+            decoration_ink_baseline: 0.0,
+            decoration_text_origin: Offset::default(),
+            decoration_text_fit_scale: 1.0,
+            decoration_ink_runs: Vec::new(),
             opacity: 1.0,
             transform: TransformMatrix::default(),
             font_face_index: 0,

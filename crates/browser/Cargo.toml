@@ -4,6 +4,17 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+serde_json = "1"
+intersection_observer = { path = "../intersection_observer" }
+navigation_history = { path = "../navigation_history" }
+scroll_animation = { path = "../scroll_animation" }
+fileapi = { path = "../fileapi" }
+getrandom = "0.4"
+canvas = { path = "../canvas" }
+icu_bidi = { path = "../icu_bidi" }
+url_formatter = { path = "../url_formatter" }
+resize_observer = { path = "../resize_observer" }
+event_loop = { path = "../event_loop" }
 executor = { path = "../executor" }
 animation = { path = "../animation" }
 style = { path = "../style/style" }
@@ -27,6 +38,7 @@ document_image = { path = "../document_image" }
 image_resource = { path = "../image_resource" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 layout_fragment = { path = "../layoutng/layout_fragment" }
+layoutng_style = { path = "../layoutng/layoutng_style" }
 layout_algo_block = { path = "../layoutng/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
 layout_algo_multicol = { path = "../layoutng/layout_algo_multicol" }
 layout_algo_flex = { path = "../layoutng/layout_algo_flex" }
@@ -39,6 +51,7 @@ layout_algo_svg = { path = "../layoutng/layout_algo_svg" }
 layout_algo_list = { path = "../layoutng/layout_algo_list" }
 layout_algo_out_of_flow = { path = "../layoutng/layout_algo_out_of_flow", optional = true }
 paint = { path = "../paint" }
+paint_skia = { path = "../paint/paint_skia" }
 url_loader = { path = "../url_loader" }
 renderer = { path = "../renderer" }
 renderer_skia = { path = "../renderer_skia" }
@@ -50,9 +63,10 @@ compositor = { path = "../compositor" }
 viz = { path = "../viz" }
 
 [dev-dependencies]
-layoutng_style = { path = "../layoutng/layoutng_style" }
+open = { path = "../open", features = ["test_support"] }
 raster = { path = "../raster", features = ["artifact_test_support"] }
 
 [features]
 default = ["inline_layout"]
 inline_layout = ["layoutng_assembly/translation_in_progress", "layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
+webgl_vertical_slice = ["webapi/webgl_vertical_slice"]

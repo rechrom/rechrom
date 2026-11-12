@@ -49,6 +49,24 @@ impl<H: HostImplResourceTypes> Default for UIResourceData<H> {
         }
     }
 }
+impl<H> crate::adapter::host_picture::HostUIResourceRead
+    for HashMap<crate::adapter::layer_tree_impl::UIResourceId, UIResourceData<H>>
+where
+    H: HostImplResourceTypes<ResourceId = crate::adapter::layer_tree_impl::ResourceId>,
+{
+    fn ResourceIdForUIResource(
+        &self,
+        id: crate::adapter::layer_tree_impl::UIResourceId,
+    ) -> crate::adapter::layer_tree_impl::ResourceId {
+        self.get(&id).map_or(
+            crate::adapter::layer_tree_impl::ResourceId::default(),
+            |data| data.resource_id_for_export,
+        )
+    }
+    fn GetUIResourceSize(&self, id: crate::adapter::layer_tree_impl::UIResourceId) -> Size {
+        self.get(&id).map_or(Size::default(), |data| data.size)
+    }
+}
 
 // Source: cc/trees/layer_tree_host_impl.cc:166-187
 const kAssumeOverlapThreshold: usize = 100;
@@ -8358,6 +8376,16 @@ impl<B: HostImplTypes> compositor_tree::activation::ActivationContext
     }
 
     fn synchronize_full_tree(&mut self) {
+        // Chromium can resolve controller-owned active scrollbars after
+        // TreeSynchronizer::SynchronizeTrees because matching LayerImpl
+        // pointers remain resident. Rust's ownership transfer also permits a
+        // replacement owner for the same logical scrollbar; once the old
+        // list is detached its controller lookup can no longer resolve that
+        // pointer. Preserve compositor-only opacity while the old active
+        // owner is still addressable. The canonical post-sync call remains
+        // below and covers the ordinary/reused-owner path.
+        self.host
+            .PushScrollbarOpacitiesFromActiveToPending(self.context);
         self.host
             .WithActiveAndPendingTrees(self.context, |active, pending, c| {
                 TreeSynchronizer::SynchronizeTreesFromPending(pending, active, c);
@@ -10576,6 +10604,7 @@ impl<B: HostImplTypes> crate::adapter::layer_tree_impl::LayerTreeHost<B>
                     delegate: *core.delegate_,
                     input_view: $input_view,
                     services: context.services,
+                    ui_resources: core.ui_resource_map_,
                 };
                 let registration =
                     crate::adapter::host_picture::HostPictureRegistrationOwnerFields {
@@ -16621,6 +16650,7 @@ impl<B: HostImplTypes> crate::adapter::picture_layer_impl::PictureLayerContextHo
             delegate: *self.core.delegate_,
             input_view: self.input_delegate_.as_deref().map(|input| input.View()),
             services: self.context.services,
+            ui_resources: self.core.ui_resource_map_,
         };
         B::WithPictureContextParts(fields, callback)
     }
@@ -16667,6 +16697,7 @@ impl<B: HostImplTypes> crate::adapter::picture_layer_impl::PictureLayerContextHo
             delegate: *self.host.core.delegate_,
             input_view: Some(self.view.reborrow()),
             services: self.host.context.services,
+            ui_resources: self.host.core.ui_resource_map_,
         };
         B::WithPictureContextParts(fields, callback)
     }
@@ -16716,11 +16747,14 @@ struct HostPictureReadHost<'a, B: HostImplTypes> {
     input: Option<InputHandlerView<'a>>,
     delegate: HostImplDelegateId,
     environment: &'a dyn crate::adapter::host_picture::HostPictureReadEnvironment,
+    ui_resources: &'a dyn crate::adapter::host_picture::HostUIResourceRead,
 }
 impl<B> crate::adapter::picture_layer_impl::PictureLayerReadHost<B> for HostPictureReadHost<'_,B>
 where B:HostImplTypes + crate::adapter::picture_layer_impl::PictureLayerImplTypes<PictureTargetColorParams=HostTargetColorParams<B::ColorSpace>>,
     <<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList:HostDisplayItemList,
 {
+    fn ResourceIdForUIResource(&self,id:crate::adapter::layer_tree_impl::UIResourceId)->crate::adapter::layer_tree_impl::ResourceId{self.ui_resources.ResourceIdForUIResource(id)}
+    fn GetUIResourceSize(&self,id:crate::adapter::layer_tree_impl::UIResourceId)->Size{self.ui_resources.GetUIResourceSize(id)}
     // Source: cc/trees/layer_tree_host_impl.cc:2009-2024,3492-3514.
     fn GetMSAASampleCountForRaster(&self,list:&<<B as crate::adapter::picture_layer_tiling::PictureLayerTilingTypes>::RasterSource as crate::adapter::picture_layer_impl::PictureRasterSource>::DisplayItemList,selected:LayerTreeId,device_scale:&f32)->i32{
         RasterMSAASampleCountForHost(list,self.caps,self.settings,||self.environment.IsLowEndDevice(),||{
@@ -17550,6 +17584,7 @@ where B:HostImplTypes<ResourcePool=crate::cc::resources::resource_pool::Resource
         delegate,
         input_view,
         services,
+        ui_resources,
     } = fields;
     let mut active_slot = active;
     let active = HostPictureTreeRead::FromSlot(&active_slot);
@@ -17580,6 +17615,7 @@ where B:HostImplTypes<ResourcePool=crate::cc::resources::resource_pool::Resource
                 input: input_view.as_ref().map(|view| view.reborrow()),
                 delegate,
                 environment,
+                ui_resources,
             };
             let queries = HostPictureSiblingQueries {
                 active: active.tree.map(|tree| HostPictureSiblingTree {
@@ -17776,7 +17812,7 @@ where B:HostImplTypes+crate::adapter::picture_layer_impl::PictureLayerImplTypes<
         let mut callback=Some(callback);
         let mut result=None;
         context.services.WithPictureExternalParts(&mut|environment,_picture,_tile,_mutation,_registration,_release|{
-            let read_host=HostPictureReadHost{active:&active,pending:&pending,recycle:&recycle,settings:&self.settings_,debug:&self.debug_state_,caps:&self.raster_caps_,global:&self.global_tile_state_,high_res:&self.requires_high_res_to_draw_,viewport_priority:&self.viewport_rect_for_tile_priority_,external_viewport:&self.external_viewport_,sink:&self.layer_tree_frame_sink_,frame_tracker:&self.current_begin_frame_tracker_,input:self.input_delegate_.as_ref().map(|input|input.View()),delegate:self.delegate_,environment};
+            let read_host=HostPictureReadHost{active:&active,pending:&pending,recycle:&recycle,settings:&self.settings_,debug:&self.debug_state_,caps:&self.raster_caps_,global:&self.global_tile_state_,high_res:&self.requires_high_res_to_draw_,viewport_priority:&self.viewport_rect_for_tile_priority_,external_viewport:&self.external_viewport_,sink:&self.layer_tree_frame_sink_,frame_tracker:&self.current_begin_frame_tracker_,input:self.input_delegate_.as_ref().map(|input|input.View()),delegate:self.delegate_,environment,ui_resources:&self.ui_resource_map_};
             let queries=HostPictureSiblingQueries{active:active.tree.map(|tree|HostPictureSiblingTree{tree,host:&read_host}),pending:pending.tree.map(|tree|HostPictureSiblingTree{tree,host:&read_host}),recycle:recycle.tree.map(|tree|HostPictureSiblingTree{tree,host:&read_host})};
             result=Some(callback.take().expect("single synchronous external capability split")(&queries));
         });
@@ -17843,6 +17879,7 @@ impl<B: HostImplTypes> crate::adapter::picture_layer_impl::PictureLayerContextHo
                 delegate: self.0.delegate,
                 input_view: self.0.input_view.as_ref().map(|view| view.reborrow()),
                 services: self.0.services,
+                ui_resources: self.0.ui_resources,
             },
             callback,
         )
@@ -17879,6 +17916,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
             current_begin_frame_tracker_,
             delegate_,
             input_delegate_,
+            ui_resource_map_,
             pending_invalidation_raster_inducing_scrolls_,
             ..
         } = self;
@@ -17918,6 +17956,7 @@ impl<B: HostImplTypes> LayerTreeHostImpl<B> {
                         delegate: *delegate_,
                         input_view: input_delegate_.as_deref().map(|input| input.View()),
                         services: context.services,
+                        ui_resources: &*ui_resource_map_,
                     });
                 tree.InvalidateRasterInducingScrollsWithPictureHost(
                     pending_invalidation_raster_inducing_scrolls_,
@@ -18295,6 +18334,7 @@ pub(crate) mod source_tile_manager_runtime {
                 input: self.input.as_ref().map(InputHandlerView::reborrow),
                 delegate: self.delegate,
                 environment: self.environment,
+                ui_resources: &crate::adapter::host_picture::EMPTY_HOST_UI_RESOURCES,
             };
             body(&read)
         }

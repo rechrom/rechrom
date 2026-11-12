@@ -50,6 +50,7 @@ fn state(width: f64) -> ContainerState {
         stuck_inline: ContainerStuckLogical::kNo,
         stuck_block: ContainerStuckLogical::kNo,
         snapped: 0,
+        snapped_state_available: false,
         scrollable_horizontal: 0,
         scrollable_vertical: 0,
         scrollable_inline: 0,
@@ -102,8 +103,12 @@ fn container_relative_units_use_nearest_axis_and_small_viewport_fallback() {
 #[test]
 fn computed_ancestor_style_queries_match_and_invalidate_without_layout() {
     let _heap = foundation::LayoutHeapScope::new();
-    let mut owner=html::html_parser::ParseHTML("<div id=outer style='--tone:blue;--gap:20px'><div id=inner><span id=target></span></div></div>");
-    let sheet=style::ParseCSS("#target{width:1px}@container style(--tone:blue){#target{width:31px}}@container style(10px < --gap < 25px){#target{height:47px}}@container style(--absent){#target{width:99px}}@container style(--tone:revert){#target{width:101px}}");
+    let mut owner = html::html_parser::ParseHTML(
+        "<div id=outer style='--tone:blue;--gap:20px'><div id=inner><span id=target></span></div></div>",
+    );
+    let sheet = style::ParseCSS(
+        "#target{width:1px}@container style(--tone:blue){#target{width:31px}}@container style(10px < --gap < 25px){#target{height:47px}}@container style(--absent){#target{width:99px}}@container style(--tone:revert){#target{width:101px}}",
+    );
     assert_eq!(
         sheet
             .rules

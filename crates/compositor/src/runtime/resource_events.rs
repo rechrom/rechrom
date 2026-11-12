@@ -11,6 +11,15 @@ use crate::{
 };
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 pub(crate) enum ResourceEffect {
+    ReportTimeSwapped {
+        request: u64,
+        frame_token: u32,
+        swap_time: crate::adapter::time::TimeTicks,
+    },
+    ReportTimeDidNotSwap {
+        request: u64,
+        failure_time: crate::adapter::time::TimeTicks,
+    },
     DidLoseLayerTreeFrameSink {
         delegate: HostImplDelegateId,
     },

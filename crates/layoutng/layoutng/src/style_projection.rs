@@ -40,6 +40,7 @@ pub struct StyleResourceBindings<'a> {
     pub(crate) svg_clip_resources: &'a crate::internal::paint_input::SvgClipResourceBinding,
     pub(crate) svg_mask_resource:
         &'a Option<std::sync::Arc<crate::internal::paint_input::SvgMaskGraph>>,
+    pub(crate) svg_pattern_content_target: Option<u64>,
     pub(crate) svg_fill_server: &'a Option<crate::internal::paint_input::SvgPaintServer>,
     pub(crate) svg_stroke_server: &'a Option<crate::internal::paint_input::SvgPaintServer>,
     pub(crate) svg_markers: &'a [crate::internal::paint_input::SvgMarkerInstance],
@@ -55,6 +56,7 @@ impl<'a> StyleResourceBindings<'a> {
             svg_filter_graphs: &resources.svg_filter_graphs,
             svg_clip_resources: &resources.svg_clip_resources,
             svg_mask_resource: &resources.svg_mask_resource,
+            svg_pattern_content_target: resources.svg_pattern_content_target,
             svg_fill_server: &resources.svg_fill_server,
             svg_stroke_server: &resources.svg_stroke_server,
             svg_markers: resources.svg_markers.as_ref(),
@@ -66,6 +68,7 @@ impl<'a> StyleResourceBindings<'a> {
         svg_filter_graphs: &'a std::sync::Arc<Vec<crate::internal::paint_input::SvgFilterGraph>>,
         svg_clip_resources: &'a crate::internal::paint_input::SvgClipResourceBinding,
         svg_mask_resource: &'a Option<std::sync::Arc<crate::internal::paint_input::SvgMaskGraph>>,
+        svg_pattern_content_target: Option<u64>,
         svg_fill_server: &'a Option<crate::internal::paint_input::SvgPaintServer>,
         svg_stroke_server: &'a Option<crate::internal::paint_input::SvgPaintServer>,
         svg_markers: &'a [crate::internal::paint_input::SvgMarkerInstance],
@@ -77,6 +80,7 @@ impl<'a> StyleResourceBindings<'a> {
             svg_filter_graphs,
             svg_clip_resources,
             svg_mask_resource,
+            svg_pattern_content_target,
             svg_fill_server,
             svg_stroke_server,
             svg_markers,
@@ -92,6 +96,7 @@ impl<'a> StyleResourceBindings<'a> {
             svg_filter_graphs: &paint.svg_filter_graphs,
             svg_clip_resources,
             svg_mask_resource: &paint.svg_mask_resource,
+            svg_pattern_content_target: None,
             svg_fill_server: &paint.svg_fill_server,
             svg_stroke_server: &paint.svg_stroke_server,
             svg_markers: &paint.svg_markers,
@@ -108,6 +113,7 @@ impl<'a> StyleResourceBindings<'a> {
             svg_filter_graphs: std::sync::Arc::clone(self.svg_filter_graphs),
             svg_clip_resources: self.svg_clip_resources.clone(),
             svg_mask_resource: self.svg_mask_resource.clone(),
+            svg_pattern_content_target: self.svg_pattern_content_target,
             svg_fill_server: self.svg_fill_server.clone(),
             svg_stroke_server: self.svg_stroke_server.clone(),
             svg_markers: self.svg_markers.to_vec().into(),
@@ -352,15 +358,13 @@ pub(crate) fn ProjectShapeOutside(computed_style: &ComputedStyle, ext: &mut Exte
                         },
                     ];
                 }
-                // Layout's typed exclusion boundary does not yet carry the
-                // path/ray/shape command stream. Keeping it disabled matches
-                // Chromium's unusable-image behavior instead of substituting
-                // an incorrect reference-box exclusion.
-                ShapeType::kStylePathType
-                | ShapeType::kStyleRayType
-                | ShapeType::kStyleShapeType => {
-                    ext.shape_outside = None;
-                    return;
+                ShapeType::kStylePathType | ShapeType::kStyleShapeType => {
+                    // The exclusion owner borrows this same compiled style
+                    // after its reference box is known; no path copy/projection.
+                    output.kind = ShapeOutsideKind::kCompiledPath;
+                }
+                ShapeType::kStyleRayType => {
+                    unreachable!("ray() is excluded by shape-outside grammar")
                 }
             }
         }
@@ -808,7 +812,13 @@ pub fn ProjectListMarkerImage(
         .and_then(|font| unsafe { font.PrimaryFont().as_ref() })
         .map_or_else(
             || computed_style.GetFontDescription().ComputedSize() / 2.0,
-            |primary| primary.GetFontMetrics().Ascent() as f32 / 2.0,
+            |primary| {
+                primary
+                    .GetFontMetrics()
+                    .FixedAscent(font_engine::FontBaseline::kAlphabeticBaseline)
+                    .ToFloat()
+                    / 2.0
+            },
         );
     let default_size = foundation::gfx::SizeF::new(side, side);
     let respect_orientation = computed_style.ImageOrientation();
@@ -854,6 +864,7 @@ pub(crate) fn ReadListStyleType(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FragmentStyleFacts {
     pub margin: crate::internal::layout_input::Edges,
     pub border: crate::internal::layout_input::Edges,
@@ -1131,27 +1142,18 @@ pub fn ProjectComputedStyle(
     // the single source of truth for both CSS declarations and SVG
     // presentation attributes.  Do not leave these fields at PaintStyleData's
     // defaults after the computed style cascade has resolved them.
-    use layoutng_style::style::svg_paint::SVGPaintType;
-    let project_svg_paint = |paint: &layoutng_style::style::svg_paint::SVGPaint,
-                             opacity: f32|
-     -> Result<
-        Option<crate::internal::layout_input_types::Color>,
-        StyleProjectionError,
-    > {
-        if paint.paint_type == SVGPaintType::kNone {
-            return Ok(None);
-        }
-        if !paint.HasColor() {
-            return Ok(None);
-        }
-        let mut projected = color(paint.GetColor())?;
-        projected.alpha *= opacity;
-        Ok(Some(projected))
-    };
-    resolved.paint.svg_fill =
-        project_svg_paint(computed_style.FillPaint(), computed_style.FillOpacity())?;
-    resolved.paint.svg_stroke =
-        project_svg_paint(computed_style.StrokePaint(), computed_style.StrokeOpacity())?;
+    resolved.paint.svg_fill = crate::internal::boundary::paint_style_export::SvgColor(
+        computed_style,
+        computed_style.FillPaint(),
+        computed_style.InternalVisitedFillPaint(),
+        computed_style.FillOpacity(),
+    );
+    resolved.paint.svg_stroke = crate::internal::boundary::paint_style_export::SvgColor(
+        computed_style,
+        computed_style.StrokePaint(),
+        computed_style.InternalVisitedStrokePaint(),
+        computed_style.StrokeOpacity(),
+    );
     resolved.paint.svg_fill_reference = computed_style
         .FillPaint()
         .HasUrl()

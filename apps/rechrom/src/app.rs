@@ -175,6 +175,16 @@ impl App {
         }
     }
     fn update_display_binding(&self) {
+        if let Some(window) = &self.window {
+            if let Ok(origin) = window.inner_position() {
+                let scale = window.scale_factor();
+                self.send(Command::WidgetScreenOrigin {
+                    x_dip: (origin.x as f64 / scale).round() as i32,
+                    y_dip: (origin.y as f64 / scale).round() as i32,
+                    scale,
+                });
+            }
+        }
         if let Some(display_id) = self.current_display_id() {
             if self.last_requested_display.replace(Some(display_id)) != Some(display_id) {
                 self.send(Command::VSyncDisplayChanged(display_id));
@@ -261,6 +271,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
         }
+        crate::native_keyboard_modifiers::update(None);
         if self.commands.is_none() {
             let window = self.window.as_ref().unwrap().clone();
             let surface = match WindowSurface::new(window.clone(), window) {
@@ -283,10 +294,12 @@ impl ApplicationHandler<UserEvent> for App {
                     .unwrap_or(Duration::from_secs_f64(1.0 / 60.0)),
                 self.current_display_id(),
                 presentation_config(std::env::var_os("RECHROM_CAPTURE_FRAMES").is_some()),
+                self.options.prefers_reduced_motion,
             ) {
                 Ok(commands) => {
                     crate::devtools_host::attach_commands(&commands);
                     self.commands = Some(commands);
+                    self.update_display_binding();
                     self.last_requested_display.set(self.current_display_id());
                 }
                 Err(error) => {
@@ -304,11 +317,15 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
     fn suspended(&mut self, _: &ActiveEventLoop) {
+        crate::native_drag::shutdown();
         self.send(Command::Stop);
         self.commands = None;
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
+            UserEvent::StartSystemDrag(start) => {
+                crate::native_drag::start(self.window.as_deref(), start)
+            }
             UserEvent::OpenDevTools => self.open_devtools(),
             UserEvent::CloseWindow => {
                 self.send(Command::Stop);
@@ -351,9 +368,8 @@ impl ApplicationHandler<UserEvent> for App {
                     if !self.input.pointer_inside() {
                         return;
                     }
-                    crate::input::set_cursor(window, cursor);
-                    if std::env::var_os("BROWSER_APP_TRACE_INPUT").is_some() {
-                        eprintln!("window-cursor {cursor:?}");
+                    if let Err(error) = crate::input::set_cursor(event_loop, window, &cursor) {
+                        eprintln!("window-cursor-error {error}");
                     }
                 }
             }
@@ -365,8 +381,24 @@ impl ApplicationHandler<UserEvent> for App {
                     );
                 }
             }
+            UserEvent::TextInputStateChanged(state) => {
+                #[cfg(target_os = "macos")]
+                if let Some(window) = &self.window {
+                    use winit::platform::macos::{ImeTextState, WindowExtMacOS};
+                    window.set_ime_text_state(state.map(|state| ImeTextState {
+                        text: String::from_utf16_lossy(&state.text),
+                        selection: state.selection,
+                        composition: state.composition,
+                    }));
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = state;
+            }
             UserEvent::Message(message) => eprintln!("page: {message}"),
-            UserEvent::PageError(error) => error.emit_stderr(),
+            UserEvent::PageError(error) => {
+                devtools::report_page_error(error.json());
+                error.emit_stderr();
+            }
             UserEvent::Fatal(FatalError { source, message }) => {
                 self.fail(event_loop, source, message)
             }
@@ -384,6 +416,7 @@ impl ApplicationHandler<UserEvent> for App {
         if window.id() != window_id {
             return;
         }
+        crate::native_keyboard_modifiers::update(Some(&event));
         if matches!(&event, WindowEvent::KeyboardInput { event, .. }
             if event.state == winit::event::ElementState::Pressed
             && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::F12))
@@ -415,6 +448,17 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         match &event {
+            WindowEvent::NativeDragDrop(event) => {
+                match crate::native_drag::Target::from_native(event, window.scale_factor()) {
+                    Ok(target) => self.send(Command::TargetDrag(target)),
+                    Err(error) => {
+                        event
+                            .operation
+                            .store(0, std::sync::atomic::Ordering::Release);
+                        eprintln!("rechrom-native-drop-error {error}");
+                    }
+                }
+            }
             WindowEvent::CloseRequested => {
                 self.send(Command::Stop);
                 event_loop.exit();
@@ -431,7 +475,13 @@ impl ApplicationHandler<UserEvent> for App {
                     self.send(command);
                 }
                 if !active {
-                    crate::input::set_cursor(window, browser::page::Cursor::kDefault);
+                    if let Err(error) = crate::input::set_cursor(
+                        event_loop,
+                        window,
+                        &interaction::Cursor::default(),
+                    ) {
+                        eprintln!("window-cursor-error {error}");
+                    }
                 }
                 self.send(Command::SetActive(*active));
             }
@@ -477,7 +527,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
             _ => {
                 if matches!(&event, WindowEvent::CursorLeft { .. }) {
-                    crate::input::set_cursor(window, browser::page::Cursor::kDefault);
+                    if let Err(error) = crate::input::set_cursor(
+                        event_loop,
+                        window,
+                        &interaction::Cursor::default(),
+                    ) {
+                        eprintln!("window-cursor-error {error}");
+                    }
                 }
                 let scale = window.scale_factor();
                 for command in self.input.event(&event, scale) {
@@ -487,6 +543,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        crate::native_keyboard_modifiers::update(None);
+        let drag_deadline = crate::native_drag::poll();
         let now = Instant::now();
         if let Some(command) = self.input.take_due_wheel_end(now) {
             self.send(command);
@@ -502,6 +560,10 @@ impl ApplicationHandler<UserEvent> for App {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        let deadline = match (deadline, drag_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         if let Some(deadline) = deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -509,6 +571,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
     fn exiting(&mut self, _: &ActiveEventLoop) {
+        crate::native_drag::shutdown();
         self.send(Command::Stop);
         println!("window-closed\tpresents={}", self.presented);
     }

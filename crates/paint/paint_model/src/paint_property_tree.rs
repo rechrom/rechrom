@@ -972,110 +972,7 @@ pub struct PaintCanvasChildState {
     pub content_state: PropertyTreeState,
 }
 
-/// Source: platform/graphics/canvas_child_paint_state.h:22-42. Geometry stays
-/// in source units; image ids are the source signed PaintImage ids.
-#[derive(Clone, Debug)]
-pub struct CanvasChildPaintState {
-    pub effective_zoom: f32,
-    pub transform_origin: [f32; 3],
-    pub box_size: [f32; 2],
-    pub reference_box_offset: Offset,
-    pub canvas_content_size: [f32; 2],
-    pub canvas_device_pixel_content_box: [i32; 2],
-    pub canvas_node_id: i32,
-    pub canvas_child_node_id: i32,
-    pub animated_image_frame_index_map: Option<Arc<BTreeMap<i32, usize>>>,
-}
-impl PartialEq for CanvasChildPaintState {
-    fn eq(&self, other: &Self) -> bool {
-        // Source: canvas_child_paint_state.cc:12-27. The child id is owned by
-        // EffectPaintPropertyNode::CanvasChildState and is intentionally not
-        // part of this value comparison.
-        self.effective_zoom == other.effective_zoom
-            && self.transform_origin == other.transform_origin
-            && self.box_size == other.box_size
-            && self.reference_box_offset == other.reference_box_offset
-            && self.canvas_content_size == other.canvas_content_size
-            && self.canvas_device_pixel_content_box == other.canvas_device_pixel_content_box
-            && self.canvas_node_id == other.canvas_node_id
-            && self.animated_image_frame_index_map == other.animated_image_frame_index_map
-    }
-}
-impl Default for CanvasChildPaintState {
-    fn default() -> Self {
-        Self {
-            effective_zoom: 1.0,
-            transform_origin: [0.0; 3],
-            box_size: [0.0; 2],
-            reference_box_offset: Offset::default(),
-            canvas_content_size: [0.0; 2],
-            canvas_device_pixel_content_box: [0; 2],
-            canvas_node_id: 0,
-            canvas_child_node_id: 0,
-            animated_image_frame_index_map: None,
-        }
-    }
-}
-impl CanvasChildPaintState {
-    /// Source: canvas_child_paint_state.cc:64-78.
-    pub fn GetCanvasGridScaleFactor(&self, canvas_size: [i32; 2]) -> [f32; 2] {
-        if canvas_size != self.canvas_device_pixel_content_box
-            && self.canvas_content_size[0] > 0.0
-            && self.canvas_content_size[1] > 0.0
-        {
-            [
-                canvas_size[0] as f32 / self.canvas_content_size[0],
-                canvas_size[1] as f32 / self.canvas_content_size[1],
-            ]
-        } else {
-            [1.0, 1.0]
-        }
-    }
-
-    /// Source: canvas_child_paint_state.cc:29-62.
-    pub fn GetElementTransform(
-        &self,
-        canvas_size: [i32; 2],
-        draw_transform: &foundation::gfx::Transform,
-        element_canvas_transform_enabled: bool,
-    ) -> foundation::gfx::Transform {
-        fn scale(x: f32, y: f32) -> foundation::gfx::Transform {
-            let mut values = TransformMatrix::default().values;
-            values[0] = f64::from(x);
-            values[5] = f64::from(y);
-            foundation::gfx::Transform::ColMajor(&values)
-        }
-
-        let physical_to_canvas_grid = self.GetCanvasGridScaleFactor(canvas_size);
-        let physical_to_css = 1.0 / self.effective_zoom;
-        let canvas_grid_to_css_x = physical_to_css / physical_to_canvas_grid[0];
-        let canvas_grid_to_css_y = physical_to_css / physical_to_canvas_grid[1];
-
-        let mut css_transform = scale(canvas_grid_to_css_x, canvas_grid_to_css_y);
-        css_transform.PreConcat(draw_transform);
-        css_transform.PreConcat(&scale(
-            1.0 / canvas_grid_to_css_x,
-            1.0 / canvas_grid_to_css_y,
-        ));
-        if element_canvas_transform_enabled {
-            return css_transform;
-        }
-
-        let mut result = foundation::gfx::Transform::default();
-        result.Translate3d(
-            -self.transform_origin[0],
-            -self.transform_origin[1],
-            -self.transform_origin[2],
-        );
-        result.PreConcat(&css_transform);
-        result.Translate3d(
-            self.transform_origin[0],
-            self.transform_origin[1],
-            self.transform_origin[2],
-        );
-        result
-    }
-}
+pub use foundation::canvas_child_paint_state::CanvasChildPaintState;
 
 impl EffectPaintPropertyNode {
     /// Current producer publishes FilterInfo only at its actual nonempty filter
@@ -1495,6 +1392,10 @@ pub struct ScrollPaintPropertyNode {
     /// Stable source owner identity used to connect Layout's sticky scroll
     /// ancestor to this Paint property node without exposing either owner.
     pub owner_client_id: u64,
+    /// DOM owner selected by DisplayItemClient::OwnerNodeId().  Scrolling
+    /// Coordinator uses this retained source identity when reflecting an impl
+    /// scroll; it must not depend on optional PaintController debug records.
+    pub owner_node_id: u64,
     pub parent: Option<Arc<Self>>,
     pub overflow_clip: Option<Arc<ClipPaintPropertyNode>>,
     pub container_rect: PaintRect,
@@ -1839,6 +1740,7 @@ impl Default for PropertyTreeState {
                 lifecycle: PaintPropertyNodeLifecycle::root(),
                 id: 0,
                 owner_client_id: 0,
+                owner_node_id: 0,
                 parent: None,
                 overflow_clip: None,
                 container_rect: infinite,
@@ -2205,6 +2107,7 @@ pub enum PaintPropertyRole {
     VisualViewportScrollTranslation,
     PaintOffsetTranslation,
     StickyTranslation,
+    ElementCanvasTransform,
     TextCombineTransform,
     Translate,
     Rotate,
@@ -2260,6 +2163,9 @@ pub struct PaintPropertyNodeStore {
     // This avoids scanning all resident slots on entirely clean paint passes.
     change_markers_cleared: bool,
     pub changed: PaintPropertyChangeType,
+    /// Source PaintPropertyTreeBuilder.cc:4754-4763, effective local changes.
+    pub intersection_observation_state:
+        foundation::intersection_observation_state::IntersectionObservationState,
 }
 impl Default for PaintPropertyNodeStore {
     fn default() -> Self {
@@ -2272,10 +2178,32 @@ impl Default for PaintPropertyNodeStore {
             scrolls: BTreeMap::new(),
             change_markers_cleared: true,
             changed: Default::default(),
+            intersection_observation_state: Default::default(),
         }
     }
 }
 impl PaintPropertyNodeStore {
+    /// Borrow an ObjectPaintProperties slot by its existing owner and role.
+    /// Query adapters retain neither another property graph nor a snapshot.
+    pub fn TransformForKey(&self, key: PaintPropertyKey) -> Option<&TransformPaintPropertyNode> {
+        self.transforms.get(&key).map(Arc::as_ref)
+    }
+
+    pub fn TransformOwnerForKey(
+        &self,
+        key: PaintPropertyKey,
+    ) -> Option<&Arc<TransformPaintPropertyNode>> {
+        self.transforms.get(&key)
+    }
+
+    pub fn ClipForKey(&self, key: PaintPropertyKey) -> Option<&ClipPaintPropertyNode> {
+        self.clips.get(&key).map(Arc::as_ref)
+    }
+
+    pub fn EffectForKey(&self, key: PaintPropertyKey) -> Option<&EffectPaintPropertyNode> {
+        self.effects.get(&key).map(Arc::as_ref)
+    }
+
     pub fn compositor_scroll_translations(
         &self,
     ) -> impl Iterator<Item = &Arc<TransformPaintPropertyNode>> {
@@ -2307,15 +2235,25 @@ impl PaintPropertyNodeStore {
     pub fn ensure_single_layout_viewport_nodes(
         &mut self,
         viewport: PaintRect,
+        visual_offset: Option<(foundation::CompositorElementId, foundation::gfx::Vector2dF)>,
+        visual_state: Option<crate::PaintVisualViewportState>,
     ) -> (
         Arc<TransformPaintPropertyNode>,
         Arc<TransformPaintPropertyNode>,
         Arc<TransformPaintPropertyNode>,
     ) {
         let roots = PropertyTreeState::default();
-        let unique_id = *self
-            .visual_viewport_unique_id
-            .get_or_insert_with(foundation::NewUniqueObjectId);
+        let unique_id = if let Some(state) = visual_state {
+            if let Some(id) = self.visual_viewport_unique_id {
+                assert_eq!(id, state.unique_id, "same native VisualViewport owner");
+            }
+            self.visual_viewport_unique_id = Some(state.unique_id);
+            state.unique_id
+        } else {
+            *self
+                .visual_viewport_unique_id
+                .get_or_insert_with(foundation::NewUniqueObjectId)
+        };
         let page_scale_element_id = foundation::CompositorElementIdFromUniqueObjectId(
             unique_id,
             foundation::CompositorElementIdNamespace::kPrimary,
@@ -2386,7 +2324,14 @@ impl PaintPropertyNodeStore {
             lifecycle: Default::default(),
             id: 0,
             parent: Some(overscroll.clone()),
-            matrix: TransformMatrix::default(),
+            matrix: {
+                let mut matrix = TransformMatrix::default();
+                if let Some(state) = visual_state {
+                    matrix.values[0] = f64::from(state.scale);
+                    matrix.values[5] = f64::from(state.scale);
+                }
+                matrix
+            },
             origin: [0.0; 3],
             flattens_inherited_transform: false,
             rendering_context_id: 0,
@@ -2433,6 +2378,7 @@ impl PaintPropertyNodeStore {
             lifecycle: Default::default(),
             id: 0,
             owner_client_id: 0,
+            owner_node_id: 0,
             parent: Some(
                 roots
                     .transform
@@ -2442,10 +2388,23 @@ impl PaintPropertyNodeStore {
                     .clone(),
             ),
             overflow_clip: None,
-            container_rect: viewport,
-            contents_rect: viewport,
+            container_rect: visual_state.map_or(viewport, |s| PaintRect {
+                x: 0.,
+                y: 0.,
+                width: f64::from(s.size.width()),
+                height: f64::from(s.size.height()),
+            }),
+            contents_rect: visual_state.map_or(viewport, |s| PaintRect {
+                x: 0.,
+                y: 0.,
+                width: f64::from(s.contents_size.width()),
+                height: f64::from(s.contents_size.height()),
+            }),
             minimum_scroll_offset: Offset::default(),
-            maximum_scroll_offset: Offset::default(),
+            maximum_scroll_offset: visual_state.map_or_else(Offset::default, |s| Offset {
+                x: f64::from(s.maximum_scroll_offset.x()),
+                y: f64::from(s.maximum_scroll_offset.y()),
+            }),
             user_scrollable_horizontal: true,
             user_scrollable_vertical: true,
         };
@@ -2492,6 +2451,19 @@ impl PaintPropertyNodeStore {
                 foundation::CompositingReason::kViewport,
             ]),
         };
+        // VisualViewport::UpdatePaintPropertyNodesIfNeeded: the native owner
+        // supplies offset_ for this SAME existing element/translation slot.
+        let source_offset = visual_state
+            .map(|s| (scroll_element_id, s.offset))
+            .or(visual_offset);
+        if let Some((element, offset)) = source_offset {
+            assert_eq!(
+                element, scroll_element_id,
+                "same VisualViewport source identity"
+            );
+            visual_translation.matrix.values[12] = -f64::from(offset.x());
+            visual_translation.matrix.values[13] = -f64::from(offset.y());
+        }
         let visual_translation = if let Some(old) = self.transforms.get(&visual_translation_key) {
             let change = transform_state_change(old, &visual_translation);
             if change == PaintPropertyChangeType::Unchanged {
@@ -2776,6 +2748,9 @@ impl PaintPropertyNodeStore {
             scrolls,
             change_markers_cleared: rebind.changed == PaintPropertyChangeType::Unchanged,
             changed: rebind.changed,
+            // No owning property-builder pass ran in this retained rebind;
+            // scroll commits publish their source state separately.
+            intersection_observation_state: Default::default(),
         };
         (store, rebind.trees)
     }
@@ -2922,6 +2897,7 @@ impl PaintPropertyNodeStore {
             stable_scroll_keys.insert(node.id, *key);
         }
         self.changed = PaintPropertyChangeType::Unchanged;
+        self.intersection_observation_state = Default::default();
         // A partial update cannot certify that every retained graph is clean.
         self.change_markers_cleared = false;
         let seen = self
@@ -3384,6 +3360,7 @@ impl RetainedScrollSnapshotRebinder {
                 lifecycle: input.lifecycle.updated(PaintPropertyChangeType::Unchanged),
                 id: input.id,
                 owner_client_id: input.owner_client_id,
+                owner_node_id: input.owner_node_id,
                 parent,
                 overflow_clip: clip,
                 container_rect: input.container_rect,
@@ -3473,6 +3450,7 @@ impl ScrollPaintPropertyNode {
             // Chromium ScrollPaintPropertyNode::State. Keep a new value when
             // they change without promoting the source lifecycle category.
             && self.owner_client_id == other.owner_client_id
+            && self.owner_node_id == other.owner_node_id
             && self.minimum_scroll_offset == other.minimum_scroll_offset
             && self.maximum_scroll_offset == other.maximum_scroll_offset
     }
@@ -3898,6 +3876,27 @@ impl PropertyNodeUpdater<'_> {
             .as_ref()
             .map(|s| self.transform(s));
         let node = update_snapshot!(self, node, key, old, transform_state_change, transforms);
+        // Source pp_tree_builder.cc:4754-4763: pure scroll translation simple
+        // values need only scroll/visibility tracking, other transform changes
+        // invalidate every observation. This reads the native update category.
+        let threshold = if key.is_some_and(|key| {
+            matches!(
+                key.role,
+                PaintPropertyRole::ScrollTranslation
+                    | PaintPropertyRole::VisualViewportScrollTranslation
+            )
+        }) {
+            PaintPropertyChangeType::ChangedOnlySimpleValues
+        } else {
+            PaintPropertyChangeType::Unchanged
+        };
+        if node.lifecycle.changed > threshold {
+            self.store.intersection_observation_state =
+                foundation::intersection_observation_state::IntersectionObservationState::Desired;
+        } else if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
+            self.store.intersection_observation_state=self.store.intersection_observation_state.max(foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly);
+        }
+
         self.transforms.insert(identity, node.clone());
         node
     }
@@ -3925,6 +3924,11 @@ impl PropertyNodeUpdater<'_> {
         node.local_transform_space = self.transform(&node.local_transform_space);
         node.pixel_moving_filter = node.pixel_moving_filter.as_ref().map(|f| self.effect(f));
         let node = update_snapshot!(self, node, key, old, clip_state_change, clips);
+        if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
+            self.store.intersection_observation_state =
+                foundation::intersection_observation_state::IntersectionObservationState::Desired;
+        }
+
         self.clips.insert(identity, node.clone());
         node
     }
@@ -3961,6 +3965,10 @@ impl PropertyNodeUpdater<'_> {
             node.compositor.canvas_child_state = Some(Arc::new(child));
         }
         let node = update_snapshot!(self, node, key, old, effect_state_change, effects);
+        if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
+            self.store.intersection_observation_state=self.store.intersection_observation_state.max(foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly);
+        }
+
         self.effects.insert(identity, node.clone());
         node
     }
@@ -3987,10 +3995,17 @@ impl PropertyNodeUpdater<'_> {
         node.parent = node.parent.as_ref().map(|p| self.scroll(p));
         node.overflow_clip = node.overflow_clip.as_ref().map(|c| self.clip(c));
         let node = update_snapshot!(self, node, key, old, scroll_state_change, scrolls);
+        if node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
+            self.store.intersection_observation_state =
+                foundation::intersection_observation_state::IntersectionObservationState::Desired;
+        }
+
         self.scrolls.insert(identity, node.clone());
         node
     }
     pub fn finish(self) {
+        let geometry_before =
+            self.store.transforms.len() + self.store.clips.len() + self.store.scrolls.len();
         let before = self.store.transforms.len()
             + self.store.clips.len()
             + self.store.effects.len()
@@ -4005,6 +4020,15 @@ impl PropertyNodeUpdater<'_> {
             + self.store.scrolls.len();
         if before != after {
             self.store.changed = PaintPropertyChangeType::NodeAddedOrRemoved;
+            let geometry_after =
+                self.store.transforms.len() + self.store.clips.len() + self.store.scrolls.len();
+            let update = if geometry_before != geometry_after {
+                foundation::intersection_observation_state::IntersectionObservationState::Desired
+            } else {
+                foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly
+            };
+            self.store.intersection_observation_state =
+                self.store.intersection_observation_state.max(update);
         }
         self.store.change_markers_cleared =
             self.store.changed == PaintPropertyChangeType::Unchanged;
@@ -5037,6 +5061,7 @@ mod retained_scroll_update_tests {
             compositor: Default::default(),
             id: 1,
             owner_client_id: 42,
+            owner_node_id: 0,
             lifecycle: clean(),
             parent: root.transform.scroll.clone(),
             overflow_clip: Some(root.clip.clone()),
@@ -5126,6 +5151,7 @@ mod retained_scroll_update_tests {
             compositor: Default::default(),
             id: 6,
             owner_client_id: 43,
+            owner_node_id: 0,
             lifecycle: clean(),
             parent: Some(scroll.clone()),
             overflow_clip: Some(clip.clone()),

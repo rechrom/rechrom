@@ -13,6 +13,11 @@ pub mod dynamic_scripts;
 mod preload;
 pub mod script_execution;
 pub mod script_scheduler;
+mod static_document_commit;
+pub use static_document_commit::{
+    OpenDocumentOwners, PreparedStaticDocumentCommit, StaticDocumentCommitResult,
+    StaticDocumentInstallation, StaticDocumentReplacementNotification,
+};
 
 pub use connected_resources::{
     ConnectedResourceDiscovery, ConnectedResourceEffects, ConnectedScriptPreparer,
@@ -25,7 +30,11 @@ use dom::DOM;
 use javascript::javascript_runtime::JavaScriptException;
 use javascript::script_engine::{ScriptExecutor, ScriptExecutorHandle};
 use resource::ResourceEngine;
-use std::{cell::RefCell, io, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    io,
+    rc::Rc,
+};
 use url_loader::{URLRequest, URLResponseHead, URLWakeCallback};
 use webapi::dom_bindings::DOMJavaScriptBindings;
 
@@ -44,6 +53,11 @@ pub struct OpenDocumentServices {
 pub struct OpenScriptServices {
     pub bindings: Rc<RefCell<DOMJavaScriptBindings>>,
     pub pending_host_errors: Option<Rc<dyn Fn() -> Vec<JavaScriptException>>>,
+}
+/// The embedding installed a replacement Document/Window. Its scheduler must
+/// retain the executor selected by that same Window transition.
+pub struct OpenDocumentWindowInstallation {
+    pub script_executor: Option<ScriptExecutorHandle>,
 }
 
 /// The mutually-exclusive parsing pipeline for one opened document. Its
@@ -204,16 +218,34 @@ impl OpenDocumentPipeline {
 /// completion policy; the application composition root supplies concrete
 /// document, resource and Web API adapters.
 pub trait OpenDocumentAdapter {
+    fn InitializeDocument(
+        &mut self,
+        _document_url: &str,
+        _resources: Rc<ResourceEngine>,
+        _owners: OpenDocumentOwners,
+    ) -> io::Result<Option<OpenDocumentWindowInstallation>> {
+        Ok(None)
+    }
     fn CommitURL(&mut self, url: &str);
-    fn PrepareDocumentServices(&mut self) -> OpenDocumentServices;
+    fn InitializeWindowNavigation(
+        &mut self,
+        _loader: Rc<document_loader::DocumentLoaderNavigationState>,
+    ) {
+    }
+    fn PrepareDocumentServices(&mut self, document_url: &str) -> OpenDocumentServices;
     fn InstallDynamicScriptHooks(&mut self, dynamic: &Rc<dynamic_scripts::DynamicScriptTasks>);
     fn WithScriptLoadClient(
         &mut self,
         callback: &mut dyn FnMut(&mut dyn script_scheduler::ScriptLoadClient),
     );
-    fn UpdateDocumentResources(&mut self, allowance: usize) -> io::Result<usize>;
+    fn UpdateDocumentResources(
+        &mut self,
+        allowance: usize,
+        drain_render_blocking_styles: bool,
+    ) -> io::Result<usize>;
     fn HasPendingImageEvents(&self) -> bool;
     fn HasPendingLoadBlockingImages(&self) -> bool;
+    fn LoadEventDelayCount(&self) -> u32;
     fn FinishLoad(&mut self, pipeline: &mut OpenDocumentPipeline);
     fn FailLoad(&mut self, message: &str);
 }
@@ -240,6 +272,7 @@ pub struct OpenReadiness {
     pub dynamic_scripts_finished: bool,
     pub image_events_finished: bool,
     pub load_blocking_images_finished: bool,
+    pub load_event_delay_finished: bool,
 }
 
 impl OpenReadiness {
@@ -250,6 +283,7 @@ impl OpenReadiness {
             && self.dynamic_scripts_finished
             && self.image_events_finished
             && self.load_blocking_images_finished
+            && self.load_event_delay_finished
     }
 }
 
@@ -278,18 +312,33 @@ pub enum OpenStatus {
 /// One main-document navigation. Subsystems may share the contained resource
 /// engine within this document, but a different document gets a new OpenEngine
 /// and ResourceEngine.
+/// The original open/load lifecycle state. Synchronous document consumers
+/// retain an alias to this owner; they never infer completion from network IO.
+#[derive(Default)]
+pub struct OpenDocumentLifecycleState {
+    loading: Cell<bool>,
+}
+impl OpenDocumentLifecycleState {
+    pub fn IsLoading(&self) -> bool {
+        self.loading.get()
+    }
+}
 pub struct OpenEngine {
     resources: Rc<ResourceEngine>,
     loader: DocumentLoader,
     current_url: String,
     document_started: bool,
-    loading: bool,
+    document_initialized: bool,
+    lifecycle: Rc<OpenDocumentLifecycleState>,
     stopped: bool,
     failure: Option<String>,
     budget: DocumentLoadBudget,
     pipeline: Option<OpenDocumentPipeline>,
     script_executor: Option<ScriptExecutorHandle>,
     resource_completion_budget: Option<usize>,
+    wake_callback: Option<URLWakeCallback>,
+    diagnostic_read_ahead: Option<bool>,
+    required_document_policy: Option<Rc<dom::document_policy::DocumentPolicyFeatureState>>,
 }
 
 /// Opaque saved admission state while a rendering opportunity runs. Rendering
@@ -297,6 +346,15 @@ pub struct OpenEngine {
 pub struct OpenResourceCompletionScope(Option<usize>);
 
 impl OpenEngine {
+    pub fn LifecycleState(&self) -> Rc<OpenDocumentLifecycleState> {
+        self.lifecycle.clone()
+    }
+    pub fn NavigationState(&self) -> Rc<document_loader::DocumentLoaderNavigationState> {
+        self.loader.NavigationState()
+    }
+    pub fn InitialScrollState(&self) -> Rc<document_loader::InitialScrollState> {
+        self.loader.InitialScrollState()
+    }
     pub fn new(
         resources: Rc<ResourceEngine>,
         script_executor: Option<ScriptExecutorHandle>,
@@ -306,17 +364,32 @@ impl OpenEngine {
             resources,
             current_url: String::new(),
             document_started: false,
-            loading: false,
+            document_initialized: false,
+            lifecycle: Rc::new(OpenDocumentLifecycleState::default()),
             stopped: false,
             failure: None,
             budget: DocumentLoadBudget::default(),
             pipeline: None,
             script_executor,
             resource_completion_budget: None,
+            wake_callback: None,
+            diagnostic_read_ahead: None,
+            required_document_policy: None,
         }
     }
 
+    /// Container policy belongs to the Frame's actual DocumentLoader and is
+    /// applied before the response/parser commit, including child navigations.
+    pub fn BindRequiredDocumentPolicy(
+        &mut self,
+        policy: Rc<dom::document_policy::DocumentPolicyFeatureState>,
+    ) {
+        self.required_document_policy = Some(policy.clone());
+        self.loader.BindRequiredDocumentPolicy(policy);
+    }
+
     pub fn EnableDiagnosticReadAhead(&mut self, scripting: bool) {
+        self.diagnostic_read_ahead = Some(scripting);
         self.loader.EnableDiagnosticReadAhead(scripting);
     }
     pub fn ApplyMutation(&mut self, mutation: OpenMutation) -> io::Result<OpenEffect> {
@@ -345,23 +418,29 @@ impl OpenEngine {
                 }
                 self.budget = budget;
                 self.loader.StartLoading(&request)?;
-                self.loading = true;
+                self.lifecycle.loading.set(true);
                 self.stopped = false;
                 self.failure = None;
                 Ok(OpenEffect::LoadingStarted)
             }
             OpenMutation::CommitURL(url) => {
+                self.loader
+                    .NavigationState()
+                    .CommitNewDocumentInitiatorState();
+                self.loader
+                    .NavigationState()
+                    .SetDocumentNavigationURL(url.clone());
                 self.current_url = url;
                 self.resources.SetDocumentURL(self.current_url.clone());
                 Ok(OpenEffect::URLCommitted(self.current_url.clone()))
             }
             OpenMutation::UpdateReadiness(readiness) => {
-                if self.loading
+                if self.lifecycle.loading.get()
                     && self.document_started
                     && self.loader.Status() == DocumentLoaderStatus::kFinished
                     && readiness.IsComplete()
                 {
-                    self.loading = false;
+                    self.lifecycle.loading.set(false);
                     self.stopped = false;
                     Ok(OpenEffect::LoadFinished)
                 } else {
@@ -370,7 +449,7 @@ impl OpenEngine {
             }
             OpenMutation::Stop => {
                 self.loader.StopLoading();
-                self.loading = false;
+                self.lifecycle.loading.set(false);
                 self.stopped = true;
                 Ok(OpenEffect::Stopped)
             }
@@ -378,9 +457,10 @@ impl OpenEngine {
                 if self.loader.Status() != DocumentLoaderStatus::kIdle {
                     self.loader.StopLoading();
                 }
-                self.loading = false;
+                self.lifecycle.loading.set(false);
                 self.stopped = false;
                 self.failure = Some(message.clone());
+                self.loader.NavigationState().SetSentDidFinishLoad();
                 Ok(OpenEffect::LoadFailed(
                     io::Error::new(kind, message).to_string(),
                 ))
@@ -393,7 +473,38 @@ impl OpenEngine {
         request: URLRequest,
         budget: DocumentLoadBudget,
     ) -> io::Result<OpenEffect> {
+        if self.document_started || self.loader.Status() != DocumentLoaderStatus::kIdle {
+            self.PrepareForDocumentNavigation();
+        }
         self.ApplyMutation(OpenMutation::Open { request, budget })
+    }
+
+    /// LocalFrame keeps its initial empty Document's FetchContext while the
+    /// provisional loader gets a distinct context. Cancellation of the old
+    /// context therefore cannot cancel the incoming response itself.
+    pub fn PrepareForDocumentNavigation(&mut self) {
+        let previous = self.loader.NavigationState().CurrentHistoryItem();
+        self.DetachDocumentLoader();
+        self.resources = self.resources.ForDocument(String::new());
+        self.loader = DocumentLoader::WithResourceEngine(self.resources.clone());
+        if let Some(scripting) = self.diagnostic_read_ahead {
+            self.loader.EnableDiagnosticReadAhead(scripting);
+        }
+        if let Some(policy) = self.required_document_policy.clone() {
+            self.loader.BindRequiredDocumentPolicy(policy);
+        }
+        self.loader
+            .NavigationState()
+            .SetPreviousDocumentHistoryItem(previous);
+        self.lifecycle = Rc::new(OpenDocumentLifecycleState::default());
+        self.document_started = false;
+        self.document_initialized = false;
+        self.stopped = false;
+        self.failure = None;
+        if let Some(wake) = self.wake_callback.clone() {
+            self.resources.SetWakeCallback(wake.clone());
+            self.loader.SetWakeCallback(wake);
+        }
     }
 
     pub fn Stop(&mut self) -> OpenEffect {
@@ -414,7 +525,7 @@ impl OpenEngine {
         &mut self,
         adapter: &mut dyn OpenDocumentAdapter,
     ) -> io::Result<Vec<OpenEffect>> {
-        if !self.loading {
+        if !self.lifecycle.loading.get() {
             return Ok(Vec::new());
         }
         let result = self.AdvanceInternal(adapter);
@@ -480,7 +591,7 @@ impl OpenEngine {
             effects.push(OpenEffect::DocumentStarted);
         }
         let response_done = profile.map(|start| start.elapsed());
-        if self.loader.Status() == DocumentLoaderStatus::kParsing {
+        while self.loader.Status() == DocumentLoaderStatus::kParsing {
             let pipeline = self.pipeline.as_mut().expect("document pipeline installed");
             let loader = &mut self.loader;
             let budget = self.budget;
@@ -489,6 +600,11 @@ impl OpenEngine {
                 result = Some(pipeline.PumpDocument(loader, budget, client));
             });
             result.expect("adapter must provide the script load client")?;
+            if !self.loader.ForcesSynchronousParsing()
+                || self.loader.IsWaitingForParserBlockingScript()
+            {
+                break;
+            }
         }
         let parser_done = profile.map(|start| start.elapsed());
         let parser_finished = if self.loader.Status() == DocumentLoaderStatus::kFinished {
@@ -512,7 +628,18 @@ impl OpenEngine {
             Some(_) => 0,
             None => usize::MAX,
         };
-        let completed = adapter.UpdateDocumentResources(allowance)?;
+        // Blink may deliver several already-complete stylesheet callbacks in
+        // one task before the first lifecycle update. Our ordinary resource
+        // budget remains one completion per task turn, but serializing ready
+        // render-blocking sheets behind that budget adds an artificial frame
+        // barrier. Drain only that first-frame stylesheet class; images,
+        // fonts, and later non-blocking resources keep the ordinary budget.
+        let drain_render_blocking_styles = task_available
+            && self
+                .pipeline
+                .as_ref()
+                .is_some_and(OpenDocumentPipeline::HasPendingRenderBlockingStyleSheets);
+        let completed = adapter.UpdateDocumentResources(allowance, drain_render_blocking_styles)?;
         let resources_done = profile.map(|start| start.elapsed());
         if let Some(remaining) = self.resource_completion_budget.as_mut() {
             *remaining = remaining.saturating_sub(completed);
@@ -543,9 +670,11 @@ impl OpenEngine {
                 .is_some_and(script_scheduler::ScriptScheduler::HasPendingDynamicScripts),
             image_events_finished: !adapter.HasPendingImageEvents(),
             load_blocking_images_finished: !adapter.HasPendingLoadBlockingImages(),
+            load_event_delay_finished: adapter.LoadEventDelayCount() == 0,
         };
         let completion = self.ApplyMutation(OpenMutation::UpdateReadiness(readiness))?;
         if completion == OpenEffect::LoadFinished {
+            let finished_navigation = self.loader.NavigationState();
             if let Some((scheduler, _)) = self
                 .pipeline
                 .as_mut()
@@ -554,6 +683,7 @@ impl OpenEngine {
                 scheduler.ConsumeTaskBudget();
             }
             adapter.FinishLoad(self.pipeline.as_mut().expect("document pipeline installed"));
+            finished_navigation.SetSentDidFinishLoad();
         }
         effects.push(completion);
         if let Some(start) = profile {
@@ -580,7 +710,18 @@ impl OpenEngine {
         if self.pipeline.is_some() {
             return Ok(());
         }
-        let services = adapter.PrepareDocumentServices();
+        self.EnsureDocumentInitialized(adapter, url)?;
+        let services = adapter.PrepareDocumentServices(url);
+        self.InstallParserState(adapter, services, url)
+    }
+
+    fn InstallParserState(
+        &mut self,
+        adapter: &mut dyn OpenDocumentAdapter,
+        services: OpenDocumentServices,
+        url: &str,
+    ) -> io::Result<()> {
+        assert!(self.pipeline.is_none(), "one pipeline per DocumentLoader");
         let render_blocking_media_matches = services.render_blocking_media_matches.clone();
         if self.script_executor.is_some() {
             let script_services = services.scripts.ok_or_else(|| {
@@ -623,6 +764,15 @@ impl OpenEngine {
             self.pipeline = Some(OpenDocumentPipeline::Resource(parser));
         }
         Ok(())
+    }
+
+    /// Admit navigation identity even when the embedding supplies the body.
+    /// Call before CommitURL, which exposes the new Window's HistoryItem.
+    pub fn AdmitSuppliedDocumentRequest(&mut self, request: &URLRequest) -> io::Result<()> {
+        if self.document_started || self.pipeline.is_some() {
+            return Err(io::Error::other("document navigation is already committed"));
+        }
+        self.loader.AdmitSuppliedDocumentRequest(request)
     }
 
     /// Parse caller-supplied complete source through the same resident parser
@@ -684,6 +834,7 @@ impl OpenEngine {
     }
 
     pub fn FinishSuppliedLoad(&mut self, adapter: &mut dyn OpenDocumentAdapter) {
+        let finished_navigation = self.loader.NavigationState();
         if let Some((scheduler, _)) = self
             .pipeline
             .as_mut()
@@ -692,6 +843,7 @@ impl OpenEngine {
             scheduler.ConsumeTaskBudget();
         }
         adapter.FinishLoad(self.pipeline.as_mut().expect("document pipeline installed"));
+        finished_navigation.SetSentDidFinishLoad();
     }
 
     /// Polling commits the final response URL into this navigation context. Page
@@ -706,11 +858,34 @@ impl OpenEngine {
         url: String,
     ) -> io::Result<OpenEffect> {
         let effect = self.ApplyMutation(OpenMutation::CommitURL(url.clone()))?;
+        self.EnsureDocumentInitialized(adapter, &url)?;
         adapter.CommitURL(&url);
+        let navigation = self.loader.NavigationState();
+        adapter.InitializeWindowNavigation(navigation);
         Ok(effect)
     }
 
+    fn EnsureDocumentInitialized(
+        &mut self,
+        adapter: &mut dyn OpenDocumentAdapter,
+        url: &str,
+    ) -> io::Result<()> {
+        if !self.document_initialized {
+            if let Some(installation) =
+                adapter.InitializeDocument(url, self.resources.clone(), self.DocumentOwners())?
+            {
+                self.script_executor = installation.script_executor;
+                if let (Some(executor), Some(wake)) = (&self.script_executor, &self.wake_callback) {
+                    executor.SetModuleCompilationWake(Some(wake.clone()));
+                }
+            }
+            self.document_initialized = true;
+        }
+        Ok(())
+    }
+
     pub fn SetWakeCallback(&mut self, callback: URLWakeCallback) {
+        self.wake_callback = Some(callback.clone());
         if let Some(executor) = &self.script_executor {
             executor.SetModuleCompilationWake(Some(callback.clone()));
         }
@@ -817,7 +992,7 @@ impl OpenEngine {
     }
 
     pub fn IsLoading(&self) -> bool {
-        self.loading
+        self.lifecycle.loading.get()
     }
 
     pub fn HasCommittedDocument(&self) -> bool {
@@ -835,7 +1010,7 @@ impl OpenEngine {
         if self.stopped {
             return OpenStatus::Stopped;
         }
-        if self.loading {
+        if self.lifecycle.loading.get() {
             return match self.loader.Status() {
                 DocumentLoaderStatus::kLoading | DocumentLoaderStatus::kResponseReady => {
                     OpenStatus::Loading

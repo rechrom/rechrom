@@ -1,0 +1,13 @@
+[package]
+name = "interaction_dispatch"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+navigation_history = { path = "../../navigation_history" }
+fileapi = { path = "../../fileapi" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+interaction_input = { path = "../interaction_input" }
+url = "2"

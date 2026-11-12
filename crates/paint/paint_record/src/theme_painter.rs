@@ -9,7 +9,6 @@ use layoutng_assembly::internal::layout_input_types::Color;
 use layoutng_style::style::appearance::AppearanceValue;
 
 use crate::contoured_border_geometry::UniformCornerRadii;
-use crate::geometry_mapper::MapRectToRoot;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType, PaintPhase};
 use crate::paint_info::PaintInfo;
@@ -259,8 +258,7 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(cull_rect) = node.cull_rect else {
         return true;
     };
-    let mapped = MapRectToRoot(*rect, &node.transforms);
-    mapped.is_none_or(|mapped| Intersects(&mapped, &cull_rect))
+    Intersects(rect, &cull_rect)
 }
 
 // cpp: paint/theme_painter.h:9-21

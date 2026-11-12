@@ -78,6 +78,8 @@ mod layout_invalidation_layout_object_image_observers;
 
 #[path = "../../../layout_fragment/src/layout_object_fragment_queries.rs"]
 mod layout_fragment_layout_object_fragment_queries;
+#[path = "../../../layout_fragment/src/visual_rect_mapping.rs"]
+mod layout_fragment_visual_rect_mapping;
 
 #[path = "../../../layout_fragment/src/layout_object_selection_queries.rs"]
 mod layout_fragment_layout_object_selection_queries;
@@ -518,6 +520,8 @@ pub enum LayoutObjectClass {
     SvgHiddenContainer,
     SvgResourceClipper,
     SvgResourceMasker,
+    SvgResourcePaintServer,
+    SvgResourceAuxiliary,
     SvgViewportContainer,
     SvgShape,
     SvgRoot,
@@ -619,42 +623,14 @@ unsafe extern "Rust" {
         ancestor: *const LayoutBoxModelObject,
         mode: MapCoordinatesFlags,
     ) -> gfx::QuadF;
-    fn DispatchLayoutObjectAncestorToLocalQuad(
+    fn DispatchLayoutObjectQuadsInAncestorInternal(
         object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        quad: &gfx::QuadF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF;
-    fn LayoutObjectAncestorToLocalPointFProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        point: &gfx::PointF,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::PointF;
-    fn LayoutObjectLocalToAncestorTransformProvider(
-        object: &LayoutObject,
+        quads: &mut Vector<gfx::QuadF>,
         ancestor: *const LayoutBoxModelObject,
         mode: MapCoordinatesFlags,
-    ) -> gfx::Transform;
-    fn LayoutObjectAbsoluteBoundingBoxRectFProvider(
-        object: &LayoutObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::RectF;
-    fn LayoutObjectAbsoluteBoundingBoxRectProvider(
-        object: &LayoutObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::Rect;
+        box_type: BoxQuadType,
+    );
     fn LayoutObjectAbsoluteBoundingBoxRectForUnboundedElementProvider(
-        object: &LayoutObject,
-    ) -> gfx::Rect;
-    fn LayoutObjectAbsoluteBoundingBoxRectHandlingEmptyInlineProvider(
-        object: &LayoutObject,
-        flags: MapCoordinatesFlags,
-    ) -> PhysicalRect;
-    fn LayoutObjectAbsoluteBoundingBoxRectForScrollIntoViewProvider(
-        object: &LayoutObject,
-    ) -> PhysicalRect;
-    fn LayoutObjectAbsoluteBoundingBoxRectIncludingDescendantsProvider(
         object: &LayoutObject,
     ) -> gfx::Rect;
     fn LayoutObjectGetCachedPseudoElementStyleProvider(
@@ -665,32 +641,6 @@ unsafe extern "Rust" {
         object: &LayoutObject,
         request: &StyleRequest,
     ) -> *const ComputedStyle;
-    fn DispatchLayoutObjectPositionForPoint(
-        object: &LayoutObject,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity;
-    fn LayoutObjectCreatePositionWithAffinityProvider(
-        object: &LayoutObject,
-        offset: i32,
-        affinity: TextAffinity,
-    ) -> PositionWithAffinity;
-    fn LayoutObjectCreatePositionWithAffinityDefaultProvider(
-        object: &LayoutObject,
-        offset: i32,
-    ) -> PositionWithAffinity;
-    fn LayoutObjectFindPositionProvider(object: &LayoutObject) -> PositionWithAffinity;
-    fn LayoutObjectFirstPositionInOrBeforeThisProvider(
-        object: &LayoutObject,
-    ) -> PositionWithAffinity;
-    fn LayoutObjectLastPositionInOrAfterThisProvider(object: &LayoutObject)
-        -> PositionWithAffinity;
-    fn LayoutObjectPositionAfterThisProvider(object: &LayoutObject) -> PositionWithAffinity;
-    fn LayoutObjectPositionBeforeThisProvider(object: &LayoutObject) -> PositionWithAffinity;
-    fn LayoutObjectSetModifiedStyleOutsideStyleRecalcProvider(
-        object: &mut LayoutObject,
-        style: *const ComputedStyle,
-        apply_changes: ApplyStyleChanges,
-    );
     fn LayoutObjectDumpLayoutObjectProvider(
         object: &LayoutObject,
         output: &mut StringBuilder,
@@ -719,34 +669,12 @@ unsafe extern "Rust" {
         object: &LayoutObject,
         rect: &PhysicalRect,
     ) -> HitTestResult;
-    fn LayoutObjectDestroyAndCleanupAnonymousWrappersProvider(
-        object: &mut LayoutObject,
-        performing_reattach: bool,
-    );
     fn LayoutObjectCollectOutlineRectsAndAdvanceProvider(
         object: &LayoutObject,
         outline_type: OutlineType,
         iterator: &mut AccompaniedFragmentIterator,
     ) -> Vector<PhysicalRect>;
-    fn LayoutObjectOutlineRectsProvider(
-        object: &LayoutObject,
-        info: *mut LayoutOutlineInfo,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    ) -> Vector<PhysicalRect>;
     fn LayoutObjectGetDisplayLockContextProvider(object: &LayoutObject) -> *mut DisplayLockContext;
-    fn LayoutObjectMapToVisualRectInAncestorSpaceInternalFastPathProvider(
-        object: &LayoutObject,
-        ancestor_or_null_for_viewport: *const LayoutBoxModelObject,
-        rect: &mut gfx::RectF,
-        flags: VisualRectFlags,
-        intersects: &mut bool,
-    ) -> bool;
-    fn AssociatedLayoutObjectOfProvider(
-        node: &Node,
-        offset_in_node: i32,
-        side: LayoutObjectSide,
-    ) -> *const LayoutObject;
     fn ShowTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeWithSecondProvider(object1: *const LayoutObject, object2: *const LayoutObject);
@@ -767,7 +695,6 @@ unsafe extern "Rust" {
         value: bool,
     );
     fn LayoutObjectPaintProvider(object: &LayoutObject, info: &PaintInfo);
-    fn LayoutObjectInvalidateVisualOverflowProvider(object: &mut LayoutObject);
     fn LayoutObjectAddDraggableRegionsProvider(
         object: &mut LayoutObject,
         regions: &mut Vector<DraggableRegionValue>,
@@ -782,7 +709,6 @@ unsafe extern "Rust" {
         location: &HitTestLocation,
         accumulated_offset: &PhysicalOffset,
     ) -> bool;
-    fn LayoutObjectNodeForHitTestProvider(object: &LayoutObject) -> *mut Node;
     fn LayoutObjectUpdateHitTestResultProvider(
         object: &LayoutObject,
         result: &mut HitTestResult,
@@ -795,42 +721,13 @@ unsafe extern "Rust" {
         accumulated_offset: &PhysicalOffset,
         phase: HitTestPhase,
     ) -> bool;
-    fn LayoutObjectMapToVisualRectPhysicalProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        rect: &mut PhysicalRect,
-        flags: VisualRectFlags,
-    ) -> bool;
-    fn LayoutObjectMapToVisualRectFloatProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        rect: &mut gfx::RectF,
-        flags: VisualRectFlags,
-    ) -> bool;
-    fn DispatchLayoutObjectMapToVisualRectInternal(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: VisualRectFlags,
-    ) -> bool;
     fn LayoutObjectGetPropertyContainerProvider(
         object: &LayoutObject,
         skip_info: *mut AncestorSkipInfo,
         state: *mut PropertyTreeStateOrAlias,
         flags: VisualRectFlags,
     ) -> *const LayoutObject;
-    fn LayoutObjectLocalCaretRectProvider(
-        object: &LayoutObject,
-        offset: i32,
-        shape: CaretShape,
-    ) -> PhysicalRect;
     fn LayoutObjectMapLocalToAncestorProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    );
-    fn LayoutObjectMapAncestorToLocalProvider(
         object: &LayoutObject,
         ancestor: *const LayoutBoxModelObject,
         state: &mut TransformState,
@@ -935,7 +832,6 @@ unsafe extern "Rust" {
     fn DispatchLayoutObjectIsSVGFilterPrimitive(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectVisualRectRespectsVisibility(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject);
-    fn DispatchLayoutObjectCanBeSelectionLeafInternal(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsChildAllowed(
         object: *const LayoutObject,
@@ -975,7 +871,6 @@ unsafe extern "Rust" {
         check_parent: bool,
     ) -> *mut PaintLayer;
     fn LayoutObjectIsBackdropForOverscrollAreaParentProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsHRProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectIsInputButtonProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectIsMenuListProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectHasClipRelatedPropertyProvider(object: *const LayoutObject) -> bool;
@@ -984,10 +879,6 @@ unsafe extern "Rust" {
     fn LayoutObjectIsListMarkerForSummaryProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectIsInListMarkerProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectNotifyPriorityScrollAnchorStatusChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectAddAbsoluteRectForLayerProvider(
-        object: *mut LayoutObject,
-        result: &mut gfx::Rect,
-    );
     fn LayoutObjectCreateObjectProvider(
         element: *mut Element,
         style: &ComputedStyle,
@@ -1010,8 +901,6 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         mark_style_dirty: bool,
     );
-    fn LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectAbsoluteSelectionRectProvider(object: *const LayoutObject) -> PhysicalRect;
     fn LayoutObjectVisibleToHitTestRequestProvider(
         object: *const LayoutObject,
         request: &HitTestRequest,
@@ -1892,6 +1781,10 @@ impl LayoutObject {
         unsafe { &*parent }.InputOwnerForLayout()
     }
 
+    pub fn InputCanvasLayoutSubtree(&self) -> bool {
+        self.InputOwnerForLayout().InputCanvasLayoutSubtree()
+    }
+
     // cpp: layoutng/internal/layout_node_data.cc:78-83
     pub fn SetInputOwnerForAnonymous(&mut self, parent: &LayoutObject) {
         self.CheckIsNotDestroyed();
@@ -1968,6 +1861,11 @@ impl LayoutObject {
     pub fn IsPrintingForLayout(&self) -> bool {
         self.CheckIsNotDestroyed();
         self.InputOwnerForLayout().InputPrinting()
+    }
+
+    pub fn ShouldPrintBackgroundsForLayout(&self) -> bool {
+        self.CheckIsNotDestroyed();
+        self.InputOwnerForLayout().InputShouldPrintBackgrounds()
     }
 
     // cpp: layoutng/internal/layout_node_data.cc:139-142
@@ -2557,6 +2455,16 @@ impl LayoutObject {
     }
 
     // cpp: layoutng/internal/layout_object_fragment_data.cc:57-60
+    /// The opaque counterpart of PaintTimingRecord's WeakMember<LayoutObject>.
+    /// Reuse FragmentData's native monotonic id so allocator address reuse
+    /// cannot make a reattached object look like the recorded object.
+    pub fn PaintTimingIdentity(&self) -> UniqueObjectId {
+        self.CheckIsNotDestroyed();
+        let fragment = unsafe { &mut *self.fragment_.Get() };
+        fragment.EnsureId();
+        fragment.UniqueId()
+    }
+
     pub fn UniqueId(&self) -> UniqueObjectId {
         self.CheckIsNotDestroyed();
         unsafe { &*self.fragment_.Get() }.UniqueId()
@@ -2583,6 +2491,8 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object_fragment_data.cc:89-102
     pub fn Destroy(&mut self) {
         self.CheckIsNotDestroyed();
+        let detached =
+            unsafe { self.GetNode().as_ref() }.and_then(|node| node.LayoutDetachNotification(self));
         debug_assert!(
             ALLOW_DESTROYING_IN_FINALIZER.load(Ordering::Relaxed) != 0
                 || !IsLayoutHeapSweepingOnOwningThread()
@@ -2591,6 +2501,12 @@ impl LayoutObject {
         self.UpdateMaskImageObservers(self.StylePtr(), std::ptr::null());
         self.bitfields_.being_destroyed_ = true;
         unsafe { DispatchLayoutObjectWillBeDestroyed(self) };
+        // Element::DetachLayoutTree's subclass tail follows the native base
+        // destruction, including child teardown. Emit only its identity; the
+        // assembly consumes these facts after releasing Layout/DOM borrows.
+        if let Some((sink, id)) = detached {
+            sink.borrow_mut().push(id);
+        }
         #[cfg(debug_assertions)]
         {
             debug_assert!(!self.bitfields_.has_ax_object_);
@@ -3601,8 +3517,20 @@ impl LayoutObject {
         self.IsFloating() || self.IsOutOfFlowPositioned()
     }
 
+    // Source virtual LayoutObject::LocalSelectionVisualRect with the existing
+    // concrete native text/replaced owners, and the source empty base case.
     pub fn LocalSelectionVisualRect(&self) -> PhysicalRect {
         self.CheckIsNotDestroyed();
+        if self.IsText() {
+            return unsafe { &*(self as *const Self).cast::<super::layout_text::LayoutText>() }
+                .LocalSelectionVisualRect();
+        }
+        if self.IsLayoutReplaced() {
+            return unsafe {
+                &*(self as *const Self).cast::<super::layout_replaced::LayoutReplaced>()
+            }
+            .LocalSelectionVisualRect();
+        }
         PhysicalRect::default()
     }
 
@@ -3948,7 +3876,8 @@ impl LayoutObject {
     // cpp: layoutng/internal/layout_object.h:1051-1051
     pub fn IsHR(&self) -> bool {
         self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsHRProvider(self) }
+        let node = self.GetNode();
+        !node.is_null() && unsafe { &*node }.InputIsHTMLHRElement()
     }
 
     // cpp: layoutng/internal/layout_object.h:1053-1053
@@ -4185,5 +4114,30 @@ mod mutable_for_painting_tests {
         );
         assert!(object.bitfields_.should_check_for_paint_invalidation_);
         object.SetDestroyedForTesting();
+    }
+}
+
+impl LayoutObject {
+    /// Source: core/layout/layout_object.cc:5115-5119. Every currently
+    /// constructed native LayoutObject subclass inherits this source virtual.
+    /// Specialized frame/plugin classes must override this at their own
+    /// construction/dispatch boundary when those classes are admitted.
+    pub fn CursorForLocalPoint(&self, _point: foundation::gfx::PointF) -> CursorDirective {
+        self.CheckIsNotDestroyed();
+        CursorDirective::kSetCursorBasedOnStyle
+    }
+}
+
+impl LayoutObject {
+    // Source: core/layout/layout_object.h:2720-2725. The request contributes
+    // only this source fact across the independent hit-test package boundary.
+    pub fn VisibleToHitTestRequestWithIgnorePointerEventsNone(
+        &self,
+        ignore_pointer_events_none: bool,
+    ) -> bool {
+        self.CheckIsNotDestroyed();
+        self.StyleRef().Visibility() == foundation::EVisibility::kVisible
+            && (ignore_pointer_events_none
+                || self.StyleRef().UsedPointerEvents() != foundation::EPointerEvents::kNone)
     }
 }

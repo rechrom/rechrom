@@ -43,9 +43,7 @@ impl LayoutView {
         state: &mut TransformState,
         flags: VisualRectFlags,
     ) -> bool {
-        unsafe {
-            LayoutViewMapToVisualRectInAncestorSpaceInternalProvider(self, ancestor, state, flags)
-        }
+        self.MapVisualRectInternalSource(ancestor, state, flags)
     }
 
     #[inline(never)]
@@ -54,9 +52,16 @@ impl LayoutView {
         quads: &mut Vector<gfx::QuadF>,
         ancestor: *const LayoutBoxModelObject,
         flags: MapCoordinatesFlags,
-        box_type: BoxQuadType,
+        _box_type: BoxQuadType,
     ) {
-        unsafe { LayoutViewQuadsInAncestorInternalProvider(self, quads, ancestor, flags, box_type) }
+        // Source: core/layout/layout_view.cc:539-548.
+        self.CheckIsNotDestroyed();
+        let area = unsafe { &*self.GetScrollableArea() };
+        quads.push(self.LocalRectToAncestorQuad(
+            &PhysicalRect::new(PhysicalOffset::default(), area.Size()),
+            ancestor,
+            flags,
+        ));
     }
 
     // Updating the caller-owned result is a small leaf operation and remains

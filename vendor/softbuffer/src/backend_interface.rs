@@ -48,6 +48,25 @@ pub(crate) trait BufferInterface {
     fn age(&self) -> u8;
     fn present_with_damage(self, damage: &[Rect]) -> Result<(), SoftBufferError>;
     fn present(self) -> Result<(), SoftBufferError>;
+    fn present_with_feedback(
+        self,
+        swap_ack: crate::PresentCallback,
+        presentation: crate::PresentationCallback,
+        observer: Option<crate::NativeTransactionObserver>,
+    ) -> Result<(), SoftBufferError>
+    where
+        Self: Sized,
+    {
+        self.present_with_callback(
+            Box::new(move |start, end| {
+                swap_ack(start, end);
+                presentation(crate::PresentationFeedback::Unavailable(
+                    crate::PresentationUnavailableReason::BackendHasNoTimestamp,
+                ));
+            }),
+            observer,
+        )
+    }
     fn present_with_callback(
         self,
         callback: crate::PresentCallback,

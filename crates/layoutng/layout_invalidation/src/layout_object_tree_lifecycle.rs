@@ -76,5 +76,12 @@ pub(super) fn LayoutObjectWillBeDestroyed(object: &mut LayoutObject) {
     if !children.is_null() {
         unsafe { &mut *children }.DestroyLeftoverChildren();
     }
+    let view = object.View();
     object.Remove();
+    // LayoutObject.cc:4260-4264: FrameView retains these original members;
+    // remove both before this native object can be destroyed.
+    if let Some(view) = unsafe { view.as_ref() } {
+        view.RemovePendingTransformUpdate(object);
+        view.RemovePendingOpacityUpdate(object);
+    }
 }

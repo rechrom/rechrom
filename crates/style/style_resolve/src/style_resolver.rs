@@ -175,7 +175,10 @@ pub trait StyleResolverBackend {
     fn VisuallyOrdered(&self, document: &Self::Document) -> bool;
     fn InForcedColorsMode(&self, document: &Self::Document) -> bool;
     fn InDesignMode(&self, document: &Self::Document) -> bool;
-    fn ContentLanguage<'d>(&self, document: &'d Self::Document) -> &'d AtomicString;
+    fn ContentLanguage<'d>(
+        &'d self,
+        document: &'d Self::Document,
+    ) -> &'d AtomicString;
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32;
     fn MediaType<'v>(&self, view: &'v Self::LocalFrameView) -> &'v str;
     fn UpdateActiveStyle(&self, engine: &Self::StyleEngine);
@@ -638,12 +641,13 @@ pub trait StyleResolverRuleMatchingBackend: StyleResolverBackend {
         &self,
         element: &'e Self::Element,
     ) -> Option<&'e Self::TextTrack>;
-    fn TextTrackCSSStyleSheets<'t>(
+    fn ForEachTextTrackCSSStyleSheet(
         &self,
-        track: &'t Self::TextTrack,
-    ) -> &'t [Rc<Self::CSSStyleSheet>];
+        track: &Self::TextTrack,
+        visitor: impl FnMut(&Rc<Self::CSSStyleSheet>),
+    );
     fn ElementDocument<'e>(&self, element: &'e Self::Element) -> &'e Self::Document;
-    fn EnsureVTTOriginatingElement<'s>(&self, engine: &'s Self::StyleEngine) -> &'s Self::Element;
+    fn EnsureVTTOriginatingElement(&self, engine: &Self::StyleEngine) -> Rc<Self::Element>;
     /// StyleEngine::RuleSetForSheet with the source's empty mixin map.
     fn RuleSetForSheet(
         &self,
@@ -1054,40 +1058,45 @@ impl<'a, B: StyleResolverRuleMatchingBackend> StyleResolver<'a, B> {
         let Some(text_track) = self.GetTextTrackFromElement(element) else {
             return;
         };
-        let styles = self.backend.TextTrackCSSStyleSheets(text_track);
-        if !styles.is_empty() {
-            self.backend.ClearMatchedRules(collector);
-            let style_engine = self
-                .backend
-                .GetStyleEngine(self.backend.ElementDocument(element));
-            let vtt_originating_element = self.backend.EnsureVTTOriginatingElement(style_engine);
-            let mut rule_set_group_index = 0;
-            let mut rule_set_group = self.backend.NewRuleSetGroup(rule_set_group_index);
-            rule_set_group_index += 1;
-            for style in styles {
-                let Some(rule_set) = self.backend.RuleSetForSheet(style_engine, style) else {
-                    continue;
+        let mut started = false;
+        let mut vtt_originating_element = None;
+        let style_engine = self
+            .backend
+            .GetStyleEngine(self.backend.ElementDocument(element));
+        let mut group_index = 0;
+        let mut group = self.backend.NewRuleSetGroup(group_index);
+        group_index += 1;
+        self.backend
+            .ForEachTextTrackCSSStyleSheet(text_track, |style| {
+                if !started {
+                    self.backend.ClearMatchedRules(collector);
+                    vtt_originating_element =
+                        Some(self.backend.EnsureVTTOriginatingElement(style_engine));
+                    started = true;
+                }
+                let Some(rules) = self.backend.RuleSetForSheet(style_engine, style) else {
+                    return;
                 };
-                self.backend
-                    .RuleSetGroupAddRuleSet(&mut rule_set_group, &rule_set);
-                if self.backend.RuleSetGroupIsFull(&rule_set_group) {
+                self.backend.RuleSetGroupAddRuleSet(&mut group, &rules);
+                if self.backend.RuleSetGroupIsFull(&group) {
                     self.backend.CollectMatchingRules(
                         collector,
-                        &rule_set_group,
+                        &group,
                         None,
-                        Some(vtt_originating_element),
+                        vtt_originating_element.as_deref(),
                         None,
                     );
-                    rule_set_group = self.backend.NewRuleSetGroup(rule_set_group_index);
-                    rule_set_group_index += 1;
+                    group = self.backend.NewRuleSetGroup(group_index);
+                    group_index += 1;
                 }
-            }
-            if !self.backend.RuleSetGroupIsEmpty(&rule_set_group) {
+            });
+        if started {
+            if !self.backend.RuleSetGroupIsEmpty(&group) {
                 self.backend.CollectMatchingRules(
                     collector,
-                    &rule_set_group,
+                    &group,
                     None,
-                    Some(vtt_originating_element),
+                    vtt_originating_element.as_deref(),
                     None,
                 );
             }
@@ -1595,17 +1604,66 @@ impl<'a, B: StyleResolverRuleMatchingBackend> StyleResolver<'a, B> {
     ) {
         self.MatchAllRules(state, collector, include_smil_properties)
     }
+}
 
+/// StyleForViewport needs only initial-style construction plus these source
+/// builder inputs, independently of element rule collection.
+pub trait StyleResolverViewportBackend: StyleResolverBackend {
+    fn ViewportSetZIndex(&self, b: &mut Self::ComputedStyleBuilder, v: i32);
+    fn ViewportSetForcesStackingContext(&self, b: &mut Self::ComputedStyleBuilder, v: bool);
+    fn ViewportSetDisplay(&self, b: &mut Self::ComputedStyleBuilder, v: EDisplay);
+    fn ViewportSetPosition(&self, b: &mut Self::ComputedStyleBuilder, v: EPosition);
+    fn ViewportSetOverflowX(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow);
+    fn ViewportSetOverflowY(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow);
+    fn ViewportApplyVisionDeficiencyStyle(
+        &self,
+        e: &Self::StyleEngine,
+        b: &mut Self::ComputedStyleBuilder,
+    );
+}
+impl<T: StyleResolverRuleMatchingBackend> StyleResolverViewportBackend for T {
+    fn ViewportSetZIndex(&self, b: &mut Self::ComputedStyleBuilder, v: i32) {
+        self.SetZIndex(b, v)
+    }
+    fn ViewportSetForcesStackingContext(&self, b: &mut Self::ComputedStyleBuilder, v: bool) {
+        self.SetForcesStackingContext(b, v)
+    }
+    fn ViewportSetDisplay(&self, b: &mut Self::ComputedStyleBuilder, v: EDisplay) {
+        self.SetDisplay(b, v)
+    }
+    fn ViewportSetPosition(&self, b: &mut Self::ComputedStyleBuilder, v: EPosition) {
+        self.SetPosition(b, v)
+    }
+    fn ViewportSetOverflowX(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow) {
+        self.SetOverflowX(b, v)
+    }
+    fn ViewportSetOverflowY(&self, b: &mut Self::ComputedStyleBuilder, v: EOverflow) {
+        self.SetOverflowY(b, v)
+    }
+    fn ViewportApplyVisionDeficiencyStyle(
+        &self,
+        e: &Self::StyleEngine,
+        b: &mut Self::ComputedStyleBuilder,
+    ) {
+        self.ApplyVisionDeficiencyStyle(e, b)
+    }
+}
+impl<'a, B: StyleResolverViewportBackend> StyleResolver<'a, B> {
     // cpp: style_resolver.cc:1315-1332; h:145
     pub fn StyleForViewport(&self) -> B::ComputedStyle {
         let mut builder = self.InitialStyleBuilderForElement();
-        self.backend.SetZIndex(&mut builder, 0);
-        self.backend.SetForcesStackingContext(&mut builder, true);
-        self.backend.SetDisplay(&mut builder, EDisplay::kBlock);
-        self.backend.SetPosition(&mut builder, EPosition::kAbsolute);
-        self.backend.SetOverflowX(&mut builder, EOverflow::kAuto);
-        self.backend.SetOverflowY(&mut builder, EOverflow::kAuto);
-        self.backend.ApplyVisionDeficiencyStyle(
+        self.backend.ViewportSetZIndex(&mut builder, 0);
+        self.backend
+            .ViewportSetForcesStackingContext(&mut builder, true);
+        self.backend
+            .ViewportSetDisplay(&mut builder, EDisplay::kBlock);
+        self.backend
+            .ViewportSetPosition(&mut builder, EPosition::kAbsolute);
+        self.backend
+            .ViewportSetOverflowX(&mut builder, EOverflow::kAuto);
+        self.backend
+            .ViewportSetOverflowY(&mut builder, EOverflow::kAuto);
+        self.backend.ViewportApplyVisionDeficiencyStyle(
             self.backend.GetStyleEngine(self.GetDocument()),
             &mut builder,
         );

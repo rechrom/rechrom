@@ -7,6 +7,8 @@
 #![allow(non_snake_case)]
 
 use super::*;
+use crate::internal::outline_info::LayoutOutlineInfo;
+use crate::internal::outline_rect_collector::VectorOutlineRectCollector;
 use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 
 fn FragmentLocalAffineTransform(
@@ -154,6 +156,49 @@ fn ExportStitchedDecorationData(
         },
         ..StitchedDecorationData::default()
     })
+}
+
+/// Export FragmentPainter::PaintOutline's source geometry while the canonical
+/// PhysicalBoxFragment and the exact style selected for painting are both
+/// available. Paint cannot reconstruct descendant/anchor outline rects from
+/// the flattened fragment tree.
+#[inline(never)]
+pub(super) fn ExportSelfOutlineGeometry(
+    box_fragment: &PhysicalBoxFragment,
+    style_to_use: &StyleComputedStyle,
+    paint: &mut PaintProperties,
+) {
+    if !style_to_use.HasOutline() {
+        paint.self_outline = None;
+        return;
+    }
+
+    let mut collector = VectorOutlineRectCollector::default();
+    let mut info = LayoutOutlineInfo::default();
+    box_fragment.AddSelfOutlineRects(
+        PhysicalOffset::default(),
+        style_to_use.OutlineRectsShouldIncludeBlockInkOverflow(),
+        &mut collector,
+        Some(&mut info),
+    );
+    paint.self_outline = Some(SelfOutlinePaintData {
+        rects: collector
+            .TakeRects()
+            .into_iter()
+            .map(|rect| FragmentPaintRect {
+                offset: Offset {
+                    x: Number(rect.offset.left),
+                    y: Number(rect.offset.top),
+                },
+                size: Size {
+                    width: Number(rect.size.width),
+                    height: Number(rect.size.height),
+                },
+            })
+            .collect(),
+        width: f64::from(info.width),
+        offset: f64::from(info.offset),
+    });
 }
 
 #[inline(never)]
@@ -374,24 +419,7 @@ pub(super) fn ExportBoxPaintGeometry(
         }
         let replaced = DynamicTo::<LayoutReplaced>(box_fragment.GetLayoutObject());
         if !replaced.is_null() {
-            let rect = unsafe { &*replaced }.ReplacedContentRect();
-            paint.replaced_content = Some(ReplacedContentPaintData {
-                offset: Offset {
-                    x: Number(rect.offset.left),
-                    y: Number(rect.offset.top),
-                },
-                size: Size {
-                    width: Number(rect.size.width),
-                    height: Number(rect.size.height),
-                },
-                respects_css_overflow: unsafe { &*replaced }.RespectsCSSOverflow(),
-                clips_to_content_box: unsafe { &*replaced }.ClipsToContentBox(),
-                is_svg_root: unsafe { &*replaced }.IsSVGRoot(),
-                is_image: unsafe { &*replaced }.IsImage(),
-                is_media: unsafe { &*replaced }.IsMedia(),
-                is_layout_embedded_content: unsafe { &*replaced }.IsLayoutEmbeddedContent(),
-                is_embedded_object: unsafe { &*replaced }.IsEmbeddedObject(),
-            });
+            paint.replaced_content = Some(ExportReplacedContentPaintData(replaced));
         }
     }
     let borders = box_fragment.Borders();
@@ -438,5 +466,42 @@ pub(super) fn ExportContentSize(box_fragment: &PhysicalBoxFragment) -> Size {
     Size {
         width: Number((size.width - insets.HorizontalSum()).ClampNegativeToZero()),
         height: Number((size.height - insets.VerticalSum()).ClampNegativeToZero()),
+    }
+}
+
+/// LayoutVideo display mode can change without a new physical fragment.
+/// Re-read the same native replaced geometry at the paint-only commit too.
+pub(super) fn ExportReplacedContentPaintData(
+    replaced: *const LayoutReplaced,
+) -> ReplacedContentPaintData {
+    let rect = unsafe { &*replaced }.ReplacedContentRect();
+    ReplacedContentPaintData {
+        offset: Offset {
+            x: Number(rect.offset.left),
+            y: Number(rect.offset.top),
+        },
+        size: Size {
+            width: Number(rect.size.width),
+            height: Number(rect.size.height),
+        },
+        respects_css_overflow: unsafe { &*replaced }.RespectsCSSOverflow(),
+        clips_to_content_box: unsafe { &*replaced }.ClipsToContentBox(),
+        is_svg_root: unsafe { &*replaced }.IsSVGRoot(),
+        is_image: unsafe { &*replaced }.IsImage(),
+        is_canvas: unsafe { &*replaced }.IsCanvas(),
+        draws_background_onto_content_layer: unsafe { &*replaced }
+            .DrawsBackgroundOntoContentLayer(),
+        is_media: unsafe { &*replaced }.IsMedia(),
+        is_video: unsafe { &*replaced }.IsVideo(),
+        video_uses_poster: unsafe { &*replaced }.IsVideo()
+            && unsafe { &*replaced.cast::<crate::internal::layout_replaced::LayoutVideo>() }
+                .GetDisplayMode()
+                == crate::internal::layout_replaced::VideoDisplayMode::Poster,
+        video_would_taint_origin: unsafe { &*replaced }.IsVideo()
+            && unsafe { &*replaced.cast::<crate::internal::layout_replaced::LayoutVideo>() }
+                .ElementState()
+                .would_taint_origin,
+        is_layout_embedded_content: unsafe { &*replaced }.IsLayoutEmbeddedContent(),
+        is_embedded_object: unsafe { &*replaced }.IsEmbeddedObject(),
     }
 }

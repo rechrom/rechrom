@@ -13,7 +13,7 @@ use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClas
 use objc2_app_kit::{
     NSAppKitVersionNumber, NSAppKitVersionNumber10_12, NSAppearance, NSAppearanceCustomization,
     NSAppearanceNameAqua, NSApplication, NSApplicationPresentationOptions, NSBackingStoreType,
-    NSColor, NSDraggingDestination, NSFilenamesPboardType, NSPasteboard,
+    NSColor, NSDragOperation, NSDraggingDestination, NSEvent, NSFilenamesPboardType, NSPasteboard,
     NSRequestUserAttentionType, NSScreen, NSView, NSWindowButton, NSWindowDelegate,
     NSWindowFullScreenButton, NSWindowLevel, NSWindowOcclusionState, NSWindowOrderingMode,
     NSWindowSharingType, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
@@ -22,7 +22,7 @@ use objc2_foundation::{
     ns_string, CGFloat, MainThreadMarker, NSArray, NSCopying, NSDictionary, NSKeyValueChangeKey,
     NSKeyValueChangeNewKey, NSKeyValueChangeOldKey, NSKeyValueObservingOptions, NSObject,
     NSObjectNSDelayedPerforming, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString,
+    NSRange, NSRect, NSSize, NSString, NSURL,
 };
 use tracing::{trace, warn};
 
@@ -36,11 +36,135 @@ use super::{ffi, Fullscreen, MonitorHandle, OsError, WindowId};
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOsError};
 use crate::event::{InnerSizeWriter, WindowEvent};
-use crate::platform::macos::{OptionAsAlt, WindowExtMacOS};
+use crate::platform::macos::{ImeTextState, OptionAsAlt, WindowExtMacOS};
 use crate::window::{
     Cursor, CursorGrabMode, Icon, ImePurpose, ResizeDirection, Theme, UserAttentionType,
     WindowAttributes, WindowButtons, WindowLevel,
 };
+
+#[derive(Debug)]
+struct DragSecurityScope {
+    url: Retained<NSURL>,
+    active: bool,
+}
+impl Drop for DragSecurityScope {
+    fn drop(&mut self) {
+        if self.active {
+            unsafe {
+                self.url.stopAccessingSecurityScopedResource();
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DragFilePromise {
+    receiver: Retained<objc2_app_kit::NSFilePromiseReceiver>,
+    files: Vec<(std::ffi::OsString, Arc<crate::event::NativeDragFilePromise>)>,
+}
+impl Drop for DragFilePromise {
+    fn drop(&mut self) {
+        self.fail("native file promise session ended before drop");
+    }
+}
+
+#[derive(Debug)]
+struct DragPromiseDirectory(std::path::PathBuf);
+impl Drop for DragPromiseDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+#[derive(Debug)]
+struct DragMaterializedAccess {
+    _directory: Arc<DragPromiseDirectory>,
+    _scope: Arc<DragSecurityScope>,
+}
+impl DragFilePromise {
+    fn fail(&self, message: &str) {
+        for (_, file) in &self.files {
+            file.fail(std::io::Error::other(message.to_owned()));
+        }
+    }
+    fn receive(mut self) {
+        use std::os::unix::fs::DirBuilderExt;
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = loop {
+            let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path =
+                std::env::temp_dir().join(format!("winit-drag-{}-{sequence}", std::process::id()));
+            match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => break Arc::new(DragPromiseDirectory(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    self.fail(&error.to_string());
+                    return;
+                }
+            }
+        };
+        let Some(path) = directory.0.to_str() else {
+            self.fail("promise destination is not representable");
+            return;
+        };
+        let destination =
+            unsafe { NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true) };
+        let queue = unsafe { objc2_foundation::NSOperationQueue::new() };
+        let options = NSDictionary::new();
+        let pending = Arc::new(Mutex::new(std::mem::take(&mut self.files)));
+        let receiver = self.receiver.clone();
+        let block = block2::RcBlock::new(
+            move |url: std::ptr::NonNull<NSURL>, error: *mut objc2_foundation::NSError| {
+                let _receiver_lifetime = &receiver;
+                let url = unsafe { url.as_ref() };
+                let path =
+                    unsafe { url.path() }.map(|path| std::path::PathBuf::from(path.to_string()));
+                let name = path.as_ref().and_then(|path| path.file_name());
+                let mut files = pending.lock().unwrap();
+                let Some(index) = files
+                    .iter()
+                    .position(|(offered, _)| Some(offered.as_os_str()) == name)
+                else {
+                    for (_, file) in files.drain(..) {
+                        file.fail(std::io::Error::other(
+                            "native file promise returned an unexpected filename",
+                        ));
+                    }
+                    return;
+                };
+                let (_, promise) = files.remove(index);
+                if !error.is_null() {
+                    promise.fail(std::io::Error::other("native file promise failed"));
+                    return;
+                }
+                let scope = Arc::new(DragSecurityScope {
+                    url: unsafe { Retained::retain(url as *const NSURL as *mut NSURL) }.unwrap(),
+                    active: unsafe { url.startAccessingSecurityScopedResource() },
+                });
+                match path.and_then(|path| crate::event::NativeDragFileOffer::open(path).ok()) {
+                    Some(mut file) => {
+                        file.access = Some(Arc::new(DragMaterializedAccess {
+                            _directory: directory.clone(),
+                            _scope: scope,
+                        }));
+                        promise.resolve_file(file);
+                    }
+                    None => promise.fail(std::io::Error::other(
+                        "native file promise could not admit the produced file",
+                    )),
+                }
+            },
+        );
+        unsafe {
+            self.receiver
+                .receivePromisedFilesAtDestination_options_operationQueue_reader(
+                    &destination,
+                    &options,
+                    &queue,
+                    &block,
+                );
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PlatformSpecificWindowAttributes {
@@ -80,6 +204,8 @@ impl Default for PlatformSpecificWindowAttributes {
 
 #[derive(Debug)]
 pub(crate) struct State {
+    target_drag: RefCell<Option<crate::event::NativeDragDropEvent>>,
+    target_file_promises: RefCell<Vec<DragFilePromise>>,
     /// Strong reference to the global application state.
     app_delegate: Retained<ApplicationDelegate>,
 
@@ -367,67 +493,25 @@ declare_class!(
     unsafe impl NSDraggingDestination for WindowDelegate {
         /// Invoked when the dragged image enters destination bounds or frame
         #[method(draggingEntered:)]
-        fn dragging_entered(&self, sender: &NSObject) -> bool {
-            trace_scope!("draggingEntered:");
-
-            use std::path::PathBuf;
-
-            let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
-            let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
-                Some(filenames) => filenames,
-                None => return false.into(),
-            };
-            let filenames: Retained<NSArray<NSString>> = unsafe { Retained::cast(filenames) };
-
-            filenames.into_iter().for_each(|file| {
-                let path = PathBuf::from(file.to_string());
-                self.queue_event(WindowEvent::HoveredFile(path));
-            });
-
-            true
+        fn dragging_entered(&self, sender: &NSObject) -> NSDragOperation {
+            self.queue_native_drag(Some(sender),crate::event::NativeDragDropPhase::Enter)
         }
-
-        /// Invoked when the image is released
+        #[method(draggingUpdated:)]
+        fn dragging_updated(&self,sender:&NSObject)->NSDragOperation {
+            self.queue_native_drag(Some(sender),crate::event::NativeDragDropPhase::Over)
+        }
         #[method(prepareForDragOperation:)]
-        fn prepare_for_drag_operation(&self, _sender: &NSObject) -> bool {
-            trace_scope!("prepareForDragOperation:");
-            true
+        fn prepare_for_drag_operation(&self,_sender:&NSObject)->bool {
+            self.ivars().target_drag.borrow().as_ref().is_some_and(|event|event.operation.load(std::sync::atomic::Ordering::Acquire)!=0)
         }
-
-        /// Invoked after the released image has been removed from the screen
         #[method(performDragOperation:)]
-        fn perform_drag_operation(&self, sender: &NSObject) -> bool {
-            trace_scope!("performDragOperation:");
-
-            use std::path::PathBuf;
-
-            let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
-            let filenames = match pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
-                Some(filenames) => filenames,
-                None => return false.into(),
-            };
-            let filenames: Retained<NSArray<NSString>> = unsafe { Retained::cast(filenames) };
-
-            filenames.into_iter().for_each(|file| {
-                let path = PathBuf::from(file.to_string());
-                self.queue_event(WindowEvent::DroppedFile(path));
-            });
-
-            true
+        fn perform_drag_operation(&self,sender:&NSObject)->bool {
+            self.queue_native_drag(Some(sender),crate::event::NativeDragDropPhase::Drop)!=NSDragOperation::None
         }
-
-        /// Invoked when the dragging operation is complete
         #[method(concludeDragOperation:)]
-        fn conclude_drag_operation(&self, _sender: Option<&NSObject>) {
-            trace_scope!("concludeDragOperation:");
-        }
-
-        /// Invoked when the dragging operation is cancelled
+        fn conclude_drag_operation(&self,_sender:Option<&NSObject>){self.ivars().target_drag.borrow_mut().take();}
         #[method(draggingExited:)]
-        fn dragging_exited(&self, _sender: Option<&NSObject>) {
-            trace_scope!("draggingExited:");
-            self.queue_event(WindowEvent::HoveredFileCancelled);
-        }
+        fn dragging_exited(&self,sender:Option<&NSObject>){self.queue_native_drag(sender,crate::event::NativeDragDropPhase::Leave);}
     }
 
     // Key-Value Observing
@@ -485,7 +569,8 @@ declare_class!(
 impl Drop for WindowDelegate {
     fn drop(&mut self) {
         unsafe {
-            self.window().removeObserver_forKeyPath(self, ns_string!("effectiveAppearance"));
+            self.window()
+                .removeObserver_forKeyPath(self, ns_string!("effectiveAppearance"));
         }
     }
 }
@@ -500,7 +585,7 @@ fn new_window(
             Some(Fullscreen::Borderless(Some(monitor)))
             | Some(Fullscreen::Exclusive(VideoModeHandle { monitor, .. })) => {
                 monitor.ns_screen(mtm).or_else(|| NSScreen::mainScreen(mtm))
-            },
+            }
             Some(Fullscreen::Borderless(None)) => NSScreen::mainScreen(mtm),
             None => None,
         };
@@ -514,7 +599,7 @@ fn new_window(
                     Some(size) => {
                         let size = size.to_logical(scale_factor);
                         NSSize::new(size.width, size.height)
-                    },
+                    }
                     None => NSSize::new(800.0, 600.0),
                 };
                 let position = match attrs.position {
@@ -524,12 +609,12 @@ fn new_window(
                             NSPoint::new(position.x, position.y),
                             size,
                         ))
-                    },
+                    }
                     // This value is ignored by calling win.center() below
                     None => NSPoint::new(0.0, 0.0),
                 };
                 NSRect::new(position, size)
-            },
+            }
         };
 
         let mut masks = if (!attrs.decorations && screen.is_none())
@@ -663,10 +748,17 @@ fn new_window(
         }
 
         // register for drag and drop operations.
-        window
-            .registerForDraggedTypes(&NSArray::from_id_slice(&[
-                unsafe { NSFilenamesPboardType }.copy()
-            ]));
+        let mut drag_types = vec![
+            unsafe { NSFilenamesPboardType }.copy(),
+            ns_string!("public.file-url").copy(),
+            ns_string!("public.utf8-plain-text").copy(),
+            ns_string!("public.html").copy(),
+            ns_string!("public.url").copy(),
+        ];
+        drag_types.extend(
+            unsafe { objc2_app_kit::NSFilePromiseReceiver::readableDraggedTypes() }.into_iter(),
+        );
+        window.registerForDraggedTypes(&NSArray::from_id_slice(&drag_types));
 
         Some(window)
     })
@@ -689,7 +781,9 @@ impl WindowDelegate {
                 let parent_view: Retained<NSView> =
                     unsafe { Retained::retain(handle.ns_view.as_ptr().cast()) }.unwrap();
                 let parent = parent_view.window().ok_or_else(|| {
-                    os_error!(OsError::CreationError("parent view should be installed in a window"))
+                    os_error!(OsError::CreationError(
+                        "parent view should be installed in a window"
+                    ))
                 })?;
 
                 // SAFETY: We know that there are no parent -> child -> parent cycles since the only
@@ -698,18 +792,20 @@ impl WindowDelegate {
                 unsafe {
                     parent.addChildWindow_ordered(&window, NSWindowOrderingMode::NSWindowAbove)
                 };
-            },
+            }
             Some(raw) => panic!("invalid raw window handle {raw:?} on macOS"),
             None => (),
         }
 
-        let resize_increments =
-            match attrs.resize_increments.map(|i| i.to_logical(window.backingScaleFactor() as _)) {
-                Some(LogicalSize { width, height }) if width >= 1. && height >= 1. => {
-                    NSSize::new(width, height)
-                },
-                _ => NSSize::new(1., 1.),
-            };
+        let resize_increments = match attrs
+            .resize_increments
+            .map(|i| i.to_logical(window.backingScaleFactor() as _))
+        {
+            Some(LogicalSize { width, height }) if width >= 1. && height >= 1. => {
+                NSSize::new(width, height)
+            }
+            _ => NSSize::new(1., 1.),
+        };
 
         let scale_factor = window.backingScaleFactor() as _;
 
@@ -718,6 +814,8 @@ impl WindowDelegate {
         }
 
         let delegate = mtm.alloc().set_ivars(State {
+            target_drag: RefCell::new(None),
+            target_file_promises: RefCell::new(Vec::new()),
             app_delegate: app_delegate.retain(),
             window: window.retain(),
             previous_position: Cell::new(flip_window_screen_coordinates(window.frame())),
@@ -816,8 +914,217 @@ impl WindowDelegate {
         self.window().id()
     }
 
+    fn queue_native_drag(
+        &self,
+        sender: Option<&NSObject>,
+        phase: crate::event::NativeDragDropPhase,
+    ) -> NSDragOperation {
+        use crate::event::{NativeDragDropEvent, NativeDragDropPhase as P};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        fn units(text: &NSString) -> Vec<u16> {
+            let mut value = vec![0; text.len_utf16()];
+            if let Some(pointer) = std::ptr::NonNull::new(value.as_mut_ptr()) {
+                unsafe {
+                    text.getCharacters_range(pointer, NSRange::new(0, value.len()));
+                }
+            }
+            value
+        }
+        let mut event = if phase == P::Enter {
+            let Some(sender) = sender else {
+                return NSDragOperation::None;
+            };
+            let pb: Retained<NSPasteboard> = unsafe { msg_send_id![sender, draggingPasteboard] };
+            let mut files = Vec::new();
+            // Read NSURL objects while the pasteboard grants access. Retain the
+            // security scope with each admitted descriptor through Page lifetime.
+            // `Class` objects are Objective-C messages but are not objc2
+            // `ClassType` instances. Let NSArray retain the class object via
+            // its native creation method instead of constructing a Rust
+            // `Retained<NSObject>` around the metaclass pointer.
+            let url_class: &AnyObject =
+                unsafe { &*(NSURL::class() as *const _ as *const AnyObject) };
+            let classes = unsafe { NSArray::<AnyObject>::arrayWithObject(url_class) };
+            let urls: Option<Retained<NSArray<NSURL>>> = unsafe {
+                msg_send_id![&*pb, readObjectsForClasses: &*classes, options: None::<&AnyObject>]
+            };
+            if let Some(urls) = urls {
+                for url in urls.into_iter() {
+                    if !unsafe { url.isFileURL() } {
+                        continue;
+                    }
+                    let Some(path) = (unsafe { url.path() }) else {
+                        continue;
+                    };
+                    let Ok(path) = String::from_utf16(&units(&path)) else {
+                        continue;
+                    };
+                    let scope = Arc::new(DragSecurityScope {
+                        active: unsafe { url.startAccessingSecurityScopedResource() },
+                        url,
+                    });
+                    if let Ok(mut file) = crate::event::NativeDragFileOffer::open(path.into()) {
+                        file.access = Some(scope);
+                        files.push(file);
+                    }
+                }
+            }
+            // Preserve pre-NSURL sources as an admission fallback; descriptors,
+            // rather than these path strings, remain the data authority.
+            if files.is_empty() {
+                if let Some(paths) = pb.propertyListForType(unsafe { NSFilenamesPboardType }) {
+                    let paths: Retained<NSArray<NSString>> = unsafe { Retained::cast(paths) };
+                    for path in paths.into_iter() {
+                        if let Ok(path) = String::from_utf16(&units(&path)) {
+                            if let Ok(file) = crate::event::NativeDragFileOffer::open(path.into()) {
+                                files.push(file);
+                            }
+                        }
+                    }
+                }
+            }
+            let paths = files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>();
+            let promise_class: &AnyObject = unsafe {
+                &*(objc2_app_kit::NSFilePromiseReceiver::class() as *const _ as *const AnyObject)
+            };
+            let classes = unsafe { NSArray::<AnyObject>::arrayWithObject(promise_class) };
+            let receivers: Option<Retained<NSArray<objc2_app_kit::NSFilePromiseReceiver>>> = unsafe {
+                msg_send_id![&*pb, readObjectsForClasses: &*classes, options: None::<&AnyObject>]
+            };
+            let mut virtual_files = Vec::new();
+            let mut pending = Vec::new();
+            if let Some(receivers) = receivers {
+                for receiver in receivers.into_iter() {
+                    let mut promises = Vec::new();
+                    for name in unsafe { receiver.fileNames() }.into_iter() {
+                        let Ok(name) = String::from_utf16(&units(&name)) else {
+                            continue;
+                        };
+                        let path = std::path::Path::new(&name);
+                        if path.file_name() != Some(std::ffi::OsStr::new(&name))
+                            || name == "."
+                            || name == ".."
+                        {
+                            continue;
+                        }
+                        let promise = Arc::new(crate::event::NativeDragFilePromise::new());
+                        virtual_files.push(crate::event::NativeDragVirtualFileOffer {
+                            name: name.clone().into(),
+                            content_type: None,
+                            metadata: None,
+                            reader: promise.clone(),
+                        });
+                        promises.push((name.into(), promise));
+                    }
+                    if !promises.is_empty() {
+                        pending.push(DragFilePromise {
+                            receiver,
+                            files: promises,
+                        });
+                    }
+                }
+            }
+            self.ivars().target_file_promises.replace(pending);
+            let mut strings: Vec<(String, Vec<u16>)> = Vec::new();
+            for (native, mime) in [
+                (ns_string!("public.utf8-plain-text"), "text/plain"),
+                (ns_string!("public.html"), "text/html"),
+                (ns_string!("public.url"), "text/uri-list"),
+            ] {
+                if let Some(value) = unsafe { pb.stringForType(native) } {
+                    strings.push((mime.into(), units(&value)));
+                }
+            }
+            if paths.is_empty() && virtual_files.is_empty() && strings.is_empty() {
+                return NSDragOperation::None;
+            }
+            NativeDragDropEvent {
+                phase,
+                files,
+                virtual_files,
+                paths,
+                data: strings
+                    .iter()
+                    .map(|(mime, value)| {
+                        (
+                            mime.clone(),
+                            Arc::<[u8]>::from(String::from_utf16_lossy(value).into_bytes()),
+                        )
+                    })
+                    .collect(),
+                strings,
+                position: PhysicalPosition::new(0., 0.),
+                screen_position: None,
+                modifiers: 0,
+                source_operations: 0,
+                operation: Arc::new(AtomicU32::new(0)),
+                observed_at: std::time::Instant::now(),
+            }
+        } else {
+            let Some(event) = self.ivars().target_drag.borrow().clone() else {
+                return NSDragOperation::None;
+            };
+            event
+        };
+        event.phase = phase;
+        event.observed_at = std::time::Instant::now();
+        if let Some(sender) = sender {
+            let location: NSPoint = unsafe { objc2::msg_send![sender, draggingLocation] };
+            let Some(view) = self.window().contentView() else {
+                return NSDragOperation::None;
+            };
+            let local = view.convertPoint_fromView(location, None);
+            let scale = self.scale_factor();
+            event.position = PhysicalPosition::new(local.x * scale, local.y * scale);
+            let screen = unsafe { self.window().convertPointToScreen(location) };
+            let screen = flip_window_screen_coordinates(NSRect::new(screen, NSSize::new(0., 0.)));
+            event.screen_position = Some(PhysicalPosition::new(screen.x * scale, screen.y * scale));
+            let mask: NSDragOperation =
+                unsafe { objc2::msg_send![sender, draggingSourceOperationMask] };
+            event.source_operations = mask.bits() as u32 & 19;
+        }
+        let modifiers = unsafe { NSEvent::modifierFlags_class() }.bits();
+        event.modifiers = i32::from(modifiers & (1 << 17) != 0)
+            | i32::from(modifiers & (1 << 18) != 0) << 1
+            | i32::from(modifiers & (1 << 19) != 0) << 2
+            | i32::from(modifiers & (1 << 20) != 0) << 3;
+        let operation = event.operation.load(Ordering::Acquire) & event.source_operations;
+        if matches!(phase, P::Drop | P::Leave) {
+            for promise in self.ivars().target_file_promises.take() {
+                if phase == P::Drop && operation != 0 {
+                    promise.receive();
+                } else {
+                    promise.fail("native drag file promise cancelled");
+                }
+            }
+            self.ivars().target_drag.borrow_mut().take();
+        } else {
+            self.ivars().target_drag.replace(Some(event.clone()));
+        }
+        match phase {
+            P::Enter => {
+                for path in &event.paths {
+                    self.queue_event(WindowEvent::HoveredFile(path.clone()));
+                }
+            }
+            P::Drop => {
+                for path in &event.paths {
+                    self.queue_event(WindowEvent::DroppedFile(path.clone()));
+                }
+            }
+            P::Leave => self.queue_event(WindowEvent::HoveredFileCancelled),
+            P::Over => (),
+        }
+        self.queue_event(WindowEvent::NativeDragDrop(event));
+        NSDragOperation::from_bits_retain(operation as usize)
+    }
     pub(crate) fn queue_event(&self, event: WindowEvent) {
-        self.ivars().app_delegate.maybe_queue_window_event(self.window().id(), event);
+        self.ivars()
+            .app_delegate
+            .maybe_queue_window_event(self.window().id(), event);
     }
 
     fn handle_scale_factor_changed(&self, scale_factor: CGFloat) {
@@ -829,10 +1136,13 @@ impl WindowDelegate {
 
         let suggested_size = content_size.to_physical(scale_factor);
         let new_inner_size = Arc::new(Mutex::new(suggested_size));
-        app_delegate.handle_window_event(window.id(), WindowEvent::ScaleFactorChanged {
-            scale_factor,
-            inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
-        });
+        app_delegate.handle_window_event(
+            window.id(),
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
+            },
+        );
         let physical_size = *new_inner_size.lock().unwrap();
         drop(new_inner_size);
 
@@ -958,20 +1268,26 @@ impl WindowDelegate {
     pub fn request_inner_size(&self, size: Size) -> Option<PhysicalSize<u32>> {
         let scale_factor = self.scale_factor();
         let size = size.to_logical(scale_factor);
-        self.window().setContentSize(NSSize::new(size.width, size.height));
+        self.window()
+            .setContentSize(NSSize::new(size.width, size.height));
         None
     }
 
     pub fn set_min_inner_size(&self, dimensions: Option<Size>) {
-        let dimensions =
-            dimensions.unwrap_or(Size::Logical(LogicalSize { width: 0.0, height: 0.0 }));
+        let dimensions = dimensions.unwrap_or(Size::Logical(LogicalSize {
+            width: 0.0,
+            height: 0.0,
+        }));
         let min_size = dimensions.to_logical::<CGFloat>(self.scale_factor());
 
         let min_size = NSSize::new(min_size.width, min_size.height);
         unsafe { self.window().setContentMinSize(min_size) };
 
         // If necessary, resize the window to match constraint
-        let mut current_size = self.window().contentRectForFrameRect(self.window().frame()).size;
+        let mut current_size = self
+            .window()
+            .contentRectForFrameRect(self.window().frame())
+            .size;
         if current_size.width < min_size.width {
             current_size.width = min_size.width;
         }
@@ -993,7 +1309,10 @@ impl WindowDelegate {
         unsafe { self.window().setContentMaxSize(max_size) };
 
         // If necessary, resize the window to match constraint
-        let mut current_size = self.window().contentRectForFrameRect(self.window().frame()).size;
+        let mut current_size = self
+            .window()
+            .contentRectForFrameRect(self.window().frame())
+            .size;
         if max_size.width < current_size.width {
             current_size.width = max_size.width;
         }
@@ -1077,7 +1396,9 @@ impl WindowDelegate {
         // We edit the button directly instead of using `NSResizableWindowMask`,
         // since that mask also affect the resizability of the window (which is
         // controllable by other means in `winit`).
-        if let Some(button) = self.window().standardWindowButton(NSWindowButton::NSWindowZoomButton)
+        if let Some(button) = self
+            .window()
+            .standardWindowButton(NSWindowButton::NSWindowZoomButton)
         {
             button.setEnabled(buttons.contains(WindowButtons::MAXIMIZE));
         }
@@ -1126,7 +1447,7 @@ impl WindowDelegate {
             CursorGrabMode::None => true,
             CursorGrabMode::Confined => {
                 return Err(ExternalError::NotSupported(NotSupportedError::new()))
-            },
+            }
         };
 
         // TODO: Do this for real https://stackoverflow.com/a/40922095/5435443
@@ -1169,8 +1490,9 @@ impl WindowDelegate {
     #[inline]
     pub fn drag_window(&self) -> Result<(), ExternalError> {
         let mtm = MainThreadMarker::from(self);
-        let event =
-            NSApplication::sharedApplication(mtm).currentEvent().ok_or(ExternalError::Ignored)?;
+        let event = NSApplication::sharedApplication(mtm)
+            .currentEvent()
+            .ok_or(ExternalError::Ignored)?;
         self.window().performWindowDragWithEvent(&event);
         Ok(())
     }
@@ -1211,8 +1533,11 @@ impl WindowDelegate {
     }
 
     fn saved_style(&self) -> NSWindowStyleMask {
-        let base_mask =
-            self.ivars().saved_style.take().unwrap_or_else(|| self.window().styleMask());
+        let base_mask = self
+            .ivars()
+            .saved_style
+            .take()
+            .unwrap_or_else(|| self.window().styleMask());
         if self.ivars().resizable.get() {
             base_mask | NSWindowStyleMask::Resizable
         } else {
@@ -1272,7 +1597,11 @@ impl WindowDelegate {
             return;
         }
 
-        if self.window().styleMask().contains(NSWindowStyleMask::Resizable) {
+        if self
+            .window()
+            .styleMask()
+            .contains(NSWindowStyleMask::Resizable)
+        {
             // Just use the native zoom if resizable
             self.window().zoom(None);
         } else {
@@ -1281,7 +1610,10 @@ impl WindowDelegate {
                 let screen = NSScreen::mainScreen(mtm).expect("no screen found");
                 screen.visibleFrame()
             } else {
-                self.ivars().standard_frame.get().unwrap_or(DEFAULT_STANDARD_FRAME)
+                self.ivars()
+                    .standard_frame
+                    .get()
+                    .unwrap_or(DEFAULT_STANDARD_FRAME)
             };
             self.window().setFrame_display(new_rect, false);
         }
@@ -1328,7 +1660,7 @@ impl WindowDelegate {
                     } else {
                         return;
                     }
-                },
+                }
                 Fullscreen::Exclusive(video_mode) => video_mode.monitor(),
             }
             .ns_screen(mtm)
@@ -1358,7 +1690,9 @@ impl WindowDelegate {
             let mut fade_token = ffi::kCGDisplayFadeReservationInvalidToken;
 
             if matches!(old_fullscreen, Some(Fullscreen::Borderless(_))) {
-                self.ivars().save_presentation_opts.replace(Some(app.presentationOptions()));
+                self.ivars()
+                    .save_presentation_opts
+                    .replace(Some(app.presentationOptions()));
             }
 
             unsafe {
@@ -1441,15 +1775,15 @@ impl WindowDelegate {
                 }
 
                 toggle_fullscreen(self.window());
-            },
+            }
             (Some(Fullscreen::Borderless(_)), None) => {
                 // State is restored by `window_did_exit_fullscreen`
                 toggle_fullscreen(self.window());
-            },
+            }
             (Some(Fullscreen::Exclusive(ref video_mode)), None) => {
                 restore_and_release_display(&video_mode.monitor());
                 toggle_fullscreen(self.window());
-            },
+            }
             (Some(Fullscreen::Borderless(_)), Some(Fullscreen::Exclusive(_))) => {
                 // If we're already in fullscreen mode, calling
                 // `CGDisplayCapture` will place the shielding window on top of
@@ -1459,7 +1793,9 @@ impl WindowDelegate {
                 // of the menu bar, and this looks broken, so we must make sure
                 // that the menu bar is disabled. This is done in the window
                 // delegate in `window:willUseFullScreenPresentationOptions:`.
-                self.ivars().save_presentation_opts.set(Some(app.presentationOptions()));
+                self.ivars()
+                    .save_presentation_opts
+                    .set(Some(app.presentationOptions()));
 
                 let presentation_options =
                     NSApplicationPresentationOptions::NSApplicationPresentationFullScreen
@@ -1469,7 +1805,7 @@ impl WindowDelegate {
 
                 let window_level = unsafe { ffi::CGShieldingWindowLevel() } as NSWindowLevel + 1;
                 self.window().setLevel(window_level);
-            },
+            }
             (Some(Fullscreen::Exclusive(ref video_mode)), Some(Fullscreen::Borderless(_))) => {
                 let presentation_options = self.ivars().save_presentation_opts.get().unwrap_or(
                     NSApplicationPresentationOptions::NSApplicationPresentationFullScreen
@@ -1482,9 +1818,10 @@ impl WindowDelegate {
 
                 // Restore the normal window level following the Borderless fullscreen
                 // `CGShieldingWindowLevel() + 1` hack.
-                self.window().setLevel(ffi::kCGNormalWindowLevel as NSWindowLevel);
-            },
-            _ => {},
+                self.window()
+                    .setLevel(ffi::kCGNormalWindowLevel as NSWindowLevel);
+            }
+            _ => {}
         };
     }
 
@@ -1559,6 +1896,11 @@ impl WindowDelegate {
         let size = NSSize::new(size.width, size.height);
 
         self.view().set_ime_cursor_area(logical_spot, size);
+    }
+
+    #[inline]
+    pub fn set_ime_text_state(&self, state: Option<ImeTextState>) {
+        self.view().set_ime_text_state(state);
     }
 
     #[inline]
@@ -1680,7 +2022,9 @@ impl WindowDelegate {
                 let app = NSApplication::sharedApplication(mtm);
 
                 if app.respondsToSelector(sel!(effectiveAppearance)) {
-                    Some(super::window_delegate::appearance_to_theme(&app.effectiveAppearance()))
+                    Some(super::window_delegate::appearance_to_theme(
+                        &app.effectiveAppearance(),
+                    ))
                 } else {
                     Some(Theme::Light)
                 }
@@ -1688,7 +2032,10 @@ impl WindowDelegate {
     }
 
     pub fn set_theme(&self, theme: Option<Theme>) {
-        unsafe { self.window().setAppearance(theme_to_appearance(theme).as_deref()) };
+        unsafe {
+            self.window()
+                .setAppearance(theme_to_appearance(theme).as_deref())
+        };
     }
 
     #[inline]
@@ -1714,7 +2061,10 @@ fn restore_and_release_display(monitor: &MonitorHandle) {
     if available_monitors.contains(monitor) {
         unsafe {
             ffi::CGRestorePermanentDisplayConfiguration();
-            assert_eq!(ffi::CGDisplayRelease(monitor.native_identifier()), ffi::kCGErrorSuccess);
+            assert_eq!(
+                ffi::CGDisplayRelease(monitor.native_identifier()),
+                ffi::kCGErrorSuccess
+            );
         };
     } else {
         warn!(
@@ -1725,6 +2075,11 @@ fn restore_and_release_display(monitor: &MonitorHandle) {
 }
 
 impl WindowExtMacOS for WindowDelegate {
+    #[inline]
+    fn set_ime_text_state(&self, state: Option<ImeTextState>) {
+        WindowDelegate::set_ime_text_state(self, state)
+    }
+
     #[inline]
     fn simple_fullscreen(&self) -> bool {
         self.ivars().is_simple_fullscreen.get()
@@ -1749,11 +2104,15 @@ impl WindowExtMacOS for WindowDelegate {
         if fullscreen {
             // Remember the original window's settings
             // Exclude title bar
+            self.ivars().standard_frame.set(Some(
+                self.window().contentRectForFrameRect(self.window().frame()),
+            ));
             self.ivars()
-                .standard_frame
-                .set(Some(self.window().contentRectForFrameRect(self.window().frame())));
-            self.ivars().saved_style.set(Some(self.window().styleMask()));
-            self.ivars().save_presentation_opts.set(Some(app.presentationOptions()));
+                .saved_style
+                .set(Some(self.window().styleMask()));
+            self.ivars()
+                .save_presentation_opts
+                .set(Some(app.presentationOptions()));
 
             // Tell our window's state that we're in fullscreen
             self.ivars().is_simple_fullscreen.set(true);
@@ -1772,7 +2131,10 @@ impl WindowExtMacOS for WindowDelegate {
             self.toggle_style_mask(NSWindowStyleMask::Titled, false);
 
             // Set the window frame to the screen frame size
-            let screen = self.window().screen().expect("expected screen to be available");
+            let screen = self
+                .window()
+                .screen()
+                .expect("expected screen to be available");
             self.window().setFrame_display(screen.frame(), true);
 
             // Fullscreen windows can't be resized, minimized, or moved
@@ -1784,7 +2146,11 @@ impl WindowExtMacOS for WindowDelegate {
             self.ivars().is_simple_fullscreen.set(false);
 
             let save_presentation_opts = self.ivars().save_presentation_opts.get();
-            let frame = self.ivars().standard_frame.get().unwrap_or(DEFAULT_STANDARD_FRAME);
+            let frame = self
+                .ivars()
+                .standard_frame
+                .get()
+                .unwrap_or(DEFAULT_STANDARD_FRAME);
 
             if let Some(presentation_opts) = save_presentation_opts {
                 app.setPresentationOptions(presentation_opts);
@@ -1810,7 +2176,8 @@ impl WindowExtMacOS for WindowDelegate {
 
     #[inline]
     fn set_tabbing_identifier(&self, identifier: &str) {
-        self.window().setTabbingIdentifier(&NSString::from_str(identifier))
+        self.window()
+            .setTabbingIdentifier(&NSString::from_str(identifier))
     }
 
     #[inline]
@@ -1841,7 +2208,9 @@ impl WindowExtMacOS for WindowDelegate {
 
     #[inline]
     fn num_tabs(&self) -> usize {
-        unsafe { self.window().tabbedWindows() }.map(|windows| windows.len()).unwrap_or(1)
+        unsafe { self.window().tabbedWindows() }
+            .map(|windows| windows.len())
+            .unwrap_or(1)
     }
 
     fn is_document_edited(&self) -> bool {
@@ -1889,7 +2258,10 @@ pub fn appearance_to_theme(appearance: &NSAppearance) -> Theme {
             Theme::Light
         }
     } else {
-        warn!(?appearance, "failed to determine the theme of the appearance");
+        warn!(
+            ?appearance,
+            "failed to determine the theme of the appearance"
+        );
         // Default to light in this case
         Theme::Light
     }

@@ -74,6 +74,12 @@ impl<B: PictureLayerImplTypes, E> LayerImplReadTree<B> for LayerContextTree<'_, 
     }
 }
 impl<B: PictureLayerImplTypes, E> LayerImplTree<B> for LayerContextTree<'_, B, E> {
+    fn ResourceIdForUIResource(&self, id: UIResourceId) -> ResourceId {
+        self.read_host.ResourceIdForUIResource(id)
+    }
+    fn GetUIResourceSize(&self, id: UIResourceId) -> crate::adapter::geometry::Size {
+        self.read_host.GetUIResourceSize(id)
+    }
     fn property_trees_mut(&mut self) -> &mut PropertyTreesFor<B> {
         self.fields.property_trees
     }

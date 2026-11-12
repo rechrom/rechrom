@@ -171,7 +171,7 @@ vm_block = 9; continue;
 }
 // C line 53239
 11 => {
-let _ = JS_EnqueueJob(ctx, Some(promise_reaction_job), (5 as i32), (args).as_mut_ptr());
+let _ = JS_EnqueueJobWithContinuation(ctx, Some(promise_reaction_job), (5 as i32), (args).as_mut_ptr(), (*(rd)).continuation_data);
 vm_block = 10; continue;
 }
 // C line 53238
@@ -2448,7 +2448,7 @@ vm_block = 7; continue;
 }
 // C line 54011
 11 => {
-let _ = JS_EnqueueJob(ctx, Some(promise_reaction_job), (5 as i32), (args).as_mut_ptr());
+let _ = JS_EnqueueJobWithContinuation(ctx, Some(promise_reaction_job), (5 as i32), (args).as_mut_ptr(), (*(rd)).continuation_data);
 vm_block = 10; continue;
 }
 // C line 54010
@@ -2580,6 +2580,7 @@ vm_block = if ((!(!(rd).is_null()) as i32)) != 0 { 37 } else { 34 }; continue;
 // C line 53977
 39 => {
 let _ = { let assigned = ((js_mallocz(ctx, (size_of::<JSPromiseReactionData>() as usize))) as *mut JSPromiseReactionData); rd = assigned; assigned };
+if !rd.is_null() { (*rd).continuation_data=js_capture_continuation_data(ctx); }
 vm_block = 38; continue;
 }
 // C line 53975

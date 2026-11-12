@@ -56,6 +56,25 @@ pub fn IsSpaceOrNewline(c: u16) -> bool {
     }
 }
 
+// WTF unicode.h categoryMask; ICU's canonical general-category provider.
+pub fn Category(code_point: i32) -> CharCategory {
+    1 << unsafe { icu_bidi::ubidi_ffi::u_charType(code_point) }
+}
+
+// WTF unicode.h:141-143; ICU u_ispunct category mask.
+pub fn IsPunct(c: i32) -> bool {
+    matches!(unsafe { icu_bidi::ubidi_ffi::u_charType(c) }, 19..=23 | 28..=29)
+}
+
+// WTF unicode.h:137-139; string_impl.cc:987-1002.
+pub fn IsPrintableChar(c: i32) -> bool {
+    unsafe { icu_bidi::ubidi_ffi::u_isprint(c) != 0 }
+}
+pub fn StartsWithIgnoringCaseAndAccents(text: &[u16], prefix: &[u16]) -> bool {
+    icu_bidi::string_search::StringSearchIgnoringCaseAndAccents(prefix, text)
+        .is_some_and(|(index, _)| index == 0)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WordBoundaryClass {
     Word,
@@ -127,5 +146,126 @@ mod tests {
         assert_eq!(WordBoundaryRange("alpha beta", 7), 6..10);
         assert_eq!(WordBoundaryRange("alpha beta", 10), 6..10);
         assert_eq!(WordBoundaryRange("cafe\u{301} noir", 5), 0..6);
+    }
+}
+
+// WTF unicode.h IsSymbol/IsAlphanumeric; ICU u_issymbol/u_isalnum category masks.
+pub fn IsSymbol(c: i32) -> bool {
+    matches!(unsafe { icu_bidi::ubidi_ffi::u_charType(c) }, 24..=27)
+}
+pub fn IsAlphanumeric(c: i32) -> bool {
+    matches!(unsafe { icu_bidi::ubidi_ffi::u_charType(c) }, 1..=5 | 9)
+}
+
+// CharacterBreakIterator::Pool and NumGraphemeClusters, source
+// platform/text/character_break_iterator.cc:40-72,156-178. Iterator state is
+// thread-local; the borrowed UTF16 span is detached before returning to pool.
+struct CharacterBreakIteratorPool(Vec<*mut icu_bidi::ubrk_ffi::UBreakIterator>);
+impl Drop for CharacterBreakIteratorPool {
+    fn drop(&mut self) {
+        for iterator in self.0.drain(..) {
+            unsafe { icu_bidi::ubrk_ffi::ubrk_close(iterator) };
+        }
+    }
+}
+thread_local! {
+    static CHARACTER_BREAK_ITERATORS: std::cell::RefCell<CharacterBreakIteratorPool> =
+        const { std::cell::RefCell::new(CharacterBreakIteratorPool(Vec::new())) };
+}
+pub fn NumGraphemeClusters(text: &[u16], locale: &std::ffi::CStr) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let mut error = 0;
+    let iterator = CHARACTER_BREAK_ITERATORS
+        .with(|pool| pool.borrow_mut().0.pop())
+        .unwrap_or_else(|| unsafe {
+            icu_bidi::ubrk_ffi::ubrk_open(0, locale.as_ptr(), std::ptr::null(), 0, &mut error)
+        });
+    if iterator.is_null() {
+        return text.len();
+    }
+    if error > 0 {
+        unsafe {
+            icu_bidi::ubrk_ffi::ubrk_close(iterator);
+        }
+        return text.len();
+    }
+    unsafe {
+        icu_bidi::ubrk_ffi::ubrk_setText(
+            iterator,
+            text.as_ptr(),
+            i32::try_from(text.len()).expect("ICU UTF16 length fits i32"),
+            &mut error,
+        );
+    }
+    let count = if error > 0 {
+        text.len()
+    } else {
+        let mut count = 0;
+        unsafe {
+            icu_bidi::ubrk_ffi::ubrk_first(iterator);
+            while icu_bidi::ubrk_ffi::ubrk_next(iterator) != icu_bidi::ubrk_ffi::UBRK_DONE {
+                count += 1;
+            }
+        }
+        count
+    };
+    error = 0;
+    unsafe {
+        icu_bidi::ubrk_ffi::ubrk_setText(iterator, std::ptr::null(), 0, &mut error);
+    }
+    CHARACTER_BREAK_ITERATORS.with(|pool| pool.borrow_mut().0.push(iterator));
+    count
+}
+/// ICU UCharDirection values, preserving WTF::unicode::Direction.
+pub fn Direction(character: u16) -> i32 {
+    unsafe { icu_bidi::ubidi_ffi::u_charDirection(character as i32) }
+}
+
+/// ICU UCHAR_VARIATION_SELECTOR=36, uchar.h. Preserve the original source
+/// property query; emoji classification separately borrows generated tables.
+pub fn IsVariationSelector(code_point: u32) -> bool {
+    unsafe { icu_bidi::ubidi_ffi::u_hasBinaryProperty(code_point as i32, 36) != 0 }
+}
+pub fn CombiningClass(code_point: u32) -> u8 {
+    unsafe { icu_bidi::ubidi_ffi::u_getCombiningClass(code_point as i32) }
+}
+
+// Blink smart_replace_cf.cc:45-48,82-83 / smart_replace_icu.cc:58-65,99-105.
+// Keep the native platform's predefined character classes; these are never
+// derived from locale-sensitive JS/DOM text or a copied Unicode range table.
+#[cfg(target_os = "macos")]
+mod smart_replace_cf {
+    use std::ffi::c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFCharacterSetGetPredefined(kind: i32) -> *const c_void;
+        fn CFCharacterSetIsLongCharacterMember(set: *const c_void, character: u32) -> u8;
+    }
+    pub(super) fn Contains(kind: i32, character: u32) -> bool {
+        unsafe {
+            CFCharacterSetIsLongCharacterMember(CFCharacterSetGetPredefined(kind), character) != 0
+        }
+    }
+}
+pub fn SmartReplaceIsWhitespaceOrNewline(character: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        smart_replace_cf::Contains(3, character)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        unsafe { icu_bidi::ubidi_ffi::u_hasBinaryProperty(character as i32, 31) != 0 }
+    }
+}
+pub fn SmartReplaceIsPunctuation(character: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        smart_replace_cf::Contains(11, character)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        IsPunct(character as i32)
     }
 }

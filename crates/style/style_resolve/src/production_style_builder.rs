@@ -104,6 +104,8 @@ mod interaction_application;
 mod motion_application;
 #[path = "render_delay_application.rs"]
 mod render_delay_application;
+#[path = "shape_application.rs"]
+mod shape_application;
 #[path = "timeline_trigger_application.rs"]
 mod timeline_trigger_application;
 #[path = "view_transition_application.rs"]
@@ -123,6 +125,15 @@ pub trait FontMetricsResolver {
         &self,
         description: &font_engine::FontDescription,
     ) -> Option<font_engine::FontMetrics>;
+    /// core/layout/text_utils.cc14-24. The same retained FontEngine computes
+    /// the source width and queues pure misses for Page to complete.
+    fn TextWidth(
+        &self,
+        description: &font_engine::FontDescription,
+        text: &[u16],
+        direction: foundation::TextDirection,
+        directional_override: bool,
+    ) -> font_engine::FontCompute<f32>;
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1213,7 +1224,7 @@ fn PixelsForStyle(
                 builder.GetFontDescription().ComputedSize(),
                 root,
                 media,
-            )
+            );
         }
     };
     builder.SetHasGlyphRelativeUnits();

@@ -5,6 +5,8 @@ pub fn IsExposed(id: foundation::CSSPropertyID) -> bool {
     use foundation::CSSPropertyID::*;
     // runtime_enabled_features.json5:2020-2023 experimental,2048-2051 test.
     // These flags have no production ExecutionContext/host override adapter.
-    !matches!(id, kTextDecorationInset | kTextSpacing)
+    (id != kTextDecorationInset
+        || foundation::RuntimeEnabledFeatures::CSSTextDecorationInsetEnabled())
+        && id != kTextSpacing
         && (id != kTextFit || foundation::RuntimeEnabledFeatures::CssTextFitEnabled())
 }

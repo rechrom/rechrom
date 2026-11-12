@@ -1,5 +1,19 @@
 use super::*;
 
+// cpp: core/layout/layout_box.cc:4038-4052.
+#[no_mangle]
+pub extern "Rust" fn LayoutBoxMutableSavePreviousOverflowDataProvider(box_: &mut LayoutBox) {
+    if box_.overflow_.Get().is_null() {
+        box_.overflow_ = Member::from_ptr(MakeGarbageCollected(BoxOverflowModel::default()));
+    }
+    let previous = crate::internal::overflow_model::PreviousOverflowData {
+        previous_scrollable_overflow_rect: box_.ScrollableOverflowRect(),
+        previous_visual_overflow_rect: box_.VisualOverflowRect(),
+        previous_self_visual_overflow_rect: box_.SelfVisualOverflowRect(),
+    };
+    unsafe { &mut *box_.overflow_.Get() }.previous_overflow_data = Some(previous);
+}
+
 #[inline(never)]
 pub(super) fn LayoutBoxSetScrollableOverflowFromLayoutResults(box_: &mut LayoutBox) {
     box_.CheckIsNotDestroyed();

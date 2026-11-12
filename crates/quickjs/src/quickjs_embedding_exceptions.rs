@@ -548,6 +548,9 @@ unsafe fn js_host_bytecode_location(
     let filename = js_host_atom_text((*ctx).rt, (*b).debug.filename);
     Some(DiagnosticLocation::new(filename, line, column, source, creation))
 }
+#[path = "quickjs_source_location_capture.rs"]
+mod source_location_capture;
+pub use source_location_capture::JS_CaptureCurrentSourceLocation;
 unsafe fn js_host_current_location(ctx: *mut JSContext) -> Option<DiagnosticLocation> {
     let mut frame = (*(*ctx).rt).current_stack_frame;
     while !frame.is_null() {

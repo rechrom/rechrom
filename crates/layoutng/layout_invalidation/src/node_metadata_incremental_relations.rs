@@ -100,6 +100,21 @@ pub(super) fn AttachIncrementalRelations(node: &mut Node) -> Result<(), Metadata
             ));
         }
     }
+    // The same native UA-part relation owner retains the input container.
+    // No later hit query searches DOM or rebuilds the shadow tree.
+    if !element.is_null() && unsafe { &*element }.InputIsTextControlContainer() {
+        let host =
+            unsafe { dynamic_node::<TextControlElement>(node.OwnerShadowHost().cast::<Node>()) };
+        if host.is_null()
+            || (!unsafe { &*host }.hit_container_.Get().is_null()
+                && unsafe { &*host }.hit_container_.Get() != element)
+        {
+            return Err(MetadataRelationsError::InvalidIncrementalRelation(
+                "Text control container requires its actual control host",
+            ));
+        }
+        unsafe { &mut *host }.hit_container_ = Member::from_ptr(element);
+    }
     if inner_editor {
         let editor = unsafe { dynamic_node::<TextControlInnerEditorElement>(node_ptr) };
         let host =

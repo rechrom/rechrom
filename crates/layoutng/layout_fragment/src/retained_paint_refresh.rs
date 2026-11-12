@@ -14,6 +14,7 @@ pub(super) fn refresh_retained_paint_inputs(
     fragments: crate::layout_engine::PaintFragmentCursor<'_>,
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
+    should_apply_root_background_behavior: bool,
 ) -> bool {
     let mut sources = SourceMap::default();
     let mut style_sources = StyleSourceMap::default();
@@ -127,6 +128,8 @@ pub(super) fn refresh_retained_paint_inputs(
         let children = cursor.Children();
         let node = unsafe { cursor.PaintDataMut() };
         node.paint.background_transfers_to_view = false;
+        node.paint.background_is_known_to_be_obscured = false;
+        node.paint.page_document_background_style = None;
         node.paint.canvas_background = None;
         node.paint.view_background_invalidation = None;
         if ink_clients.contains(&node.paint.display_item_client_id) {
@@ -146,6 +149,13 @@ pub(super) fn refresh_retained_paint_inputs(
                 ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
             node.paint.BindSourceObject(object);
             node.paint.pre_paint_invalidation = current.pre_paint_invalidation;
+            node.paint.is_printing = current.is_printing;
+            node.paint.should_print_backgrounds = current.should_print_backgrounds;
+            node.paint.effective_allowed_touch_action = current.effective_allowed_touch_action;
+            node.paint.inside_blocking_wheel_event_handler =
+                current.inside_blocking_wheel_event_handler;
+            node.paint.region_capture_crop_id = current.region_capture_crop_id;
+            node.paint.tracked_element_sub_rects = current.tracked_element_sub_rects;
             node.paint.style = current.style;
             node.paint.form_control = current.form_control;
             node.paint.display_item_client_is_cacheable = current.display_item_client_is_cacheable;
@@ -173,6 +183,10 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint
                 .selection_client_is_just_created
                 .set(current.selection_client_is_just_created.get());
+            node.paint.is_selected = current.is_selected;
+            node.paint.replaced_selection_state = current.replaced_selection_state;
+            node.paint.replaced_local_selection_visual_rect =
+                current.replaced_local_selection_visual_rect;
             node.paint.display_item_raster_effect_outset =
                 current.display_item_raster_effect_outset;
             node.paint.paint_layer_client_id = current.paint_layer_client_id;
@@ -200,6 +214,8 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
+            node.paint.background_is_known_to_be_obscured =
+                current.background_is_known_to_be_obscured;
             node.paint.background_paint_location = current.background_paint_location;
             node.paint.background_fill_layer_count = current.background_fill_layer_count;
             node.paint.has_background = current.has_background;
@@ -212,9 +228,17 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.background_any_layer_uses_content_box =
                 current.background_any_layer_uses_content_box;
             node.paint.scrollable_overflow = current.scrollable_overflow;
+            node.paint.previous_box_geometry = current.previous_box_geometry;
+            node.paint.previous_view_background_rect = current.previous_view_background_rect;
             node.paint.view_background_rect = current.view_background_rect;
             node.paint.focused_image_map_area = current.focused_image_map_area;
             node.paint.image_decoding_mode = current.image_decoding_mode;
+            node.paint.video_frame_resource_id = current.video_frame_resource_id;
+            if unsafe { &*object }.IsVideo() {
+                node.paint.replaced_content = Some(ExportReplacedContentPaintData(
+                    object.cast::<LayoutReplaced>(),
+                ));
+            }
         }
         if let Some(&item) = ink_items.get(&(
             node.paint.display_item_client_id,
@@ -238,7 +262,12 @@ pub(super) fn refresh_retained_paint_inputs(
             &ink_items,
         )
     };
-    ExportCanvasBackground(root, &objects, fragments);
+    ExportCanvasBackground(
+        root,
+        &objects,
+        fragments,
+        should_apply_root_background_behavior,
+    );
     ExportGlobalMainThreadScrollFacts(root, &objects, fragments);
     true
 }

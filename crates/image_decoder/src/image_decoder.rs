@@ -18,9 +18,13 @@ pub struct ImageDecodeInput<'a> {
 // cpp: image_decoder/image_decoder.h:19-23
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DecodedImage {
+    /// Decoder-selected format, never the URL extension or declared MIME.
+    pub filename_extension: Option<&'static str>,
     pub width: u32,
     pub height: u32,
     pub orientation: image_resource::ImageOrientation,
+    /// Original CUR hotspot for the same selected frame as `rgba8`.
+    pub hot_spot: Option<image_resource::ImageHotSpot>,
     /// Representation of `rgba8` and every retained animation frame.
     pub alpha_type: image_resource::PaintImageAlphaType,
     /// Source PaintImageGenerator frame metadata, when the codec's complete

@@ -8,6 +8,7 @@ use layoutng_assembly::internal::gap::gap_geometry::GapGeometry;
 use layoutng_assembly::internal::grid_item::GridItems;
 use layoutng_assembly::internal::grid_layout_data::GridLayoutSubtree;
 use layoutng_assembly::internal::layout_box::LayoutBox;
+use layoutng_assembly::RegisterGridTotalRowGapCount;
 use layoutng_geometry::geometry::logical_offset::LogicalOffset;
 
 // cpp: layoutng_grid/grid_break_token_data.h:25-44
@@ -66,6 +67,7 @@ impl GridBreakTokenData {
         cumulative_gap_offset_adjustment: LayoutUnit,
         first_unprocessed_row_gap_idx: u32,
     ) -> Self {
+        RegisterGridTotalRowGapCount(DispatchGridTotalRowGapCount);
         Self {
             base: BreakTokenAlgorithmData::new(BreakTokenAlgorithmDataType::kGridData),
             grid_items: Member::from_ptr(grid_items),
@@ -103,6 +105,9 @@ impl GridBreakTokenData {
         self.first_unprocessed_row_gap_idx
     }
 }
+fn DispatchGridTotalRowGapCount(data: *const BreakTokenAlgorithmData) -> u32 {
+    unsafe { &*data.cast::<GridBreakTokenData>() }.GetTotalRowGapCount()
+}
 const _: () = assert!(std::mem::offset_of!(GridBreakTokenData, base) == 0);
 impl BreakTokenAlgorithmDataVirtual for GridBreakTokenData {
     fn base(&self) -> &BreakTokenAlgorithmData {
@@ -127,5 +132,38 @@ impl DowncastFrom<BreakTokenAlgorithmData> for GridBreakTokenData {
 impl Traceable for GridBreakTokenData {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         GridBreakTokenData::Trace(self, visitor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layoutng_assembly::internal::gap::gap_geometry::ContainerType;
+
+    #[test]
+    fn base_virtual_dispatch_reads_full_geometry_gap_count() {
+        let mut geometry = GapGeometry::new(ContainerType::kGrid);
+        geometry.AddMainGap(LayoutUnit::from_signed(10));
+        geometry.AddMainGap(LayoutUnit::from_signed(20));
+        geometry.AddMainGap(LayoutUnit::from_signed(30));
+        let mut track_to_set = Vector::default();
+        let mut column_segments = Vector::default();
+        let data = GridBreakTokenData::new(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            LayoutUnit::default(),
+            LayoutUnit::default(),
+            &Vector::default(),
+            &Vector::default(),
+            &Vector::default(),
+            &HeapVector::default(),
+            &geometry,
+            &mut track_to_set,
+            &mut column_segments,
+            LayoutUnit::default(),
+            0,
+        );
+
+        assert_eq!(data.base.GetTotalRowGapCount(), 3);
     }
 }

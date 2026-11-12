@@ -431,6 +431,18 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
     pub fn HasCanvasChildPaintRecord(&self, child: B::DomNodeId) -> bool {
         self.canvas_child_layer_map_.contains_key(&child)
     }
+    /// Read the original retained child index; no display-list or DOM scan.
+    pub fn CanvasChildIds(&self) -> impl Iterator<Item = B::DomNodeId> + '_ {
+        self.canvas_child_layer_map_.keys().copied()
+    }
+    pub fn GetCanvasChildPaintRecordReadLease(
+        &self,
+        child: B::DomNodeId,
+        c: &LayerContext<'_, B>,
+    ) -> Option<crate::adapter::content_layer_client_impl::CanvasChildPaintRecordReadLease<B>> {
+        let index = *self.canvas_child_layer_map_.get(&child)?;
+        self.pending_layers_[index].GetCanvasChildPaintRecordReadLease(c)
+    }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:165-174.
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h:233-235.
     pub fn GetCanvasChildPaintState(&self, child: B::DomNodeId) -> Option<CanvasStateRead<'_, B>> {
@@ -490,16 +502,41 @@ impl<B: PaintArtifactCompositorTypes> OldPendingLayerMatcher<B> {
         }
     }
     fn Find(&mut self, new_layer: &PendingLayer<B>) -> Option<&mut PendingLayer<B>> {
+        let trace = std::env::var_os("RECHROM_DIAG_LAYER_MATCH").is_some();
         if self.pending_layers_.is_empty() {
+            if trace {
+                eprintln!(
+                    "layer-match new={} result=no-old-layers",
+                    new_layer.FirstPaintChunk().IdToString()
+                );
+            }
             return None;
         }
         if !new_layer.FirstPaintChunk().CanMatchOldChunk() {
+            if trace {
+                eprintln!(
+                    "layer-match new={} result=new-chunk-cannot-match",
+                    new_layer.FirstPaintChunk().IdToString()
+                );
+            }
             return None;
         }
         let mut index = self.next_index_;
         loop {
             let next = (index + 1) % self.pending_layers_.len();
-            if new_layer.Matches(&self.pending_layers_[index]) {
+            let matches = new_layer.Matches(&self.pending_layers_[index]);
+            if trace {
+                eprintln!(
+                    "layer-match new={} new-own={} old-index={} old={} old-own={} matches={}",
+                    new_layer.FirstPaintChunk().IdToString(),
+                    new_layer.ChunkRequiresOwnLayer(),
+                    index,
+                    self.pending_layers_[index].FirstPaintChunk().IdToString(),
+                    self.pending_layers_[index].ChunkRequiresOwnLayer(),
+                    matches
+                );
+            }
+            if matches {
                 self.next_index_ = next;
                 return Some(&mut self.pending_layers_[index]);
             }
@@ -1279,6 +1316,19 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::layerize_walk::Layeri
             compositing_type,
             self.services,
         ));
+        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+            let pending = self.pending_layers_.last().unwrap();
+            let transform = pending.GetPropertyTreeState().TransformNode();
+            let direct = transform.NearestDirectlyCompositedAncestor();
+            eprintln!(
+                "will-change-layerize chunk={} bounds={:?} transform-direct={} nearest-direct={} compositing={:?}",
+                pending.FirstPaintChunk().IdToString(),
+                pending.BoundsForTesting(),
+                transform.HasDirectCompositingReasons(),
+                direct.is_some(),
+                compositing_type,
+            );
+        }
     }
 
     fn advance_chunk_cursor(&mut self) {
@@ -1668,7 +1718,37 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
         .Layerize();
         self.compositor.pending_layers_ = pending;
         self.merged_sticky_transforms = merged_sticky_transforms;
+        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+            for (index, pending) in self.compositor.pending_layers_.iter().enumerate() {
+                let transform = pending.GetPropertyTreeState().TransformNode();
+                eprintln!(
+                    "will-change-final-before-decompose index={} first={} chunks={} bounds={:?} offset={:?} transform-direct={} nearest-direct={}",
+                    index,
+                    pending.FirstPaintChunk().IdToString(),
+                    pending.Chunks().len(),
+                    pending.BoundsForTesting(),
+                    pending.OffsetOfDecompositedTransforms(),
+                    transform.HasDirectCompositingReasons(),
+                    transform.NearestDirectlyCompositedAncestor().is_some(),
+                );
+            }
+        }
         PendingLayer::DecompositeTransforms(&mut self.compositor.pending_layers_);
+        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some() {
+            for (index, pending) in self.compositor.pending_layers_.iter().enumerate() {
+                let transform = pending.GetPropertyTreeState().TransformNode();
+                eprintln!(
+                    "will-change-final-after-decompose index={} first={} chunks={} bounds={:?} offset={:?} transform-direct={} nearest-direct={}",
+                    index,
+                    pending.FirstPaintChunk().IdToString(),
+                    pending.Chunks().len(),
+                    pending.BoundsForTesting(),
+                    pending.OffsetOfDecompositedTransforms(),
+                    transform.HasDirectCompositingReasons(),
+                    transform.NearestDirectlyCompositedAncestor().is_some(),
+                );
+            }
+        }
         self.compositor.pending_layers_.len()
     }
 

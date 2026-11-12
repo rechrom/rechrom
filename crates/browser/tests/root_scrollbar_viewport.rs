@@ -129,6 +129,53 @@ fn overlay_vertical_overflow_keeps_root_width() {
 }
 
 #[test]
+fn programmatic_scroll_refreshes_macos_painted_thumb_opacity() {
+    test_thread::run(|| {
+        let mut page = fixture("#fill{height:400px}", "<div id=fill></div>", true);
+        let before = page.CurrentFrame().unwrap().fragments.clone();
+        assert_eq!(
+            root_paint(&before)
+                .paint
+                .scrollbars
+                .as_ref()
+                .and_then(|scrollbars| scrollbars.vertical.as_ref())
+                .map(|axis| axis.painted_opacity),
+            Some(0.0)
+        );
+        assert!(page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .display_items
+            .iter()
+            .filter_map(|item| item.scrollbar.as_ref())
+            .all(|scrollbar| scrollbar.painted_opacity == 0.0));
+        check(&mut page, "window.scrollTo(0,100)");
+        for _ in 0..4 {
+            page.RunTask().unwrap();
+        }
+        let after = page.CurrentFrame().unwrap().fragments.clone();
+        assert_eq!(
+            root_paint(&after)
+                .paint
+                .scrollbars
+                .as_ref()
+                .and_then(|scrollbars| scrollbars.vertical.as_ref())
+                .map(|axis| axis.painted_opacity),
+            Some(1.0)
+        );
+        assert!(page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .display_items
+            .iter()
+            .filter_map(|item| item.scrollbar.as_ref())
+            .any(|scrollbar| !scrollbar.horizontal && scrollbar.painted_opacity == 1.0));
+    });
+}
+
+#[test]
 fn rowspan_cell_ink_overflow_recalculates_through_table_owner() {
     test_thread::run(|| {
         let mut page = fixture(
@@ -548,11 +595,11 @@ fn canvas_scroll_and_fixed_layers_keep_clip_parity_after_scroll() {
                 let retained = page.CurrentFrame().unwrap().fragments.clone();
                 page.ScrollWheelDefault(&interaction::input_event::WheelEvent {
                     phase: interaction::input_event::WheelPhase::kEnded,
-                    position: layoutng_assembly::internal::layout_input::Offset {
+                    position: interaction::input_event::Offset {
                         x: 100.0,
                         y: 100.0,
                     },
-                    delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 },
+                    delta: interaction::input_event::Offset { x: 0.0, y: 80.0 },
                     ..Default::default()
                 })
                 .unwrap();
@@ -647,8 +694,8 @@ fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
         paint_fixed_control(&page, 300, 200, 239, 140);
         page.ScrollWheelDefault(&interaction::input_event::WheelEvent {
             phase: interaction::input_event::WheelPhase::kEnded,
-            position: layoutng_assembly::internal::layout_input::Offset { x: 100.0, y: 100.0 },
-            delta: layoutng_assembly::internal::layout_input::Offset { x: 0.0, y: 80.0 },
+            position: interaction::input_event::Offset { x: 100.0, y: 100.0 },
+            delta: interaction::input_event::Offset { x: 0.0, y: 80.0 },
             ..Default::default()
         })
         .unwrap();

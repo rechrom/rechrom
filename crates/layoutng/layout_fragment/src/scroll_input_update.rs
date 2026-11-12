@@ -11,6 +11,7 @@ pub(super) fn update_scroll_offset(
     tree: &mut LayoutObjectTree,
     id: u64,
     offset: crate::internal::layout_input::Offset,
+    scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
 ) -> bool {
     let storage = unsafe { &mut *tree.storage_ };
     assert!(!storage.updating);
@@ -43,7 +44,7 @@ pub(super) fn update_scroll_offset(
                 unsafe { &mut *area }.ClearScrollAnchorForExplicitScroll();
             }
             element.scroll_offset = offset;
-            unsafe { &mut *record.node }.UpdateInputScrollOffset(offset);
+            unsafe { &mut *record.node }.UpdateInputScrollOffsetWithType(offset, scroll_type);
             found = true;
         }
     }

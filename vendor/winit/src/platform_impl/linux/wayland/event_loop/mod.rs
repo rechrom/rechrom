@@ -513,6 +513,7 @@ impl<T: 'static> EventLoop<T> {
 
         // This is always the last event we dispatch before poll again
         callback(Event::AboutToWait, &self.window_target);
+        self.with_state(|state| state.flush_native_drag_feedback());
 
         // Update the window frames and schedule redraws.
         let mut wake_up = false;

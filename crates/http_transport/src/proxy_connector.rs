@@ -2,7 +2,7 @@
 use hyper::Uri;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::connect::proxy::{SocksV4, SocksV5, Tunnel};
-use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
+use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector, HttpInfo};
 use hyper_util::client::proxy::matcher::Matcher;
 use hyper_util::rt::TokioIo;
 use std::error::Error;
@@ -17,28 +17,43 @@ use tower_service::Service;
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
-trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send + Connection {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + Connection> Stream for T {}
 
 pub(crate) struct ProxyStream {
     inner: TokioIo<Box<dyn Stream>>,
     proxied: bool,
     h2: bool,
+    transport: fetch_policy::RawNetworkTransport,
 }
 
 impl ProxyStream {
-    fn new(stream: impl Stream + 'static, proxied: bool, h2: bool) -> Self {
+    fn new(
+        stream: impl Stream + 'static,
+        proxied: bool,
+        h2: bool,
+        transport: fetch_policy::RawNetworkTransport,
+    ) -> Self {
         Self {
             inner: TokioIo::new(Box::new(stream)),
             proxied,
             h2,
+            transport,
         }
     }
 }
 
 impl Connection for ProxyStream {
     fn connected(&self) -> Connected {
-        let connected = Connected::new().proxy(self.proxied);
+        let mut connected = self.inner.inner().connected().proxy(self.proxied);
+        let mut extras = hyper::http::Extensions::new();
+        connected.get_extras(&mut extras);
+        if let Some(info) = extras.get::<HttpInfo>() {
+            connected = connected.extra(fetch_policy::RawNetworkConnection {
+                transport: self.transport,
+                peer: info.remote_addr(),
+            });
+        }
         if self.h2 {
             connected.negotiated_h2()
         } else {
@@ -113,7 +128,12 @@ impl EnvironmentConnector {
         dst: &Uri,
     ) -> Result<ProxyStream, BoxError> {
         if dst.scheme_str() != Some("https") {
-            return Ok(ProxyStream::new(stream, false, false));
+            return Ok(ProxyStream::new(
+                stream,
+                false,
+                false,
+                fetch_policy::RawNetworkTransport::Proxied,
+            ));
         }
         let host = dst
             .host()
@@ -124,7 +144,12 @@ impl EnvironmentConnector {
             .connect(name, stream)
             .await?;
         let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
-        Ok(ProxyStream::new(stream, false, h2))
+        Ok(ProxyStream::new(
+            NativeTlsStream(stream),
+            false,
+            h2,
+            fetch_policy::RawNetworkTransport::Proxied,
+        ))
     }
 }
 
@@ -143,14 +168,24 @@ impl Service<Uri> for EnvironmentConnector {
             let Some(proxy) = connector.matcher.intercept(&dst) else {
                 let stream = connector.direct.call(dst).await?;
                 let h2 = stream.connected().is_negotiated_h2();
-                return Ok(ProxyStream::new(TokioIo::new(stream), false, h2));
+                return Ok(ProxyStream::new(
+                    TokioIo::new(stream),
+                    false,
+                    h2,
+                    fetch_policy::RawNetworkTransport::Direct,
+                ));
             };
             let proxy_uri = proxy.uri().clone();
             match proxy_uri.scheme_str().unwrap_or("http") {
                 "http" | "https" if dst.scheme_str() == Some("http") => {
                     let stream = connector.proxy_http.call(proxy_uri).await?;
                     // Tell hyper to use absolute-form request targets for the proxy.
-                    Ok(ProxyStream::new(TokioIo::new(stream), true, false))
+                    Ok(ProxyStream::new(
+                        TokioIo::new(stream),
+                        true,
+                        false,
+                        fetch_policy::RawNetworkTransport::Proxied,
+                    ))
                 }
                 "http" | "https" => {
                     let mut tunnel = Tunnel::new(proxy_uri, connector.proxy_http.clone());
@@ -158,7 +193,9 @@ impl Service<Uri> for EnvironmentConnector {
                         tunnel = tunnel.with_auth(auth.clone());
                     }
                     let stream = tunnel.call(dst.clone()).await?;
-                    connector.secure(TokioIo::new(stream), &dst).await
+                    {
+                        connector.secure(TokioIo::new(stream), &dst).await
+                    }
                 }
                 scheme @ ("socks4" | "socks4a" | "socks5" | "socks5h") => {
                     // hyper-util's SOCKS helpers default to 443. Supply the
@@ -200,7 +237,9 @@ impl Service<Uri> for EnvironmentConnector {
                         }
                         socks.call(socks_dst).await?
                     };
-                    connector.secure(TokioIo::new(stream), &dst).await
+                    {
+                        connector.secure(TokioIo::new(stream), &dst).await
+                    }
                 }
                 scheme => Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -209,5 +248,43 @@ impl Service<Uri> for EnvironmentConnector {
                 .into()),
             }
         })
+    }
+}
+
+/// Retains the connector's original Connection metadata through target TLS,
+/// including all extras. It does not synthesize a second Connected owner.
+struct NativeTlsStream<T>(tokio_rustls::client::TlsStream<T>);
+impl<T: Stream> Connection for NativeTlsStream<T> {
+    fn connected(&self) -> Connected {
+        let connected = self.0.get_ref().0.connected();
+        if self.0.get_ref().1.alpn_protocol() == Some(b"h2") {
+            connected.negotiated_h2()
+        } else {
+            connected
+        }
+    }
+}
+impl<T: Stream> AsyncRead for NativeTlsStream<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+impl<T: Stream> AsyncWrite for NativeTlsStream<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }

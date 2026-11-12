@@ -252,6 +252,10 @@ impl ScrollbarAnimationController {
         client: &mut C,
         now: TimeTicks,
     ) -> bool {
+        let mut trace =
+            browser_tracing::span("compositor.animation", "Compositor.Animation.ScrollbarTick");
+        trace.set("owner", self.scroll_element_id_.GetInternalValue() as f64);
+        trace.set("animating", self.is_animating_ as u8 as f64);
         let mut animated = false;
         for scrollbar in self.Scrollbars(client) {
             if !client.Scrollbar_CanScrollOrientation(&scrollbar) {
@@ -264,6 +268,7 @@ impl ScrollbarAnimationController {
                 self.last_awaken_time_ = now;
             }
             let progress = self.AnimationProgressAtTime(now);
+            trace.set("progress", progress as f64);
             self.RunAnimationFrame(client, progress);
             if self.is_animating_ {
                 client.SetNeedsAnimateForScrollbarAnimation();

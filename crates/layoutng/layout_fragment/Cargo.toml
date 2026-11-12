@@ -4,7 +4,9 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+scroll_snap = { path = "../../scroll_snap" }
 browser_tracing = { path = "../../tracing" }
+canvas = { path = "../../canvas" }
 foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" }
 font_engine = { path = "../../font_engine" }
 image_resource = { path = "../../image_resource" }

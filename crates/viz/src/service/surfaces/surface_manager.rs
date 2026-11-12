@@ -315,6 +315,59 @@ impl SurfaceManager {
             .get(&id.local_surface_id().embed_token())
             .filter(|group| group.submitter_frame_sink_id() == id.frame_sink_id())
     }
+
+    // Source: components/viz/service/surfaces/surface.cc:780-854.
+    // Rust's Surface does not retain a manager backlink, so the manager owns
+    // the allocation-group half of UpdateActivationDependencies. Return only
+    // dependencies that are still unresolved; already-active child Surfaces
+    // must never leave their embedder pending.
+    pub fn PrepareActivationDependencies(
+        &mut self,
+        embedder: SurfaceId,
+        dependencies: impl IntoIterator<Item = SurfaceId>,
+    ) -> BTreeSet<SurfaceId> {
+        let previous = self
+            .surfaces_
+            .get(&embedder)
+            .map(|surface| surface.activation_dependencies().clone())
+            .unwrap_or_default();
+        let mut effects = Vec::new();
+        for dependency in previous {
+            let token = dependency.local_surface_id().embed_token();
+            if let Some(group) = self.embed_token_to_allocation_group_.get_mut(&token) {
+                if let Some(effect) = group.UnregisterBlockedEmbedder(embedder, false) {
+                    effects.push(effect);
+                }
+            }
+        }
+        self.ApplyAllocationGroupEffects(effects);
+
+        let mut groups = BTreeSet::new();
+        let mut unresolved = BTreeSet::new();
+        for dependency in dependencies {
+            let token = dependency.local_surface_id().embed_token();
+            if !groups.insert(token) {
+                continue;
+            }
+            let effects = match self.GetOrCreateAllocationGroupForSurfaceId(dependency) {
+                Ok(group) => group.UpdateLastPendingReferenceAndMaybeActivate(dependency),
+                Err(_) => Vec::new(),
+            };
+            self.ApplyAllocationGroupEffects(effects);
+            if self
+                .surfaces_
+                .get(&dependency)
+                .is_some_and(Surface::HasActiveFrame)
+            {
+                continue;
+            }
+            if let Ok(group) = self.GetOrCreateAllocationGroupForSurfaceId(dependency) {
+                group.RegisterBlockedEmbedder(embedder, dependency);
+                unresolved.insert(dependency);
+            }
+        }
+        unresolved
+    }
     pub fn SetAllocationGroupsNeedGarbageCollection(&mut self) {
         self.allocation_groups_need_garbage_collection_ = true;
     }

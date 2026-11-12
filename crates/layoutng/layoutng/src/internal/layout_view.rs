@@ -1,4 +1,10 @@
 #![allow(non_snake_case)]
+#[path = "../../../layout_fragment/src/layout_view_visual_rect.rs"]
+mod layout_fragment_visual_rect;
+
+#[path = "../../../layout_fragment/src/frame_view_pending_property_updates.rs"]
+mod frame_view_pending_property_updates;
+use frame_view_pending_property_updates::FrameViewPendingPropertyUpdates;
 
 use foundation::graphics_types;
 use std::cell::Cell;
@@ -101,20 +107,7 @@ unsafe extern "Rust" {
         result: &mut HitTestResult,
     ) -> bool;
     fn LayoutViewClearHitTestCacheProvider(view: &mut LayoutView);
-    fn LayoutViewMapToVisualRectInAncestorSpaceInternalProvider(
-        view: &LayoutView,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: VisualRectFlags,
-    ) -> bool;
     fn LayoutViewCommitPendingSelectionProvider(view: &mut LayoutView);
-    fn LayoutViewQuadsInAncestorInternalProvider(
-        view: &LayoutView,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        flags: MapCoordinatesFlags,
-        box_type: BoxQuadType,
-    );
     fn LayoutViewUpdateHitTestResultProvider(
         view: &LayoutView,
         result: &mut HitTestResult,
@@ -157,6 +150,10 @@ pub struct CachedScrollDimensions {
 #[repr(C)]
 pub struct LayoutView {
     base_: LayoutBlockFlow,
+    frame_view_pending_property_updates_: FrameViewPendingPropertyUpdates,
+    // Alias of the Page's canonical FrameSelection/LayoutSelection owner.
+    // Replaces source GetFrame()->Selection(); no endpoints are copied.
+    editing_selection_: std::rc::Weak<crate::editing_state::LayoutEditingState>,
     initial_containing_block_resize_handled_list_: Member<GCedHeapHashSet<Member<LayoutObject>>>,
     initial_containing_block_size_for_printing_: PhysicalSize,
     pagination_scale_factor_: f32,
@@ -181,6 +178,33 @@ pub struct LayoutView {
     is_visually_non_empty_: bool,
     contains_annotations_: bool,
     contains_non_scaling_stroke_: bool,
+    // LocalFrameView::ScrollableAreas(), weak keys retain original identities.
+    scrollbar_activity_queue_: std::rc::Rc<
+        std::cell::RefCell<Vec<super::layout_scrollable_area::NativeScrollbarActivity>>,
+    >,
+    scroll_area_disposals_:
+        std::rc::Rc<std::cell::RefCell<Vec<(usize, foundation::CompositorElementId)>>>,
+    registered_scrollable_areas_: std::cell::RefCell<
+        std::collections::BTreeMap<
+            usize,
+            WeakMember<super::layout_scrollable_area::PaintLayerScrollableArea>,
+        >,
+    >,
+    // LocalFrameView::pending_snap_updates_, same native area identities.
+    pending_snap_updates_: std::cell::RefCell<
+        std::collections::BTreeMap<
+            usize,
+            Member<super::layout_scrollable_area::PaintLayerScrollableArea>,
+        >,
+    >,
+    pending_perform_snap_: std::cell::RefCell<
+        std::collections::BTreeMap<
+            usize,
+            Member<super::layout_scrollable_area::PaintLayerScrollableArea>,
+        >,
+    >,
+    pending_snap_target_notifications_:
+        std::cell::RefCell<Vec<super::layout_scrollable_area::NativeLayoutSnapPlan>>,
 }
 
 // cpp: layoutng/internal/layout_view.h:437-442
@@ -217,6 +241,8 @@ impl LayoutView {
         assert!(!input_root.is_null());
         let mut view = Self {
             base_: LayoutBlockFlow::new(input_root),
+            frame_view_pending_property_updates_: Default::default(),
+            editing_selection_: Default::default(),
             initial_containing_block_resize_handled_list_: Member::default(),
             initial_containing_block_size_for_printing_: PhysicalSize::default(),
             pagination_scale_factor_: 1.0,
@@ -238,6 +264,12 @@ impl LayoutView {
             is_visually_non_empty_: false,
             contains_annotations_: false,
             contains_non_scaling_stroke_: false,
+            registered_scrollable_areas_: Default::default(),
+            scroll_area_disposals_: Default::default(),
+            scrollbar_activity_queue_: Default::default(),
+            pending_snap_updates_: Default::default(),
+            pending_perform_snap_: Default::default(),
+            pending_snap_target_notifications_: Default::default(),
         };
         view.SetRuntimeClass(super::layout_object::LayoutObjectClass::View);
         view.SetInline(false);
@@ -252,12 +284,34 @@ impl LayoutView {
         view
     }
 
+    pub(crate) fn BindEditingSelection(
+        &mut self,
+        owner: &std::rc::Rc<crate::editing_state::LayoutEditingState>,
+    ) {
+        self.editing_selection_ = std::rc::Rc::downgrade(owner);
+    }
+    pub fn EditingSelection(&self) -> std::rc::Rc<crate::editing_state::LayoutEditingState> {
+        self.editing_selection_
+            .upgrade()
+            .expect("same FrameSelection retained by resident tree")
+    }
+
     // cpp: layoutng/internal/layout_view_layout.cc:36-42
     pub fn Trace(&self, visitor: &mut Visitor) {
+        self.frame_view_pending_property_updates_.Trace(visitor);
         visitor.Trace(&self.anonymous_page_objects_);
+        for area in self.registered_scrollable_areas_.borrow().values() {
+            visitor.Trace(area);
+        }
         visitor.Trace(&self.svg_text_descendants_);
         visitor.Trace(&self.text_to_variable_length_transform_result_);
         visitor.Trace(&self.initial_containing_block_resize_handled_list_);
+        for area in self.pending_snap_updates_.borrow().values() {
+            visitor.Trace(area);
+        }
+        for area in self.pending_perform_snap_.borrow().values() {
+            visitor.Trace(area);
+        }
         self.base_.Trace(visitor);
     }
 
@@ -299,5 +353,156 @@ impl LayoutView {
     // cpp: layoutng/internal/layout_view.h:437-442
     pub fn AllowFromLayoutObject(object: &LayoutObject) -> bool {
         object.IsLayoutView()
+    }
+}
+
+impl LayoutView {
+    // LocalFrameView::AddPendingSnapUpdate/RemovePendingSnapUpdate, cc:5764-5776.
+    pub(crate) fn AddPendingSnapUpdate(
+        &self,
+        area: *mut super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        self.pending_snap_updates_
+            .borrow_mut()
+            .insert(area as usize, Member::from_ptr(area));
+    }
+    pub(crate) fn RemovePendingSnapUpdate(
+        &self,
+        area: *mut super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        self.pending_snap_updates_
+            .borrow_mut()
+            .remove(&(area as usize));
+        self.pending_perform_snap_
+            .borrow_mut()
+            .remove(&(area as usize));
+    }
+    // LocalFrameView::ExecutePendingSnapUpdates, cc:5778-5801. Performing the
+    // selected post-layout scroll is a separate programmatic-animator stage.
+    pub(crate) fn ExecutePendingSnapDataUpdates(&self) {
+        let pending = std::mem::take(&mut *self.pending_snap_updates_.borrow_mut());
+        for (_, area) in pending {
+            let Some(owner) = (unsafe { area.Get().as_mut() }) else {
+                continue;
+            };
+            if owner.HasBeenDisposed() {
+                continue;
+            }
+            let changed = owner
+                .UpdateSnapContainerData()
+                .expect("native snap-area geometry owner required");
+            if let Some(notification) = owner.TakeSnapTargetRemovalNotification() {
+                self.pending_snap_target_notifications_
+                    .borrow_mut()
+                    .push(notification);
+            }
+            if changed {
+                self.pending_perform_snap_
+                    .borrow_mut()
+                    .insert(area.Get() as usize, area);
+            }
+        }
+    }
+}
+
+impl LayoutView {
+    pub(crate) fn PendingPostLayoutSnapTargets(
+        &self,
+    ) -> Vec<super::layout_scrollable_area::NativePendingSnapTarget> {
+        self.pending_perform_snap_
+            .borrow()
+            .values()
+            .filter_map(|area| {
+                let area = unsafe { area.Get().as_ref()? };
+                (!area.HasBeenDisposed()).then(|| area.PendingSnapTarget())
+            })
+            .collect()
+    }
+    // LocalFrameView::ExecutePendingSnapUpdates, cc:5780-5808. Animator facts
+    // belong to the same source owner, supplied before consuming this queue.
+    pub(crate) fn ResolvePendingPostLayoutSnaps(
+        &self,
+        animation_states: &[super::layout_scrollable_area::NativeSnapAnimationState],
+        should_defer_layout_snap: bool,
+    ) -> Vec<super::layout_scrollable_area::NativeLayoutSnapPlan> {
+        let pending = std::mem::take(&mut *self.pending_perform_snap_.borrow_mut());
+        let mut plans = std::mem::take(&mut *self.pending_snap_target_notifications_.borrow_mut());
+        for (_, area) in pending {
+            let Some(owner) = (unsafe { area.Get().as_mut() }) else {
+                continue;
+            };
+            if owner.HasBeenDisposed() {
+                continue;
+            }
+            let state = *animation_states
+                .iter()
+                .find(|state| state.scroll_element_id == owner.GetScrollElementId())
+                .expect("every queued native snap owner requires its live animator state");
+            if state.has_running_animation {
+                self.AddPendingSnapUpdate(area.Get());
+            } else if should_defer_layout_snap {
+                self.pending_perform_snap_
+                    .borrow_mut()
+                    .insert(area.Get() as usize, area);
+            } else {
+                plans.push(owner.PlanSnapAfterLayout(state));
+            }
+        }
+        plans
+    }
+}
+
+impl LayoutView {
+    // LocalFrameView.cc AddScrollableArea/RemoveScrollableArea: membership is
+    // produced at native area creation/disposal, never inferred by a tree walk.
+    pub fn RegisterScrollableArea(
+        &self,
+        area: *mut super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        self.registered_scrollable_areas_
+            .borrow_mut()
+            .insert(area as usize, WeakMember::from_ptr(area));
+    }
+    pub fn UnregisterScrollableArea(
+        &self,
+        area: *const super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        if self
+            .registered_scrollable_areas_
+            .borrow_mut()
+            .remove(&(area as usize))
+            .is_some()
+        {
+            let element = unsafe { &*area }.GetScrollElementId();
+            self.scroll_area_disposals_
+                .borrow_mut()
+                .push((area as usize, element));
+        }
+    }
+    pub(crate) fn ScrollAreaDisposalQueue(
+        &self,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<(usize, foundation::CompositorElementId)>>> {
+        self.scroll_area_disposals_.clone()
+    }
+    pub fn RegisteredScrollableAreas(
+        &self,
+    ) -> Vec<foundation::Persistent<super::layout_scrollable_area::PaintLayerScrollableArea>> {
+        self.registered_scrollable_areas_
+            .borrow()
+            .values()
+            .filter_map(|area| {
+                let pointer = area.Get();
+                (!pointer.is_null()).then(|| foundation::Persistent::from_ptr(pointer))
+            })
+            .collect()
+    }
+}
+
+impl LayoutView {
+    pub(crate) fn ScrollbarActivityQueue(
+        &self,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<super::layout_scrollable_area::NativeScrollbarActivity>>>
+    {
+        self.scrollbar_activity_queue_.clone()
     }
 }

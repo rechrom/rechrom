@@ -9,6 +9,16 @@ use std::ffi::c_char;
 pub enum UBidi {}
 
 unsafe extern "C" {
+    // ICU uchar.h, backspace_state_machine.cc:107-267 source Unicode facts.
+    #[link_name = concat!("u_hasBinaryProperty_", env!("ICU_MAJOR"))]
+    pub fn u_hasBinaryProperty(ch: i32, property: i32) -> i8;
+    #[link_name = concat!("u_getCombiningClass_", env!("ICU_MAJOR"))]
+    pub fn u_getCombiningClass(ch: i32) -> u8;
+
+    // ICU uchar.h; WTF unicode.h:137-139.
+    #[link_name = concat!("u_isprint_", env!("ICU_MAJOR"))]
+    pub fn u_isprint(ch: i32) -> i8;
+
     #[link_name = concat!("ubidi_open_", env!("ICU_MAJOR"))]
     pub fn ubidi_open() -> *mut UBidi;
     #[link_name = concat!("ubidi_close_", env!("ICU_MAJOR"))]
@@ -60,4 +70,15 @@ unsafe extern "C" {
         options: u32,
         status: *mut i32,
     ) -> i32;
+    #[link_name = concat!("u_strToLower_", env!("ICU_MAJOR"))]
+    pub fn u_strToLower(
+        destination: *mut u16,
+        capacity: i32,
+        source: *const u16,
+        source_length: i32,
+        locale: *const c_char,
+        status: *mut i32,
+    ) -> i32;
+    #[link_name = concat!("u_memcasecmp_", env!("ICU_MAJOR"))]
+    pub fn u_memcasecmp(first: *const u16, second: *const u16, length: i32, options: u32) -> i32;
 }

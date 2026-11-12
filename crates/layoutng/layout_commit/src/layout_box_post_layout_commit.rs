@@ -37,5 +37,14 @@ impl LayoutBox {
             unsafe { &mut *layer }.UpdateScrollingAfterLayout();
         }
         self.ClearNeedsLayout();
+        // Source: core/layout/layout_video.cc:146-150. Derived post-layout
+        // invalidation follows the base fragment/overflow/layer publication.
+        if self.IsVideo() {
+            unsafe {
+                &mut *(self as *mut LayoutBox)
+                    .cast::<crate::internal::layout_replaced::LayoutVideo>()
+            }
+            .InvalidateCompositing();
+        }
     }
 }

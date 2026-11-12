@@ -31,9 +31,11 @@ pub struct Longhand {
 // cpp: layoutng_style/style/style_image.h:39-45
 pub use super::generated_gradient_image::Image;
 
-#[repr(C)]
+/// Source ImageResourceContent view over the resource's immutable image.
+/// The lease retains canonical producer identity across computed-style uses.
 pub struct ImageResourceContent {
-    _private: [u8; 0],
+    pub resource: std::rc::Rc<dyn image_resource::ImageResourceContentLease>,
+    pub image: std::sync::Arc<image_resource::PaintImage>,
 }
 
 pub use super::image_resource_observer::ImageResourceObserver;

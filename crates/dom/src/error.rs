@@ -3,7 +3,12 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DOMExceptionKind {
     InvalidArgument,
+    InvalidNodeType,
+    IndexSizeError,
     LogicError,
+    NotSupportedError,
+    NotFoundError,
+    InvalidStateError,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

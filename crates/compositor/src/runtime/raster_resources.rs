@@ -73,10 +73,11 @@ impl RasterPoolImages {
         &self,
         size: crate::adapter::geometry::Size,
         format: &crate::adapter::resource_types::SharedImageFormat,
+        color_space: &RasterColorSpace,
     ) -> Option<RasterSharedImage> {
         match self
             .provider
-            .CreateSharedImage(self.ids.Next(), size, format)
+            .CreateSharedImage(self.ids.Next(), size, format, color_space)
         {
             Ok(image) => Some(image),
             Err(error) => {
@@ -92,20 +93,20 @@ impl<R: CpuSkiaBackend> PoolSharedImageInterface<CpuCompositorTypes<R>> for Rast
         descriptor: SharedImageDescriptor<'_, RasterColorSpace>,
         _buffer_usage: Option<RasterBufferUsage>,
     ) -> Option<RasterSharedImage> {
-        self.Allocate(*descriptor.size, descriptor.format)
+        self.Allocate(*descriptor.size, descriptor.format, descriptor.color_space)
     }
     fn CreateSharedImageForSoftwareCompositor(
         &self,
         descriptor: SharedImageDescriptor<'_, RasterColorSpace>,
     ) -> Option<RasterSharedImage> {
-        self.Allocate(*descriptor.size, descriptor.format)
+        self.Allocate(*descriptor.size, descriptor.format, descriptor.color_space)
     }
     fn CreateSharedImageForTesting(
         &self,
         descriptor: SharedImageTestDescriptor<'_, RasterColorSpace>,
         _texture_target: u32,
     ) -> Option<RasterSharedImage> {
-        self.Allocate(*descriptor.size, descriptor.format)
+        self.Allocate(*descriptor.size, descriptor.format, descriptor.color_space)
     }
 }
 

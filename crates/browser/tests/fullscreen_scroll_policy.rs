@@ -3,8 +3,8 @@
 mod test_thread;
 
 use browser::page::Page;
+use interaction::input_event::Offset;
 use interaction::input_event::{WheelEvent, WheelPhase};
-use layoutng_assembly::internal::layout_input::Offset;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

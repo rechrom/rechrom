@@ -24,7 +24,7 @@ use std::{
 };
 
 #[cfg(test)]
-use layoutng_assembly::{fragment_tree::FragmentPaintData, internal::layout_input::Offset};
+use layoutng_assembly::fragment_tree::FragmentPaintData;
 #[cfg(test)]
 use std::{
     cell::Cell,
@@ -43,6 +43,11 @@ pub struct Viewport {
 #[derive(Clone, Copy, Debug)]
 pub struct ResizeRequest {
     pub viewport: Viewport,
+    /// Root browser viewport that owns this visual-properties update. A Page
+    /// may receive a derived child viewport (toolbar or content), but the root
+    /// value remains attached so its committed frame can acknowledge the
+    /// exact browser geometry that produced it.
+    pub root_viewport: Viewport,
     pub queued_at: Instant,
     pub samples: usize,
 }
@@ -50,6 +55,7 @@ impl ResizeRequest {
     pub fn new(viewport: Viewport, queued_at: Instant) -> Self {
         Self {
             viewport,
+            root_viewport: viewport,
             queued_at,
             samples: 1,
         }
@@ -59,6 +65,7 @@ impl ResizeRequest {
     }
     pub fn merge(&mut self, next: Self) {
         self.viewport = next.viewport;
+        self.root_viewport = next.root_viewport;
         self.queued_at = self.queued_at.min(next.queued_at);
         self.samples = self.samples.saturating_add(next.samples);
     }
@@ -137,6 +144,23 @@ pub struct WindowFrame {
     pub content: CapturedSurface,
 }
 pub type FrameMailbox = Arc<Mutex<Option<WindowFrame>>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyOutputTarget {
+    Page,
+    Toolbar,
+    /// The completed BrowserView display root, including browser-owned
+    /// backdrops and every embedded child Surface.
+    Root,
+}
+
+#[derive(Debug)]
+pub(crate) struct CopyOutputResult {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
+    pub(crate) provenance: Option<crate::page_presentation::FrameProvenance>,
+}
 #[derive(Debug)]
 pub struct FatalError {
     pub source: &'static str,
@@ -152,6 +176,7 @@ impl FatalError {
 }
 #[derive(Debug)]
 pub enum UserEvent {
+    StartSystemDrag(crate::native_drag::Start),
     OpenDevTools,
     CloseWindow,
     FrameReady,
@@ -167,8 +192,9 @@ pub enum UserEvent {
     Message(String),
     Fatal(FatalError),
     PageError(crate::page_error::PageError),
-    CursorChanged(browser::page::Cursor),
+    CursorChanged(interaction::Cursor),
     CaretChanged(Option<browser::page::CaretRect>),
+    TextInputStateChanged(Option<interaction::adapter::interaction::TextInputState>),
 }
 /// Opaque application routing key carried by a generic event-loop wake.
 /// The scheduler never interprets this value or learns which engine emitted it.
@@ -183,7 +209,13 @@ pub enum Command {
     Navigate(String),
     Resize(ResizeRequest),
     VSyncDisplayChanged(u32),
+    WidgetScreenOrigin {
+        x_dip: i32,
+        y_dip: i32,
+        scale: f64,
+    },
     Redraw,
+    TargetDrag(crate::native_drag::Target),
     Input(InputEvent),
     Wheel(crate::input::WheelSample),
     QueuedInput {
@@ -197,6 +229,14 @@ pub enum Command {
     Evaluate {
         source: String,
         reply: mpsc::Sender<Result<(), String>>,
+    },
+    /// Viz CopyOutputRequest equivalent for the last completed display frame.
+    /// The browser host only routes the request; Display owns the render target
+    /// and performs the RGBA readback on its presentation sequence.
+    CopyOutput {
+        expected_viewport: Viewport,
+        target: CopyOutputTarget,
+        reply: mpsc::Sender<Result<CopyOutputResult, String>>,
     },
     NewTab,
     CloseActiveTab,
@@ -214,12 +254,15 @@ impl Command {
             Self::Navigate(_) => "Host.Navigate",
             Self::Resize(_) => "Host.Resize",
             Self::VSyncDisplayChanged(_) => "Host.VSyncDisplayChanged",
+            Self::WidgetScreenOrigin { .. } => "Host.WidgetScreenOrigin",
             Self::Redraw => "Host.Redraw",
+            Self::TargetDrag(_) => "Host.TargetDrag",
             Self::Input(_) | Self::QueuedInput { .. } | Self::Wheel(_) => "Host.Input",
             Self::FocusAddress => "Host.FocusAddress",
             Self::SetActive(_) => "Host.SetActive",
             Self::Reload => "Host.Reload",
             Self::Evaluate { .. } => "Host.Evaluate",
+            Self::CopyOutput { .. } => "Host.CopyOutput",
             Self::NewTab => "Host.NewTab",
             Self::CloseActiveTab => "Host.CloseActiveTab",
             Self::CycleTab(_) => "Host.CycleTab",
@@ -268,7 +311,10 @@ pub struct Output {
 }
 impl Output {
     pub(crate) fn publish(&self, frame: WindowFrame) {
+        let mut trace = browser_tracing::span("present", "Display.PublishReadback");
+        let waiting = Instant::now();
         let mut mailbox = self.mailbox.lock().unwrap();
+        trace.set("lock_wait_ms", waiting.elapsed().as_secs_f64() * 1000.0);
         let wake = mailbox.is_none();
         *mailbox = Some(frame);
         drop(mailbox);
@@ -284,16 +330,15 @@ impl Output {
 // MainThreadSchedulerImpl keeps a presentation ThreadType lease on its page
 // thread. PlatformThreadApple maps that type to USER_INTERACTIVE; an ordinary
 // std::thread otherwise inherits default QoS, even while composing a window.
-pub(crate) fn set_page_thread_presentation_priority() {
+pub(crate) fn set_presentation_thread_priority() {
     #[cfg(target_os = "macos")]
     {
         unsafe extern "C" {
             fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
         }
         const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-        // Call only on the Page owner. This changes scheduling class, never
-        // realtime policy. Focus is not visibility: the owner's presentation
-        // lease remains active while an unfocused window can still present.
+        // Call only on workers that deliver or consume the presentation
+        // deadline. This changes scheduling class, never realtime policy.
         let result = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
         if result != 0 {
             eprintln!(
@@ -312,6 +357,7 @@ pub fn spawn(
     fallback_interval: Duration,
     display_id: Option<u32>,
     presentation_config: crate::presentation_runtime::Config,
+    prefers_reduced_motion: bool,
 ) -> io::Result<mpsc::Sender<Command>> {
     crate::browser_host::spawn(
         viewport,
@@ -321,6 +367,7 @@ pub fn spawn(
         fallback_interval,
         display_id,
         presentation_config,
+        prefers_reduced_motion,
     )
 }
 
@@ -347,13 +394,18 @@ pub(crate) fn create_document(
     height: f64,
     scale: f64,
     scripting: bool,
+    prefers_reduced_motion: bool,
+    text_settings: &crate::interaction_text_settings::InteractionTextSettings,
+    font_backend_factory: browser::BrowserFontBackendFactory,
     client: Rc<RefCell<dyn PageClient>>,
     threads: browser::page::PageThreads,
 ) -> io::Result<Page> {
     let mut options = url_loader::DefaultURLLoaderOptions::default();
-    // Chromium can multiplex many subresource requests over HTTP/2. Keep the
-    // embedder-wide scheduler from letting deferred scripts and media occupy
-    // every slot while render-blocking stylesheets wait behind them.
+    // Keep the process-wide admission window bounded. Letting every discovered
+    // subresource enter one HTTP/2 connection at once can exhaust the peer's
+    // active stream window: late critical resources receive headers but never
+    // make body progress. The scheduler partitions these slots by priority, so
+    // fonts and render-blocking CSS still bypass ordinary scripts and media.
     options.max_parallel_requests = 32;
     options.trace_requests = std::env::var_os("BROWSER_APP_TRACE_NETWORK").is_some();
     let loader = Rc::new(RefCell::new(url_loader::DefaultURLLoader::new(
@@ -363,8 +415,11 @@ pub(crate) fn create_document(
         image_decoder::skia_image_decoder::SkiaImageDecoder,
     ));
     let assembly = browser::CreateLayoutAssembly();
-    let mut constraints =
-        browser::CreateBrowserConstraints(width.ceil() as u32, height.ceil() as u32);
+    let mut constraints = browser::CreateBrowserConstraintsWithFontBackendFactory(
+        width.ceil() as u32,
+        height.ceil() as u32,
+        font_backend_factory,
+    );
     // The host selects a theme; pure layout receives only immutable metrics.
     // Leave the established overlay default unchanged unless explicitly asked.
     let scrollbar_mode = std::env::var("RECHROM_SCROLLBAR_MODE")
@@ -385,14 +440,14 @@ pub(crate) fn create_document(
     )?;
     constraints.available_size = Size { width, height };
     constraints.device_pixel_ratio = scale;
-    // The embedder supplies the viewport in CSS pixels. Device scale belongs
-    // to media-resolution evaluation and the raster transform; applying it a
-    // second time as layout zoom makes Layout see a 640 CSS-pixel viewport
-    // while media queries see 1280 CSS pixels at DPR 2. Chromium's
-    // use-zoom-for-dsf path compensates by changing the LayoutView input size
-    // as well. Rechrom keeps the equivalent, simpler CSS-pixel contract at
-    // this boundary and reserves layout_zoom_factor for actual page zoom.
-    constraints.layout_zoom_factor = 1.0;
+    constraints.prefers_reduced_motion = prefers_reduced_motion;
+    // Source: WebFrameWidgetImpl::SetZoomInternal. Chromium's layout zoom is
+    // the hardware device scale multiplied by browser/CSS zoom. The layout
+    // input projection enlarges the CSS viewport by this factor and DOM
+    // geometry divides it back out; PaintArtifactToDeviceScale then removes
+    // the same factor before raster. Keeping DSF in this source path preserves
+    // LayoutUnit precision at high DPI instead of scaling a DPR-1 layout.
+    constraints.layout_zoom_factor = scale;
     let document_images = Rc::new(RefCell::new(browser::CreateSVGImageDecoderWithConstraints(
         &assembly,
         &constraints,
@@ -417,6 +472,16 @@ pub(crate) fn create_document(
         Some(client),
         threads,
     );
+    page.SetNativeFileReader(crate::native_file::create()?);
+    page.SetInteractionTextSettings(
+        text_settings.editing_behavior,
+        &text_settings.ui_locale,
+        text_settings.smart_insert_delete_enabled,
+    );
+    if let Some(locale) = &text_settings.temporal_locale {
+        page.SetTemporalInputLocale(locale.clone());
+    }
+    page.SetKillRing(Rc::new(crate::native_kill_ring::NativeKillRing));
     if scripting && std::env::var("RECHROM_DIAGNOSTIC_READ_AHEAD").as_deref() == Ok("1") {
         page.EnableDiagnosticReadAhead(scripting);
     }

@@ -170,10 +170,39 @@ impl<R: CpuSkiaBackend> MainLayerTypes for CpuCompositorTypes<R> {
 impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes
     for CpuCompositorTypes<R>
 {
-    type ScrollbarCanvas = ();
+    type ScrollbarCanvas = super::paint::ScrollbarCanvas;
     type Scrollbar = super::paint::Scrollbar;
+    fn RasterizeScrollbarThumb(
+        scrollbar: &Self::Scrollbar,
+        logical_size: crate::adapter::geometry::Size,
+        pixel_size: crate::adapter::geometry::Size,
+    ) -> <Self as crate::adapter::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap {
+        use crate::cc::input::scrollbar::Scrollbar as _;
+        let mut canvas = super::paint::ScrollbarCanvas::new(logical_size, pixel_size);
+        let mut adapter = scrollbar.clone();
+        adapter.PaintThumb(
+            &mut canvas,
+            &crate::adapter::geometry::Rect::new(0, 0, logical_size.width(), logical_size.height()),
+        );
+        super::host_resources::UIBitmap(std::sync::Arc::new(
+            super::host_resources::RawUIBitmap::new(
+                canvas.pixel_size(),
+                canvas.pixels().to_vec(),
+                canvas.row_bytes(),
+                false,
+            ),
+        ))
+    }
+    fn PaintedScrollbarConstructor(
+    ) -> Option<crate::adapter::scrollbar_layer_base::ScrollbarConstructor<Self>> {
+        Some(crate::cc::layers::painted_scrollbar_layer::PaintedScrollbarLayer::<Self>::Constructor)
+    }
 }
 impl<R: CpuSkiaBackend> crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerTypes
+    for CpuCompositorTypes<R>
+{
+}
+impl<R: CpuSkiaBackend> crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerTypes
     for CpuCompositorTypes<R>
 {
 }
@@ -218,6 +247,37 @@ impl<R: CpuSkiaBackend>
     }
 }
 impl<R: CpuSkiaBackend>
+    crate::adapter::painted_scrollbar_layer::PaintedScrollbarLayerImplTarget<CpuCompositorTypes<R>>
+    for CompositorLayer<CpuCompositorTypes<R>>
+{
+    fn CreatePaintedScrollbar(
+        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
+        id: i32,
+        orientation: crate::cc::input::scrollbar::ScrollbarOrientation,
+        left: bool,
+        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
+    ) -> Box<Self> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
+            crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl::<
+                CpuCompositorTypes<R>,
+            >::Create(tree_id, id, orientation, left, c)
+        })
+    }
+    fn painted_scrollbar(
+        &mut self,
+    ) -> Option<
+        &mut crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<
+            CpuCompositorTypes<R>,
+        >,
+    > {
+        if let CompositorLayer::PaintedScrollbar(layer) = self {
+            Some(layer)
+        } else {
+            None
+        }
+    }
+}
+impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_scrollbar_layer::SolidColorScrollbarLayerImplTarget<
         CpuCompositorTypes<R>,
     > for CompositorLayer<CpuCompositorTypes<R>>
@@ -257,6 +317,53 @@ impl<R: CpuSkiaBackend>
         layer.set_color(color);
     }
 }
+impl<R: CpuSkiaBackend> crate::adapter::surface_layer::SurfaceLayerImplTarget<CpuCompositorTypes<R>>
+    for CompositorLayer<CpuCompositorTypes<R>>
+{
+    fn CreateSurface(
+        tree: &mut LayerTreeImpl<CpuCompositorTypes<R>>,
+        id: i32,
+        context: &mut LayerTreeContext<'_, CpuCompositorTypes<R>>,
+    ) -> Box<Self> {
+        CpuCompositorTypes::<R>::WithLayerImplContext(tree, context, |tree_id, c| {
+            crate::cc::layers::surface_layer_impl::SurfaceLayerImpl::Create(tree_id, id, c)
+        })
+    }
+
+    fn SurfaceSetRange(
+        &mut self,
+        range: <CpuCompositorTypes<R> as LayerTreeTypes>::SurfaceRange,
+        deadline: Option<u32>,
+        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        let CompositorLayer::Surface(layer) = self else {
+            panic!("native SurfaceLayerImpl target subtype")
+        };
+        layer.SetRange(range, deadline, tree);
+    }
+
+    fn SurfaceSetStretchContentToFillBounds(
+        &mut self,
+        value: bool,
+        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        let CompositorLayer::Surface(layer) = self else {
+            panic!("native SurfaceLayerImpl target subtype")
+        };
+        layer.SetStretchContentToFillBounds(value, tree);
+    }
+
+    fn SurfaceSetIsReflection(
+        &mut self,
+        value: bool,
+        tree: &mut <CpuCompositorTypes<R> as MainLayerTypes>::ImplContext<'_>,
+    ) {
+        let CompositorLayer::Surface(layer) = self else {
+            panic!("native SurfaceLayerImpl target subtype")
+        };
+        layer.SetIsReflection(value, tree);
+    }
+}
 impl<R: CpuSkiaBackend> LayerImplTypes for CpuCompositorTypes<R> {
     type SharedQuadState = super::frame::SharedQuadState<Transform<R>>;
     type DrawQuad = super::frame::DrawQuad<super::paint::ContentDisplayItemList<R>>;
@@ -284,6 +391,34 @@ impl<R: CpuSkiaBackend> crate::adapter::solid_color_layer_impl::SolidColorLayerI
         CompositorLayer::SolidColor(layer)
     }
 }
+impl<R: CpuSkiaBackend> crate::adapter::surface_layer_impl::SurfaceLayerImplTypes
+    for CpuCompositorTypes<R>
+{
+    fn WrapSurfaceLayerImpl(
+        layer: crate::cc::layers::surface_layer_impl::SurfaceLayerImpl<Self>,
+    ) -> Self::Layer {
+        CompositorLayer::Surface(layer)
+    }
+    fn DefaultSurfaceRange() -> Self::SurfaceRange {
+        Default::default()
+    }
+    fn SurfaceRangesEqual(a: &Self::SurfaceRange, b: &Self::SurfaceRange) -> bool {
+        a == b
+    }
+    fn SurfaceRangeIsValid(range: &Self::SurfaceRange) -> bool {
+        let valid = |id: &super::types::SurfaceId| {
+            id.frame_sink_id.client_id != 0
+                && id.frame_sink_id.sink_id != 0
+                && id.local_surface_id.parent_sequence_number != 0
+                && id.local_surface_id.child_sequence_number != 0
+                && id.local_surface_id.embed_token != [0, 0]
+        };
+        valid(&range.end) && range.start.as_ref().is_none_or(valid)
+    }
+    fn SurfaceRangeEnd(range: &Self::SurfaceRange) -> Self::SurfaceId {
+        range.end
+    }
+}
 impl<R: CpuSkiaBackend>
     crate::adapter::solid_color_scrollbar_layer_impl::SolidColorScrollbarLayerImplTypes
     for CpuCompositorTypes<R>
@@ -294,6 +429,11 @@ impl<R: CpuSkiaBackend>
         >,
     ) -> Self::Layer {
         CompositorLayer::SolidColorScrollbar(layer)
+    }
+    fn WrapPaintedScrollbarLayerImpl(
+        layer: crate::cc::layers::painted_scrollbar_layer_impl::PaintedScrollbarLayerImpl<Self>,
+    ) -> Self::Layer {
+        CompositorLayer::PaintedScrollbar(layer)
     }
 }
 impl<R: CpuSkiaBackend> crate::adapter::render_surface_impl::RenderSurfaceTypes
@@ -335,6 +475,15 @@ pub fn CreateCpuPictureLayer<R: CpuSkiaBackend>(
             PictureLayerImpl::<CpuCompositorTypes<R>>::Create(tree_id, id, context)
         })
     })
+}
+
+/// Public bridge constructor used by Blink ForeignLayer producers such as
+/// VideoPainter. The returned resident cc::SurfaceLayer is updated through
+/// LayerRef::SetSurfaceRange and never owns the child frame.
+pub fn CreateCpuSurfaceLayer<R: CpuSkiaBackend>(
+    services: &dyn crate::adapter::main_layer::MainLayerServices,
+) -> LayerRef<CpuCompositorTypes<R>> {
+    crate::cc::layers::surface_layer::SurfaceLayer::<CpuCompositorTypes<R>>::Create(services)
 }
 
 /// Concrete native LayerImpl scroll entry with the same scoped current/rest

@@ -95,8 +95,10 @@ pub enum NodeType {
 
 // cpp: layoutng/internal/layout_node_metadata.cc:16-49
 pub struct StandaloneNodeData {
+    pub editing: crate::internal::editing::forward::EditingNodeFacts,
     pub compatibility_mode: CompatibilityMode,
     pub printing: bool,
+    pub should_print_backgrounds: bool,
     pub paginated: bool,
     pub fragmentainer_block_size: Option<f64>,
     pub vertical_scroll_enforced: bool,
@@ -105,6 +107,7 @@ pub struct StandaloneNodeData {
     pub canvas_draw_element_enabled: bool,
     pub prefer_non_composited_scrolling_enabled: bool,
     pub viewport: Option<ViewportGeometry>,
+    pub media_panel_page: Option<super::layout_input::MediaPanelPageFacts>,
     pub minimum_font_physical_size: Option<f32>,
     pub scrollbar_theme: Option<ScrollbarThemeMetrics>,
     pub control_theme: ControlThemeMetrics,
@@ -132,14 +135,18 @@ impl StandaloneNodeData {
 // allocation and destruction order will be established with LayoutObjectTree.
 // cpp: layoutng/internal/layout_node_metadata.h:67-164
 pub struct Node {
+    layout_detach_sink_: Option<std::rc::Rc<std::cell::RefCell<Vec<u64>>>>,
     input_tree_sealed_: bool,
     input_font_dirty_: bool,
+    hit_test_node_owner_: Option<u64>,
     has_first_line_styles_: bool,
     first_line_style_: Member<StyleComputedStyle>,
     input_data_: Box<StandaloneNodeData>,
     global_input_owner_: Member<Node>,
     control_host_: Member<Element>,
     implicit_anchor_: Member<Element>,
+    ultimate_originating_element_: Member<Element>,
+    generated_scroll_marker_group_: Member<Element>,
     viewport_defining_element_: Member<Element>,
     type_: NodeType,
     is_container_: bool,
@@ -169,14 +176,18 @@ impl Node {
             return Err(NodeMetadataError::MissingComputedStyle);
         }
         Ok(Self {
+            layout_detach_sink_: None,
             input_tree_sealed_: false,
             input_font_dirty_: true,
+            hit_test_node_owner_: None,
             has_first_line_styles_: false,
             first_line_style_: Member::default(),
             input_data_: input_data,
             global_input_owner_: Member::default(),
             control_host_: Member::default(),
             implicit_anchor_: Member::default(),
+            ultimate_originating_element_: Member::default(),
+            generated_scroll_marker_group_: Member::default(),
             viewport_defining_element_: Member::default(),
             type_: node_type,
             is_container_: container,
@@ -259,6 +270,9 @@ impl Node {
     pub fn InputPrinting(&self) -> bool {
         self.GlobalInputData().printing
     }
+    pub fn InputShouldPrintBackgrounds(&self) -> bool {
+        self.GlobalInputData().should_print_backgrounds
+    }
     pub fn InputPaginated(&self) -> bool {
         self.GlobalInputData().paginated
     }
@@ -275,12 +289,21 @@ impl Node {
     pub fn InputDevicePixelRatio(&self) -> f64 {
         self.GlobalInputData().device_pixel_ratio
     }
+    pub fn InputElementCanvasTransformEnabled(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.element_canvas_transform_enabled)
+    }
     pub fn InputCanvasDrawElementEnabled(&self) -> bool {
         self.GlobalInputData().canvas_draw_element_enabled
     }
     pub fn InputPreferNonCompositedScrollingEnabled(&self) -> bool {
         self.GlobalInputData()
             .prefer_non_composited_scrolling_enabled
+    }
+    pub fn InputMediaPanelPageFacts(&self) -> Option<super::layout_input::MediaPanelPageFacts> {
+        self.GlobalInputData().media_panel_page
     }
     pub fn InputViewport(&self) -> &Option<ViewportGeometry> {
         &self.GlobalInputData().viewport
@@ -293,6 +316,21 @@ impl Node {
     }
     pub fn InputDocumentRole(&self) -> DocumentRole {
         self.input_data_.document_role
+    }
+    pub fn InputEditingFacts(&self) -> crate::internal::editing::forward::EditingNodeFacts {
+        self.input_data_.editing
+    }
+    pub(crate) fn SetInputEditingFacts(
+        &mut self,
+        facts: crate::internal::editing::forward::EditingNodeFacts,
+    ) {
+        self.input_data_.editing = facts;
+    }
+    pub fn InputHitTestNodeOwner(&self) -> Option<u64> {
+        self.hit_test_node_owner_
+    }
+    pub fn SetInputHitTestNodeOwner(&mut self, owner: Option<u64>) {
+        self.hit_test_node_owner_ = owner;
     }
     pub fn InputId(&self) -> u64 {
         self.input_data_.input_id
@@ -323,6 +361,60 @@ impl Node {
             .element_data
             .as_ref()
             .is_some_and(|data| data.html_canvas)
+    }
+    pub fn InputIsHTMLHRElement(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_hr)
+    }
+    pub fn InputIsHTMLListOwner(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_list_owner)
+    }
+    pub fn InputOrderedListReversed(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.ordered_list_reversed)
+    }
+    pub fn InputOrderedListStart(&self) -> Option<i32> {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .and_then(|data| data.ordered_list_start)
+    }
+    pub fn InputListItemExplicitValue(&self) -> Option<i32> {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .and_then(|data| data.list_item_explicit_value)
+    }
+    pub fn InputIsHTMLMediaElement(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_media)
+    }
+    pub fn InputIsHTMLVideoElement(&self) -> bool {
+        self.input_data_
+            .element_data
+            .as_ref()
+            .is_some_and(|data| data.html_video)
+    }
+    /// HTMLMediaElement::UpdateLayoutObject updates the resident native input
+    /// before invoking LayoutVideo::UpdateFromElement on that same object.
+    pub fn SetVideoLayoutState(&mut self, state: super::layout_input::VideoLayoutState) {
+        let element = self
+            .input_data_
+            .element_data
+            .as_mut()
+            .expect("video element input");
+        assert!(element.html_video);
+        element.video = Some(state);
+        element.media_is_fullscreen = state.is_fullscreen;
     }
     pub fn InputCanvasLayoutSubtree(&self) -> bool {
         self.input_data_
@@ -370,6 +462,17 @@ impl Node {
     }
 
     pub(crate) fn UpdateInputScrollOffset(&mut self, offset: super::layout_input::Offset) {
+        self.UpdateInputScrollOffsetWithType(
+            offset,
+            layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kClamping,
+        );
+    }
+
+    pub(crate) fn UpdateInputScrollOffsetWithType(
+        &mut self,
+        offset: super::layout_input::Offset,
+        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    ) {
         let changed = self
             .input_data_
             .element_data
@@ -379,8 +482,10 @@ impl Node {
         let area = super::layout_scrollable_area::PaintLayerScrollableArea::FromNode(self);
         if !area.is_null() {
             // The resident area, not SavedLayerScrollOffset, owns live offsets.
-            unsafe { &mut *area }
-                .UpdateScrollOffset(ScrollOffset::new(offset.x as f32, offset.y as f32));
+            unsafe { &mut *area }.UpdateScrollOffset(
+                ScrollOffset::new(offset.x as f32, offset.y as f32),
+                scroll_type,
+            );
         }
         if changed {
             let object = self.GetLayoutObject();
@@ -421,6 +526,25 @@ impl Node {
     pub fn SetLayoutObject(&mut self, object: *mut LayoutObject) {
         self.layout_object_ = Member::from_ptr(object);
     }
+    pub(crate) fn SetLayoutDetachSink(&mut self, sink: std::rc::Rc<std::cell::RefCell<Vec<u64>>>) {
+        self.layout_detach_sink_ = Some(sink);
+    }
+    pub(crate) fn LayoutDetachNotification(
+        &self,
+        object: *const LayoutObject,
+    ) -> Option<(std::rc::Rc<std::cell::RefCell<Vec<u64>>>, u64)> {
+        // DestroyLeftoverChildren clears Node::layout_object_ immediately
+        // before recursively destroying that same native child.
+        if (!self.GetLayoutObject().is_null() && self.GetLayoutObject().cast_const() != object)
+            || !self.IsElementNode()
+            || self.InputIsStyleGenerated()
+        {
+            return None;
+        }
+        self.layout_detach_sink_
+            .clone()
+            .map(|sink| (sink, self.InputId()))
+    }
 
     // cpp: layoutng/internal/layout_node_metadata.cc:149-177
     pub fn PrepareStandaloneLayout(
@@ -431,6 +555,7 @@ impl Node {
     ) {
         self.input_data_.compatibility_mode = input.compatibility_mode;
         self.input_data_.printing = input.printing;
+        self.input_data_.should_print_backgrounds = input.should_print_backgrounds;
         self.input_data_.paginated = input.fragmentainer_block_size.is_some();
         self.input_data_.fragmentainer_block_size = input.fragmentainer_block_size;
         self.input_data_.vertical_scroll_enforced = input.vertical_scroll_enforced;
@@ -438,6 +563,7 @@ impl Node {
             .fullscreen_element_blocks_layout_view_scroll =
             input.fullscreen_element_blocks_layout_view_scroll;
         self.input_data_.device_pixel_ratio = input.device_pixel_ratio;
+        self.input_data_.media_panel_page = input.media_panel_page;
         self.input_data_.canvas_draw_element_enabled = input.canvas_draw_element_enabled;
         self.input_data_.prefer_non_composited_scrolling_enabled =
             input.prefer_non_composited_scrolling_enabled;
@@ -485,6 +611,18 @@ impl Node {
     pub(crate) fn set_control_host(&mut self, host: *mut Element) {
         self.control_host_ = Member::from_ptr(host);
     }
+    pub fn UltimateOriginatingElement(&self) -> *mut Element {
+        self.ultimate_originating_element_.Get()
+    }
+    pub(crate) fn set_ultimate_originating_element(&mut self, element: *mut Element) {
+        self.ultimate_originating_element_ = Member::from_ptr(element);
+    }
+    pub fn GeneratedScrollMarkerGroup(&self) -> *mut Element {
+        self.generated_scroll_marker_group_.Get()
+    }
+    pub(crate) fn set_generated_scroll_marker_group(&mut self, group: *mut Element) {
+        self.generated_scroll_marker_group_ = Member::from_ptr(group);
+    }
     pub(crate) fn set_implicit_anchor(&mut self, anchor: *mut Element) {
         self.implicit_anchor_ = Member::from_ptr(anchor);
     }
@@ -498,6 +636,13 @@ impl Node {
         self.input_tree_sealed_ = true;
     }
 
+    // Document's current LayoutView is retained by the canonical global input
+    // owner; this is identity, not another view/geometry representation.
+    pub(crate) fn InputLayoutView(&self) -> *mut super::layout_view::LayoutView {
+        foundation::DynamicTo::<super::layout_view::LayoutView>(
+            self.GlobalInputOwner().GetLayoutObject(),
+        )
+    }
     fn GlobalInputOwner(&self) -> &Node {
         let owner = self.global_input_owner_.Get();
         if owner.is_null() {
@@ -524,6 +669,8 @@ impl Node {
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.control_host_);
         visitor.Trace(&self.implicit_anchor_);
+        visitor.Trace(&self.ultimate_originating_element_);
+        visitor.Trace(&self.generated_scroll_marker_group_);
         visitor.Trace(&self.viewport_defining_element_);
         visitor.Trace(&self.global_input_owner_);
         visitor.Trace(&self.style_);
@@ -821,6 +968,18 @@ impl Element {
     // cpp: layoutng/internal/layout_node_metadata.cc:401-461
     pub fn InputElementData(&self) -> &Option<ElementData> {
         &self.container.node.input_data_.element_data
+    }
+    pub fn InputRegionCaptureCropId(&self) -> Option<[u64; 2]> {
+        self.InputElementData()
+            .as_ref()
+            .and_then(|data| data.region_capture_crop_id)
+    }
+    pub fn InputTrackedElementSubRects(
+        &self,
+    ) -> &[crate::internal::layout_input::TrackedElementSubRect] {
+        self.InputElementData()
+            .as_ref()
+            .map_or(&[], |data| data.tracked_element_sub_rects.as_slice())
     }
     pub fn InputSvgLengthAdjust(&self) -> SVGLengthAdjustType {
         let value = self

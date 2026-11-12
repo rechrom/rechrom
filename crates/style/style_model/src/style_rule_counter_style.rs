@@ -492,13 +492,19 @@ mod tests {
         fn CreateIdentifier(_: CSSValueID) -> Rc<CSSValue<Self>> {
             panic!("unused fixture identifier")
         }
-        fn DeclarationPropertyValueSet(_: &()) -> Option<&CSSPropertyValueSet<Self>> {
+        fn DeclarationWithPropertyValueSet<R>(
+            _: &(),
+            _: impl FnOnce(Option<&CSSPropertyValueSet<Self>>) -> R,
+        ) -> R {
             panic!("unused fixture declaration")
         }
         fn DeclarationPropertyMatches(_: &(), _: CSSPropertyID, _: &CSSValue<Self>) -> bool {
             panic!("unused fixture declaration comparison")
         }
-        fn NewCSSStyleDeclaration(_: Option<&()>, _: &MutableCSSPropertyValueSet<Self>) -> Rc<()> {
+        fn NewCSSStyleDeclaration(
+            _: Option<&()>,
+            _: Rc<std::cell::RefCell<MutableCSSPropertyValueSet<Self>>>,
+        ) -> Rc<()> {
             panic!("unused fixture declaration construction")
         }
     }

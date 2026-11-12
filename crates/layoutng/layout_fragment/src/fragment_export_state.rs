@@ -8,17 +8,33 @@
 use super::*;
 
 #[derive(Default)]
+pub(super) struct PaintPopulationStats {
+    pub(super) property_export_ns: u64,
+    pub(super) sidecar_store_ns: u64,
+    pub(super) physical_fragments: usize,
+    pub(super) inline_items: usize,
+}
+
+#[derive(Default)]
 pub(super) struct FragmentOwners {
     pub(super) paint: LayoutBoundaryHashSet<*const PhysicalBoxFragment>,
     pub(super) instances: LayoutBoundaryHashMap<*const PhysicalBoxFragment, u64>,
     pub(super) exported_styles: ExportedStyleCache,
+    pub(super) exported_selection_styles: ExportedSelectionStyleCache,
     pub(super) debug_names: DebugNameCache,
-    pub(super) fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
+    pub(super) fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
     // Exact source identities from the preceding LayoutResult. LayoutNG may
     // carry immutable child fragments into a replacement root result during
     // constraint-only layout. Reuse their FragmentData identity while pruning
     // every source pointer not visited by the new result.
-    pub(super) prior_fragment_instance_ids: LayoutBoundaryHashMap<(u8, usize), u64>,
+    pub(super) prior_fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
+    pub(super) retained_resource_compatibility: LayoutBoundaryHashMap<usize, bool>,
+    pub(super) new_fragment_instances: usize,
+    pub(super) population_stats: PaintPopulationStats,
+    /// GetOrCreateFragmentData's per-object inline-container progression for
+    /// this publication. Values are only (last native container, entry count),
+    /// never a retained fragment list or another layout tree.
+    pub(super) inline_fragment_data: LayoutBoundaryHashMap<*const LayoutObject, (u64, u32)>,
 }
 impl FragmentOwners {
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
@@ -28,22 +44,20 @@ impl FragmentOwners {
 
     pub(super) fn fragment_instance(
         &mut self,
-        kind: u8,
-        source: usize,
+        key: FragmentIdentityKey,
         next_fragment_instance_id: &mut u64,
     ) -> u64 {
-        let key = (kind, source);
         if let Some(instance) = self.fragment_instance_ids.get(&key) {
             return *instance;
         }
-        let instance = self
-            .prior_fragment_instance_ids
-            .remove(&key)
-            .unwrap_or_else(|| {
-                let instance = *next_fragment_instance_id;
-                *next_fragment_instance_id += 1;
-                instance
-            });
+        let instance = if let Some(instance) = self.prior_fragment_instance_ids.remove(&key) {
+            instance
+        } else {
+            self.new_fragment_instances += 1;
+            let instance = *next_fragment_instance_id;
+            *next_fragment_instance_id += 1;
+            instance
+        };
         self.fragment_instance_ids.insert(key, instance);
         instance
     }

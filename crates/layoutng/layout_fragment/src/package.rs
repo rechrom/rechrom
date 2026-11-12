@@ -21,13 +21,14 @@ pub use boundary_types::{
     BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge,
     CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
     FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentPaintData,
-    FragmentPaintRect, FrameSetPaintData, InlineGeometry, InlineGeometryRect, MathMLPaintData,
-    MathMLPaintKind, PaintGlyph, PaintGlyphRun, PaintPropertiesHandle, PaintResources,
-    PrePaintInvalidation, ReplacedContentPaintData, ScrollContainerPaintData,
-    ScrollSnapAxisPaintData, ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData,
-    ScrollbarPaintAxis, ScrollbarPaintData, StickyAxisPaintData, StickyPositionPaintData,
-    StitchedDecorationData, SvgTextPaintData, SvgViewportGeometry, TablePaintColumn,
-    TablePaintData, TextCombineEmphasisPaintData, TextCombinePaintData, TextControlCaretMetrics,
+    FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide, InlineGeometry,
+    InlineGeometryRect, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
+    PaintPropertiesHandle, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
+    ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
+    ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
+    SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
+    SvgTextPaintData, SvgViewportGeometry, TablePaintColumn, TablePaintData,
+    TextCombineEmphasisPaintData, TextCombinePaintData,
 };
 
 /// Lifetime handle for Chromium's canonical source `LayoutResult`.

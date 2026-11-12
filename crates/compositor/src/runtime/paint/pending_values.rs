@@ -25,7 +25,7 @@ fn metadata(chunk: &PaintChunk) -> &paint::paint_engine::PaintChunkCompositorDat
 #[derive(Clone)]
 pub struct CpuForeignLayer<R: CpuSkiaBackend> {
     layer: crate::cc::layers::layer::LayerRef<CpuCompositorTypes<R>>,
-    bounds: paint::paint_engine::ForeignLayerSize,
+    bounds: Arc<std::sync::RwLock<paint::paint_engine::ForeignLayerSize>>,
 }
 
 impl<R: CpuSkiaBackend> CpuForeignLayer<R> {
@@ -36,10 +36,12 @@ impl<R: CpuSkiaBackend> CpuForeignLayer<R> {
         let bounds = *layer.bounds(c);
         Self {
             layer,
-            bounds: paint::paint_engine::ForeignLayerSize {
-                width: bounds.width() as f64,
-                height: bounds.height() as f64,
-            },
+            bounds: Arc::new(std::sync::RwLock::new(
+                paint::paint_engine::ForeignLayerSize {
+                    width: bounds.width() as f64,
+                    height: bounds.height() as f64,
+                },
+            )),
         }
     }
 
@@ -54,7 +56,17 @@ impl<R: CpuSkiaBackend> paint::paint_engine::ForeignLayer for CpuForeignLayer<R>
     }
 
     fn Bounds(&self) -> paint::paint_engine::ForeignLayerSize {
-        self.bounds
+        *self
+            .bounds
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn SetBounds(&self, bounds: paint::paint_engine::ForeignLayerSize) {
+        *self
+            .bounds
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = bounds;
     }
 
     fn EqualsLayer(&self, other: &dyn paint::paint_engine::ForeignLayer) -> bool {
@@ -235,6 +247,20 @@ impl<R: CpuSkiaBackend> PendingDisplayItem<CpuCompositorTypes<R>> for DisplayIte
             .expect("ForeignLayerDisplayItem owner must match the active compositor backend")
             .Layer()
             .clone()
+    }
+    fn ForeignVideoPresentationStyle(&self) -> Option<(FilterQuality, DynamicRangeLimit)> {
+        let style = self.VideoPresentationStyle()?;
+        Some((
+            if style.nearest_neighbor {
+                FilterQuality::kNone
+            } else {
+                FilterQuality::kLow
+            },
+            DynamicRangeLimit {
+                standard_mix: style.dynamic_range_limit.standard_mix,
+                constrained_high_mix: style.dynamic_range_limit.constrained_high_mix,
+            },
+        ))
     }
     fn IsScrollbar(&self) -> bool {
         matches!(self.kind, RecordedDisplayItemKind::Scrollbar) && self.scrollbar.is_some()

@@ -16,6 +16,13 @@ pub use super::pending_layer::PendingLayerTypes as ContentLayerClientTypes;
 pub trait CanvasChildPaintState {
     fn reference_box_offset(&self) -> Vector2dF;
 }
+/// Finalized immutable source list and the exact prefix offset from
+/// ContentLayerClientImpl::GetCanvasChildPaintRecord. No mutable engine owner.
+pub struct CanvasChildPaintRecordReadLease<B: ContentLayerClientTypes> {
+    pub state: B::CanvasChildPaintState,
+    pub list: Arc<B::ContentDisplayItemList>,
+    pub offset: Vector2dF,
+}
 pub trait ContentDisplayItemList<B: ContentLayerClientTypes>: PictureDisplayItemList<B> {
     fn StartPaint(&mut self);
     fn PushNoop(&mut self);
@@ -36,6 +43,9 @@ pub trait ContentPaintOpBuffer<B: ContentLayerClientTypes> {
 }
 pub trait RasterInvalidationCallback {
     fn InvalidateRect(&mut self, rect: Rect);
+    fn InvalidateRectForFullReplay(&mut self, rect: Rect, _inner: Rect, _replay_rect: Rect) {
+        self.InvalidateRect(rect);
+    }
 }
 pub trait RasterInvalidator<B: ContentLayerClientTypes> {
     fn LayerBounds(&self) -> Size;

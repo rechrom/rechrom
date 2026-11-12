@@ -177,10 +177,12 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
     {
         let chunks = pending.Chunks();
         self.cc_picture_layer_.WithPictureLayer(c, |layer, _| {
-            assert!(layer
-                .client()
-                .as_ref()
-                .is_some_and(|client| client.ptr_eq(&self.identity_)));
+            assert!(
+                layer
+                    .client()
+                    .as_ref()
+                    .is_some_and(|client| client.ptr_eq(&self.identity_))
+            );
         });
         if services.ExpensiveDChecksEnabled() {
             let mut data = services.NewJsonArray();
@@ -339,12 +341,10 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
         c: &LayerContext<'_, B>,
         services: &dyn ContentLayerClientServices<B>,
     ) -> Option<B::CanvasChildPaintRecord> {
-        let state = self.canvas_child_paint_state_.as_ref()?;
-        let offset = self.Layer().offset_to_transform_parent(c) - state.reference_box_offset();
-        let list = self
-            .cc_display_item_list_
-            .as_ref()
-            .expect("source canvas child display list");
+        let view = self.GetCanvasChildPaintRecordReadLease(c)?;
+        let state = &view.state;
+        let offset = view.offset;
+        let list = view.list.as_ref();
         let record = if offset.x() == 0.0 && offset.y() == 0.0 {
             list.DeepCopyAsRecord()
         } else {
@@ -354,6 +354,25 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
             result.ReleaseAsRecord()
         };
         Some(services.CreateCanvasChildPaintRecord(state.clone(), record))
+    }
+    pub fn GetCanvasChildPaintRecordReadLease(
+        &self,
+        c: &LayerContext<'_, B>,
+    ) -> Option<crate::adapter::content_layer_client_impl::CanvasChildPaintRecordReadLease<B>> {
+        let state = self.canvas_child_paint_state_.as_ref()?;
+        let offset = self.Layer().offset_to_transform_parent(c) - state.reference_box_offset();
+        let list = self
+            .cc_display_item_list_
+            .as_ref()
+            .expect("source finalized canvas child display list")
+            .clone();
+        Some(
+            crate::adapter::content_layer_client_impl::CanvasChildPaintRecordReadLease {
+                state: state.clone(),
+                list,
+                offset,
+            },
+        )
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.h:63;
     // Source: third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.cc:266-269.
@@ -398,6 +417,12 @@ impl<B: ContentLayerClientTypes> RasterInvalidationCallback for InvalidationCall
         }
         *self.list = None;
         self.picture.LayerRef().SetNeedsDisplayRect(&rect, self.c);
+    }
+    fn InvalidateRectForFullReplay(&mut self, rect: Rect, inner: Rect, replay_rect: Rect) {
+        self.InvalidateRect(rect);
+        self.picture.WithPictureLayer(self.c, |picture, c| {
+            picture.SetNeedsFullReplayForPartialRaster(rect, inner, replay_rect, c)
+        });
     }
 }
 
@@ -445,7 +470,25 @@ impl<B: ContentLayerClientTypes> Clone for ContentLayerClientRef<B> {
     }
 }
 impl<B: ContentLayerClientTypes> ContentLayerClientRef<B> {
-    pub fn AppendAdditionalInfoAsJSON(&self,flags:LayerTreeFlags,layer:&Layer<B>,json:&mut B::Json,c:&LayerContext<'_,B>,services:&dyn ContentLayerClientServices<B>){self.0.read().unwrap().AppendAdditionalInfoAsJSON(flags,layer,json,c,services)}
+    pub fn GetCanvasChildPaintRecordReadLease(
+        &self,
+        c: &LayerContext<'_, B>,
+    ) -> Option<crate::adapter::content_layer_client_impl::CanvasChildPaintRecordReadLease<B>> {
+        self.0.read().unwrap().GetCanvasChildPaintRecordReadLease(c)
+    }
+    pub fn AppendAdditionalInfoAsJSON(
+        &self,
+        flags: LayerTreeFlags,
+        layer: &Layer<B>,
+        json: &mut B::Json,
+        c: &LayerContext<'_, B>,
+        services: &dyn ContentLayerClientServices<B>,
+    ) {
+        self.0
+            .read()
+            .unwrap()
+            .AppendAdditionalInfoAsJSON(flags, layer, json, c, services)
+    }
     pub fn new(c: &mut LayerContext<'_, B>, services: &dyn ContentLayerClientServices<B>) -> Self {
         Self(ContentLayerClientImpl::new(c, services))
     }

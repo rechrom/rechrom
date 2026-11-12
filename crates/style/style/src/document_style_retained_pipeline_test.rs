@@ -45,6 +45,24 @@ fn display(owner: &dom::DOM, index: usize) -> EDisplay {
 }
 
 #[test]
+fn stylesheet_will_change_transform_reaches_retained_computed_style() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<!doctype html><style>.layer{will-change:transform}</style><div id=target class=layer></div>",
+    );
+    let target = node(&owner, "target");
+    let mut engine = StyleEngine::new(&owner);
+
+    engine.Update(&mut owner, &media(800.0), &[]).unwrap();
+
+    let retained = owner.GetDocument().ResolvedStyleFor(target).unwrap();
+    let style = unsafe { &*retained.computed_style_owner.Get() };
+    assert!(style.HasWillChangeTransformProperty());
+    assert!(style.HasWillChangeAnyTransformProperty());
+    assert!(style.HasWillChangeProperty(foundation::CSSPropertyID::kTransform));
+}
+
+#[test]
 fn viewport_resize_retains_unaffected_styles_until_media_result_changes() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(

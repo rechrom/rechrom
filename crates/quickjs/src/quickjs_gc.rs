@@ -283,6 +283,7 @@ unsafe fn free_bytecode_atoms(
     }
 }
 unsafe fn free_function_bytecode(rt: *mut JSRuntime, b: *mut JSFunctionBytecode) {
+    js_host_free_script_base_url(rt, b);
     js_host_free_bytecode_diagnostics(rt, b);
     if !(*b).byte_code_buf.is_null() {
         free_bytecode_atoms(rt, (*b).byte_code_buf, (*b).byte_code_len, 1);
@@ -456,6 +457,10 @@ pub unsafe fn JS_IsLiveObject(_rt: *mut JSRuntime, obj: JSValueConst) -> JS_BOOL
     }
 }
 pub unsafe fn JS_FreeRuntime(rt: *mut JSRuntime) {
+    if !(*rt).continuation_data_slot.is_null() {
+        drop(std::rc::Rc::from_raw((*rt).continuation_data_slot));
+        (*rt).continuation_data_slot = ptr::null();
+    }
     js_host_clear_exception_diagnostics(rt);
     js_clear_module_embedding_hooks(rt);
     JS_FreeValueRT(rt, (*rt).current_exception);
@@ -472,6 +477,7 @@ pub unsafe fn JS_FreeRuntime(rt: *mut JSRuntime) {
             );
             i += 1;
         }
+        js_free_continuation_data((*e).continuation_data);
         JS_FreeContext((*e).realm);
         js_free_rt(rt, e.cast());
     }

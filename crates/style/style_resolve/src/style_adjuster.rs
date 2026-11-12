@@ -79,6 +79,22 @@ pub fn AdjustStyleForZIndex(builder: &mut ComputedStyleBuilder, layout_parent: &
     }
 }
 
+/// cpp: style_adjuster.cc:410-431. TextControlInnerEditorElement's custom
+/// style calls the editing-only adjustment after installing its user-modify
+/// value, independently of the resolver's full element adjustment.
+pub fn AdjustStyleForEditingValues(builder: &mut ComputedStyleBuilder) {
+    if builder.UserModify() != EUserModify::kReadWritePlaintextOnly {
+        return;
+    }
+    match builder.WhiteSpace() {
+        EWhiteSpace::kNormal | EWhiteSpace::kPreLine => {
+            builder.SetWhiteSpace(EWhiteSpace::kPreWrap)
+        }
+        EWhiteSpace::kNowrap => builder.SetWhiteSpace(EWhiteSpace::kPre),
+        _ => {}
+    }
+}
+
 use super::style_resolver::StyleResolver;
 use super::style_resolver_state::{StyleResolverState, StyleResolverStateBackend};
 use font_engine::FontVariantEmoji;
@@ -669,16 +685,7 @@ impl<'a, B: StyleAdjusterBackend> StyleAdjuster<'a, B> {
         if element.is_some_and(|e| self.backend.HasEditContext(e)) {
             builder.SetUserModify(EUserModify::kReadWrite);
         }
-        if builder.UserModify() != EUserModify::kReadWritePlaintextOnly {
-            return;
-        }
-        match builder.WhiteSpace() {
-            EWhiteSpace::kNormal | EWhiteSpace::kPreLine => {
-                builder.SetWhiteSpace(EWhiteSpace::kPreWrap)
-            }
-            EWhiteSpace::kNowrap => builder.SetWhiteSpace(EWhiteSpace::kPre),
-            _ => {}
-        }
+        AdjustStyleForEditingValues(builder);
     }
     // cpp: style_adjuster.cc:433-452
     pub fn AdjustStyleForTextCombine(builder: &mut ComputedStyleBuilder) {

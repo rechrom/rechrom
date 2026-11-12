@@ -43,6 +43,28 @@ impl DOM {
         interaction: &UserInteractionState,
         mut receive: impl FnMut(LayoutMutation<'_>) -> bool,
     ) {
+        // Metadata follows the same local DOM mutation/recalc notification.
+        // Absent objects need no cache entry: their next attachment receives
+        // current facts directly from the canonical node owner.
+        let editing_nodes = self
+            .GetDocument()
+            .StyleState()
+            .editing_input_nodes
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        for id in editing_nodes {
+            if let Some(node) = self.GetDocument().FindNodeById(id) {
+                receive(LayoutMutation::EditingNodeFacts {
+                    node_id: id,
+                    facts: self.GetDocument().EditingNodeFacts(node),
+                });
+            }
+        }
+        self.GetDocumentMut()
+            .StyleStateMut()
+            .editing_input_nodes
+            .clear();
         let state = self.GetDocument().StyleState();
         let mut trace = browser_tracing::span("layout", "DOM.EmitLayoutMutations");
         trace.set(
@@ -78,6 +100,8 @@ impl DOM {
         // turn every unrelated style input into a subtree transaction.
         let can_apply_local = !state.layout_inputs_require_tree;
         let reattach_nodes = state.layout_reattach_nodes.clone();
+        let can_consume_unrepresented_geometry =
+            can_apply_local && state.layout_tree_roots.is_empty() && reattach_nodes.is_empty();
         // Style publishes this work in its parent-first recalc order. Preserve
         // that source order instead of recovering it from the DOM afterward.
         let mut nodes = state.layout_style_nodes.iter().copied().collect::<Vec<_>>();
@@ -105,27 +129,50 @@ impl DOM {
         }
         let mut locally_applied = Vec::new();
         let mut local_attempts = 0;
+        let mut unrepresented_geometry = 0;
         if can_apply_local {
             for id in nodes {
                 if reattach_nodes.contains(&id) {
                     continue;
                 }
                 local_attempts += 1;
-                let applied = self.EmitPaintInputs(id, interaction, |mutation| match mutation {
-                    LayoutMutation::PaintInput {
-                        node_id,
-                        style,
-                        resources,
-                        element,
-                    } => receive(LayoutMutation::NodeInput {
-                        node_id,
-                        style,
-                        resources,
-                        element,
-                    }),
-                    _ => unreachable!("EmitPaintInputs emits typed node inputs"),
-                });
+                // A geometry-only notification for an element suppressed by
+                // display:none has no resident LayoutObject to update. Blink
+                // consumes that notification without reattaching an ancestor;
+                // a later style/display transition schedules its own tree
+                // work. Generated pseudos remain structural because they may
+                // still own exported layout objects.
+                let geometry_has_no_layout_consumer = can_consume_unrepresented_geometry
+                    && state.geometry_input_nodes.contains(&id)
+                    && !state.layout_style_nodes.contains(&id)
+                    && document
+                        .FindNodeById(id)
+                        .and_then(|index| document.ResolvedStyleFor(index))
+                        .is_some_and(|resolved| {
+                            !resolved.generates_box
+                                && resolved.before.is_none()
+                                && resolved.after.is_none()
+                                && resolved.first_letter.is_none()
+                                && resolved.placeholder.is_none()
+                                && resolved.marker.is_none()
+                        });
+                let applied = geometry_has_no_layout_consumer
+                    || self.EmitPaintInputs(id, interaction, |mutation| match mutation {
+                        LayoutMutation::PaintInput {
+                            node_id,
+                            style,
+                            resources,
+                            element,
+                        } => receive(LayoutMutation::NodeInput {
+                            node_id,
+                            style,
+                            resources,
+                            element,
+                        }),
+                        _ => unreachable!("EmitPaintInputs emits typed node inputs"),
+                    });
                 if applied {
+                    unrepresented_geometry += geometry_has_no_layout_consumer as usize;
                     locally_applied.push(id);
                 }
             }
@@ -139,6 +186,10 @@ impl DOM {
         }
         trace.set("local_inputs_attempted", local_attempts as f64);
         trace.set("local_inputs_applied", locally_applied.len() as f64);
+        trace.set(
+            "geometry_inputs_without_layout_object",
+            unrepresented_geometry as f64,
+        );
         let state = self.GetDocument().StyleState();
         let has_pending_attachment = state.layout_inputs_require_tree
             || !state.layout_tree_roots.is_empty()
@@ -199,6 +250,7 @@ impl DOM {
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
+            resolved_resources.svg_pattern_content_target,
             &resolved_resources.svg_fill_server,
             &resolved_resources.svg_stroke_server,
             &resolved_resources.svg_markers,
@@ -208,13 +260,7 @@ impl DOM {
             node_id,
             style,
             resources: &style_resources,
-            clip_resource_version: if super::layout_object_tree_builder::needs_svg_clip_resources(
-                style,
-            ) {
-                resources.version
-            } else {
-                Default::default()
-            },
+            clip_resource_version: resources.version,
         });
         true
     }
@@ -264,6 +310,7 @@ impl DOM {
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
+            resolved_resources.svg_pattern_content_target,
             &resolved_resources.svg_fill_server,
             &resolved_resources.svg_stroke_server,
             &resolved_resources.svg_markers,
@@ -307,12 +354,17 @@ impl DOM {
         &mut self,
         node_id: u64,
         offset: Offset,
+        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
         mut receive: impl FnMut(LayoutMutation<'_>),
     ) -> bool {
         if !self.SetScrollOffset(node_id, offset) {
             return false;
         }
-        receive(LayoutMutation::ScrollOffset { node_id, offset });
+        receive(LayoutMutation::ScrollOffset {
+            node_id,
+            offset,
+            scroll_type,
+        });
         true
     }
 

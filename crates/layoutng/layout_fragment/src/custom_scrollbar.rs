@@ -287,12 +287,197 @@ impl CustomScrollbar {
         rect
     }
 
+    // cpp: CustomScrollbarTheme::ButtonSizesAlongTrackAxis/TrackRect and
+    // ConstrainTrackRectToTrackPieces, custom_scrollbar_theme.cc:60-139.
+    pub(crate) fn ThemeTrackRect(&self) -> gfx::Rect {
+        let horizontal = self.Orientation() == ScrollbarOrientation::kHorizontalScrollbar;
+        let length = |part| {
+            let rect = self.ButtonRect(part);
+            if horizontal {
+                rect.width()
+            } else {
+                rect.height()
+            }
+        };
+        let before = length(ScrollbarPart::kBackButtonStartPart)
+            + length(ScrollbarPart::kForwardButtonStartPart);
+        let after = length(ScrollbarPart::kBackButtonEndPart)
+            + length(ScrollbarPart::kForwardButtonEndPart);
+        if before + after
+            > if horizontal {
+                self.Width()
+            } else {
+                self.Height()
+            }
+        {
+            return *self.FrameRect();
+        }
+        self.TrackRect(before, after)
+    }
+    pub(crate) fn ConstrainTrackRect(&self, rect: &gfx::Rect) -> gfx::Rect {
+        let back = self.TrackPieceRectWithMargins(ScrollbarPart::kBackTrackPart, rect);
+        let forward = self.TrackPieceRectWithMargins(ScrollbarPart::kForwardTrackPart, rect);
+        let mut result = *rect;
+        if self.Orientation() == ScrollbarOrientation::kHorizontalScrollbar {
+            result.set_x(back.x());
+            result.set_width(forward.right() - back.x());
+        } else {
+            result.set_y(back.y());
+            result.set_height(forward.bottom() - back.y());
+        }
+        result
+    }
+    // cpp: scrollbar_theme.cc:195-217,248-278; cc/input/scroll_utils.cc:59-73.
+    pub(crate) fn SplitTrack(
+        &self,
+        enabled: bool,
+        visible: i32,
+        total: i32,
+        current: f32,
+    ) -> (gfx::Rect, gfx::Rect, gfx::Rect, gfx::Rect) {
+        let unconstrained = self.ThemeTrackRect();
+        let track = self.ConstrainTrackRect(&unconstrained);
+        let horizontal = self.Orientation() == ScrollbarOrientation::kHorizontalScrollbar;
+        let track_length = if horizontal {
+            track.width()
+        } else {
+            track.height()
+        };
+        let thumb_length = if enabled {
+            let proportion = if total > 0 {
+                visible as f32 / total as f32
+            } else {
+                0.0
+            };
+            ((proportion * track_length as f32).round() as i32)
+                .max(self.MinimumThumbLength())
+                .min(track_length)
+        } else {
+            0
+        };
+        let size = (total - visible) as f32;
+        let position = if enabled && size != 0.0 {
+            let pos = current.max(0.0) * (track_length - thumb_length) as f32 / size;
+            if pos > 0.0 && pos < 1.0 {
+                1
+            } else {
+                pos as i32
+            }
+        } else {
+            0
+        };
+        if horizontal {
+            let thumb = gfx::Rect::new(
+                gfx::Point::new(track.x() + position, track.y()),
+                gfx::Size::new(thumb_length, self.Height()),
+            );
+            let before = gfx::Rect::new(
+                track.origin(),
+                gfx::Size::new(position + thumb.width() / 2, track.height()),
+            );
+            let after = gfx::Rect::new(
+                gfx::Point::new(track.x() + before.width(), track.y()),
+                gfx::Size::new(track.right() - before.right(), track.height()),
+            );
+            (unconstrained, before, thumb, after)
+        } else {
+            let thumb = gfx::Rect::new(
+                gfx::Point::new(track.x(), track.y() + position),
+                gfx::Size::new(self.Width(), thumb_length),
+            );
+            let before = gfx::Rect::new(
+                track.origin(),
+                gfx::Size::new(track.width(), position + thumb.height() / 2),
+            );
+            let after = gfx::Rect::new(
+                gfx::Point::new(track.x(), track.y() + before.height()),
+                gfx::Size::new(track.width(), track.bottom() - before.bottom()),
+            );
+            (unconstrained, before, thumb, after)
+        }
+    }
+    pub fn PartRect(
+        &self,
+        part: ScrollbarPart,
+        enabled: bool,
+        visible: i32,
+        total: i32,
+        current: f32,
+    ) -> gfx::Rect {
+        let (track, before, thumb, after) = self.SplitTrack(enabled, visible, total, current);
+        match part {
+            ScrollbarPart::kBackButtonStartPart
+            | ScrollbarPart::kForwardButtonStartPart
+            | ScrollbarPart::kBackButtonEndPart
+            | ScrollbarPart::kForwardButtonEndPart => self.ButtonRect(part),
+            ScrollbarPart::kBackTrackPart => before,
+            ScrollbarPart::kForwardTrackPart => after,
+            ScrollbarPart::kThumbPart => thumb,
+            ScrollbarPart::kTrackBGPart => track,
+            ScrollbarPart::kScrollbarBGPart => *self.FrameRect(),
+            _ => gfx::Rect::default(),
+        }
+    }
+    // cpp: custom_scrollbar.cc:377-424. Part paint offsets and overridden sizes
+    // stay on the actual anonymous part/FragmentData owners.
+    pub fn PositionScrollbarParts(
+        &mut self,
+        enabled: bool,
+        visible: i32,
+        total: i32,
+        current: f32,
+    ) {
+        let (track, before, thumb, after) = self.SplitTrack(enabled, visible, total, current);
+        for (part, owner) in self.parts_.iter() {
+            let rect = match *part {
+                ScrollbarPart::kBackButtonStartPart
+                | ScrollbarPart::kForwardButtonStartPart
+                | ScrollbarPart::kBackButtonEndPart
+                | ScrollbarPart::kForwardButtonEndPart => self.ButtonRect(*part),
+                ScrollbarPart::kBackTrackPart => before,
+                ScrollbarPart::kForwardTrackPart => after,
+                ScrollbarPart::kThumbPart => thumb,
+                ScrollbarPart::kTrackBGPart => track,
+                ScrollbarPart::kScrollbarBGPart => *self.FrameRect(),
+                _ => unreachable!("custom part is individual"),
+            };
+            unsafe { &mut *owner.Get() }.SetPartFrameRect(&rect);
+        }
+    }
+
     pub fn MinimumThumbLength(&self) -> i32 {
         let part = self.GetPart(ScrollbarPart::kThumbPart);
         if part.is_null() {
             0
         } else {
             unsafe { &*part }.ComputeLength()
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+impl CustomScrollbar {
+    // Source: core/layout/custom_scrollbar.cc:426-447.
+    pub fn GetScrollbarPartStyleForCursor(
+        &self,
+        part_type: ScrollbarPart,
+    ) -> Option<&ComputedStyle> {
+        if let Some(part) = unsafe { self.GetPart(part_type).as_ref() } {
+            return Some(part.StyleRef());
+        }
+        match part_type {
+            ScrollbarPart::kBackButtonStartPart
+            | ScrollbarPart::kForwardButtonStartPart
+            | ScrollbarPart::kBackButtonEndPart
+            | ScrollbarPart::kForwardButtonEndPart
+            | ScrollbarPart::kTrackBGPart
+            | ScrollbarPart::kThumbPart => {
+                self.GetScrollbarPartStyleForCursor(ScrollbarPart::kScrollbarBGPart)
+            }
+            ScrollbarPart::kBackTrackPart | ScrollbarPart::kForwardTrackPart => {
+                self.GetScrollbarPartStyleForCursor(ScrollbarPart::kTrackBGPart)
+            }
+            _ => None,
         }
     }
 }

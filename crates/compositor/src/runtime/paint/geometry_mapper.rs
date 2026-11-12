@@ -243,6 +243,9 @@ impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
     fn ClipIsInfinite(&self, r: &FloatClipRect) -> bool {
         r.IsInfinite()
     }
+    fn ClipHasRadius(&self, r: &FloatClipRect) -> bool {
+        r.HasRadius()
+    }
     fn ClipRect(&self, r: &FloatClipRect) -> RectF {
         *r.Rect()
     }

@@ -9,6 +9,7 @@ use layoutng_assembly::internal::layout_input_types::Color;
 use crate::box_fragment_painter::{GetHitTestOpaqueness, IsVisible};
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
+use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_chunker::DisplayItemClientInfo;
 use crate::paint_context::{PaintContext, ScopedPaintChunkProperties};
 use crate::paint_engine::{DisplayItem, DisplayItemType};
@@ -242,6 +243,10 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                         height: axis.thumb_size.height,
                     },
                     thumb_color: data.thumb_color,
+                    painted_opacity: axis.painted_opacity,
+                    painted_thumb_width: axis.painted_thumb_width,
+                    is_solid_color: data.is_solid_color,
+                    uses_macos_painted_scrollbars: data.uses_macos_painted_scrollbars,
                     horizontal: axis.horizontal,
                     overlay: data.uses_overlay_scrollbars,
                     left_side_vertical: axis.left_side_vertical,
@@ -440,6 +445,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 },
             ),
         ] {
+            let color = InvertColorIfNeeded(&fragment.paint.style, color, ElementRole::kBackground);
             self.context.borrow_mut().Append(
                 DisplayItem {
                     r#type: DisplayItemType::kStrokePath,

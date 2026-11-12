@@ -1,8 +1,8 @@
 //! Exact native Viz owned-output access used by solid-color quad emission.
 use super::{
-    geometry::Rect,
+    geometry::{Rect, RectF},
     layer_impl::{LayerImplRenderPass, LayerImplTypes},
-    layer_tree_impl::Color4f,
+    layer_tree_impl::{Color4f, ResourceId},
 };
 use crate::cc::layers::solid_color_layer_impl::SolidColorLayerImpl;
 pub trait SolidColorLayerImplTypes: LayerImplTypes<RenderPass: SolidColorRenderPass<Self>> {
@@ -24,5 +24,14 @@ pub trait SolidColorRenderPass<B: SolidColorLayerImplTypes>: LayerImplRenderPass
         visible: Rect,
         color: Color4f,
         force_anti_aliasing_off: bool,
+    );
+    fn AppendScrollbarTextureQuad(
+        &mut self,
+        state: B::SharedQuadStateHandle,
+        rect: Rect,
+        visible: Rect,
+        resource: ResourceId,
+        tex_coord_rect: RectF,
+        background: Color4f,
     );
 }

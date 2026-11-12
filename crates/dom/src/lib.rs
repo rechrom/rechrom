@@ -19,75 +19,47 @@ pub mod user_interaction_state;
 pub use user_interaction_state::{InteractionStateMutation, UserInteractionState};
 pub mod use_counter;
 pub use use_counter::WebFeature;
+pub mod attribute_lifecycle;
+pub mod content_security_policy;
 pub mod custom_elements;
+pub mod document_base_url;
+pub mod document_lifecycle;
+pub mod document_metadata;
+pub mod document_policy;
 pub mod dom_mutation;
+pub mod element_internals;
 pub mod error;
 pub mod event_path;
+pub mod lazy_load_frame_observer;
+pub use persistent_document::{DOMFormControlClass, DOMSelectCollection};
+pub mod tree_mutation;
 pub use event_path::{DOMEventPath, DOMEventPathEntry};
 pub mod image_resource;
 pub mod mutation_observers;
+pub mod native_execution_context_lifetime;
 pub mod node_references;
+pub mod node_removal_observer;
 pub mod persistent_document;
+pub mod popup_state;
+pub mod range;
+pub use range::{DOMBoundaryPoint, DOMRangeError, DOMRangeHandle, DOMStaticRange};
 pub mod style_state;
 pub mod svg_path_parser;
 pub use persistent_document::{
-    DOMAutofillState, PersistentDocument as Document, StyleDocument, DOM,
+    DOMAutofillState, DOMInputType, DOMNamespace, DOMNodeType, PersistentDocument,
+    PersistentDocument as Document, StyleDocument, DOM,
 };
 
-// cpp: dom/document.h:158-163
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ImageResourceMetadata {
-    pub id: u64,
-    pub natural_width: f64,
-    pub natural_height: f64,
-    pub resolution_scale: f64,
-    pub orientation: ::image_resource::ImageOrientation,
-    /// Image::IsOpaque published by the decoded resource owner.
-    pub known_to_be_opaque: bool,
-    /// ImageResourceContent::IsCorsSameOrigin(), retained for SVG feImage's
-    /// FilterEffect origin-taint decision.
-    pub is_cors_same_origin: bool,
-}
+pub use ::image_resource::ImageResourceMetadata;
 
-impl Default for ImageResourceMetadata {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            natural_width: 0.0,
-            natural_height: 0.0,
-            resolution_scale: 1.0,
-            orientation: Default::default(),
-            known_to_be_opaque: false,
-            is_cors_same_origin: false,
-        }
-    }
-}
-
-impl ImageResourceMetadata {
-    pub fn NaturalSize(&self, respect_orientation: bool) -> (f64, f64) {
-        if respect_orientation {
-            self.orientation
-                .oriented_size(self.natural_width, self.natural_height)
-        } else {
-            (self.natural_width, self.natural_height)
-        }
-    }
-
-    /// CSS intrinsic size for one HTML responsive-image use. Candidate
-    /// density is element-owned; resource resolution remains the fallback for
-    /// ordinary `src` and CSS image consumers.
-    pub fn NaturalSizeForCandidate(
-        &self,
-        respect_orientation: bool,
-        candidate_density: Option<f64>,
-    ) -> (f64, f64) {
-        let size = self.NaturalSize(respect_orientation);
-        let density = candidate_density
-            .filter(|density| density.is_finite() && *density > 0.0)
-            .unwrap_or(self.resolution_scale);
-        let scale = self.resolution_scale / density;
-        (size.0 * scale, size.1 * scale)
-    }
+/// Immutable current-frame metadata retained by HTMLVideoElement. Pixel
+/// storage remains in ConstraintSpace's PaintImage catalog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoFrameMetadata {
+    pub resource_id: ::image_resource::ImageId,
+    pub revision: u64,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -112,3 +84,44 @@ pub mod layout_mapping;
 extern crate layoutng_assembly as layoutng;
 
 mod lifecycle;
+
+pub mod public_url_manager;
+
+pub mod network_permissions_policy;
+pub mod permissions_policy_features;
+
+pub mod frame_ad_evidence;
+
+pub mod document_parser_lifecycle;
+
+pub mod load_event_delay_count;
+
+pub mod navigation_tokens;
+
+pub mod find_buffer;
+
+pub mod render_blocking_resource_manager;
+
+pub mod render_blocking_elements;
+
+pub mod font_loading;
+
+pub mod opaque_range;
+pub use opaque_range::DOMOpaqueRangeHandle;
+
+pub mod range_geometry;
+
+pub mod font_preload;
+
+mod history_url;
+
+pub use persistent_document::content_frames;
+pub mod frame_lifecycle;
+pub mod frame_owner_loading;
+
+pub mod video_timing;
+
+pub mod form_controller;
+
+pub mod atomic_move;
+pub mod input_value;

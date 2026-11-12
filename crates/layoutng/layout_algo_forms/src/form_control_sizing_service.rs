@@ -1,4 +1,4 @@
-use foundation::{DynamicTo, EFieldSizing};
+use foundation::DynamicTo;
 use layoutng_style::style::computed_style::ComputedStyle;
 
 use super::super::form_control_types::AutofillState;
@@ -15,16 +15,16 @@ pub trait ComputedStyleControlSizingExt {
 impl ComputedStyleControlSizingExt for ComputedStyle {
     // cpp: layoutng/internal/form_control_sizing_service.cc:27-39
     fn ApplyControlFixedSize(&self, node: *const Node) -> bool {
-        if self.FieldSizing() == EFieldSizing::kFixed {
-            return true;
-        }
-        if node.is_null() {
-            return false;
-        }
-        let mut control = DynamicTo::<HTMLFormControlElement>(node);
-        if control.is_null() {
-            control = DynamicTo::<HTMLFormControlElement>(unsafe { &*node }.OwnerShadowHost());
-        }
-        !control.is_null() && unsafe { &*control }.GetAutofillState() != AutofillState::kNotFilled
+        layoutng_style::style::menu_list_inner_style::ApplyControlFixedSize(self, || {
+            if node.is_null() {
+                return false;
+            }
+            let mut control = DynamicTo::<HTMLFormControlElement>(node);
+            if control.is_null() {
+                control = DynamicTo::<HTMLFormControlElement>(unsafe { &*node }.OwnerShadowHost());
+            }
+            !control.is_null()
+                && unsafe { &*control }.GetAutofillState() != AutofillState::kNotFilled
+        })
     }
 }

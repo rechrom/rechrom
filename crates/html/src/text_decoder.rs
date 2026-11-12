@@ -25,6 +25,13 @@ impl TextDecoder {
             pending: vec![],
         })
     }
+    pub(crate) fn Encoding(&self) -> dom::document_metadata::DocumentTextEncoding {
+        if self.windows1252 {
+            dom::document_metadata::DocumentTextEncoding::Windows1252
+        } else {
+            dom::document_metadata::DocumentTextEncoding::UTF8
+        }
+    }
     pub(crate) fn append(&mut self, bytes: &[u8], eof: bool) -> io::Result<String> {
         if self.windows1252 {
             const C1: [u16; 32] = [

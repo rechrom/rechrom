@@ -98,9 +98,11 @@ fn DecodeImage(
                 })
                 .collect::<Vec<_>>();
             return Ok(DecodedImage {
+                filename_extension: Some("gif"),
                 width,
                 height,
                 orientation: image_resource::ImageOrientation::kDefault,
+                hot_spot: None,
                 alpha_type: image_resource::PaintImageAlphaType::Unpremultiplied,
                 animation: image_resource::PaintImageAnimationMetadata::Known(
                     image_resource::PaintImageAnimationInfo {
@@ -125,7 +127,11 @@ fn DecodeImage(
             image_resource::PaintImageAnimationMetadata::Known(
                 image_resource::PaintImageAnimationInfo::confirmed_static(),
             ),
-        );
+        )
+        .map(|mut image| {
+            image.filename_extension = Some("gif");
+            image
+        });
     }
     // Keep the codec's actual animation classification before erasing its
     // concrete type. The current pixel ABI cannot retain animated frame sets.
@@ -209,7 +215,19 @@ fn DecodeImage(
     } else {
         image_resource::PaintImageAlphaType::Unpremultiplied
     };
-    IntoDecodedImageWithAlphaType(decoded, orientation, animation, alpha_type)
+    IntoDecodedImageWithAlphaType(decoded, orientation, animation, alpha_type).map(|mut image| {
+        image.filename_extension = format.map(|format| match format {
+            image::ImageFormat::Jpeg => "jpg",
+            image::ImageFormat::Png => "png",
+            image::ImageFormat::Gif => "gif",
+            image::ImageFormat::WebP => "webp",
+            image::ImageFormat::Bmp => "bmp",
+            image::ImageFormat::Ico => "ico",
+            image::ImageFormat::Avif => "avif",
+            _ => format.extensions_str()[0],
+        });
+        image
+    })
 }
 
 fn IntoDecodedImage(
@@ -252,9 +270,11 @@ fn IntoDecodedImageWithAlphaType(
         }
     }
     Ok(DecodedImage {
+        filename_extension: None,
         width,
         height,
         orientation: image_resource::ImageOrientation::from_exif(orientation.to_exif()),
+        hot_spot: None,
         alpha_type,
         animation,
         animation_frames: Vec::new(),
@@ -286,6 +306,9 @@ impl ImageDecoder for SkiaImageDecoder {
         }
         if IsJpeg(input) {
             return DecodeImage(input, Some(image::ImageFormat::Jpeg));
+        }
+        if input.bytes.starts_with(b"\0\0\x01\0") || input.bytes.starts_with(b"\0\0\x02\0") {
+            return crate::ico_image_decoder::Decode(input.bytes);
         }
         DecodeImage(input, None)
     }

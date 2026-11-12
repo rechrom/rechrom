@@ -419,6 +419,23 @@ impl Transform {
         self.ProjectPointWithClamped(point, None)
     }
 
+    // Source ui/gfx/geometry/transform.cc:928-945. Preserve the all-behind-
+    // camera empty-quad rule; projecting its bounding rect is not equivalent.
+    pub fn ProjectQuad(&self, quad: crate::gfx_quad_f::QuadF) -> crate::gfx_quad_f::QuadF {
+        let mut clamped = [false; 4];
+        let result = crate::gfx_quad_f::QuadF::new(
+            self.ProjectPointWithClamped(*quad.p1(), Some(&mut clamped[0])),
+            self.ProjectPointWithClamped(*quad.p2(), Some(&mut clamped[1])),
+            self.ProjectPointWithClamped(*quad.p3(), Some(&mut clamped[2])),
+            self.ProjectPointWithClamped(*quad.p4(), Some(&mut clamped[3])),
+        );
+        if clamped.iter().all(|clamped| *clamped) {
+            crate::gfx_quad_f::QuadF::default()
+        } else {
+            result
+        }
+    }
+
     pub fn ProjectPointWithClamped(
         &self,
         point: foundation_base::gfx_geometry::PointF,

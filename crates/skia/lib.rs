@@ -24,6 +24,12 @@
 // Host-buffer boundary for the browser CPU replay migration. No legacy backend.
 pub mod raster_target;
 
+// Real Metal resource/command boundary for the GPU translation. Only the
+// explicitly source-mapped solid draw slice receives translation credit; the
+// rest of Ganesh/Graphite Canvas playback remains outside this module.
+#[cfg(all(target_vendor = "apple", feature = "browser_gpu_metal"))]
+pub mod metal_target;
+
 // Actual Chromium SK_REF_CNT_MIXIN_INCLUDE source translations. These are
 // embedding definitions, separate from the pinned Skia source-line total.
 pub mod skia {
@@ -35,6 +41,9 @@ pub mod skia {
 }
 
 pub mod include {
+    pub mod pathops {
+        pub mod SkPathOps;
+    }
     pub mod codec {
         pub mod SkCodecAnimation;
         pub mod SkEncodedImageFormat;
@@ -134,6 +143,43 @@ pub mod modules {
     }
 }
 pub mod src {
+    pub mod pathops {
+        pub mod SkAddIntersections;
+        pub mod SkCoincidentSpans;
+        pub mod SkDConicLineIntersection;
+        pub mod SkDCubicLineIntersection;
+        pub mod SkDLineIntersection;
+        pub mod SkDQuadLineIntersection;
+        pub mod SkIntersectionHelper;
+        pub mod SkIntersections;
+        pub mod SkLineParameters;
+        pub mod SkOpAngle;
+        pub mod SkOpCoincidence;
+        pub mod SkOpContour;
+        pub mod SkOpCubicHull;
+        pub mod SkOpEdgeBuilder;
+        pub mod SkOpGlobalState;
+        pub mod SkOpSegment;
+        pub mod SkOpSpan;
+        pub mod SkPathOpsBounds;
+        pub mod SkPathOpsCommon;
+        pub mod SkPathOpsConic;
+        pub mod SkPathOpsCubic;
+        pub mod SkPathOpsCurve;
+        pub mod SkPathOpsLine;
+        pub mod SkPathOpsOp;
+        pub mod SkPathOpsPoint;
+        pub mod SkPathOpsQuad;
+        pub mod SkPathOpsRect;
+        pub mod SkPathOpsSimplify;
+        pub mod SkPathOpsTCurve;
+        pub mod SkPathOpsTSect;
+        pub mod SkPathOpsTSectCoincidence;
+        pub mod SkPathOpsTypes;
+        pub mod SkPathOpsWinding;
+        pub mod SkPathWriter;
+        pub mod SkReduceOrder;
+    }
     pub mod codec {
         pub mod SkCodec;
         pub mod SkCodecColorProfile;

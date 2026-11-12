@@ -40,6 +40,18 @@ pub(super) fn begin_layout_output(
 
 #[inline(never)]
 pub(super) fn run_layout_without_publication(engine: &mut LayoutEngine) {
+    run_layout_without_publication_impl(engine, true);
+}
+
+#[inline(never)]
+pub(super) fn run_provisional_layout_without_publication(engine: &mut LayoutEngine) {
+    run_layout_without_publication_impl(engine, false);
+}
+
+fn run_layout_without_publication_impl(
+    engine: &mut LayoutEngine,
+    invalidate_pre_paint_basis: bool,
+) {
     let _trace = layout_commit::trace_span(layout_commit::TracePhase::RunLayoutWithoutPublication);
     if let Some(index) = engine.scroll_paint_index_.take() {
         engine.scroll_paint_index_spare_ = Some(index);
@@ -47,16 +59,27 @@ pub(super) fn run_layout_without_publication(engine: &mut LayoutEngine) {
     engine.pending_scroll_ids_.clear();
     let root = engine.RootPointer();
     engine.fragments = None;
-    // Retained scroll refresh is owned by the caller and can mutate inputs
-    // without publication. Its next ordinary layout must establish a basis.
-    engine.pre_paint_inputs_.invalidate();
+    if invalidate_pre_paint_basis {
+        // Retained scroll refresh is owned by the caller and can mutate inputs
+        // without publication. Its next ordinary layout must establish a basis.
+        engine.pre_paint_inputs_.invalidate();
+    }
     let constraints = engine.constraints_.clone();
-    let _ = engine.RunLayout(
-        unsafe { &mut *root },
-        &constraints,
-        false,
-        LayoutUpdateKind::Paint,
-    );
+    if invalidate_pre_paint_basis {
+        let _ = engine.RunPaintLayoutLifecycle(
+            unsafe { &mut *root },
+            &constraints,
+            false,
+            LayoutUpdateKind::Paint,
+        );
+    } else {
+        let _ = engine.RunLayout(
+            unsafe { &mut *root },
+            &constraints,
+            false,
+            LayoutUpdateKind::Paint,
+        );
+    }
 }
 
 #[inline(never)]
@@ -98,4 +121,13 @@ pub(super) fn publish_layout_output(
     }
     engine.fragments = Some(fragments);
     engine.pre_paint_inputs_ = inputs;
+    // FrameSelection::DidLayout -> UpdateAppearance (frame_selection.cc:
+    // 1254-1261): offsets are recomputed against the new native OffsetMapping.
+    if let Some(tree) = engine.tree_.as_ref() {
+        tree.EditingState()
+            .selections
+            .layout_selection
+            .borrow_mut()
+            .SetHasPendingSelection();
+    }
 }

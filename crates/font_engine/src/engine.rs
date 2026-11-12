@@ -33,6 +33,8 @@ pub enum FontMutation {
     /// Decoded immutable faces supplied by the embedding, never encoded WOFF.
     SetFaces(Vec<FontFace>),
     SetRules(Vec<FontRule>),
+    UpsertRule(FontRule),
+    RemoveRule(u64),
     SetFaceState {
         rule_id: u64,
         state: FontFaceState,
@@ -78,6 +80,19 @@ pub struct RetainedShapeResult {
     result: Persistent<ShapeResult>,
     pub context_version: FontContextVersion,
 }
+impl RetainedShapeResult {
+    pub(crate) fn ApplyPlainTextSpacing(
+        &mut self,
+        spacing: &mut crate::fonts::shaping::shape_result_spacing::ShapeResultSpacing,
+        offset: i32,
+    ) {
+        unsafe { &mut *self.result.Get() }.ApplySpacing(spacing, offset);
+    }
+}
+pub struct StyleTextMeasurement {
+    pub width: Option<f32>,
+    pub pending: FontPending,
+}
 impl Deref for RetainedShapeResult {
     type Target = ShapeResult;
     fn deref(&self) -> &Self::Target {
@@ -87,6 +102,10 @@ impl Deref for RetainedShapeResult {
 
 pub struct FontEngine {
     context_version: FontContextVersion,
+    /// Platform-metric sampling scale. Layout coordinates remain CSS pixels;
+    /// SimpleFontData dezooms the rounded strike metrics before publishing
+    /// them to Style and Layout.
+    device_scale_factor: f32,
     faces: Vec<FontFace>,
     rules: Vec<FontRule>,
     answers: Vec<SystemFontResponse>,
@@ -147,6 +166,7 @@ impl FontEngine {
     ) -> Self {
         Self {
             context_version,
+            device_scale_factor: 1.0,
             faces: vec![],
             rules: vec![],
             answers: vec![],
@@ -163,12 +183,33 @@ impl FontEngine {
     /// Compatibility for hosts supplying an already resolved, immutable face
     /// snapshot. Uses the same resolver as the request/resume entry points.
     pub fn FromFaces(faces: &[FontFace], backend: Option<Arc<dyn FontBackendFactory>>) -> Self {
+        Self::FromFacesWithDeviceScaleFactor(faces, backend, 1.0)
+    }
+    pub fn FromFacesWithDeviceScaleFactor(
+        faces: &[FontFace],
+        backend: Option<Arc<dyn FontBackendFactory>>,
+        device_scale_factor: f32,
+    ) -> Self {
         let mut engine = Self::new(FontContextVersion::default(), backend);
+        engine.SetDeviceScaleFactor(device_scale_factor);
         engine.faces = faces.to_vec();
         engine.resolved_faces = Some(faces.to_vec().into());
         engine.discover_system = false;
         engine.queries = None;
         engine
+    }
+    pub fn SetDeviceScaleFactor(&mut self, scale: f32) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        if self.device_scale_factor.to_bits() == scale.to_bits() {
+            return;
+        }
+        self.device_scale_factor = scale;
+        self.resolver = None;
+        self.metrics_cache.clear();
     }
     pub fn SetQueryCollector(&mut self, collector: Option<FontQueryCollector>) {
         let changed = match (&self.queries, &collector) {
@@ -195,6 +236,30 @@ impl FontEngine {
         self.OpenCandidates(query, &mut pending);
         pending
     }
+    /// Read the exact opened candidate selected by the same discovery query.
+    /// Used by LocalFontFaceSource after its unique-name provider request has
+    /// completed; no family rematch or byte/index reconstruction occurs here.
+    pub fn ResolvedSystemMatch(&self, query: &SystemFontQuery) -> Option<FontFace> {
+        let response = self
+            .answers
+            .iter()
+            .find(|answer| &answer.request.query == query)?;
+        let SystemFontAnswer::Faces(candidates) = &response.answer else {
+            return None;
+        };
+        candidates.iter().find_map(|candidate| {
+            self.answers
+                .iter()
+                .find_map(|answer| match (&answer.request.query, &answer.answer) {
+                    (SystemFontQuery::OpenFace { id }, SystemFontAnswer::Face(face))
+                        if id == &candidate.id =>
+                    {
+                        Some(face.clone())
+                    }
+                    _ => None,
+                })
+        })
+    }
     pub fn ContextVersion(&self) -> FontContextVersion {
         self.context_version
     }
@@ -207,6 +272,24 @@ impl FontEngine {
             }
             FontMutation::SetRules(rules) => {
                 self.rules = rules;
+                self.resolver = None;
+                self.resolved_faces = None;
+            }
+            FontMutation::UpsertRule(rule) => {
+                if let Some(existing) = self
+                    .rules
+                    .iter_mut()
+                    .find(|existing| existing.id == rule.id)
+                {
+                    *existing = rule;
+                } else {
+                    self.rules.push(rule);
+                }
+                self.resolver = None;
+                self.resolved_faces = None;
+            }
+            FontMutation::RemoveRule(id) => {
+                self.rules.retain(|rule| rule.id != id);
                 self.resolver = None;
                 self.resolved_faces = None;
             }
@@ -345,7 +428,7 @@ impl FontEngine {
                         if (!fallback || index >= failed_prefix)
                             && matches!(answer.answer, SystemFontAnswer::Face(_)) =>
                     {
-                        break
+                        break;
                     }
                     Some(_) => continue,
                     None => {
@@ -525,7 +608,11 @@ impl FontEngine {
     fn Resolver(&mut self) -> &mut FontResolver {
         if self.resolver.is_none() {
             let faces = self.ResolvedFaces();
-            let mut resolver = FontResolver::new(&faces, self.backend.clone());
+            let mut resolver = FontResolver::new_with_device_scale_factor(
+                &faces,
+                self.backend.clone(),
+                self.device_scale_factor,
+            );
             resolver.SetQueryCollector(self.queries.clone());
             self.resolver = Some(resolver);
         }
@@ -547,7 +634,7 @@ impl FontEngine {
             .expect("resolved font")
             .Variations(font)
     }
-    fn ResolveDescription(&mut self, description: &FontDescription) -> *const Font {
+    pub(crate) fn ResolveDescription(&mut self, description: &FontDescription) -> *const Font {
         let families: Vec<String> = Self::Families(description)
             .into_iter()
             .map(|(name, _)| name)
@@ -566,6 +653,45 @@ impl FontEngine {
             orientation: description.Orientation(),
             smoothing: FontSmoothing::kAuto,
         }) as *const Font
+    }
+    pub fn MeasureTextForStyle(
+        &mut self,
+        description: &FontDescription,
+        text: &[u16],
+        direction: RunDirection,
+        directional_override: bool,
+    ) -> Result<StyleTextMeasurement, FontError> {
+        let _scope = foundation::LayoutHeapScope::new();
+        if text.is_empty() {
+            return Ok(StyleTextMeasurement {
+                width: Some(0.),
+                pending: FontPending::default(),
+            });
+        }
+        let pending = self.Prepare(description, self.context_version)?;
+        if !self.HasAvailableFaces() {
+            return Ok(StyleTextMeasurement {
+                width: None,
+                pending,
+            });
+        }
+        let font = self.ResolveDescription(description);
+        if unsafe { &*font }.PrimaryFont().is_null() {
+            return Ok(StyleTextMeasurement {
+                width: None,
+                pending,
+            });
+        }
+        let width = crate::plain_text_painter::PlainTextPainter::ComputeInlineSizeForFont(
+            unsafe { &*font },
+            text,
+            direction,
+            directional_override,
+        );
+        Ok(StyleTextMeasurement {
+            width: Some(width),
+            pending,
+        })
     }
     pub fn GetMetrics(
         &mut self,
@@ -587,7 +713,7 @@ impl FontEngine {
             Ok(pending)
                 if !pending.system_queries.is_empty() || !pending.resource_ids.is_empty() =>
             {
-                return FontCompute::Pending(pending)
+                return FontCompute::Pending(pending);
             }
             _ => {}
         }
@@ -654,7 +780,7 @@ impl FontEngine {
             Ok(pending)
                 if !pending.system_queries.is_empty() || !pending.resource_ids.is_empty() =>
             {
-                return FontCompute::Pending(pending)
+                return FontCompute::Pending(pending);
             }
             _ => {}
         }
@@ -905,7 +1031,10 @@ mod tests {
             SystemFontAnswer::Faces(descriptors.clone()),
         );
         assert_eq!(selected_id(&mut engine, &request).0, "ja-face");
-        assert!(engine.pending.is_empty(), "new query reusing the first opened candidate must not open the next face before shaping");
+        assert!(
+            engine.pending.is_empty(),
+            "new query reusing the first opened candidate must not open the next face before shaping"
+        );
 
         description.SetLocale(crate::LayoutLocale::GetShared(&AtomicString::FromUtf8(
             b"zh-CN",

@@ -25,21 +25,32 @@ impl LayoutObject {
     #[inline]
     pub fn ObjectBoundingBox(&self) -> gfx::RectF {
         self.CheckIsNotDestroyed();
-        std::process::abort();
+        let algorithms = LayoutPassScope::Algorithms();
+        let query = unsafe { algorithms.as_ref() }
+            .and_then(|a| a.svg_support.object_bounding_box)
+            .expect("SVG object geometry owner is not installed");
+        query(self)
     }
 
     // cpp: layoutng/internal/layout_object_core_services.cc:550-553
     #[inline]
     pub fn StrokeBoundingBox(&self) -> gfx::RectF {
         self.CheckIsNotDestroyed();
-        std::process::abort();
+        let algorithms = LayoutPassScope::Algorithms();
+        let query = unsafe { algorithms.as_ref() }
+            .and_then(|a| a.svg_support.stroke_bounding_box)
+            .expect("SVG stroke geometry owner is not installed");
+        query(self)
     }
 
     // cpp: layoutng/internal/layout_object_core_services.cc:555-558
     #[inline]
     pub fn DecoratedBoundingBox(&self) -> gfx::RectF {
         self.CheckIsNotDestroyed();
-        std::process::abort();
+        let algorithms = LayoutPassScope::Algorithms();
+        unsafe { algorithms.as_ref() }
+            .and_then(|a| a.svg_support.decorated_bounding_box)
+            .expect("native SVG decorated geometry owner is installed")(self)
     }
 
     // cpp: layoutng/internal/layout_object_core_services.cc:560-563
@@ -56,6 +67,14 @@ impl LayoutObject {
     #[inline]
     pub fn LocalSVGTransform(&self) -> AffineTransform {
         self.CheckIsNotDestroyed();
+        if self.IsSVGChild() {
+            let algorithms = LayoutPassScope::Algorithms();
+            if let Some(query) =
+                unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.local_to_parent_transform)
+            {
+                return query(self);
+            }
+        }
         AffineTransform::default()
     }
 }

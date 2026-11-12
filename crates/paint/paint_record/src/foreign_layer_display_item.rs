@@ -33,18 +33,43 @@ pub struct ForeignLayerSize {
 pub trait ForeignLayer: Any + Send + Sync {
     fn LayerId(&self) -> i32;
     fn Bounds(&self) -> ForeignLayerSize;
+    /// Source: video_painter.cc:85-87. VideoPainter sizes the resident layer
+    /// to the pixel-snapped replaced-content rectangle immediately before it
+    /// records the foreign-layer item. Non-video implementations may retain
+    /// immutable bounds.
+    fn SetBounds(&self, _bounds: ForeignLayerSize) {}
+    /// Source: html_canvas_painter.cc:83-86. A resident canvas layer is made
+    /// drawable and hit-testable immediately before its foreign display item
+    /// is recorded. Other layer subtypes may keep their existing state.
+    fn SetIsDrawable(&self, _drawable: bool) {}
+    fn SetHitTestable(&self, _hit_testable: bool) {}
+    /// Source: html_canvas_painter.cc:74-79. The color is already resolved by
+    /// Layout/Paint; the resident canvas layer owns its compositing state.
+    fn SetBackgroundColor(&self, _color: foundation::PaintColor) {}
     fn EqualsLayer(&self, other: &dyn ForeignLayer) -> bool;
     fn AsAny(&self) -> &dyn Any;
 }
 
+/// Source HTMLVideoElement::StyleDidChange filter/dynamic-range state. This
+/// small value crosses with the same resident layer; PAC applies it when its
+/// live LayerContext is available, like the existing video bounds handoff.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoPresentationStyle {
+    pub nearest_neighbor: bool,
+    pub dynamic_range_limit: foundation::DynamicRangeLimit,
+}
 #[derive(Clone)]
 pub struct ForeignLayerDisplayItemData {
     layer_: Arc<dyn ForeignLayer>,
+    video_style_: Option<VideoPresentationStyle>,
 }
 
 impl ForeignLayerDisplayItemData {
     pub fn new(layer: Arc<dyn ForeignLayer>) -> Self {
-        Self { layer_: layer }
+        Self {
+            layer_: layer,
+            video_style_: None,
+        }
     }
 
     pub fn GetLayer(&self) -> &dyn ForeignLayer {
@@ -78,6 +103,10 @@ impl RecordedDisplayItem {
     }
 
     // Source: foreign_layer_display_item.h:35-38.
+    pub fn VideoPresentationStyle(&self) -> Option<VideoPresentationStyle> {
+        self.ForeignLayerData().video_style_
+    }
+
     pub fn GetForeignLayer(&self) -> &dyn ForeignLayer {
         self.ForeignLayerData().GetLayer()
     }
@@ -145,11 +174,60 @@ pub fn RecordForeignLayer(
     raster_effect_outset: RasterEffectOutset,
     properties: Option<&PropertyTreeState>,
 ) {
+    RecordLayer(
+        context,
+        id,
+        client,
+        layer,
+        origin,
+        raster_effect_outset,
+        properties,
+        None,
+    );
+}
+
+pub fn RecordVideoForeignLayer(
+    context: &mut PaintContext<'_>,
+    id: DisplayItemId,
+    client: DisplayItemClientInfo,
+    layer: Arc<dyn ForeignLayer>,
+    origin: Offset,
+    style: VideoPresentationStyle,
+) {
+    assert_eq!(
+        id.r#type,
+        crate::display_item_id::DisplayItemIdType::kForeignLayerVideo
+    );
+    RecordLayer(
+        context,
+        id,
+        client,
+        layer,
+        origin,
+        RasterEffectOutset::kNone,
+        None,
+        Some(style),
+    );
+}
+fn RecordLayer(
+    context: &mut PaintContext<'_>,
+    id: DisplayItemId,
+    client: DisplayItemClientInfo,
+    layer: Arc<dyn ForeignLayer>,
+    origin: Offset,
+    raster_effect_outset: RasterEffectOutset,
+    properties: Option<&PropertyTreeState>,
+    video_style: Option<VideoPresentationStyle>,
+) {
     let previous_properties = properties.map(|_| context.chunk_properties());
     if let Some(properties) = properties {
         context.update_chunk_properties(properties.clone());
     }
-    let item = NewForeignLayerDisplayItem(id, client, layer, origin, raster_effect_outset);
+    let mut item = NewForeignLayerDisplayItem(id, client, layer, origin, raster_effect_outset);
+    item.foreign_layer
+        .as_mut()
+        .expect("foreign layer record")
+        .video_style_ = video_style;
     context.AppendForeignLayerDisplayItem(item, client);
     if let Some(previous_properties) = previous_properties {
         context.update_chunk_properties(previous_properties);

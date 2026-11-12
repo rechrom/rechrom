@@ -14,6 +14,8 @@ struct Operation {
 impl XMLHttpRequestOperation for Operation {
     fn Poll(&mut self) -> io::Result<Option<XMLHttpResponseData>> {
         Ok(self.request.Poll()?.map(|response| XMLHttpResponseData {
+            expected_content_length: response.expected_content_length,
+            headers: response.headers,
             status: response.status,
             final_url: response.final_url,
             mime_type: response.mime_type,

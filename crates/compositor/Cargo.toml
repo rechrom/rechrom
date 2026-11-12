@@ -9,6 +9,8 @@ default = []
 chromeos = []
 
 [dependencies]
+scroll_animation = { path = "../scroll_animation" }
+canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 compositor_layerize = { path = "compositor_layerize" }
 compositor_tree = { path = "compositor_tree" }
@@ -21,7 +23,13 @@ compositor_scheduler = { path = "compositor_scheduler" }
 compositor_input = { path = "compositor_input" }
 compositor_animation = { path = "compositor_animation" }
 paint = { path = "../paint" }
+paint_model = { path = "../paint/paint_model" }
+paint_skia = { path = "../paint/paint_skia" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }
+image_decoder = { path = "../image_decoder", default-features = false }
 serde_json = "1"
 getrandom = "0.4"
+
+[dev-dependencies]
+layoutng_assembly = { path = "../layoutng/layoutng_assembly" }

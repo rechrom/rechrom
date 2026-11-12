@@ -134,6 +134,27 @@ fn create_managed_object(
     });
     let mut previous = storage.pending.remove(&key);
     let reattach = storage.reattach.contains(&id);
+    // ImageLoader::UpdateLayoutObject keeps the previous completed resource
+    // while a replacement is pending. Read the resident LayoutImageResource
+    // before rebuilding the retained input so a pending DOM candidate cannot
+    // erase the image id, intrinsic size or opacity used by Paint.
+    let resident_image_facts = previous.as_ref().and_then(|old| {
+        let object = unsafe { &*old.object };
+        if object.WasDestroyedForTreeUpdate() {
+            return None;
+        }
+        (!style_generated && object.IsLayoutImage()).then(|| {
+            let query = storage
+                .factories
+                .replaced_image_resource_facts
+                .expect("LayoutImageResource facts query is not installed");
+            query(unsafe {
+                &*old
+                    .object
+                    .cast::<crate::internal::layout_replaced::LayoutReplaced>()
+            })
+        })
+    });
     // Compare borrowed inputs before making owned descriptors: unchanged nodes
     // need neither strings nor construction resolver scopes.
     if let Some(old) = previous.as_ref() {
@@ -183,10 +204,49 @@ fn create_managed_object(
     } else {
         Arc::new(style.clone())
     };
-    let input_resources =
-        Arc::new(crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input_style));
-    let source_resources =
-        Arc::new(crate::internal::layout_input::StyleResourceData::FromLegacyInput(&source_style));
+    let projected_image_resource_id = source_style.paint.image_resource_id;
+    let resident_image_resource_id = resident_image_facts
+        .as_ref()
+        .and_then(|facts| facts.metadata.map(|metadata| metadata.id));
+    let mut input_resource_data =
+        crate::internal::layout_input::StyleResourceData::FromLegacyInput(&input_style);
+    let mut source_resource_data =
+        crate::internal::layout_input::StyleResourceData::FromLegacyInput(&source_style);
+    if resident_image_facts.is_some() {
+        input_resource_data.image_resource_id = resident_image_resource_id;
+        source_resource_data.image_resource_id = resident_image_resource_id;
+    }
+    let input_resources = Arc::new(input_resource_data);
+    let source_resources = Arc::new(source_resource_data);
+    let mut element = element;
+    if let (Some(data), Some(facts)) = (element.as_mut(), resident_image_facts.as_ref()) {
+        data.image_resource_is_loaded = facts.metadata.is_some();
+        data.image_resource_error = facts.error;
+        data.image_resource_known_to_be_opaque = facts
+            .metadata
+            .is_some_and(|metadata| metadata.known_to_be_opaque);
+        if let Some(metadata) = facts.metadata {
+            let use_projected_ratio = projected_image_resource_id == Some(metadata.id);
+            if !use_projected_ratio {
+                data.image_device_pixel_ratio = facts.device_pixel_ratio as f64;
+            }
+            let respect_orientation = !source_style.style.is_null()
+                && unsafe { &*source_style.style }.ImageOrientation()
+                    == foundation::RespectImageOrientationEnum::kRespectImageOrientation;
+            let (width, height) = metadata.NaturalSize(respect_orientation);
+            let ratio = data.image_device_pixel_ratio;
+            data.natural_width = Some(width * ratio);
+            data.natural_height = Some(height * ratio);
+            data.natural_aspect_ratio = (height > 0.0).then_some(width / height);
+        } else if facts.error {
+            if let Some(old) = previous.as_ref().and_then(|old| old.input.element.as_ref()) {
+                data.natural_width = old.natural_width;
+                data.natural_height = old.natural_height;
+                data.natural_aspect_ratio = old.natural_aspect_ratio;
+                data.image_device_pixel_ratio = old.image_device_pixel_ratio;
+            }
+        }
+    }
     let mut input = NodeConstructionData {
         id,
         kind,
@@ -231,6 +291,12 @@ fn create_managed_object(
         if reattach || unsafe { &*old.object }.WasDestroyedForTreeUpdate() || !compatible {
             if !unsafe { &*old.object }.WasDestroyedForTreeUpdate() {
                 unsafe { &mut *old.object }.Destroy();
+                // Node::DetachLayoutTree clears the native LayoutObject alias
+                // immediately after destroying it.  Keep that ordering here:
+                // UA shadow relations (notably a text control's inner editor)
+                // may retain the Node through the rest of this transaction,
+                // but must never observe the retired LayoutObject.
+                unsafe { &mut *old.node }.SetLayoutObject(std::ptr::null_mut());
                 unsafe { &mut *old.node }.DetachForTreeUpdate();
             }
             if old.object == storage.root.Get() {
@@ -260,6 +326,15 @@ fn create_managed_object(
     let control_paint_state_changed = previous
         .as_ref()
         .is_some_and(|old| ControlPaintStateChanged(&descriptor.element, &old.input.element));
+    // Source SVGResources client notification. The native marker drawing now
+    // borrows the resource subtree, so its cache invalidation follows resource
+    // identity/generation instead of comparing a flattened primitive payload.
+    let marker_resource_changed = previous.as_ref().is_some_and(|old| {
+        unsafe { &*old.object }.IsSVGShape()
+            && unsafe { &*old.object }.StyleRef().HasMarkers()
+            && old.input.resources.svg_clip_resources.snapshot.version
+                != descriptor.resources.svg_clip_resources.snapshot.version
+    });
     let image_paint_state_changed = previous
         .as_ref()
         .is_some_and(|old| ImagePaintStateChanged(&descriptor.element, &old.input.element));
@@ -472,13 +547,27 @@ fn create_managed_object(
             TextNode::new(&input, layout_style, text).unwrap_or_else(|error| panic!("{error:?}")),
         ) as *mut Node
     } else {
-        CreateElementMetadata(&input, layout_style, &storage.factories)
-            .unwrap_or_else(|error| panic!("{error:?}")) as *mut Node
+        CreateElementMetadata(&input, layout_style, &storage.factories).unwrap_or_else(|error| {
+            panic!(
+                "{error:?}; node_id={}; kind={:?}; debug_name={}; replaced={:?}",
+                input.id,
+                input.kind,
+                input.debug_name,
+                input.element.as_ref().map(|data| (
+                    data.natural_width,
+                    data.natural_height,
+                    data.natural_aspect_ratio,
+                    data.image_device_pixel_ratio,
+                    data.replaced_respects_css_overflow,
+                ))
+            )
+        }) as *mut Node
     };
     if paint_only && !old_font_dirty {
         unsafe { &mut *metadata_node }.ClearInputFontBinding();
     }
     unsafe { &mut *metadata_node }.SetInputFirstLineStyle(layout_first_line_style);
+    unsafe { &mut *metadata_node }.SetLayoutDetachSink(storage.detached_elements.clone());
     if previous.is_none() && !parent.is_null() {
         let parent_node = unsafe { &*parent }.GetNode().cast::<ContainerNode>();
         unsafe { &mut *parent_node }
@@ -517,6 +606,11 @@ fn create_managed_object(
             &storage.factories,
         )
     };
+    // Node::layout_object_ is established by Blink's layout-tree attachment
+    // before StyleDidChange may create PaintLayer and its scrollable area.
+    // Keeping the alias null until after SetStyle made the root Node unable to
+    // resolve its LayoutView during PaintLayerScrollableArea registration.
+    unsafe { &mut *metadata_node }.SetLayoutObject(object);
     unsafe { &mut *object }.SetStyle(layout_style);
     if unsafe { &*object }.IsLayoutImage() {
         let ratio = descriptor
@@ -535,6 +629,21 @@ fn create_managed_object(
             unsafe { &mut *object.cast::<crate::internal::layout_replaced::LayoutReplaced>() },
             ratio,
             resource_error,
+        );
+    }
+    if unsafe { &*object }.IsVideo() {
+        // Source: core/layout/layout_video.cc:165-173. UpdateFromElement
+        // refreshes LayoutVideo's natural dimensions before the next layout;
+        // the package callback preserves that derived-object ownership.
+        let update = storage
+            .factories
+            .replaced_video_state_updater
+            .expect("LayoutVideo state updater is not installed");
+        update(unsafe { &mut *object.cast::<crate::internal::layout_replaced::LayoutReplaced>() });
+    }
+    if marker_resource_changed {
+        unsafe { &mut *object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+            foundation::PaintInvalidationReason::kSVGResource,
         );
     }
     if natural_size_changed {
@@ -590,15 +699,17 @@ fn create_managed_object(
             unsafe { &mut *object }.SetCanContainAbsolutePositionObjects(true);
         }
     }
-    unsafe { &mut *metadata_node }.SetLayoutObject(object);
     if previous.is_none() {
         storage
             .metadata
             .insert(metadata_node, Persistent::from_ptr(metadata_node));
         storage.objects.insert(object, Persistent::from_ptr(object));
     }
-    let effective_resources =
+    let mut effective_resources =
         crate::internal::layout_input::StyleResourceData::FromLegacyInput(&effective_style);
+    if resident_image_facts.is_some() {
+        effective_resources.image_resource_id = resident_image_resource_id;
+    }
     let effective_computed_style = if effective_style.style.is_null() {
         layout_style
     } else {

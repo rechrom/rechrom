@@ -47,6 +47,9 @@ pub struct DynamicScriptTasks {
     supports_modules: bool,
     modules: RefCell<Rc<document_loader::ModuleResources>>,
     resources: RefCell<HashMap<u64, ResourceLoader>>,
+    render_blocking_scripts: RefCell<
+        HashMap<u64, Rc<dom::render_blocking_resource_manager::ScriptRenderBlockingRegistration>>,
+    >,
     prepared_classic_sources: RefCell<HashMap<u64, io::Result<(String, String)>>>,
     registrations: RefCell<VecDeque<u64>>,
     pending_modules: RefCell<HashSet<u64>>,
@@ -134,6 +137,7 @@ impl DynamicScriptTasks {
             supports_modules,
             modules: RefCell::new(modules),
             resources: RefCell::new(HashMap::new()),
+            render_blocking_scripts: RefCell::new(HashMap::new()),
             prepared_classic_sources: RefCell::new(HashMap::new()),
             registrations: RefCell::new(VecDeque::new()),
             pending_modules: RefCell::new(HashSet::new()),
@@ -221,6 +225,18 @@ impl DynamicScriptTasks {
                     self.pending_modules.borrow_mut().insert(id);
                 } else {
                     self.StartScriptLoad(id, src)?;
+                }
+                // Dynamic scripts have no implicit parser-inserted blocker.
+                if (kind == Kind::Module || !src.is_empty())
+                    && tree.Node(node).FindAttribute("blocking").is_some_and(|a| {
+                        dom::render_blocking_resource_manager::HasRenderBlockingToken(&a.value)
+                    })
+                {
+                    if let Some(manager) = tree.GetRenderBlockingResourceManager() {
+                        if let Some(registration) = dom::render_blocking_resource_manager::ScriptRenderBlockingRegistration::Register(&manager, dom::render_blocking_resource_manager::ScriptOwner(id), dom::render_blocking_resource_manager::ScriptRenderBlockingKind::Other) {
+                            self.render_blocking_scripts.borrow_mut().insert(id, registration);
+                        }
+                    }
                 }
                 self.registrations.borrow_mut().push_back(id);
             }
@@ -373,6 +389,7 @@ impl DynamicScriptTasks {
     ) {
         self.started.borrow_mut().insert(id);
         self.pending_modules.borrow_mut().remove(&id);
+        self.render_blocking_scripts.borrow_mut().remove(&id);
         let kind = {
             let owner = self.document.borrow();
             let tree = owner.GetDocument();
@@ -498,7 +515,17 @@ impl DynamicScriptTasks {
                         return;
                     }
                     service.RunScript(id, runtime, realm, &client);
-                    let event = MakeSyntheticEvent(EventType::kLoad, id);
+                    let mut event = MakeSyntheticEvent(EventType::kLoad, id);
+                    // DynamicScript load dispatch bypasses Interaction's full
+                    // EventDispatcher because Open still owns this parser task.
+                    // Retain the same canonical native Event that EventTarget
+                    // listener selection and the JavaScript wrapper consume.
+                    service.bindings.borrow().PrepareLifecycleEvent(&mut event);
+                    service.bindings.borrow().PrepareLifecycleEventInvocation(
+                        &event,
+                        EventPhase::kAtTarget,
+                        false,
+                    );
                     DOMJavaScriptBindings::DispatchEventListeners(
                         &service.bindings,
                         &EventListenerInvocation {
@@ -516,6 +543,7 @@ impl DynamicScriptTasks {
                             client.borrow_mut().DidReportScriptError(error);
                         },
                     );
+                    service.bindings.borrow().FinishLifecycleEvent(&event);
                     service.ReportHostErrors(&client);
                 }),
                 Rc::new(move |runtime, realm| {

@@ -35,9 +35,12 @@ pub(crate) fn MimeTypeFor(request: &URLRequest) -> &'static str {
         RequestDestination::kDocument => "text/html",
         RequestDestination::kStyleSheet => "text/css",
         RequestDestination::kScript => "text/javascript",
-        RequestDestination::kImage | RequestDestination::kFetch | RequestDestination::kFont => {
-            "application/octet-stream"
-        }
+        RequestDestination::kImage
+        | RequestDestination::kVideo
+        | RequestDestination::kTrack
+        | RequestDestination::kFetch
+        | RequestDestination::kReport
+        | RequestDestination::kFont => "application/octet-stream",
     }
 }
 

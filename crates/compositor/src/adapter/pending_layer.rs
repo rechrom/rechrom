@@ -109,6 +109,9 @@ pub trait PendingLayerTypes:
 pub trait PendingDisplayItem<B: PendingLayerTypes> {
     fn ForeignLayerVisualRect(&self) -> RectF;
     fn ForeignLayer(&self) -> LayerRef<B>;
+    /// Immutable video style values for the same retained cc layer. Reading
+    /// the display item must finish before PendingLayer mutates its owner slot.
+    fn ForeignVideoPresentationStyle(&self) -> Option<(B::FilterQuality, B::DynamicRangeLimit)>;
     fn IsScrollbar(&self) -> bool;
     fn CreateOrReuseScrollbarLayer(
         &self,

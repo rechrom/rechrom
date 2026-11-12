@@ -54,6 +54,32 @@ fn computed_style<'a>(owner: &'a dom::DOM, id: &str) -> &'a ComputedStyle {
 }
 
 #[test]
+fn media_query_diff_invalidates_repeated_selector_buckets_in_both_directions() {
+    let _heap = foundation::LayoutHeapScope::new();
+    let mut owner = html::html_parser::ParseHTML(
+        "<style>.a,.b,.c{width:40px}@media(max-width:800px){
+         .a{width:80px}.a{height:10px}
+         .b{width:80px}.b{height:10px}
+         .c{width:80px}.c{height:10px}}
+         </style><div id=a class=a></div><div id=b class=b></div><div id=c class=c></div>",
+    );
+    let mut engine = StyleEngine::new(&owner);
+    for (viewport, expected) in [(1280., 40.), (600., 80.), (1280., 40.)] {
+        let mut environment = media();
+        environment.viewport_width = viewport;
+        environment.large_viewport_width = viewport;
+        engine.Update(&mut owner, &environment, &[]).unwrap();
+        for id in ["a", "b", "c"] {
+            assert_eq!(
+                computed_style(&owner, id).Width().Pixels(),
+                expected,
+                "selector .{id} at viewport {viewport}"
+            );
+        }
+    }
+}
+
+#[test]
 fn clip_rect_and_page_locale_reach_computed_style_cascade_with_css_wide() {
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(

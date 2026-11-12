@@ -12,6 +12,10 @@ pub(super) fn has_current_output(engine: &LayoutEngine, purpose: LayoutUpdateKin
         && engine.pending_inline_ink_ids_.is_empty()
         && engine.pending_subtree_layout_id_.is_none()
         && (purpose == LayoutUpdateKind::Layout || engine.output_kind == LayoutUpdateKind::Paint)
+        && (purpose == LayoutUpdateKind::Layout
+            || engine.fragments.as_ref().is_some_and(|fragments| {
+                PaintFragmentCursor::TryFromHandle(fragments).is_some()
+            }))
         && engine
             .tree_
             .as_ref()

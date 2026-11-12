@@ -15,6 +15,7 @@ use crate::src::core::{
     SkBlendMode::SkBlendMode,
     SkCanvas::{SaveLayerRec, SkCanvas, SrcRectConstraint},
     SkColor::{SkColor, SkColor4f},
+    SkColorSpace::SkColorSpace,
     SkFont::SkFont,
     SkImageInfo::SkImageInfo,
     SkM44::SkM44,
@@ -24,6 +25,7 @@ use crate::src::core::{
     SkPoint::SkPoint,
     SkRRect::SkRRect,
     SkRect::SkRect,
+    SkTextBlob::SkTextBlob,
 };
 use crate::src::image::SkImage::SkImage;
 use crate::RasterError;
@@ -53,9 +55,9 @@ pub enum N32BlitMode {
 }
 
 /// Convert one tightly packed straight-alpha RGBA8888 image into Skia's
-/// premultiplied RGBA8888 representation using the selected original SkOpts
+/// premultiplied native N32 representation using the selected original SkOpts
 /// kernel. This is the PaintImage upload boundary; it owns the returned bytes.
-pub fn premultiply_rgba8888(width: u32, height: u32, pixels: &[u8]) -> Option<Vec<u8>> {
+pub fn premultiply_n32_rgba8888(width: u32, height: u32, pixels: &[u8]) -> Option<Vec<u8>> {
     if width == 0 || height == 0 || width > (i32::MAX as u32) / 4 {
         return None;
     }
@@ -70,7 +72,50 @@ pub fn premultiply_rgba8888(width: u32, height: u32, pixels: &[u8]) -> Option<Ve
         .zip(pixels.chunks_exact(row_bytes))
     {
         unsafe {
-            crate::src::opts::SkSwizzler_opts::RGBA_to_rgbA(
+            if crate::src::core::SkColorPriv::SK_PMCOLOR_IS_BGRA {
+                crate::src::opts::SkSwizzler_opts::RGBA_to_bgrA(
+                    dst.as_mut_ptr().cast(),
+                    src.as_ptr().cast(),
+                    width as i32,
+                );
+            } else {
+                crate::src::opts::SkSwizzler_opts::RGBA_to_rgbA(
+                    dst.as_mut_ptr().cast(),
+                    src.as_ptr().cast(),
+                    width as i32,
+                );
+            }
+        }
+    }
+    Some(output)
+}
+
+/// Convert tightly packed premultiplied RGBA8888 pixels into Skia's native
+/// N32 byte order without applying alpha a second time. WebP's libwebp-backed
+/// decoder publishes this representation directly.
+pub fn native_n32_from_premultiplied_rgba8888(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 || width > (i32::MAX as u32) / 4 {
+        return None;
+    }
+    let row_bytes = (width as usize).checked_mul(4)?;
+    let length = row_bytes.checked_mul(height as usize)?;
+    if length > isize::MAX as usize || pixels.len() != length {
+        return None;
+    }
+    if !crate::src::core::SkColorPriv::SK_PMCOLOR_IS_BGRA {
+        return Some(pixels.to_vec());
+    }
+    let mut output = vec![0; length];
+    for (dst, src) in output
+        .chunks_exact_mut(row_bytes)
+        .zip(pixels.chunks_exact(row_bytes))
+    {
+        unsafe {
+            crate::src::opts::SkSwizzler_opts::RGBA_to_BGRA(
                 dst.as_mut_ptr().cast(),
                 src.as_ptr().cast(),
                 width as i32,
@@ -78,6 +123,28 @@ pub fn premultiply_rgba8888(width: u32, height: u32, pixels: &[u8]) -> Option<Ve
         }
     }
     Some(output)
+}
+
+#[cfg(test)]
+mod image_upload_tests {
+    #[test]
+    fn premultiplied_upload_only_changes_native_channel_order() {
+        let input = [10, 20, 30, 40, 50, 60, 70, 80];
+        let actual = super::native_n32_from_premultiplied_rgba8888(2, 1, &input)
+            .expect("valid premultiplied bitmap");
+        let expected = if crate::src::core::SkColorPriv::SK_PMCOLOR_IS_BGRA {
+            vec![30, 20, 10, 40, 70, 60, 50, 80]
+        } else {
+            input.to_vec()
+        };
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn premultiplied_upload_rejects_invalid_storage() {
+        assert!(super::native_n32_from_premultiplied_rgba8888(0, 1, &[]).is_none());
+        assert!(super::native_n32_from_premultiplied_rgba8888(1, 1, &[0; 3]).is_none());
+    }
 }
 
 /// A pinned, concrete CPU Canvas over initialized, host-owned 32-bit pixels.
@@ -98,6 +165,11 @@ pub struct RasterTarget<'pixels> {
 }
 
 impl<'pixels> RasterTarget<'pixels> {
+    /// Preserve the tile's position in picture device space for analytic AA.
+    pub fn set_raster_phase_origin(&mut self, x: i32, y: i32) {
+        self.canvas.as_mut().setRasterPhaseOrigin(x, y);
+    }
+
     /// Borrow the entire visible target, including any padding between rows.
     /// `row_bytes` is the physical stride; `width` remains the visible width.
     pub fn new(
@@ -106,6 +178,21 @@ impl<'pixels> RasterTarget<'pixels> {
         height: i32,
         row_bytes: usize,
         format: PixelFormat,
+        props: Option<&SkSurfaceProps>,
+    ) -> Result<Self, TargetError> {
+        Self::new_with_color_space(pixels, width, height, row_bytes, format, None, props)
+    }
+
+    /// Wraps pixels with the exact color identity selected by the embedding.
+    /// This is the Rust form of `SkSurfaces::WrapPixels(SkImageInfo, ...)` used
+    /// by Chromium's `RasterBufferProvider::PlaybackToMemory`.
+    pub fn new_with_color_space(
+        pixels: &'pixels mut [u8],
+        width: i32,
+        height: i32,
+        row_bytes: usize,
+        format: PixelFormat,
+        color_space: Option<Arc<SkColorSpace>>,
         props: Option<&SkSurfaceProps>,
     ) -> Result<Self, TargetError> {
         let (color_type, alpha_type) = match format {
@@ -122,7 +209,8 @@ impl<'pixels> RasterTarget<'pixels> {
                 SkAlphaType::kOpaque_SkAlphaType,
             ),
         };
-        let info = SkImageInfo::MakeWithColorSpace(width, height, color_type, alpha_type, None);
+        let info =
+            SkImageInfo::MakeWithColorSpace(width, height, color_type, alpha_type, color_space);
         if !crate::src::image::SkSurface_Raster::SkSurfaceValidateRasterInfo(&info, row_bytes) {
             return Err(TargetError::InvalidLayout);
         }
@@ -502,6 +590,31 @@ impl<'pixels> RasterTarget<'pixels> {
                 positions,
                 origin,
                 font,
+                paint,
+            )
+        }
+    }
+
+    /// Draw the immutable positioned-glyph representation produced by
+    /// ShapeResultBloberizer.  Keeping the blob intact preserves Skia's
+    /// horizontal-positioning path instead of expanding every glyph to an
+    /// independent two-dimensional position at the embedding boundary.
+    ///
+    /// # Safety
+    /// Blob font/typeface/scaler backing and paint resources must remain alive
+    /// for the synchronous draw and must not alias the destination pixels.
+    pub unsafe fn draw_text_blob(
+        &mut self,
+        blob: &crate::include::core::SkRefCnt::sk_sp<SkTextBlob>,
+        origin: SkPoint,
+        paint: &SkPaint,
+    ) -> Result<(), RasterError> {
+        unsafe {
+            SkCanvas::drawTextBlob_shared_raw(
+                self.canvas_address(),
+                blob,
+                origin.fX,
+                origin.fY,
                 paint,
             )
         }

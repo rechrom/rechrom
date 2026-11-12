@@ -185,6 +185,7 @@ mod dark_mode;
 mod definitions;
 mod dpi;
 mod drop_handler;
+pub(crate) use drop_handler::clipboard_virtual_files;
 mod event_loop;
 mod icon;
 mod ime;

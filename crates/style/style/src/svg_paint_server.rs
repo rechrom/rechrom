@@ -34,24 +34,13 @@ pub(crate) type PendingStyles<'a> = HashMap<usize, &'a ResolvedNodeStyle>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SVGContextPaint<'a> {
-    fill: Option<layoutng::internal::layout_input_types::Color>,
-    stroke: Option<layoutng::internal::layout_input_types::Color>,
-    fill_server: &'a Option<PaintShader>,
-    stroke_server: &'a Option<PaintShader>,
+    origin: usize,
+    style: &'a ComputedStyle,
 }
 
 impl<'a> SVGContextPaint<'a> {
-    pub(crate) fn new(
-        paint: &PaintStyleData,
-        fill_server: &'a Option<PaintShader>,
-        stroke_server: &'a Option<PaintShader>,
-    ) -> Self {
-        Self {
-            fill: paint.svg_fill,
-            stroke: paint.svg_stroke,
-            fill_server,
-            stroke_server,
-        }
+    pub(crate) fn new(origin: usize, style: &'a ComputedStyle) -> Self {
+        Self { origin, style }
     }
 }
 
@@ -69,7 +58,7 @@ struct CollectedGradient {
     spread: Option<PaintSpreadMethod>,
     object_bounding_box: Option<bool>,
     transform: Option<TransformMatrix>,
-    stops: Option<Vec<PaintColorStop>>,
+    stops: Option<Arc<Vec<PaintColorStop>>>,
     x1: Option<String>,
     y1: Option<String>,
     x2: Option<String>,
@@ -105,6 +94,18 @@ fn LocalFragment(reference: &str) -> Option<&str> {
 
 fn FindById(document: &Document, origin: usize, id: &str) -> Option<usize> {
     document.FindSVGResourceById(origin, id)
+}
+
+fn IsInCanvasSubtree(document: &Document, node: usize) -> bool {
+    let mut ancestor = document.FlatTreeParentElement(node);
+    while let Some(index) = ancestor {
+        let current = document.Node(index);
+        if current.IsElement("canvas", DOMNamespace::kHTML) {
+            return true;
+        }
+        ancestor = document.FlatTreeParentElement(index);
+    }
+    false
 }
 
 fn ReferencedGradient(document: &Document, node: usize) -> Option<usize> {
@@ -321,8 +322,7 @@ fn Stops(
     document: &Document,
     pending: &PendingStyles<'_>,
     gradient: usize,
-    paint_opacity: f32,
-) -> Option<Vec<PaintColorStop>> {
+) -> Option<Arc<Vec<PaintColorStop>>> {
     let mut result = Vec::new();
     let mut previous = 0.0_f64;
     for &child in document.Node(gradient).Children() {
@@ -347,7 +347,7 @@ fn Stops(
             red,
             green,
             blue,
-            alpha: resolved.Alpha() * computed_style.StopOpacity() * paint_opacity,
+            alpha: resolved.Alpha() * computed_style.StopOpacity(),
         };
         result.push(PaintColorStop {
             offset,
@@ -360,7 +360,7 @@ fn Stops(
             is_hint: false,
         });
     }
-    (!result.is_empty()).then_some(result)
+    (!result.is_empty()).then(|| Arc::new(result))
 }
 
 fn ParseOffset(value: &str) -> Option<f64> {
@@ -475,7 +475,7 @@ fn Collect(
                 .and_then(ParseGradientTransform);
         }
         if output.stops.is_none() {
-            output.stops = Stops(document, pending, node, paint_opacity);
+            output.stops = Stops(document, pending, node);
         }
         if kind == PaintShaderKind::kLinearGradient && linear {
             output.x1 = output.x1.or_else(|| Attribute(document, node, "x1"));
@@ -1115,7 +1115,15 @@ fn PatternPrimitivesWithShapes(
             let fill_opacity = computed_style.FillOpacity();
             let stroke_opacity = computed_style.StrokeOpacity();
             let mut fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
-                ResolveInner(document, node, pending, reference, fill_opacity, resolving)
+                ResolveInner(
+                    document,
+                    node,
+                    pending,
+                    reference,
+                    fill_opacity,
+                    paint.force_dark,
+                    resolving,
+                )
             });
             let mut stroke_server = paint.svg_stroke_reference.as_deref().and_then(|reference| {
                 ResolveInner(
@@ -1124,6 +1132,7 @@ fn PatternPrimitivesWithShapes(
                     pending,
                     reference,
                     stroke_opacity,
+                    paint.force_dark,
                     resolving,
                 )
             });
@@ -1135,26 +1144,74 @@ fn PatternPrimitivesWithShapes(
                 match computed_style.FillPaint().paint_type {
                     SVGPaintType::kContextFill => {
                         fill_is_context = true;
-                        fill = context.fill;
-                        fill_server = context.fill_server.clone();
+                        fill = layoutng::internal::boundary::paint_style_export::SvgColor(
+                            computed_style,
+                            context.style.FillPaint(),
+                            context.style.InternalVisitedFillPaint(),
+                            fill_opacity,
+                        );
+                        fill_server = ResolveContextPaintServer(
+                            document,
+                            pending,
+                            context,
+                            context.style.FillPaint(),
+                            fill_opacity,
+                            resolving,
+                        );
                     }
                     SVGPaintType::kContextStroke => {
                         fill_is_context = true;
-                        fill = context.stroke;
-                        fill_server = context.stroke_server.clone();
+                        fill = layoutng::internal::boundary::paint_style_export::SvgColor(
+                            computed_style,
+                            context.style.StrokePaint(),
+                            context.style.InternalVisitedStrokePaint(),
+                            fill_opacity,
+                        );
+                        fill_server = ResolveContextPaintServer(
+                            document,
+                            pending,
+                            context,
+                            context.style.StrokePaint(),
+                            fill_opacity,
+                            resolving,
+                        );
                     }
                     _ => {}
                 }
                 match computed_style.StrokePaint().paint_type {
                     SVGPaintType::kContextFill => {
                         stroke_is_context = true;
-                        stroke = context.fill;
-                        stroke_server = context.fill_server.clone();
+                        stroke = layoutng::internal::boundary::paint_style_export::SvgColor(
+                            computed_style,
+                            context.style.FillPaint(),
+                            context.style.InternalVisitedFillPaint(),
+                            stroke_opacity,
+                        );
+                        stroke_server = ResolveContextPaintServer(
+                            document,
+                            pending,
+                            context,
+                            context.style.FillPaint(),
+                            stroke_opacity,
+                            resolving,
+                        );
                     }
                     SVGPaintType::kContextStroke => {
                         stroke_is_context = true;
-                        stroke = context.stroke;
-                        stroke_server = context.stroke_server.clone();
+                        stroke = layoutng::internal::boundary::paint_style_export::SvgColor(
+                            computed_style,
+                            context.style.StrokePaint(),
+                            context.style.InternalVisitedStrokePaint(),
+                            stroke_opacity,
+                        );
+                        stroke_server = ResolveContextPaintServer(
+                            document,
+                            pending,
+                            context,
+                            context.style.StrokePaint(),
+                            stroke_opacity,
+                            resolving,
+                        );
                     }
                     _ => {}
                 }
@@ -1193,6 +1250,9 @@ fn PatternPrimitivesWithShapes(
                 fill_even_odd: paint.svg_fill_even_odd,
                 non_scaling_stroke: paint.svg_non_scaling_stroke,
                 antialias: paint.svg_shape_antialias,
+                apply_srgb_to_linear_color_filter: shapes.is_some()
+                    && computed_style.ColorInterpolation()
+                        == foundation::EColorInterpolation::kLinearrgb,
                 transform: Some(transform),
             }));
             if has_mask {
@@ -1305,6 +1365,7 @@ fn PatternPrimitivesWithShapes(
                 output.push(SvgPatternCommand::DrawImage(SvgPatternImage {
                     resource_id: resource.id,
                     image_interpolation_quality: paint.image_interpolation_quality,
+                    dynamic_range_limit: paint.dynamic_range_limit,
                     destination_offset: Offset { x, y },
                     destination_width: width,
                     destination_height: height,
@@ -1412,7 +1473,15 @@ fn PatternPrimitivesWithShapes(
                 let fill_opacity = computed_style.FillOpacity();
                 let stroke_opacity = computed_style.StrokeOpacity();
                 let fill_server = paint.svg_fill_reference.as_deref().and_then(|reference| {
-                    ResolveInner(document, node, pending, reference, fill_opacity, resolving)
+                    ResolveInner(
+                        document,
+                        node,
+                        pending,
+                        reference,
+                        fill_opacity,
+                        paint.force_dark,
+                        resolving,
+                    )
                 });
                 let stroke_server = paint.svg_stroke_reference.as_deref().and_then(|reference| {
                     ResolveInner(
@@ -1421,6 +1490,7 @@ fn PatternPrimitivesWithShapes(
                         pending,
                         reference,
                         stroke_opacity,
+                        paint.force_dark,
                         resolving,
                     )
                 });
@@ -1470,6 +1540,9 @@ fn PatternPrimitivesWithShapes(
                         fill_even_odd: false,
                         non_scaling_stroke: paint.svg_non_scaling_stroke,
                         antialias: paint.svg_shape_antialias,
+                        apply_srgb_to_linear_color_filter: shapes.is_some()
+                            && computed_style.ColorInterpolation()
+                                == foundation::EColorInterpolation::kLinearrgb,
                         transform: Some(transform),
                     },
                     reset_cursor: element.Name() == "text",
@@ -1895,6 +1968,62 @@ pub(crate) fn ResolveMarkers(
         .collect()
 }
 
+/// Resolve context paint from the originating graphics element while applying
+/// the fill/stroke opacity of the marker child that consumes it.
+pub(crate) fn ResolveContextPaintServer(
+    document: &Document,
+    pending: &PendingStyles<'_>,
+    context: &SVGContextPaint<'_>,
+    paint: &layoutng_style::style::svg_paint::SVGPaint,
+    opacity: f32,
+    resolving: &mut HashSet<usize>,
+) -> Option<PaintShader> {
+    if !paint.HasUrl() {
+        return None;
+    }
+    let reference = paint.GetUrl().Utf8();
+    ResolveInner(
+        document,
+        context.origin,
+        pending,
+        &reference,
+        opacity,
+        context.style.ForceDark(),
+        resolving,
+    )
+}
+
+/// SVGPatternElement::CollectPatternAttributes cc:224-243, content element
+/// only. A circular href terminates collection after the already-seen element;
+/// it does not discard an existing content element.
+pub(crate) fn PatternContentTarget(
+    document: &Document,
+    pending: &PendingStyles<'_>,
+    start: usize,
+) -> Option<u64> {
+    let mut current = start;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+        let node = document.Node(current);
+        if !node.IsElement("pattern", DOMNamespace::kSVG) {
+            return None;
+        }
+        if !node.Children().is_empty() {
+            return Some(node.Id());
+        }
+        let next = Reference(document, current)
+            .and_then(LocalFragment)
+            .and_then(|id| FindById(document, current, id))?;
+        if !Style(document, pending, next).is_some_and(|style| style.own_generates_box) {
+            return None;
+        }
+        current = next;
+    }
+}
+
 /// Resolve a canonical SVGPaint local IRI to the immutable Paint shader
 /// transported through Layout. Unsupported resources return None so the
 /// SVGPaint fallback color/none semantics remain authoritative.
@@ -1904,6 +2033,7 @@ pub(crate) fn Resolve(
     pending: &PendingStyles<'_>,
     reference: &str,
     paint_opacity: f32,
+    using_force_dark: bool,
 ) -> Option<PaintShader> {
     ResolveInner(
         document,
@@ -1911,8 +2041,13 @@ pub(crate) fn Resolve(
         pending,
         reference,
         paint_opacity,
+        using_force_dark,
         &mut HashSet::new(),
     )
+}
+
+fn QuantizedPaintServerOpacity(opacity: f32) -> f32 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() / 255.0
 }
 
 fn ResolveInner(
@@ -1921,8 +2056,13 @@ fn ResolveInner(
     pending: &PendingStyles<'_>,
     reference: &str,
     paint_opacity: f32,
+    using_force_dark: bool,
     resolving: &mut HashSet<usize>,
 ) -> Option<PaintShader> {
+    // SVGObjectPainter installs resource shaders on PaintFlags, whose alpha
+    // is currently quantized through an eight-bit channel. Keep that quirk on
+    // the shader path only; solid fallback colors retain their float opacity.
+    let paint_opacity = QuantizedPaintServerOpacity(paint_opacity);
     let target = FindById(document, origin, LocalFragment(reference)?)?;
     if !resolving.insert(target) {
         return None;
@@ -1932,7 +2072,16 @@ fn ResolveInner(
     // retain their distinct SVGMarkerElement lifetime in ResolveMarkers.
     let result = Style(document, pending, target)
         .filter(|style| style.own_generates_box)
-        .and_then(|_| ResolveElement(document, pending, target, paint_opacity, resolving));
+        .and_then(|_| {
+            ResolveElement(
+                document,
+                pending,
+                target,
+                paint_opacity,
+                using_force_dark,
+                resolving,
+            )
+        });
     resolving.remove(&target);
     result
 }
@@ -1942,9 +2091,11 @@ fn ResolveElement(
     pending: &PendingStyles<'_>,
     target: usize,
     paint_opacity: f32,
+    using_force_dark: bool,
     resolving: &mut HashSet<usize>,
 ) -> Option<PaintShader> {
     let element = document.Node(target);
+    let is_in_canvas_subtree = IsInCanvasSubtree(document, target);
     let kind = if element.IsElement("linearGradient", DOMNamespace::kSVG) {
         PaintShaderKind::kLinearGradient
     } else if element.IsElement("radialGradient", DOMNamespace::kSVG) {
@@ -1997,6 +2148,7 @@ fn ResolveElement(
         };
         return Some(PaintShader {
             kind: PaintShaderKind::kPattern,
+            is_in_canvas_subtree,
             resource_id: target as u64 + 1,
             tile_offset: Offset {
                 x: length(collected.x, "0", LengthAxis::X)?,
@@ -2026,11 +2178,25 @@ fn ResolveElement(
     let viewport = (!object_bounding_box)
         .then(|| ViewBox(document, target))
         .flatten();
-    let stops = collected.stops?;
+    let raw_stops = collected.stops?;
+    let mut stops = raw_stops.as_ref().clone();
+    for stop in &mut stops {
+        stop.color.alpha *= paint_opacity;
+        stop.source_components[3] *= paint_opacity;
+    }
+    let resource_force_dark = Style(document, pending, target)
+        .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
+        .is_some_and(ComputedStyle::ForceDark);
     let mut output = PaintShader {
         kind,
+        is_in_canvas_subtree,
+        // LayoutSVGResourceGradient::ApplyShader enables dark-mode stop
+        // filtering only when the AutoDarkMode supplied by the client and the
+        // resource element's own ComputedStyle both enable ForceDark.
+        apply_dark_mode: using_force_dark && resource_force_dark,
         spread: collected.spread.unwrap_or(PaintSpreadMethod::kPad),
         stops,
+        svg_context_stops: Some(raw_stops),
         unit_coordinates: object_bounding_box,
         object_bounding_box_coordinates: object_bounding_box,
         transform: collected.transform.unwrap_or_default(),
@@ -2139,11 +2305,6 @@ pub(crate) fn ResolveMaskDefinition(
                 return Err(format!("invalid {name}"));
             }
         }
-        if style
-            .is_some_and(|s| s.ColorInterpolation() == foundation::EColorInterpolation::kLinearrgb)
-        {
-            return Err("linearRGB local mask color interpolation".into());
-        }
         graph.x = PatternMaskLength(Attribute(document, target, "x"), "-10%").ok_or("mask x")?;
         graph.y = PatternMaskLength(Attribute(document, target, "y"), "-10%").ok_or("mask y")?;
         graph.width =
@@ -2176,14 +2337,14 @@ pub(crate) fn ResolveMaskDefinition(
             let paint =
                 layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
             let paint = &paint;
-            if !matches!(
+            if matches!(
                 computed_style.FillPaint().paint_type,
-                SVGPaintType::kColor | SVGPaintType::kNone
-            ) || !matches!(
+                SVGPaintType::kContextFill | SVGPaintType::kContextStroke
+            ) || matches!(
                 computed_style.StrokePaint().paint_type,
-                SVGPaintType::kColor | SVGPaintType::kNone
+                SVGPaintType::kContextFill | SVGPaintType::kContextStroke
             ) {
-                return Err("context/resource mask paint".into());
+                return Err("context mask paint".into());
             }
             if paint.svg_non_scaling_stroke || computed_style.PaintOrder()!=layoutng_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
             if !computed_style.StrokeWidth().length().IsFixed()
@@ -2203,8 +2364,6 @@ pub(crate) fn ResolveMaskDefinition(
                 || paint.clip_path.is_some()
                 || !paint.mask_images.is_empty()
                 || !paint.backdrop_filters.is_empty()
-                || paint.svg_fill_reference.is_some()
-                || paint.svg_stroke_reference.is_some()
                 || !computed_style.MarkerStartResource().is_null()
                 || !computed_style.MarkerMidResource().is_null()
                 || !computed_style.MarkerEndResource().is_null()

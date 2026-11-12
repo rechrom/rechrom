@@ -232,12 +232,14 @@ pub struct HTMLFormControlElementWithState {
 pub struct TextControlElement {
     pub state: HTMLFormControlElementWithState,
     pub(crate) inner_editor_: Member<TextControlInnerEditorElement>,
+    pub(crate) hit_container_: Member<Element>,
 }
 impl TextControlElement {
     pub fn from_resolved_state(state: HTMLFormControlElementWithState) -> Self {
         Self {
             state,
             inner_editor_: Member::default(),
+            hit_container_: Member::default(),
         }
     }
 
@@ -245,6 +247,12 @@ impl TextControlElement {
         self.inner_editor_.Get()
     }
 
+    pub fn HitContainerElement(&self) -> *mut Element {
+        self.hit_container_.Get()
+    }
+    pub fn HitContainerMember(&self) -> &Member<Element> {
+        &self.hit_container_
+    }
     pub fn InnerEditorMember(&self) -> &Member<TextControlInnerEditorElement> {
         &self.inner_editor_
     }

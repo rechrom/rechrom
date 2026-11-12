@@ -4,6 +4,16 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+navigation_history = { path = "../navigation_history" }
+intersection_observer = { path = "../intersection_observer" }
+resize_observer = { path = "../resize_observer" }
+getrandom = "0.4"
+base64 = "0.22"
+sha2 = "0.10"
+# Chromium net/http structured-header parser wrapper uses this exact RFC parser.
+sfv = "=0.15.0"
+fileapi = { path = "../fileapi" }
+canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
@@ -13,6 +23,8 @@ font_engine = { path = "../font_engine" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 image_resource = { path = "../image_resource" }
 layoutng_style = { path = "../layoutng/layoutng_style" }
+style_parser = { path = "../style/style_parser" }
+url = "2"
 
 [dev-dependencies]
 html = { path = "../html" }

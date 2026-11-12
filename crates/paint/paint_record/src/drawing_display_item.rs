@@ -92,7 +92,13 @@ pub(crate) fn TightenVisualRect(
     if let [op] = record {
         if matches!(
             op.r#type,
-            DisplayItemType::kDrawRect | DisplayItemType::kDrawRoundedRect
+            DisplayItemType::kDrawRect
+                | DisplayItemType::kDrawRoundedRect
+                // Chromium records this CSS border as one stroked
+                // kDrawRRect, which TightenVisualRect handles. Rechrom lowers
+                // the same ring to its outer/inner rounded-rect op, so its
+                // outer rect must participate in the identical tightening.
+                | DisplayItemType::kDrawDoubleRoundedRect
         ) && IsDrawAreaAnalysisCandidate(op)
         {
             return (EnclosingRectInPropertySpace(op.rect, delta), true);
@@ -308,6 +314,44 @@ mod tests {
         assert_eq!(
             TightenVisualRect(visual, &[image], Offset::default()),
             (visual, false)
+        );
+    }
+
+    #[test]
+    fn tightening_uses_double_rounded_rect_outer_bounds() {
+        let visual = PaintRect {
+            x: -1.0,
+            y: 0.0,
+            width: 201.0,
+            height: 36.0,
+        };
+        let ring = DisplayItem {
+            r#type: DisplayItemType::kDrawDoubleRoundedRect,
+            rect: PaintRect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 36.0,
+            },
+            inner_rect: PaintRect {
+                x: 1.0,
+                y: 1.0,
+                width: 198.0,
+                height: 34.0,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            TightenVisualRect(visual, &[ring], Offset::default()),
+            (
+                PaintRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 36.0,
+                },
+                true,
+            )
         );
     }
 }

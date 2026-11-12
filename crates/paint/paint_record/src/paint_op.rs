@@ -40,4 +40,7 @@ pub enum PaintOpType {
     kDrawScrollbarThumb,
     kDrawScrollbarButton,
     kDrawScrollbarCorner,
+    /// PaintCanvas custom-data placeholder. PaintArtifactCompositor replaces
+    /// the DOM-node id with the nested canvas snapshot before raster.
+    kCustomData,
 }

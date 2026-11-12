@@ -79,7 +79,7 @@ fn find_path<'a>(
 }
 
 #[inline(never)]
-fn transform_to_root(
+pub(super) fn transform_to_root(
     output: LayoutOutput<'_>,
     target: &PhysicalBoxFragment,
     in_contents: bool,
@@ -197,7 +197,7 @@ pub(super) fn client_rects(node: &LayoutNode<'_>) -> Vec<LayoutRect> {
 }
 
 #[inline(never)]
-fn map_rect(transform: &gfx::Transform, rect: PhysicalRect) -> LayoutRect {
+pub(super) fn map_rect(transform: &gfx::Transform, rect: PhysicalRect) -> LayoutRect {
     let mapped = transform.MapRect(gfx::RectF::from(rect));
     LayoutRect {
         x: mapped.x() as f64,

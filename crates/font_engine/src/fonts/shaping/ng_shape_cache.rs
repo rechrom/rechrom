@@ -28,6 +28,7 @@ pub struct ShapeCacheKey {
     locale_: AtomicString,
     font_features_: Vec<FontFeatureRange>,
     direction_: TextDirection,
+    fallback_revision_: u64,
 }
 
 impl Default for ShapeCacheKey {
@@ -39,6 +40,7 @@ impl Default for ShapeCacheKey {
             locale_: AtomicString::default(),
             font_features_: Vec::new(),
             direction_: TextDirection::kLtr,
+            fallback_revision_: 0,
         }
     }
 }
@@ -53,6 +55,7 @@ impl ShapeCacheKey {
         locale: &AtomicString,
         font_features: &[FontFeatureRange],
         direction: TextDirection,
+        fallback_revision: u64,
     ) -> Self {
         assert!(
             !text.empty(),
@@ -65,6 +68,7 @@ impl ShapeCacheKey {
             locale_: locale.clone(),
             font_features_: font_features.to_vec(),
             direction_: direction,
+            fallback_revision_: fallback_revision,
         }
     }
 
@@ -119,6 +123,8 @@ impl ShapeCacheKey {
         };
         AddIntToHash(&mut hash, foundation::rapidhash::rapidhash(bytes) as u32);
         AddIntToHash(&mut hash, self.direction_ as u32);
+        AddIntToHash(&mut hash, self.fallback_revision_ as u32);
+        AddIntToHash(&mut hash, (self.fallback_revision_ >> 32) as u32);
         hash
     }
 
@@ -137,6 +143,7 @@ impl PartialEq for ShapeCacheKey {
             && self.locale_ == other.locale_
             && self.font_features_ == other.font_features_
             && self.direction_ == other.direction_
+            && self.fallback_revision_ == other.fallback_revision_
     }
 }
 impl Eq for ShapeCacheKey {}

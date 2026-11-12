@@ -7,7 +7,12 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+#[path = "window_performance_timing.rs"]
+mod window_performance_timing;
+pub use window_performance_timing::WindowPerformanceTiming;
+#[path = "window_event_timing.rs"]
+mod window_event_timing;
 use xhr_transport::*;
 
 // cpp: webapi/window_bindings.cc:17-23
@@ -18,6 +23,36 @@ const PERFORMANCE_TIMING: u64 = PERFORMANCE - 3;
 const MIME_TYPES: u64 = PERFORMANCE - 4;
 const PLUGINS: u64 = PERFORMANCE - 5;
 const SCREEN: u64 = PERFORMANCE - 6;
+const WINDOW_GLOBAL_NAMES: &[&str] = &[
+    "performance",
+    "location",
+    "navigator",
+    "screen",
+    "innerWidth",
+    "innerHeight",
+    "outerWidth",
+    "outerHeight",
+    "devicePixelRatio",
+    "structuredClone",
+    "reportError",
+    "queueMicrotask",
+    "__queueTask",
+    "__request",
+    "__requestSync",
+    "__cancelRequest",
+    "__urlParts",
+    "__urlDecodeForm",
+    "__queueScrollCompletion",
+    "__bindEventTiming",
+    "__randomHex",
+    "__mediaQueryMatches",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
+];
 // Blink DOMTimer uses the same values. Timers installed by deeply nested
 // timer callbacks must stop behaving like an unrestricted busy loop.
 const MAX_TIMER_NESTING_LEVEL: u32 = 6;
@@ -43,6 +78,14 @@ struct NetworkJob {
 // Rust borrow adapter for the Page-owned runtime captured by C++ host tasks.
 // The task receives the turn's active runtime after the Window borrow is released.
 type RuntimeTask = Box<dyn FnOnce(&mut dyn JavaScriptRuntime, &JavaScriptRealm)>;
+struct AbortTimeoutCancellation(Rc<RefCell<Option<RuntimeTask>>>);
+impl interaction::default::core::dom::abort_signal::CancellableAbortTask
+    for AbortTimeoutCancellation
+{
+    fn Cancel(&self) {
+        self.0.borrow_mut().take();
+    }
+}
 enum HostTaskCallback {
     Plain(Box<dyn FnOnce()>),
     WithRuntime(RuntimeTask),
@@ -54,6 +97,9 @@ enum HostTaskReady {
     WithRuntime(RuntimeTaskReady),
 }
 struct HostTask {
+    identity: Option<u64>,
+    ready_at: Option<Instant>,
+    never_ready: bool,
     run: Option<HostTaskCallback>,
     ready: Option<HostTaskReady>,
 }
@@ -70,6 +116,9 @@ type AnimationTick = Rc<RefCell<Box<dyn FnMut(f64)>>>;
 // cpp: webapi/window_bindings.h:21-75
 pub struct WindowJavaScriptBindings {
     dom: Rc<RefCell<dyn JavaScriptHostBindings>>,
+    dom_namespace: WeakJavaScriptHostObjectNamespace,
+    window_dom: Rc<RefCell<dyn JavaScriptHostBindings>>,
+    window_namespace: WeakJavaScriptHostObjectNamespace,
     xhr_transport: Box<dyn XMLHttpRequestTransport>,
     user_agent: String,
     document_id: u64,
@@ -83,9 +132,10 @@ pub struct WindowJavaScriptBindings {
     height: f64,
     scale: f64,
     preferred_color_scheme: style::PreferredColorScheme,
+    prefers_reduced_motion: bool,
     forced_colors: style::media_queries::forced_colors::ForcedColors,
-    start: Instant,
-    time_origin: f64,
+    performance_timing: Rc<WindowPerformanceTiming>,
+    event_timing_callback: Option<JavaScriptFunction>,
     next_timer: u64,
     timers: HashMap<u64, Timer>,
     timer_deadlines: BTreeSet<(Instant, u64)>,
@@ -98,6 +148,7 @@ pub struct WindowJavaScriptBindings {
     next_request: u64,
     network_jobs: Vec<NetworkJob>,
     host_tasks: Vec<HostTask>,
+    next_host_task: u64,
     // Exceptions raised by posted-message callbacks are reported at the end
     // of their task, just like timer and network callback exceptions.  The
     // callback itself runs after releasing Window's borrow, so retain the
@@ -167,36 +218,23 @@ impl WindowJavaScriptBindings {
         user_agent: String,
         animation_tick: Option<Box<dyn FnMut(f64)>>,
     ) -> Self {
+        Self::WithPerformanceTiming(
+            dom,
+            xhr_transport,
+            user_agent,
+            animation_tick,
+            Rc::new(WindowPerformanceTiming::new()),
+        )
+    }
+    pub fn WithPerformanceTiming(
+        dom: Rc<RefCell<dyn JavaScriptHostBindings>>,
+        xhr_transport: Box<dyn XMLHttpRequestTransport>,
+        user_agent: String,
+        animation_tick: Option<Box<dyn FnMut(f64)>>,
+        performance_timing: Rc<WindowPerformanceTiming>,
+    ) -> Self {
         let mut globals = dom.borrow().GlobalNames();
-        for name in [
-            "performance",
-            "location",
-            "navigator",
-            "screen",
-            "innerWidth",
-            "innerHeight",
-            "outerWidth",
-            "outerHeight",
-            "devicePixelRatio",
-            "structuredClone",
-            "queueMicrotask",
-            "__queueTask",
-            "__request",
-            "__requestSync",
-            "__cancelRequest",
-            "__urlParts",
-            "__urlDecodeForm",
-            "__historyUpdate",
-            "__queueScrollCompletion",
-            "__randomHex",
-            "__mediaQueryMatches",
-            "setTimeout",
-            "setInterval",
-            "clearTimeout",
-            "clearInterval",
-            "requestAnimationFrame",
-            "cancelAnimationFrame",
-        ] {
+        for &name in WINDOW_GLOBAL_NAMES {
             globals.push(name.into());
         }
         let document = dom.borrow_mut().Invoke(&HostCall {
@@ -212,7 +250,10 @@ impl WindowJavaScriptBindings {
             0
         };
         let mut result = Self {
+            window_dom: dom.clone(),
+            window_namespace: Default::default(),
             dom,
+            dom_namespace: Default::default(),
             xhr_transport,
             user_agent,
             document_id,
@@ -226,13 +267,10 @@ impl WindowJavaScriptBindings {
             height: 0.0,
             scale: 1.0,
             preferred_color_scheme: style::PreferredColorScheme::kLight,
+            prefers_reduced_motion: false,
             forced_colors: style::media_queries::forced_colors::ForcedColors::kNone,
-            start: Instant::now(),
-            time_origin: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64()
-                * 1000.0,
+            performance_timing,
+            event_timing_callback: None,
             next_timer: 1,
             timers: HashMap::new(),
             timer_deadlines: BTreeSet::new(),
@@ -245,6 +283,7 @@ impl WindowJavaScriptBindings {
             next_request: 1,
             network_jobs: Vec::new(),
             host_tasks: Vec::new(),
+            next_host_task: 0,
             posted_message_errors: Rc::new(RefCell::new(Vec::new())),
             next_task_source: 0,
             animation_tick: animation_tick.map(|f| Rc::new(RefCell::new(f))),
@@ -259,6 +298,83 @@ impl WindowJavaScriptBindings {
     // active realm, instead of Window retaining an aliased runtime pointer.
     pub fn BindRuntime(&mut self, realm: &JavaScriptRealm) {
         self.bound_realm = Some(realm.Downgrade());
+    }
+    /// Freeze this Document's native wrapper owner before installing WebIDL.
+    /// ClearForReuse replaces this association, never the original namespace.
+    pub fn BindInitialDocumentNamespace(&mut self, namespace: &JavaScriptHostObjectNamespace) {
+        assert!(self.dom_namespace.Upgrade().is_none());
+        self.dom_namespace = namespace.Downgrade();
+        self.window_namespace = namespace.Downgrade();
+    }
+    /// ClearForReuse keeps this Window's tasks, native objects and realm.
+    /// The new DOM has a separate namespace and never replaces old wrappers.
+    pub fn InstallDocumentForReuse(
+        &mut self,
+        dom: Rc<RefCell<dyn JavaScriptHostBindings>>,
+        namespace: &JavaScriptHostObjectNamespace,
+        url: String,
+    ) {
+        self.document_id = dom
+            .borrow()
+            .DocumentHostObjectId()
+            .expect("Document native owner");
+        self.dom = dom;
+        self.dom_namespace = namespace.Downgrade();
+        self.SetURL(url);
+    }
+    fn WindowMember<'a>(call: &'a HostCall<'_>) -> Option<&'a str> {
+        if call.receiver != 0 {
+            return None;
+        }
+        if call.member != "__domInvoke" {
+            return Some(call.member);
+        }
+        let mut receiver = call.arguments.first()?;
+        while let HostValue::Retained(_, value) = receiver {
+            receiver = value;
+        }
+        if !matches!(receiver, HostValue::Object(object) if object.id == 0) {
+            return None;
+        }
+        match call.arguments.get(1)? {
+            HostValue::String(member) => Some(member),
+            _ => None,
+        }
+    }
+    fn IsWindowSupplementMember(member: &str) -> bool {
+        matches!(
+            member,
+            "addEventListener" | "removeEventListener" | "__eventTargetCreate"
+        ) || member.starts_with("on")
+            || member.starts_with("__navigation")
+            || member.starts_with("__abort")
+            || member.starts_with("__closeWatcher")
+    }
+    fn InvocationDOM(&self, call: &HostCall<'_>) -> Rc<RefCell<dyn JavaScriptHostBindings>> {
+        if Self::WindowMember(call).is_some_and(Self::IsWindowSupplementMember) {
+            self.window_dom.clone()
+        } else {
+            self.dom.clone()
+        }
+    }
+    pub fn SetAnimationTick(&mut self, callback: Box<dyn FnMut(f64)>) {
+        self.animation_tick = Some(Rc::new(RefCell::new(callback)));
+    }
+    /// LocalDOMWindow::FrameDestroyed / ExecutionContext destruction stops
+    /// this Window's task sources. Keepalive resources live in ResourceFetcher,
+    /// independently of these non-keepalive XMLHttpRequest operations.
+    pub fn ResetForNewWindow(&mut self) {
+        self.timers.clear();
+        self.timer_deadlines.clear();
+        self.animation_callbacks.clear();
+        self.animation_fallback_due = None;
+        self.begin_frame_source = None;
+        self.host_tasks.clear();
+        self.network_jobs.clear();
+        self.task_registration_flusher = None;
+        self.location_navigator = None;
+        self.animation_tick = None;
+        self.event_timing_callback = None;
     }
     pub fn SetBeginFrameSource(&mut self, source: Option<Arc<dyn BeginFrameSource>>) {
         self.begin_frame_source = source;
@@ -282,16 +398,23 @@ impl WindowJavaScriptBindings {
             let due = now + Duration::from_millis(1);
             wake = Some(wake.map_or(due, |current| current.min(due)));
         }
-        if !self.host_tasks.is_empty() {
-            let ready = self.host_tasks.iter().any(|task| match &task.ready {
-                None => true,
-                Some(HostTaskReady::Plain(ready)) => ready(),
-                Some(HostTaskReady::WithRuntime(_)) => false,
-            });
-            let due = if ready {
-                now
+        for task in &self.host_tasks {
+            if task.never_ready {
+                continue;
+            }
+            let due = if let Some(due) = task.ready_at.filter(|due| *due > now) {
+                due
             } else {
-                now + Duration::from_millis(1)
+                let ready = match &task.ready {
+                    None => true,
+                    Some(HostTaskReady::Plain(ready)) => ready(),
+                    Some(HostTaskReady::WithRuntime(_)) => false,
+                };
+                if ready {
+                    now
+                } else {
+                    now + Duration::from_millis(1)
+                }
             };
             wake = Some(wake.map_or(due, |current| current.min(due)));
         }
@@ -316,6 +439,9 @@ impl WindowJavaScriptBindings {
     pub fn SetPreferredColorScheme(&mut self, preference: style::PreferredColorScheme) {
         self.preferred_color_scheme = preference;
     }
+    pub fn SetPrefersReducedMotion(&mut self, preference: bool) {
+        self.prefers_reduced_motion = preference;
+    }
     pub fn SetForcedColors(
         &mut self,
         forced_colors: style::media_queries::forced_colors::ForcedColors,
@@ -327,9 +453,59 @@ impl WindowJavaScriptBindings {
     }
     pub fn EnqueueTask(&mut self, task: Box<dyn FnOnce()>, ready: Option<Rc<dyn Fn() -> bool>>) {
         self.host_tasks.push(HostTask {
+            identity: None,
+            ready_at: None,
+            never_ready: false,
             run: Some(HostTaskCallback::Plain(task)),
             ready: ready.map(HostTaskReady::Plain),
         });
+    }
+
+    /// Cancellable native task on the same Window task source. EventHandler
+    /// timers are task-runner timers, so DOMTimer's nesting clamp does not apply.
+    pub fn EnqueueDelayedNativeTask(&mut self, delay: Duration, task: Box<dyn FnOnce()>) -> u64 {
+        let identity = self.next_host_task;
+        self.next_host_task = identity
+            .checked_add(1)
+            .expect("native Window task identity");
+        self.host_tasks.push(HostTask {
+            identity: Some(identity),
+            ready_at: Some(Instant::now() + delay),
+            never_ready: false,
+            run: Some(HostTaskCallback::Plain(task)),
+            ready: None,
+        });
+        identity
+    }
+    /// AbortSignal::timeout uses the same Window task source with a
+    /// cancellable callback payload, released synchronously on cancellation.
+    pub(crate) fn EnqueueAbortTimeout(
+        &mut self,
+        delay: Duration,
+        callback: RuntimeTask,
+    ) -> Rc<dyn interaction::default::core::dom::abort_signal::CancellableAbortTask> {
+        let callback = Rc::new(RefCell::new(Some(callback)));
+        let captured = callback.clone();
+        let ready_at = Instant::now().checked_add(delay);
+        self.host_tasks.push(HostTask {
+            identity: None,
+            ready_at,
+            never_ready: ready_at.is_none(),
+            run: Some(HostTaskCallback::WithRuntime(Box::new(
+                move |runtime, realm| {
+                    let callback = captured.borrow_mut().take();
+                    if let Some(callback) = callback {
+                        callback(runtime, realm);
+                    }
+                },
+            ))),
+            ready: None,
+        });
+        Rc::new(AbortTimeoutCancellation(callback))
+    }
+    pub fn CancelNativeTask(&mut self, identity: u64) {
+        self.host_tasks
+            .retain(|task| task.identity != Some(identity));
     }
 
     // cpp: webapi/window_bindings.cc:354-360
@@ -341,6 +517,9 @@ impl WindowJavaScriptBindings {
         ready: Option<Rc<dyn Fn() -> bool>>,
     ) {
         self.host_tasks.push(HostTask {
+            identity: None,
+            ready_at: None,
+            never_ready: false,
             run: Some(HostTaskCallback::WithRuntime(task)),
             ready: ready.map(HostTaskReady::Plain),
         });
@@ -350,6 +529,9 @@ impl WindowJavaScriptBindings {
     /// Called without a Window borrow. Readiness must not execute page script.
     pub fn EnqueueTaskWithRuntimeReadiness(&mut self, task: RuntimeTask, ready: RuntimeTaskReady) {
         self.host_tasks.push(HostTask {
+            identity: None,
+            ready_at: None,
+            never_ready: false,
             run: Some(HostTaskCallback::WithRuntime(task)),
             ready: Some(HostTaskReady::WithRuntime(ready)),
         });
@@ -454,6 +636,7 @@ impl WindowJavaScriptBindings {
                         device_pixel_ratio: self.scale as f32,
                         media_type: foundation::String::from("screen"),
                         preferred_color_scheme: self.preferred_color_scheme,
+                        prefers_reduced_motion: self.prefers_reduced_motion,
                         forced_colors: self.forced_colors,
                         scripting: style::media_queries::scripting::Scripting::kEnabled,
                         ..Default::default()
@@ -469,6 +652,18 @@ impl WindowJavaScriptBindings {
             } else {
                 unhandled()
             };
+        }
+        if receiver == 0 && name == "__bindEventTiming" {
+            if call.operation == HostOperation::kGet {
+                return method(0, name);
+            }
+            if call.operation == HostOperation::kCall {
+                let Some(callback) = function_arg(args, 0) else {
+                    return error("Event Timing requires a callback");
+                };
+                self.event_timing_callback = Some(callback);
+                return HostResult::default();
+            }
         }
         if receiver == 0 && name == "__queueScrollCompletion" {
             if call.operation == HostOperation::kGet {
@@ -760,6 +955,20 @@ impl WindowJavaScriptBindings {
                 return runtime.as_mut().unwrap().EnqueueMicrotask(&callback);
             }
         }
+        if receiver == 0 && name == "reportError" {
+            if call.operation == HostOperation::kGet {
+                return method(0, name);
+            }
+            if call.operation == HostOperation::kCall {
+                let Some(reported) = args.first() else {
+                    return error("reportError requires a value");
+                };
+                let Some(runtime) = runtime.as_mut() else {
+                    return error("reportError requires an active script context");
+                };
+                return runtime.ReportException(reported);
+            }
+        }
         if receiver == 0 && name == "__queueTask" {
             if call.operation == HostOperation::kGet {
                 return method(0, name);
@@ -935,20 +1144,28 @@ impl WindowJavaScriptBindings {
                 match name {
                     "URL" | "documentURI" => return string(self.location["href"].clone()),
                     "cookie" => return string(""),
-                    "domain" => return string(self.document_domain.clone()),
+                    "domain" => {
+                        return self.dom.borrow_mut().Invoke(&HostCall {
+                            receiver: 0,
+                            operation: HostOperation::kCall,
+                            member: "__documentDomainGet",
+                            symbol: HostSymbol::kNone,
+                            arguments: &[],
+                        });
+                    }
                     _ => {}
                 }
             }
             if receiver == PERFORMANCE {
                 return match name {
                     "now" => method(receiver, name),
-                    "timeOrigin" => number(self.time_origin),
+                    "timeOrigin" => number(self.performance_timing.TimeOrigin()),
                     "timing" => object(PERFORMANCE_TIMING),
                     _ => unhandled(),
                 };
             }
             if receiver == PERFORMANCE_TIMING {
-                return number(self.time_origin);
+                return number(self.performance_timing.TimeOrigin());
             }
             if receiver == LOCATION {
                 return if matches!(name, "toString" | "assign" | "replace") {
@@ -974,13 +1191,18 @@ impl WindowJavaScriptBindings {
                 {
                     return error("Invalid document.domain");
                 }
-                self.document_domain = domain.into();
-                return HostResult::default();
+                return self.dom.borrow_mut().Invoke(&HostCall {
+                    receiver: 0,
+                    operation: HostOperation::kCall,
+                    member: "__documentDomainSet",
+                    symbol: HostSymbol::kNone,
+                    arguments: args,
+                });
             }
         }
         if call.operation == HostOperation::kCall {
             if receiver == PERFORMANCE && name == "now" {
-                return number(self.start.elapsed().as_secs_f64() * 1000.0);
+                return number(self.performance_timing.Now());
             }
             if receiver == LOCATION && name == "toString" {
                 return string(self.location["href"].clone());
@@ -1004,11 +1226,61 @@ impl WindowJavaScriptBindings {
         {
             return unhandled();
         }
-        self.dom.borrow_mut().Invoke(call)
+        match runtime {
+            Some(runtime) => self
+                .InvocationDOM(call)
+                .borrow_mut()
+                .InvokeWithRuntime(call, runtime),
+            None => self.InvocationDOM(call).borrow_mut().Invoke(call),
+        }
     }
 }
 
 impl JavaScriptHostBindings for WindowJavaScriptBindings {
+    fn DocumentHostObjectId(&self) -> Option<HostObjectId> {
+        Some(self.document_id)
+    }
+    fn IsWindowHost(&self) -> bool {
+        true
+    }
+    fn ArgumentNamespace(&self, call: &HostCall<'_>) -> Option<JavaScriptHostObjectNamespace> {
+        if call.receiver == 0 && !WINDOW_GLOBAL_NAMES.contains(&call.member) {
+            if Self::WindowMember(call).is_some_and(Self::IsWindowSupplementMember) {
+                self.window_namespace.Upgrade()
+            } else {
+                self.dom_namespace.Upgrade()
+            }
+        } else {
+            None
+        }
+    }
+    fn BindTaskAttributionTracker(
+        &mut self,
+        tracker: Rc<foundation::task_attribution::TaskAttributionTracker>,
+    ) {
+        self.dom.borrow_mut().BindTaskAttributionTracker(tracker);
+    }
+
+    fn OwnsGlobalHostObject(&self, id: HostObjectId) -> bool {
+        [
+            LOCATION,
+            PERFORMANCE,
+            PERFORMANCE_TIMING,
+            NAVIGATOR,
+            MIME_TYPES,
+            PLUGINS,
+            SCREEN,
+        ]
+        .contains(&id)
+            || self.url_records.contains_key(&id)
+    }
+    fn ArgumentPolicy(
+        &self,
+        receiver: HostObjectId,
+        member: &str,
+    ) -> javascript::javascript_runtime::HostArgumentPolicy {
+        self.dom.borrow().ArgumentPolicy(receiver, member)
+    }
     fn ObjectTraceSource(
         &self,
     ) -> Option<Rc<dyn javascript::javascript_runtime::HostObjectTraceSource>> {
@@ -1039,11 +1311,15 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
                     return error("Location method requires a URL");
                 }
                 let converted = runtime.ToString(&argument);
-                if converted.exception.is_some() {
+                if converted.exception.is_some() || converted.thrown.is_some() {
                     return converted;
                 }
-                let HostValue::String(text) = converted.value else {
-                    unreachable!()
+                let text = match converted.value {
+                    HostValue::String(text) => text,
+                    // Location.href is USVString: this is its declared IDL
+                    // replacement of unpaired surrogates, after VM ToString.
+                    HostValue::String16(units) => String::from_utf16_lossy(&units),
+                    _ => unreachable!(),
                 };
                 let resolved = url::Url::parse(&referrer)
                     .ok()
@@ -1064,7 +1340,9 @@ impl JavaScriptHostBindings for WindowJavaScriptBindings {
                 HostResult::default()
             }));
         }
-        self.dom.borrow_mut().PrepareInvocation(call)
+        self.InvocationDOM(call)
+            .borrow_mut()
+            .PrepareInvocation(call)
     }
 
     fn GlobalNames(&self) -> Vec<String> {
@@ -1185,7 +1463,8 @@ impl WindowJavaScriptBindings {
             w.animation_fallback_due = None;
             (
                 w.animation_callbacks.keys().copied().collect::<Vec<_>>(),
-                frame_time.saturating_duration_since(w.start).as_secs_f64() * 1000.0,
+                w.performance_timing
+                    .MonotonicTimeToDOMHighResTimeStamp(frame_time),
                 w.animation_tick.clone(),
             )
         };
@@ -1259,16 +1538,22 @@ impl WindowJavaScriptBindings {
                         loop {
                             let ready = {
                                 let w = window.borrow();
-                                w.host_tasks.get(index).map(|t| t.ready.clone())
+                                w.host_tasks
+                                    .get(index)
+                                    .map(|t| (t.ready.clone(), t.ready_at, t.never_ready))
                             };
-                            let Some(ready) = ready else {
+                            let Some((ready, ready_at, never_ready)) = ready else {
                                 break;
                             };
-                            let runnable = match ready {
-                                None => true,
-                                Some(HostTaskReady::Plain(ready)) => ready(),
-                                Some(HostTaskReady::WithRuntime(ready)) => ready(runtime, realm),
-                            };
+                            let runnable = !never_ready
+                                && ready_at.is_none_or(|due| due <= Instant::now())
+                                && match ready {
+                                    None => true,
+                                    Some(HostTaskReady::Plain(ready)) => ready(),
+                                    Some(HostTaskReady::WithRuntime(ready)) => {
+                                        ready(runtime, realm)
+                                    }
+                                };
                             if runnable {
                                 task = Some(Task::Host(
                                     window
@@ -1367,8 +1652,10 @@ impl WindowJavaScriptBindings {
                             let elapsed = started.elapsed();
                             if elapsed >= Duration::from_millis(16) {
                                 // Animation dispatch performs its own checkpoints.
-                                eprintln!("javascript-selected-task-profile kind={task_kind} total_ms={:.3}",
-                                    elapsed.as_secs_f64() * 1000.0);
+                                eprintln!(
+                                    "javascript-selected-task-profile kind={task_kind} total_ms={:.3}",
+                                    elapsed.as_secs_f64() * 1000.0
+                                );
                             }
                         }
                         continue;
@@ -1413,10 +1700,12 @@ impl WindowJavaScriptBindings {
                 if let Some(started) = task_started {
                     let elapsed = started.elapsed();
                     if elapsed >= Duration::from_millis(16) {
-                        eprintln!("javascript-selected-task-profile kind={task_kind} callback_ms={:.3} checkpoint_ms={:.3} total_ms={:.3}",
+                        eprintln!(
+                            "javascript-selected-task-profile kind={task_kind} callback_ms={:.3} checkpoint_ms={:.3} total_ms={:.3}",
                             callback_elapsed.unwrap().as_secs_f64() * 1000.0,
                             checkpoint_started.unwrap().elapsed().as_secs_f64() * 1000.0,
-                            elapsed.as_secs_f64() * 1000.0);
+                            elapsed.as_secs_f64() * 1000.0
+                        );
                     }
                 }
                 continue;
@@ -1475,6 +1764,7 @@ mod tests {
                 final_url: request.url.clone(),
                 mime_type: "text/plain".into(),
                 body: b"reply".to_vec(),
+                ..Default::default()
             }))))
         }
     }
@@ -1684,6 +1974,20 @@ mod tests {
         let owner = Rc::new(RefCell::new(html::html_parser::ParseHTML(
             "<!doctype html><div></div>",
         )));
+        // The loader's canonical origin admission precedes Window bindings;
+        // SetURL only changes URL state and cannot manufacture an origin.
+        owner
+            .borrow_mut()
+            .GetDocumentMut()
+            .InitializeSecurityContextForNavigation(
+                dom::persistent_document::SecurityOrigin::CreateForNavigation(
+                    "https://www.example.test:443/a/b?old=1#fragment",
+                    None,
+                    Rc::new(dom::persistent_document::SecurityOriginSchemeRegistry::default()),
+                ),
+                false,
+            );
+
         let dom = Rc::new(RefCell::new(DOMJavaScriptBindings::new(
             owner,
             Box::new(|_| {}),
@@ -1701,6 +2005,7 @@ mod tests {
             .borrow_mut()
             .SetURL("https://www.example.test:443/a/b?old=1#fragment".into());
         window.borrow_mut().SetViewport(1024.0, 768.0, 2.0);
+        window.borrow_mut().SetPrefersReducedMotion(true);
         let mut runtime = QuickJsJavaScriptRuntime::new();
         let realm = runtime.CreateRealm(window.clone());
         window.borrow_mut().BindRuntime(&realm);
@@ -1750,6 +2055,7 @@ mod tests {
             if (!matchMedia('(1000px < width <= 1024px) and (resolution: 192dpi)').matches) throw Error('typed media range/resolution');
             if (!matchMedia('(min-width: 64em)').matches || matchMedia('(max-width: 63em)').matches) throw Error('typed media font lengths');
             if (!matchMedia('(prefers-color-scheme: light)').matches || matchMedia('not (unknown: x)').matches) throw Error('typed media preference/unknown');
+            if (!matchMedia('(prefers-reduced-motion: reduce)').matches || matchMedia('(prefers-reduced-motion: no-preference)').matches) throw Error('typed reduced motion preference');
             if (!matchMedia('(scripting: enabled)').matches) throw Error('typed media scripting');
 
             document.cookie='ignored=1';
@@ -1836,7 +2142,11 @@ mod tests {
         assert!(errors[0].message.contains("reported message failure"));
         errors.clear();
         assert_script(&mut runtime, &realm, "JSON.stringify(channelLog) === '[9]'");
-        assert_script(&mut runtime,&realm,"JSON.stringify(log) === JSON.stringify(['queued','promise','network','network-job','timer','timer-job','failure'])");
+        assert_script(
+            &mut runtime,
+            &realm,
+            "JSON.stringify(log) === JSON.stringify(['queued','promise','network','network-job','timer','timer-job','failure'])",
+        );
         assert_eq!(
             requests.borrow()[0].url,
             "https://www.example.test/endpoint"
@@ -1947,8 +2257,11 @@ mod tests {
         );
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].message.contains("frame callback failure"));
-        assert_script(&mut runtime, &realm,
-            "JSON.stringify(frameLog)===JSON.stringify(['timer','A','microtask','C']) && frameTimes.every(t=>t===40)");
+        assert_script(
+            &mut runtime,
+            &realm,
+            "JSON.stringify(frameLog)===JSON.stringify(['timer','A','microtask','C']) && frameTimes.every(t=>t===40)",
+        );
         assert!(window.borrow().HasPendingAnimationFrames());
         // An already serviced frame must not execute registrations made in it.
         WindowJavaScriptBindings::RunAnimationFrameCallbacks(
@@ -1969,8 +2282,11 @@ mod tests {
             first_time + Duration::from_millis(40),
             &mut |error| errors.push(error.clone()),
         );
-        assert_script(&mut runtime, &realm,
-            "JSON.stringify(frameLog)===JSON.stringify(['timer','A','microtask','C','D']) && frameTimes.at(-1)===80");
+        assert_script(
+            &mut runtime,
+            &realm,
+            "JSON.stringify(frameLog)===JSON.stringify(['timer','A','microtask','C','D']) && frameTimes.at(-1)===80",
+        );
         assert_eq!(&*ticks.borrow(), &[40.0, 80.0]);
         assert!(!window.borrow().HasPendingAnimationFrames());
         assert_eq!(errors.len(), 1);
@@ -2013,7 +2329,10 @@ mod tests {
           check(caught&&structuredClone({ok:8}).ok===8,'failure recovery');
           const OriginalMap=Map;let calls=0;
           globalThis.Map=function(){calls++;return new OriginalMap()};
-          try {check(structuredClone({ok:9}).ok===9&&calls===1,'current global Map')}finally{globalThis.Map=OriginalMap}
+          try {check(structuredClone({ok:9}).ok===9&&calls===0,'native clone ignores author Map')}finally{globalThis.Map=OriginalMap}
+          const token={};let originalThrown=false;
+          try{structuredClone({get x(){throw token}})}catch(e){originalThrown=e===token}
+          check(originalThrown,'original thrown identity');
           check(names===Object.getOwnPropertyNames(globalThis).join('|'),'no helper globals');
           return true;
         })()"#,

@@ -234,8 +234,25 @@ fn UpdateFromElement(object: &mut LayoutObject) {
         _ => object.UpdateFromElementBase(),
     }
 }
+fn QuadsInAncestor(
+    object: &LayoutObject,
+    quads: &mut foundation::Vector<foundation::gfx::QuadF>,
+    ancestor: *const layoutng_assembly::internal::layout_box_model_object::LayoutBoxModelObject,
+    mode: layoutng_assembly::internal::map_coordinates_flags::MapCoordinatesFlags,
+    box_type: layoutng_assembly::internal::layout_object::BoxQuadType,
+) {
+    if object.RuntimeClass() == LayoutObjectClass::TableColumn {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutTableColumn>() }
+            .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+    } else {
+        unsafe { &*(object as *const LayoutObject).cast::<LayoutBox>() }
+            .QuadsInAncestorInternal(quads, ancestor, mode, box_type);
+    }
+}
 pub(crate) fn Virtuals() -> TableObjectVirtuals {
     TableObjectVirtuals {
+        focusgroup_facts: crate::grid_focusgroup_facts::Read,
+        quads_in_ancestor: QuadsInAncestor,
         add_child: AddChild,
         remove_child: RemoveChild,
         style_did_change: StyleDidChange,

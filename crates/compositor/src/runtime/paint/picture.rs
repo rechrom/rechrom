@@ -8,7 +8,9 @@ use crate::{
         picture_layer_impl::{DirectlyCompositedImageInfo, PictureRasterSource},
         picture_layer_tiling::TilingRasterSource,
         property_types::PropertyTrace,
-        recording_source::{RecordingDisplayItemList, RecordingSourceTypes},
+        recording_source::{
+            PartialRasterFullReplay, RecordingDisplayItemList, RecordingSourceTypes,
+        },
     },
     cc::{layers::recording_source::RecordingSource, paint::display_item_list::DisplayItemList},
     runtime::types::CpuSkiaBackend,
@@ -74,11 +76,19 @@ pub struct RasterSourceStorage<R: CpuSkiaBackend> {
     pub slow_down_raster_scale_factor_for_debug: i32,
     pub recording_scale_factor: f32,
     directly_composited_image_info: Option<DirectlyCompositedImageInfo>,
+    full_replays_for_partial_raster: Vec<PartialRasterFullReplay>,
     debug_name: RwLock<String>,
 }
 impl<R: CpuSkiaBackend> RasterSourceStorage<R> {
     pub fn from_recording(recording: &RecordingSource<CpuRecordingTypes<R>>) -> Self {
         let value = recording.RasterSourceFields();
+        if std::env::var_os("RECHROM_TRACE_PARTIAL_RASTER").is_some() {
+            eprintln!(
+                "partial-full-replay-source count={} requires_clear={}",
+                value.full_replays_for_partial_raster.len(),
+                value.requires_clear
+            );
+        }
         let source = Self {
             display_list: value.display_list.clone(),
             background_color: *value.background_color,
@@ -90,6 +100,7 @@ impl<R: CpuSkiaBackend> RasterSourceStorage<R> {
             slow_down_raster_scale_factor_for_debug: *value.slow_down_raster_scale_factor_for_debug,
             recording_scale_factor: *value.recording_scale_factor,
             directly_composited_image_info: value.directly_composited_image_info.clone(),
+            full_replays_for_partial_raster: value.full_replays_for_partial_raster.to_vec(),
             debug_name: RwLock::new(String::new()),
         };
         debug_assert!(
@@ -101,6 +112,9 @@ impl<R: CpuSkiaBackend> RasterSourceStorage<R> {
     }
     pub fn display_list(&self) -> &Option<Arc<ContentDisplayItemList<R>>> {
         &self.display_list
+    }
+    pub fn FullReplaysForPartialRaster(&self) -> &[PartialRasterFullReplay] {
+        &self.full_replays_for_partial_raster
     }
     pub fn DebugName(&self) -> RasterDebugName<'_> {
         RasterDebugName(

@@ -14,7 +14,9 @@ use layoutng_assembly::internal::layout_node_metadata::Element;
 use layoutng_assembly::internal::layout_object::{
     HitTestLocation, HitTestResult, LayoutObject, LayoutObjectClass, StyleChangeContext,
 };
-use layoutng_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
+use layoutng_assembly::internal::layout_replaced::{
+    LayoutInputReplaced, LayoutReplaced, LayoutVideo, VideoDisplayMode,
+};
 use layoutng_assembly::internal::outline_geometry::OutlineOutsetExtent;
 use layoutng_assembly::internal::outline_info::LayoutOutlineInfo;
 use layoutng_assembly::internal::outline_rect_collector::VectorOutlineRectCollector;
@@ -67,6 +69,15 @@ pub extern "Rust" fn LayoutReplacedNew(element: *mut Element) -> LayoutReplaced 
             )
         },
     );
+    layoutng_assembly::RegisterVideoStyleDidChange(|object, diff, old, new, context| {
+        crate::layout_video::StyleDidChange(
+            unsafe { &mut *object.cast::<LayoutVideo>() },
+            diff,
+            old,
+            new,
+            context,
+        );
+    });
     layoutng_assembly::RegisterReplacedRecalcVisualOverflow(|object| {
         LayoutReplacedRecalcVisualOverflow(unsafe { &mut *object.cast::<LayoutReplaced>() })
     });
@@ -217,6 +228,16 @@ pub extern "Rust" fn LayoutInputReplacedStyleDidChange(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced) {
     this.CheckIsNotDestroyed();
+    if this.IsVideo() {
+        let video = unsafe { &mut *(this as *mut LayoutReplaced).cast::<LayoutVideo>() };
+        if video.ElementState().show_poster {
+            video.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+                &raw const layout_invalidation_reason::kSizeChanged,
+            );
+        }
+        crate::layout_video::UpdateNaturalSize(video);
+        return;
+    }
     let object: &mut LayoutObject = this;
     object.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
         &raw const layout_invalidation_reason::kSizeChanged,
@@ -542,7 +563,22 @@ pub extern "Rust" fn LayoutReplacedContentRectFrom(
     base_content_rect: &PhysicalRect,
 ) -> PhysicalRect {
     this.CheckIsNotDestroyed();
-    LayoutReplacedComputeReplacedContentRect(this, base_content_rect, &this.GetNaturalDimensions())
+    let rect = LayoutReplacedComputeReplacedContentRect(
+        this,
+        base_content_rect,
+        &this.GetNaturalDimensions(),
+    );
+    // Source: core/layout/layout_video.cc:188-204. Video output sizes are
+    // rounded before paint/compositor handoff so a resize cannot oscillate by
+    // one device pixel and force the codec to restart from another I-frame.
+    if this.IsVideo()
+        && unsafe { &*(this as *const LayoutReplaced).cast::<LayoutVideo>() }.GetDisplayMode()
+            == VideoDisplayMode::Video
+    {
+        LayoutReplaced::PreSnappedRectForPersistentSizing(&rect)
+    } else {
+        rect
+    }
 }
 
 // cpp: core/layout/layout_replaced.cc:509-522
@@ -621,6 +657,11 @@ pub extern "Rust" fn DispatchLayoutReplacedGetNaturalDimensions(
         });
     }
     assert_eq!(this.RuntimeClass(), LayoutObjectClass::Replaced);
+    if this.IsVideo() {
+        return crate::layout_video::NaturalDimensions(unsafe {
+            &*(this as *const LayoutReplaced).cast::<LayoutVideo>()
+        });
+    }
     LayoutInputReplacedGetNaturalDimensions(unsafe {
         &*(this as *const LayoutReplaced as *const LayoutInputReplaced)
     })

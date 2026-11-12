@@ -37,8 +37,15 @@ impl LayoutObject {
         style: *const ComputedStyle,
         apply_changes: ApplyStyleChanges,
     ) {
-        unsafe {
-            LayoutObjectSetModifiedStyleOutsideStyleRecalcProvider(self, style, apply_changes)
+        // Chromium layout_object.cc:5646-5657. The same ComputedStyle owner
+        // is installed on LayoutObject and its existing Element projection.
+        self.CheckIsNotDestroyed();
+        self.SetStyleWithChanges(style, apply_changes);
+        if self.IsAnonymous() {
+            return;
+        }
+        if let Some(element) = unsafe { DynamicTo::<Element>(self.GetNode()).as_mut() } {
+            element.SetComputedStyle(style);
         }
     }
 }

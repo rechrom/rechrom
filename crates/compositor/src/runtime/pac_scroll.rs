@@ -24,6 +24,7 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub(crate) enum PacScrollEffect {
+    DidUpdateCompositorScrollState(crate::engine::CompositorScrollState),
     DidCompositorScroll {
         sequence: u64,
         element: ElementId,
@@ -49,7 +50,7 @@ impl PacScrollEffects {
         self.0.borrow().is_empty()
     }
 
-    fn Push(&self, effect: PacScrollEffect) {
+    pub(crate) fn Push(&self, effect: PacScrollEffect) {
         self.0.borrow_mut().push_back(effect)
     }
 }

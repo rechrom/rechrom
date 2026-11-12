@@ -4,6 +4,7 @@
 //! StyleResolver assembly.
 #![allow(non_snake_case)]
 
+use crate::scrollbar_style::{ScrollbarStylePart, ScrollbarStyleState};
 use crate::{
     container_query::ContainerQuery,
     element_rule_collector::SearchTextRequest,
@@ -11,6 +12,7 @@ use crate::{
 };
 use foundation::AtomicString;
 use layoutng_style::style::computed_style_constants::PseudoId;
+use std::rc::Rc;
 
 pub(crate) type ProductionContainerQuery = ContainerQuery<Value, CSSUnparsedDeclarationValue>;
 
@@ -21,6 +23,8 @@ pub(crate) struct ProductionPseudoRequest {
     pub argument: Option<AtomicString>,
     pub ident_list: Vec<AtomicString>,
     pub search_text: SearchTextRequest,
+    pub scrollbar: Option<Rc<ScrollbarStyleState>>,
+    pub scrollbar_part: ScrollbarStylePart,
 }
 impl ProductionPseudoRequest {
     pub fn Element() -> Self {
@@ -30,6 +34,8 @@ impl ProductionPseudoRequest {
             argument: None,
             ident_list: Vec::new(),
             search_text: SearchTextRequest::kNone,
+            scrollbar: None,
+            scrollbar_part: ScrollbarStylePart::kNoPart,
         }
     }
 
@@ -40,6 +46,8 @@ impl ProductionPseudoRequest {
             argument,
             ident_list: Vec::new(),
             search_text: SearchTextRequest::kNone,
+            scrollbar: None,
+            scrollbar_part: ScrollbarStylePart::kNoPart,
         }
     }
 
@@ -50,6 +58,8 @@ impl ProductionPseudoRequest {
             argument: None,
             ident_list: Vec::new(),
             search_text: SearchTextRequest::kNone,
+            scrollbar: None,
+            scrollbar_part: ScrollbarStylePart::kNoPart,
         }
     }
 }

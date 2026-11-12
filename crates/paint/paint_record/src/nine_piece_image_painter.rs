@@ -9,7 +9,7 @@ use layoutng_assembly::internal::paint_input::{
     NinePieceImagePaint, PaintImageTileRule, PaintShader,
 };
 
-use crate::geometry_mapper::{MapRectToRoot, MultiplyTransforms, TranslationTransform};
+use crate::geometry_mapper::{MultiplyTransforms, TranslationTransform};
 use crate::nine_piece_image_grid::{NinePiece, NinePieceDrawInfo, NinePieceImageGrid};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{
@@ -19,7 +19,7 @@ use crate::paint_shader_resolver::ResolvePaintShader;
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintRect;
 
-// cpp: paint/nine_piece_image_painter.cc:14-18
+// cpp: paint/nine_piece_image_painter.cc:38-43
 struct TileParameters {
     scale_factor: f64,
     phase: f64,
@@ -36,7 +36,7 @@ impl Default for TileParameters {
     }
 }
 
-// cpp: paint/nine_piece_image_painter.cc:20-48
+// cpp: paint/nine_piece_image_painter.cc:23-73
 fn ComputeTileParameters(
     rule: PaintImageTileRule,
     destination: f64,
@@ -75,7 +75,8 @@ fn ComputeTileParameters(
     }
 }
 
-// cpp: paint/nine_piece_image_painter.cc:50-68
+// Resource lookup is the typed equivalent of StyleImage::GetImage at
+// nine_piece_image_painter.cc:214-227.
 fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
     let fragment = node
         .fragment
@@ -98,21 +99,19 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage>
     Some(found)
 }
 
-// cpp: paint/nine_piece_image_painter.cc:70-73
+// Paint's retained local cull is applied before emitting backend-neutral ops.
 fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-// cpp: paint/nine_piece_image_painter.cc:75-80
 fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(cull_rect) = node.cull_rect else {
         return true;
     };
-    let mapped = MapRectToRoot(*rect, &node.transforms);
-    mapped.is_none_or(|mapped| Intersects(&mapped, &cull_rect))
+    Intersects(rect, &cull_rect)
 }
 
-// cpp: paint/nine_piece_image_painter.cc:82-86
+// cpp: paint/nine_piece_image_painter.cc:75-85
 fn ShouldTile(info: &NinePieceDrawInfo) -> bool {
     !info.is_corner_piece
         && (info.horizontal_rule != PaintImageTileRule::kStretch
@@ -305,7 +304,7 @@ fn AppendGradientTiledPiece(
     );
 }
 
-// cpp: paint/nine_piece_image_painter.h:7-14
+// cpp: paint/nine_piece_image_painter.h:20-33
 pub struct NinePieceImagePainter;
 
 impl NinePieceImagePainter {
@@ -336,17 +335,20 @@ impl NinePieceImagePainter {
     }
 
     pub fn Bounds(node: &PaintTreeNode<'_>, image: &NinePieceImagePaint) -> PaintRect {
-        let decoration_area = Self::ReferenceRect(node);
+        Self::BoundsWithin(Self::ReferenceRect(node), image)
+    }
+
+    pub fn BoundsWithin(reference_rect: PaintRect, image: &NinePieceImagePaint) -> PaintRect {
         PaintRect {
-            x: decoration_area.x - image.outsets.left,
-            y: decoration_area.y - image.outsets.top,
-            width: decoration_area.width + image.outsets.left + image.outsets.right,
-            height: decoration_area.height + image.outsets.top + image.outsets.bottom,
+            x: reference_rect.x - image.outsets.left,
+            y: reference_rect.y - image.outsets.top,
+            width: reference_rect.width + image.outsets.left + image.outsets.right,
+            height: reference_rect.height + image.outsets.top + image.outsets.bottom,
         }
     }
 
-    // cpp: paint/nine_piece_image_painter.h:10-13
-    // cpp: paint/nine_piece_image_painter.cc:90-211
+    // cpp: paint/nine_piece_image_painter.h:23-30
+    // cpp: paint/nine_piece_image_painter.cc:180-244
     pub fn Paint(
         node: &PaintTreeNode<'_>,
         context: &RefCell<PaintContext<'_>>,
@@ -363,7 +365,7 @@ impl NinePieceImagePainter {
         else {
             return false;
         };
-        Self::PaintImage(node, context, phase, border_image)
+        Self::PaintImage(node, context, phase, border_image, None)
     }
 
     pub fn PaintMaskBox(
@@ -382,7 +384,27 @@ impl NinePieceImagePainter {
         else {
             return false;
         };
-        Self::PaintImage(node, context, phase, mask_box_image)
+        Self::PaintImage(node, context, phase, mask_box_image, None)
+    }
+
+    pub fn PaintMaskBoxWithin(
+        node: &PaintTreeNode<'_>,
+        context: &RefCell<PaintContext<'_>>,
+        phase: PaintPhase,
+        reference_rect: PaintRect,
+    ) -> bool {
+        let Some(mask_box_image) = node
+            .fragment
+            .as_deref()
+            .expect("paint tree node has a fragment")
+            .paint
+            .style
+            .mask_box_image
+            .as_ref()
+        else {
+            return false;
+        };
+        Self::PaintImage(node, context, phase, mask_box_image, Some(reference_rect))
     }
 
     fn PaintImage(
@@ -390,14 +412,20 @@ impl NinePieceImagePainter {
         context: &RefCell<PaintContext<'_>>,
         phase: PaintPhase,
         border_image: &NinePieceImagePaint,
+        reference_rect: Option<PaintRect>,
     ) -> bool {
         let fragment = node
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        // A specified border image suppresses ordinary border painting while
-        // its resource is pending. Blink returns true from Paint() in this
-        // state and records no nine-piece draw operations.
+        if !border_image.is_loaded {
+            return true;
+        }
+        if !border_image.can_render {
+            return false;
+        }
+        // A loaded StyleImage may still yield no image snapshot. Blink keeps
+        // suppressing ordinary borders in that state and records no pieces.
         let image = if border_image.shader.is_none() {
             FindImage(node, border_image.resource_id)
         } else {
@@ -410,16 +438,11 @@ impl NinePieceImagePainter {
         let sliced_inline_strip = fragment.paint.display == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
             && fragment.paint.stitched_decoration.is_some();
-        let area = Self::Bounds(node, border_image);
-        let source_size = if border_image.shader.is_some() {
-            border_image.image_size
-        } else {
-            let image = image.expect("fetched border image disappeared");
-            Size {
-                width: f64::from(image.width),
-                height: f64::from(image.height),
-            }
-        };
+        let area = node.PixelSnappedRect(&reference_rect.map_or_else(
+            || Self::Bounds(node, border_image),
+            |rect| Self::BoundsWithin(rect, border_image),
+        ));
+        let source_size = border_image.image_size;
         if !source_size.width.is_finite()
             || !source_size.height.is_finite()
             || source_size.width <= 0.0
@@ -436,8 +459,8 @@ impl NinePieceImagePainter {
             ResolveDocumentImageContainerKey(
                 image,
                 Size {
-                    width: f64::from(image.width) / image_resolution_scale * effective_zoom,
-                    height: f64::from(image.height) / image_resolution_scale * effective_zoom,
+                    width: source_size.width / image_resolution_scale * effective_zoom,
+                    height: source_size.height / image_resolution_scale * effective_zoom,
                 },
                 effective_zoom,
                 fragment.paint.resources.as_deref(),
@@ -453,22 +476,31 @@ impl NinePieceImagePainter {
                 Some(source_size),
             )
         });
-        let mut resolved = border_image.clone();
-        if !sliced_inline_strip {
-            if !fragment.paint.border_sides.top {
-                resolved.widths.top = 0.0;
-            }
-            if !fragment.paint.border_sides.right {
-                resolved.widths.right = 0.0;
-            }
-            if !fragment.paint.border_sides.bottom {
-                resolved.widths.bottom = 0.0;
-            }
-            if !fragment.paint.border_sides.left {
-                resolved.widths.left = 0.0;
-            }
-        }
-        let grid = NinePieceImageGrid::new(&resolved, source_size, effective_zoom, area);
+        // cpp: core/paint/nine_piece_image_painter.cc:236-239. Keep the
+        // DevTools image event at the resolved image/geometry boundary before
+        // the nine source pieces are emitted.
+        let mut trace = browser_tracing::span("devtools.timeline", "PaintImage");
+        trace.set("node_id", fragment.node_id as f64);
+        trace.set("src_x", 0.0);
+        trace.set("src_y", 0.0);
+        trace.set("src_width", source_size.width);
+        trace.set("src_height", source_size.height);
+        trace.set("dest_x", area.x);
+        trace.set("dest_y", area.y);
+        trace.set("dest_area", area.width * area.height);
+        let sides_to_include = if sliced_inline_strip {
+            Default::default()
+        } else {
+            fragment.paint.border_sides
+        };
+        let grid = NinePieceImageGrid::new(
+            border_image,
+            source_size,
+            effective_zoom,
+            area,
+            sides_to_include,
+            node.pixel_snap_scale,
+        );
         if sliced_inline_strip {
             let sides = &fragment.paint.border_sides;
             let clip = PaintRect {
@@ -547,6 +579,8 @@ impl NinePieceImagePainter {
                             .paint
                             .style
                             .image_interpolation_quality(),
+                        dynamic_range_limit: fragment.paint.style.dynamic_range_limit(),
+                        image_orientation: border_image.image_orientation,
                         document_image_container_key: document_image_container_key.clone(),
                         tile_rule_x: info.horizontal_rule,
                         tile_rule_y: info.vertical_rule,
@@ -586,6 +620,8 @@ impl NinePieceImagePainter {
                     source_rect: info.source,
                     resource_id: image.id,
                     image_interpolation_quality: fragment.paint.style.image_interpolation_quality(),
+                    dynamic_range_limit: fragment.paint.style.dynamic_range_limit(),
+                    image_orientation: border_image.image_orientation,
                     document_image_container_key: document_image_container_key.clone(),
                     repeat_x: info.horizontal_rule != PaintImageTileRule::kStretch,
                     repeat_y: info.vertical_rule != PaintImageTileRule::kStretch,
@@ -614,5 +650,44 @@ impl NinePieceImagePainter {
             );
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use layoutng_assembly::internal::layout_input::Edges;
+    use layoutng_assembly::internal::paint_input::NinePieceImagePaint;
+
+    use super::{NinePieceImagePainter, PaintRect};
+
+    #[test]
+    fn explicit_mask_reference_rect_controls_nine_piece_bounds() {
+        let image = NinePieceImagePaint {
+            outsets: Edges {
+                top: 2.0,
+                right: 3.0,
+                bottom: 4.0,
+                left: 5.0,
+            },
+            ..NinePieceImagePaint::default()
+        };
+
+        assert_eq!(
+            NinePieceImagePainter::BoundsWithin(
+                PaintRect {
+                    x: 16.0,
+                    y: 27.0,
+                    width: 90.0,
+                    height: 70.0,
+                },
+                &image,
+            ),
+            PaintRect {
+                x: 11.0,
+                y: 25.0,
+                width: 98.0,
+                height: 76.0,
+            }
+        );
     }
 }

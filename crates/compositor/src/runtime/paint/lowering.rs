@@ -98,6 +98,12 @@ fn flags<R: CpuSkiaBackend>(op: &PaintOp) -> CpuPaintFlags<R> {
     ));
     f.setAntiAlias(op.antialias);
     f.setBlendMode(blend(op.blend_mode));
+    f.setDynamicRangeLimit(
+        paint::cc::paint::paint_flags::DynamicRangeLimitMixture::new(
+            op.dynamic_range_limit.standard_mix,
+            op.dynamic_range_limit.constrained_high_mix,
+        ),
+    );
     f
 }
 /// Lower the actual source record once, when ContentDisplayItemList receives
@@ -180,6 +186,7 @@ pub fn LowerPaintRecord<R: CpuSkiaBackend>(
             N::kStrokeWavyLine => LowerWavy(source, values.clone(), &mut wavy_cache, &mut output),
             N::kDrawMask => LowerMask(source, values.clone(), &mut output),
             N::kDrawBoxShadow => LowerBoxShadow(source, &mut output),
+            N::kCustomData => output.push(CpuPaintOp::CustomData(op.custom_data_id)),
             _ => output.push(CpuPaintOp::Atom(source)),
         }
     }

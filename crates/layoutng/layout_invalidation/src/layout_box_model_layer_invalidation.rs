@@ -2,6 +2,17 @@
 
 use super::{LayoutBoxModelObject, MakeGarbageCollected, PaintLayer, PaintLayerType};
 
+fn MarkLayerParentAfterTreeChange(layer: *mut PaintLayer) {
+    let parent = unsafe { &*layer }.Parent();
+    if parent.is_null() {
+        return;
+    }
+    unsafe { &mut *parent }.MarkAncestorChainForLayerTreeChange();
+    if !unsafe { &*layer }.IsSelfPaintingLayer() {
+        unsafe { &mut *parent }.DirtyVisibleContentStatus();
+    }
+}
+
 impl LayoutBoxModelObject {
     // cpp: layoutng/internal/layout_box_model_object.h:124-130
     // cpp: core/layout/layout_box_model_object.cc:360-367
@@ -9,6 +20,10 @@ impl LayoutBoxModelObject {
     pub fn DestroyLayer(&mut self) {
         self.CheckIsNotDestroyed();
         debug_assert!(self.HasLayer() && !self.Layer().is_null());
+        // PaintLayer::RemoveChild marks the former ancestor chain before the
+        // child is detached. Rechrom derives layer links from LayoutObject, so
+        // perform the same invalidation while that relationship is still live.
+        MarkLayerParentAfterTreeChange(self.Layer());
         self.DisposeScrollableAreaForPaintLayer();
         self.SetHasLayer(false);
         // FragmentData::SetLayer owns the single PaintLayer::Destroy() call.
@@ -59,6 +74,11 @@ impl LayoutBoxModelObject {
         first.EnsureId();
         first.SetLayer(layer);
         self.SetHasLayer(true);
+        // Chromium's InsertOnlyThisLayerAfterStyleChange() reaches AddChild(),
+        // which marks descendant-dependent flags on the complete ancestor
+        // chain. Our links are derived instead of stored, but the invalidation
+        // is still required so the root PrePaint refresh visits this new layer.
+        MarkLayerParentAfterTreeChange(layer);
         self.SetNeedsPaintPropertyUpdate();
     }
 }

@@ -660,11 +660,15 @@ impl HarfBuzzShaper {
             let unsafe_to_break = glyph.unsafe_to_break;
             let vertical = (hb_direction & !1) == 6;
             let shaped_advance = if vertical {
-                -glyph.y_advance as f32
+                -glyph.y_advance
             } else {
-                glyph.x_advance as f32
-            } / 65536.0;
-            let advance = TextRunLayoutUnit::FromFloatRound(shaped_advance);
+                glyph.x_advance
+            };
+            // Chromium shape_result.cc:1357-1359,1552-1554 carries the
+            // HarfBuzz 16.16 value straight into TextRunLayoutUnit. Avoid a
+            // float round-trip so adjacent words/spaces cannot accumulate an
+            // extra subpixel at a representability boundary.
+            let advance = TextRunLayoutUnit::FromFixed::<16>(i128::from(shaped_advance));
             run_ref.glyph_data_[i as u32] = HarfBuzzRunGlyphData::new(
                 glyph.id,
                 character_index,
@@ -1068,9 +1072,12 @@ mod tests {
     use foundation::LayoutHeapScope;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     const PLATFORM_SHAPING_ADVANCE: f32 = 7.12345;
+    const PLATFORM_SPACE_ADVANCE: f32 = 2.34567;
+    static PLATFORM_BATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     struct FixedAdvanceBackend;
 
@@ -1111,6 +1118,27 @@ mod tests {
             PLATFORM_SHAPING_ADVANCE
         }
 
+        fn GlyphAdvancesForShaping(
+            &self,
+            glyphs: &[u16],
+            _size: f32,
+            _synthetic_bold: bool,
+            _synthetic_italic: bool,
+            advances: &mut [f32],
+        ) {
+            PLATFORM_BATCH_CALLS.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(glyphs.len(), advances.len());
+            for (glyph, advance) in glyphs.iter().zip(advances) {
+                // minimal_font maps U+0020 to glyph 1 and the requested
+                // rectangle character to glyph 3.
+                *advance = if *glyph == 1 {
+                    PLATFORM_SPACE_ADVANCE
+                } else {
+                    PLATFORM_SHAPING_ADVANCE
+                };
+            }
+        }
+
         fn WithVariations(&self, _variations: &[FontVariation]) -> Arc<dyn FontBackend> {
             Arc::new(Self)
         }
@@ -1134,8 +1162,9 @@ mod tests {
     }
 
     #[test]
-    fn backend_advance_callback_shapes_with_platform_strike() {
+    fn backend_advance_callback_batches_space_with_platform_strike() {
         let _heap = LayoutHeapScope::new();
+        PLATFORM_BATCH_CALLS.store(0, Ordering::Relaxed);
         let bytes = Build(false, 0, 'A' as u32, false, false);
         let platform = MakeGarbageCollected(FontPlatformData::new(
             Arc::new(OpenTypeFont::new(&bytes, 0, 16.0, &[])),
@@ -1149,8 +1178,8 @@ mod tests {
             vec![],
         ));
         let data = unsafe { &*SimpleFontData::Create(platform) };
-        let text = String::from("AA");
-        let units = [u16::from(b'A'), u16::from(b'A')];
+        let text = String::from("A A");
+        let units = [u16::from(b'A'), u16::from(b' '), u16::from(b'A')];
         let run = HarfBuzzShaper::new(text).ShapeBuffer(
             data,
             &units,
@@ -1162,9 +1191,45 @@ mod tests {
             &[],
             VariationSelectorMode::Normal,
         );
-        assert_eq!(run.glyphs.len(), 2);
-        let expected = (PLATFORM_SHAPING_ADVANCE * 65536.0) as i32;
-        assert!(run.glyphs.iter().all(|glyph| glyph.x_advance == expected));
+        assert_eq!(run.glyphs.len(), 3);
+        assert!(PLATFORM_BATCH_CALLS.load(Ordering::Relaxed) > 0);
+        let letter = (PLATFORM_SHAPING_ADVANCE * 65536.0) as i32;
+        let space = (PLATFORM_SPACE_ADVANCE * 65536.0) as i32;
+        assert_eq!(
+            run.glyphs
+                .iter()
+                .map(|glyph| glyph.x_advance)
+                .collect::<Vec<_>>(),
+            [letter, space, letter]
+        );
+        assert_eq!(
+            run.glyphs
+                .iter()
+                .scan(0i64, |position, glyph| {
+                    let before = *position;
+                    *position += i64::from(glyph.x_advance);
+                    Some(before)
+                })
+                .collect::<Vec<_>>(),
+            [0, i64::from(letter), i64::from(letter + space)]
+        );
+
+        let font = Font::new_with_ordered_fonts(
+            FontDescription::default(),
+            &[data as *const SimpleFontData],
+        );
+        let result = unsafe { &*shape(&font, "A A", TextDirection::kLtr) };
+        assert_eq!(result.runs_.len(), 1);
+        let committed = unsafe { &*result.runs_[0].Get() };
+        assert_eq!(
+            committed
+                .glyph_data_
+                .data_
+                .iter()
+                .map(|glyph| glyph.advance.RawValue())
+                .collect::<Vec<_>>(),
+            [letter, space, letter]
+        );
     }
 
     #[test]

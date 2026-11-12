@@ -22,6 +22,11 @@ struct ResourceRequestKey {
     method: String,
     body: Vec<u8>,
     headers: Vec<(String, String)>,
+    fetch_identity: Option<(
+        url_loader::FetchMode,
+        url_loader::FetchCredentialsMode,
+        url_loader::FetchOrigin,
+    )>,
 }
 
 impl From<&URLRequest> for ResourceRequestKey {
@@ -34,6 +39,13 @@ impl From<&URLRequest> for ResourceRequestKey {
             method: request.method.clone(),
             body: request.body.clone(),
             headers: request.headers.clone(),
+            fetch_identity: request.fetch.as_ref().map(|fetch| {
+                (
+                    fetch.mode,
+                    fetch.credentials,
+                    fetch.requestor_origin.clone(),
+                )
+            }),
         }
     }
 }
@@ -43,13 +55,32 @@ impl From<&URLRequest> for ResourceRequestKey {
 /// belong to this engine instance. The engine intentionally has no DOM pointer:
 /// discovery and application belong to DocumentEngine and Page.
 pub struct ResourceEngine {
-    loader: Rc<RefCell<dyn URLLoader>>,
+    pub(crate) loader: Rc<RefCell<dyn URLLoader>>,
     decode: Rc<DecodeEngine>,
     document_url: RefCell<String>,
-    document_referrer_policy: Cell<ReferrerPolicy>,
-    active: Cell<bool>,
-    wake_callback: RefCell<Option<URLWakeCallback>>,
-    next_image_id: Cell<ImageId>,
+    document_referrer_policy: Rc<Cell<ReferrerPolicy>>,
+    pub(crate) active: Cell<bool>,
+    pub(crate) context_detached: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) fetcher_loaders: Rc<crate::fetcher_lifecycle::FetcherLoaderSets>,
+    pub(crate) fetcher_task_runner: RefCell<Option<Rc<dyn crate::FetcherTaskRunner>>>,
+    pub(crate) is_in_request_resource: Rc<Cell<bool>>,
+    pub(crate) xmlhttp_requests: Rc<crate::XMLHttpRequestRegistry>,
+    pub(crate) wake_callback: RefCell<Option<URLWakeCallback>>,
+    next_image_id: Rc<Cell<ImageId>>,
+    platform_images: Rc<
+        RefCell<
+            HashMap<
+                image_resource::platform_resources::PlatformImageVariant,
+                image_resource::platform_resources::PlatformDecodedImageHandle,
+            >,
+        >,
+    >,
+    pub(crate) raw_loads: RefCell<HashMap<u64, crate::raw_resource::RawLoad>>,
+    pub(crate) text_track_resources:
+        RefCell<HashMap<u64, Rc<crate::text_track_resource::TextTrackResource>>>,
+    pub(crate) raw_inflight_bytes: Cell<u32>,
+    pub(crate) raw_metrics: Arc<url_loader::FetchKeepaliveMetrics>,
+    pub(crate) raw_observer: RefCell<Option<Rc<dyn crate::raw_resource::RawResourceObserver>>>,
     loads: RefCell<
         HashMap<ResourceRequestKey, Rc<RefCell<crate::resource_loader::SharedResourceLoad>>>,
     >,
@@ -60,12 +91,16 @@ pub struct ResourceMemoryDiagnostics {
     pub cached_loads: usize,
     pub loading: usize,
     pub encoded_response_capacity: usize,
+    pub raw_loading: usize,
+    pub keepalive_inflight_bytes: u32,
 }
 impl ResourceEngine {
     pub fn MemoryDiagnostics(&self) -> ResourceMemoryDiagnostics {
         let loads = self.loads.borrow();
         let mut usage = ResourceMemoryDiagnostics {
             cached_loads: loads.len(),
+            raw_loading: self.raw_loads.borrow().len(),
+            keepalive_inflight_bytes: self.raw_inflight_bytes.get(),
             ..Default::default()
         };
         for load in loads.values() {
@@ -77,14 +112,26 @@ impl ResourceEngine {
         usage
     }
     pub fn new(loader: Rc<RefCell<dyn URLLoader>>, document_url: String) -> Self {
+        let in_request_resource = Rc::new(Cell::new(false));
         Self {
             loader,
             decode: Rc::new(DecodeEngine::new()),
             document_url: RefCell::new(document_url),
-            document_referrer_policy: Cell::new(ReferrerPolicy::default()),
+            document_referrer_policy: Rc::new(Cell::new(ReferrerPolicy::default())),
             active: Cell::new(true),
+            context_detached: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fetcher_loaders: Rc::new(Default::default()),
+            fetcher_task_runner: RefCell::new(None),
+            is_in_request_resource: in_request_resource.clone(),
+            xmlhttp_requests: Rc::new(crate::XMLHttpRequestRegistry::new(in_request_resource)),
             wake_callback: RefCell::new(None),
-            next_image_id: Cell::new(1),
+            next_image_id: Rc::new(Cell::new(1)),
+            platform_images: Rc::new(RefCell::new(HashMap::new())),
+            raw_loads: RefCell::new(HashMap::new()),
+            text_track_resources: RefCell::new(HashMap::new()),
+            raw_inflight_bytes: Cell::new(0),
+            raw_metrics: Arc::new(Default::default()),
+            raw_observer: RefCell::new(None),
             loads: RefCell::new(HashMap::new()),
         }
     }
@@ -94,20 +141,65 @@ impl ResourceEngine {
         decode: Rc<DecodeEngine>,
         document_url: String,
     ) -> Self {
+        let in_request_resource = Rc::new(Cell::new(false));
         Self {
             loader,
             decode,
             document_url: RefCell::new(document_url),
-            document_referrer_policy: Cell::new(ReferrerPolicy::default()),
+            document_referrer_policy: Rc::new(Cell::new(ReferrerPolicy::default())),
             active: Cell::new(true),
+            context_detached: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fetcher_loaders: Rc::new(Default::default()),
+            fetcher_task_runner: RefCell::new(None),
+            is_in_request_resource: in_request_resource.clone(),
+            xmlhttp_requests: Rc::new(crate::XMLHttpRequestRegistry::new(in_request_resource)),
             wake_callback: RefCell::new(None),
-            next_image_id: Cell::new(1),
+            next_image_id: Rc::new(Cell::new(1)),
+            platform_images: Rc::new(RefCell::new(HashMap::new())),
+            raw_loads: RefCell::new(HashMap::new()),
+            text_track_resources: RefCell::new(HashMap::new()),
+            raw_inflight_bytes: Cell::new(0),
+            raw_metrics: Arc::new(Default::default()),
+            raw_observer: RefCell::new(None),
             loads: RefCell::new(HashMap::new()),
         }
     }
 
+    pub fn XMLHttpRequestRegistry(&self) -> Rc<crate::XMLHttpRequestRegistry> {
+        self.xmlhttp_requests.clone()
+    }
     pub fn DocumentURL(&self) -> String {
         self.document_url.borrow().clone()
+    }
+
+    /// A DocumentLoader replacement keeps the same transport/decoder services
+    /// while creating a new Document fetch context. In-flight handles, policy,
+    /// URL/referrer and cancellation remain attached to their original engine.
+    /// Image ids and immutable platform images belong to the surviving Page's
+    /// resource namespace, including frames retained by its compositor.
+    pub fn ForDocument(&self, document_url: String) -> Rc<Self> {
+        let in_request_resource = Rc::new(Cell::new(false));
+        Rc::new(Self {
+            loader: self.loader.clone(),
+            decode: self.decode.clone(),
+            document_url: RefCell::new(document_url),
+            document_referrer_policy: Rc::new(Cell::new(ReferrerPolicy::default())),
+            active: Cell::new(true),
+            context_detached: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fetcher_loaders: Rc::new(Default::default()),
+            fetcher_task_runner: RefCell::new(self.fetcher_task_runner.borrow().clone()),
+            is_in_request_resource: in_request_resource.clone(),
+            xmlhttp_requests: Rc::new(crate::XMLHttpRequestRegistry::new(in_request_resource)),
+            wake_callback: RefCell::new(self.wake_callback.borrow().clone()),
+            next_image_id: self.next_image_id.clone(),
+            platform_images: self.platform_images.clone(),
+            raw_loads: RefCell::new(HashMap::new()),
+            text_track_resources: RefCell::new(HashMap::new()),
+            raw_inflight_bytes: Cell::new(0),
+            raw_metrics: self.raw_metrics.clone(),
+            raw_observer: RefCell::new(self.raw_observer.borrow().clone()),
+            loads: RefCell::new(HashMap::new()),
+        })
     }
 
     /// The resource owner supplies the document origin; URL loading owns the
@@ -124,11 +216,18 @@ impl ResourceEngine {
         self.document_referrer_policy.set(policy);
     }
 
+    pub fn ReferrerPolicyReadHandle(
+        &self,
+    ) -> foundation::referrer_policy::ReferrerPolicyReadHandle {
+        foundation::referrer_policy::ReferrerPolicyReadHandle::FromOwner(
+            &self.document_referrer_policy,
+        )
+    }
     pub fn ReferrerPolicy(&self) -> ReferrerPolicy {
         self.document_referrer_policy.get()
     }
 
-    fn NormalizeRequest(&self, mut request: URLRequest) -> URLRequest {
+    pub(crate) fn NormalizeRequest(&self, mut request: URLRequest) -> URLRequest {
         let policy = request
             .referrer_policy
             .unwrap_or_else(|| self.ReferrerPolicy());
@@ -171,6 +270,36 @@ impl ResourceEngine {
     }
 
     pub fn Start(&self, request: URLRequest) -> ResourceLoader {
+        self.StartWithLoadEventPolicy(request, crate::ResourceLoadEventPolicy::Regular)
+    }
+    pub fn StartWithLoadEventPolicy(
+        &self,
+        request: URLRequest,
+        policy: crate::ResourceLoadEventPolicy,
+    ) -> ResourceLoader {
+        let _request = crate::fetcher_lifecycle::RequestResourceScope::new(
+            self.is_in_request_resource.clone(),
+        );
+
+        if request.fetch.as_ref().is_some_and(|fetch| {
+            fetch.keepalive
+                || !matches!(
+                    (request.destination, fetch.context),
+                    (
+                        url_loader::RequestDestination::kImage,
+                        foundation::content_security_policy::CSPRequestContext::Image
+                            | foundation::content_security_policy::CSPRequestContext::ImageSet
+                    ) | (
+                        url_loader::RequestDestination::kFont,
+                        foundation::content_security_policy::CSPRequestContext::Font
+                    )
+                )
+        }) {
+            return ResourceLoader::Failed(
+                "typed RawResource FetchParameters require FetchRaw admission",
+            );
+        }
+
         if !self.active.get() {
             return ResourceLoader::Failed("resource engine is cancelled");
         }
@@ -180,11 +309,17 @@ impl ResourceEngine {
         // boundary: callers still receive independent handles, while one
         // transport operation and one immutable terminal response are shared.
         // Non-idempotent requests retain one operation per call.
-        if request.method.eq_ignore_ascii_case("GET") && request.body.is_empty() {
+        if request.method.eq_ignore_ascii_case("GET")
+            && request.body.is_empty()
+            && request.encoded_body.is_none()
+        {
             let key = ResourceRequestKey::from(&request);
             if let Some(shared) = self.loads.borrow().get(&key).cloned() {
                 let mut resource = ResourceLoader::FromShared(shared);
                 resource.SetScheduling(&request);
+                if policy.BlocksLoad(&request) {
+                    resource.PromoteToBlocking();
+                }
                 browser_tracing::instant_with_text(
                     "resource",
                     "ResourceRequestReused",
@@ -199,14 +334,38 @@ impl ResourceEngine {
                 }
                 return resource;
             }
-            let mut resource = ResourceLoader::Start(&mut *self.loader.borrow_mut(), &request);
+            let mut resource = ResourceLoader::Prepare(&request);
+            if policy == crate::ResourceLoadEventPolicy::LinkPreload {
+                resource.MarkLinkPreload();
+            }
+            self.fetcher_loaders.Add(
+                &resource,
+                if policy.BlocksLoad(&request) {
+                    crate::fetcher_lifecycle::LoaderSet::Blocking
+                } else {
+                    crate::fetcher_lifecycle::LoaderSet::NonBlocking
+                },
+            );
+            resource.StartPrepared(&mut *self.loader.borrow_mut(), &request);
             if let Some(callback) = self.wake_callback.borrow().clone() {
                 resource.SetWakeCallback(callback);
             }
             self.loads.borrow_mut().insert(key, resource.Shared());
             return resource;
         }
-        let mut resource = ResourceLoader::Start(&mut *self.loader.borrow_mut(), &request);
+        let mut resource = ResourceLoader::Prepare(&request);
+        if policy == crate::ResourceLoadEventPolicy::LinkPreload {
+            resource.MarkLinkPreload();
+        }
+        self.fetcher_loaders.Add(
+            &resource,
+            if policy.BlocksLoad(&request) {
+                crate::fetcher_lifecycle::LoaderSet::Blocking
+            } else {
+                crate::fetcher_lifecycle::LoaderSet::NonBlocking
+            },
+        );
+        resource.StartPrepared(&mut *self.loader.borrow_mut(), &request);
         if let Some(callback) = self.wake_callback.borrow().clone() {
             resource.SetWakeCallback(callback);
         }
@@ -216,6 +375,34 @@ impl ResourceEngine {
     /// MemoryCache::ResourceForURL(...)->IsLoaded() equivalent for a request
     /// owned by this document resource engine. This is intentionally a URL
     /// request query rather than a DOM/source-string cache.
+    /// ResourceFetcher removes an errored image from MemoryCache, retaining
+    /// existing clients' resource identity while allowing a fresh src retry.
+    pub fn RemoveImageFromMemoryCache(&self, resource: &ResourceLoader) {
+        if let Some(request) = resource.Request() {
+            let key = ResourceRequestKey::from(request.as_ref());
+            let mut loads = self.loads.borrow_mut();
+            if loads
+                .get(&key)
+                .is_some_and(|cached| Rc::ptr_eq(cached, &resource.Shared()))
+            {
+                loads.remove(&key);
+            }
+        }
+    }
+    pub fn ReloadImage(&self, request: URLRequest) -> ResourceLoader {
+        self.ReloadImageWithLoadEventPolicy(request, crate::ResourceLoadEventPolicy::Regular)
+    }
+    pub fn ReloadImageWithLoadEventPolicy(
+        &self,
+        request: URLRequest,
+        policy: crate::ResourceLoadEventPolicy,
+    ) -> ResourceLoader {
+        let normalized = self.NormalizeRequest(request.clone());
+        self.loads
+            .borrow_mut()
+            .remove(&ResourceRequestKey::from(&normalized));
+        self.StartWithLoadEventPolicy(request, policy)
+    }
     pub fn HasLoaded(&self, request: URLRequest) -> bool {
         let request = self.NormalizeRequest(request);
         let key = ResourceRequestKey::from(&request);
@@ -226,6 +413,13 @@ impl ResourceEngine {
     }
 
     pub fn StartStream(&self, request: URLRequest) -> io::Result<Box<dyn URLStreamOperation>> {
+        if request.fetch.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "typed RawResource FetchParameters require FetchRaw admission",
+            ));
+        }
+
         if !self.active.get() {
             return Err(io::Error::other("resource engine is cancelled"));
         }
@@ -244,6 +438,26 @@ impl ResourceEngine {
         for shared in loads {
             ResourceLoader::FromShared(shared).SetWakeCallback(callback.clone());
         }
+        for load in self.raw_loads.borrow_mut().values_mut() {
+            load.loader.SetWakeCallback(callback.clone());
+        }
+        for resource in self.text_track_resources.borrow().values() {
+            resource.SetWakeCallback(callback.clone());
+        }
+    }
+
+    /// Queue another owner turn for already-admitted resource work.
+    ///
+    /// A transport normally wakes the owner when it becomes ready.  A single
+    /// owner turn can deliberately consume only one such completion, though,
+    /// while other completions from the same parallel fetch group are already
+    /// queued.  Re-posting through the embedding callback preserves those
+    /// task identities instead of relying on an unrelated frame or timer.
+    pub fn RequestWake(&self) {
+        let callback = self.wake_callback.borrow().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
     }
 
     pub fn BeginImageDecode(
@@ -260,6 +474,19 @@ impl ResourceEngine {
             .BeginImageDecode(self.AllocateImageId()?, bytes, mime_type, container))
     }
 
+    pub fn BeginVideoFrameDecode(
+        &self,
+        bytes: Arc<[u8]>,
+        mime_type: &str,
+    ) -> io::Result<decode::VideoDecodeJob> {
+        if !self.active.get() {
+            return Err(io::Error::other("resource engine is cancelled"));
+        }
+        Ok(self
+            .decode
+            .BeginVideoFrameDecode(self.AllocateImageId()?, bytes, mime_type))
+    }
+
     pub fn DecodeImage(
         &self,
         bytes: Arc<[u8]>,
@@ -274,8 +501,74 @@ impl ResourceEngine {
             .DecodeImage(resource_id, bytes, mime_type, container)
     }
 
+    /// Image::LoadPlatformResource, using the same concrete bitmap decoder and
+    /// immutable PaintImage representation as network image resources.
+    pub fn LoadPlatformImage(
+        &self,
+        variant: image_resource::platform_resources::PlatformImageVariant,
+    ) -> io::Result<image_resource::platform_resources::PlatformDecodedImageHandle> {
+        if let Some(image) = self.platform_images.borrow().get(&variant) {
+            return Ok(image.clone());
+        }
+        let bytes: Arc<[u8]> = Arc::from(variant.EncodedBytes());
+        let decoded = self.DecodeImage(
+            bytes.clone(),
+            "image/png",
+            &ContainerKey::new(0, 0, 1.0, 1.0),
+        )?;
+        let DecodedImageResource::Bitmap {
+            resource_id,
+            image,
+            encoded_data,
+        } = decoded
+        else {
+            return Err(io::Error::other(
+                "Blink platform PNG produced a document image",
+            ));
+        };
+        if !image.animation_frames.is_empty() {
+            return Err(io::Error::other("Blink broken-image PNG must be static"));
+        }
+        if let image_resource::PaintImageAnimationMetadata::Unavailable(error) = &image.animation {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, error.clone()));
+        }
+
+        let image = image_resource::PaintImage {
+            id: resource_id,
+            paint_image_id: image_resource::PaintImageId::allocate(),
+            revision: 1,
+            compositor_metadata: Ok(image_resource::PaintImageMetadata {
+                animation: image.animation,
+                completion_state: image_resource::PaintImageCompletionState::Done,
+                is_multipart: false,
+            }),
+            width: image.width,
+            height: image.height,
+            orientation: image.orientation,
+            hot_spot: image.hot_spot,
+            alpha_type: image.alpha_type,
+            is_cors_same_origin: true,
+            is_lazy_generated: true,
+            encoded_data: Some(encoded_data),
+            content: image_resource::PaintImageContent::Bitmap(Arc::new(image.rgba8)),
+            ..Default::default()
+        };
+        let handle =
+            Arc::new(image_resource::platform_resources::PlatformDecodedImage { variant, image });
+        self.platform_images
+            .borrow_mut()
+            .insert(variant, handle.clone());
+        Ok(handle)
+    }
+
     pub fn HasAnimatedImages(&self) -> bool {
         self.active.get() && self.decode.HasPendingBeginFrame()
+    }
+    pub fn ImageBitmapProvider(
+        &self,
+        resource_id: ImageId,
+    ) -> Option<Rc<dyn image_resource::ImageBitmapProvider>> {
+        self.decode.ImageBitmapProvider(resource_id)
     }
 
     pub fn AdvanceDocumentImages(
@@ -302,17 +595,76 @@ impl ResourceEngine {
     }
 
     pub fn Cancel(&self) {
+        self.context_detached
+            .store(true, std::sync::atomic::Ordering::Release);
         self.active.set(false);
         self.decode.SetWakeCallback(None);
         for shared in self.loads.borrow().values() {
             ResourceLoader::CancelShared(shared);
         }
         self.loads.borrow_mut().clear();
+        self.DetachRawResources();
+        // This abrupt context cancellation is distinct from StopFetching's
+        // synchronous client-delivery path. Include uncached POST/other
+        // loaders in the original native membership sets as well as cache.
+        for set in [
+            crate::fetcher_lifecycle::LoaderSet::NonBlocking,
+            crate::fetcher_lifecycle::LoaderSet::Blocking,
+        ] {
+            for shared in self.fetcher_loaders.Snapshot(set) {
+                ResourceLoader::CancelShared(&shared);
+            }
+        }
+        self.CancelTextTrackResources();
         self.decode.ClearDocumentImages();
     }
 
+    fn DetachRawResources(&self) {
+        self.raw_observer.borrow_mut().take();
+        for load in self.raw_loads.borrow_mut().values_mut() {
+            if load.fetch.keepalive {
+                let was_loading = load.loader.Status() == crate::ResourceLoadStatus::kLoading;
+                // The native network owner detaches even when a caller still
+                // holds a Resource handle. Timeout begins at disconnection.
+                if let Err(error) = load.loader.DetachForKeepalive() {
+                    browser_tracing::instant_with_text(
+                        "resource",
+                        "RawResourceDetachFailed",
+                        &error.to_string(),
+                        &[],
+                    );
+                    ResourceLoader::CancelShared(&load.loader.Shared());
+                }
+                if was_loading
+                    && !load
+                        .fetch
+                        .failed
+                        .swap(true, std::sync::atomic::Ordering::AcqRel)
+                {
+                    load.fetch.metrics.Record(
+                        load.fetch.context,
+                        url_loader::FetchKeepaliveRequestState::Failed,
+                        false,
+                    );
+                }
+                load.fetch
+                    .context_detached
+                    .store(true, std::sync::atomic::Ordering::Release);
+            } else {
+                ResourceLoader::CancelShared(&load.loader.Shared());
+            }
+        }
+        self.raw_loads.borrow_mut().clear();
+        self.raw_inflight_bytes.set(0);
+    }
     pub fn IsActive(&self) -> bool {
         self.active.get()
+    }
+}
+
+impl Drop for ResourceEngine {
+    fn drop(&mut self) {
+        self.DetachRawResources();
     }
 }
 
@@ -362,11 +714,13 @@ mod tests {
     impl ImageDecoder for BitmapDecoder {
         fn Decode(&mut self, _: &ImageDecodeInput<'_>) -> io::Result<DecodedImage> {
             Ok(DecodedImage {
+                filename_extension: None,
                 alpha_type: Default::default(),
                 animation: Default::default(),
                 width: 1,
                 height: 1,
                 orientation: Default::default(),
+                hot_spot: None,
                 animation_frames: Vec::new(),
                 rgba8: vec![1, 2, 3, 4],
             })

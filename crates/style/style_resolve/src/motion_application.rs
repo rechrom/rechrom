@@ -433,6 +433,10 @@ mod tests {
                 ShapeType::kBasicShapePolygonType,
             ),
             ("path('M0 0 L10 10')", ShapeType::kStylePathType),
+            (
+                "shape(from 0 0, line to 10px 10px)",
+                ShapeType::kStyleShapeType,
+            ),
         ] {
             apply(&mut shapes, None, &format!("offset-path:{value}"));
             let operation = operation(&shapes);
@@ -442,7 +446,7 @@ mod tests {
             .GetBasicShape();
             assert_eq!(shape.GetType(), expected);
         }
-        for value in ["shape(from 0 0, line to 10px 10px)", "url(#path)"] {
+        for value in ["url(#path)"] {
             assert_eq!(
                 ParseProperty(
                     CSSPropertyID::kOffsetPath,

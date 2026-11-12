@@ -20,11 +20,18 @@ pub enum DecodedImageResource {
     Bitmap {
         resource_id: ImageId,
         image: DecodedImage,
+        encoded_data: Arc<[u8]>,
     },
     Document {
         resource_id: ImageId,
         frame: Arc<DocumentImageFrame>,
     },
+}
+
+pub struct DecodedVideoFrame {
+    pub resource_id: ImageId,
+    pub image: DecodedImage,
+    pub resource: image_resource::VideoFrameResource,
 }
 
 pub enum DecodeMutation {
@@ -60,7 +67,7 @@ pub enum DecodeEffect {
 }
 
 struct ActiveDocumentImage {
-    image: Box<dyn DocumentImage>,
+    image: Rc<RefCell<Box<dyn DocumentImage>>>,
     first_frame_time: Option<Instant>,
     begin_frame_requested: bool,
 }
@@ -71,17 +78,42 @@ pub enum ImageDecodeJob {
     Ready(Option<io::Result<DecodedImageResource>>),
     Bitmap {
         resource_id: ImageId,
+        encoded_data: Option<Arc<[u8]>>,
         job: DecodeJob<DecodedImage>,
     },
+}
+
+pub struct VideoDecodeJob {
+    resource_id: ImageId,
+    job: DecodeJob<image_decoder::video_frame_decoder::DecodedVideoFrame>,
+}
+impl VideoDecodeJob {
+    pub fn poll(&mut self) -> Option<io::Result<DecodedVideoFrame>> {
+        self.job.poll().map(|result| {
+            result.map(|frame| DecodedVideoFrame {
+                resource_id: self.resource_id,
+                image: frame.software_image,
+                resource: frame.resource,
+            })
+        })
+    }
 }
 impl ImageDecodeJob {
     pub fn poll(&mut self) -> Option<io::Result<DecodedImageResource>> {
         match self {
             Self::Ready(result) => result.take(),
-            Self::Bitmap { resource_id, job } => job.poll().map(|result| {
+            Self::Bitmap {
+                resource_id,
+                encoded_data,
+                job,
+            } => job.poll().map(|result| {
+                let encoded_data = encoded_data
+                    .take()
+                    .expect("completed bitmap decode retains its encoded producer data");
                 result.map(|image| DecodedImageResource::Bitmap {
                     resource_id: *resource_id,
                     image,
+                    encoded_data,
                 })
             }),
         }
@@ -95,6 +127,7 @@ pub struct DecodeEngine {
     document_image_decoder: Option<Rc<RefCell<dyn DocumentImageDecoder>>>,
     web_font_decoder: web_font::WebFontDecoder,
     document_images: RefCell<BTreeMap<ImageId, ActiveDocumentImage>>,
+    bitmap_rasterizer: Option<Rc<dyn image_resource::ImageBitmapRasterizer>>,
 }
 
 impl Default for DecodeEngine {
@@ -114,6 +147,7 @@ impl DecodeEngine {
             document_image_decoder: None,
             web_font_decoder: web_font::WebFontDecoder::new(),
             document_images: RefCell::new(BTreeMap::new()),
+            bitmap_rasterizer: None,
         }
     }
 
@@ -128,6 +162,7 @@ impl DecodeEngine {
             document_image_decoder: Some(document_image_decoder),
             web_font_decoder: web_font::WebFontDecoder::new(),
             document_images: RefCell::new(BTreeMap::new()),
+            bitmap_rasterizer: None,
         }
     }
 
@@ -142,6 +177,25 @@ impl DecodeEngine {
     }
     pub fn SetWakeCallback(&self, wake: Option<Wake>) {
         *self.wake.lock().unwrap_or_else(|e| e.into_inner()) = wake;
+    }
+    pub fn SetImageBitmapRasterizer(
+        &mut self,
+        rasterizer: Rc<dyn image_resource::ImageBitmapRasterizer>,
+    ) {
+        self.bitmap_rasterizer = Some(rasterizer);
+    }
+    pub fn ImageBitmapProvider(
+        &self,
+        resource_id: ImageId,
+    ) -> Option<Rc<dyn image_resource::ImageBitmapProvider>> {
+        Some(Rc::new(DecodedImageBitmapProvider {
+            rasterizer: self.bitmap_rasterizer.clone()?,
+            document: self
+                .document_images
+                .borrow()
+                .get(&resource_id)
+                .map(|image| image.image.clone()),
+        }))
     }
     pub fn BeginFontDecode(&self, bytes: Vec<u8>) -> DecodeJob<Vec<u8>> {
         let inline = executor::InlineExecutor;
@@ -170,18 +224,23 @@ impl DecodeEngine {
             if let Some((executor, factory)) = &self.execution {
                 let factory = factory.clone();
                 let mime_type = mime_type.to_owned();
+                let decode_bytes = bytes.clone();
                 let job = DecodeJob::start(
                     executor.as_ref(),
                     self.wake.clone(),
                     "BitmapDecode",
                     move || {
                         factory().Decode(&ImageDecodeInput {
-                            bytes: &bytes,
+                            bytes: &decode_bytes,
                             mime_type: &mime_type,
                         })
                     },
                 );
-                return ImageDecodeJob::Bitmap { resource_id, job };
+                return ImageDecodeJob::Bitmap {
+                    resource_id,
+                    encoded_data: Some(bytes),
+                    job,
+                };
             }
         }
         ImageDecodeJob::Ready(Some(self.DecodeImage(
@@ -190,6 +249,25 @@ impl DecodeEngine {
             mime_type,
             container,
         )))
+    }
+
+    // cpp: media/renderers/video_renderer_impl.cc:521-571
+    pub fn BeginVideoFrameDecode(
+        &self,
+        resource_id: ImageId,
+        bytes: Arc<[u8]>,
+        mime_type: &str,
+    ) -> VideoDecodeJob {
+        let inline = executor::InlineExecutor;
+        let executor: &dyn executor::Executor = self
+            .execution
+            .as_ref()
+            .map_or(&inline, |(executor, _)| executor.as_ref());
+        let mime_type = mime_type.to_owned();
+        let job = DecodeJob::start(executor, self.wake.clone(), "VideoFrameDecode", move || {
+            image_decoder::video_frame_decoder::DecodeVideoFirstFrame(&bytes, &mime_type)
+        });
+        VideoDecodeJob { resource_id, job }
     }
 
     /// Returns the platform web-font decoder used by resource loading.
@@ -263,7 +341,7 @@ impl DecodeEngine {
             self.document_images.borrow_mut().insert(
                 resource_id,
                 ActiveDocumentImage {
-                    image: created.image,
+                    image: Rc::new(RefCell::new(created.image)),
                     first_frame_time: None,
                     begin_frame_requested,
                 },
@@ -278,7 +356,11 @@ impl DecodeEngine {
             bytes: &bytes,
             mime_type,
         })?;
-        Ok(DecodedImageResource::Bitmap { resource_id, image })
+        Ok(DecodedImageResource::Bitmap {
+            resource_id,
+            image,
+            encoded_data: bytes,
+        })
     }
 
     pub fn HasPendingBeginFrame(&self) -> bool {
@@ -298,7 +380,7 @@ impl DecodeEngine {
             .get_mut(&resource_id)
             .ok_or_else(|| io::Error::other("document image resource is not active"))?;
         image.begin_frame_requested = false;
-        let effects = image.image.apply_mutation(mutation)?;
+        let effects = image.image.borrow_mut().apply_mutation(mutation)?;
         Self::TranslateDocumentImageEffects(resource_id, image, effects)
     }
 
@@ -315,12 +397,12 @@ impl DecodeEngine {
             image.begin_frame_requested = false;
             let origin = *image.first_frame_time.get_or_insert(frame_time);
             let elapsed = frame_time.saturating_duration_since(origin);
-            let effects = image
-                .image
-                .apply_mutation(DocumentImageMutation::AdvanceTimeline {
+            let effects = image.image.borrow_mut().apply_mutation(
+                DocumentImageMutation::AdvanceTimeline {
                     frame_time: elapsed,
                     begin_frame_sequence,
-                })?;
+                },
+            )?;
             output.extend(Self::TranslateDocumentImageEffects(
                 resource_id,
                 image,
@@ -372,6 +454,50 @@ impl DecodeEngine {
 
     pub fn ClearDocumentImages(&self) {
         self.document_images.borrow_mut().clear();
+    }
+}
+
+struct DecodedImageBitmapProvider {
+    rasterizer: Rc<dyn image_resource::ImageBitmapRasterizer>,
+    document: Option<Rc<RefCell<Box<dyn DocumentImage>>>>,
+}
+impl image_resource::ImageBitmapProvider for DecodedImageBitmapProvider {
+    fn ConcreteImageSize(
+        &self,
+        image: &image_resource::PaintImage,
+        mut multiplier: f32,
+        default_size: (f32, f32),
+    ) -> io::Result<Option<(f32, f32)>> {
+        if !image.IsDocumentImage() {
+            return Ok(None);
+        }
+        // StyleFetchedImage::ApplyImageResolution: SVG ignores image-set's
+        // override resolution, but honors the real Content-DPR response.
+        if let Some(dpr) = image.content_dpr {
+            multiplier /= dpr as f32;
+        }
+        self.document
+            .as_ref()
+            .ok_or_else(|| io::Error::other("SVG sizing has no live image producer"))?
+            .borrow()
+            .concrete_image_size(multiplier, default_size)
+    }
+    fn BitmapForCurrentFrame(
+        &self,
+        image: &image_resource::PaintImage,
+        container: Option<image_resource::DocumentImageBitmapRequest>,
+    ) -> io::Result<image_resource::ImmutableImageBitmap> {
+        if !image.IsDocumentImage() {
+            return self.rasterizer.Bitmap(image);
+        }
+        let request = container
+            .ok_or_else(|| io::Error::other("SVG bitmap requires its container geometry"))?;
+        let owner = self
+            .document
+            .as_ref()
+            .ok_or_else(|| io::Error::other("SVG bitmap has no live image producer"))?;
+        let frame = owner.borrow_mut().frame_for_container(request)?;
+        self.rasterizer.Document(&frame)
     }
 }
 

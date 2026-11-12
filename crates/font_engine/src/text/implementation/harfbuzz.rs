@@ -99,6 +99,23 @@ pub const NAME_ID_POSTSCRIPT_NAME: u32 = 6;
 pub const NAME_ID_TYPOGRAPHIC_FAMILY: u32 = 16;
 
 unsafe extern "C" {
+    pub fn hb_set_create() -> *mut std::ffi::c_void;
+    pub fn hb_set_destroy(set: *mut std::ffi::c_void);
+    pub fn hb_set_clear(set: *mut std::ffi::c_void);
+    pub fn hb_set_has(set: *const std::ffi::c_void, codepoint: u32) -> c_int;
+    pub fn hb_ot_layout_has_positioning(face: *mut HbFace) -> c_int;
+    pub fn hb_ot_layout_has_substitution(face: *mut HbFace) -> c_int;
+    pub fn hb_ot_layout_table_get_lookup_count(face: *mut HbFace, tag: u32) -> c_uint;
+    pub fn hb_ot_layout_lookup_collect_glyphs(
+        face: *mut HbFace,
+        tag: u32,
+        index: c_uint,
+        before: *mut std::ffi::c_void,
+        input: *mut std::ffi::c_void,
+        after: *mut std::ffi::c_void,
+        output: *mut std::ffi::c_void,
+    );
+
     pub fn hb_unicode_funcs_get_default() -> *mut HbUnicodeFuncs;
     pub fn hb_unicode_general_category(funcs: *mut HbUnicodeFuncs, codepoint: u32) -> c_int;
     pub fn hb_blob_create_or_fail(

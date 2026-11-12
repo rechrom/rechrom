@@ -13,8 +13,8 @@ use crate::selector_checker::*;
 use crate::selector_filter::*;
 use crate::selector_query::*;
 use dom::persistent_document::{
-    CompatibilityMode, DOMAttribute, DOMAutofillState, DOMNamespace, DOMNodeType, DOMOwnerHandle,
-    DOMPartNamesMap, DOMShadowRootMode,
+    CompatibilityMode, DOMAttribute, DOMAutofillState, DOMInputType, DOMNamespace, DOMNodeType,
+    DOMOwnerHandle, DOMPartNamesMap, DOMShadowRootMode,
 };
 use dom::user_interaction_state::UserInteractionState;
 use dom::Document;
@@ -239,8 +239,8 @@ pub(crate) struct PersistentSelectorBackend<'d> {
     spatial_navigation_policy: SpatialNavigationPolicy,
     forced: HashMap<u64, Vec<PseudoType>>,
     frame_active: bool,
+    page_active: bool,
     slot_assignment_dirty: HashSet<u64>,
-    vtt_elements: HashSet<u64>,
     has_depth: Cell<u32>,
     query_depth: Cell<u32>,
     nth_depth: Cell<u32>,
@@ -263,8 +263,8 @@ impl<'d> PersistentSelectorBackend<'d> {
         spatial_navigation_policy: SpatialNavigationPolicy,
         forced: HashMap<u64, Vec<PseudoType>>,
         frame_active: bool,
+        page_active: bool,
         slot_assignment_dirty: HashSet<u64>,
-        vtt_elements: HashSet<u64>,
     ) -> Rc<Self> {
         let ancestor = filters.borrow().ancestor.clone();
         Rc::new(Self {
@@ -276,8 +276,8 @@ impl<'d> PersistentSelectorBackend<'d> {
             spatial_navigation_policy,
             forced,
             frame_active,
+            page_active,
             slot_assignment_dirty,
-            vtt_elements,
             has_depth: Cell::new(0),
             query_depth: Cell::new(0),
             nth_depth: Cell::new(0),
@@ -343,31 +343,6 @@ impl<'d> PersistentSelectorBackend<'d> {
             i = p;
         }
         i
-    }
-    // cpp: user_action_element_traversal.h:19-35;
-    //      document.cc:8977-9099. Blink materializes :hover/:active on the
-    // target's inclusive flat-tree ancestor chain. HTMLLabelElement also
-    // mirrors both states to its associated control. The stable top-layer
-    // behavior stops before leaving a modal/popover subtree.
-    fn in_user_action_chain(&self, element: usize, target: Option<u64>) -> bool {
-        let Some(mut current) = target.and_then(|id| self.document.FindNodeById(id)) else {
-            return false;
-        };
-        loop {
-            if current == element
-                || (self.document.Node(current).IsHTMLElement("label")
-                    && self.document.LabelControl(current) == Some(element))
-            {
-                return true;
-            }
-            if self.document.IsInTopLayer(current) {
-                return false;
-            }
-            let Some(parent) = self.document.FlatTreeParentElement(current) else {
-                return false;
-            };
-            current = parent;
-        }
     }
     fn sibling(&self, index: usize, forward: bool, elements: bool) -> Option<Rc<usize>> {
         let siblings = self
@@ -730,9 +705,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     type StyleScopeActivation = PersistentStyleScopeActivation;
     type ElementResolveContext = ();
     type PartNames = PersistentPartNames;
-    type CustomScrollbar = ();
-    type ScrollbarPart = ();
-    type StyleRequest = ();
+    type CustomScrollbar = crate::scrollbar_style::ScrollbarStyleState;
+    type ScrollbarPart = crate::scrollbar_style::ScrollbarStylePart;
+    type StyleRequest = crate::production_rule_context::ProductionPseudoRequest;
     type Attribute = DOMAttribute;
     type ViewTransition = ();
     type Node = usize;
@@ -757,19 +732,19 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: ResolvePseudoElementAncestors")
     }
     fn RequestScrollbar(&self, r: &Self::StyleRequest) -> Option<Rc<Self::CustomScrollbar>> {
-        panic!("Chromium DOM/runtime collaborator pending: RequestScrollbar")
+        r.scrollbar.clone()
     }
     fn RequestPseudoArgument(&self, r: &Self::StyleRequest) -> AtomicString {
-        panic!("Chromium DOM/runtime collaborator pending: RequestPseudoArgument")
+        r.argument.clone().unwrap_or_default()
     }
     fn RequestPseudoIdentList(&self, r: &Self::StyleRequest) -> Vec<AtomicString> {
-        panic!("Chromium DOM/runtime collaborator pending: RequestPseudoIdentList")
+        r.ident_list.clone()
     }
     fn RequestScrollbarPart(&self, r: &Self::StyleRequest) -> Self::ScrollbarPart {
-        panic!("Chromium DOM/runtime collaborator pending: RequestScrollbarPart")
+        r.scrollbar_part
     }
     fn NoScrollbarPart(&self) -> Self::ScrollbarPart {
-        ()
+        crate::scrollbar_style::ScrollbarStylePart::kNoPart
     }
     fn TreeScopeShadowHost(&self, s: &Self::TreeScope) -> Option<Rc<Self::Element>> {
         self.document.ShadowHost(*s).map(|host| self.handle(host))
@@ -844,7 +819,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             && self.attr(*e, "href").is_some()
     }
     fn IsPseudoElement(&self, e: &Self::Element) -> bool {
-        self.document.Node(*e).Type() != DOMNodeType::kElement
+        self.document.PseudoElementFacts(*e).is_some()
     }
     fn IsScrollButtonPseudoElement(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: IsScrollButtonPseudoElement")
@@ -860,7 +835,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: ScrollButtonPseudoIdFromArgument")
     }
     fn ElementPseudoId(&self, e: &Self::Element) -> PseudoId {
-        PseudoId::kPseudoIdNone
+        self.ElementPseudoIdForStyling(e)
     }
     fn TransitionForElement(&self, _: &Self::Element) -> Option<Rc<Self::ViewTransition>> {
         // PersistentDocument does not currently retain a ViewTransition
@@ -1022,7 +997,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             Media => matches!(name, "audio" | "video"),
             Video => node.IsHTMLElement("video"),
             Slot => node.IsHTMLElement("slot"),
-            VTT => self.vtt_elements.contains(&node.Id()),
+            VTT => self.document.IsVTTElement(*e),
             MenuItem => node.IsHTMLElement("menuitem"),
             _ => panic!("DOM class collaborator pending: {:?}", class),
         }
@@ -1044,6 +1019,12 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
     fn FeatureEnabled(&self, e: &Self::Element, feature: SelectorRuntimeFeature) -> bool {
         match feature {
             SelectorRuntimeFeature::CSSLangExtendedRanges => true,
+            SelectorRuntimeFeature::CustomizableCombobox => {
+                self.document.SelectSourceFeatures().customizable_combobox
+            }
+            SelectorRuntimeFeature::FilterableSelect => {
+                self.document.SelectSourceFeatures().filterable_select
+            }
             _ => panic!(
                 "runtime feature not admitted by capability preflight: {:?}",
                 feature
@@ -1108,7 +1089,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .unwrap_or_default()
     }
     fn ElementPseudoIdForStyling(&self, e: &Self::Element) -> PseudoId {
-        PseudoId::kPseudoIdNone
+        self.document
+            .PseudoElementFacts(*e)
+            .map_or(PseudoId::kPseudoIdNone, |facts| facts.pseudo_id)
     }
     fn ElementPseudoArgument(&self, e: &Self::Element) -> AtomicString {
         panic!("Chromium DOM/runtime collaborator pending: ElementPseudoArgument")
@@ -1205,7 +1188,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: NavigationLocationMatches")
     }
     fn OwnerDataListElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: OwnerDataListElement")
+        self.document
+            .OptionOwnerDataList(*e)
+            .map(|owner| self.handle(owner))
     }
     fn OwnerSelectElement(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         self.document
@@ -1213,7 +1198,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .map(|select| self.handle(select))
     }
     fn ActiveOption(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
-        panic!("Chromium DOM/runtime collaborator pending: ActiveOption")
+        self.document
+            .ActiveOption(*e)
+            .map(|option| self.handle(option))
     }
     fn InterestInvoker(&self, e: &Self::Element) -> Option<Rc<Self::Element>> {
         panic!("Chromium DOM/runtime collaborator pending: InterestInvoker")
@@ -1241,7 +1228,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         AtomicString::default()
     }
     fn VttLanguage(&self, e: &Self::Element) -> AtomicString {
-        panic!("Chromium DOM/runtime collaborator pending: VttLanguage")
+        self.document.VTTLanguage(*e)
     }
     fn SlotAssignmentDirty(&self, e: &Self::Element) -> bool {
         self.slot_assignment_dirty
@@ -1260,7 +1247,8 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: OwningMenuElement")
     }
     fn InternalsHasState(&self, e: &Self::Element, state: &AtomicString) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: InternalsHasState")
+        self.document
+            .ElementInternalsHasState(*e, &state.to_string())
     }
     fn GetPseudoElement(&self, e: &Self::Element, pseudo: PseudoId) -> Option<Rc<Self::Element>> {
         let shadow_id = match pseudo {
@@ -1278,7 +1266,9 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
             .and_then(|v| self.element(v))
     }
     fn FocusVisibleOption(&self, e: &Self::Element) -> Option<bool> {
-        Some(self.interaction.focus_visible_node_id == Some(self.document.Node(*e).Id()))
+        self.document
+            .GetFocusOptions()
+            .and_then(|options| options.focus_visible)
     }
     fn TransitionScope(&self, t: &Self::ViewTransition) -> Rc<Self::Element> {
         panic!("Chromium DOM/runtime collaborator pending: TransitionScope")
@@ -1298,25 +1288,25 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: TransitionMatchActiveType")
     }
     fn ScrollbarEnabled(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarEnabled")
+        s.enabled
     }
     fn ScrollbarHoveredPart(&self, s: &Self::CustomScrollbar) -> Self::ScrollbarPart {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarHoveredPart")
+        s.hovered_part
     }
     fn ScrollbarPressedPart(&self, s: &Self::CustomScrollbar) -> Self::ScrollbarPart {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarPressedPart")
+        s.pressed_part
     }
     fn ScrollbarPartBits(&self, p: &Self::ScrollbarPart) -> u32 {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarPartBits")
+        p.Bits()
     }
     fn ScrollbarHorizontal(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarHorizontal")
+        s.horizontal
     }
     fn ScrollbarThemeHasButtons(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarThemeHasButtons")
+        s.native_theme_has_buttons
     }
     fn ScrollbarCornerVisible(&self, s: &Self::CustomScrollbar) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: ScrollbarCornerVisible")
+        s.scroll_corner_visible
     }
     fn InPseudoHasChecking(&self, e: &Self::Element) -> bool {
         self.has_depth.get() > 0
@@ -1653,15 +1643,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.SelectUsesMenuList(*e)
     }
     fn IsMultiSelectFocused(&self, e: &Self::Element) -> bool {
-        let Some(select) = self.document.OptionOwnerSelect(*e) else {
-            return false;
-        };
-        self.document
-            .Node(select)
-            .FindAttribute("multiple")
-            .is_some()
-            && !self.document.SelectUsesMenuList(select)
-            && self.interaction.multi_select_focused_option_id == Some(self.document.Node(*e).Id())
+        self.document.OptionMultiSelectFocused(*e)
     }
     fn IsResourceTarget(&self, e: &Self::Element) -> bool {
         self.ElementIs(e, ElementClass::SVG)
@@ -1690,23 +1672,13 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: MatchesToolSubmitActive")
     }
     fn IsDragged(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsDragged")
+        self.document.IsNodeDragged(*e)
     }
     fn HasFocusWithin(&self, e: &Self::Element) -> bool {
-        let Some(id) = self.interaction.focused_node_id else {
-            return false;
-        };
-        let mut current = self.document.FindNodeById(id);
-        while let Some(v) = current {
-            if v == *e {
-                return true;
-            }
-            current = self.document.Node(v).Parent();
-        }
-        false
+        self.document.HasElementFocusWithin(*e)
     }
     fn IsFiltered(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsFiltered")
+        self.document.OptionIsFiltered(*e)
     }
     fn HasInterest(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: HasInterest")
@@ -1715,10 +1687,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: HasFlattenedAssignedNodes")
     }
     fn IsHovered(&self, e: &Self::Element) -> bool {
-        self.in_user_action_chain(*e, self.interaction.hovered_node_id)
+        self.document.IsElementHovered(*e)
     }
     fn IsActive(&self, e: &Self::Element) -> bool {
-        self.in_user_action_chain(*e, self.interaction.pressed_node_id)
+        self.document.IsElementActive(*e)
     }
     fn MatchesEnabled(&self, e: &Self::Element) -> bool {
         self.document.MatchesEnabledPseudoClass(*e)
@@ -1771,16 +1743,16 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.IsRequiredFormControl(*e)
     }
     fn MatchesUserInvalid(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MatchesUserInvalid")
+        self.document.MatchesUserValidityPseudoClass(*e, false)
     }
     fn MatchesUserValid(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MatchesUserValid")
+        self.document.MatchesUserValidityPseudoClass(*e, true)
     }
     fn MatchesValidity(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MatchesValidity")
+        self.document.MatchesValidityPseudoClasses(*e)
     }
     fn IsValid(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: IsValid")
+        self.document.IsValidElementForStyle(*e)
     }
     fn ShouldAppearChecked(&self, e: &Self::Element) -> bool {
         self.document.ControlChecked(*e)
@@ -1818,7 +1790,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.attr(*e, "open").is_some()
     }
     fn PopupIsVisible(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: PopupIsVisible")
+        self.document.SelectPopupIsVisible(*e)
     }
     fn IsPickerVisible(&self, e: &Self::Element) -> bool {
         panic!("Chromium DOM/runtime collaborator pending: IsPickerVisible")
@@ -1836,19 +1808,19 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: IsPictureInPicture")
     }
     fn MediaPaused(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MediaPaused")
+        self.document.MediaElementState(*e).paused.get()
     }
     fn MediaSeeking(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MediaSeeking")
+        self.document.MediaElementState(*e).seeking.get()
     }
     fn MediaBuffering(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MediaBuffering")
+        self.document.MediaMatchesBufferingPseudo(*e)
     }
     fn MediaStalled(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MediaStalled")
+        self.document.MediaMatchesStalledPseudo(*e)
     }
     fn MediaMuted(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: MediaMuted")
+        self.document.MediaMuted(*e)
     }
     fn VideoPersistent(&self, _e: &Self::Element) -> bool {
         false
@@ -1869,7 +1841,7 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: IsOutOfRange")
     }
     fn VttIsPastNode(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: VttIsPastNode")
+        self.document.VTTIsPastNode(*e)
     }
     fn IsDefined(&self, e: &Self::Element) -> bool {
         self.IsHTMLElement(e) && !self.document.Node(*e).Name().contains("-")
@@ -1881,10 +1853,10 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         panic!("Chromium DOM/runtime collaborator pending: HasEffectiveAppearance")
     }
     fn PageIsActive(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: PageIsActive")
+        self.page_active
     }
     fn DidAttachInternals(&self, e: &Self::Element) -> bool {
-        panic!("Chromium DOM/runtime collaborator pending: DidAttachInternals")
+        self.document.DidAttachElementInternals(*e)
     }
     fn DialogIsModal(&self, e: &Self::Element) -> bool {
         self.document.DialogIsModal(*e)
@@ -1899,19 +1871,53 @@ impl SelectorCheckerBackend for PersistentSelectorBackend<'_> {
         self.document.AutofillState(*e) == DOMAutofillState::kPreviewed
     }
     fn IsFocused(&self, e: &Self::Element) -> bool {
-        self.interaction.focused_node_id == Some(self.document.Node(*e).Id())
+        self.document.IsElementFocused(*e)
     }
-    fn AccessibilityAlwaysShowFocus(&self, e: &Self::Element) -> bool {
-        self.interaction.focus_visible_node_id == Some(self.document.Node(*e).Id())
+    fn AccessibilityAlwaysShowFocus(&self, _: &Self::Element) -> bool {
+        self.document.AccessibilityAlwaysShowFocus()
     }
+    // Source: Element::MayTriggerVirtualKeyboard (element.cc:11545-11547),
+    // HTMLFormControlElement::MayTriggerVirtualKeyboard, text_field_input_type.cc:146,
+    // base_temporal_input_type.cc:213, html_select_element.cc:493-495.
     fn MayTriggerVirtualKeyboard(&self, e: &Self::Element) -> bool {
-        self.IsTextField(e) || self.document.Node(*e).IsHTMLElement("textarea")
+        if let Some(input) = self.document.InputType(*e) {
+            return input.IsTextFieldInputType()
+                || matches!(
+                    input,
+                    DOMInputType::kDate
+                        | DOMInputType::kDateTimeLocal
+                        | DOMInputType::kMonth
+                        | DOMInputType::kTime
+                        | DOMInputType::kWeek
+                );
+        }
+        let node = self.document.Node(*e);
+        if node.IsHTMLElement("textarea") {
+            return true;
+        }
+        if node.IsHTMLElement("select") {
+            return !self
+                .document
+                .ResolvedStyleFor(*e)
+                .and_then(|style| style.ComputedStyle())
+                .is_some_and(|style| style.HasBaseAppearance());
+        }
+        if node.Namespace() == DOMNamespace::kHTML
+            && matches!(node.Name(), "button" | "fieldset" | "output")
+        {
+            return false;
+        }
+        foundation::editable::IsEditable(
+            &dom::persistent_document::DOMEditableFacts(self.document),
+            node.Id(),
+            foundation::editable::EditableFeatures::default(),
+        )
     }
-    fn LastFocusTypeIsMouse(&self, e: &Self::Element) -> bool {
-        self.interaction.pressed_node_id.is_some()
+    fn LastFocusTypeIsMouse(&self, _: &Self::Element) -> bool {
+        self.document.LastFocusType() == foundation::FocusType::kMouse
     }
-    fn HadKeyboardEvent(&self, e: &Self::Element) -> bool {
-        self.interaction.focus_visible_node_id.is_some()
+    fn HadKeyboardEvent(&self, _: &Self::Element) -> bool {
+        self.document.HadKeyboardEvent()
     }
     fn AffectedByMultipleHas(&self, e: &Self::Element) -> bool {
         self.element_flags
@@ -1935,8 +1941,9 @@ pub struct PersistentSelectorService {
     pub spatial_navigation_policy: SpatialNavigationPolicy,
     pub forced_pseudo_states: HashMap<u64, Vec<PseudoType>>,
     pub frame_focused_and_active: bool,
+    /// FocusController::IsActive is separate from focused-frame selection.
+    pub page_is_active: bool,
     pub slot_assignment_dirty: HashSet<u64>,
-    pub vtt_elements: HashSet<u64>,
 }
 pub struct PersistentSelectorMatchSession<'d> {
     backend: Rc<PersistentSelectorBackend<'d>>,
@@ -1967,12 +1974,20 @@ impl Default for PersistentSelectorService {
             spatial_navigation_policy: Default::default(),
             forced_pseudo_states: HashMap::new(),
             frame_focused_and_active: true,
+            page_is_active: true,
             slot_assignment_dirty: HashSet::new(),
-            vtt_elements: HashSet::new(),
         }
     }
 }
 impl PersistentSelectorService {
+    /// Discard the scoped style resolver's invalidation registrations without
+    /// replacing canonical Node handles or the detached Document's query cache.
+    pub(crate) fn ClearStyleInvalidationFlags(&self) {
+        self.container_flags.borrow_mut().clear();
+        self.element_flags.borrow_mut().clear();
+        self.subject_flags.borrow_mut().clear();
+        self.sibling_has_flags.borrow_mut().clear();
+    }
     fn backend<'d>(&mut self, document: &'d Document) -> Rc<PersistentSelectorBackend<'d>> {
         let owner = (document.RootHandle(), document.GetCompatibilityMode());
         if self.owner.map(|previous| previous.0) != Some(owner.0) {
@@ -2022,8 +2037,8 @@ impl PersistentSelectorService {
             self.spatial_navigation_policy,
             self.forced_pseudo_states.clone(),
             self.frame_focused_and_active,
+            self.page_is_active,
             self.slot_assignment_dirty.clone(),
-            self.vtt_elements.clone(),
         )
     }
 

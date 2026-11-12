@@ -59,6 +59,11 @@ pub trait RasterResourceLease: Send + Sync {
     fn size(&self) -> Size;
     fn format(&self) -> SharedImageFormat;
     fn is_opaque(&self) -> bool;
+    /// Resource color identity used by Viz/Renderer. Tile resources default to
+    /// sRGB; multiplanar video overrides this with the decoded gfx::ColorSpace.
+    fn color_space(&self) -> super::resources::RasterColorSpace {
+        super::resources::RasterColorSpace::CreateSRGB()
+    }
     fn backend_resource(&self) -> &(dyn Any + Send + Sync);
 }
 /// Exact move-only origin-thread task results. Values are produced by native

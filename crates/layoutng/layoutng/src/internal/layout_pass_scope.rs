@@ -136,3 +136,45 @@ impl Drop for LayoutPassScope {
         // object_factory_scope_ drops after this body and restores OBJECTS.
     }
 }
+
+// This is a borrow of the engine's existing native NodeId index during Layout,
+// analogous to SVGResource's synchronous native target access. It owns neither
+// the tree nor resource geometry, and cannot outlive the RunLayout guard.
+thread_local! {static SVG_RESOURCE_TREE:Cell<*const super::layout_object_builder::LayoutObjectTree>=const {Cell::new(std::ptr::null())};}
+pub(crate) struct SVGResourceTreeScope {
+    previous: *const super::layout_object_builder::LayoutObjectTree,
+}
+impl SVGResourceTreeScope {
+    pub(crate) fn new(tree: Option<&super::layout_object_builder::LayoutObjectTree>) -> Self {
+        let pointer = tree.map_or(std::ptr::null(), |tree| tree as *const _);
+        let previous = SVG_RESOURCE_TREE.with(|current| current.replace(pointer));
+        Self { previous }
+    }
+}
+impl Drop for SVGResourceTreeScope {
+    fn drop(&mut self) {
+        SVG_RESOURCE_TREE.with(|current| current.set(self.previous));
+    }
+}
+impl LayoutPassScope {
+    pub fn WithSVGResourceTree<R>(
+        query: impl for<'a> FnOnce(&'a super::layout_object_builder::LayoutObjectTree) -> R,
+    ) -> Option<R> {
+        SVG_RESOURCE_TREE.with(|current| unsafe { current.get().as_ref() }.map(query))
+    }
+}
+
+/// Synchronous read-query lease for SVG's native resource identity resolver.
+/// The scope borrows the existing tree, never a cloned resource/geometry tree.
+pub struct SVGResourceQueryScope<'a> {
+    _scope: SVGResourceTreeScope,
+    _owner: PhantomData<&'a super::layout_object_builder::LayoutObjectTree>,
+}
+impl<'a> SVGResourceQueryScope<'a> {
+    pub fn new(tree: &'a super::layout_object_builder::LayoutObjectTree) -> Self {
+        Self {
+            _scope: SVGResourceTreeScope::new(Some(tree)),
+            _owner: PhantomData,
+        }
+    }
+}

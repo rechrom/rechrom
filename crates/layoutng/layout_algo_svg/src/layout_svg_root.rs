@@ -17,7 +17,10 @@ use layoutng_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 #[repr(C)]
 pub struct LayoutSVGRoot {
     replaced: LayoutReplaced,
+    pub(crate) effect_bounds: crate::svg_effect_bounds::SvgEffectBoundsCache,
     children: LayoutObjectChildList,
+    object_bounds: crate::svg_resources::SvgObjectBounds,
+    container_scale: foundation::gfx::Vector2dF,
     container_size: PhysicalSize,
     viewport: foundation::gfx::RectF,
     content_transform: foundation::blink_geometry::transforms::affine_transform::AffineTransform,
@@ -30,11 +33,29 @@ impl LayoutSVGRoot {
         replaced.SetRuntimeClass(LayoutObjectClass::SvgRoot);
         Self {
             replaced,
+            effect_bounds: Default::default(),
             children: LayoutObjectChildList::default(),
+            object_bounds: Default::default(),
+            container_scale: foundation::gfx::Vector2dF::new(1., 1.),
             container_size: PhysicalSize::default(),
             viewport: Default::default(),
             content_transform: Default::default(),
         }
+    }
+
+    pub fn ContainerScale(&self) -> foundation::gfx::Vector2dF {
+        self.container_scale
+    }
+    pub fn SetContainerScale(&mut self, scale: foundation::gfx::Vector2dF) {
+        if self.container_scale != scale {
+            self.container_scale = scale;
+            self.SetNeedsLayoutAndFullPaintInvalidation(
+                &raw const layoutng_assembly::internal::layout_invalidation_reason::kSvgChanged,
+            );
+        }
+    }
+    pub(crate) fn ObjectBounds(&self) -> crate::svg_resources::SvgObjectBounds {
+        self.object_bounds
     }
 
     // cpp: layoutng_svg/layout_svg_root.h:19-27
@@ -143,6 +164,29 @@ impl LayoutSVGRoot {
     pub fn PaintGeometry(&self) -> layoutng_assembly::fragment_tree::SvgViewportGeometry {
         crate::svg_viewport::Geometry(self, self.viewport, self.content_transform, false)
     }
+
+    // layout_svg_root.cc:215-244. Keep SVG overflow in the original LayoutBox
+    // sidecar so generic hit-test rejection consumes the native source result.
+    pub fn AddSVGContentsVisualOverflow(&mut self) {
+        if self.ClipsToContentBox() {
+            return;
+        }
+        use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
+        let bounds = self
+            .ContentTransform()
+            .MapRect(self.object_bounds.decorated);
+        let mut rect = PhysicalRect::EnclosingRect(&bounds);
+        rect.Intersect(&PhysicalRect::from(foundation::InfiniteIntRect()));
+        self.AddContentsVisualOverflow(&rect);
+    }
+    pub fn VisualOverflowRectIncludingFilters(&self) -> PhysicalRect {
+        use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
+        let bounds = crate::svg_container_layout::ContentVisualOverflowIncludingFilters(self);
+        let bounds = self.ContentTransform().MapRect(bounds);
+        let mut rect = self.ApplyFiltersToRect(&PhysicalRect::EnclosingRect(&bounds));
+        rect.Intersect(&PhysicalRect::from(foundation::InfiniteIntRect()));
+        rect
+    }
     pub fn LayoutRoot(&mut self, content_rect: &PhysicalRect) {
         self.viewport = foundation::gfx::RectF::new(
             foundation::gfx::PointF::new(
@@ -154,14 +198,18 @@ impl LayoutSVGRoot {
                 content_rect.size.height.ToFloat(),
             ),
         );
+        let translate = unsafe { DynamicTo::<Element>(self.GetNode()).as_ref() }
+            .and_then(|element| element.InputElementData().as_ref())
+            .map_or([0.; 2], |element| element.svg_current_translate);
+        // LayoutSVGRoot::BuildLocalToBorderBoxTransform, cc:434-454.
         self.content_transform =
             foundation::blink_geometry::transforms::affine_transform::AffineTransform::new(
                 1.0,
                 0.0,
                 0.0,
                 1.0,
-                self.viewport.x() as f64,
-                self.viewport.y() as f64,
+                self.viewport.x() as f64 + translate[0] as f64,
+                self.viewport.y() as f64 + translate[1] as f64,
             );
         if crate::svg_viewport::ViewBox(self).is_some() {
             self.content_transform
@@ -188,9 +236,13 @@ impl LayoutSVGRoot {
         };
         let mut child = self.FirstChild();
         while !child.is_null() {
-            unsafe { &mut *child }.UpdateSVGLayout(&info);
+            crate::svg_resources::LayoutMarkerResourcesIfNeeded(unsafe { &*child }, &info);
+            let result = unsafe { &mut *child }.UpdateSVGLayout(&info);
+            unsafe { &mut *child }.SetHasViewportDependence(result.has_viewport_dependence);
             child = unsafe { &*child }.NextSibling();
         }
+        self.object_bounds = crate::svg_resources::CollectObjectBounds(self);
+        self.AddSVGContentsVisualOverflow();
     }
 }
 
@@ -238,6 +290,9 @@ pub fn SvgRootNaturalDimensions(object: &LayoutObject) -> PhysicalNaturalSizingI
 pub fn SvgRootLayout(object: &mut LayoutObject, rect: &PhysicalRect) {
     let _trace = browser_tracing::span("layout", "layout_algo_svg.RootLayout");
     unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.LayoutRoot(rect);
+}
+pub fn SvgRootSetContainerScale(object: &mut LayoutObject, scale: foundation::gfx::Vector2dF) {
+    unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.SetContainerScale(scale);
 }
 pub fn SvgRootSetContainerSize(object: &mut LayoutObject, size: PhysicalSize) {
     unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }.SetContainerSize(size);

@@ -54,6 +54,7 @@ pub trait ChunkGeometryMapper {
         rect: &mut Self::FloatClipRect,
     );
     fn ClipIsInfinite(&self, clip: &Self::FloatClipRect) -> bool;
+    fn ClipHasRadius(&self, clip: &Self::FloatClipRect) -> bool;
     fn ClipRect(&self, clip: &Self::FloatClipRect) -> RectF;
     fn MoveClip(&self, clip: &mut Self::FloatClipRect, offset: Vector2dF);
 }

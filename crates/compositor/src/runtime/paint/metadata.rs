@@ -106,7 +106,27 @@ pub(crate) fn flags<R: CpuSkiaBackend>(op: CpuPaintOpRef<'_, R>) -> Option<&CpuP
         _ => None,
     }
 }
-fn image_usage(record: &PaintRecord, resource: u64, usage: &mut ContentColorUsage) -> bool {
+pub(crate) fn image_usage(
+    record: &PaintRecord,
+    resource: u64,
+    usage: &mut ContentColorUsage,
+) -> bool {
+    // Canvas snapshots are eager StaticBitmapImage-style resources. Chromium's
+    // PaintOpBuffer metadata only marks lazy PaintImages as discardable; the
+    // canvas pixels remain in the artifact's canvas catalog for raster replay.
+    if record
+        .artifact()
+        .resources
+        .as_ref()
+        .is_some_and(|resources| {
+            resources
+                .canvases
+                .iter()
+                .any(|canvas| canvas.resource_id == resource)
+        })
+    {
+        return false;
+    }
     let image = CpuPaintImage::FromPaintResource(record, resource)
         .expect("PaintInput validates the actual resource and its native facts");
     *usage = (*usage).max(image.0.ContentColorUsage());
@@ -171,9 +191,13 @@ pub(crate) struct MetadataFields<'a, R: CpuSkiaBackend> {
 
 #[cfg(test)]
 mod tests {
-    use super::visit_shader_images;
+    use super::{image_usage, visit_shader_images};
+    use crate::{adapter::layer_tree_host_impl::ContentColorUsage, runtime::paint::PaintRecord};
+    use canvas::CanvasPaintResource;
+    use layoutng_assembly::fragment_tree::PaintResources;
     use paint::paint_engine::{
-        PaintShader, PaintShaderKind, SvgPatternCommand, SvgPatternData, SvgPatternImage,
+        PaintArtifact, PaintShader, PaintShaderKind, SvgPatternCommand, SvgPatternData,
+        SvgPatternImage,
     };
     use std::sync::Arc;
 
@@ -202,6 +226,30 @@ mod tests {
         };
         visit_shader_images(&bitmap, &mut |id| ids.push(id));
         assert_eq!(ids, vec![7, 8]);
+    }
+
+    #[test]
+    fn eager_canvas_snapshot_is_not_a_discardable_image() {
+        let resource_id = 1 << 63;
+        let record = PaintRecord::from_artifact(Arc::new(PaintArtifact {
+            resources: Some(Arc::new(PaintResources {
+                canvases: vec![CanvasPaintResource {
+                    dom_node_id: 1,
+                    resource_id,
+                    revision: 1,
+                    width: 1,
+                    height: 1,
+                    origin_clean: true,
+                    is_clear: false,
+                    pixels: Arc::new(vec![0, 0, 0, 0]),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }));
+        let mut usage = ContentColorUsage::kSRGB;
+        assert!(!image_usage(&record, resource_id, &mut usage));
+        assert_eq!(usage, ContentColorUsage::kSRGB);
     }
 }
 impl<'a, R: CpuSkiaBackend> MetadataFields<'a, R> {

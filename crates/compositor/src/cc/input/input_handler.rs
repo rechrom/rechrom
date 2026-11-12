@@ -638,13 +638,24 @@ impl<B: InputHandlerTypes, C: InputHost<B> + ?Sized>
     fn hit_test_scroll_node(
         &mut self,
     ) -> compositor_input::scroll_begin::ScrollBeginHitTest<B::ScrollNode> {
+        let device_scale_factor = self.host.ActiveTree_device_scale_factor();
         let point = point_scale(
             PointF::new(
                 self.state.position_x() as f32,
                 self.state.position_y() as f32,
             ),
-            self.host.ActiveTree_device_scale_factor(),
+            device_scale_factor,
         );
+        if std::env::var_os("RECHROM_DIAG_INPUT_HIT_TEST").is_some() {
+            eprintln!(
+                "input-scroll-begin position=({}, {}) device_scale_factor={} device_point=({}, {})",
+                self.state.position_x(),
+                self.state.position_y(),
+                device_scale_factor,
+                point.x(),
+                point.y(),
+            );
+        }
         let hit = self.handler.HitTestScrollNode(self.host, point);
         compositor_input::scroll_begin::ScrollBeginHitTest {
             scroll_node: hit.scroll_node,
@@ -818,13 +829,13 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         input: ScrollInputType,
     ) -> ScrollStatus {
         let _trace = host.BeginTrace("InputHandler::ScrollBegin", &[]);
-        compositor_input::scroll_begin::BeginScroll(&mut ScrollBeginAdapter {
+        let (status, _) = compositor_input::scroll_begin::BeginScroll(&mut ScrollBeginAdapter {
             handler: self,
             host,
             state,
             input,
-        })
-        .0
+        });
+        status
     }
 
     /// Rust ownership adaptation of Blink InputHandlerProxy's elastic
@@ -2483,6 +2494,9 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         };
         let layers =
             host.ActiveTree_FindLayersUpToFirstScrollableOrOpaqueToHitTest(&self.View(), point);
+        if std::env::var_os("RECHROM_DIAG_INPUT_HIT_TEST").is_some() {
+            eprintln!("input-scroll-hit point=({}, {}) layers={layers:?}", point.x(), point.y());
+        }
         let mut first = None;
         if let Some(last) = layers.last() {
             if setting!(host, enable_hit_test_opaqueness) {
@@ -2495,6 +2509,14 @@ impl<B: InputHandlerTypes> InputHandler<B> {
         }
         let mut node = None;
         for layer in &layers {
+            if std::env::var_os("RECHROM_DIAG_INPUT_HIT_TEST").is_some() {
+                eprintln!(
+                    "input-scroll-layer layer={layer:?} scroll_tree_index={} opaque={} scroller_or_scrollbar={}",
+                    host.LayerScrollTreeIndex(layer),
+                    host.LayerOpaqueToHitTest(layer),
+                    host.LayerIsScrollerOrScrollbar(layer),
+                );
+            }
             if !self.IsInitialScrollHitTestReliable(host, layer, first, &mut node) {
                 host.InstantTrace("Failed Hit Test", &[]);
                 result
@@ -2509,6 +2531,9 @@ impl<B: InputHandlerTypes> InputHandler<B> {
                 return result;
             }
             let id = host.ActiveTree_PointHitsNonCompositedScroll(point, layer);
+            if std::env::var_os("RECHROM_DIAG_INPUT_HIT_TEST").is_some() {
+                eprintln!("input-scroll-layer-result layer={layer:?} scroll_element={id:?}");
+            }
             if id.IsValid() {
                 node = host.ScrollTree_MutableFindNodeFromElementId(id);
                 assert!(node.is_some());

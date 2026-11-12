@@ -41,8 +41,11 @@ use crate::{
 };
 use CSSValueID::*;
 
+#[path = "production_shape_parser.rs"]
+mod shape_parser;
 #[path = "production_svg_path_byte_stream.rs"]
 mod svg_path_byte_stream;
+pub(super) use shape_parser::ShapeFunction;
 pub(super) fn IsEffectsProperty(id: CSSPropertyID) -> bool {
     matches!(
         id,
@@ -645,7 +648,9 @@ fn Shape<
         Some(Path(id, stream)?)
     } else if function == Some(kRect) {
         Some(Rect(id, stream, mode)?)
-    } else if matches!(function, Some(kXywh | kShape)) {
+    } else if function == Some(kShape) {
+        Some(ShapeFunction(id, stream, mode)?)
+    } else if function == Some(kXywh) {
         return Err(unsupported(
             id,
             "BasicShape computed_style Path/equality owner or typed shape subtype",
@@ -673,20 +678,62 @@ fn Shape<
     }
     Ok(values::list(items, values::ListSeparator::Space))
 }
-// cpp: longhands_custom.cc:3386-3463 (image branch requires its resource owner).
-fn Cursor<T: TokenStreamTokenizer>(
+// cpp: longhands_custom.cc:3386-3463; generated images are forbidden.
+fn Cursor<
+    T: TokenStreamTokenizer,
+    P: CSSParserContextPlatform<URL = crate::production_css_value::ProductionURL>,
+>(
     id: CSSPropertyID,
     stream: &mut Stream<T>,
     mode: CSSParserMode,
+    context: &CSSParserContext<P>,
 ) -> Result<Rc<Value>, PropertyParseError> {
-    if stream.Peek().GetType() == kUrlToken
-        || stream.Peek().FunctionId() == Some(kUrl)
-        || stream.Peek().FunctionId() == Some(kImageSet)
-    {
-        return Err(unsupported(
-            id,
-            "CSSCursorImageValue/StyleImage resource adapter",
-        ));
+    let mut items = Vec::new();
+    loop {
+        let image = if matches!(
+            stream.Peek().FunctionId(),
+            Some(kImageSet | kWebkitImageSet)
+        ) {
+            let image = ConsumeImageSet(id, stream, mode, context)?;
+            // ConsumeGeneratedImagePolicy::kForbid applies to candidates too.
+            if let CSSValuePayload::kImageSetClass(set) = image.Payload() {
+                if set.list.values.iter().any(|value| !matches!(value.Payload(), CSSValuePayload::kImageSetOptionClass(option) if option.image.IsImageValue())) {
+                    return Err(invalid(id));
+                }
+            }
+            Some(image)
+        } else {
+            ConsumeContentImage(id, stream, context)?
+        };
+        let Some(image) = image else { break };
+        let mut hot_spot = foundation::Point::new(-1, -1);
+        let mut specified = false;
+        if stream.Peek().GetType() == kNumberToken || IsMathFunction(stream) {
+            let mut coordinates = [0; 2];
+            for coordinate in &mut coordinates {
+                let value = if IsMathFunction(stream) {
+                    ConsumeMath(id, stream, &[C::Number], R::All)?
+                } else {
+                    ConsumeLiteral(id, stream, mode, Grammar::Number { nonnegative: false })?
+                };
+                let number = match value.Payload() {
+                    CSSValuePayload::kNumericLiteralClass(number) => number.DoubleValue(),
+                    CSSValuePayload::kMathFunctionClass(math) => math
+                        .expression
+                        .GetValueIfKnown()
+                        .ok_or_else(|| invalid(id))?,
+                    _ => return Err(invalid(id)),
+                };
+                *coordinate = number as i32;
+            }
+            hot_spot = foundation::Point::new(coordinates[0], coordinates[1]);
+            specified = true;
+        }
+        items.push(values::cursor_image(image, specified, hot_spot));
+        if stream.Peek().GetType() != kCommaToken {
+            return Err(invalid(id));
+        }
+        stream.ConsumeIncludingWhitespace();
     }
     let mut keyword = stream.Peek().Id();
     if keyword == kHand {
@@ -700,7 +747,13 @@ fn Cursor<T: TokenStreamTokenizer>(
         return Err(invalid(id));
     }
     stream.ConsumeIncludingWhitespace();
-    Ok(values::identifier(keyword))
+    let keyword = values::identifier(keyword);
+    if items.is_empty() {
+        Ok(keyword)
+    } else {
+        items.push(keyword);
+        Ok(values::list(items, values::ListSeparator::Comma))
+    }
 }
 pub(super) fn Consume<
     T: TokenStreamTokenizer,
@@ -716,7 +769,7 @@ pub(super) fn Consume<
             Filter(id, stream, mode, context)
         }
         CSSPropertyID::kClipPath | CSSPropertyID::kShapeOutside => Shape(id, stream, mode, context),
-        CSSPropertyID::kCursor => Cursor(id, stream, mode),
+        CSSPropertyID::kCursor => Cursor(id, stream, mode, context),
         CSSPropertyID::kShapeImageThreshold => {
             let value = if IsMathFunction(stream) {
                 ConsumeMath(id, stream, &[C::Number, C::Percent], R::All)?

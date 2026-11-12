@@ -6,6 +6,7 @@ use browser::page::Page;
 use foundation::{DynamicTo, RespectImageOrientationEnum};
 use layoutng_assembly::internal::{
     hit_test_phase::HitTestPhase,
+    layout_box::LayoutBox,
     layout_input::FontFace,
     layout_object::{LayoutObject, StyleChangeContext},
     layout_pass_scope::LayoutObjectFactoryScope,
@@ -91,6 +92,75 @@ fn fixture(image: &[u8], extra_style: &str) -> Page {
     fixture_with_attributes(image, extra_style, "")
 }
 
+fn rounded_box_fixture() -> Page {
+    let html = br#"<!doctype html><style>
+      body{margin:0}
+      #target{width:100px;height:100px;overflow:hidden;border:1px solid black;border-radius:8px;background:red}
+      #child{width:100%;height:100%;background:black}
+      </style><div id=target><div id=child></div></div>"#;
+    let assembly = browser::CreateLayoutAssembly();
+    let mut constraints = browser::CreateBrowserConstraints(160, 120);
+    constraints.fonts = vec![FontFace {
+        family: "LayoutBoxBackground".into(),
+        bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
+            .as_slice()
+            .into(),
+        ..Default::default()
+    }]
+    .into();
+    let svg = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let mut page = Page::Create(
+        Rc::new(RefCell::new(Loader {
+            html: html.to_vec(),
+            image: Vec::new(),
+        })),
+        Rc::new(RefCell::new(
+            image_decoder::skia_image_decoder::SkiaImageDecoder,
+        )),
+        Rc::new(RefCell::new(svg)),
+        constraints,
+        None,
+        None,
+    );
+    page.Open("https://layout-box-background.test/", 16384, 4096)
+        .unwrap();
+    for _ in 0..100 {
+        page.RunTask().unwrap();
+        if !page.IsLoading() && page.CurrentFrame().is_some() {
+            break;
+        }
+    }
+    assert!(!page.IsLoading());
+    page
+}
+
+fn layout_box_by_id<'a>(page: &'a Page, id: &str) -> &'a LayoutBox {
+    let owner = page.Document();
+    let document = owner.GetDocument();
+    let wanted = (0..document.NodeCount())
+        .find_map(|index| {
+            document
+                .Node(index)
+                .FindAttribute("id")
+                .filter(|attribute| attribute.value == id)
+                .map(|_| document.Node(index).Id())
+        })
+        .expect("wanted node");
+    let engine = page.GetLayoutEngine();
+    let root = engine.GetLayoutTree().unwrap().Root();
+    let mut object = root as *const LayoutObject;
+    while !object.is_null() {
+        let current = unsafe { &*object };
+        let node = current.GetNode();
+        if !node.is_null() && unsafe { &*node }.InputId() == wanted {
+            assert!(current.IsBox());
+            return unsafe { &*object.cast::<LayoutBox>() };
+        }
+        object = current.NextInPreOrder(root);
+    }
+    panic!("LayoutBox for {id} missing")
+}
+
 fn image_box_ptr(page: &Page) -> *mut LayoutReplaced {
     let owner = page.Document();
     let document = owner.GetDocument();
@@ -122,6 +192,25 @@ fn image_box_ptr(page: &Page) -> *mut LayoutReplaced {
 
 fn image_box(page: &Page) -> &LayoutReplaced {
     unsafe { &*image_box_ptr(page) }
+}
+
+fn image_background_is_recorded(page: &Page) -> bool {
+    let node = image_box(page).GetNode();
+    assert!(!node.is_null());
+    let node_id = unsafe { &*node }.InputId();
+    page.CurrentFrame()
+        .unwrap()
+        .display_items
+        .items
+        .iter()
+        .any(|item| {
+            item.node_id == node_id
+                && item.r#type == paint::paint_engine::DisplayItemType::kDrawRect
+                && item.color.red == 1.0
+                && item.color.green == 0.0
+                && item.color.blue == 0.0
+                && item.color.alpha == 1.0
+        })
 }
 
 fn assert_replaced_rect(page: &Page, expected: [f64; 4]) {
@@ -193,6 +282,52 @@ fn layout_image_opaque_foreground_matches_loaded_pixels_and_style_coverage() {
         let page = fixture(opaque, "border:1px dashed black");
         let box_ = image_box(&page);
         assert!(!box_.ForegroundIsKnownToBeOpaqueInRect(&box_.PhysicalContentBoxRect(), 0));
+    });
+}
+
+#[test]
+fn paint_skips_only_a_layout_image_background_known_to_be_obscured() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let opaque =
+            include_bytes!("../../image_decoder/tests/fixtures/avif-source/paris_icc_exif_xmp.png");
+        let alpha =
+            include_bytes!("../../image_decoder/tests/fixtures/avif-source/alpha-libyuv.png");
+
+        let opaque_page = fixture(opaque, "");
+        assert!(image_box(&opaque_page).ComputeBackgroundIsKnownToBeObscured());
+        assert!(!image_background_is_recorded(&opaque_page));
+
+        let alpha_page = fixture(alpha, "");
+        assert!(!image_box(&alpha_page).ComputeBackgroundIsKnownToBeObscured());
+        assert!(image_background_is_recorded(&alpha_page));
+    });
+}
+
+#[test]
+fn rounded_box_background_is_skipped_when_opaque_child_obscures_it() {
+    test_thread::run(|| {
+        let _heap = foundation::LayoutHeapScope::new();
+        let page = rounded_box_fixture();
+        let target = layout_box_by_id(&page, "target");
+        assert!(target.ComputeBackgroundIsKnownToBeObscured());
+
+        let node = target.GetNode();
+        assert!(!node.is_null());
+        let node_id = unsafe { &*node }.InputId();
+        assert!(!page
+            .CurrentFrame()
+            .unwrap()
+            .display_items
+            .items
+            .iter()
+            .any(|item| {
+                item.node_id == node_id
+                    && item.color.red == 1.0
+                    && item.color.green == 0.0
+                    && item.color.blue == 0.0
+                    && item.color.alpha == 1.0
+            }));
     });
 }
 

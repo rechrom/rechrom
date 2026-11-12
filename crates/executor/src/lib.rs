@@ -1,6 +1,208 @@
 //! Injectable execution of finite, owned work. No engine or Page dependencies.
 use std::{io, sync::Arc, time::Duration};
 pub type Task = Box<dyn FnOnce() + Send + 'static>;
+
+#[cfg(target_os = "macos")]
+const DELAYED_WAKE_IDENT: u64 = 1;
+#[cfg(target_os = "macos")]
+const DELAYED_TIMER_IDENT: u64 = 2;
+
+#[cfg(target_os = "macos")]
+fn timer_event(ident: u64, filter: i16, flags: u16, fflags: u32, data: i64) -> libc::kevent64_s {
+    libc::kevent64_s {
+        ident,
+        filter,
+        flags,
+        fflags,
+        data,
+        udata: 0,
+        ext: [0; 2],
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn change_timer_event(queue: std::os::fd::RawFd, event: &libc::kevent64_s) -> io::Result<()> {
+    let result = unsafe {
+        libc::kevent64(
+            queue,
+            event,
+            1,
+            std::ptr::null_mut(),
+            0,
+            libc::KEVENT_FLAG_NONE,
+            std::ptr::null(),
+        )
+    };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn create_delayed_timer_queue() -> io::Result<std::os::fd::RawFd> {
+    let queue = unsafe { libc::kqueue() };
+    if queue < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let wake = timer_event(
+        DELAYED_WAKE_IDENT,
+        libc::EVFILT_USER,
+        libc::EV_ADD | libc::EV_CLEAR,
+        0,
+        0,
+    );
+    if let Err(error) = change_timer_event(queue, &wake) {
+        unsafe { libc::close(queue) };
+        return Err(error);
+    }
+    Ok(queue)
+}
+
+#[cfg(target_os = "macos")]
+fn wake_delayed_timer(queue: std::os::fd::RawFd) {
+    let wake = timer_event(
+        DELAYED_WAKE_IDENT,
+        libc::EVFILT_USER,
+        0,
+        libc::NOTE_TRIGGER,
+        0,
+    );
+    let _ = change_timer_event(queue, &wake);
+}
+
+#[cfg(target_os = "macos")]
+fn arm_delayed_timer(queue: std::os::fd::RawFd, deadline: std::time::Instant) -> io::Result<()> {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let microseconds = remaining
+        .as_nanos()
+        .div_ceil(1_000)
+        .max(1)
+        .min(i64::MAX as u128) as i64;
+    change_timer_event(
+        queue,
+        &timer_event(
+            DELAYED_TIMER_IDENT,
+            libc::EVFILT_TIMER,
+            libc::EV_ADD | libc::EV_ONESHOT,
+            libc::NOTE_USECONDS | libc::NOTE_CRITICAL,
+            microseconds,
+        ),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_delayed_timer(queue: std::os::fd::RawFd) -> io::Result<libc::kevent64_s> {
+    loop {
+        let mut event = timer_event(0, 0, 0, 0, 0);
+        let result = unsafe {
+            libc::kevent64(
+                queue,
+                std::ptr::null(),
+                0,
+                &mut event,
+                1,
+                libc::KEVENT_FLAG_NONE,
+                std::ptr::null(),
+            )
+        };
+        if result > 0 {
+            if event.flags & libc::EV_ERROR != 0 && event.data != 0 {
+                return Err(io::Error::from_raw_os_error(event.data as i32));
+            }
+            return Ok(event);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_delayed_task_worker(
+    receiver: std::sync::mpsc::Receiver<(std::time::Instant, Task)>,
+    ready: std::sync::mpsc::Sender<Task>,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
+    queue: std::os::fd::RawFd,
+) {
+    let result = (|| -> io::Result<()> {
+        let mut pending: Vec<(std::time::Instant, Task)> = Vec::new();
+        loop {
+            while let Ok(task) = receiver.try_recv() {
+                pending.push(task);
+            }
+            if stopped.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
+            let Some((index, deadline)) = pending
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (deadline, _))| *deadline)
+                .map(|(index, (deadline, _))| (index, *deadline))
+            else {
+                let _ = wait_for_delayed_timer(queue)?;
+                continue;
+            };
+            arm_delayed_timer(queue, deadline)?;
+            loop {
+                let event = wait_for_delayed_timer(queue)?;
+                if stopped.load(std::sync::atomic::Ordering::Acquire) {
+                    return Ok(());
+                }
+                if event.ident == DELAYED_WAKE_IDENT {
+                    break;
+                }
+                if event.ident == DELAYED_TIMER_IDENT {
+                    let (_, task) = pending.swap_remove(index);
+                    if ready.send(task).is_err() {
+                        return Ok(());
+                    }
+                    break;
+                }
+            }
+        }
+    })();
+    unsafe { libc::close(queue) };
+    if let Err(error) = result {
+        eprintln!("executor-delayed-timer: {error}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_delayed_task_worker(
+    receiver: std::sync::mpsc::Receiver<(std::time::Instant, Task)>,
+    ready: std::sync::mpsc::Sender<Task>,
+) {
+    let mut pending: Vec<(std::time::Instant, Task)> = Vec::new();
+    loop {
+        if pending.is_empty() {
+            match receiver.recv() {
+                Ok(task) => pending.push(task),
+                Err(_) => break,
+            }
+            continue;
+        }
+        let next = pending
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, (deadline, _))| *deadline)
+            .map(|(index, (deadline, _))| (index, *deadline))
+            .unwrap();
+        let wait = next.1.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(wait) {
+            Ok(task) => pending.push(task),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let (_, task) = pending.swap_remove(next.0);
+                if ready.send(task).is_err() {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
 /// An accepted task runs exactly once. Implementations may execute inline or
 /// on another thread. Err means it was not executed. Panics are not IO errors.
 pub trait Executor: Send + Sync {
@@ -68,6 +270,10 @@ pub struct PoolExecutor {
     busy: Arc<std::sync::atomic::AtomicUsize>,
     sender: std::sync::mpsc::Sender<Task>,
     delayed_sender: std::sync::mpsc::Sender<(std::time::Instant, Task)>,
+    #[cfg(target_os = "macos")]
+    delayed_timer_queue: std::os::fd::RawFd,
+    #[cfg(target_os = "macos")]
+    delayed_stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 impl PoolExecutor {
     pub fn new(name: &str, stack_size: usize, lanes: usize) -> io::Result<Self> {
@@ -124,45 +330,46 @@ impl PoolExecutor {
             std::sync::mpsc::channel::<(std::time::Instant, Task)>();
         let ready = sender.clone();
         let initialize_timer_thread = initialize_thread;
-        std::thread::Builder::new()
+        #[cfg(target_os = "macos")]
+        let delayed_timer_queue = create_delayed_timer_queue()?;
+        #[cfg(target_os = "macos")]
+        let worker_timer_queue = delayed_timer_queue;
+        #[cfg(target_os = "macos")]
+        let delayed_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        let worker_stopped = delayed_stopped.clone();
+        let timer_worker = std::thread::Builder::new()
             .name(format!("{name}-timer"))
             .stack_size(stack_size)
             .spawn(move || {
                 initialize_timer_thread();
-                let mut pending: Vec<(std::time::Instant, Task)> = Vec::new();
-                loop {
-                    if pending.is_empty() {
-                        match delayed_receiver.recv() {
-                            Ok(task) => pending.push(task),
-                            Err(_) => break,
-                        }
-                        continue;
-                    }
-                    let next = pending
-                        .iter()
-                        .enumerate()
-                        .min_by_key(|(_, (deadline, _))| *deadline)
-                        .map(|(index, (deadline, _))| (index, *deadline))
-                        .unwrap();
-                    let wait = next.1.saturating_duration_since(std::time::Instant::now());
-                    match delayed_receiver.recv_timeout(wait) {
-                        Ok(task) => pending.push(task),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                            let (_, task) = pending.swap_remove(next.0);
-                            if ready.send(task).is_err() {
-                                break;
-                            }
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-            })?;
+                #[cfg(target_os = "macos")]
+                run_delayed_task_worker(
+                    delayed_receiver,
+                    ready,
+                    worker_stopped,
+                    worker_timer_queue,
+                );
+                #[cfg(not(target_os = "macos"))]
+                run_delayed_task_worker(delayed_receiver, ready);
+            });
+        if let Err(error) = timer_worker {
+            #[cfg(target_os = "macos")]
+            unsafe {
+                libc::close(delayed_timer_queue);
+            }
+            return Err(error);
+        }
         Ok(Self {
             id,
             lanes,
             busy,
             sender,
             delayed_sender,
+            #[cfg(target_os = "macos")]
+            delayed_timer_queue,
+            #[cfg(target_os = "macos")]
+            delayed_stopped,
         })
     }
 }
@@ -186,7 +393,19 @@ impl Executor for PoolExecutor {
     fn execute_after(&self, delay: Duration, task: Task) -> io::Result<()> {
         self.delayed_sender
             .send((std::time::Instant::now() + delay, task))
-            .map_err(|_| io::Error::other("executor timer stopped"))
+            .map_err(|_| io::Error::other("executor timer stopped"))?;
+        #[cfg(target_os = "macos")]
+        wake_delayed_timer(self.delayed_timer_queue);
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for PoolExecutor {
+    fn drop(&mut self) {
+        self.delayed_stopped
+            .store(true, std::sync::atomic::Ordering::Release);
+        wake_delayed_timer(self.delayed_timer_queue);
     }
 }
 

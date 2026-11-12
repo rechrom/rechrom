@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
-use foundation::{RuleVisibilityItems, Vector};
+use foundation::{RuleBreak, RuleVisibilityItems, Vector};
+use layoutng_style::style::computed_style::ComputedStyle;
 use layoutng_style::style::grid_enums::GridTrackSizingDirection;
 
 use super::super::gap_geometry::{BlockedStatus, ContainerType, GapGeometry};
@@ -10,6 +11,68 @@ use super::super::gap_utils::GapSegmentState;
 pub struct CSSGapDecorationUtils;
 
 impl CSSGapDecorationUtils {
+    pub fn ResolveRuleBreakValue(
+        style: &ComputedStyle,
+        direction: GridTrackSizingDirection,
+        container_type: ContainerType,
+    ) -> RuleBreak {
+        let rule_break = if direction == GridTrackSizingDirection::kForColumns {
+            style.ColumnRuleBreak()
+        } else {
+            style.RowRuleBreak()
+        };
+        if container_type == ContainerType::kMultiColumn && rule_break == RuleBreak::kNormal {
+            if direction == GridTrackSizingDirection::kForColumns {
+                RuleBreak::kIntersection
+            } else {
+                RuleBreak::kNone
+            }
+        } else {
+            rule_break
+        }
+    }
+
+    pub fn ResolveRuleVisibilityItemsValue(
+        style: &ComputedStyle,
+        container_type: ContainerType,
+        direction: GridTrackSizingDirection,
+    ) -> RuleVisibilityItems {
+        let visibility = if direction == GridTrackSizingDirection::kForColumns {
+            style.ColumnRuleVisibilityItems()
+        } else {
+            style.RowRuleVisibilityItems()
+        };
+        if visibility != RuleVisibilityItems::kNormal {
+            return visibility;
+        }
+        match container_type {
+            ContainerType::kGrid | ContainerType::kGridLanes => RuleVisibilityItems::kAll,
+            ContainerType::kFlex | ContainerType::kMultiColumn => RuleVisibilityItems::kBetween,
+        }
+    }
+
+    pub fn HasOverlapJoin(style: &ComputedStyle, is_column_gap: bool) -> bool {
+        let (cap_start, cap_end, junction_start, junction_end) = if is_column_gap {
+            (
+                style.ColumnRuleInsetCapStart(),
+                style.ColumnRuleInsetCapEnd(),
+                style.ColumnRuleInsetJunctionStart(),
+                style.ColumnRuleInsetJunctionEnd(),
+            )
+        } else {
+            (
+                style.RowRuleInsetCapStart(),
+                style.RowRuleInsetCapEnd(),
+                style.RowRuleInsetJunctionStart(),
+                style.RowRuleInsetJunctionEnd(),
+            )
+        };
+        cap_start.IsOverlapJoin()
+            || cap_end.IsOverlapJoin()
+            || junction_start.IsOverlapJoin()
+            || junction_end.IsOverlapJoin()
+    }
+
     pub fn IsRuleSegmentVisible(
         gap_state: GapSegmentState,
         rule_visibility: RuleVisibilityItems,

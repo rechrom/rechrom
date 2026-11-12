@@ -25,4 +25,14 @@ mod svg_viewport;
 
 mod svg_text_visual_rect;
 
+pub mod layout_svg_resource_auxiliary;
 pub mod layout_svg_resource_masker;
+pub mod layout_svg_resource_paint_server;
+
+pub mod svg_resources;
+
+pub mod svg_effect_bounds;
+
+mod svg_marker_data;
+
+mod svg_length_context;

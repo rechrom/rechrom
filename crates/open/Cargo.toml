@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+navigation_history = { path = "../navigation_history" }
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
 document_loader = { path = "../document_loader" }
@@ -19,3 +21,6 @@ webapi = { path = "../webapi" }
 
 [dev-dependencies]
 xhr_transport = { path = "../xhr_transport" }
+
+[features]
+test_support = []

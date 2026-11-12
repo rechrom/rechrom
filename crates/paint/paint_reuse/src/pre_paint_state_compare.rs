@@ -327,6 +327,7 @@ impl Compare<'_> {
             lifecycle,
             id,
             owner_client_id,
+            owner_node_id,
             parent,
             overflow_clip,
             container_rect,
@@ -339,6 +340,7 @@ impl Compare<'_> {
         let same = self.same_slot(a, b, *id, b.id, lifecycle, &b.lifecycle)
             && compositor == &b.compositor
             && owner_client_id == &b.owner_client_id
+            && owner_node_id == &b.owner_node_id
             && finite_rect(container_rect)
             && container_rect == &b.container_rect
             && finite_rect(contents_rect)

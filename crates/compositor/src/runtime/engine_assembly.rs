@@ -1,5 +1,6 @@
 //! Private canonical Scheduler/Host command loop. No layer/tile/job/frame plan
 //! crosses the Engine command/effect boundary.
+mod gesture;
 use super::{
     engine_core::EngineCore,
     execution::{EngineTask, EngineTaskQueue},
@@ -25,8 +26,30 @@ use crate::{
 use paint::PaintArtifact;
 use std::sync::Arc;
 
+// InputHandlerProxy owns the exact scroll begin while a source DOM ack or
+// main-thread hit-test callback crosses the sequenced package boundary.
+struct PendingWheelInput {
+    input: CompositorInput,
+    stage: PendingWheelStage,
+}
+enum PendingWheelStage {
+    DOMAcknowledgement,
+    MainThreadHitTest(crate::adapter::input_types::MainThreadHitTestReasons),
+}
 pub(crate) struct EngineAssembly {
     core: EngineCore,
+    scroll_animation_commit: Option<crate::engine::ScrollAnimationCommitToken>,
+    next_scroll_animation_commit: u64,
+    pending_wheel_inputs: std::collections::BTreeMap<u64, PendingWheelInput>,
+    next_wheel_request: u64,
+    waiting_wheel_hit_test: Option<u64>,
+    deferred_wheel_inputs: std::collections::VecDeque<(CompositorInput, bool)>,
+    wheel_gesture_in_progress: bool,
+    active_scroll_gesture: Option<crate::adapter::input_handler::ScrollInputType>,
+    gesture_pinch_in_progress: bool,
+    scrollbar_gesture_active: bool,
+    // MouseWheelEventQueue::send_wheel_events_async_, source cc:246-247.
+    wheel_events_async: bool,
     scheduler: Scheduler,
     commands: EngineTaskQueue,
     lifecycle: HostLifecycleEffects,
@@ -41,6 +64,22 @@ pub(crate) struct EngineAssembly {
         Arc<crate::cc::base::delayed_unique_notifier::DelayedUniqueNotifier>,
 }
 impl EngineAssembly {
+    pub(crate) fn ConvertPaintArtifactSubsetToRecord(
+        &self,
+        artifact: Arc<PaintArtifact>,
+        state: &paint::paint_property_tree::PropertyTreeState,
+    ) -> crate::engine::ImmutablePaintRecord {
+        self.core
+            .ConvertPaintArtifactSubsetToRecord(artifact, state)
+    }
+
+    pub(crate) fn CreateVideoSurfaceForeignLayer(
+        &mut self,
+        range: crate::runtime::types::SurfaceRange,
+    ) -> Arc<dyn paint::ForeignLayer> {
+        self.core.CreateVideoSurfaceForeignLayer(range)
+    }
+
     pub(crate) fn new(
         mut core: EngineCore,
         settings: SchedulerSettings,
@@ -97,7 +136,18 @@ impl EngineAssembly {
                 crate::adapter::time::TimeDelta::Milliseconds(250),
             );
         Ok(Self {
+            pending_wheel_inputs: Default::default(),
+            next_wheel_request: 0,
+            waiting_wheel_hit_test: None,
+            deferred_wheel_inputs: Default::default(),
+            wheel_gesture_in_progress: false,
+            active_scroll_gesture: None,
+            gesture_pinch_in_progress: false,
+            scrollbar_gesture_active: false,
+            wheel_events_async: false,
             core,
+            scroll_animation_commit: None,
+            next_scroll_animation_commit: 0,
             scheduler,
             commands,
             lifecycle,
@@ -116,6 +166,23 @@ impl EngineAssembly {
         artifact: Arc<PaintArtifact>,
         viewport: CompositorViewportState,
     ) -> Result<CompositorOutput, CompositorError> {
+        self.CommitWithScrollAnimations(artifact, viewport, Vec::new())
+    }
+    pub(crate) fn CommitWithScrollAnimations(
+        &mut self,
+        artifact: Arc<PaintArtifact>,
+        viewport: CompositorViewportState,
+        areas: Vec<crate::adapter::input_types::ElementId>,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.core.ExpireCommitDeferral();
+        if let Some(reason) = self.core.main_frame_lifecycle.DeferralReason() {
+            // ProxyMain completes Blink's lifecycle but aborts before PAC /
+            // UpdateLayers. The producer's immutable artifact remains with Page;
+            // no cc ready-commit or presentable marker is manufactured here.
+            self.core
+                .AbortDeferredMainFrame(&mut self.scheduler, reason);
+            return self.Poll();
+        }
         if !self.core.awaiting_main {
             // The embedding can finish Page's artifact before Scheduler has
             // dispatched the BeginMainFrame which will own it.  Synchronize
@@ -135,10 +202,53 @@ impl EngineAssembly {
                 .core
                 .scheduler_queries
                 .Enter(self.scheduler.IsReadyToActivate());
-            self.core
-                .PrepareCommit(artifact, viewport, &self.main_features)?;
+            self.core.PreparePaintCommit(artifact, viewport)?;
         }
         self.scheduler.SetVisible(viewport.visible, &mut self.core);
+        if !areas.is_empty() {
+            self.next_scroll_animation_commit = self
+                .next_scroll_animation_commit
+                .checked_add(1)
+                .expect("native animation commit identity exhausted");
+            let token =
+                crate::engine::ScrollAnimationCommitToken(self.next_scroll_animation_commit);
+            assert!(self.scroll_animation_commit.replace(token).is_none());
+            let areas = self.core.ClassifyScrollAnimationAreas(&areas);
+            self.core
+                .effects
+                .push(CompositorMainThreadEffect::ScrollAnimationCommitPrepared { token, areas });
+            if !self.core.awaiting_main {
+                self.scheduler
+                    .SetNeedsBeginMainFrame(false, false, &mut self.core);
+            }
+            return self.Poll();
+        }
+        self.core.FinalizePreparedCommit(&self.main_features)?;
+        self.ScheduleFinalizedMainCommit();
+        self.Poll()
+    }
+    pub(crate) fn FinalizeScrollAnimationCommit(
+        &mut self,
+        token: crate::engine::ScrollAnimationCommitToken,
+        commands: Vec<scroll_animation::compositor_mutation::ScrollAnimationMutation>,
+    ) -> Result<CompositorOutput, CompositorError> {
+        if self.scroll_animation_commit != Some(token) {
+            return Err(CompositorError::NotReady {
+                stage: "scroll animation reply does not own this pending main commit",
+            });
+        }
+        for command in commands {
+            self.core.ApplySourceScrollAnimation(command);
+        }
+        self.core.FinalizePreparedCommit(&self.main_features)?;
+        self.scroll_animation_commit = None;
+        self.core
+            .effects
+            .push(CompositorMainThreadEffect::ScrollAnimationCommitFinalized { token });
+        self.ScheduleFinalizedMainCommit();
+        self.Poll()
+    }
+    fn ScheduleFinalizedMainCommit(&mut self) {
         if self.core.awaiting_main
             && self.core.HasReadyCommit()
             && !self.core.ReadyCommitWasNotified()
@@ -152,7 +262,6 @@ impl EngineAssembly {
             self.scheduler
                 .SetNeedsBeginMainFrame(false, false, &mut self.core);
         }
-        self.Poll()
     }
 
     /// Establishes the widget state before the first main-frame request.
@@ -199,20 +308,249 @@ impl EngineAssembly {
         self.Poll()
     }
 
+    pub(crate) fn ApplySourceScrollAnimation(
+        &mut self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.core.ApplySourceScrollAnimation(mutation);
+        self.Poll()
+    }
+    pub(crate) fn ApplyFrameLifecycle(
+        &mut self,
+        mutation: crate::engine::FrameLifecycleMutation,
+    ) -> Result<CompositorOutput, CompositorError> {
+        use crate::engine::{CompositorMainThreadEffect, FrameLifecycleMutation};
+        match mutation {
+            FrameLifecycleMutation::SetDeferMainFrameUpdates(deferred) => {
+                if self
+                    .core
+                    .main_frame_lifecycle
+                    .SetDeferMainFrameUpdates(deferred)
+                {
+                    self.core.effects.push(
+                        CompositorMainThreadEffect::MainFrameUpdatesDeferralChanged { deferred },
+                    );
+                    self.scheduler.SetDeferBeginMainFrame(
+                        self.core.main_frame_lifecycle.DeferBeginMainFrame(),
+                        &mut self.core,
+                    );
+                }
+            }
+            FrameLifecycleMutation::StartDeferringCommits { timeout, reason } => {
+                if self.core.main_frame_lifecycle.StartDeferringCommits(
+                    self.core.services.core.MonotonicTimeNow(),
+                    timeout,
+                    reason,
+                ) {
+                    self.core
+                        .effects
+                        .push(CompositorMainThreadEffect::CommitDeferralChanged {
+                            deferred: true,
+                            reason,
+                        });
+                }
+            }
+            FrameLifecycleMutation::StopDeferringCommits => {
+                if let Some(reason) = self.core.main_frame_lifecycle.StopDeferringCommits() {
+                    self.core
+                        .effects
+                        .push(CompositorMainThreadEffect::CommitDeferralChanged {
+                            deferred: false,
+                            reason,
+                        });
+                }
+            }
+        }
+        self.Poll()
+    }
+
+    /// Requests a new compositor submission from the resident active tree.
+    /// This is ProxyImpl::SetNeedsRedrawOnImplThread: no main-tree state is
+    /// copied or rebuilt, and the normal Scheduler/BeginFrame path still owns
+    /// the draw opportunity.
+    pub(crate) fn RequestRedraw(&mut self) -> Result<CompositorOutput, CompositorError> {
+        // SetNeedsRedraw schedules a draw, while viewport damage makes that
+        // draw produce a CompositorFrame even when every layer pixel is
+        // retained. Chromium pairs these in embedder-driven full redraws.
+        self.core.SetFullViewportDamage();
+        self.scheduler.SetNeedsRedraw(&mut self.core);
+        self.Poll()
+    }
     /// Value conversion only: source InputHandler owns hit testing, latching,
     /// scroll chaining, animation and mutation of the current canonical tree.
     pub(crate) fn Input(
         &mut self,
         input: CompositorInput,
     ) -> Result<CompositorOutput, CompositorError> {
+        let mut output = self.InputOnce(input, false)?;
+        while self.waiting_wheel_hit_test.is_none() {
+            let Some((input, acknowledged)) = self.deferred_wheel_inputs.pop_front() else {
+                break;
+            };
+            let mut next = self.InputOnce(input, acknowledged)?;
+            debug_assert!(
+                output.frame.is_none() && next.frame.is_none(),
+                "source input never draws"
+            );
+            output
+                .main_thread_effects
+                .append(&mut next.main_thread_effects);
+            output.needs_begin_frames |= next.needs_begin_frames;
+            output.work_pending |= next.work_pending;
+            output.main_commit_pending |= next.main_commit_pending;
+        }
+        Ok(output)
+    }
+    fn InputOnce(
+        &mut self,
+        input: CompositorInput,
+        acknowledged: bool,
+    ) -> Result<CompositorOutput, CompositorError> {
+        // WebFrameWidgetImpl.cc:2220-2232. Listener metadata is applied to
+        // the same main host that produces the next pending commit, never to
+        // an impl tree or a parallel registry snapshot.
+        match input {
+            CompositorInput::SetPageScaleFactorAndLimits {
+                scale,
+                minimum,
+                maximum,
+            } => {
+                if !scale.is_finite()
+                    || !minimum.is_finite()
+                    || !maximum.is_finite()
+                    || minimum <= 0.
+                    || scale < minimum
+                    || scale > maximum
+                {
+                    return Err(Self::WheelContinuationError("invalid page scale limits"));
+                }
+                self.core
+                    .main
+                    .SetPageScaleFactorAndLimits(scale, minimum, maximum);
+                return self.Poll();
+            }
+            CompositorInput::StartPageScaleAnimation {
+                target,
+                use_anchor,
+                scale,
+                duration,
+            } => {
+                if !scale.is_finite() || scale <= 0. || duration.InMicroseconds() < 0 {
+                    return Err(Self::WheelContinuationError("invalid page scale animation"));
+                }
+                self.core
+                    .host
+                    .as_mut()
+                    .expect("resident Host")
+                    .BaseMutable()
+                    .StartPageScaleAnimation(
+                        target,
+                        use_anchor,
+                        scale,
+                        duration,
+                        &mut HostImplContext {
+                            services: &mut self.core.services,
+                        },
+                    );
+                return self.Poll();
+            }
+            CompositorInput::SetHaveScrollEventHandlers(value) => {
+                self.core.main.SetHaveScrollEventHandlers(value);
+                return self.Poll();
+            }
+            CompositorInput::SetEventListenerProperties { class, properties } => {
+                self.core.main.SetEventListenerProperties(class, properties);
+                return self.Poll();
+            }
+            _ => {}
+        }
+        // InputHandlerProxy.cc:497-548 keeps the original event, then either
+        // reinjects its source hit id/reasons or drops an invalid hit result.
+        let (input, dom_acknowledged, main_thread_hit_test) = match input {
+            CompositorInput::WheelDOMAcknowledgement {
+                request,
+                default_prevented,
+            } => {
+                let pending = self
+                    .pending_wheel_inputs
+                    .remove(&request)
+                    .ok_or_else(|| Self::WheelContinuationError("unknown wheel acknowledgement"))?;
+                if !matches!(pending.stage, PendingWheelStage::DOMAcknowledgement) {
+                    return Err(Self::WheelContinuationError(
+                        "wheel acknowledgement stage mismatch",
+                    ));
+                }
+                if default_prevented {
+                    return Ok(self.WaitingWheelOutput(
+                        CompositorMainThreadEffect::WheelDisposition {
+                            compositor_owned: false,
+                        },
+                    ));
+                }
+                (pending.input, true, None)
+            }
+            CompositorInput::ContinueWheelScroll {
+                request,
+                scroll_element_id,
+            } => {
+                let pending = self.pending_wheel_inputs.remove(&request).ok_or_else(|| {
+                    Self::WheelContinuationError("unknown wheel hit-test continuation")
+                })?;
+                let PendingWheelStage::MainThreadHitTest(reasons) = pending.stage else {
+                    return Err(Self::WheelContinuationError(
+                        "wheel hit-test stage mismatch",
+                    ));
+                };
+                if self.waiting_wheel_hit_test != Some(request) {
+                    return Err(Self::WheelContinuationError(
+                        "wheel hit-test identity mismatch",
+                    ));
+                }
+                self.waiting_wheel_hit_test = None;
+                let Some(id) = scroll_element_id else {
+                    let effect = match pending.input {
+                        CompositorInput::ScrollGesture(gesture) => {
+                            CompositorMainThreadEffect::GestureDisposition {
+                                dispatch_id: gesture.dispatch_id,
+                                handled: false,
+                            }
+                        }
+                        _ => CompositorMainThreadEffect::WheelDisposition {
+                            compositor_owned: false,
+                        },
+                    };
+                    return Ok(self.WaitingWheelOutput(effect));
+                };
+                (pending.input, true, Some((id, reasons)))
+            }
+            input => (input, acknowledged, None),
+        };
+        if matches!(
+            input,
+            CompositorInput::ScrollGesture(_) | CompositorInput::PinchGesture { .. }
+        ) {
+            return self.GestureInput(input, main_thread_hit_test);
+        }
         let mut input_trace = Span(CompositorPackage::Input, "Compositor.Input.Dispatch");
         input_trace.set(
             "kind",
             match &input {
+                CompositorInput::ScrollGesture(_) | CompositorInput::PinchGesture { .. } => {
+                    unreachable!()
+                }
                 CompositorInput::Wheel { .. } => 0.0,
+                CompositorInput::ScrollbarGesture { .. } => 4.0,
                 CompositorInput::PinchBegin { .. } => 1.0,
                 CompositorInput::PinchUpdate { .. } => 2.0,
                 CompositorInput::PinchEnd { .. } => 3.0,
+                CompositorInput::SetPageScaleFactorAndLimits { .. }
+                | CompositorInput::StartPageScaleAnimation { .. }
+                | CompositorInput::WheelDOMAcknowledgement { .. }
+                | CompositorInput::ContinueWheelScroll { .. }
+                | CompositorInput::SetHaveScrollEventHandlers(_)
+                | CompositorInput::SetEventListenerProperties { .. } => {
+                    unreachable!("continuation unwrapped above")
+                }
             },
         );
         use crate::{
@@ -245,6 +583,61 @@ impl EngineAssembly {
         let mut context = HostImplContext {
             services: &mut self.core.services,
         };
+        // InputHandlerProxy::HandleMouseWheel, cc:1132-1154: only the
+        // canonical DOM acknowledgement admits the default gesture through a
+        // blocking wheel region. Native hit-test/scroll policy remains in cc.
+        if !dom_acknowledged && !self.wheel_events_async {
+            if let CompositorInput::Wheel { position, .. } = input {
+                let point = point(position)?;
+                let blocked = host.WithInputHandler(&mut context, |input, runtime| {
+                    input
+                        .expect("source bound InputHandler")
+                        .HasBlockingWheelEventHandlerAt(runtime, point)
+                });
+                if blocked {
+                    drop(query);
+                    let request =
+                        self.RetainWheelInput(input, PendingWheelStage::DOMAcknowledgement);
+                    return Ok(self.WaitingWheelOutput(
+                        CompositorMainThreadEffect::WheelRequiresDOMAcknowledgement { request },
+                    ));
+                }
+            }
+        }
+        if self.waiting_wheel_hit_test.is_some() && matches!(input, CompositorInput::Wheel { .. }) {
+            self.deferred_wheel_inputs
+                .push_back((input, dom_acknowledged));
+            drop(query);
+            return Ok(
+                self.WaitingWheelOutput(CompositorMainThreadEffect::WheelDisposition {
+                    compositor_owned: false,
+                }),
+            );
+        }
+        // MouseWheelEventQueue.cc:237-267 synthesizes GSB for the first
+        // nonzero acknowledged wheel, including phase-less and cancelled-Began
+        // streams. Native cc still selects the scrolling element.
+        let begin_gesture = main_thread_hit_test.is_some()
+            || matches!(input,
+            CompositorInput::Wheel { unconstrained_delta, .. }
+            if !self.wheel_gesture_in_progress && (unconstrained_delta.x() != 0. || unconstrained_delta.y() != 0.));
+        if begin_gesture {
+            self.scrollbar_gesture_active = false;
+        }
+        if matches!(input, CompositorInput::Wheel { phase: ScrollPhase::Begin, unconstrained_delta, .. }
+            if unconstrained_delta.x() != 0. || unconstrained_delta.y() != 0.)
+        {
+            self.wheel_events_async = true;
+        }
+        let mut hit_test_reasons = None;
+        let mut gesture_in_progress = self.wheel_gesture_in_progress;
+        // A new wheel-generated GSB shares the proxy's single scroll latch
+        // with host touchscreen/autoscroll gestures.
+        let previous_scroll_gesture = if begin_gesture {
+            self.active_scroll_gesture.take()
+        } else {
+            None
+        };
         // A gesture phase boundary cannot overtake scroll updates that were
         // queued for the previous BeginImplFrame. InputHandlerProxy preserves
         // this ordering in its compositor event queue before dispatching the
@@ -252,13 +645,15 @@ impl EngineAssembly {
         // finger gesture relatch first, so the previous gesture's queued
         // momentum is then applied to the new latch and visibly snaps the
         // page.
-        if matches!(
-            input,
-            CompositorInput::Wheel {
-                phase: ScrollPhase::Begin | ScrollPhase::End,
-                ..
-            }
-        ) {
+        if begin_gesture
+            || matches!(
+                input,
+                CompositorInput::Wheel {
+                    phase: ScrollPhase::Begin | ScrollPhase::End,
+                    ..
+                }
+            )
+        {
             let pending = self.input_client.TakeQueued();
             if !pending.is_empty() {
                 host.WithInputHandler(&mut context, |input, runtime| {
@@ -274,13 +669,7 @@ impl EngineAssembly {
                 });
             }
         }
-        if matches!(
-            input,
-            CompositorInput::Wheel {
-                phase: ScrollPhase::Begin,
-                ..
-            }
-        ) {
+        if begin_gesture {
             self.input_client.BeginGesture();
         }
         if let CompositorInput::Wheel {
@@ -353,15 +742,20 @@ impl EngineAssembly {
                         .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
                     return Ok(CompositorOutput {
                         frame: None,
+                        frame_matches_latest_commit: false,
                         main_thread_effects: std::mem::take(&mut self.core.effects),
                         needs_begin_frames: true,
                         work_pending: true,
-                        main_commit_pending: self.core.HasReadyCommit(),
+                        main_commit_pending: self.core.HasReadyCommit()
+                            || self.scroll_animation_commit.is_some(),
                     });
                 }
             }
         }
         let compositor_owned = match input {
+            CompositorInput::ScrollGesture(_) | CompositorInput::PinchGesture { .. } => {
+                unreachable!()
+            }
             CompositorInput::Wheel {
                 position,
                 delta,
@@ -392,7 +786,12 @@ impl EngineAssembly {
                     // Source: content/renderer/input/input_handler_proxy.cc;
                     //         cc/input/input_handler.h:InputHandlerScrollResult.
                     let mut compositor_owned = input.IsCurrentlyScrolling(runtime);
-                    if phase == ScrollPhase::Begin {
+                    if begin_gesture {
+                        if let Some(previous) = previous_scroll_gesture {
+                            input.RecordScrollEnd(runtime, previous);
+                            input.ScrollEnd(runtime, true, None);
+                        }
+                        gesture_in_progress = true;
                         let mut data = ScrollStateData::default();
                         data.position_x = position.x();
                         data.position_y = position.y();
@@ -402,6 +801,10 @@ impl EngineAssembly {
                         data.is_in_inertial_phase = is_inertial;
                         data.delta_granularity = granularity;
                         data.from_user_input = true;
+                        if let Some((id, reasons)) = main_thread_hit_test {
+                            data.set_current_native_scrolling_element(id);
+                            data.main_thread_hit_tested_reasons = reasons;
+                        }
                         let mut state = ScrollState::new(data);
                         let status = input.ScrollBeginWithElasticOverscroll(
                             runtime,
@@ -411,6 +814,13 @@ impl EngineAssembly {
                         );
                         compositor_owned = status.thread == ScrollThread::kScrollOnImplThread
                             && status.main_thread_hit_test_reasons.empty();
+                        if !status.main_thread_hit_test_reasons.empty() {
+                            assert!(
+                                main_thread_hit_test.is_none(),
+                                "source reinjected hit test cannot request another hit test"
+                            );
+                            hit_test_reasons = Some(status.main_thread_hit_test_reasons);
+                        }
                     }
                     if compositor_owned
                         && (phase == ScrollPhase::Update || delta.x() != 0. || delta.y() != 0.)
@@ -432,7 +842,8 @@ impl EngineAssembly {
                             event_timestamp,
                         );
                     }
-                    if phase == ScrollPhase::End {
+                    if phase == ScrollPhase::End && gesture_in_progress {
+                        gesture_in_progress = false;
                         compositor_owned = input.IsCurrentlyScrolling(runtime);
                         input.ScrollEndWithElasticOverscroll(
                             runtime,
@@ -444,6 +855,87 @@ impl EngineAssembly {
                     }
                     compositor_owned
                 }))
+            }
+            CompositorInput::SetPageScaleFactorAndLimits { .. }
+            | CompositorInput::StartPageScaleAnimation { .. }
+            | CompositorInput::WheelDOMAcknowledgement { .. }
+            | CompositorInput::ContinueWheelScroll { .. }
+            | CompositorInput::SetHaveScrollEventHandlers(_)
+            | CompositorInput::SetEventListenerProperties { .. } => {
+                unreachable!("continuation unwrapped above")
+            }
+            CompositorInput::ScrollbarGesture {
+                scroll_element_id,
+                delta,
+                granularity,
+                event_timestamp,
+                phase,
+            } => {
+                if !delta.x().is_finite() || !delta.y().is_finite() {
+                    return Err(CompositorError::Backend(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "nonfinite scrollbar gesture delta",
+                    )));
+                }
+                let mut active = self.scrollbar_gesture_active;
+                host.WithInputHandler(&mut context, |input, runtime| {
+                    use crate::cc::input::input_handler::ScrollBeginThreadState as BeginState;
+                    let input = input.expect("source bound InputHandler");
+                    // InputHandlerProxy.cc:61-122,1176-1254. An injected
+                    // scrollbar begin already has the main-thread hit target.
+                    if phase == ScrollPhase::Begin {
+                        if let Some(previous) = self.active_scroll_gesture.take() {
+                            input.RecordScrollEnd(runtime, previous);
+                            input.ScrollEnd(runtime, true, None);
+                        }
+                        if active || gesture_in_progress {
+                            input.RecordScrollEnd(runtime, if active { ScrollInputType::kScrollbar } else { ScrollInputType::kWheel });
+                            input.ScrollEnd(runtime, true, None);
+                        }
+                        let mut data = ScrollStateData::default();
+                        data.is_scrollbar_interaction = true;
+                        data.is_beginning = true;
+                        data.delta_x_hint = -f64::from(delta.x());
+                        data.delta_y_hint = -f64::from(delta.y());
+                        data.delta_granularity = granularity;
+                        data.set_current_native_scrolling_element(scroll_element_id);
+                        data.main_thread_hit_tested_reasons.Put(crate::adapter::input_types::MainThreadHitTestReason::kScrollbarScrolling);
+                        let status = input.ScrollBeginWithElasticOverscroll(runtime, &mut ScrollState::new(data), ScrollInputType::kScrollbar, false);
+                        assert!(status.main_thread_hit_test_reasons.empty(), "injected scrollbar has its source hit identity");
+                        // Proxy.cc:1042-1082. kScrollbarScrolling means this
+                        // source begin was hit-tested on main in all cases.
+                        if status.thread != ScrollThread::kScrollIgnored {
+                            let state = if status.main_thread_repaint_reasons.empty() {
+                                BeginState::kScrollingOnCompositorBlockedOnMain
+                            } else if status.raster_inducing {
+                                BeginState::kRasterInducingScrollBlockedOnMain
+                            } else { BeginState::kScrollingOnMain };
+                            input.RecordScrollBegin(runtime, ScrollInputType::kScrollbar, state);
+                        }
+                        active = status.thread == ScrollThread::kScrollOnImplThread;
+                        gesture_in_progress = false;
+                    } else if active && phase == ScrollPhase::Update {
+                        // Proxy.cc:1257-1346: cc owns granularity, target,
+                        // snapping constraints and unused delta/overscroll.
+                        let mut data = ScrollStateData::default();
+                        data.is_scrollbar_interaction = true;
+                        data.delta_x = -f64::from(delta.x());
+                        data.delta_y = -f64::from(delta.y());
+                        data.delta_x_unconstrained = data.delta_x;
+                        data.delta_y_unconstrained = data.delta_y;
+                        data.delta_granularity = granularity;
+                        let result = input.ScrollUpdateWithElasticOverscroll(runtime, ScrollState::new(data), TimeDelta::default(), event_timestamp);
+                        if result.hit_snap_constraint { input.ScrollEnd(runtime, true, None); active = false; }
+                    } else if phase == ScrollPhase::End {
+                        if active {
+                            input.RecordScrollEnd(runtime, ScrollInputType::kScrollbar);
+                            input.ScrollEndWithElasticOverscroll(runtime, true, None, event_timestamp, false);
+                        }
+                        active = false;
+                    }
+                });
+                self.scrollbar_gesture_active = active;
+                None
             }
             CompositorInput::PinchBegin { anchor } => {
                 let anchor = point(anchor)?;
@@ -481,6 +973,16 @@ impl EngineAssembly {
                 None
             }
         };
+        if matches!(
+            input,
+            CompositorInput::Wheel {
+                phase: ScrollPhase::End,
+                ..
+            }
+        ) {
+            self.wheel_events_async = false;
+        }
+        self.wheel_gesture_in_progress = gesture_in_progress;
         if let Some(compositor_owned) = compositor_owned {
             input_trace.set("compositor_owned", compositor_owned as u8 as f64);
             self.core
@@ -488,6 +990,20 @@ impl EngineAssembly {
                 .push(CompositorMainThreadEffect::WheelDisposition { compositor_owned });
         }
         drop(query);
+        if let Some(reasons) = hit_test_reasons {
+            let CompositorInput::Wheel { position, .. } = input else {
+                unreachable!()
+            };
+            let request =
+                self.RetainWheelInput(input, PendingWheelStage::MainThreadHitTest(reasons));
+            self.waiting_wheel_hit_test = Some(request);
+            self.core
+                .effects
+                .push(CompositorMainThreadEffect::WheelRequiresMainThreadHitTest {
+                    request,
+                    position,
+                });
+        }
         // LayerTreeHostImpl delegate calls stay on Chromium's impl sequence.
         // In particular, ProxyImpl::SetNeedsRedrawOnImplThread immediately
         // updates Scheduler before the next BeginFrame.  Our delegate endpoint
@@ -517,13 +1033,32 @@ impl EngineAssembly {
         //         cc/trees/proxy_impl.cc SetNeedsRedrawOnImplThread.
         Ok(CompositorOutput {
             frame: None,
+            frame_matches_latest_commit: false,
             main_thread_effects: effects,
             needs_begin_frames: true,
             work_pending: true,
-            main_commit_pending: self.core.HasReadyCommit(),
+            main_commit_pending: self.core.HasReadyCommit()
+                || self.scroll_animation_commit.is_some(),
         })
     }
     /// The actual Viz acceptance event is distinct from resource returns.
+    pub(crate) fn RequestPresentationTime(
+        &mut self,
+        request: u64,
+    ) -> Result<CompositorOutput, CompositorError> {
+        let promise = super::report_time_swap_promise::Create(
+            request,
+            self.resource_effects.clone(),
+            self.core.endpoint.Clock(),
+        );
+        // LayerTreeHost::QueueSwapPromise does not invent a commit or paint.
+        self.core
+            .main
+            .pending_commit_state_mut()
+            .swap_promises
+            .push(promise);
+        self.Poll()
+    }
     pub(crate) fn DidReceiveFrameAck(&mut self) -> Result<CompositorOutput, CompositorError> {
         {
             let _query = self
@@ -822,19 +1357,6 @@ impl EngineAssembly {
     }
     fn Lifecycle(&mut self, effect: HostLifecycleEffect) -> Result<(), CompositorError> {
         use HostLifecycleEffect as E;
-        if std::env::var_os("RECHROM_DIAG_CC_LIFECYCLE").is_some() {
-            if matches!(effect, E::NotifyReadyToActivate { .. }) {
-                eprintln!("cc-lifecycle NotifyReadyToActivate");
-            } else if matches!(effect, E::NotifyReadyToDraw { .. }) {
-                eprintln!("cc-lifecycle NotifyReadyToDraw");
-            } else if matches!(effect, E::DidPrepareTiles { .. }) {
-                eprintln!("cc-lifecycle DidPrepareTiles");
-            } else if matches!(effect, E::SetNeedsPrepareTiles { .. }) {
-                eprintln!("cc-lifecycle SetNeedsPrepareTiles");
-            } else if matches!(effect, E::SetNeedsRedraw { .. }) {
-                eprintln!("cc-lifecycle SetNeedsRedraw");
-            }
-        }
         match effect {
             E::NotifyReadyToActivate { .. } => self.scheduler.NotifyReadyToActivate(&mut self.core),
             E::NotifyReadyToDraw { .. } => self.scheduler.NotifyReadyToDraw(&mut self.core),
@@ -858,7 +1380,11 @@ impl EngineAssembly {
                 self.scheduler.SetWaitingForScrollEvent(waiting)
             }
             E::SetDeferBeginMainFrameFromImpl { defer, .. } => {
-                self.scheduler.SetDeferBeginMainFrame(defer, &mut self.core)
+                self.core.main_frame_lifecycle.SetDeferFromImpl(defer);
+                self.scheduler.SetDeferBeginMainFrame(
+                    self.core.main_frame_lifecycle.DeferBeginMainFrame(),
+                    &mut self.core,
+                )
             }
             E::SetNeedsOneBeginImplFrame { .. } => {
                 self.scheduler.SetNeedsOneBeginImplFrame(&mut self.core)
@@ -921,6 +1447,29 @@ impl EngineAssembly {
             .Base()
             .delegate_for_testing();
         match effect {
+            ResourceEffect::ReportTimeSwapped {
+                request,
+                frame_token,
+                swap_time,
+            } => self
+                .core
+                .effects
+                .push(CompositorMainThreadEffect::PresentationPromiseSwapped {
+                    request,
+                    frame_token,
+                    swap_time,
+                }),
+            ResourceEffect::ReportTimeDidNotSwap {
+                request,
+                failure_time,
+            } => {
+                self.core
+                    .effects
+                    .push(CompositorMainThreadEffect::PresentationPromiseDidNotSwap {
+                        request,
+                        failure_time,
+                    })
+            }
             ResourceEffect::DidLoseLayerTreeFrameSink { delegate: target } => {
                 assert_eq!(target, delegate);
                 self.scheduler.DidLoseLayerTreeFrameSink(&mut self.core);
@@ -985,6 +1534,14 @@ impl EngineAssembly {
                 for callback in callbacks.main_successful_callbacks.drain(..) {
                     callback(&details);
                 }
+                // LayerTreeHost.cc:998-1003: client notification follows
+                // the source main-thread presentation callback lists.
+                self.core
+                    .effects
+                    .push(CompositorMainThreadEffect::FramePresented {
+                        frame_token: token,
+                        details: details.clone(),
+                    });
             }
             ResourceEffect::TransitionFinished {
                 delegate: target,
@@ -1151,32 +1708,15 @@ impl EngineAssembly {
         poll_trace.set("work_pending", work_pending as u8 as f64);
         poll_trace.set("tasks", tasks_processed as f64);
         poll_trace.set("turns", turns as f64);
-        if std::env::var_os("RECHROM_DIAG_CC_LIFECYCLE").is_some()
-            && (self.core.HasReadyCommit()
-                || self.scheduler.CommitPending()
-                || self.scheduler.RedrawPending()
-                || self.scheduler.PrepareTilesPending())
-        {
-            let host = self.core.host.as_ref().unwrap().Base();
-            eprintln!(
-                "cc-state pending_tree={} ready_activate={} commit_pending={} ready_commit={} redraw={} prepare={} can_draw={} needs_bf={} work_pending={}",
-                host.pending_tree().is_some(),
-                self.scheduler.pending_tree_is_ready_for_activation(),
-                self.scheduler.CommitPending(),
-                self.core.HasReadyCommit(),
-                self.scheduler.RedrawPending(),
-                self.scheduler.PrepareTilesPending(),
-                host.CanDraw(&HostImplContext { services: &mut self.core.services }),
-                self.needs_begin_frames,
-                work_pending,
-            );
-        }
+        let (frame, frame_matches_latest_commit) = self.core.TakeFrame();
         Ok(CompositorOutput {
-            frame: self.core.TakeFrame(),
+            frame,
+            frame_matches_latest_commit,
             main_thread_effects: effects,
             needs_begin_frames: self.needs_begin_frames,
             work_pending,
-            main_commit_pending: self.core.HasReadyCommit(),
+            main_commit_pending: self.core.HasReadyCommit()
+                || self.scroll_animation_commit.is_some(),
         })
     }
 }
@@ -1189,5 +1729,35 @@ impl Drop for EngineAssembly {
         let queries = self.core.scheduler_queries.clone();
         let _query = queries.Enter(self.scheduler.IsReadyToActivate());
         self.core.Shutdown();
+    }
+}
+
+impl EngineAssembly {
+    fn WheelContinuationError(message: &str) -> CompositorError {
+        CompositorError::Backend(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            message,
+        ))
+    }
+    fn RetainWheelInput(&mut self, input: CompositorInput, stage: PendingWheelStage) -> u64 {
+        self.next_wheel_request = self
+            .next_wheel_request
+            .checked_add(1)
+            .expect("source wheel request identity exhausted");
+        self.pending_wheel_inputs
+            .insert(self.next_wheel_request, PendingWheelInput { input, stage });
+        self.next_wheel_request
+    }
+    fn WaitingWheelOutput(&mut self, effect: CompositorMainThreadEffect) -> CompositorOutput {
+        self.core.effects.push(effect);
+        CompositorOutput {
+            frame: None,
+            frame_matches_latest_commit: false,
+            main_thread_effects: std::mem::take(&mut self.core.effects),
+            needs_begin_frames: self.needs_begin_frames,
+            work_pending: false,
+            main_commit_pending: self.core.HasReadyCommit()
+                || self.scroll_animation_commit.is_some(),
+        }
     }
 }

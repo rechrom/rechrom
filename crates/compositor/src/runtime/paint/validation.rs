@@ -22,7 +22,7 @@ pub enum PaintInputError {
     MissingStickyConstraint {
         node: Arc<paint_property_tree::TransformPaintPropertyNode>,
     },
-    UnsupportedCanvasChild {
+    InvalidCanvasChild {
         node: Arc<paint_property_tree::EffectPaintPropertyNode>,
     },
     InvalidRecordRange {
@@ -83,9 +83,9 @@ impl std::fmt::Display for PaintInputError {
                 "transform {} lacks the native compositor sticky constraint",
                 node.id
             ),
-            Self::UnsupportedCanvasChild { node } => write!(
+            Self::InvalidCanvasChild { node } => write!(
                 f,
-                "effect {} lacks native canvas-child CustomData recording support",
+                "effect {} has an incomplete canvas-child property state",
                 node.id
             ),
             Self::InvalidRecordRange {
@@ -251,16 +251,24 @@ fn ValidateArtifactGraph(
         }
     }
     for resource_id in image_ids {
-        let image = artifact
+        let resources = artifact
             .resources
             .as_ref()
-            .and_then(|resources| {
-                resources
-                    .images
-                    .iter()
-                    .find(|image| image.id == resource_id)
-            })
             .ok_or(PaintInputError::MissingImageResource { resource_id })?;
+        let Some(image) = resources
+            .images
+            .iter()
+            .find(|image| image.id == resource_id)
+        else {
+            if resources
+                .canvases
+                .iter()
+                .any(|canvas| canvas.resource_id == resource_id)
+            {
+                continue;
+            }
+            return Err(PaintInputError::MissingImageResource { resource_id });
+        };
         if let paint::paint_engine::PaintImageContent::Document(content) = &image.content {
             let record = image
                 .document_container_key
@@ -344,8 +352,8 @@ fn ValidateArtifactGraph(
                 if !seen.insert((2, Arc::as_ptr(&node) as usize)) {
                     continue;
                 }
-                if node.compositor.canvas_child_state.is_some() {
-                    return Err(PaintInputError::UnsupportedCanvasChild { node: node.clone() });
+                if node.compositor.canvas_child_state.is_some() && !node.HasCanvasChildState() {
+                    return Err(PaintInputError::InvalidCanvasChild { node: node.clone() });
                 }
                 for (backdrop, filters) in [(false, &node.filters), (true, &node.backdrop_filters)]
                 {

@@ -309,6 +309,27 @@ pub(crate) fn PointAndTangentForShape(
     distance: &Length,
     effective_zoom: f32,
 ) -> Option<PointAndTangent> {
+    if shape.GetType() == ShapeType::kStyleShapeType {
+        let path = shape.GetPath(
+            &gfx::RectF::new(gfx::PointF::default(), *reference_size),
+            effective_zoom,
+            1.,
+        );
+        let measure = layoutng_geometry::shape_path_measure::ShapePathMeasure::new(&path);
+        let length = measure.Length();
+        let mut resolved = FloatValueForLength(distance, length);
+        if length > 0. {
+            if measure.IsClosed() {
+                resolved %= length;
+                if resolved < 0. {
+                    resolved += length;
+                }
+            } else {
+                resolved = resolved.clamp(0., length);
+            }
+        }
+        return Some(measure.PointAndTangent(resolved));
+    }
     if shape.GetType() == ShapeType::kStylePathType {
         let path = unsafe { &*(shape as *const dyn BasicShape as *const StylePath) };
         return Some(resolved_sample(

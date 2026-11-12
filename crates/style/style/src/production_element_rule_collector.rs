@@ -149,8 +149,22 @@ impl<'d> ProductionElementRuleCollectorRuntime<'d> {
         implicit_scope_roots: impl Into<Rc<HashMap<usize, Vec<usize>>>>,
         container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
     ) -> Self {
+        Self::with_production_backend(
+            session.Backend(),
+            author_layer_map,
+            implicit_scope_roots,
+            container_runtime,
+        )
+    }
+
+    pub fn with_production_backend(
+        selector: Rc<PersistentSelectorBackend<'d>>,
+        author_layer_map: Option<Rc<CascadeLayerMap>>,
+        implicit_scope_roots: impl Into<Rc<HashMap<usize, Vec<usize>>>>,
+        container_runtime: Option<&'d ProductionContainerRuntime<'d>>,
+    ) -> Self {
         Self {
-            selector: session.Backend(),
+            selector,
             author_layer_map: author_layer_map.map(Rc::new),
             implicit_scope_roots: implicit_scope_roots.into(),
             container_runtime,
@@ -238,7 +252,18 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         &self,
         c: &Self::ElementResolveContext,
     ) -> Rc<Self::Element> {
-        self.ContextElement(c)
+        // cpp: ElementResolveContext::ElementResolveContext. Retained UA
+        // shadow implementation nodes (such as the placeholder div) are
+        // ordinary Elements and therefore match from themselves. Only real
+        // PseudoElements replace the selector subject with their ultimate
+        // originating element.
+        let document = self.selector.document();
+        let element = if document.PseudoElementFacts(c.element).is_some() {
+            document.UltimateOriginatingElement(c.element)
+        } else {
+            c.element
+        };
+        self.selector.handle(element)
     }
     fn ContextParentElement(&self, c: &Self::ElementResolveContext) -> Option<Rc<Self::Element>> {
         self.selector
@@ -246,15 +271,17 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
             .FlatTreeParentElement(c.element)
             .map(|index| self.selector.handle(index))
     }
-    fn ElementIsPseudoElement(&self, _: &Self::Element) -> bool {
-        false
+    fn ElementIsPseudoElement(&self, e: &Self::Element) -> bool {
+        self.selector.document().PseudoElementFacts(*e).is_some()
     }
     fn LayoutTraversalParentOfUltimateOriginatingElement(
         &self,
         e: &Self::Element,
     ) -> Option<Rc<Self::Element>> {
-        self.node(e)
-            .Parent()
+        let origin = self.selector.document().UltimateOriginatingElement(*e);
+        self.selector
+            .document()
+            .FlatTreeParentElement(origin)
             .map(|index| self.selector.handle(index))
     }
     fn ParentStackIsConsistent(
@@ -341,8 +368,10 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
         c: &Self::ElementResolveContext,
     ) -> Self::SelectorCheckingContext {
         ProductionCheckingContext {
-            element: self.ContextElement(c),
-            pseudo_element: None,
+            element: self.ContextUltimateOriginatingElementOrSelf(c),
+            pseudo_element: self
+                .ElementIsPseudoElement(&c.element)
+                .then(|| self.ContextElement(c)),
             style_scope_frame: None,
             scope: None,
             tree_scope: None,
@@ -424,12 +453,11 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
                 Rc<PersistentSelectorBackend<'static>>,
             >(self.selector.clone())
         };
-        let mut checker = SelectorChecker::ForPseudoRequestWithParts(
+        let mut checker = SelectorChecker::ForStyleRequest(
             backend,
             parts.cloned().map(Rc::new),
+            request,
             mode,
-            request.argument.clone().unwrap_or_default(),
-            request.ident_list.clone(),
             ua,
         );
         checker.SetOriginatingPseudoId(request.originating_id);
@@ -453,6 +481,22 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
             >(self.selector.clone())
         };
         let mut actual = SelectorCheckingContext::new(backend.handle(*c.element));
+        // ElementResolveContext::BuildPseudoElementAncestors, cc:48-69.
+        // Borrow identities from the retained DOM pseudo-parent chain.
+        actual.pseudo_element = c.pseudo_element.clone();
+        if let Some(pseudo) = c.pseudo_element.as_deref() {
+            let mut current = Some(*pseudo);
+            while let Some(element) = current {
+                if backend.document().PseudoElementFacts(element).is_none() {
+                    break;
+                }
+                actual
+                    .pseudo_element_ancestors
+                    .push(backend.handle(element));
+                current = backend.document().Node(element).Parent();
+            }
+            actual.pseudo_element_ancestors.reverse();
+        }
         actual.selector = Some(selector);
         actual.scope = c.scope.as_ref().map(|scope| backend.handle(**scope));
         // TreeScope comparisons in SelectorChecker are identity comparisons,
@@ -573,9 +617,8 @@ impl ElementRuleCollectorRuntime<Backend> for ProductionElementRuleCollectorRunt
     fn ShadowPseudoId(&self, element: &Self::Element) -> AtomicString {
         SelectorCheckerBackend::ShadowPseudoId(self.selector.as_ref(), element)
     }
-    fn IsVTTElement(&self, _: &Self::Element) -> bool {
-        // Persistent DOM nodes do not model Blink's VTTElement subclass.
-        false
+    fn IsVTTElement(&self, element: &Self::Element) -> bool {
+        self.selector.document().IsVTTElement(*element)
     }
     fn HasID(&self, e: &Self::Element) -> bool {
         SelectorCheckerBackend::HasID(self.selector.as_ref(), e)

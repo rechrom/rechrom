@@ -21,9 +21,10 @@ pub struct PaintColor {
     pub alpha: f32,
 }
 
-/// Writing modes stored in the public Layout -> Paint artifact. Sideways
-/// modes intentionally collapse to their physical vertical direction before
-/// crossing this boundary; source Layout keeps the five-value `WritingMode`.
+/// Writing modes stored in the public Layout -> Paint artifact. Sideways-rl
+/// shares Paint's physical behavior with vertical-rl, while sideways-lr stays
+/// distinct because text rotation and selection-bound edges differ from
+/// vertical-lr. Source Layout keeps the full five-value `WritingMode`.
 // cpp: layoutng/internal/layout_input.h:54-57
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub enum LayoutPaintWritingMode {
     kHorizontalTb,
     kVerticalRl,
     kVerticalLr,
+    kSidewaysLr,
 }
 
 impl From<crate::WritingMode> for LayoutPaintWritingMode {
@@ -39,7 +41,8 @@ impl From<crate::WritingMode> for LayoutPaintWritingMode {
         match mode {
             crate::WritingMode::kHorizontalTb => Self::kHorizontalTb,
             crate::WritingMode::kVerticalRl | crate::WritingMode::kSidewaysRl => Self::kVerticalRl,
-            crate::WritingMode::kVerticalLr | crate::WritingMode::kSidewaysLr => Self::kVerticalLr,
+            crate::WritingMode::kVerticalLr => Self::kVerticalLr,
+            crate::WritingMode::kSidewaysLr => Self::kSidewaysLr,
         }
     }
 }
@@ -173,7 +176,7 @@ mod tests {
         );
         assert_eq!(
             LayoutPaintWritingMode::from(crate::WritingMode::kSidewaysLr),
-            LayoutPaintWritingMode::kVerticalLr
+            LayoutPaintWritingMode::kSidewaysLr
         );
         assert_ne!(FontSmoothing::kAuto, FontSmoothing::kNone);
         assert_eq!(FontVariation::default().tag, 0);

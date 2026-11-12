@@ -19,6 +19,10 @@ fn main() {
         browser_cpu ^ chromium_embedding,
         "select exactly one Skia embedding: browser_cpu or chromium_embedding"
     );
+    // Source: skia/BUILD.gn:59-70, skia_config. Chromium keeps the legacy
+    // shader-context path enabled for eligible N32 bitmap shaders; this is a
+    // build configuration input, not a replay-time sampling override.
+    println!("cargo:rustc-cfg=SK_ENABLE_LEGACY_SHADERCONTEXT");
     if browser_cpu {
         // These are upstream Skia's actual default diagnostic ports. This
         // embedding has no Chromium base::logging owner, so its FileLine

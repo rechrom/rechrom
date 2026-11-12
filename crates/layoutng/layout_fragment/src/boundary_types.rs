@@ -16,17 +16,49 @@ pub struct FragmentPaintRect {
     pub size: LayoutSize,
 }
 
+/// PhysicalBoxFragment::AddSelfOutlineRects output for the style actually
+/// selected by BoxFragmentPainter. Rects remain fragment-local until PrePaint
+/// applies the resident paint offset.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SelfOutlinePaintData {
+    pub rects: Vec<FragmentPaintRect>,
+    pub width: f64,
+    pub offset: f64,
+}
+
+/// LayoutBox's saved geometry from the preceding completed Paint lifecycle.
+/// These values survive in-place updates of the resident physical fragments.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PreviousBoxGeometry {
+    pub size: LayoutSize,
+    pub content_box: FragmentPaintRect,
+    pub self_visual_overflow: FragmentPaintRect,
+    pub scrollable_overflow: FragmentPaintRect,
+    pub replaced_content: Option<FragmentPaintRect>,
+}
+
 /// Immutable resources and host geometry retained with a fragment result.
 // cpp: layoutng_fragment_tree/fragment_tree.h:12-17
 #[derive(Clone, PartialEq)]
 pub struct PaintResources {
     pub fonts: font_engine::FontFaceCatalog,
     pub images: Vec<image_resource::PaintImage>,
+    /// Immutable front-buffer snapshots published by Canvas contexts. They
+    /// remain a distinct producer catalog even though Raster lowers both
+    /// canvas and decoded bitmap frames to SkImage resources.
+    pub canvases: Vec<canvas::CanvasPaintResource>,
     pub device_pixel_ratio: f64,
     pub preferred_color_scheme: u8,
     /// Page/browser zoom already applied to retained Layout coordinates.
     pub layout_zoom_factor: f64,
+    /// LocalFrameView::BaseBackgroundColor() after host/color-scheme policy.
+    /// Kept independently from the admission bit because transparent and
+    /// non-white embedder colors are observable during printing.
+    pub base_background_color: PaintColor,
     pub paints_opaque_base_background: bool,
+    /// Settings::GetShouldClearDocumentBackground. When the base backdrop is
+    /// painted, ViewPainter uses source replacement instead of source-over.
+    pub should_clear_document_background: bool,
     pub viewport: Option<LayoutViewportGeometry>,
 }
 
@@ -87,7 +119,18 @@ impl<Style> Default for TablePaintData<Style> {
 pub struct CanvasBackgroundPaintData<Style> {
     pub style: Style,
     pub effective_zoom: f32,
+    /// Stable LayoutObject identity of the document element whose
+    /// LocalBorderBoxProperties provide the canvas background paint state.
+    /// The selected style may instead come from the body element.
+    pub document_element_node_id: u64,
+    pub previous_document_element_geometry: Option<PreviousBoxGeometry>,
+    /// RootBox::FirstFragment().PaintOffset(), in LayoutView contents space.
+    /// ViewPainter covers the canvas with the view rect but positions ordinary
+    /// background images from this document-element border-box origin.
+    pub document_element_paint_offset: LayoutOffset,
     pub document_element_size: LayoutSize,
+    pub document_element_border: LayoutEdges,
+    pub document_element_padding: LayoutEdges,
     pub document_element_content_box: FragmentPaintRect,
     pub document_element_scrollable_overflow: Option<FragmentPaintRect>,
     pub document_element_has_transform: bool,
@@ -101,10 +144,18 @@ impl Default for PaintResources {
         Self {
             fonts: font_engine::FontFaceCatalog::default(),
             images: Vec::new(),
+            canvases: Vec::new(),
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,
             layout_zoom_factor: 1.0,
+            base_background_color: PaintColor {
+                red: 1.0,
+                green: 1.0,
+                blue: 1.0,
+                alpha: 1.0,
+            },
             paints_opaque_base_background: true,
+            should_clear_document_background: true,
             viewport: None,
         }
     }
@@ -177,7 +228,20 @@ pub struct ReplacedContentPaintData {
     pub clips_to_content_box: bool,
     pub is_svg_root: bool,
     pub is_image: bool,
+    /// LayoutHTMLCanvas identity. Paint dispatches this to HTMLCanvasPainter
+    /// instead of treating every LayoutReplaced as a LayoutImage.
+    pub is_canvas: bool,
+    /// LayoutHTMLCanvas::DrawsBackgroundOntoContentLayer(). Layout owns the
+    /// style/geometry and rendering-context eligibility decision; Paint only
+    /// applies the resolved color to the resident foreign layer.
+    pub draws_background_onto_content_layer: bool,
     pub is_media: bool,
+    /// LayoutVideo identity. LayoutMedia also covers audio, whose
+    /// PaintReplaced() is intentionally empty in Chromium.
+    pub is_video: bool,
+    /// LayoutVideo::GetDisplayMode(), resolved by the native video owner.
+    pub video_uses_poster: bool,
+    pub video_would_taint_origin: bool,
     pub is_layout_embedded_content: bool,
     pub is_embedded_object: bool,
 }
@@ -191,7 +255,12 @@ impl Default for ReplacedContentPaintData {
             clips_to_content_box: true,
             is_svg_root: false,
             is_image: false,
+            is_canvas: false,
+            draws_background_onto_content_layer: false,
             is_media: false,
+            is_video: false,
+            video_uses_poster: false,
+            video_would_taint_origin: false,
             is_layout_embedded_content: false,
             is_embedded_object: false,
         }
@@ -307,17 +376,6 @@ pub struct FrameSetPaintData {
     pub has_border_color: bool,
 }
 
-/// Font geometry required to position a caret even when the editor has no glyphs.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TextControlCaretMetrics {
-    pub font_height: f64,
-    pub ascent: f64,
-    pub line_height: f64,
-    /// Primary-font `0` advance used by Chromium as the 1ch fallback for a
-    /// block/underscore caret when no following grapheme can be measured.
-    pub zero_width: f64,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BackgroundPaintLocation {
     #[default]
@@ -339,6 +397,8 @@ impl BackgroundPaintLocation {
 /// Chromium dirty-bit facts consumed by the fragment-local PrePaint tracker.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PrePaintInvalidation {
+    pub blocking_wheel_event_handler_changed: bool,
+    pub descendant_blocking_wheel_event_handler_changed: bool,
     pub needs_paint_property_update: bool,
     pub descendant_needs_paint_property_update: bool,
     /// LayoutObject::ChildPrePaintBlockedByDisplayLock(). This participates in
@@ -373,7 +433,8 @@ pub struct PrePaintInvalidation {
 
 impl PrePaintInvalidation {
     pub fn own(self) -> bool {
-        self.needs_paint_property_update
+        self.blocking_wheel_event_handler_changed
+            || self.needs_paint_property_update
             || self.should_check_for_paint_invalidation
             || self.should_check_layout_for_paint_invalidation
             || self.subtree_should_check_for_paint_invalidation
@@ -381,7 +442,8 @@ impl PrePaintInvalidation {
     }
 
     pub fn descendants(self) -> bool {
-        self.descendant_needs_paint_property_update
+        self.descendant_blocking_wheel_event_handler_changed
+            || self.descendant_needs_paint_property_update
             || self.descendant_should_check_layout_for_paint_invalidation
             || self.subtree_should_check_for_paint_invalidation
             || self.subtree_should_do_full_paint_invalidation
@@ -453,11 +515,18 @@ pub struct FragmentPaintData<Paint> {
     pub content_size: LayoutSize,
     pub text_start: Option<u32>,
     pub text_end: Option<u32>,
+    /// Exact TextPainter paint-timing admission for this source substring.
+    /// Glyph ids cannot reconstruct CSS text whitespace after shaping.
+    pub text_paint_timing_non_whitespace: bool,
     pub paint: PaintPropertiesHandle<Paint>,
 }
 
 impl<Paint> FragmentPaintData<Paint> {
     pub fn new(paint: Paint) -> Self {
+        Self::with_paint_handle(paint.into())
+    }
+
+    pub fn with_paint_handle(paint: PaintPropertiesHandle<Paint>) -> Self {
         Self {
             inline_geometry: Vec::new(),
             paint_cull_scroll_offset: None,
@@ -473,8 +542,26 @@ impl<Paint> FragmentPaintData<Paint> {
             content_size: LayoutSize::default(),
             text_start: None,
             text_end: None,
-            paint: paint.into(),
+            text_paint_timing_non_whitespace: false,
+            paint,
         }
+    }
+
+    /// Prepare the resident fragment slot for another source publication.
+    /// Paint payload and lifecycle revisions stay in place; source-fragment
+    /// geometry is rewritten by the publication walk that follows.
+    pub fn prepare_for_publication(&mut self) {
+        self.inline_geometry.clear();
+        self.paint_cull_scroll_offset = None;
+        self.fragmentainer_instance_id = 0;
+        self.node_id = 0;
+        self.kind = FragmentKind::kBox;
+        self.offset = LayoutOffset::default();
+        self.size = LayoutSize::default();
+        self.content_size = LayoutSize::default();
+        self.text_start = None;
+        self.text_end = None;
+        self.text_paint_timing_non_whitespace = false;
     }
 }
 
@@ -552,6 +639,46 @@ pub struct ColumnRulePaintData {
     pub rules: Vec<ColumnRule>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GapRuleSide {
+    #[default]
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct GapRule {
+    pub offset: LayoutOffset,
+    pub size: LayoutSize,
+    pub color: PaintColor,
+    pub line_style: BorderLineStyle,
+    /// Physical side selected by CSSGapDecorationUtils::BoxSideFromDirection.
+    pub side: GapRuleSide,
+}
+
+impl Default for GapRule {
+    fn default() -> Self {
+        Self {
+            offset: LayoutOffset::default(),
+            size: LayoutSize::default(),
+            color: PaintColor::default(),
+            line_style: BorderLineStyle::kNone,
+            side: GapRuleSide::Top,
+        }
+    }
+}
+
+/// Fully resolved CSS gap-decoration segments.  The used-value payload is the
+/// same used-value shape as a legacy multicolumn rule plus the source physical
+/// side needed for inset/outset lighting.
+// cpp: core/paint/gap_decorations_painter.cc:222-527
+#[derive(Clone, Default, PartialEq)]
+pub struct GapRulePaintData {
+    pub rules: Vec<GapRule>,
+}
+
 // cpp: layoutng_fragment_tree/fragment_tree.h:193-201
 #[derive(Clone, PartialEq)]
 pub struct CollapsedTableEdge {
@@ -605,6 +732,10 @@ pub struct ScrollbarPaintAxis {
     pub horizontal: bool,
     pub left_side_vertical: bool,
     pub has_buttons: bool,
+    /// ScrollbarTheme::Opacity() for painted platform scrollbars.
+    pub painted_opacity: f32,
+    /// Current NSScrollerImp track-box width (12/10 while unexpanded).
+    pub painted_thumb_width: i32,
 }
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:230-248
@@ -621,6 +752,8 @@ pub struct ScrollbarPaintData {
     /// scrollers and CSS overflow:overlay controls also paint above content.
     pub should_paint_as_overlay: bool,
     pub uses_overlay_scrollbars: bool,
+    pub is_solid_color: bool,
+    pub uses_macos_painted_scrollbars: bool,
     /// Negated ScrollbarTheme::AllowsHitTest(). The negated representation
     /// preserves the safe, hit-testable behavior of older/default payloads.
     pub theme_disallows_hit_test: bool,
@@ -654,6 +787,7 @@ pub struct FormControlPaintData {
     pub r#type: Option<FormControlType>,
     pub checked: bool,
     pub indeterminate: bool,
+    pub is_progress: bool,
     pub disabled: bool,
     pub read_only: bool,
     pub hovered: bool,
@@ -672,6 +806,7 @@ impl Default for FormControlPaintData {
             r#type: None,
             checked: false,
             indeterminate: false,
+            is_progress: false,
             disabled: false,
             read_only: false,
             hovered: false,
@@ -724,6 +859,14 @@ pub struct SvgViewportGeometry {
     pub content_transform: TransformMatrix,
     pub clip: Option<FragmentPaintRect>,
     pub disabled: bool,
+    /// Source: SVGRootPainter::TransformToPixelSnappedBorderBox. An SVG
+    /// document root scales its stitched viewport to the snapped border box;
+    /// an inline SVG does not while the experimental inline adjustment is off.
+    pub is_document_element: bool,
+    /// RuntimeEnabledFeatures::SvgInlineRootPixelSnappingScaleAdjustmentEnabled
+    /// captured with the source viewport. This feature is test-only in the
+    /// pinned Chromium revision and defaults to false in production.
+    pub inline_root_pixel_snapping_scale_adjustment: bool,
 }
 
 /// The computed `scroll-snap-type` values retained by Layout for Paint.
@@ -872,6 +1015,8 @@ mod tests {
         assert_eq!(CollapsedTableSection::default().start_row, 0);
         assert!(CollapsedTablePaintData::default().edges.is_empty());
         assert_eq!(ColumnRule::default().line_style, BorderLineStyle::kNone);
+        assert!(GapRulePaintData::default().rules.is_empty());
+        assert_eq!(GapRule::default().side, GapRuleSide::Top);
         assert_eq!(
             FieldsetPaintData::default().border_outsets,
             LayoutEdges::default()

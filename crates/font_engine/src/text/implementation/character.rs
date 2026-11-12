@@ -69,6 +69,26 @@ impl Character {
             .is_ok()
     }
 
+    // character.h:101-104, character.cc:245-247,283-288.
+    pub fn IsCjkIdeographOrSymbolBase(c: i32) -> bool {
+        use foundation::unicode::*;
+        Self::IsCjkIdeographOrSymbol(c)
+            && Category(c)
+                & (kMark_SpacingCombining
+                    | kMark_Enclosing
+                    | kMark_NonSpacing
+                    | kLetter_Modifier
+                    | kSymbol_Modifier)
+                == 0
+    }
+    pub fn IsEmojiComponent(c: i32) -> bool {
+        unsafe { icu_bidi::ubidi_ffi::u_getIntPropertyValue(c, 61) != 0 }
+    }
+    pub fn IsCommonOrInheritedScript(c: i32) -> bool {
+        let mut error = 0;
+        let script = unsafe { icu_bidi::ubidi_ffi::uscript_getScript(c, &mut error) };
+        error <= 0 && (script == 0 || script == 1)
+    }
     pub fn IsCjkIdeographOrSymbol(c: i32) -> bool {
         if c < 0x2C7 {
             false

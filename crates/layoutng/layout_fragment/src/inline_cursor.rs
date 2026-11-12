@@ -74,6 +74,22 @@ pub extern "Rust" fn LayoutTextPhysicalLinesBoundingBox(text: &LayoutText) -> Ph
     bounding_box
 }
 
+// Source: core/layout/layout_text.cc:1154-1160. Mutate the canonical
+// fragment-local Paint sidecar through the resident InlineCursor.
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "Rust" fn LayoutTextInvalidateVisualOverflow(text: &mut LayoutText) {
+    debug_assert!(text.IsInLayoutNGInlineFormattingContext());
+    let mut cursor = InlineCursor::default();
+    cursor.MoveToLayoutObject(unsafe { &*(text as *mut LayoutText as *mut LayoutObject) });
+    while cursor.IsNotNull() {
+        unsafe { &*cursor.CurrentItem() }
+            .GetMutableForPainting()
+            .InvalidateInkOverflow();
+        cursor.MoveToNextForSameLayoutObject();
+    }
+}
+
 // cpp: core/layout/layout_inline.cc:727-744
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
@@ -1897,6 +1913,13 @@ impl<'a> InlineBackwardCursor<'a> {
         }
     }
 
+    /// Move the source backward cursor's existing sibling index owner into a
+    /// call-scoped consumer. The resident FragmentItems and geometry stay here.
+    /// Source: inline_cursor.h:676-706; inline_cursor.cc:1326-1374.
+    pub fn IntoSiblingItemIndices(self) -> Vec<usize> {
+        self.sibling_item_indices_
+    }
+
     pub fn Current(&self) -> &InlineCursorPosition {
         &self.current_
     }
@@ -1928,3 +1951,7 @@ impl<'a> InlineBackwardCursor<'a> {
         self.cursor_.ContainerFragment()
     }
 }
+
+#[cfg(feature = "translation_in_progress")]
+#[path = "../../layout_algo_inline/src/inline_cursor_editing_queries.rs"]
+mod layout_algo_inline_editing_queries;

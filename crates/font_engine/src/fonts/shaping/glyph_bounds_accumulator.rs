@@ -48,10 +48,10 @@ impl<const IS_HORIZONTAL_RUN: bool> GlyphBoundsAccumulator<IS_HORIZONTAL_RUN> {
         if !IS_HORIZONTAL_RUN {
             std::mem::swap(&mut self.min_x_, &mut self.min_y_);
             std::mem::swap(&mut self.max_x_, &mut self.max_y_);
-            let baseline_adjust = metrics.AscentFor(FontBaseline::kCentralBaseline)
-                - metrics.AscentFor(FontBaseline::kAlphabeticBaseline);
-            self.min_y_ += baseline_adjust as f32;
-            self.max_y_ += baseline_adjust as f32;
+            let baseline_adjust = metrics.FixedAscent(FontBaseline::kCentralBaseline)
+                - metrics.FixedAscent(FontBaseline::kAlphabeticBaseline);
+            self.min_y_ += baseline_adjust.ToFloat();
+            self.max_y_ += baseline_adjust.ToFloat();
         }
         RectF::new(
             PointF::new(self.min_x_, self.min_y_),

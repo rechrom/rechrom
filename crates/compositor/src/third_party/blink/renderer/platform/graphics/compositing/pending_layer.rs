@@ -304,6 +304,14 @@ impl<B: PendingLayerTypes> PendingLayerDecomposition for PendingLayer<B> {
 // the type graph, replacing Oilpan's explicit Visitor calls.
 
 impl<B: PendingLayerTypes> PendingLayer<B> {
+    pub fn GetCanvasChildPaintRecordReadLease(
+        &self,
+        c: &LayerContext<'_, B>,
+    ) -> Option<crate::adapter::content_layer_client_impl::CanvasChildPaintRecordReadLease<B>> {
+        self.content_layer_client_
+            .as_ref()?
+            .GetCanvasChildPaintRecordReadLease(c)
+    }
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.h:40-43;
     // Source: third_party/blink/renderer/platform/graphics/compositing/pending_layer.cc:44-79.
     pub fn new(
@@ -616,11 +624,37 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
         let item = self.FirstDisplayItem();
         let visual_rect = item.ForeignLayerVisualRect();
         let layer_offset = Vector2dF::new(visual_rect.x(), visual_rect.y());
-        self.cc_layer_ = Some(item.ForeignLayer());
-        self.cc_layer_
+        let foreign_layer = item.ForeignLayer();
+        let video_style = if self.HasVideo() {
+            Some(
+                item.ForeignVideoPresentationStyle()
+                    .expect("video item retains its element style"),
+            )
+        } else {
+            None
+        };
+        // The item borrow ends here; this is the original resident layer Rc.
+        self.cc_layer_ = Some(foreign_layer);
+        let layer = self
+            .cc_layer_
             .as_ref()
-            .expect("foreign display item supplies its resident layer")
-            .SetOffsetToTransformParent(layer_offset + self.offset_of_decomposited_transforms_, c);
+            .expect("foreign display item supplies its resident layer");
+        // VideoPainter sizes CcLayer to the pixel-snapped replaced-content
+        // rectangle before recording kForeignLayerVideo. Paint's package
+        // boundary retains that size in the display item's visual rect; apply
+        // it here where the live LayerContext is available.
+        if let Some((filter_quality, dynamic_range_limit)) = video_style {
+            layer.SetFilterQuality(filter_quality, c);
+            layer.SetDynamicRangeLimit(dynamic_range_limit, c);
+            layer.SetBounds(
+                Size::new(
+                    visual_rect.width().round().max(0.0) as i32,
+                    visual_rect.height().round().max(0.0) as i32,
+                ),
+                c,
+            );
+        }
+        layer.SetOffsetToTransformParent(layer_offset + self.offset_of_decomposited_transforms_, c);
     }
 
     fn UpdateScrollHitTestLayer(

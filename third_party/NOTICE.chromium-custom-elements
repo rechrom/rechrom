@@ -4,6 +4,18 @@ See LICENSE.chromium, LICENSE-LGPL-2 and LICENSE-LGPL-2.1.
 Original source-file notices are preserved below; the root BSD license does
 not replace source-specific LGPL terms on the DOM integration files.
 
+third_party/blink/renderer/core/html/custom/element_internals.cc
+https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/html/custom/element_internals.cc
+// Copyright 2018 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+third_party/blink/renderer/core/html/custom/custom_state_set.cc
+https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/core/html/custom/custom_state_set.cc
+// Copyright 2021 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 third_party/blink/renderer/platform/bindings/callback_method_retriever.cc
 https://chromium.googlesource.com/chromium/src/+/6c1d401fcca5e1b0030563a90c2f2bba168e0c15/third_party/blink/renderer/platform/bindings/callback_method_retriever.cc
 // Copyright 2018 The Chromium Authors

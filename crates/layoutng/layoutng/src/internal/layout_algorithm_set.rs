@@ -235,6 +235,70 @@ impl Default for SvgRootSizingInfo {
 // cpp: layoutng/internal/layout_algorithm_set.h:196-215
 #[derive(Clone, Copy, Default)]
 pub struct SvgLayoutSupport {
+    pub hit_test_reference_box: Option<
+        fn(
+            &LayoutObject,
+            layoutng_style::style::computed_style_constants::GeometryBox,
+        ) -> foundation::gfx::RectF,
+    >,
+    pub hit_test_resolve_clip: Option<
+        fn(
+            &super::layout_object_builder::LayoutObjectTree,
+            &LayoutObject,
+            &layoutng_style::style::reference_clip_path_operation::ReferenceClipPathOperation,
+        ) -> *const LayoutObject,
+    >,
+    pub hit_test_clip_units: Option<fn(&LayoutObject) -> bool>,
+    pub hit_test_clip_transform: Option<
+        fn(
+            &LayoutObject,
+        ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform,
+    >,
+    // Native SVG hit-test queries. Paths and derived geometry stay on the
+    // original LayoutSVG owner; the receiving engine only borrows them.
+    pub hit_test_path:
+        Option<fn(&LayoutObject) -> Option<&dyn foundation::native_path::NativePath>>,
+    pub hit_test_shape_empty: Option<fn(&LayoutObject) -> bool>,
+    pub hit_test_fill_geometry:
+        Option<fn(&LayoutObject) -> foundation::native_path::ShapeFillGeometry>,
+    pub hit_test_stroke_geometry:
+        Option<fn(&LayoutObject) -> foundation::native_path::ShapeStrokeGeometry>,
+    pub hit_test_stroke_bounds: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    pub hit_test_stroke_width: Option<fn(&LayoutObject) -> f32>,
+    pub hit_test_object_bounds_valid: Option<fn(&LayoutObject) -> bool>,
+    pub hit_test_viewport: Option<
+        fn(
+            &LayoutObject,
+        ) -> (
+            foundation::gfx::RectF,
+            foundation::blink_geometry::transforms::affine_transform::AffineTransform,
+        ),
+    >,
+    pub hit_test_root_transform: Option<
+        fn(
+            &LayoutObject,
+        ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform,
+    >,
+    pub hit_test_filtered_bounds: Option<
+        fn(
+            &super::layout_object_builder::LayoutObjectTree,
+            &LayoutObject,
+        ) -> foundation::gfx::RectF,
+    >,
+    pub hit_test_has_paint_server:
+        Option<fn(&super::layout_object_builder::LayoutObjectTree, &LayoutObject, bool) -> bool>,
+    pub root_add_visual_overflow: Option<fn(&mut LayoutObject)>,
+    pub root_visual_overflow_including_filters:
+        Option<fn(&LayoutObject) -> foundation::PhysicalRect>,
+    pub foreign_object_physical_location: Option<fn(&LayoutObject) -> foundation::PhysicalOffset>,
+    pub decorated_bounding_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    pub object_bounding_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    // SVGGraphicsElement::GetBBox source use-counter facts from native owners.
+    pub resize_observer_bbox_diagnostics: Option<fn(&LayoutObject) -> (bool, bool)>,
+    pub stroke_bounding_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
+    pub retained_shape:
+        Option<fn(&LayoutObject) -> Option<&std::sync::Arc<super::layout_input::SvgShapeData>>>,
+
     pub performance_owner: Option<&'static str>,
     // Pure object geometry used by PhysicalBoxFragment outline collection.
     pub text_object_bounding_box: Option<fn(&LayoutObject) -> foundation::gfx::RectF>,
@@ -260,6 +324,7 @@ pub struct SvgLayoutSupport {
     pub root_natural_dimensions: Option<fn(&LayoutObject) -> PhysicalNaturalSizingInfo>,
     pub root_sizing_info: Option<fn(&LayoutObject) -> SvgRootSizingInfo>,
     pub set_root_container_size: Option<fn(&mut LayoutObject, PhysicalSize)>,
+    pub set_root_container_scale: Option<fn(&mut LayoutObject, foundation::gfx::Vector2dF)>,
     pub layout_root: Option<fn(&mut LayoutObject, &PhysicalRect)>,
     pub resolve_length: Option<fn(&Length, &ComputedStyle, f32) -> f32>,
     pub screen_font_scale: Option<fn(&LayoutObject) -> f32>,
@@ -428,6 +493,7 @@ impl LayoutAlgorithmSet {
                 || self.svg_support.root_natural_dimensions.is_some()
                 || self.svg_support.root_sizing_info.is_some()
                 || self.svg_support.set_root_container_size.is_some()
+                || self.svg_support.set_root_container_scale.is_some()
                 || self.svg_support.layout_root.is_some()
                 || self.svg_support.resolve_length.is_some()
                 || self.svg_support.screen_font_scale.is_some()

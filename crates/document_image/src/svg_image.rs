@@ -7,11 +7,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::svg_view_spec::{ParsePreserveAspectRatio, ParseViewSpec};
 use cssom::{CSSDeclaration, CSSKeyframesRule, CSSStyleSheet};
-use dom::persistent_document::{
-    DOMNamespace, DOMNode, PersistentDocument, SVGImagePreserveAspectRatio, SVGImageViewSpec, DOM,
-};
-use html::html_parser::ParseHTMLBytes;
+use dom::persistent_document::{DOMNamespace, DOMNode, PersistentDocument, SVGImageViewSpec, DOM};
+use html::xml_document_parser::ParseSVGDocumentBytes;
 use image_resource::{
     ContainerKey, CreatedDocumentImage, DocumentImage, DocumentImageEffect, DocumentImageFrame,
     DocumentImageMutation, ImageId, IntrinsicSize, MutationCause,
@@ -72,8 +71,13 @@ struct SVGDocumentAnimation {
     paint_engine: paint::paint_engine::PaintEngine,
     constraints: layoutng_assembly::internal::layout_input::ConstraintSpace,
     intrinsic_sizing: SVGIntrinsicSizing,
+    // SVGImage::intrinsic_size_ is resource-owned; per-use view/container
+    // changes must not rewrite that immutable resource dimension identity.
+    resource_intrinsic_size: IntrinsicSize,
+    resource_view_specification: String,
     container: ContainerKey,
     containers: Vec<ContainerKey>,
+    frames: HashMap<ContainerKey, (Duration, Arc<DocumentImageFrame>)>,
     revision: u64,
     animations: Vec<CSSImageAnimation>,
     last_sample: Option<AnimationSampleBatch>,
@@ -154,260 +158,6 @@ fn DecodeURLFragment(fragment: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
-fn ParseViewBoxValue(value: &str) -> Option<[f64; 4]> {
-    let values = ParseSVGNumbers(value)?;
-    if values.len() != 4 || values[2] < 0.0 || values[3] < 0.0 {
-        return None;
-    }
-    Some([values[0], values[1], values[2], values[3]])
-}
-
-fn ParsePreserveAspectRatio(value: &str) -> Option<SVGImagePreserveAspectRatio> {
-    let parts = value.split_ascii_whitespace().collect::<Vec<_>>();
-    let mut cursor = usize::from(parts.first() == Some(&"defer"));
-    let align = *parts.get(cursor)?;
-    cursor += 1;
-    let mut result = SVGImagePreserveAspectRatio::default();
-    if align == "none" {
-        result.preserve_none = true;
-    } else {
-        let bytes = align.as_bytes();
-        if bytes.len() != 8 || bytes[0] != b'x' || bytes[4] != b'Y' {
-            return None;
-        }
-        result.align_x = match &bytes[1..4] {
-            b"Min" => -1,
-            b"Mid" => 0,
-            b"Max" => 1,
-            _ => return None,
-        };
-        result.align_y = match &bytes[5..8] {
-            b"Min" => -1,
-            b"Mid" => 0,
-            b"Max" => 1,
-            _ => return None,
-        };
-    }
-    if let Some(meet_or_slice) = parts.get(cursor) {
-        result.slice = match *meet_or_slice {
-            "meet" => false,
-            "slice" => true,
-            _ => return None,
-        };
-        cursor += 1;
-    }
-    (cursor == parts.len()).then_some(result)
-}
-
-fn ParseSVGNumbers(value: &str) -> Option<Vec<f64>> {
-    let mut bytes = value.as_bytes().to_vec();
-    bytes.push(0);
-    let mut cursor = bytes.as_ptr().cast::<c_char>();
-    let mut values = Vec::new();
-    loop {
-        while unsafe { *cursor } != 0
-            && ((unsafe { *cursor } as u8).is_ascii_whitespace()
-                || unsafe { *cursor } as u8 == b',')
-        {
-            cursor = unsafe { cursor.add(1) };
-        }
-        if unsafe { *cursor } == 0 {
-            return Some(values);
-        }
-        let mut end = std::ptr::null_mut();
-        let number = unsafe { strtod(cursor, &mut end) };
-        if end == cursor.cast_mut() || !number.is_finite() {
-            return None;
-        }
-        values.push(number);
-        cursor = end;
-    }
-}
-
-fn MultiplyAffine(left: [f64; 6], right: [f64; 6]) -> [f64; 6] {
-    [
-        left[0] * right[0] + left[2] * right[1],
-        left[1] * right[0] + left[3] * right[1],
-        left[0] * right[2] + left[2] * right[3],
-        left[1] * right[2] + left[3] * right[3],
-        left[0] * right[4] + left[2] * right[5] + left[4],
-        left[1] * right[4] + left[3] * right[5] + left[5],
-    ]
-}
-
-fn ParseViewTransform(value: &str) -> io::Result<Option<[f64; 6]>> {
-    let mut cursor = 0;
-    let mut transform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let bytes = value.as_bytes();
-    while cursor < bytes.len() {
-        while cursor < bytes.len() && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b',')
-        {
-            cursor += 1;
-        }
-        if cursor == bytes.len() {
-            break;
-        }
-        let name_start = cursor;
-        while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() {
-            cursor += 1;
-        }
-        let name = &value[name_start..cursor];
-        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if name.is_empty() || bytes.get(cursor) != Some(&b'(') {
-            return Ok(None);
-        }
-        cursor += 1;
-        let arguments_start = cursor;
-        while cursor < bytes.len() && bytes[cursor] != b')' {
-            cursor += 1;
-        }
-        if cursor == bytes.len() {
-            return Ok(None);
-        }
-        let arguments = ParseSVGNumbers(&value[arguments_start..cursor]);
-        cursor += 1;
-        let Some(arguments) = arguments else {
-            return Ok(None);
-        };
-        let operation = match name {
-            "matrix" if arguments.len() == 6 => arguments.try_into().unwrap(),
-            "translate" if (1..=2).contains(&arguments.len()) => [
-                1.0,
-                0.0,
-                0.0,
-                1.0,
-                arguments[0],
-                arguments.get(1).copied().unwrap_or(0.0),
-            ],
-            "scale" if (1..=2).contains(&arguments.len()) => [
-                arguments[0],
-                0.0,
-                0.0,
-                arguments.get(1).copied().unwrap_or(arguments[0]),
-                0.0,
-                0.0,
-            ],
-            "rotate" if arguments.len() == 1 || arguments.len() == 3 => {
-                let angle = arguments[0].to_radians();
-                let rotation = [
-                    angle.cos(),
-                    angle.sin(),
-                    -angle.sin(),
-                    angle.cos(),
-                    0.0,
-                    0.0,
-                ];
-                if arguments.len() == 1 {
-                    rotation
-                } else {
-                    let to_origin = [1.0, 0.0, 0.0, 1.0, -arguments[1], -arguments[2]];
-                    let from_origin = [1.0, 0.0, 0.0, 1.0, arguments[1], arguments[2]];
-                    MultiplyAffine(from_origin, MultiplyAffine(rotation, to_origin))
-                }
-            }
-            "skewX" if arguments.len() == 1 => {
-                [1.0, 0.0, arguments[0].to_radians().tan(), 1.0, 0.0, 0.0]
-            }
-            "skewY" if arguments.len() == 1 => {
-                [1.0, arguments[0].to_radians().tan(), 0.0, 1.0, 0.0, 0.0]
-            }
-            known
-                if matches!(
-                    known,
-                    "matrix" | "translate" | "scale" | "rotate" | "skewX" | "skewY"
-                ) =>
-            {
-                return Ok(None);
-            }
-            unsupported => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!("unsupported svgView transform operation: {unsupported}"),
-                ));
-            }
-        };
-        transform = MultiplyAffine(transform, operation);
-    }
-    Ok(Some(transform))
-}
-
-fn ParseSVGViewSpecification(fragment: &str) -> io::Result<Option<SVGImageViewSpec>> {
-    let Some(body) = fragment
-        .strip_prefix("svgView(")
-        .and_then(|value| value.strip_suffix(')'))
-    else {
-        return Ok(None);
-    };
-    let mut result = SVGImageViewSpec::default();
-    let mut cursor = 0;
-    while cursor < body.len() {
-        while cursor < body.len()
-            && (body.as_bytes()[cursor].is_ascii_whitespace() || body.as_bytes()[cursor] == b';')
-        {
-            cursor += 1;
-        }
-        if cursor == body.len() {
-            break;
-        }
-        let name_start = cursor;
-        while cursor < body.len() && body.as_bytes()[cursor].is_ascii_alphabetic() {
-            cursor += 1;
-        }
-        let name = &body[name_start..cursor];
-        if body.as_bytes().get(cursor) != Some(&b'(') {
-            return Ok(None);
-        }
-        cursor += 1;
-        let value_start = cursor;
-        let mut depth = 1usize;
-        while cursor < body.len() && depth != 0 {
-            match body.as_bytes()[cursor] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            cursor += 1;
-        }
-        if depth != 0 {
-            return Ok(None);
-        }
-        let value = &body[value_start..cursor - 1];
-        match name {
-            "viewBox" => {
-                let Some(view_box) = ParseViewBoxValue(value) else {
-                    return Ok(None);
-                };
-                result.view_box = Some(view_box);
-            }
-            "preserveAspectRatio" => {
-                let Some(preserve) = ParsePreserveAspectRatio(value) else {
-                    return Ok(None);
-                };
-                result.preserve_aspect_ratio = Some(preserve);
-            }
-            "transform" => {
-                let Some(transform) = ParseViewTransform(value)? else {
-                    return Ok(None);
-                };
-                result.transform = Some(transform);
-            }
-            // SVGViewSpec parses but deliberately ignores viewTarget.
-            "viewTarget" => {}
-            "zoomAndPan" if matches!(value.trim(), "magnify" | "disable") => {}
-            "zoomAndPan" => return Ok(None),
-            unsupported => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!("unsupported svgView function: {unsupported}"),
-                ));
-            }
-        }
-    }
-    Ok(Some(result))
-}
-
 fn FindFragmentTarget(document: &PersistentDocument, id: &str) -> Option<usize> {
     (0..document.NodeCount()).find(|&node| {
         document.Node(node).Type() == dom::persistent_document::DOMNodeType::kElement
@@ -433,26 +183,7 @@ fn CreateSVGImageViewInfo(
         ));
     }
     let target = FindFragmentTarget(document, &fragment);
-    let view_spec = if fragment.starts_with("svgView(") {
-        ParseSVGViewSpecification(&fragment)?
-    } else if target
-        .is_some_and(|target| document.Node(target).IsElement("view", DOMNamespace::kSVG))
-    {
-        let view = document.Node(target.unwrap());
-        let view_box = view
-            .FindAttribute("viewBox")
-            .and_then(|attribute| ParseViewBoxValue(&attribute.value));
-        let preserve_aspect_ratio = view
-            .FindAttribute("preserveAspectRatio")
-            .and_then(|attribute| ParsePreserveAspectRatio(&attribute.value));
-        Some(SVGImageViewSpec {
-            view_box,
-            preserve_aspect_ratio,
-            transform: None,
-        })
-    } else {
-        None
-    };
+    let view_spec = ParseViewSpec(&fragment, target.map(|target| document.Node(target)))?;
     if view_spec.is_none() && target.is_none() {
         return Ok(None);
     }
@@ -471,11 +202,11 @@ fn ApplySVGImageViewInfo(document: &mut DOM, fragment: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn EffectiveIntrinsicSize(
+fn EffectiveIntrinsicSizing(
     document: &PersistentDocument,
     fragment: &str,
     mut sizing: SVGIntrinsicSizing,
-) -> io::Result<IntrinsicSize> {
+) -> io::Result<SVGIntrinsicSizing> {
     // SVGImage::GetNaturalDimensions passes the active view specification's
     // viewBox to LayoutSVGRoot.  Explicit width+height remain the ratio owner;
     // otherwise the active viewBox supplies only an intrinsic ratio.
@@ -499,29 +230,23 @@ fn EffectiveIntrinsicSize(
         sizing.height = None;
         sizing.aspect_ratio = None;
     }
+    Ok(sizing)
+}
+
+fn EffectiveIntrinsicSize(
+    document: &PersistentDocument,
+    fragment: &str,
+    sizing: SVGIntrinsicSizing,
+) -> io::Result<IntrinsicSize> {
+    let sizing = EffectiveIntrinsicSizing(document, fragment, sizing)?;
 
     // cpp: core/layout/natural_sizing_info.cc ConcreteObjectSizeImpl(), with
     // the CSS Images default object size used by LayoutImage (300x150).
-    let (width, height) = match (sizing.width, sizing.height, sizing.aspect_ratio) {
-        (Some(width), Some(height), _) => (width, height),
-        (Some(width), None, Some((ratio_width, ratio_height))) => {
-            (width, width * ratio_height / ratio_width)
-        }
-        (Some(width), None, None) => (width, 150.0),
-        (None, Some(height), Some((ratio_width, ratio_height))) => {
-            (height * ratio_width / ratio_height, height)
-        }
-        (None, Some(height), None) => (300.0, height),
-        (None, None, Some((ratio_width, ratio_height))) => {
-            let width_at_default_height = 150.0 * ratio_width / ratio_height;
-            if width_at_default_height <= 300.0 {
-                (width_at_default_height, 150.0)
-            } else {
-                (300.0, 300.0 * ratio_height / ratio_width)
-            }
-        }
-        (None, None, None) => (300.0, 150.0),
-    };
+    let size = layoutng_style::style::natural_sizing_info::ConcreteObjectSizeF(
+        &NaturalSizingInfo(sizing),
+        &foundation::gfx::SizeF::new(300.0, 150.0),
+    );
+    let (width, height) = (size.width(), size.height());
     if !width.is_finite()
         || !height.is_finite()
         || width <= 0.0
@@ -538,6 +263,22 @@ fn EffectiveIntrinsicSize(
         width: width.ceil() as u32,
         height: height.ceil() as u32,
     })
+}
+
+fn NaturalSizingInfo(
+    sizing: SVGIntrinsicSizing,
+) -> layoutng_style::style::natural_sizing_info::NaturalSizingInfo {
+    layoutng_style::style::natural_sizing_info::NaturalSizingInfo {
+        size: foundation::gfx::SizeF::new(
+            sizing.width.unwrap_or(0.0) as f32,
+            sizing.height.unwrap_or(0.0) as f32,
+        ),
+        aspect_ratio: sizing.aspect_ratio.map_or_else(Default::default, |(w, h)| {
+            foundation::gfx::SizeF::new(w as f32, h as f32)
+        }),
+        has_width: sizing.width.is_some(),
+        has_height: sizing.height.is_some(),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -599,7 +340,7 @@ impl SVGImageDecoder {
                 "input is not an SVG image",
             ));
         }
-        let mut document = ParseHTMLBytes(bytes);
+        let mut document = ParseSVGDocumentBytes(bytes)?;
         let svg =
             FindSVG(document.GetDocument(), document.GetDocument().Root()).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::Other, "SVG image has no root svg element")
@@ -679,13 +420,13 @@ impl SVGImageDecoder {
             &container.view_specification,
             intrinsic_sizing,
         )?;
-        if container.width == 0 {
+        if container.width == 0 && container.unrounded_size_bits.is_none() {
             container.width = intrinsic.width;
         }
-        if container.height == 0 {
+        if container.height == 0 && container.unrounded_size_bits.is_none() {
             container.height = intrinsic.height;
         }
-        let media = ImageMediaData(&container);
+        let media = ImageMediaData(&container, self.host_constraints_.prefers_reduced_motion);
         document.GetDocumentMut().UpdateSVGUseInstances();
         let mut style_engine = style::StyleEngine::new(&document);
         style_engine
@@ -712,9 +453,14 @@ impl SVGImageDecoder {
         constraints.document_image_container = Some(
             layoutng_assembly::internal::layout_input::DocumentImageContainer {
                 root_node_id: document.GetDocument().Node(root).Id(),
-                size: constraints.available_size,
+                size: crate::svg_image_for_container::RootContainerSize(&container),
+                scale: crate::svg_image_for_container::ContainerScale(&container),
             },
         );
+        // ViewPainter::ShouldApplyRootBackgroundBehavior is false for an SVG
+        // document. Its root background remains an element decoration instead
+        // of being transferred to the document canvas.
+        constraints.should_apply_root_background_behavior = false;
         constraints.device_pixel_ratio = container.device_pixel_ratio();
         constraints.preferred_color_scheme = container.preferred_color_scheme;
         constraints.layout_zoom_factor = 1.0;
@@ -734,7 +480,10 @@ impl SVGImageDecoder {
             paint_engine: paint::paint_engine::PaintEngine::new(),
             constraints,
             intrinsic_sizing,
+            resource_intrinsic_size: intrinsic,
+            resource_view_specification: container.view_specification.clone(),
             containers: vec![container.clone()],
+            frames: HashMap::new(),
             container,
             revision: 0,
             animations,
@@ -752,11 +501,13 @@ impl SVGDocumentAnimation {
             width: f64::from(self.container.width),
             height: f64::from(self.container.height),
         };
-        self.constraints
+        let root_container = self
+            .constraints
             .document_image_container
             .as_mut()
-            .expect("SVG image retains its root container input")
-            .size = self.constraints.available_size;
+            .expect("SVG image retains its root container input");
+        root_container.size = crate::svg_image_for_container::RootContainerSize(&self.container);
+        root_container.scale = crate::svg_image_for_container::ContainerScale(&self.container);
         self.constraints.device_pixel_ratio = self.container.device_pixel_ratio();
         self.constraints.preferred_color_scheme = self.container.preferred_color_scheme;
         // The nested PaintArtifact is replayed through the outer image draw,
@@ -807,7 +558,7 @@ impl SVGDocumentAnimation {
         self.style_engine
             .Update(
                 &mut self.document,
-                &ImageMediaData(&self.container),
+                &ImageMediaData(&self.container, self.constraints.prefers_reduced_motion),
                 &self.user_agent_sheets,
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -825,18 +576,50 @@ impl SVGDocumentAnimation {
             .engine
             .TakePaintOutput()
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
-        self.paint_engine.Paint(&layout_output, Default::default());
+        {
+            let _svg_resources =
+                layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                    self.engine
+                        .GetLayoutTree()
+                        .expect("SVG image Paint retains native resources"),
+                );
+            self.paint_engine.Paint(&layout_output, Default::default());
+        }
         let paint_output = self.paint_engine.CommitPaintResult();
         let (_fragments, artifact) = self.engine.CommitPaint(layout_output, paint_output, None);
-        let intrinsic_size = EffectiveIntrinsicSize(
-            self.document.GetDocument(),
-            &self.container.view_specification,
-            self.intrinsic_sizing,
-        )?;
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!(
+                "svg-artifact-profile resource={} size={}x{} items={}",
+                self.resource_id,
+                self.container.width,
+                self.container.height,
+                artifact.items.len()
+            );
+            for item in artifact.items.iter() {
+                eprintln!(
+                    "svg-artifact-item type={:?} node={} rect=({:.2},{:.2},{:.2},{:.2}) rgba=({:.3},{:.3},{:.3},{:.3}) opacity={:.3} masks={} canonical_filters_empty={}",
+                    item.r#type,
+                    item.node_id,
+                    item.rect.x,
+                    item.rect.y,
+                    item.rect.width,
+                    item.rect.height,
+                    item.color.red,
+                    item.color.green,
+                    item.color.blue,
+                    item.color.alpha,
+                    item.opacity,
+                    item.mask_layers.len(),
+                    item.canonical_filters.is_empty()
+                );
+            }
+        }
+        let intrinsic_size = self.resource_intrinsic_size;
         self.revision = self
             .revision
             .checked_add(1)
             .ok_or_else(|| io::Error::other("document image revision exhausted"))?;
+        let timeline_time = sample.timeline_time;
         self.last_sample = Some(sample);
         let record = Arc::new(paint::paint_engine::DocumentPaintArtifactRecord {
             artifact,
@@ -847,7 +630,7 @@ impl SVGDocumentAnimation {
             },
             container_key: self.container.clone(),
         });
-        Ok(Arc::new(DocumentImageFrame {
+        let frame = Arc::new(DocumentImageFrame {
             resource_id: self.resource_id,
             revision: self.revision,
             // Source: image.cc:351-358; cc/paint/paint_image.cc:444-449.
@@ -866,7 +649,10 @@ impl SVGDocumentAnimation {
             intrinsic_size,
             container_key: self.container.clone(),
             record,
-        }))
+        });
+        self.frames
+            .insert(self.container.clone(), (timeline_time, frame.clone()));
+        Ok(frame)
     }
 
     fn RenderAt(&mut self, elapsed: Duration) -> io::Result<Arc<DocumentImageFrame>> {
@@ -876,6 +662,84 @@ impl SVGDocumentAnimation {
 }
 
 impl DocumentImage for SVGDocumentAnimation {
+    /// StyleFetchedImage::ImageSize, cc:141-161. Preserve missing intrinsic
+    /// dimensions and the viewBox ratio until the caller supplies its default.
+    fn concrete_image_size(
+        &self,
+        multiplier: f32,
+        default_size: (f32, f32),
+    ) -> io::Result<Option<(f32, f32)>> {
+        use layoutng_style::style::{
+            natural_sizing_info::ConcreteObjectSizeF, style_image::StyleImage,
+        };
+        if !multiplier.is_finite()
+            || multiplier <= 0.0
+            || !default_size.0.is_finite()
+            || !default_size.1.is_finite()
+            || default_size.0 < 0.0
+            || default_size.1 < 0.0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid SVG default sizing geometry",
+            ));
+        }
+        let sizing = EffectiveIntrinsicSizing(
+            self.document.GetDocument(),
+            &self.resource_view_specification,
+            self.intrinsic_sizing,
+        )?;
+        let info = NaturalSizingInfo(sizing);
+        let inverse = 1.0 / multiplier;
+        let size = ConcreteObjectSizeF(
+            &info,
+            &foundation::gfx::SizeF::new(default_size.0 * inverse, default_size.1 * inverse),
+        );
+        let size = StyleImage::ApplyZoom(&size, multiplier);
+        Ok(Some((size.width(), size.height())))
+    }
+    /// Source SVGImageForContainer::Create/GetPaintRecord and
+    /// SVGImage::PaintRecordForCurrentFrame: same isolated document, live
+    /// timeline and container owner, with immutable records retained per use.
+    fn frame_for_container(
+        &mut self,
+        request: image_resource::DocumentImageBitmapRequest,
+    ) -> io::Result<image_resource::DocumentImageBitmapFrame> {
+        let mut heap_scope = foundation::LayoutHeapScope::new();
+        heap_scope.DeferCollection();
+        let use_ = crate::svg_image_for_container::SVGImageContainerUse::CreateFloating(
+            (request.width, request.height),
+            request.zoom,
+            // EventHandler::SelectCursor passes a null SVGImageViewInfo
+            // (event_handler.cc:690-691), even for an authored URL fragment.
+            "",
+            request.preferred_color_scheme,
+        )?;
+        let elapsed = self
+            .last_sample
+            .as_ref()
+            .map_or(Duration::ZERO, |sample| sample.timeline_time);
+        let frame = if let Some((_, frame)) = self
+            .frames
+            .get(&use_.container)
+            .filter(|(time, _)| *time == elapsed)
+        {
+            frame.clone()
+        } else {
+            // SVGImageForContainer retains a per-use PaintImage, not a
+            // ResourceFetcher publication. Do not register this key as an
+            // already-published document-paint consumer: a subsequent ordinary
+            // SetContainer still has to return its FrameChanged commit.
+            self.container = use_.container.clone();
+            self.UpdateContainerEnvironment();
+            self.RenderAt(elapsed)?
+        };
+        Ok(image_resource::DocumentImageBitmapFrame {
+            frame,
+            width: use_.image_size.0,
+            height: use_.image_size.1,
+        })
+    }
     fn apply_mutation(
         &mut self,
         mutation: DocumentImageMutation,
@@ -922,11 +786,11 @@ impl DocumentImage for SVGDocumentAnimation {
                 Ok(effects)
             }
             DocumentImageMutation::SetContainer { container } => {
-                if self.container == container {
+                if self.container == container && self.containers.contains(&container) {
                     return Ok(Vec::new());
                 }
                 self.container = container;
-                if self.container.width == 0 {
+                if self.container.width == 0 && self.container.unrounded_size_bits.is_none() {
                     self.container.width = EffectiveIntrinsicSize(
                         self.document.GetDocument(),
                         &self.container.view_specification,
@@ -934,7 +798,7 @@ impl DocumentImage for SVGDocumentAnimation {
                     )?
                     .width;
                 }
-                if self.container.height == 0 {
+                if self.container.height == 0 && self.container.unrounded_size_bits.is_none() {
                     self.container.height = EffectiveIntrinsicSize(
                         self.document.GetDocument(),
                         &self.container.view_specification,
@@ -1189,7 +1053,7 @@ fn ExpandKeyframes(rule: &CSSKeyframesRule) -> Vec<TimedKeyframe> {
 }
 
 // Chromium SVGImageForContainer supplies the container viewport, DPR and color scheme.
-fn ImageMediaData(container: &ContainerKey) -> MediaValuesCachedData {
+fn ImageMediaData(container: &ContainerKey, prefers_reduced_motion: bool) -> MediaValuesCachedData {
     let width = container.width as f64;
     let height = container.height as f64;
     MediaValuesCachedData {
@@ -1203,13 +1067,13 @@ fn ImageMediaData(container: &ContainerKey) -> MediaValuesCachedData {
         dynamic_viewport_height: height,
         device_width: container.width as i32,
         device_height: container.height as i32,
-        // SVG image documents have the same LocalFrame DPR contract as the
-        // outer document: host scale multiplied by their container zoom.
-        device_pixel_ratio: (container.device_pixel_ratio()
-            * container.zoom().max(f64::MIN_POSITIVE)) as f32,
-        layout_zoom_factor: container.zoom().max(f64::MIN_POSITIVE) as f32,
+        // DrawInfo zoom scales the outer image draw. It does not change the
+        // isolated LocalFrame's page zoom or media-query coordinate system.
+        device_pixel_ratio: container.device_pixel_ratio() as f32,
+        layout_zoom_factor: 1.0,
         media_type: foundation::String::from("screen"),
         preferred_color_scheme: PreferredScheme(container.preferred_color_scheme),
+        prefers_reduced_motion,
         scripting: style::media_queries::scripting::Scripting::kNone,
         ..Default::default()
     }
@@ -1268,6 +1132,13 @@ fn CollectAnimations(
                 }
                 declarations.extend(rule.declarations.iter().cloned());
             }
+        }
+        // Inline declarations participate in the same cascade as author
+        // rules. SVG illustrations commonly attach their animation shorthand
+        // directly to a group, so omitting this source leaves the element at
+        // its pre-animation (often hidden) base style forever.
+        if let Some(attribute) = document.Node(index).FindAttribute("style") {
+            declarations.extend(style::ParseCSSDeclarationList(&attribute.value));
         }
         let Some(animation) = ParseAnimationDeclarations(&declarations) else {
             continue;
@@ -1447,17 +1318,11 @@ fn SVGLowerASCII(input: &str) -> String {
 }
 
 // cpp: image_decoder/svg_image_decoder.cc:31-36
-fn FindSVG(document: &PersistentDocument, node: usize) -> Option<usize> {
-    let node_ref = document.Node(node);
-    if node_ref.IsElement("svg", DOMNamespace::kSVG) {
-        return Some(node);
-    }
-    for &child in node_ref.Children() {
-        if let Some(result) = FindSVG(document, child) {
-            return Some(result);
-        }
-    }
-    None
+fn FindSVG(document: &PersistentDocument, _node: usize) -> Option<usize> {
+    // IsolatedSVGDocumentHost::RootElement, cc:208-210.
+    document
+        .DocumentElement()
+        .filter(|&root| document.Node(root).IsElement("svg", DOMNamespace::kSVG))
 }
 
 // cpp: image_decoder/svg_image_decoder.cc:38-51

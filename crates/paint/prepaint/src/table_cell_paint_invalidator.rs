@@ -21,7 +21,8 @@ impl TableCellPaintInvalidator {
         new_paint_offset: Offset,
     ) -> bool {
         old_paint_offset.is_some_and(|old| old != new_paint_offset)
-            || previous.is_some_and(|old| StitchedSize(old) != StitchedSize(fragment))
+            || crate::box_paint_invalidator::PreviousGeometry(fragment, previous)
+                .is_some_and(|old| old.size != StitchedSize(fragment))
     }
 
     /// Source: `table_cell_paint_invalidator.cc:17-32`. The caller performs

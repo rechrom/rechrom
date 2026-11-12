@@ -138,9 +138,12 @@ unsafe fn dynamic_node<T: NodeDowncast>(node: *mut Node) -> *mut T {
 impl NodeMetadataRelations {
     pub(crate) fn ResetForTreeUpdate(node: &mut Node) {
         node.set_control_host(std::ptr::null_mut());
+        node.set_ultimate_originating_element(std::ptr::null_mut());
+        node.set_generated_scroll_marker_group(std::ptr::null_mut());
         let text_control = foundation::DynamicTo::<TextControlElement>(&mut *node);
         if !text_control.is_null() {
             unsafe { &mut *text_control }.inner_editor_ = Member::default();
+            unsafe { &mut *text_control }.hit_container_ = Member::default();
         }
         let input = foundation::DynamicTo::<HTMLInputElement>(&mut *node);
         if !input.is_null() {

@@ -8,6 +8,10 @@ pub struct PhysicalRect {
 }
 
 impl PhysicalRect {
+    // core/layout/geometry/physical_rect.h:169-171.
+    pub fn Center(&self) -> PhysicalOffset {
+        self.offset + PhysicalOffset::new(self.size.width / 2, self.size.height / 2)
+    }
     pub fn new(offset: PhysicalOffset, size: PhysicalSize) -> Self {
         Self { offset, size }
     }
@@ -44,6 +48,14 @@ impl PhysicalRect {
     }
     pub fn Bottom(&self) -> LayoutUnit {
         self.offset.top + self.size.height
+    }
+
+    // Source core/layout/geometry/physical_rect.h:89-95.
+    pub fn ContainsPoint(&self, point: &PhysicalOffset) -> bool {
+        point.left >= self.offset.left
+            && point.left < self.Right()
+            && point.top >= self.offset.top
+            && point.top < self.Bottom()
     }
 
     // cpp: foundation/blink_geometry/geometry/physical_rect.h:59-68
@@ -107,6 +119,16 @@ impl PhysicalRect {
     }
 
     // cpp: foundation/blink_geometry/geometry/physical_rect.h:177-183
+    // Source: core/layout/geometry/physical_rect.h:188-191.
+    pub fn FastAndLossyFromRectF(rect: &gfx::RectF) -> Self {
+        Self::from_units(
+            LayoutUnit::from_f32(rect.x()),
+            LayoutUnit::from_f32(rect.y()),
+            LayoutUnit::from_f32(rect.width()),
+            LayoutUnit::from_f32(rect.height()),
+        )
+    }
+
     pub fn EnclosingRect(rect: &gfx::RectF) -> Self {
         let offset = PhysicalOffset::new(
             LayoutUnit::FromFloatFloor(rect.x()),
@@ -220,5 +242,25 @@ impl std::ops::Sub<PhysicalOffset> for PhysicalRect {
     type Output = Self;
     fn sub(self, offset: PhysicalOffset) -> Self {
         Self::new(self.offset - offset, self.size)
+    }
+}
+
+impl PhysicalRect {
+    // core/layout/geometry/physical_rect.cc:41-50.
+    pub fn Contains(&self, other: &Self) -> bool {
+        self.offset.left <= other.offset.left
+            && self.offset.top <= other.offset.top
+            && self.Right() >= other.Right()
+            && self.Bottom() >= other.Bottom()
+    }
+    pub fn Intersects(&self, other: &Self) -> bool {
+        self.size.width > LayoutUnit::default()
+            && self.size.height > LayoutUnit::default()
+            && other.size.width > LayoutUnit::default()
+            && other.size.height > LayoutUnit::default()
+            && self.offset.left < other.Right()
+            && other.offset.left < self.Right()
+            && self.offset.top < other.Bottom()
+            && other.offset.top < self.Bottom()
     }
 }

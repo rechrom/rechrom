@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -89,12 +89,32 @@ impl Drop for ScrollAnchoringAdjustmentScope {
 pub struct ScrollAnchor {
     anchor_object_: *mut LayoutObject,
     saved_block_offset_: i32,
+    saved_selector_: String,
     queued_: bool,
     disabling_style_changed_: bool,
+    // Source scroll_anchor.h:206. The scope retains only the same counter's
+    // allocation, matching a GC Member<ScrollAnchor> across callback teardown.
+    suppress_adjustment_count_: Rc<Cell<u32>>,
 }
 
 impl ScrollAnchor {
+    /// Source scroll_anchor.h:116-120: nested scopes suppress independently.
+    pub fn BeginSuppressAdjustment(&self) {
+        let count = self.suppress_adjustment_count_.get();
+        self.suppress_adjustment_count_.set(
+            count
+                .checked_add(1)
+                .expect("scroll-anchor suppression overflow"),
+        );
+    }
+    pub fn EndSuppressAdjustment(&self) {
+        let count = self.suppress_adjustment_count_.get();
+        assert!(count > 0, "balanced scroll-anchor suppression");
+        self.suppress_adjustment_count_.set(count - 1);
+    }
+
     fn ClearSelf(&mut self) {
+        self.saved_selector_.clear();
         let object = std::mem::replace(&mut self.anchor_object_, std::ptr::null_mut());
         if !object.is_null() {
             unsafe { &mut *object }.MaybeClearIsScrollAnchorObject();
@@ -294,6 +314,72 @@ impl ScrollAnchor {
         false
     }
 
+    /// ScrollAnchor::RestoreAnchor, scroll_anchor.cc:758-847. QuerySelectorAll
+    /// runs in the canonical selector owner before these original objects are
+    /// borrowed; no DOM id is interpreted as a geometric location.
+    pub fn RestoreNeedsSelectorQuery(&self, selector: &str) -> bool {
+        !selector.is_empty() && self.anchor_object_.is_null()
+    }
+    pub fn RestoreAnchor(
+        &mut self,
+        area: &mut PaintLayerScrollableArea,
+        selector: &str,
+        relative_offset: gfx::PointF,
+        candidates: &[*mut LayoutObject],
+    ) -> bool {
+        if selector.is_empty() {
+            return false;
+        }
+        if !self.anchor_object_.is_null() {
+            return selector == self.saved_selector_;
+        }
+        for &candidate in candidates {
+            let Some(object) = (unsafe { candidate.as_ref() }) else {
+                continue;
+            };
+            let current = area.GetScrollOffset();
+            let bounds = object.AbsoluteBoundingBoxRectFDefault();
+            let writing = object.StyleRef().GetWritingMode();
+            let location = if object.StyleRef().IsFlippedBlocksWritingMode() {
+                bounds.top_right()
+            } else if writing == foundation::WritingMode::kSidewaysLr {
+                bounds.bottom_left()
+            } else {
+                bounds.origin()
+            };
+            // SerializedAnchor converts the physical offset through LayoutUnit
+            // to logical coordinates and back before rounding to scroll units.
+            let delta = ScrollOffset::new(
+                foundation::LayoutUnit::from_f32(relative_offset.x()).Round() as f32,
+                foundation::LayoutUnit::from_f32(relative_offset.y()).Round() as f32,
+            );
+            let desired = ScrollOffset::new(
+                location.x() + current.x() - delta.x(),
+                location.y() + current.y() - delta.y(),
+            );
+            let desired = area.ClampScrollOffset(&desired);
+            area.UpdateScrollOffset(
+                desired,
+                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kAnchoring,
+            );
+            self.FindAnchorRecursive(area, area.GetLayoutBox().cast::<LayoutObject>());
+            if self.anchor_object_.is_null() {
+                area.UpdateScrollOffset(
+                    current,
+                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kAnchoring,
+                );
+                continue;
+            }
+            unsafe { &mut *self.anchor_object_ }.SetIsScrollAnchorObject();
+            if let Some(offset) = Self::BlockOffset(area, unsafe { &*self.anchor_object_ }) {
+                self.saved_block_offset_ = offset;
+            }
+            self.saved_selector_ = selector.to_owned();
+            return true;
+        }
+        false
+    }
+
     pub fn NotifyBeforeLayout(&mut self, area: &PaintLayerScrollableArea) {
         if self.queued_ {
             self.disabling_style_changed_ |=
@@ -351,6 +437,11 @@ impl ScrollAnchor {
             return;
         }
         self.queued_ = false;
+        // Source ScrollAnchor::Adjust cc:718-720: consume the queued pass,
+        // retaining the anchor and saved offset while adjustment is suppressed.
+        if self.suppress_adjustment_count_.get() > 0 {
+            return;
+        }
         let object = self.anchor_object_;
         if object.is_null() {
             return;
@@ -406,5 +497,32 @@ impl ScrollAnchor {
                 ),
             ],
         );
+    }
+}
+
+/// Source scroll_anchor.cc:933-945 / h:209-223. No borrowed engine or raw
+/// ScrollableArea survives the constructor, so script/layout teardown during
+/// editing cannot leave a dangling scope. This is the anchor's original
+/// counter owner, rather than an independent suppression registry.
+pub struct SuppressScrollAnchorScope {
+    count_: Option<Rc<Cell<u32>>>,
+}
+impl SuppressScrollAnchorScope {
+    pub fn new(scroller: Option<&mut PaintLayerScrollableArea>) -> Self {
+        let count_ = scroller.map(|scroller| {
+            let anchor = scroller.GetScrollAnchor();
+            anchor.BeginSuppressAdjustment();
+            anchor.suppress_adjustment_count_.clone()
+        });
+        Self { count_ }
+    }
+}
+impl Drop for SuppressScrollAnchorScope {
+    fn drop(&mut self) {
+        if let Some(count) = self.count_.take() {
+            let value = count.get();
+            assert!(value > 0, "balanced scroll-anchor suppression");
+            count.set(value - 1);
+        }
     }
 }

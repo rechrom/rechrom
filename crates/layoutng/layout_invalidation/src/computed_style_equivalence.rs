@@ -1,6 +1,6 @@
 //! Invalidation-owned comparison of projected layout style inputs.
 
-use layoutng_style::style::computed_style_base::{ComputedStyleBase, FieldDifference};
+use layoutng_style::style::computed_style_base::ComputedStyleBase;
 
 use super::ComputedStyle;
 
@@ -47,10 +47,11 @@ fn layout_equivalent(style: &ComputedStyle, other: &ComputedStyle) -> bool {
         }) else {
             return false;
         };
-        if ComputedStyleBase::FieldInvalidationDiff(old, new)
-            & (FieldDifference::kLayout.bits() | FieldDifference::kReshape.bits())
-            != 0
-        {
+        let fields = ComputedStyleBase::FieldInvalidationDiff(old, new);
+        // cpp: ComputedStyle::VisualInvalidationDiff. Keep the generated bits
+        // and their value-sensitive second stage in one shared translated
+        // owner so style lifecycle and retained LayoutObjects cannot drift.
+        if old.VisualInvalidationDiffNeedsLayout(new, fields) {
             return false;
         }
     }
@@ -94,16 +95,33 @@ fn geometry_inputs_equal(style: &ComputedStyle, other: &ComputedStyle) -> bool {
         (None, None) => true,
         _ => false,
     };
+    // Every element carries its native scoped resource identity, including
+    // resource definitions. A resource generation affects geometry only for
+    // actual reference clients; ordinary elements must not relayout because
+    // another SVG resource changed elsewhere in the document.
+    let references_resource = |input: &ComputedStyle| {
+        unsafe { input.style.as_ref() }.is_none_or(|style| {
+            style.HasMarkers()
+                || style.HasMask()
+                || style.FillPaint().HasUrl()
+                || style.StrokePaint().HasUrl()
+                || style.ClipPath().is_some()
+                || style.Filter().HasReferenceFilter()
+                || style.BackdropFilter().HasReferenceFilter()
+        })
+    };
+    let resource_equal = !(references_resource(style) || references_resource(other))
+        || style.svg_clip_resources == other.svg_clip_resources;
     // Exhaustive destructuring forces new fields to enter this comparison.
     macro_rules! same_inputs {
             ($($field:ident),* $(,)?) => {{
-                let ComputedStyle { style: _, paint: _, extended: _, $($field),* } = style;
+                let ComputedStyle { style: _, paint: _, extended: _, svg_clip_resources: _, $($field),* } = style;
                 $($field == &other.$field)&&*
             }};
         }
     extended_equal
+        && resource_equal
         && same_inputs!(
-            svg_clip_resources,
             display,
             width,
             height,

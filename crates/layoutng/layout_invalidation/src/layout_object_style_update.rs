@@ -1,7 +1,9 @@
 use super::*;
 use foundation::Length;
 use layoutng_style::style::computed_style::ComputedStyleBuilder;
-use layoutng_style::style::computed_style_base::IsAtShadowBoundary;
+use layoutng_style::style::computed_style_base::{
+    ComputedStyleBase, FieldDifference, IsAtShadowBoundary,
+};
 use layoutng_style::style::computed_style_constants::PseudoId;
 
 unsafe extern "Rust" {
@@ -224,6 +226,16 @@ fn transform_style_difference(
     old_style: &ComputedStyle,
     new_style: &ComputedStyle,
 ) -> StyleDifference {
+    // ComputedStyle::VisualInvalidationDiff marks every field in the generated
+    // kScrollAnchor group as an anchoring suppression trigger.  Layout's
+    // retained SetStyle path deliberately projects only the invalidation bits
+    // it owns locally, but it must not drop this source bit: size, margin,
+    // padding, inset and transform changes on the selected anchor otherwise
+    // let a later layout resurrect a pre-clamp scroll offset.
+    //
+    // Source: core/style/computed_style.cc:899-904;
+    //         core/layout/layout_object.cc:3521-3523.
+    let field_diff = ComputedStyleBase::FieldInvalidationDiff(old_style, new_style);
     let transform_property_changed = old_style.Transform() != new_style.Transform();
     let offset_anchor_changed = old_style.OffsetAnchor() != new_style.OffsetAnchor();
     let offset_path_changed = !ValuesEquivalent(old_style.OffsetPath(), new_style.OffsetPath());
@@ -282,6 +294,9 @@ fn transform_style_difference(
         diff.set_only_transform_property_changed(true);
         diff.set_transform_changed(true);
     }
+    diff.set_disable_scroll_anchoring(
+        field_diff & FieldDifference::kScrollAnchor.bits() != 0 || diff.transform_changed(),
+    );
     diff
 }
 

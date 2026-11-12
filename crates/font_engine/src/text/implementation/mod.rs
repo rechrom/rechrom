@@ -22,3 +22,4 @@ pub mod text_break_iterator;
 pub mod unicode_category;
 mod variation_sequence_data;
 pub mod vertical_orientation_data;
+pub mod word_break_iterator;

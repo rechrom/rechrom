@@ -158,3 +158,11 @@ impl Traceable for LayoutListItem {
         self.flow.Trace(visitor);
     }
 }
+
+// Source DowncastTraits<LayoutListItem>, layout_list_item.h:65-71. The
+// canonical runtime class owns the type test; DynamicTo performs the cast.
+impl foundation::DowncastFrom<LayoutObject> for LayoutListItem {
+    fn AllowFrom(object: &LayoutObject) -> bool {
+        object.IsLayoutListItem()
+    }
+}

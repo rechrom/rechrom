@@ -68,6 +68,20 @@ impl BreakTokenAlgorithmData {
     pub fn IsMulticolType(&self) -> bool {
         self.Type() == BreakTokenAlgorithmDataType::kMulticolData
     }
+
+    // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:50
+    // Concrete flex/grid data lives in downstream algorithm packages. The
+    // assembly boundary restores the source virtual call without introducing
+    // a Cargo dependency cycle from fragments back to those packages.
+    pub fn GetTotalRowGapCount(&self) -> u32 {
+        unsafe { DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(self) }
+    }
+}
+
+unsafe extern "Rust" {
+    fn DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(
+        data: *const BreakTokenAlgorithmData,
+    ) -> u32;
 }
 
 // A trait object represents calls through the C++ virtual base pointer.

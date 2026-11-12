@@ -124,7 +124,25 @@ repeat what the compiler or an existing test already proves. Documentation-only
 changes need only a focused text or diff check unless they change executable
 examples or generated files.
 
+Be aggressive about completing coherent implementation changes when the
+architecture is preserved. Once the owning Chromium mechanism and production
+call path are understood, proceed with the necessary refactoring and integration
+without artificially splitting work into tiny edits or repeatedly seeking
+confirmation. Preserve package boundaries, one-way dependencies, typed ownership,
+lifecycle order, and minimal interfaces; speed does not justify bypasses or
+parallel algorithms. Validate the completed change with the smallest meaningful
+set of checks, and expand testing only for a concrete failure or unresolved risk.
+
 When disk usage is high, stale `target/` build caches may be evicted, but do not remove artifacts used by active builds.
+
+For browser interaction work, validate in three tiers: use `cargo check` for
+the owning crate while editing; after a coherent fix slice, build
+`rechrom_app` once with `--profile iteration` and reuse the same
+`target/iteration/rechrom` headless process for the full DevTools correctness
+matrix; run fat-LTO Release only after that slice passes. Iteration artifacts
+are not evidence for performance, final experience, or release delivery.
+Keep input-pipeline diagnostics behind a runtime trace switch and extend the
+shared trace before the slice build instead of relinking for each new log.
 
 1. Use the repository's browser pixel-comparison workflow whenever visual
    correctness is involved. Capture Rechrom and Chromium through
@@ -282,7 +300,17 @@ URL/input
   state, and the current fragment snapshot; output is `InteractionOutput`
   (`DOMMutation`, `InteractionStateMutation`, or an interaction effect). It
   performs hit testing and default actions without directly invoking Style,
-  Layout, Paint, Compositor, or Renderer.
+  Layout, Paint, Compositor, or Renderer. `interaction` is the Page-facing
+  facade and synchronous transaction owner. `interaction_input` owns host
+  input values and frame-aligned coalescing; `interaction_hit_test` owns
+  read-only target, cursor, caret, and text-position queries over the borrowed
+  resident fragment cursor; `interaction_dispatch` owns DOM Event values,
+  paths, and listener propagation; `interaction_default` owns activation,
+  focus, controls, editing, and selection default actions; and
+  `interaction_scroll` owns blocking wheel regions and pure main-thread scroll
+  update calculation. Page retains lifecycle and compositor-route decisions.
+  These packages must not retain a copied interaction tree, buffer synchronous
+  DOM effects past listener reentry, or depend back on the facade.
 - `style`: keep Chromium's style data flow even though Rechrom uses a small
   package interface. Its input borrows the live DOM/CSSOM facts, pending
   changes, page environment, stylesheet owners, and the small font or container

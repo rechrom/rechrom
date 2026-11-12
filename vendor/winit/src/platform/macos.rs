@@ -34,8 +34,53 @@ use crate::event_loop::{ActiveEventLoop, EventLoopBuilder};
 use crate::monitor::MonitorHandle;
 use crate::window::{Window, WindowAttributes};
 
+/// Renderer-owned editable text state used by AppKit's synchronous
+/// `NSTextInputClient` range queries. Offsets are UTF-16 code units.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImeTextState {
+    pub text: String,
+    pub selection: std::ops::Range<usize>,
+    pub composition: Option<std::ops::Range<usize>>,
+}
+
+/// Custom cursor image sizing in AppKit view units.
+///
+/// Keeps the original bitmap pixels for Retina rendering while dividing the
+/// image's logical dimensions and hotspot by its image scale factor.
+pub trait CustomCursorExtMacOS {
+    fn from_rgba_with_scale_factor(
+        rgba: impl Into<Vec<u8>>,
+        width: u16,
+        height: u16,
+        hotspot_x: u16,
+        hotspot_y: u16,
+        image_scale_factor: f32,
+    ) -> Result<crate::window::CustomCursorSource, crate::window::BadImage>;
+}
+
+impl CustomCursorExtMacOS for crate::window::CustomCursor {
+    fn from_rgba_with_scale_factor(
+        rgba: impl Into<Vec<u8>>,
+        width: u16,
+        height: u16,
+        hotspot_x: u16,
+        hotspot_y: u16,
+        image_scale_factor: f32,
+    ) -> Result<crate::window::CustomCursorSource, crate::window::BadImage> {
+        assert!(image_scale_factor.is_finite() && image_scale_factor > 0.0);
+        let mut source = Self::from_rgba(rgba, width, height, hotspot_x, hotspot_y)?;
+        source.inner.0.image_scale_factor = image_scale_factor;
+        Ok(source)
+    }
+}
+
 /// Additional methods on [`Window`] that are specific to MacOS.
 pub trait WindowExtMacOS {
+    /// Publish the current editable text and selection to AppKit. The view
+    /// updates these ranges synchronously while marked text changes, then the
+    /// renderer's next state replaces the optimistic values.
+    fn set_ime_text_state(&self, state: Option<ImeTextState>);
+
     /// Returns whether or not the window is in simple fullscreen mode.
     fn simple_fullscreen(&self) -> bool;
 
@@ -117,13 +162,20 @@ pub trait WindowExtMacOS {
 
 impl WindowExtMacOS for Window {
     #[inline]
+    fn set_ime_text_state(&self, state: Option<ImeTextState>) {
+        self.window
+            .maybe_queue_on_main(move |w| w.set_ime_text_state(state))
+    }
+
+    #[inline]
     fn simple_fullscreen(&self) -> bool {
         self.window.maybe_wait_on_main(|w| w.simple_fullscreen())
     }
 
     #[inline]
     fn set_simple_fullscreen(&self, fullscreen: bool) -> bool {
-        self.window.maybe_wait_on_main(move |w| w.set_simple_fullscreen(fullscreen))
+        self.window
+            .maybe_wait_on_main(move |w| w.set_simple_fullscreen(fullscreen))
     }
 
     #[inline]
@@ -133,12 +185,14 @@ impl WindowExtMacOS for Window {
 
     #[inline]
     fn set_has_shadow(&self, has_shadow: bool) {
-        self.window.maybe_queue_on_main(move |w| w.set_has_shadow(has_shadow))
+        self.window
+            .maybe_queue_on_main(move |w| w.set_has_shadow(has_shadow))
     }
 
     #[inline]
     fn set_tabbing_identifier(&self, identifier: &str) {
-        self.window.maybe_wait_on_main(|w| w.set_tabbing_identifier(identifier))
+        self.window
+            .maybe_wait_on_main(|w| w.set_tabbing_identifier(identifier))
     }
 
     #[inline]
@@ -158,7 +212,8 @@ impl WindowExtMacOS for Window {
 
     #[inline]
     fn select_tab_at_index(&self, index: usize) {
-        self.window.maybe_queue_on_main(move |w| w.select_tab_at_index(index))
+        self.window
+            .maybe_queue_on_main(move |w| w.select_tab_at_index(index))
     }
 
     #[inline]
@@ -173,12 +228,14 @@ impl WindowExtMacOS for Window {
 
     #[inline]
     fn set_document_edited(&self, edited: bool) {
-        self.window.maybe_queue_on_main(move |w| w.set_document_edited(edited))
+        self.window
+            .maybe_queue_on_main(move |w| w.set_document_edited(edited))
     }
 
     #[inline]
     fn set_option_as_alt(&self, option_as_alt: OptionAsAlt) {
-        self.window.maybe_queue_on_main(move |w| w.set_option_as_alt(option_as_alt))
+        self.window
+            .maybe_queue_on_main(move |w| w.set_option_as_alt(option_as_alt))
     }
 
     #[inline]
@@ -188,7 +245,8 @@ impl WindowExtMacOS for Window {
 
     #[inline]
     fn set_borderless_game(&self, borderless_game: bool) {
-        self.window.maybe_wait_on_main(|w| w.set_borderless_game(borderless_game))
+        self.window
+            .maybe_wait_on_main(|w| w.set_borderless_game(borderless_game))
     }
 
     #[inline]
@@ -306,7 +364,9 @@ impl WindowAttributesExtMacOS for WindowAttributes {
 
     #[inline]
     fn with_tabbing_identifier(mut self, tabbing_identifier: &str) -> Self {
-        self.platform_specific.tabbing_identifier.replace(tabbing_identifier.to_string());
+        self.platform_specific
+            .tabbing_identifier
+            .replace(tabbing_identifier.to_string());
         self
     }
 
@@ -415,7 +475,9 @@ impl MonitorHandleExtMacOS for MonitorHandle {
     fn ns_screen(&self) -> Option<*mut c_void> {
         // SAFETY: We only use the marker to get a pointer
         let mtm = unsafe { objc2_foundation::MainThreadMarker::new_unchecked() };
-        self.inner.ns_screen(mtm).map(|s| objc2::rc::Retained::as_ptr(&s) as _)
+        self.inner
+            .ns_screen(mtm)
+            .map(|s| objc2::rc::Retained::as_ptr(&s) as _)
     }
 }
 
@@ -471,4 +533,34 @@ pub enum OptionAsAlt {
     /// No special handling is applied for `Option` key.
     #[default]
     None,
+}
+
+/// AppKit's original key-binding commands, in doCommandBySelector delivery order.
+/// The application translates selectors into its own platform-neutral commands.
+pub trait KeyEventExtMacOS {
+    /// Return the selectors delivered for this event by interpretKeyEvents.
+    fn edit_commands(&self) -> &[String];
+    /// Whether interpretKeyEvents consumed this key through the native IME.
+    fn ime_processed(&self) -> bool;
+    fn native_key_code(&self) -> u16;
+    fn unmodified_text(&self) -> &str;
+    /// The single character actually delivered by insertText for this key.
+    fn committed_text(&self) -> Option<&str>;
+}
+impl KeyEventExtMacOS for crate::event::KeyEvent {
+    fn ime_processed(&self) -> bool {
+        self.platform_specific.ime_processed
+    }
+    fn native_key_code(&self) -> u16 {
+        self.platform_specific.native_key_code
+    }
+    fn unmodified_text(&self) -> &str {
+        &self.platform_specific.unmodified_text
+    }
+    fn committed_text(&self) -> Option<&str> {
+        self.platform_specific.committed_text.as_deref()
+    }
+    fn edit_commands(&self) -> &[String] {
+        &self.platform_specific.edit_commands
+    }
 }

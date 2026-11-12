@@ -22,6 +22,13 @@ pub struct SkDevice {
     global_to_device: SkM44,
     device_to_global: SkM44,
     local_to_device: SkM44,
+    // Device-space position represented by backing pixel (0, 0). Chromium's
+    // tile raster keeps this phase for analytic antialiasing while writing to
+    // a compact tile allocation.
+    raster_phase_origin: SkIPoint,
+    // (0, 0) is a valid explicit picture origin. Keep presence separately so
+    // it is not confused with an ordinary Canvas that has no tile metadata.
+    has_raster_phase_origin: bool,
     surface_props: SkSurfaceProps,
     info: SkImageInfo,
     // Source: src/core/SkDevice.h:107-107
@@ -71,6 +78,23 @@ impl SkDevice {
     }
     pub fn global_to_device(&self) -> &SkM44 {
         &self.global_to_device
+    }
+    pub fn raster_phase_origin(&self) -> SkIPoint {
+        self.raster_phase_origin
+    }
+    pub fn raster_phase_origin_for_ctm(&self) -> SkIPoint {
+        if !self.has_raster_phase_origin {
+            return SkIPoint::make(0, 0);
+        }
+        self.raster_phase_origin
+    }
+    pub fn set_raster_phase_origin(&mut self, origin: SkIPoint) {
+        self.raster_phase_origin = origin;
+        self.has_raster_phase_origin = true;
+    }
+    pub fn set_inherited_raster_phase_origin(&mut self, origin: SkIPoint) {
+        self.raster_phase_origin = origin;
+        self.has_raster_phase_origin = true;
     }
 }
 // Source: src/core/SkDevice.h:211-215
@@ -125,6 +149,8 @@ impl SkDevice {
             global_to_device,
             local_to_device: SkM44::default(),
             local_to_device33: SkMatrix::default(),
+            raster_phase_origin: SkIPoint::make(0, 0),
+            has_raster_phase_origin: false,
             local_to_device_dirty: true,
         }
     }

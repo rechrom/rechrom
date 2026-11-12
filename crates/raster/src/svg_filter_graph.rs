@@ -572,6 +572,7 @@ mod tests {
 
     fn user_space_graph() -> SvgFilterGraph {
         SvgFilterGraph {
+            resource_node_id: 0,
             id: "viewport-filter".into(),
             filter_units: SvgFilterUnits::kUserSpaceOnUse,
             primitive_units: SvgFilterUnits::kUserSpaceOnUse,

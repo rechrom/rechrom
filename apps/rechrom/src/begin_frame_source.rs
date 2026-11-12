@@ -263,6 +263,7 @@ fn trace_vsync(frame: BeginFrame, timer_fallback: bool, requested: bool) {
         return;
     }
     let args = frame.args;
+    let delivery_lateness = Instant::now().saturating_duration_since(args.frame_time);
     let _scope = browser_tracing::scope(browser_tracing::Context {
         target_id: 1,
         source_id: args.source_id,
@@ -277,6 +278,10 @@ fn trace_vsync(frame: BeginFrame, timer_fallback: bool, requested: bool) {
             ("interval_ms", args.interval.as_secs_f64() * 1000.0),
             ("timer_fallback", if timer_fallback { 1.0 } else { 0.0 }),
             ("requested", if requested { 1.0 } else { 0.0 }),
+            (
+                "delivery_lateness_ms",
+                delivery_lateness.as_secs_f64() * 1000.0,
+            ),
             (
                 "display_target_offset_ms",
                 frame.display_time.map_or(f64::NAN, |t| {
@@ -363,7 +368,250 @@ struct TimerDemand {
 
 struct TimerSource {
     shared: Arc<(Mutex<TimerDemand>, Condvar)>,
+    #[cfg(target_os = "macos")]
+    timer_queue: std::os::fd::RawFd,
     worker: Option<JoinHandle<()>>,
+}
+
+fn next_timer_frame_time(timebase: Instant, interval: Duration) -> Instant {
+    let now = Instant::now();
+    let remainder = now.duration_since(timebase).as_nanos() % interval.as_nanos();
+    let elapsed_in_tick = Duration::new(
+        (remainder / 1_000_000_000) as u64,
+        (remainder % 1_000_000_000) as u32,
+    );
+    let mut delay = interval - elapsed_in_tick;
+    // DelayBasedTimeSource skips a boundary that is less than 500us away so
+    // callback jitter cannot produce two logical ticks in one display cycle.
+    if delay <= Duration::from_micros(500) {
+        delay += interval;
+    }
+    now + delay
+}
+
+fn deliver_timer_frame(
+    generator: &mut BeginFrameArgsGenerator,
+    source_id: u64,
+    frame_time: Instant,
+    interval: Duration,
+    notify: &QueuedFrameNotify,
+) {
+    let frame = generator
+        .generate(source_id, frame_time, frame_time + interval, interval)
+        .into();
+    trace_vsync(frame, true, true);
+    notify(frame);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_timer_worker(
+    state: Arc<(Mutex<TimerDemand>, Condvar)>,
+    notify: QueuedFrameNotify,
+    interval: Duration,
+    source_id: u64,
+) {
+    let timebase = Instant::now();
+    let mut generator = BeginFrameArgsGenerator::default();
+    let (lock, wake) = &*state;
+    let mut demand = lock.lock().unwrap();
+    loop {
+        while !demand.requested && !demand.stopped {
+            demand = wake.wait(demand).unwrap();
+        }
+        if demand.stopped {
+            break;
+        }
+        let frame_time = next_timer_frame_time(timebase, interval);
+        while !demand.stopped && Instant::now() < frame_time {
+            let remaining = frame_time.saturating_duration_since(Instant::now());
+            demand = wake.wait_timeout(demand, remaining).unwrap().0;
+        }
+        if demand.stopped {
+            break;
+        }
+        demand.requested = false;
+        drop(demand);
+        deliver_timer_frame(&mut generator, source_id, frame_time, interval, &notify);
+        demand = lock.lock().unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+const TIMER_WAKE_IDENT: u64 = 1;
+#[cfg(target_os = "macos")]
+const TIMER_TICK_IDENT: u64 = 2;
+
+// Chromium's kPrecise DeadlineTimer reaches MessagePumpKqueue as a one-shot
+// EVFILT_TIMER with no timer slack.  This standalone queue does not inherit
+// Chromium's message-pump wake policy, so encode the same no-slack intent with
+// NOTE_CRITICAL; otherwise Darwin applies about 5ms of default coalescing and
+// consumes the compositor's late-input window before BeginFrame is delivered.
+
+#[cfg(target_os = "macos")]
+fn timer_event(ident: u64, filter: i16, flags: u16, fflags: u32, data: i64) -> libc::kevent64_s {
+    libc::kevent64_s {
+        ident,
+        filter,
+        flags,
+        fflags,
+        data,
+        udata: 0,
+        ext: [0; 2],
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn change_timer_event(timer_queue: std::os::fd::RawFd, event: &libc::kevent64_s) -> io::Result<()> {
+    let result = unsafe {
+        libc::kevent64(
+            timer_queue,
+            event,
+            1,
+            std::ptr::null_mut(),
+            0,
+            libc::KEVENT_FLAG_NONE,
+            std::ptr::null(),
+        )
+    };
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn create_timer_queue() -> io::Result<std::os::fd::RawFd> {
+    let timer_queue = unsafe { libc::kqueue() };
+    if timer_queue < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let wake = timer_event(
+        TIMER_WAKE_IDENT,
+        libc::EVFILT_USER,
+        libc::EV_ADD | libc::EV_CLEAR,
+        0,
+        0,
+    );
+    if let Err(error) = change_timer_event(timer_queue, &wake) {
+        unsafe {
+            libc::close(timer_queue);
+        }
+        return Err(error);
+    }
+    Ok(timer_queue)
+}
+
+#[cfg(target_os = "macos")]
+fn trigger_timer_worker(timer_queue: std::os::fd::RawFd) {
+    let wake = timer_event(
+        TIMER_WAKE_IDENT,
+        libc::EVFILT_USER,
+        0,
+        libc::NOTE_TRIGGER,
+        0,
+    );
+    let _ = change_timer_event(timer_queue, &wake);
+}
+
+#[cfg(target_os = "macos")]
+fn arm_timer_worker(timer_queue: std::os::fd::RawFd, frame_time: Instant) -> io::Result<()> {
+    let remaining = frame_time.saturating_duration_since(Instant::now());
+    let microseconds = remaining
+        .as_nanos()
+        .div_ceil(1_000)
+        .max(1)
+        .min(i64::MAX as u128) as i64;
+    let timer = timer_event(
+        TIMER_TICK_IDENT,
+        libc::EVFILT_TIMER,
+        libc::EV_ADD | libc::EV_ONESHOT,
+        libc::NOTE_USECONDS | libc::NOTE_CRITICAL,
+        microseconds,
+    );
+    change_timer_event(timer_queue, &timer)
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_timer_event(timer_queue: std::os::fd::RawFd) -> io::Result<libc::kevent64_s> {
+    loop {
+        let mut event = timer_event(0, 0, 0, 0, 0);
+        let result = unsafe {
+            libc::kevent64(
+                timer_queue,
+                std::ptr::null(),
+                0,
+                &mut event,
+                1,
+                libc::KEVENT_FLAG_NONE,
+                std::ptr::null(),
+            )
+        };
+        if result > 0 {
+            if event.flags & libc::EV_ERROR != 0 && event.data != 0 {
+                return Err(io::Error::from_raw_os_error(event.data as i32));
+            }
+            return Ok(event);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_timer_worker(
+    state: Arc<(Mutex<TimerDemand>, Condvar)>,
+    notify: QueuedFrameNotify,
+    interval: Duration,
+    source_id: u64,
+    timer_queue: std::os::fd::RawFd,
+) {
+    let result = (|| -> io::Result<()> {
+        let timebase = Instant::now();
+        let mut generator = BeginFrameArgsGenerator::default();
+        let (lock, _) = &*state;
+        loop {
+            loop {
+                let demand = lock.lock().unwrap();
+                if demand.stopped {
+                    return Ok(());
+                }
+                if demand.requested {
+                    break;
+                }
+                drop(demand);
+                wait_for_timer_event(timer_queue)?;
+            }
+
+            let frame_time = next_timer_frame_time(timebase, interval);
+            arm_timer_worker(timer_queue, frame_time)?;
+            loop {
+                let event = wait_for_timer_event(timer_queue)?;
+                if event.ident == TIMER_TICK_IDENT {
+                    break;
+                }
+                if lock.lock().unwrap().stopped {
+                    return Ok(());
+                }
+            }
+
+            let mut demand = lock.lock().unwrap();
+            if demand.stopped {
+                return Ok(());
+            }
+            demand.requested = false;
+            drop(demand);
+            deliver_timer_frame(&mut generator, source_id, frame_time, interval, &notify);
+        }
+    })();
+    unsafe {
+        libc::close(timer_queue);
+    }
+    if let Err(error) = result {
+        eprintln!("begin-frame-timer-fallback: {error}");
+    }
 }
 
 impl TimerSource {
@@ -374,49 +622,36 @@ impl TimerSource {
         let shared = Arc::new((Mutex::new(TimerDemand::default()), Condvar::new()));
         let state = shared.clone();
         let source_id = NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed);
+        #[cfg(target_os = "macos")]
+        let timer_queue = create_timer_queue()?;
+        #[cfg(target_os = "macos")]
+        let worker_timer_queue = timer_queue;
         let worker = thread::Builder::new()
             .name("begin-frame-timer-fallback".into())
             .spawn(move || {
-                let timebase = Instant::now();
-                let mut generator = BeginFrameArgsGenerator::default();
-                let (lock, wake) = &*state;
-                let mut demand = lock.lock().unwrap();
-                loop {
-                    while !demand.requested && !demand.stopped {
-                        demand = wake.wait(demand).unwrap();
-                    }
-                    if demand.stopped {
-                        break;
-                    }
-                    // Snap to the next tick of the supplied interval, rather than
-                    // starting a new delay after each callback (DelayBasedTimeSource).
-                    let now = Instant::now();
-                    let remainder = now.duration_since(timebase).as_nanos() % interval.as_nanos();
-                    let elapsed_in_tick = Duration::new(
-                        (remainder / 1_000_000_000) as u64,
-                        (remainder % 1_000_000_000) as u32,
-                    );
-                    let delay = interval - elapsed_in_tick;
-                    let frame_time = now + delay;
-                    while !demand.stopped && Instant::now() < frame_time {
-                        let remaining = frame_time.saturating_duration_since(Instant::now());
-                        demand = wake.wait_timeout(demand, remaining).unwrap().0;
-                    }
-                    if demand.stopped {
-                        break;
-                    }
-                    demand.requested = false;
-                    drop(demand);
-                    let frame = generator
-                        .generate(source_id, frame_time, frame_time + interval, interval)
-                        .into();
-                    trace_vsync(frame, true, true);
-                    notify(frame);
-                    demand = lock.lock().unwrap();
+                // DelayBasedTimeSource runs on the compositor task runner in
+                // Chromium. Keep the fallback pulse on the same scheduling
+                // class as the workers that consume its frame deadline.
+                crate::engine::set_presentation_thread_priority();
+                #[cfg(target_os = "macos")]
+                run_timer_worker(state, notify, interval, source_id, worker_timer_queue);
+                #[cfg(not(target_os = "macos"))]
+                run_timer_worker(state, notify, interval, source_id);
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    libc::close(timer_queue);
                 }
-            })?;
+                return Err(error);
+            }
+        };
         Ok(Arc::new(Self {
             shared,
+            #[cfg(target_os = "macos")]
+            timer_queue,
             worker: Some(worker),
         }))
     }
@@ -424,20 +659,29 @@ impl TimerSource {
 
 impl BeginFrameSource for TimerSource {
     fn request_begin_frame(&self) {
-        let (lock, wake) = &*self.shared;
+        let (lock, _wake) = &*self.shared;
         let mut demand = lock.lock().unwrap();
         if !demand.stopped && !demand.requested {
             demand.requested = true;
-            wake.notify_one();
+            drop(demand);
+            #[cfg(target_os = "macos")]
+            trigger_timer_worker(self.timer_queue);
+            #[cfg(not(target_os = "macos"))]
+            _wake.notify_one();
         }
     }
 }
 
 impl Drop for TimerSource {
     fn drop(&mut self) {
-        let (lock, wake) = &*self.shared;
-        lock.lock().unwrap().stopped = true;
-        wake.notify_one();
+        let (lock, _wake) = &*self.shared;
+        let mut demand = lock.lock().unwrap();
+        demand.stopped = true;
+        drop(demand);
+        #[cfg(target_os = "macos")]
+        trigger_timer_worker(self.timer_queue);
+        #[cfg(not(target_os = "macos"))]
+        _wake.notify_one();
         finish_worker(&mut self.worker);
     }
 }

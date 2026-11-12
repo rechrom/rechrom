@@ -14,6 +14,11 @@ default = ["browser_cpu"]
 # Production CPU drawing embedding. Encoded image decoding remains owned by
 # image_decoder; Skia receives decoded images at the raster boundary.
 browser_cpu = []
+# Metal target allocation and command submission boundary used while the
+# translated Ganesh/Graphite implementation is brought across. This is not a
+# software emulation path and is intentionally opt-in until Canvas playback is
+# backed by a translated GPU device.
+browser_gpu_metal = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-metal"]
 # Optional Chromium base/logging/discardable-memory embedding. This requires
 # the genuine native ABI and configuration inputs consumed by build.rs.
 chromium_embedding = []
@@ -22,6 +27,29 @@ sk_yuv_color_space_high_precision = []
 [dependencies]
 browser_tracing = { path = "../tracing" }
 libc = "0.2.189"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = { version = "0.5.2", optional = true }
+objc2-foundation = { version = "0.2.2", optional = true, features = [
+    "NSError",
+    "NSString",
+] }
+objc2-metal = { version = "0.2.2", optional = true, features = [
+    "MTLBlitCommandEncoder",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLLibrary",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLResource",
+    "MTLSampler",
+    "MTLTexture",
+    "MTLTypes",
+] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(skvx_disable_simd)', 'cfg(SK_USE_LARGER_NO_BLUR_THRESHOLD)', 'cfg(SK_SUPPORT_LEGACY_RRECT_TRANSFORM)', 'cfg(SK_LEGACY_PATH_ACCESSORS)', 'cfg(SK_BUILD_FOR_FUZZER)', 'cfg(SK_BUILD_FOR_DEBUGGER)', 'cfg(SK_SUPPORT_LEGACY_PATHBUILDER_SETLASTPT)', 'cfg(SK_CPU_LIMIT_AVX)', 'cfg(SK_CPU_LIMIT_SSE41)', 'cfg(SK_CPU_LIMIT_SSE2)', 'cfg(SK_ENABLE_THREADLOCAL_STRIKECACHE)', 'cfg(SK_STRIKE_CACHE_DOESNT_AUTO_CHECK_PINNERS)', 'cfg(SK_UNTIL_CRBUG_1187654_IS_FIXED)', 'cfg(SK_USE_DRAWING_MIPMAP_DOWNSAMPLER)', 'cfg(SK_ENABLE_OPTIMIZE_SIZE)', 'cfg(SK_ENABLE_AVX512_OPTS)', 'cfg(SK_DISABLE_AVX512_OPTS)', 'cfg(SK_USE_INACCURATE_DIV255_IN_BLEND)', 'cfg(SK_USE_RSQRT_IN_RP_NORMALIZE)', 'cfg(sk_build_for_android_framework)', 'cfg(skia_memory_sanitizer)', 'cfg(SK_MSAN)', 'cfg(sk_build_for_google3)', 'cfg(sk_disable_effect_deserialization)', 'cfg(SK_SUPPORT_LEGACY_EMBOSSMASKFILTER)', 'cfg(BUILD_DIVIDE_TABLE)', 'cfg(SK_PMCOLOR_IS_RGBA)', 'cfg(SK_PMCOLOR_IS_BGRA)', 'cfg(SK_ENABLE_LEGACY_SHADERCONTEXT)', 'cfg(SK_FORCE_8_BYTE_ALIGNMENT)', 'cfg(SK_DUMP_STATS)', 'cfg(GPU_TEST_UTILS)', 'cfg(GR_CACHE_STATS, values("0", "1"))', 'cfg(GR_GPU_STATS, values("0", "1"))'] }

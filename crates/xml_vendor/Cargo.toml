@@ -1,0 +1,8 @@
+[package]
+name = "xml"
+version = "1.4.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../../../src/third_party/rust/chromium_crates_io/vendor/xml-v1/src/lib.rs"

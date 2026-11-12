@@ -28,6 +28,7 @@ pub struct StyleFetchedImage {
     orientation: image_resource::ImageOrientation,
     is_cors_same_origin: bool,
     known_to_be_opaque: bool,
+    cached_image: Option<Box<super::forward::ImageResourceContent>>,
 }
 
 impl StyleFetchedImage {
@@ -69,7 +70,19 @@ impl StyleFetchedImage {
             orientation,
             is_cors_same_origin,
             known_to_be_opaque,
+            cached_image: None,
         }
+    }
+
+    /// Source StyleFetchedImage's ImageResourceContent member. The resource
+    /// owner publishes actual image content; metadata alone stays non-drawable.
+    pub fn SetResourceContent(
+        &mut self,
+        resource: std::rc::Rc<dyn image_resource::ImageResourceContentLease>,
+    ) {
+        self.cached_image = resource
+            .ImageSnapshot()
+            .map(|image| Box::new(super::forward::ImageResourceContent { resource, image }));
     }
 
     pub fn StyleImage(&self) -> &StyleImage {
@@ -238,7 +251,14 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
     // cpp: core/style/style_fetched_image.cc:248-251. The resource owner
     // publishes Image::IsOpaque when it commits decoded pixels.
     KnownToBeOpaque: |base, _| fetched(base).known_to_be_opaque,
-    CachedImage: StyleImageDefaultCachedImage,
+    CachedImage: |base| {
+        fetched(base)
+            .cached_image
+            .as_deref()
+            .map_or(std::ptr::null_mut(), |content| {
+                content as *const _ as *mut _
+            })
+    },
     DependsOnCurrentColor: StyleImageDefaultDependsOnCurrentColor,
     IsLoadedAfterMouseover: StyleImageDefaultIsLoadedAfterMouseover,
     Trace: |base, visitor| fetched(base).Trace(visitor),
@@ -268,6 +288,11 @@ static FETCHED_VTABLE: StyleImageVTable = StyleImageVTable {
                 && this.orientation == other.orientation
                 && this.is_cors_same_origin == other.is_cors_same_origin
                 && this.known_to_be_opaque == other.known_to_be_opaque
+                && match (&this.cached_image, &other.cached_image) {
+                    (Some(a), Some(b)) => std::sync::Arc::ptr_eq(&a.image, &b.image),
+                    (None, None) => true,
+                    _ => false,
+                }
         })
     },
 };

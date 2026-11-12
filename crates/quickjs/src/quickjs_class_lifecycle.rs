@@ -240,6 +240,7 @@ struct JSPromiseFunctionData {
 }
 #[repr(C)]
 struct JSPromiseReactionData {
+    continuation_data: *mut JSContinuationData,
     link: list_head,
     resolving_funcs: [JSValue; 2],
     handler: JSValue,
@@ -261,6 +262,7 @@ pub unsafe fn JS_PromiseResult(ctx: *mut JSContext, promise: JSValue) -> JSValue
     }
 }
 unsafe fn promise_reaction_data_free(rt: *mut JSRuntime, rd: *mut JSPromiseReactionData) {
+    js_free_continuation_data((*rd).continuation_data);
     JS_FreeValueRT(rt, (*rd).resolving_funcs[0]);
     JS_FreeValueRT(rt, (*rd).resolving_funcs[1]);
     JS_FreeValueRT(rt, (*rd).handler);

@@ -65,6 +65,7 @@ pub struct ContainerState {
     pub stuck_inline: ContainerStuckLogical,
     pub stuck_block: ContainerStuckLogical,
     pub snapped: ContainerSnappedFlags,
+    pub snapped_state_available: bool,
     pub scrollable_horizontal: ContainerScrollableFlags,
     pub scrollable_vertical: ContainerScrollableFlags,
     pub scrollable_inline: ContainerScrollableFlags,
@@ -89,6 +90,7 @@ impl ContainerState {
             stuck_inline: ContainerStuckLogical::kNo,
             stuck_block: ContainerStuckLogical::kNo,
             snapped: 0,
+            snapped_state_available: false,
             scrollable_horizontal: 0,
             scrollable_vertical: 0,
             scrollable_inline: 0,
@@ -1015,6 +1017,8 @@ fn EvaluateContainerFeature(
                         data: Rc::new(RestoreContainerVariableData(reference)),
                         mode: crate::parser::css_parser_mode::CSSParserMode::kHTMLStandardMode,
                         base_url: crate::production_css_value::ProductionURL::Null,
+                        resource_fetch_restriction:
+                            crate::css_resource_fetch_restriction::ResourceFetchRestriction::kNone,
                     }),
                     &bounds,
                     resolver.RangeQueriesEnabled(),
@@ -1029,7 +1033,7 @@ fn EvaluateContainerFeature(
         if resolver.values.state.is_none()
             || (matches!(
                 feature.name.Utf8().as_str(),
-                "stuck" | "snapped" | "scrollable" | "scrolled"
+                "stuck" | "scrollable" | "scrolled"
             ) && !resolver
                 .values
                 .state

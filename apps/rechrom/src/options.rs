@@ -6,6 +6,7 @@ pub struct Options {
     pub height: u32,
     pub headless: bool,
     pub device_scale_factor: f64,
+    pub prefers_reduced_motion: bool,
     pub exit_after: Option<std::time::Duration>,
     pub devtools_port: u16,
 }
@@ -18,6 +19,7 @@ impl Options {
             height: 800,
             headless: false,
             device_scale_factor: 1.0,
+            prefers_reduced_motion: false,
             exit_after: None,
             devtools_port: 9223,
         };
@@ -35,6 +37,7 @@ impl Options {
                         --devtools-port PORT selects the localhost Performance server (default 9223, 0 automatic).\n\
                         --headless renders without a display server or native window (default DPR 1).\n\
                         --force-device-scale-factor N sets headless DPR (0.25..4).\n\
+                        --force-prefers-reduced-motion exposes the reduced-motion accessibility preference.\n\
                         With --headless, --width and --height are the page viewport in CSS pixels.\n\
                         --exit-after SECONDS stops the browser after a timed smoke run.");
                     return Ok(None);
@@ -49,6 +52,7 @@ impl Options {
                 "--force-device-scale-factor" => {
                     options.device_scale_factor = parse_number(args.next(), "device scale factor")?
                 }
+                "--force-prefers-reduced-motion" => options.prefers_reduced_motion = true,
                 "--devtools-port" => {
                     options.devtools_port = parse_number(args.next(), "devtools-port")?
                 }

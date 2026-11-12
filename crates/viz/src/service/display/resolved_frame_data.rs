@@ -262,7 +262,8 @@ impl<'a> ResolvedFrameData<'a> {
             let mut draw_quads = Vec::with_capacity(pass.quad_list.len());
             for quad in &pass.quad_list {
                 let resource = match quad.material {
-                    QuadMaterial::Tile { resource_id, .. } => resource_id,
+                    QuadMaterial::Tile { resource_id, .. }
+                    | QuadMaterial::Texture { resource_id, .. } => resource_id,
                     QuadMaterial::CompositorRenderPass {
                         render_pass_id,
                         mask_resource_id,
@@ -463,7 +464,10 @@ pub fn ValidateFrame(frame: &CompositorFrame) -> Result<(), FrameValidationError
                 return Err(FrameValidationError::MissingSharedQuadState);
             }
             match quad.material {
-                QuadMaterial::Tile { resource_id, .. } if !resources.contains(&resource_id) => {
+                QuadMaterial::Tile { resource_id, .. }
+                | QuadMaterial::Texture { resource_id, .. }
+                    if !resources.contains(&resource_id) =>
+                {
                     return Err(FrameValidationError::MissingResource);
                 }
                 QuadMaterial::CompositorRenderPass {

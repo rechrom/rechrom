@@ -13,6 +13,8 @@ use layoutng_style::style::computed_style::ComputedStyle;
 #[repr(C)]
 pub struct LayoutSVGGroup {
     flow: LayoutBlockFlow,
+    pub(crate) effect_bounds: crate::svg_effect_bounds::SvgEffectBoundsCache,
+    object_bounds: crate::svg_resources::SvgObjectBounds,
     local_transform: foundation::blink_geometry::transforms::affine_transform::AffineTransform,
 }
 
@@ -23,8 +25,17 @@ impl LayoutSVGGroup {
         flow.SetRuntimeClass(LayoutObjectClass::SvgGroup);
         Self {
             flow,
+            effect_bounds: Default::default(),
+            object_bounds: Default::default(),
             local_transform: Default::default(),
         }
+    }
+
+    pub(crate) fn ObjectBounds(&self) -> crate::svg_resources::SvgObjectBounds {
+        self.object_bounds
+    }
+    pub(crate) fn UpdateObjectBounds(&mut self) {
+        self.object_bounds = crate::svg_resources::CollectObjectBounds(self);
     }
 
     // cpp: layoutng_svg/layout_svg_group.h:15-15
@@ -93,7 +104,7 @@ impl LayoutSVGGroup {
     ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
         self.local_transform
     }
-    pub fn UpdateSVGLayout(&mut self, info: &SVGLayoutInfo) -> SVGLayoutResult {
+    fn UpdateLocalTransform(&mut self) -> bool {
         self.local_transform = crate::svg_viewport::LocalTransform(self);
         let element = foundation::DynamicTo::<Element>(self.GetNode());
         let use_data = unsafe { element.as_ref() }
@@ -134,7 +145,21 @@ impl LayoutSVGGroup {
             self.local_transform
                 .Translate(f64::from(offset.x()), f64::from(offset.y()));
         }
+        relative
+    }
+    pub fn UpdateSVGLayout(&mut self, info: &SVGLayoutInfo) -> SVGLayoutResult {
+        let relative = self.UpdateLocalTransform();
         let mut result = crate::svg_container_layout::LayoutContainer(self, info, 0.0, 0.0);
+        // TransformHelper reference-box dependent transforms commit after the
+        // native SVGContentContainer has updated its child object bounds.
+        if self.StyleRef().HasTransform()
+            && self
+                .StyleRef()
+                .UsedTransformBox(layoutng_style::style::style_transform::TransformBoxContext::kSvg)
+                != foundation::ETransformBox::kViewBox
+        {
+            self.UpdateLocalTransform();
+        }
         result.has_viewport_dependence |= relative;
         result
     }

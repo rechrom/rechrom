@@ -18,6 +18,7 @@ use layoutng_style::style::computed_style::ComputedStyle;
 #[repr(C)]
 pub struct LayoutSVGText {
     flow: LayoutBlockFlow,
+    pub(crate) effect_bounds: crate::svg_effect_bounds::SvgEffectBoundsCache,
     needs_text_metrics_update: bool,
 }
 
@@ -28,8 +29,14 @@ impl LayoutSVGText {
         flow.SetRuntimeClass(LayoutObjectClass::SvgText);
         Self {
             flow,
+            effect_bounds: Default::default(),
             needs_text_metrics_update: true,
         }
+    }
+
+    // Chromium layout_svg_text.cc:283-286.
+    pub fn IsObjectBoundingBoxValid(&self) -> bool {
+        self.PhysicalFragments().HasFragmentItems()
     }
 
     // Chromium layout_svg_text.cc:288-312. Read the completed source fragment

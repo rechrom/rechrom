@@ -83,6 +83,11 @@ pub trait MainLayerHostRead<B: MainLayerTypes>: ProtectedSequenceSynchronizer {
     fn IsElementAnimating(&self, element: ElementId) -> bool;
 }
 pub trait MainLayerHost<B: MainLayerTypes>: MainLayerHostRead<B> {
+    fn CreateUIResource(
+        &mut self,
+        bitmap: <B as LayerTreeTypes>::UIResourceBitmap,
+    ) -> super::layer_tree_impl::UIResourceId;
+    fn DeleteUIResource(&mut self, id: super::layer_tree_impl::UIResourceId);
     fn AddViewTransitionRequest(&mut self, request: Box<SelfViewTransitionRequest<B>>);
     fn RegisterSelection(&mut self, selection: B::LayerSelection);
     fn RegisterViewportPropertyIds(

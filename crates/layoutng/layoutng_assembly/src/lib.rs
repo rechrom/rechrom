@@ -42,11 +42,13 @@ pub mod text_decoration_info;
 pub mod css_color_parser;
 
 mod block_virtual_dispatch;
-pub use block_virtual_dispatch::RegisterFlexStitchedRowGapIndex;
 pub use block_virtual_dispatch::{
     GridObjectVirtuals, RegisterGridObjectVirtuals, RegisterGridStyleDidChange,
     RegisterImageStyleDidChange, RegisterReplacedRecalcVisualOverflow,
-    RegisterReplacedStyleDidChange, RegisterSvgRootChildren,
+    RegisterReplacedStyleDidChange, RegisterSvgRootChildren, RegisterVideoStyleDidChange,
+};
+pub use block_virtual_dispatch::{
+    RegisterFlexStitchedRowGapIndex, RegisterFlexTotalRowGapCount, RegisterGridTotalRowGapCount,
 };
 mod layout_invalidation_reason_symbols;
 mod out_of_flow_element_data;
@@ -753,7 +755,9 @@ mod package_contract_tests {
                 && source.contains("replaced_respects_css_overflow")
                 && source.contains("LayoutReplacedRespectsCSSOverflow")
                 && source.contains("replaced_image_state_updater")
-                && source.contains("UpdateImageState"),
+                && source.contains("UpdateImageState")
+                && source.contains("replaced_video_state_updater")
+                && source.contains("UpdateVideoState"),
             "replaced intrinsic sizing must retain a package span and out-of-line sampling frame"
         );
 
@@ -1012,11 +1016,11 @@ mod package_contract_tests {
         let source = std::fs::read_to_string(root.join("layoutng/src/internal/algorithm_entry.rs"))
             .expect("read source algorithm entry");
         assert!(
-            source.contains("#[inline(never)]\npub fn RunAlgorithm<A: LayoutAlgorithmImplementation>")
-                && source.contains(
-                    "#[inline(never)]\npub fn MeasureAlgorithm<A: LayoutAlgorithmImplementation>",
-                )
-                && source.contains("layout: Some(RunAlgorithm::<A>)")
+            source.contains(
+                "#[inline(never)]\npub fn RunAlgorithm<A: LayoutAlgorithmImplementation>"
+            ) && source.contains(
+                "#[inline(never)]\npub fn MeasureAlgorithm<A: LayoutAlgorithmImplementation>",
+            ) && source.contains("layout: Some(RunAlgorithm::<A>)")
                 && source.contains("measure: Some(MeasureAlgorithm::<A>)"),
             "source algorithm entries must remain out-of-line monomorphizations of the package type"
         );
@@ -1931,9 +1935,8 @@ mod package_contract_tests {
             facade.contains(concat!(
                 "layout_algo_",
                 "block/src/fragmentation_context.rs"
-            )) && transaction.contains(
-                "layout_algo_block_fragmentation_context::fragmentation_context(parent)"
-            ),
+            )) && transaction
+                .contains("layout_algo_block_fragmentation_context::fragmentation_context(parent)"),
             "managed-object update must delegate fragmentation-context lookup to the block algorithm"
         );
         for leaked_policy in [
@@ -3953,9 +3956,8 @@ mod package_contract_tests {
                 .expect("read shared node-metadata schema");
         assert!(
             core.contains("layout_invalidation/src/node_input_state.rs")
-                && core.contains(
-                    "layout_invalidation_node_input_state::NewStandaloneNodeData(input)"
-                )
+                && core
+                    .contains("layout_invalidation_node_input_state::NewStandaloneNodeData(input)")
                 && core.contains(
                     "layout_invalidation_node_input_state::UpdateNodeInputData(self, input)"
                 ),
@@ -7141,7 +7143,7 @@ mod package_contract_tests {
             "fn MapToVisualRectInAncestorSpaceInternalFastPath",
             "LayoutObjectHitTestForOcclusionProvider",
             "LayoutObjectHitTestAllPhasesProvider",
-            "DispatchLayoutObjectMapToVisualRectInternal",
+            "MapVisualRectInternalDispatch",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -7197,8 +7199,8 @@ mod package_contract_tests {
             "fn CanBeSelectionLeaf",
             "fn IsSelected",
             "fn IsSelectable",
-            "LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider",
-            "LayoutObjectAbsoluteSelectionRectProvider",
+            "self.ContainingBlock().as_ref()",
+            "self.MapToVisualRectInAncestorSpacePhysical",
             "self.SlowFirstChild().is_null()",
             "self.StyleRef().Visibility() != EVisibility::kVisible",
             "self.HasLockedAncestorPreventingPaint()",
@@ -7363,19 +7365,26 @@ mod package_contract_tests {
             "fn AbsoluteBoundingBoxRectHandlingEmptyInline",
             "fn AbsoluteBoundingBoxRectForScrollIntoView",
             "fn AbsoluteBoundingBoxRectIncludingDescendants",
-            "LayoutObjectAbsoluteBoundingBoxRectFProvider",
-            "LayoutObjectAbsoluteBoundingBoxRectIncludingDescendantsProvider",
-            "LayoutObjectAddAbsoluteRectForLayerProvider",
         ] {
             assert!(
                 owner.contains(owned_policy),
                 "layout_fragment bounding geometry lost {owned_policy}"
             );
         }
+        for replaced_bypass in [
+            "LayoutObjectAbsoluteBoundingBoxRectFProvider",
+            "LayoutObjectAbsoluteBoundingBoxRectIncludingDescendantsProvider",
+            "LayoutObjectAddAbsoluteRectForLayerProvider",
+        ] {
+            assert!(
+                !owner.contains(replaced_bypass),
+                "native bounds still bypass source owner through {replaced_bypass}"
+            );
+        }
         assert_eq!(
             owner.matches("#[inline(never)]").count(),
             7,
-            "layer rectangle and six provider-backed absolute bounds operations must retain fragment sampling frames"
+            "layer rectangle and six absolute bounds operations must retain fragment sampling frames"
         );
 
         let loader = std::fs::read_to_string(root.join("layoutng/src/internal/layout_object.rs"))
@@ -9230,8 +9239,8 @@ mod package_contract_tests {
             "fn DirtyLinesFromChangedChild",
             "fn InvalidatePaint(",
             "fn InvalidateDisplayItemClients",
-            "LayoutObjectDestroyAndCleanupAnonymousWrappersProvider",
-            "LayoutObjectInvalidateVisualOverflowProvider",
+            "let mut destroy_root = self as *mut LayoutObject",
+            "self.PaintingLayerDefault()",
             "LayoutObjectInvalidatePaintProvider",
             "LayoutObjectInvalidateDisplayItemClientsProvider",
         ] {
@@ -9656,74 +9665,6 @@ mod package_contract_tests {
     }
 
     #[test]
-    fn caret_geometry_resolves_to_the_fragment_owner() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("layoutng package root");
-        let owner = std::fs::read_to_string(root.join("layout_fragment/src/caret_geometry.rs"))
-            .expect("read source caret-geometry owner");
-        for owned_policy in [
-            "fn visit_text",
-            "fn text_control_caret_rect",
-            "fn editor(",
-            "fn text_control_offset_for_point",
-            "TextInlinePosition",
-            "TextNextCharacterWidth",
-            "TextPaintBaseline",
-            "TextOffsetForPoint",
-            "text_control_empty_caret",
-        ] {
-            assert!(
-                owner.contains(owned_policy),
-                "layout_fragment caret geometry lost {owned_policy}"
-            );
-        }
-        assert!(
-            owner.matches("#[inline(never)]").count() >= 4,
-            "caret rect, hit test and recursive walks must retain fragment sampling frames"
-        );
-
-        let contract = std::fs::read_to_string(root.join("layout_fragment/src/caret_rect.rs"))
-            .expect("read caret rectangle contract owner");
-        assert!(
-            contract.contains("pub enum CaretShape")
-                && contract.contains("pub trait CaretRectServices")
-                && contract.contains("fn GetCaretRectAtTextOffset"),
-            "layout_fragment caret rectangle contract lost its public schema"
-        );
-        let contract_facade =
-            std::fs::read_to_string(root.join("layoutng/src/internal/caret_rect.rs"))
-                .expect("read caret rectangle contract facade");
-        assert!(
-            contract_facade.contains("layout_fragment/src/caret_rect.rs")
-                && contract_facade.contains("pub use layout_fragment_caret_rect::*;")
-                && !contract_facade.contains("pub trait CaretRectServices"),
-            "caret rectangle contract must be re-exported from layout_fragment"
-        );
-
-        let adapter = std::fs::read_to_string(root.join("layoutng/src/caret/geometry.rs"))
-            .expect("read caret geometry adapter");
-        assert!(
-            adapter.contains("layout_fragment/src/caret_geometry.rs")
-                && adapter.contains("layout_fragment_caret_geometry::text_control_caret_rect")
-                && adapter
-                    .contains("layout_fragment_caret_geometry::text_control_offset_for_point"),
-            "caret geometry API must delegate source walks to layout_fragment"
-        );
-        for leaked_policy in [
-            "fn visit_text",
-            "fn editor(",
-            "TextInlinePosition(offset.min(end))",
-            "node.TextOffsetForPoint(local)",
-        ] {
-            assert!(
-                !adapter.contains(leaked_policy),
-                "caret facade still owns fragment geometry policy {leaked_policy}"
-            );
-        }
-    }
-
-    #[test]
     fn sticky_layout_commit_resolves_to_the_fragment_owner() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -9926,7 +9867,6 @@ mod package_contract_tests {
             "ShouldDoFullPaintInvalidation",
             "ExportStyleWithProjectedSvg",
             "ExportStickyPaintProperties",
-            "text_control_empty_caret",
             "FormControlPaintData",
         ] {
             assert!(
@@ -10145,6 +10085,7 @@ mod package_contract_tests {
             "pub(super) fn ExportFrameSetPaintData",
             "pub(super) fn ExportFieldsetPaintData",
             "pub(super) fn ExportColumnRulePaintData",
+            "pub(super) fn ExportGapRulePaintData",
             "pub(super) fn ExportOverflowClipMargin",
         ] {
             assert!(

@@ -210,12 +210,31 @@ pub struct Layer<B: MainLayerTypes> {
 // This Rust vtable carries no host/service/backpointer or cloned base state.
 pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
     fn base(&self) -> &Layer<B>;
+    /// Rechrom's paint package crosses this boundary with immutable scrollbar
+    /// snapshots instead of Blink's live WebScrollbar adapter. Preserve the
+    /// native PaintedScrollbarLayer allocation when PAC offers the matching
+    /// existing layer, while allowing the concrete owner to replace only that
+    /// snapshot. Other layer kinds reject the operation.
+    fn ReusePaintedScrollbarSnapshot(
+        &self,
+        _scrollbar: Arc<
+            <B as crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes>::Scrollbar,
+        >,
+    ) -> bool
+    where
+        B: crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes,
+    {
+        false
+    }
     fn AsScrollbarLayer(
         &self,
     ) -> Option<&dyn super::scrollbar_layer_base::ScrollbarLayerObject<B>> {
         None
     }
     fn AsPictureLayer(&self) -> Option<&dyn PictureLayerObject<B>> {
+        None
+    }
+    fn AsSurfaceLayer(&self) -> Option<&dyn super::surface_layer::SurfaceLayerObject<B>> {
         None
     }
     fn HasDrawableContent(&self, c: &LayerContext<'_, B>) -> bool {
@@ -1887,6 +1906,31 @@ impl<B: MainLayerTypes> LayerRef<B> {
     pub fn SetIsDrawable(&self, value: bool, c: &mut LayerContext<'_, B>) {
         self.0.base().SetIsDrawable(self.0.as_ref(), value, c);
     }
+    pub fn SetHitTestable(&self, value: bool, c: &mut LayerContext<'_, B>) {
+        self.0.base().SetHitTestable(value, c);
+    }
+    pub fn SetSurfaceRange(
+        &self,
+        range: B::SurfaceRange,
+        deadline: Option<u32>,
+        c: &mut LayerContext<'_, B>,
+    ) where
+        B: crate::adapter::surface_layer::SurfaceLayerTypes,
+    {
+        self.0
+            .AsSurfaceLayer()
+            .expect("typed SurfaceLayer owner")
+            .SetSurfaceRange(range, deadline, c);
+    }
+    pub fn SetStretchContentToFillBounds(&self, value: bool, c: &mut LayerContext<'_, B>)
+    where
+        B: crate::adapter::surface_layer::SurfaceLayerTypes,
+    {
+        self.0
+            .AsSurfaceLayer()
+            .expect("typed SurfaceLayer owner")
+            .SetStretchContentToFillBounds(value, c);
+    }
 }
 impl<B: MainLayerTypes> Layer<B> {
     // Source: cc/layers/layer.cc:654-679.
@@ -2103,9 +2147,7 @@ impl<B: MainLayerTypes> Layer<B> {
             let node = trees.transform_tree_mutable().MutableNode(index);
             node.post_translation = offset;
             node.needs_local_transform_update = true;
-            node.SetTransformChanged(
-                crate::cc::trees::damage_reason::DamageReason::kUntracked,
-            );
+            node.SetTransformChanged(crate::cc::trees::damage_reason::DamageReason::kUntracked);
             {
                 let (tree, mut context) = trees.transform_tree_with_context();
                 tree.set_needs_update(true, &mut context);
@@ -2135,9 +2177,7 @@ impl<B: MainLayerTypes> Layer<B> {
                 let preserves = Are2dAxisAligned(old, transform);
                 node.local = transform.clone();
                 node.needs_local_transform_update = true;
-                node.SetTransformChanged(
-                    crate::cc::trees::damage_reason::DamageReason::kUntracked,
-                );
+                node.SetTransformChanged(crate::cc::trees::damage_reason::DamageReason::kUntracked);
                 {
                     let (tree, mut context) = trees.transform_tree_with_context();
                     tree.set_needs_update(true, &mut context);
@@ -2176,9 +2216,7 @@ impl<B: MainLayerTypes> Layer<B> {
             debug_assert_eq!(expected, node.id);
             node.origin = origin;
             node.needs_local_transform_update = true;
-            node.SetTransformChanged(
-                crate::cc::trees::damage_reason::DamageReason::kUntracked,
-            );
+            node.SetTransformChanged(crate::cc::trees::damage_reason::DamageReason::kUntracked);
             {
                 let (tree, mut context) = trees.transform_tree_with_context();
                 tree.set_needs_update(true, &mut context);

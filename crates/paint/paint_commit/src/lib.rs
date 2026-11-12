@@ -24,6 +24,7 @@ pub type PaintArtifact = paint_record::PaintRecording;
 /// One completed PaintEngine publication. The artifact is immutable behind
 /// `Arc`; the client receipt is opaque and can only be consumed through
 /// Layout's commit interface. Neither value contains a copied fragment tree.
+#[derive(Clone)]
 pub struct PaintOutput {
     artifact: Arc<PaintArtifact>,
     layout_commit: layoutng_assembly::layout_engine::PaintClientCommit,

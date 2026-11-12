@@ -1,5 +1,11 @@
 [workspace]
 members = [
+    "crates/navigation_history",
+    "crates/fetch_policy",
+    "crates/fileapi",
+    "crates/net_filename",
+    "crates/scroll_snap",
+    "crates/scroll_animation",
     "crates/executor",
     "crates/tracing",
     "crates/event_loop",
@@ -32,6 +38,9 @@ members = [
     "crates/layoutng/layout_algo_mathml",
     "crates/layoutng/layout_algo_svg",
     "crates/icu_bidi",
+    "crates/url_formatter",
+    "crates/resize_observer",
+    "crates/intersection_observer",
     "crates/layoutng/layout_algo_inline",
     "crates/layoutng/layout_algo_list",
     "crates/layoutng/layout_algo_out_of_flow",
@@ -48,6 +57,7 @@ members = [
     "crates/style/style",
     "crates/layoutng/layout_algo_custom",
     "crates/paint/paint_model",
+    "crates/paint/paint_skia",
     "crates/paint/paint_walk",
     "crates/paint/paint_reuse",
     "crates/paint/paint_record",
@@ -72,6 +82,7 @@ members = [
     "crates/renderer_skia",
     "crates/dom",
     "crates/html",
+    "crates/xml_vendor",
     "crates/css_parser",
     "crates/http_transport",
     "crates/xhr_transport",
@@ -84,9 +95,17 @@ members = [
     "crates/image_decoder",
     "crates/image_resource",
     "crates/document_image",
+    "crates/canvas",
+    "crates/gpu_webgl",
     "crates/web_font",
     "crates/javascript",
     "crates/webapi",
+    "crates/webgl",
+    "crates/interaction/interaction_input",
+    "crates/interaction/interaction_dispatch",
+    "crates/interaction/interaction_default",
+    "crates/interaction/interaction_hit_test",
+    "crates/interaction/interaction_scroll",
     "crates/interaction",
     "crates/animation",
     "crates/page_mutation",
@@ -95,7 +114,7 @@ members = [
 ]
 # The remaining LayoutNG core source tree has reciprocal translated C++
 # dependencies and compiles through layoutng_assembly.
-exclude = ["crates/layoutng/layoutng", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d"]
+exclude = ["vendor/smithay-clipboard", "crates/layoutng/layoutng", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d", "vendor/hyper-util"]
 resolver = "2"
 
 [profile.release]
@@ -105,6 +124,30 @@ resolver = "2"
 lto = "fat"
 codegen-units = 1
 
+# Fast, representative browser builds for headless correctness iteration.
+# This is deliberately not a release or performance-measurement artifact.
+[profile.iteration]
+inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 256
+incremental = true
+debug = 0
+strip = "debuginfo"
+
+# Native experiential checks run the workspace's dev artifact. The software
+# renderer and its Skia playback loops are real-time pixel paths: leaving these
+# three packages at opt-level 0 turns a DPR 2 scroll frame into tens of
+# milliseconds and hides the compositor's actual scheduling behavior.
+[profile.dev.package.skia]
+opt-level = 3
+
+[profile.dev.package.renderer]
+opt-level = 3
+
+[profile.dev.package.renderer_skia]
+opt-level = 3
+
 [patch.crates-io]
 rav1d = { path = "vendor/rav1d" }
 icu_locale_data = { path = "vendor/icu_locale_data-2.3.0" }
@@ -112,3 +155,8 @@ zune-jpeg = { path = "vendor/zune-jpeg" }
 ttf-parser = { path = "vendor/ttf-parser" }
 softbuffer = { path = "vendor/softbuffer" }
 winit = { path = "vendor/winit" }
+
+hyper-util = { path = "vendor/hyper-util" }
+sfv = { path = "../src/third_party/rust/chromium_crates_io/vendor/sfv-v0_15" }
+ref-cast = { path = "../src/third_party/rust/chromium_crates_io/vendor/ref-cast-v1" }
+ref-cast-impl = { path = "../src/third_party/rust/chromium_crates_io/vendor/ref-cast-impl-v1" }

@@ -6,9 +6,13 @@
 use crate::persistent_document::{
     DOMNamespace, DOMNodeType, DOMShadowRootMode, PersistentDocument,
 };
-use std::collections::{HashMap, VecDeque};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
-/// A document-local definition identity. Script functions stay in the host.
+/// A Window-registry definition identity. Script functions stay in its realm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CustomElementDefinitionId(pub u64);
 
@@ -25,6 +29,16 @@ pub struct CustomElementCallbacks {
     pub connected_move: bool,
     pub adopted: bool,
     pub attribute_changed: bool,
+    pub form_associated: bool,
+    pub form_disabled: bool,
+    pub form_reset: bool,
+    pub form_state_restore: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CustomElementOptions {
+    pub form_associated: bool,
+    pub disable_internals: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +47,7 @@ pub struct CustomElementDefinition {
     pub descriptor: CustomElementDescriptor,
     pub observed_attributes: Vec<String>,
     pub callbacks: CustomElementCallbacks,
+    pub options: CustomElementOptions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +89,25 @@ pub enum CustomElementReaction {
         element: usize,
         id: CustomElementDefinitionId,
     },
+    FormAssociated {
+        element: usize,
+        id: CustomElementDefinitionId,
+        form: Option<usize>,
+    },
+    FormDisabled {
+        element: usize,
+        id: CustomElementDefinitionId,
+        disabled: bool,
+    },
+    FormReset {
+        element: usize,
+        id: CustomElementDefinitionId,
+    },
+    FormStateRestore {
+        element: usize,
+        id: CustomElementDefinitionId,
+        state: crate::element_internals::ElementInternalsValue,
+    },
 }
 
 impl CustomElementReaction {
@@ -83,26 +117,35 @@ impl CustomElementReaction {
             | Self::AttributeChanged { element, .. }
             | Self::Connected { element, .. }
             | Self::Disconnected { element, .. } => *element,
+            Self::FormAssociated { element, .. }
+            | Self::FormDisabled { element, .. }
+            | Self::FormReset { element, .. }
+            | Self::FormStateRestore { element, .. } => *element,
         }
     }
 }
 
 #[derive(Default)]
-pub(crate) struct CustomElementRegistry {
-    definitions: Vec<CustomElementDefinition>,
+struct WindowCustomElementDefinitions {
+    definitions: Vec<Rc<CustomElementDefinition>>,
     names: HashMap<String, CustomElementDefinitionId>,
+}
+#[derive(Default)]
+pub(crate) struct CustomElementRegistry {
+    window: Rc<RefCell<WindowCustomElementDefinitions>>,
     elements: HashMap<usize, (CustomElementState, CustomElementDefinitionId)>,
     // CustomElementReactionStack owns one shared reaction queue per element.
     // Nested scopes own separate element queues, not separate reaction lists.
     reactions: HashMap<usize, VecDeque<CustomElementReaction>>,
     scopes: Vec<VecDeque<usize>>,
     backup: VecDeque<usize>,
+    pub(crate) internals: HashMap<usize, crate::element_internals::ElementInternals>,
 }
 
 impl CustomElementRegistry {
-    fn Definition(&self, id: CustomElementDefinitionId) -> Option<&CustomElementDefinition> {
+    fn Definition(&self, id: CustomElementDefinitionId) -> Option<Rc<CustomElementDefinition>> {
         let index = usize::try_from(id.0.checked_sub(1)?).ok()?;
-        self.definitions.get(index)
+        self.window.borrow().definitions.get(index).cloned()
     }
 
     fn Enqueue(&mut self, reaction: CustomElementReaction) {
@@ -173,6 +216,14 @@ pub fn IsValidCustomElementName(name: &str) -> bool {
 }
 
 impl PersistentDocument {
+    pub(crate) fn ReuseWindowCustomElementDefinitions(&mut self, previous: &Self) {
+        assert!(self.custom_elements.window.borrow().definitions.is_empty());
+        assert!(
+            self.custom_elements.elements.is_empty() && self.custom_elements.reactions.is_empty()
+        );
+        self.custom_elements.window = previous.custom_elements.window.clone();
+    }
+
     /// The host first extracts and validates all script-observable definition
     /// properties. Only this successful commit makes a definition visible.
     pub fn RegisterCustomElementDefinition(
@@ -181,32 +232,54 @@ impl PersistentDocument {
         observed_attributes: Vec<String>,
         callbacks: CustomElementCallbacks,
     ) -> Result<CustomElementDefinitionId, CustomElementRegistrationError> {
+        self.RegisterCustomElementDefinitionWithOptions(
+            descriptor,
+            observed_attributes,
+            callbacks,
+            CustomElementOptions::default(),
+        )
+    }
+
+    pub fn RegisterCustomElementDefinitionWithOptions(
+        &mut self,
+        descriptor: CustomElementDescriptor,
+        observed_attributes: Vec<String>,
+        callbacks: CustomElementCallbacks,
+        options: CustomElementOptions,
+    ) -> Result<CustomElementDefinitionId, CustomElementRegistrationError> {
         if !IsValidCustomElementName(&descriptor.name) {
             return Err(CustomElementRegistrationError::InvalidName);
         }
-        if self.custom_elements.names.contains_key(&descriptor.name) {
-            return Err(CustomElementRegistrationError::DuplicateName);
-        }
-        if descriptor.name != descriptor.local_name {
-            return Err(CustomElementRegistrationError::CustomizedBuiltInUnsupported);
-        }
-        let id = CustomElementDefinitionId(self.custom_elements.definitions.len() as u64 + 1);
-        self.custom_elements
-            .names
-            .insert(descriptor.name.clone(), id);
-        self.custom_elements
-            .definitions
-            .push(CustomElementDefinition {
+        let id = {
+            let mut window = self.custom_elements.window.borrow_mut();
+            if window.names.contains_key(&descriptor.name) {
+                return Err(CustomElementRegistrationError::DuplicateName);
+            }
+            if descriptor.name != descriptor.local_name {
+                return Err(CustomElementRegistrationError::CustomizedBuiltInUnsupported);
+            }
+            let id = CustomElementDefinitionId(window.definitions.len() as u64 + 1);
+            window.names.insert(descriptor.name.clone(), id);
+            let definition = Rc::new(CustomElementDefinition {
                 id,
                 descriptor,
-                // Without the callback the host must not read observedAttributes.
                 observed_attributes: if callbacks.attribute_changed {
                     observed_attributes
                 } else {
                     Vec::new()
                 },
                 callbacks,
+                options,
             });
+            browser_tracing::instant_with_text(
+                "javascript",
+                "CustomElementDefined",
+                &definition.descriptor.name,
+                &[("definition_id", id.0 as f64)],
+            );
+            window.definitions.push(definition);
+            id
+        };
         // CollectCandidates + CustomElementUpgradeSorter: only candidates in
         // the associated live document, in shadow-including tree order.
         for element in self.CustomElementInclusiveDescendants(self.Root()) {
@@ -223,18 +296,21 @@ impl PersistentDocument {
     }
 
     pub fn HasCustomElementDefinitions(&self) -> bool {
-        !self.custom_elements.definitions.is_empty()
+        !self.custom_elements.window.borrow().definitions.is_empty()
     }
 
-    pub fn CustomElementDefinitionForName(&self, name: &str) -> Option<&CustomElementDefinition> {
-        self.custom_elements
-            .Definition(*self.custom_elements.names.get(name)?)
+    pub fn CustomElementDefinitionForName(
+        &self,
+        name: &str,
+    ) -> Option<Rc<CustomElementDefinition>> {
+        let id = *self.custom_elements.window.borrow().names.get(name)?;
+        self.custom_elements.Definition(id)
     }
 
     pub fn CustomElementDefinitionForId(
         &self,
         id: CustomElementDefinitionId,
-    ) -> Option<&CustomElementDefinition> {
+    ) -> Option<Rc<CustomElementDefinition>> {
         self.custom_elements.Definition(id)
     }
 
@@ -257,7 +333,7 @@ impl PersistentDocument {
     pub fn CustomElementDefinitionForElement(
         &self,
         element: usize,
-    ) -> Option<&CustomElementDefinition> {
+    ) -> Option<Rc<CustomElementDefinition>> {
         let &(state, id) = self.custom_elements.elements.get(&element)?;
         (state == CustomElementState::Custom)
             .then(|| self.custom_elements.Definition(id))
@@ -268,7 +344,7 @@ impl PersistentDocument {
     pub fn LookupCustomElementDefinition(
         &self,
         element: usize,
-    ) -> Option<&CustomElementDefinition> {
+    ) -> Option<Rc<CustomElementDefinition>> {
         let node = self.Node(element);
         if node.Type() != DOMNodeType::kElement
             || node.Namespace() != DOMNamespace::kHTML
@@ -304,7 +380,20 @@ impl PersistentDocument {
             .reactions
             .iter()
             .filter(|(_, queue)| !queue.is_empty())
-            .map(|(&element, _)| self.Node(element).Id())
+            .flat_map(|(&element, queue)| {
+                std::iter::once(self.Node(element).Id()).chain(queue.iter().filter_map(
+                    move |reaction| {
+                        if let CustomElementReaction::FormAssociated {
+                            form: Some(form), ..
+                        } = reaction
+                        {
+                            Some(self.Node(*form).Id())
+                        } else {
+                            None
+                        }
+                    },
+                ))
+            })
             .collect()
     }
 
@@ -431,6 +520,10 @@ impl PersistentDocument {
             CustomElementState::Failed
         };
         self.custom_elements.elements.insert(element, (state, id));
+        if succeeded && self.IsFormAssociatedCustomElement(element) {
+            self.EnsureElementInternals(element);
+            self.ElementInternalsDidUpgrade(element);
+        }
         if !succeeded {
             // Definition::Upgrade clears every callback already enqueued for
             // this element, including pre-constructor attribute/connected work.
@@ -441,6 +534,10 @@ impl PersistentDocument {
         // as an unknown node mutation widens any sibling selector in the
         // document to the element's complete parent subtree.
         self.RecordDefinedStyleChange(element);
+    }
+
+    pub(crate) fn EnqueueInternalsReaction(&mut self, reaction: CustomElementReaction) {
+        self.custom_elements.Enqueue(reaction);
     }
 
     pub(crate) fn CustomElementAttributeWillChange(

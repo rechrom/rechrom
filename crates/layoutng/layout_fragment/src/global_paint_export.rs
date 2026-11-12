@@ -1,7 +1,8 @@
 //! Document-global paint facts projected from the resident source tree.
 //!
-//! Canvas background transfer and fixed-background scroll requirements each
-//! retain fragment-qualified sampling frames.
+//! Canvas background transfer, paginated document backgrounds and
+//! fixed-background scroll requirements retain fragment-qualified sampling
+//! frames.
 
 #![allow(non_snake_case)]
 
@@ -12,6 +13,7 @@ pub(super) fn ExportCanvasBackground(
     root_object: &LayoutObject,
     objects: &[*mut LayoutObject],
     output: crate::layout_engine::PaintFragmentCursor<'_>,
+    should_apply_root_background_behavior: bool,
 ) {
     if !root_object.IsDocumentElement() {
         return;
@@ -39,7 +41,12 @@ pub(super) fn ExportCanvasBackground(
             return Some(CanvasBackgroundPaintData {
                 style: cursor.paint.style.clone(),
                 effective_zoom: cursor.paint.effective_zoom,
+                document_element_node_id: 0,
+                previous_document_element_geometry: cursor.paint.previous_box_geometry,
+                document_element_paint_offset: Offset::default(),
                 document_element_size: size,
+                document_element_border: cursor.paint.border,
+                document_element_padding: cursor.paint.padding,
                 document_element_content_box: FragmentPaintRect {
                     offset: Offset {
                         x: cursor.paint.border.left + cursor.paint.padding.left,
@@ -67,6 +74,89 @@ pub(super) fn ExportCanvasBackground(
     let Some(root_geometry) = source(output, root_id) else {
         return;
     };
+    unsafe fn publish_page_document_style(
+        cursor: crate::layout_engine::PaintFragmentCursor<'_>,
+        style: &PaintStyle,
+        positioning_size: Size,
+        root_element_paint_offset: Offset,
+        border: Edges,
+        padding: Edges,
+        has_background_fixed_to_viewport: bool,
+    ) {
+        let children = cursor.Children();
+        let input = unsafe { cursor.PaintDataMut() };
+        if input.paint.is_page_border_box {
+            input.paint.page_document_background_style = Some(style.clone());
+            let offset = input
+                .paint
+                .page_document_background_geometry
+                .map_or(Offset::default(), |geometry| {
+                    geometry.positioning_area_offset
+                });
+            input.paint.page_document_background_geometry =
+                Some(crate::fragment_tree::PageBackgroundPaintData {
+                    positioning_size,
+                    positioning_area_offset: offset,
+                    border,
+                    padding,
+                    has_background_fixed_to_viewport,
+                });
+        }
+        if input.paint.is_page_container {
+            let local = input
+                .paint
+                .page_container_background_geometry
+                .unwrap_or_default();
+            input.paint.page_container_background_geometry =
+                Some(crate::fragment_tree::PageContainerBackgroundPaintData {
+                    positioning_size,
+                    root_element_paint_offset,
+                    has_background_fixed_to_viewport,
+                    ..local
+                });
+        }
+        for child in children {
+            unsafe {
+                publish_page_document_style(
+                    child,
+                    style,
+                    positioning_size,
+                    root_element_paint_offset,
+                    border,
+                    padding,
+                    has_background_fixed_to_viewport,
+                )
+            };
+        }
+    }
+    // Rechrom's root LayoutObject is the LayoutView carrying the document
+    // element's style, so this is the immutable equivalent of
+    // document.GetLayoutView()->StyleRef() in BoxFragmentPainter.
+    let root_paint = &output.paint;
+    let root_box = DynamicTo::<LayoutBox>(root_object as *const LayoutObject);
+    let root_element_paint_offset = if root_box.is_null() {
+        Offset::default()
+    } else {
+        let offset = unsafe { &*root_box }.FirstFragment().PaintOffset();
+        Offset {
+            x: Number(offset.left),
+            y: Number(offset.top),
+        }
+    };
+    unsafe {
+        publish_page_document_style(
+            output,
+            &root_geometry.style,
+            root_geometry.document_element_size,
+            root_element_paint_offset,
+            root_paint.border,
+            root_paint.padding,
+            root_paint.is_background_attachment_fixed_object,
+        )
+    };
+    if !should_apply_root_background_behavior {
+        return;
+    }
     unsafe { mark(output, root_id) };
     let body = objects
         .iter()
@@ -87,7 +177,12 @@ pub(super) fn ExportCanvasBackground(
     let Some(mut canvas) = source(output, source_id) else {
         return;
     };
+    canvas.document_element_node_id = root_id;
     canvas.document_element_size = root_geometry.document_element_size;
+    canvas.document_element_paint_offset = root_element_paint_offset;
+    canvas.document_element_border = root_geometry.document_element_border;
+    canvas.document_element_padding = root_geometry.document_element_padding;
+    canvas.previous_document_element_geometry = root_geometry.previous_document_element_geometry;
     canvas.document_element_content_box = root_geometry.document_element_content_box;
     canvas.document_element_scrollable_overflow =
         root_geometry.document_element_scrollable_overflow;

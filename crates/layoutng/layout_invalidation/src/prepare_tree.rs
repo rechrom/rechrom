@@ -397,6 +397,19 @@ pub(super) fn prepare_layout_object_tree(
                     .set_root_container_size
                     .expect("SVG layout module has a root container setter");
                 set_container(unsafe { &mut *object }, size);
+                let scale = space
+                    .document_image_container
+                    .filter(|container| {
+                        !node.is_null() && unsafe { &*node }.InputId() == container.root_node_id
+                    })
+                    .map_or([1.0, 1.0], |container| container.scale);
+                unsafe { &*algorithms }
+                    .svg_support
+                    .set_root_container_scale
+                    .expect("SVG layout module has a root container-scale setter")(
+                    unsafe { &mut *object },
+                    foundation::gfx::Vector2dF::new(scale[0], scale[1]),
+                );
             }
             object = next;
         }

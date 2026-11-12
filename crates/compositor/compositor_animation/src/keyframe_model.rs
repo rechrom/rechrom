@@ -249,7 +249,16 @@ impl<C: KeyframeCurve> KeyframeModel<C> {
     }
     // Source: cc/animation/keyframe_model.cc:193-203
     pub fn ToString(&self) -> String {
-        format!("KeyframeModel{{id={}, group={}, target_property_type={}, custom_property_name={}, native_property_type={}, run_state={}, element_id={}}}",self.id(),self.group_,self.TargetProperty(),self.target_property_id_.custom_property_name(),self.target_property_id_.native_property_type() as i32,gfx::KeyframeModel::<C>::ToString(self.run_state()),self.element_id_.ToString())
+        format!(
+            "KeyframeModel{{id={}, group={}, target_property_type={}, custom_property_name={}, native_property_type={}, run_state={}, element_id={}}}",
+            self.id(),
+            self.group_,
+            self.TargetProperty(),
+            self.target_property_id_.custom_property_name(),
+            self.target_property_id_.native_property_type() as i32,
+            gfx::KeyframeModel::<C>::ToString(self.run_state()),
+            self.element_id_.ToString()
+        )
     }
     // Source: cc/animation/keyframe_model.cc:205-210
     pub fn SetIsImplOnly(&mut self) {

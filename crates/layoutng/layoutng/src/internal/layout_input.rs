@@ -97,6 +97,10 @@ pub enum NodeKind {
     kSvgHiddenContainer,
     kSvgResourceClipper,
     kSvgResourceMasker,
+    kSvgResourceGradient,
+    kSvgResourcePattern,
+    kSvgResourceFilter,
+    kSvgResourceMarker,
     kSvgForeignObject,
     kSvgText,
     kSvgInline,
@@ -488,6 +492,7 @@ pub struct ShapePoint {
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeOutsideKind {
+    kCompiledPath,
     kReferenceBox,
     kPolygon,
     kCircle,
@@ -1344,12 +1349,14 @@ pub struct TextDecorationPaint {
     pub underline: bool,
     pub overline: bool,
     pub line_through: bool,
+    pub spelling_error: bool,
+    pub grammar_error: bool,
     pub color: Option<Color>,
     pub style: TextDecorationStyle,
     pub thickness: foundation::TextDecorationThickness,
     pub underline_offset: f64,
     pub underline_offset_auto: bool,
-    pub skip_ink: bool,
+    pub skip_ink: foundation::ETextDecorationSkipInk,
 }
 impl Default for TextDecorationPaint {
     fn default() -> Self {
@@ -1357,12 +1364,14 @@ impl Default for TextDecorationPaint {
             underline: false,
             overline: false,
             line_through: false,
+            spelling_error: false,
+            grammar_error: false,
             color: None,
             style: TextDecorationStyle::kSolid,
             thickness: foundation::TextDecorationThickness::default(),
             underline_offset: 0.0,
             underline_offset_auto: true,
-            skip_ink: true,
+            skip_ink: foundation::ETextDecorationSkipInk::kAuto,
         }
     }
 }
@@ -1579,14 +1588,7 @@ pub enum SvgUseData {
 /// HTMLAreaElement's parsed shape. The focused-area relation is resolved by
 /// DOM, while LayoutImage supplies the container geometry and effective zoom.
 /// Source: core/html/html_area_element.cc:52-84,111-191.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ImageMapAreaShape {
-    #[default]
-    kRect,
-    kCircle,
-    kPoly,
-    kDefault,
-}
+pub use foundation::native_path::ImageMapAreaShape;
 
 /// Immutable focused image-map input published on the associated HTML image.
 /// Paint must not traverse DOM or reconstruct the map/image relation.
@@ -1602,9 +1604,124 @@ pub struct FocusedImageMapArea {
     pub effective_zoom: f32,
 }
 
+/// Source: platform/graphics/paint/tracked_element_data.h:29-46.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackedElementSubRectType {
+    IntersectWithElementRect,
+    NoIntersection,
+}
+
+/// Source: public/common/tokens/tokens.h FrameToken. The tagged identity must
+/// survive the DOM/Layout boundary; local and remote tokens can share words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackedElementFrameToken {
+    Local([u64; 2]),
+    Remote([u64; 2]),
+}
+
+/// Source: platform/graphics/paint/tracked_element_data.h:29-46.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackedElementRelativeRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub r#type: TrackedElementSubRectType,
+}
+
+/// Element-owned input corresponding to one entry in TrackedElementSubRects.
+/// `feature` is the flat-map key in Chromium and therefore defines stable
+/// publication order when more than one feature tracks the same element.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedElementSubRect {
+    pub feature: i32,
+    pub id: [u64; 2],
+    pub should_add_to_compositor_frame_metadata: bool,
+    pub should_exclude_fixed_and_sticky_occlusions: bool,
+    pub sub_rect: Option<TrackedElementRelativeRect>,
+    pub frame_token: Option<TrackedElementFrameToken>,
+    /// Chromium stores a LocalFrameToken for the parent frame, not the tagged
+    /// local-or-remote FrameToken used by `frame_token`.
+    pub parent_frame_token: Option<[u64; 2]>,
+}
+
+/// Source LayoutIFrame/LayoutEmbeddedObject most-derived identities. They
+/// share the retained LayoutReplaced representation at this package boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmbeddedContentKind {
+    Frame,
+    Object,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SvgMarkerOrient {
+    Angle(f32),
+    Auto,
+    AutoStartReverse,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvgMarkerData {
+    pub lengths: std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues>,
+    pub container_sizes: Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes>,
+    pub stroke_width_units: bool,
+    pub orient: SvgMarkerOrient,
+}
+/// Main-frame view facts consumed by LayoutMedia::ComputePanelWidth. The
+/// current frame's scrollbar modes are queried on its resident LayoutView.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaPanelMainFrame {
+    Remote,
+    NoLocalView,
+    CurrentLocalFrame,
+    OtherLocalFrame {
+        horizontal_scrollbar_mode: super::scrollbar_mode::mojom::blink::ScrollbarMode,
+    },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaPanelPageFacts {
+    pub main_frame: MediaPanelMainFrame,
+    /// VisualViewport::VisibleWidth (layout pixels, excluding scrollbars).
+    /// This must come from the original viewport owner, never layout width.
+    pub visual_viewport_visible_width: Option<foundation::LayoutUnit>,
+}
+
+/// HTMLVideoElement/player facts captured at the element update boundary.
+/// Source: core/layout/layout_video.cc:78-132,175-185. None natural size
+/// means there is no WebMediaPlayer; Some(empty) is a player without metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoLayoutState {
+    pub show_poster: bool,
+    pub has_available_video_frame: bool,
+    pub poster_url_present: bool,
+    pub is_default_poster: bool,
+    pub player_natural_size: Option<foundation::gfx::Size>,
+    pub in_active_document: bool,
+    pub is_media_document: bool,
+    pub has_compositor_layer: bool,
+    pub would_taint_origin: bool,
+    pub has_controls: bool,
+    pub is_fullscreen: bool,
+}
+/// Native media UA subclass identity, never inferred from a CSS pseudo name.
+/// Source: core/layout/layout_media.cc:62-92.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaChildKind {
+    Controls,
+    TextTrackContainer,
+    RemotingInterstitial,
+    PictureInPictureInterstitial,
+}
 #[derive(Clone)]
 pub struct ElementData {
     pub used_canvas_transform: Option<TransformMatrix>,
+    pub element_canvas_transform_enabled: bool,
+    /// Element::GetRegionCaptureCropId(), stored as Token high/low words.
+    /// None is the source nullptr; the all-zero token is never valid.
+    pub region_capture_crop_id: Option<[u64; 2]>,
+    /// Element::GetTrackedElementSubRects(), retained in source feature order.
+    /// Paint converts these source descriptors into chunk-space effective
+    /// bounds only after the element's pixel-snapped paint rect is known.
+    pub tracked_element_sub_rects: Vec<TrackedElementSubRect>,
     pub content_lock: Option<ContentLockState>,
     pub remembered_inline_size: Option<f64>,
     pub remembered_block_size: Option<f64>,
@@ -1612,18 +1729,45 @@ pub struct ElementData {
     pub image_map_area: bool,
     pub html_anchor: bool,
     pub html_canvas: bool,
+    pub html_hr: bool,
+    /// LayoutMedia/HTMLMediaElement identity retained across the DOM-to-layout
+    /// boundary. Audio and video share LayoutMedia; only video overrides
+    /// LayoutVideo::IsVideo().
+    pub html_media: bool,
+    pub html_video: bool,
+    pub video: Option<VideoLayoutState>,
+    pub media_child_kind: Option<MediaChildKind>,
+    /// VTTCueBox::CreateLayoutObject source override, cc142-153.
+    pub vtt_cue_box_block_flow: bool,
+    pub media_is_fullscreen: bool,
+    pub video_frame_resource_id: Option<image_resource::ImageId>,
     pub canvas_layout_subtree: bool,
     pub drawable_attribute: bool,
     pub html_image: bool,
+    /// HTMLImageElement::CreateLayoutObject selects ordinary HTMLElement
+    /// layout while its source-owned fallback subtree is active.
+    pub html_image_uses_fallback: bool,
+    pub embedded_content_kind: Option<EmbeddedContentKind>,
     /// HTMLImageElement decoding preference. ImageElementBase retains the
     /// content-transition state separately at the paint lifecycle boundary.
     pub image_decoding_mode: image_resource::ImageDecodingMode,
     pub focused_image_map_area: Option<FocusedImageMapArea>,
     pub html_ordered_or_unordered_list: bool,
+    /// HTML list-owner identity and ordered-list attributes consumed by
+    /// ListItemOrdinal's native DOM-order calculation.
+    pub html_list_owner: bool,
+    pub ordered_list_reversed: bool,
+    pub ordered_list_start: Option<i32>,
+    pub list_item_explicit_value: Option<i32>,
     pub first_letter_pseudo: bool,
     pub viewport_defining: bool,
     pub root_editable: bool,
     pub implicit_anchor_id: u64,
+    /// PseudoElement::UltimateOriginatingElement, retained as same native relation.
+    pub ultimate_originating_element_id: Option<u64>,
+    /// Element::GetPseudoElement(group-before), otherwise group-after.
+    /// None is canonical pseudo absence, not a CSS property projection.
+    pub generated_scroll_marker_group_id: Option<u64>,
     pub scroll_offset: Offset,
     pub root_scroller_visible_size: Option<IntSize>,
     pub natural_width: Option<f64>,
@@ -1662,6 +1806,15 @@ pub struct ElementData {
     pub frame_border: Option<bool>,
     pub frame_no_resize: bool,
     pub frame_has_border_color: bool,
+    /// SVGClipPathElement's live clipPathUnits, independent of the paint graph.
+    /// None identifies an element other than clipPath.
+    pub svg_clip_path_object_bounding_box: Option<bool>,
+    /// SVGGeometryElement's authored pathLength, before optional CSS support.
+    pub svg_path_length: Option<f32>,
+    pub svg_path_element: bool,
+    pub svg_marker: Option<SvgMarkerData>,
+    /// SVGFEImageElement::TargetElement identities for source filter cycle checks.
+    pub svg_filter_image_targets: Vec<u64>,
     pub svg_use: Option<SvgUseData>,
     pub svg_x: Vec<f64>,
     pub svg_y: Vec<f64>,
@@ -1670,6 +1823,8 @@ pub struct ElementData {
     pub svg_rotate: Vec<f64>,
     pub svg_shape: Option<SvgShapeData>,
     pub svg_view_box: Option<SvgViewBoxData>,
+    /// SVGSVGElement::CurrentTranslate, independent of CSS/viewBox transforms.
+    pub svg_current_translate: [f32; 2],
     pub svg_viewport: Option<SvgViewportData>,
     pub svg_text_length: Option<f64>,
     pub svg_text_path: Option<SvgTextPathData>,
@@ -1678,9 +1833,12 @@ pub struct ElementData {
     pub custom_layout:
         Option<std::sync::Arc<dyn layout_algo_custom::custom_layout_api::CustomLayout>>,
     pub form_control_type: Option<FormControlType>,
+    /// ImageInputType::CreateLayoutObject selects the generic object for fallback.
+    pub input_image_use_fallback: bool,
     pub select_uses_menu_list: Option<bool>,
     pub control_checked: bool,
     pub control_indeterminate: bool,
+    pub control_is_progress: bool,
     pub control_disabled: bool,
     pub control_read_only: bool,
     pub control_hovered: bool,
@@ -1712,6 +1870,9 @@ impl Default for ElementData {
     fn default() -> Self {
         Self {
             used_canvas_transform: None,
+            element_canvas_transform_enabled: false,
+            region_capture_crop_id: None,
+            tracked_element_sub_rects: Vec::new(),
             content_lock: None,
             remembered_inline_size: None,
             remembered_block_size: None,
@@ -1719,16 +1880,32 @@ impl Default for ElementData {
             image_map_area: false,
             html_anchor: false,
             html_canvas: false,
+            html_hr: false,
+            html_media: false,
+            html_video: false,
+            video: None,
+            media_child_kind: None,
+            vtt_cue_box_block_flow: false,
+            media_is_fullscreen: false,
+            video_frame_resource_id: None,
             canvas_layout_subtree: false,
             drawable_attribute: false,
             html_image: false,
+            html_image_uses_fallback: false,
+            embedded_content_kind: None,
             image_decoding_mode: Default::default(),
             focused_image_map_area: None,
             html_ordered_or_unordered_list: false,
+            html_list_owner: false,
+            ordered_list_reversed: false,
+            ordered_list_start: None,
+            list_item_explicit_value: None,
             first_letter_pseudo: false,
             viewport_defining: false,
             root_editable: false,
             implicit_anchor_id: 0,
+            ultimate_originating_element_id: None,
+            generated_scroll_marker_group_id: None,
             scroll_offset: Offset::default(),
             root_scroller_visible_size: None,
             natural_width: None,
@@ -1758,6 +1935,11 @@ impl Default for ElementData {
             frame_border: None,
             frame_no_resize: false,
             frame_has_border_color: false,
+            svg_clip_path_object_bounding_box: None,
+            svg_path_length: None,
+            svg_path_element: false,
+            svg_marker: None,
+            svg_filter_image_targets: Vec::new(),
             svg_use: None,
             svg_x: Vec::new(),
             svg_y: Vec::new(),
@@ -1766,6 +1948,7 @@ impl Default for ElementData {
             svg_rotate: Vec::new(),
             svg_shape: None,
             svg_view_box: None,
+            svg_current_translate: [0.; 2],
             svg_viewport: None,
             svg_text_length: None,
             svg_text_path: None,
@@ -1773,9 +1956,11 @@ impl Default for ElementData {
             custom_layout_name: String::new(),
             custom_layout: None,
             form_control_type: None,
+            input_image_use_fallback: false,
             select_uses_menu_list: None,
             control_checked: false,
             control_indeterminate: false,
+            control_is_progress: false,
             control_disabled: false,
             control_read_only: false,
             control_hovered: false,
@@ -1957,6 +2142,29 @@ mod computed_style_layout_equivalence_tests {
     }
 
     #[test]
+    fn effective_border_width_changes_require_layout() {
+        let _heap = foundation::LayoutHeapScope::new();
+        let initial = unsafe { &*StyleComputedStyle::GetInitialStyleSingleton() };
+        let mut builder = ComputedStyleBuilder::from_style(initial);
+        builder.SetBorderBottomStyle(foundation::EBorderStyle::kSolid);
+        builder.SetBorderBottomWidthOwned(1);
+        let one_pixel = builder.TakeStyle();
+        let mut builder = ComputedStyleBuilder::from_style(unsafe { &*one_pixel });
+        builder.SetBorderBottomWidthOwned(0);
+        let zero = builder.TakeStyle();
+        let old = ComputedStyle {
+            style: one_pixel,
+            ..Default::default()
+        };
+        let new = ComputedStyle {
+            style: zero,
+            ..Default::default()
+        };
+        assert!(!old.LayoutEquivalent(&new));
+        assert!(!new.LayoutEquivalent(&old));
+    }
+
+    #[test]
     fn opacity_and_existing_transform_value_are_paint_only() {
         let mut old = ComputedStyle::default();
         let mut new = old.clone();
@@ -2041,6 +2249,7 @@ pub struct StyleResourceData {
     pub svg_filter_graphs: std::sync::Arc<Vec<super::paint_input::SvgFilterGraph>>,
     pub svg_clip_resources: super::paint_input::SvgClipResourceBinding,
     pub svg_mask_resource: Option<std::sync::Arc<super::paint_input::SvgMaskGraph>>,
+    pub svg_pattern_content_target: Option<u64>,
     pub svg_fill_server: Option<super::paint_input::SvgPaintServer>,
     pub svg_stroke_server: Option<super::paint_input::SvgPaintServer>,
     pub svg_markers: std::sync::Arc<[super::paint_input::SvgMarkerInstance]>,
@@ -2054,6 +2263,7 @@ impl StyleResourceData {
             svg_filter_graphs: std::sync::Arc::clone(&style.paint.svg_filter_graphs),
             svg_clip_resources: style.svg_clip_resources.clone(),
             svg_mask_resource: style.paint.svg_mask_resource.clone(),
+            svg_pattern_content_target: None,
             svg_fill_server: style.paint.svg_fill_server.clone(),
             svg_stroke_server: style.paint.svg_stroke_server.clone(),
             svg_markers: style.paint.svg_markers.clone().into(),
@@ -2143,6 +2353,7 @@ pub trait TextTransformProvider {
 pub struct DocumentImageContainer {
     pub root_node_id: u64,
     pub size: Size,
+    pub scale: [f32; 2],
 }
 
 // cpp: layoutng/internal/layout_input.h:1114-1145
@@ -2152,6 +2363,13 @@ pub struct ConstraintSpace {
     pub fragmentainer_block_size: Option<f64>,
     pub compatibility_mode: CompatibilityMode,
     pub printing: bool,
+    /// ViewPainter::ShouldApplyRootBackgroundBehavior. HTML and XHTML
+    /// documents transfer the selected root/body background to LayoutView;
+    /// isolated SVG/XML documents paint their root element locally.
+    pub should_apply_root_background_behavior: bool,
+    /// Settings::GetShouldPrintBackgrounds(). Print-economy foreground and
+    /// background rewriting must consume the same host preference.
+    pub should_print_backgrounds: bool,
     pub vertical_scroll_enforced: bool,
     /// Fullscreen::FullscreenElementFrom(document) exists and is not the
     /// document element. PaintLayerScrollableArea::UserInputScrollable uses
@@ -2163,6 +2381,9 @@ pub struct ConstraintSpace {
     /// Immutable host preference for SVG embedding, forwarded to Paint.
     /// Uses ContainerKey encoding: 0 is light, 1 is dark.
     pub preferred_color_scheme: u8,
+    /// Immutable host accessibility preference consumed by CSS media queries
+    /// and Window.matchMedia before the document's first script runs.
+    pub prefers_reduced_motion: bool,
     pub document_image_container: Option<DocumentImageContainer>,
     /// Page/layout zoom in Blink's layout coordinate space. This is distinct
     /// from the host device scale factor even when both happen to be 2.
@@ -2171,6 +2392,7 @@ pub struct ConstraintSpace {
     /// Source: platform/runtime_enabled_features.json5:4756-4759.
     pub prefer_non_composited_scrolling_enabled: bool,
     pub viewport: Option<ViewportGeometry>,
+    pub media_panel_page: Option<MediaPanelPageFacts>,
     pub control_theme: ControlThemeMetrics,
     pub hyphenation: Option<std::sync::Arc<dyn HyphenationProvider>>,
     pub phrase_break: Option<std::sync::Arc<dyn PhraseBreakProvider>>,
@@ -2186,6 +2408,9 @@ pub struct ConstraintSpace {
     /// mutation creates a new catalog generation through copy-on-write.
     pub fonts: font_engine::FontFaceCatalog,
     pub images: Vec<PaintImage>,
+    /// Immutable front-buffer snapshots supplied by the Canvas package for
+    /// this lifecycle. Layout carries identity/geometry; Paint consumes bytes.
+    pub canvases: Vec<canvas::CanvasPaintResource>,
 }
 impl Default for ConstraintSpace {
     fn default() -> Self {
@@ -2194,17 +2419,21 @@ impl Default for ConstraintSpace {
             fragmentainer_block_size: None,
             compatibility_mode: CompatibilityMode::kStandards,
             printing: false,
+            should_apply_root_background_behavior: true,
+            should_print_backgrounds: false,
             vertical_scroll_enforced: false,
             fullscreen_element_blocks_layout_view_scroll: false,
             scrollbar_theme: None,
             minimum_font_physical_size: None,
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,
+            prefers_reduced_motion: false,
             document_image_container: None,
             layout_zoom_factor: 1.0,
             canvas_draw_element_enabled: false,
             prefer_non_composited_scrolling_enabled: false,
             viewport: None,
+            media_panel_page: None,
             control_theme: ControlThemeMetrics::default(),
             hyphenation: None,
             phrase_break: None,
@@ -2214,6 +2443,7 @@ impl Default for ConstraintSpace {
             font_queries: None,
             fonts: font_engine::FontFaceCatalog::default(),
             images: Vec::new(),
+            canvases: Vec::new(),
         }
     }
 }

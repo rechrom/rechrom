@@ -151,7 +151,25 @@ pub(super) fn invalidate_editing(tree: &mut LayoutObjectTree, id: u64) -> bool {
 }
 
 #[inline(never)]
-pub(super) fn invalidate_selection_paint(tree: &mut LayoutObjectTree, id: u64) -> bool {
+pub(super) fn invalidate_selection_paint(
+    tree: &mut LayoutObjectTree,
+    id: u64,
+) -> Vec<*mut LayoutObject> {
+    invalidate_text_paint(tree, id, foundation::PaintInvalidationReason::kSelection).1
+}
+
+pub(super) fn invalidate_caret_text_paint(
+    tree: &mut LayoutObjectTree,
+    id: u64,
+) -> Vec<*mut LayoutObject> {
+    invalidate_text_paint(tree, id, foundation::PaintInvalidationReason::kCaret).1
+}
+
+fn invalidate_text_paint(
+    tree: &mut LayoutObjectTree,
+    id: u64,
+    reason: foundation::PaintInvalidationReason,
+) -> (bool, Vec<*mut LayoutObject>) {
     let mut trace = layout_invalidation::trace_span(
         layout_invalidation::TracePhase::SelectionPaintInvalidation,
     );
@@ -182,10 +200,8 @@ pub(super) fn invalidate_selection_paint(tree: &mut LayoutObjectTree, id: u64) -
     trace.set("roots", roots.len() as f64);
     trace.set("visited", visited.len() as f64);
     trace.set("leaves", leaves.len() as f64);
-    for object in leaves {
-        unsafe { &mut *object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(
-            foundation::PaintInvalidationReason::kSelection,
-        );
+    for &object in &leaves {
+        unsafe { &mut *object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(reason);
     }
-    !roots.is_empty()
+    (!roots.is_empty(), leaves)
 }

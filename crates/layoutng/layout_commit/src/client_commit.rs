@@ -18,8 +18,9 @@ type CommittedClientState = (PaintInvalidationReason, bool, bool);
 use crate::{
     fragment_tree::{FragmentPaintData, LayoutResultHandle, ScrollbarPaintData},
     internal::{
-        layout_box_model_object::LayoutBoxModelObject, layout_object::LayoutObject,
-        layout_object_builder::LayoutObjectTree, layout_text::LayoutText,
+        layout_box::LayoutBox, layout_box_model_object::LayoutBoxModelObject,
+        layout_object::LayoutObject, layout_object_builder::LayoutObjectTree,
+        layout_text::LayoutText,
     },
     layout_engine::PaintFragmentCursor,
 };
@@ -214,6 +215,43 @@ pub fn commit_paint_client_state(
                 // object/descendant paint-property-update bits after PrePaint.
                 // The immutable fragment crosses the Layout/Paint boundary,
                 // so perform that transition after the artifact commits.
+                // cpp: BoxPaintInvalidator::SavePreviousBoxGeometriesIfNeeded.
+                // Keep the baseline in its native LayoutBox owner. Resident
+                // fragment references already contain the new geometry.
+                let layout_box = foundation::DynamicTo::<LayoutBox>(object);
+                if !layout_box.is_null() && current.ShouldCheckForPaintInvalidation() {
+                    let box_ = unsafe { &mut *layout_box };
+                    let style = box_.StyleRef();
+                    let save_content = box_.IsLayoutReplaced()
+                        || ((style.BackgroundLayers().AnyLayerUsesContentBox()
+                            || style.MaskLayers().AnyLayerUsesContentBox())
+                            && box_.PhysicalContentBoxRect().size != box_.StitchedSize());
+                    let save_overflow = box_.HasVisualOverflow()
+                        || box_.HasScrollableOverflow()
+                        || ((style.BackgroundLayers().AnyLayerHasLocalAttachmentImage()
+                            || box_.GetBackgroundPaintLocation()
+                                != crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace
+                            || box_.IsDocumentElement())
+                            && box_.ScrollableOverflowRect() != box_.PhysicalBorderBoxRect());
+                    let mut mutable = box_.GetMutableForPainting();
+                    mutable.SavePreviousSize();
+                    if save_content {
+                        mutable.SavePreviousContentBoxRect();
+                    } else {
+                        mutable.ClearPreviousContentBoxRect();
+                    }
+                    if save_overflow {
+                        mutable.SavePreviousOverflowData();
+                    } else {
+                        mutable.ClearPreviousOverflowData();
+                    }
+                    let view =
+                        foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(object);
+                    if !view.is_null() {
+                        let view = unsafe { &*view };
+                        view.SetPreviousBackgroundRect(view.BackgroundRect());
+                    }
+                }
                 let current_mut = unsafe { &mut *object };
                 current_mut
                     .GetMutableForPainting()

@@ -137,6 +137,7 @@ fn mapped_parser_tokens_and_form_interaction_predicates() {
     service.interaction.focused_node_id = Some(d.Node(input).Id());
     service.interaction.focus_visible_node_id = Some(d.Node(input).Id());
     service.interaction.hovered_node_id = Some(d.Node(input).Id());
+    d.SetUserActionTargets(service.interaction.hovered_node_id, None);
     assert!(service
         .Matches(d, input, ":focus:focus-visible:hover")
         .unwrap());

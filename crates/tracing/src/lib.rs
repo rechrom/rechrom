@@ -277,6 +277,19 @@ fn attach(category: &str) -> Option<(Arc<Recording>, Arc<ThreadBuffer>, Context,
         if r.options.target_id != 0 && r.options.target_id != l.context.target_id {
             return None;
         }
+        // cpp: base/trace_event/trace_config.h:32-34
+        // cpp: base/trace_event/trace_log.cc:241-257
+        // Chromium's bounded mode records until full, and a disabled producer
+        // returns before materializing TraceEvent. `push` remains the atomic authority
+        // for races between producers, but this advisory check is the hot-path
+        // backpressure: a page with deeply nested layout (for example a large
+        // grid's intrinsic contribution walks) must not keep cloning Events,
+        // reading clocks and mutating the parent stack for every event that is
+        // already known to be unrecordable.
+        if r.count.load(Ordering::Relaxed) >= r.options.max_events {
+            r.dropped.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         Some((
             r.clone(),
             l.buffer.as_ref()?.clone(),
@@ -700,10 +713,17 @@ mod tests {
             for _ in 0..600 {
                 let _ = span("test", "bounded");
             }
+            let saturated = span("test", "saturated-fast-path");
+            assert!(
+                saturated.record.is_none(),
+                "a full trace buffer must reject producer work before Event materialization"
+            );
         }
         stop().unwrap();
         let loss = snapshot(None).unwrap();
         assert!(loss.dropped_events > 0);
+        assert_eq!(loss.spans.len(), 512);
+        assert!(loss.spans.iter().all(|span| !span.incomplete));
         assert!(loss.spans.iter().all(|s| s.name != "excluded"));
         // Live collectors must not lose events while copying earlier history.
         start(StartOptions {

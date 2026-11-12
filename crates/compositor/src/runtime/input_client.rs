@@ -48,10 +48,20 @@ pub(crate) struct QueuedInputHandlerClient {
 
 impl QueuedInputHandlerClient {
     pub(crate) fn BeginGesture(&self) {
+        self.BeginGestureForInput(crate::adapter::input_handler::ScrollInputType::kWheel);
+    }
+
+    pub(crate) fn BeginGestureForInput(
+        &self,
+        device: crate::adapter::input_handler::ScrollInputType,
+    ) {
+        // InputHandlerProxy.cc:470-487 only dispatches the first touchpad
+        // update immediately; touchscreen updates remain BeginImplFrame aligned.
         self.state
             .lock()
             .unwrap()
-            .has_seen_first_scroll_update_after_begin = false;
+            .has_seen_first_scroll_update_after_begin =
+            device != crate::adapter::input_handler::ScrollInputType::kWheel;
     }
 
     pub(crate) fn RouteUpdate(&self, input: ScrollStateData, now: TimeTicks) -> ScrollUpdateRoute {

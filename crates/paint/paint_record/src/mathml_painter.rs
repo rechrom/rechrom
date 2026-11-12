@@ -5,43 +5,42 @@ use std::cell::RefCell;
 use layoutng_assembly::fragment_tree::MathMLPaintKind;
 use layoutng_assembly::internal::layout_input::{Offset, TextDirection};
 
+use crate::box_fragment_painter::DecorationVisualRect;
 use crate::display_item_id::DisplayItemIdType;
 use crate::drawing_recorder::DrawingRecorder;
-use crate::geometry_mapper::MapRectToRoot;
+use crate::paint_auto_dark_mode::{ElementRole, InvertColorIfNeeded};
 use crate::paint_context::PaintContext;
 use crate::paint_engine::{DisplayItem, DisplayItemType};
 use crate::paint_info::PaintInfo;
 use crate::pre_paint_tree_walk::PaintTreeNode;
 use crate::PaintRect;
 
-// cpp: paint/mathml_painter.cc:12-15
+// Paint's retained local cull is applied before emitting backend-neutral ops.
 fn Intersects(a: &PaintRect, b: &PaintRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
-// cpp: paint/mathml_painter.cc:17-22
 fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
     let Some(cull_rect) = node.cull_rect else {
         return true;
     };
-    let mapped = MapRectToRoot(*rect, &node.transforms);
-    mapped.is_none_or(|mapped| Intersects(&mapped, &cull_rect))
+    Intersects(rect, &cull_rect)
 }
 
-// cpp: paint/mathml_painter.h:9-27
+// cpp: paint/mathml_painter.h:17-33
 pub struct MathMLPainter<'n, 'f, 'c, 'o> {
     node: &'n PaintTreeNode<'f>,
     context: &'c RefCell<PaintContext<'o>>,
 }
 
 impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
-    // cpp: paint/mathml_painter.h:11-12
+    // cpp: paint/mathml_painter.h:21-22
     pub fn new(node: &'n PaintTreeNode<'f>, context: &'c RefCell<PaintContext<'o>>) -> Self {
         Self { node, context }
     }
 
-    // cpp: paint/mathml_painter.h:14
-    // cpp: paint/mathml_painter.cc:26-41
+    // cpp: paint/mathml_painter.h:23
+    // cpp: paint/mathml_painter.cc:164-188
     pub fn Paint(&self, info: &PaintInfo<'c, 'o>) {
         let paint = &self
             .node
@@ -54,22 +53,15 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         };
         // MathMLPainter::Paint (.cc:170) records the whole math decoration,
         // including all radical/operator glyph pieces and the fraction bar.
-        let fragment = self
-            .node
-            .fragment
-            .as_deref()
-            .expect("paint tree node has a fragment");
-        let visual_rect = PaintRect {
-            x: self.node.paint_offset.x,
-            y: self.node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
-        };
+        let drawing_type = DisplayItemIdType::PaintPhaseToDrawingType(info.phase);
+        if DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type) {
+            return;
+        }
         let _drawing = DrawingRecorder::new(
             self.context,
             self.node,
-            DisplayItemIdType::PaintPhaseToDrawingType(info.phase),
-            visual_rect,
+            drawing_type,
+            DecorationVisualRect(self.node),
         );
         match math.kind {
             MathMLPaintKind::kFraction => self.PaintFractionBar(info),
@@ -78,8 +70,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/mathml_painter.h:17
-    // cpp: paint/mathml_painter.cc:43-76
+    // cpp: paint/mathml_painter.h:26
+    // cpp: paint/mathml_painter.cc:19-32
     fn PaintBar(&self, info: &PaintInfo<'c, 'o>, mut rect: PaintRect) {
         let fragment = self
             .node
@@ -115,21 +107,26 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
             return;
         }
+        let color = InvertColorIfNeeded(
+            &fragment.paint.style,
+            fragment.paint.style.color(),
+            ElementRole::kForeground,
+        );
         self.context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: info.phase,
                 node_id: fragment.node_id,
                 rect,
-                color: fragment.paint.style.color(),
+                color,
                 ..Default::default()
             },
             self.node,
         );
     }
 
-    // cpp: paint/mathml_painter.h:18
-    // cpp: paint/mathml_painter.cc:78-92
+    // cpp: paint/mathml_painter.h:27
+    // cpp: paint/mathml_painter.cc:51-70
     fn PaintFractionBar(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
@@ -163,8 +160,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         );
     }
 
-    // cpp: paint/mathml_painter.h:22-23
-    // cpp: paint/mathml_painter.cc:94-100
+    // cpp: paint/mathml_painter.cc:76-81,134-142,152-157
     fn LogicalToPhysicalX(&self, logical_offset: f64, inner_width: f64) -> f64 {
         let fragment = self
             .node
@@ -178,8 +174,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/mathml_painter.h:21
-    // cpp: paint/mathml_painter.cc:102-132
+    // cpp: paint/mathml_painter.h:30
+    // cpp: paint/mathml_painter.cc:34-49
     fn PaintOperatorGlyphs(&self, info: &PaintInfo<'c, 'o>, baseline_origin: Offset) {
         let fragment = self
             .node
@@ -191,6 +187,11 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .mathml
             .as_ref()
             .expect("operator requires MathML paint data");
+        let color = InvertColorIfNeeded(
+            &fragment.paint.style,
+            fragment.paint.style.color(),
+            ElementRole::kForeground,
+        );
         for input_run in &math.operator_glyph_runs {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kDrawGlyphRun,
@@ -202,7 +203,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                     width: fragment.size.width,
                     height: fragment.size.height,
                 },
-                color: fragment.paint.style.color(),
+                color,
                 font_face_index: input_run.font_face_index,
                 font_variations: input_run.font_variations.clone(),
                 font_size: input_run.font_size,
@@ -226,8 +227,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         }
     }
 
-    // cpp: paint/mathml_painter.h:19
-    // cpp: paint/mathml_painter.cc:134-147
+    // cpp: paint/mathml_painter.h:28
+    // cpp: paint/mathml_painter.cc:72-100
     fn PaintOperator(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node
@@ -258,8 +259,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         );
     }
 
-    // cpp: paint/mathml_painter.h:20
-    // cpp: paint/mathml_painter.cc:149-178
+    // cpp: paint/mathml_painter.h:29
+    // cpp: paint/mathml_painter.cc:102-162
     fn PaintRadical(&self, info: &PaintInfo<'c, 'o>) {
         let fragment = self
             .node

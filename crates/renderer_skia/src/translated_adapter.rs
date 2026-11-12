@@ -14,7 +14,7 @@ use compositor_core::{
     },
     runtime::{frame::RenderPassId, raster_execution::RasterResourceLease},
 };
-use raster::MapResourceForRead;
+use raster::{MapResourceForRead, MapVideoResourceForRead};
 use skia::{
     include::core::{
         SkAlphaType::SkAlphaType,
@@ -298,7 +298,468 @@ pub(crate) fn lease_image(lease: Arc<dyn RasterResourceLease>) -> io::Result<Arc
         .ok_or_else(|| io::Error::other("translated immutable image allocation failed"))
 }
 
-fn target_format(format: PixelFormat) -> TranslatedPixelFormat {
+#[derive(Clone, Copy)]
+struct Nv12Planes<'a> {
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    y_plane: &'a [u8],
+    uv_plane: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+struct BilinearAxis {
+    lower: usize,
+    upper: usize,
+    fraction: f32,
+}
+
+#[inline]
+fn bilinear_axis(coordinate: f32, length: usize) -> BilinearAxis {
+    let floor = coordinate.floor();
+    let lower = (floor as isize).clamp(0, length.saturating_sub(1) as isize) as usize;
+    let upper = ((floor as isize) + 1).clamp(0, length.saturating_sub(1) as isize) as usize;
+    BilinearAxis {
+        lower,
+        upper,
+        fraction: coordinate - floor,
+    }
+}
+
+#[inline]
+fn bilinear_plane_sample_precomputed(
+    bytes: &[u8],
+    stride: usize,
+    x: BilinearAxis,
+    y: BilinearAxis,
+    pixel_stride: usize,
+    channel: usize,
+) -> f32 {
+    let top_offset = y.lower * stride + channel;
+    let bottom_offset = y.upper * stride + channel;
+    let value = |offset| bytes[offset] as f32 / 255.0;
+    let top = value(top_offset + x.lower * pixel_stride) * (1.0 - x.fraction)
+        + value(top_offset + x.upper * pixel_stride) * x.fraction;
+    let bottom = value(bottom_offset + x.lower * pixel_stride) * (1.0 - x.fraction)
+        + value(bottom_offset + x.upper * pixel_stride) * x.fraction;
+    top * (1.0 - y.fraction) + bottom * y.fraction
+}
+
+#[inline]
+fn yuv_row(matrix: [[f32; 3]; 3], translate: [f32; 3], yuv: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| {
+        (matrix[row][0] * yuv[0]
+            + matrix[row][1] * yuv[1]
+            + matrix[row][2] * yuv[2]
+            + translate[row])
+            .clamp(0.0, 1.0)
+    })
+}
+
+fn bt709_apple_to_srgb_byte_slow(encoded: f32) -> u8 {
+    // macOS accelerated decode tags this transfer as a pure 1.961 gamma.
+    // Chrome's normal-GPU foreign-layer golden follows fp32 through the YUV
+    // and transfer stages, then quantizes the output UNORM with nearest-even.
+    let linear = encoded.clamp(0.0, 1.0).powf(1.961);
+    let srgb = if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb.clamp(0.0, 1.0) * 255.0)
+        .round_ties_even()
+        .clamp(0.0, 255.0) as u8
+}
+
+// First fp32 encoded value that quantizes to each output byte 1..=255. The
+// positive-float bit pattern has the same ordering as the value, so the hot
+// conversion loop needs only an integer binary search and no powf. These are
+// generated from bt709_apple_to_srgb_byte_slow and checked exhaustively below.
+const BT709_APPLE_TO_SRGB_THRESHOLD_BITS: [u32; 255] = [
+    0x3c38f07e, 0x3ca1ebe8, 0x3cd21ab5, 0x3cf96e93, 0x3d0dc4bb, 0x3d1d0b43, 0x3d2b0238, 0x3d37f450,
+    0x3d441409, 0x3d4f8561, 0x3d5a6e75, 0x3d65618c, 0x3d706d56, 0x3d7b9119, 0x3d836613, 0x3d890eee,
+    0x3d8ec2d1, 0x3d948171, 0x3d9a4a90, 0x3da01de6, 0x3da5fb3e, 0x3dabe258, 0x3db1d301, 0x3db7cd02,
+    0x3dbdd02f, 0x3dc3dc50, 0x3dc9f13f, 0x3dd00ecc, 0x3dd634d1, 0x3ddc6324, 0x3de299a2, 0x3de8d823,
+    0x3def1e86, 0x3df56ca9, 0x3dfbc26a, 0x3e010fd6, 0x3e044227, 0x3e07781b, 0x3e0ab1a4, 0x3e0deeb2,
+    0x3e112f3b, 0x3e147330, 0x3e17ba86, 0x3e1b0530, 0x3e1e5324, 0x3e21a457, 0x3e24f8bb, 0x3e285049,
+    0x3e2baaf5, 0x3e2f08b5, 0x3e326981, 0x3e35cd4e, 0x3e393413, 0x3e3c9dc7, 0x3e400a62, 0x3e4379db,
+    0x3e46ec2d, 0x3e4a614b, 0x3e4dd92f, 0x3e5153d2, 0x3e54d12c, 0x3e585137, 0x3e5bd3ea, 0x3e5f593f,
+    0x3e62e131, 0x3e666bb4, 0x3e69f8ca, 0x3e6d8863, 0x3e711a82, 0x3e74af1b, 0x3e78462b, 0x3e7bdfa8,
+    0x3e7f7b93, 0x3e818cef, 0x3e835d47, 0x3e852ec9, 0x3e870178, 0x3e88d54d, 0x3e8aaa48, 0x3e8c8065,
+    0x3e8e57a4, 0x3e902fff, 0x3e920978, 0x3e93e40a, 0x3e95bfb3, 0x3e979c70, 0x3e997a41, 0x3e9b5921,
+    0x3e9d3912, 0x3e9f1a0e, 0x3ea0fc15, 0x3ea2df24, 0x3ea4c33b, 0x3ea6a855, 0x3ea88e73, 0x3eaa7591,
+    0x3eac5db0, 0x3eae46cb, 0x3eb030e2, 0x3eb21bf2, 0x3eb407fc, 0x3eb5f4fa, 0x3eb7e2ef, 0x3eb9d1d5,
+    0x3ebbc1af, 0x3ebdb276, 0x3ebfa42e, 0x3ec196d1, 0x3ec38a62, 0x3ec57eda, 0x3ec7743d, 0x3ec96a85,
+    0x3ecb61b5, 0x3ecd59c5, 0x3ecf52bc, 0x3ed14c90, 0x3ed34749, 0x3ed542dd, 0x3ed73f50, 0x3ed93c9e,
+    0x3edb3ac8, 0x3edd39c9, 0x3edf39a6, 0x3ee13a56, 0x3ee33be0, 0x3ee53e3a, 0x3ee7416d, 0x3ee9456d,
+    0x3eeb4a42, 0x3eed4fe3, 0x3eef5658, 0x3ef15d98, 0x3ef365a6, 0x3ef56e7c, 0x3ef77821, 0x3ef9828b,
+    0x3efb8dc2, 0x3efd99bb, 0x3effa680, 0x3f00da03, 0x3f01e129, 0x3f02e8b0, 0x3f03f09a, 0x3f04f8e2,
+    0x3f06018d, 0x3f070a95, 0x3f0813ff, 0x3f091dc5, 0x3f0a27ec, 0x3f0b326f, 0x3f0c3d51, 0x3f0d488f,
+    0x3f0e542b, 0x3f0f6020, 0x3f106c74, 0x3f117921, 0x3f12862b, 0x3f13938e, 0x3f14a14c, 0x3f15af63,
+    0x3f16bdd5, 0x3f17cc9d, 0x3f18dbc0, 0x3f19eb39, 0x3f1afb0b, 0x3f1c0b33, 0x3f1d1bb4, 0x3f1e2c89,
+    0x3f1f3db7, 0x3f204f38, 0x3f216111, 0x3f22733d, 0x3f2385c0, 0x3f249894, 0x3f25abc0, 0x3f26bf3c,
+    0x3f27d30f, 0x3f28e732, 0x3f29fba9, 0x3f2b1072, 0x3f2c258e, 0x3f2d3afa, 0x3f2e50b9, 0x3f2f66c7,
+    0x3f307d28, 0x3f3193d8, 0x3f32aad9, 0x3f33c229, 0x3f34d9ca, 0x3f35f1b8, 0x3f3709f7, 0x3f382282,
+    0x3f393b5e, 0x3f3a5486, 0x3f3b6dfd, 0x3f3c87bf, 0x3f3da1d2, 0x3f3ebc2e, 0x3f3fd6d9, 0x3f40f1cf,
+    0x3f420d12, 0x3f43289f, 0x3f44447a, 0x3f45609e, 0x3f467d0e, 0x3f4799c8, 0x3f48b6ce, 0x3f49d41b,
+    0x3f4af1b5, 0x3f4c0f96, 0x3f4d2dc3, 0x3f4e4c36, 0x3f4f6af5, 0x3f5089fa, 0x3f51a949, 0x3f52c8df,
+    0x3f53e8bf, 0x3f5508e4, 0x3f562952, 0x3f574a05, 0x3f586b02, 0x3f598c42, 0x3f5aadcc, 0x3f5bcf99,
+    0x3f5cf1af, 0x3f5e1408, 0x3f5f36a9, 0x3f60598d, 0x3f617cb8, 0x3f62a025, 0x3f63c3da, 0x3f64e7d1,
+    0x3f660c0e, 0x3f67308d, 0x3f685552, 0x3f697a58, 0x3f6a9fa4, 0x3f6bc530, 0x3f6ceb02, 0x3f6e1115,
+    0x3f6f376c, 0x3f705e04, 0x3f7184df, 0x3f72abfb, 0x3f73d359, 0x3f74faf8, 0x3f7622da, 0x3f774afb,
+    0x3f78735f, 0x3f799c01, 0x3f7ac4e6, 0x3f7bee09, 0x3f7d176f, 0x3f7e4112, 0x3f7f6af8,
+];
+
+const BT709_APPLE_TO_SRGB_BUCKET_COUNT: usize = (1.0_f32.to_bits() >> 16) as usize + 1;
+
+const fn bt709_apple_to_srgb_bucket_base() -> [u8; BT709_APPLE_TO_SRGB_BUCKET_COUNT] {
+    let mut buckets = [0_u8; BT709_APPLE_TO_SRGB_BUCKET_COUNT];
+    let mut bucket = 0;
+    let mut value = 0;
+    while bucket < buckets.len() {
+        let first_bits = (bucket as u32) << 16;
+        while value < BT709_APPLE_TO_SRGB_THRESHOLD_BITS.len()
+            && first_bits >= BT709_APPLE_TO_SRGB_THRESHOLD_BITS[value]
+        {
+            value += 1;
+        }
+        buckets[bucket] = value as u8;
+        bucket += 1;
+    }
+    buckets
+}
+
+const BT709_APPLE_TO_SRGB_BUCKET_BASE: [u8; BT709_APPLE_TO_SRGB_BUCKET_COUNT] =
+    bt709_apple_to_srgb_bucket_base();
+
+#[inline]
+fn bt709_apple_to_srgb_byte(encoded: f32) -> u8 {
+    let encoded_bits = encoded.clamp(0.0, 1.0).to_bits();
+    let mut value = BT709_APPLE_TO_SRGB_BUCKET_BASE[(encoded_bits >> 16) as usize];
+    while (value as usize) < BT709_APPLE_TO_SRGB_THRESHOLD_BITS.len()
+        && encoded_bits >= BT709_APPLE_TO_SRGB_THRESHOLD_BITS[value as usize]
+    {
+        value += 1;
+    }
+    value
+}
+
+#[cfg(test)]
+fn convert_nv12_bt709_apple_to_srgb(
+    video: Nv12Planes<'_>,
+    matrix_id: compositor_core::runtime::resources::ColorMatrixId,
+) -> io::Result<Vec<u8>> {
+    convert_nv12_bt709_apple_to_srgb_scaled(video, matrix_id, video.width, video.height)
+}
+
+fn convert_nv12_bt709_apple_to_srgb_scaled(
+    video: Nv12Planes<'_>,
+    matrix_id: compositor_core::runtime::resources::ColorMatrixId,
+    output_width: usize,
+    output_height: usize,
+) -> io::Result<Vec<u8>> {
+    use compositor_core::runtime::resources::ColorMatrixId;
+
+    let chroma_width = video.width.div_ceil(2);
+    let chroma_height = video.height.div_ceil(2);
+    let y_bytes = video
+        .y_stride
+        .checked_mul(video.height)
+        .ok_or_else(|| io::Error::other("translated video luma byte count overflow"))?;
+    let uv_bytes = video
+        .uv_stride
+        .checked_mul(chroma_height)
+        .ok_or_else(|| io::Error::other("translated video chroma byte count overflow"))?;
+    if video.width == 0
+        || video.height == 0
+        || video.y_stride < video.width
+        || video.uv_stride < chroma_width * 2
+        || video.y_plane.len() < y_bytes
+        || video.uv_plane.len() < uv_bytes
+    {
+        return Err(io::Error::other(
+            "translated video planes do not match their dimensions",
+        ));
+    }
+
+    // Source: third_party/skia/src/core/SkYUVMath.cpp with
+    // SK_YUV_COLOR_SPACE_HIGH_PRECISION. from_bits preserves Chromium's
+    // hexadecimal f32 constants exactly.
+    let (matrix, translate) = match matrix_id {
+        ColorMatrixId::Bt709 => (
+            [
+                [
+                    f32::from_bits(0x3f95_0a86),
+                    f32::from_bits(0xb1a9_95ba),
+                    f32::from_bits(0x3fe5_788b),
+                ],
+                [
+                    f32::from_bits(0x3f95_0a85),
+                    f32::from_bits(0xbe5a_5dd7),
+                    f32::from_bits(0xbf08_6cbf),
+                ],
+                [
+                    f32::from_bits(0x3f95_0a85),
+                    f32::from_bits(0x4007_3197),
+                    f32::from_bits(0xb2b2_aaa5),
+                ],
+            ],
+            [
+                f32::from_bits(0xbf79_12ef),
+                f32::from_bits(0x3e9a_5bf0),
+                f32::from_bits(0xbf91_1353),
+            ],
+        ),
+        ColorMatrixId::Smpte170M => (
+            [
+                [
+                    f32::from_bits(0x3f95_0a86),
+                    f32::from_bits(0xb077_764c),
+                    f32::from_bits(0x3fcc_4a9b),
+                ],
+                [
+                    f32::from_bits(0x3f95_0a86),
+                    f32::from_bits(0xbec8_9512),
+                    f32::from_bits(0xbf50_1ea7),
+                ],
+                [
+                    f32::from_bits(0x3f95_0a86),
+                    f32::from_bits(0x4001_1a55),
+                    f32::from_bits(0x3296_f05b),
+                ],
+            ],
+            [
+                f32::from_bits(0xbf5f_cbb8),
+                f32::from_bits(0x3f08_1b63),
+                f32::from_bits(0xbf8a_f5f4),
+            ],
+        ),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "translated video renderer received an unsupported YUV matrix",
+            ));
+        }
+    };
+    let pixels = output_width
+        .checked_mul(output_height)
+        .and_then(|count| count.checked_mul(4))
+        .ok_or_else(|| io::Error::other("translated video output byte count overflow"))?;
+    let mut rgba = vec![0_u8; pixels];
+    let source_x: Vec<f32> = (0..output_width)
+        .map(|x| (x as f32 + 0.5) * video.width as f32 / output_width as f32 - 0.5)
+        .collect();
+    let luma_x: Vec<BilinearAxis> = source_x
+        .iter()
+        .map(|x| bilinear_axis(*x, video.width))
+        .collect();
+    // KeyHelpers.cpp configures centered siting and the Graphite shader keeps
+    // UV coordinates in Y texel space. At a Y texel center that becomes
+    // x/2-.25, y/2-.25 in UV texel space. Clamp mirrors the texture sampler.
+    let chroma_x: Vec<BilinearAxis> = source_x
+        .iter()
+        .map(|x| bilinear_axis(*x * 0.5 - 0.25, chroma_width))
+        .collect();
+    let fill_rows = |start_y: usize, rows: &mut [u8]| {
+        for (local_y, row) in rows.chunks_exact_mut(output_width * 4).enumerate() {
+            let y = start_y + local_y;
+            let source_y = (y as f32 + 0.5) * video.height as f32 / output_height as f32 - 0.5;
+            let luma_y = bilinear_axis(source_y, video.height);
+            let chroma_y = bilinear_axis(source_y * 0.5 - 0.25, chroma_height);
+            for x in 0..output_width {
+                let yuv = [
+                    bilinear_plane_sample_precomputed(
+                        video.y_plane,
+                        video.y_stride,
+                        luma_x[x],
+                        luma_y,
+                        1,
+                        0,
+                    ),
+                    bilinear_plane_sample_precomputed(
+                        video.uv_plane,
+                        video.uv_stride,
+                        chroma_x[x],
+                        chroma_y,
+                        2,
+                        0,
+                    ),
+                    bilinear_plane_sample_precomputed(
+                        video.uv_plane,
+                        video.uv_stride,
+                        chroma_x[x],
+                        chroma_y,
+                        2,
+                        1,
+                    ),
+                ];
+                let encoded = yuv_row(matrix, translate, yuv);
+                let offset = x * 4;
+                row[offset] = bt709_apple_to_srgb_byte(encoded[0]);
+                row[offset + 1] = bt709_apple_to_srgb_byte(encoded[1]);
+                row[offset + 2] = bt709_apple_to_srgb_byte(encoded[2]);
+                row[offset + 3] = 255;
+            }
+        }
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(8)
+        .min(output_height.max(1));
+    if workers > 1 && output_width.saturating_mul(output_height) >= 256 * 1024 {
+        let rows_per_worker = output_height.div_ceil(workers);
+        let bytes_per_worker = rows_per_worker * output_width * 4;
+        std::thread::scope(|scope| {
+            for (worker, rows) in rgba.chunks_mut(bytes_per_worker).enumerate() {
+                scope.spawn(move || fill_rows(worker * rows_per_worker, rows));
+            }
+        });
+    } else {
+        fill_rows(0, &mut rgba);
+    }
+    Ok(rgba)
+}
+
+/// Software-output counterpart of Chromium's multiplanar SkYUVA image. Plane
+/// sampling stays in Renderer (not Decode/Paint), uses centered 4:2:0 linear
+/// chroma coordinates, then applies the resource's transfer into the sRGB
+/// output surface. The Metal backend can consume the same lease without this
+/// temporary materialization.
+pub(crate) fn video_lease_image(
+    lease: Arc<dyn RasterResourceLease>,
+) -> io::Result<Arc<dyn SkImage>> {
+    let size = lease.size();
+    video_lease_image_scaled(lease, size.width(), size.height())
+}
+
+pub(crate) fn video_lease_image_scaled(
+    lease: Arc<dyn RasterResourceLease>,
+    output_width: i32,
+    output_height: i32,
+) -> io::Result<Arc<dyn SkImage>> {
+    use compositor_core::runtime::resources::{ColorPrimaryId, ColorRangeId, ColorTransferId};
+    let video = MapVideoResourceForRead(lease.as_ref())?;
+    let width = video.size.width();
+    let height = video.size.height();
+    if width <= 0
+        || height <= 0
+        || video.color_space.range != ColorRangeId::Limited
+        || video.color_space.transfer != ColorTransferId::Bt709Apple
+        || video.color_space.primaries != ColorPrimaryId::Bt709
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "translated video renderer received an unsupported color space",
+        ));
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    if output_width <= 0 || output_height <= 0 {
+        return Err(io::Error::other("translated video output size is empty"));
+    }
+    let rgba = convert_nv12_bt709_apple_to_srgb_scaled(
+        Nv12Planes {
+            width: width_usize,
+            height: height_usize,
+            y_stride: video.y_stride,
+            uv_stride: video.uv_stride,
+            y_plane: video.y_plane,
+            uv_plane: video.uv_plane,
+        },
+        video.color_space.matrix,
+        output_width as usize,
+        output_height as usize,
+    )?;
+    image_from_bytes(
+        &rgba,
+        output_width,
+        output_height,
+        output_width as usize * 4,
+        SinglePlaneFormat::RGBA_8888,
+    )
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+    use compositor_core::runtime::resources::ColorMatrixId;
+
+    #[test]
+    fn bt709_apple_transfer_thresholds_preserve_exact_quantization() {
+        for value in 0..=u16::MAX {
+            let encoded = value as f32 / u16::MAX as f32;
+            assert_eq!(
+                bt709_apple_to_srgb_byte(encoded),
+                bt709_apple_to_srgb_byte_slow(encoded),
+                "encoded={encoded}"
+            );
+        }
+        for threshold in BT709_APPLE_TO_SRGB_THRESHOLD_BITS {
+            for bits in [threshold - 1, threshold, threshold + 1] {
+                let encoded = f32::from_bits(bits);
+                assert_eq!(
+                    bt709_apple_to_srgb_byte(encoded),
+                    bt709_apple_to_srgb_byte_slow(encoded),
+                    "encoded_bits={bits:#010x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bt709_apple_conversion_uses_normal_gpu_fp32_stages() {
+        let rgba = convert_nv12_bt709_apple_to_srgb(
+            Nv12Planes {
+                width: 1,
+                height: 1,
+                y_stride: 1,
+                uv_stride: 2,
+                y_plane: &[16],
+                uv_plane: &[16, 114],
+            },
+            ColorMatrixId::Bt709,
+        )
+        .unwrap();
+
+        assert_eq!(rgba, [0, 34, 0, 255]);
+    }
+
+    #[test]
+    fn centered_bilinear_chroma_matches_normal_gpu_pixel_fixture() {
+        // Padding bytes make the fixture also verify that plane strides, not
+        // logical widths, locate the following row.
+        let y = [
+            16, 64, 128, 235, 0xee, 0xee, 32, 80, 144, 220, 0xee, 0xee, 48, 96, 160, 200, 0xee,
+            0xee, 64, 112, 176, 180, 0xee, 0xee,
+        ];
+        let uv = [16, 240, 128, 128, 0xdd, 0xdd, 240, 16, 90, 200, 0xdd, 0xdd];
+        let rgba = convert_nv12_bt709_apple_to_srgb(
+            Nv12Planes {
+                width: 4,
+                height: 4,
+                y_stride: 6,
+                uv_stride: 6,
+                y_plane: &y,
+                uv_plane: &uv,
+            },
+            ColorMatrixId::Bt709,
+        )
+        .unwrap();
+
+        assert_eq!(
+            rgba,
+            [
+                207, 0, 0, 255, 212, 32, 0, 255, 189, 133, 81, 255, 255, 255, 255, 255, 130, 0, 0,
+                255, 168, 68, 0, 255, 205, 150, 116, 255, 255, 233, 222, 255, 0, 63, 166, 255, 48,
+                112, 176, 255, 220, 165, 162, 255, 255, 199, 164, 255, 0, 103, 255, 255, 0, 142,
+                255, 255, 236, 181, 193, 255, 255, 170, 122, 255,
+            ]
+        );
+    }
+}
+
+pub(crate) fn target_format(format: PixelFormat) -> TranslatedPixelFormat {
     match format {
         PixelFormat::Rgba8888 => TranslatedPixelFormat::Rgba8888,
         PixelFormat::Bgra8888 => TranslatedPixelFormat::Bgra8888,

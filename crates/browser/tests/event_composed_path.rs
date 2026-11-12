@@ -75,6 +75,16 @@ fn fixture() -> Page {
         }),
         None,
     );
+    let editing_behavior = if cfg!(target_os = "macos") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Mac
+    } else if cfg!(target_os = "windows") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Windows
+    } else if cfg!(target_os = "android") {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Android
+    } else {
+        interaction::default::core::editing::editing_behavior::EditingBehaviorType::Unix
+    };
+    page.SetInteractionTextSettings(editing_behavior, c"en-US", cfg!(target_os = "macos"));
     page.Open("https://shadow-publication.test/", 16384, 4096)
         .unwrap();
     for _ in 0..100 {
@@ -277,7 +287,7 @@ fn document_window_and_load_paths_match_dispatch_endpoints() {
             r#"
             let log=[];
             for (const node of [document,window]) for (const capture of [true,false]) node.addEventListener('probe',e=>{
-                const p=e.composedPath();
+                let p;try{p=e.composedPath()}catch(error){nativeDebug.push('path throw:'+error);return}
                 check(p.length===2&&p[0]===document&&p[1]===window,'document path includes window');
                 log.push((node===window?'w':'d')+':'+capture+':'+e.eventPhase);
             },capture);
@@ -323,15 +333,21 @@ fn real_mouse_click_traverses_slot_and_keeps_source_event_identity() {
         "#,
         );
         for click in 1..=2 {
-            for kind in [interaction::input_event::MouseEventType::kClick] {
+            for kind in [
+                interaction::input_event::MouseEventType::kDown,
+                interaction::input_event::MouseEventType::kUp,
+            ] {
                 page.Dispatch(&interaction::input_event::InputEvent::Mouse(
                     interaction::input_event::MouseEvent {
                         r#type: kind,
-                        position: layoutng_assembly::internal::layout_input::Offset {
-                            x: 40.0,
-                            y: 20.0,
-                        },
+                        position: interaction::input_event::Offset { x: 40.0, y: 20.0 },
                         button: interaction::input_event::MouseButton::kPrimary,
+                        buttons: if kind == interaction::input_event::MouseEventType::kDown {
+                            1
+                        } else {
+                            0
+                        },
+                        click_count: 1,
                         ..Default::default()
                     },
                 ))

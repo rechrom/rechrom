@@ -22,7 +22,6 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
     let _devtools_url = crate::devtools_host::serve(options.devtools_port, &options.address)?;
     let mailbox: engine::FrameMailbox = Arc::new(Mutex::new(None));
-    crate::devtools_host::attach_screenshots(mailbox.clone());
     let (events, receiver) = mpsc::channel();
     let output = Output {
         mailbox,
@@ -38,8 +37,9 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs_f64(1.0 / 60.0),
         None,
         crate::app::presentation_config(true),
+        options.prefers_reduced_motion,
     )?;
-    crate::devtools_host::attach_commands(&commands);
+    crate::devtools_host::attach_offscreen(&commands, viewport);
     pump_events(
         receiver,
         commands,
@@ -100,6 +100,9 @@ fn pump_events(
             }
         };
         match event {
+            UserEvent::StartSystemDrag(start) => {
+                start.fail(crate::native_drag::Failure::Unsupported)
+            }
             UserEvent::CloseWindow => break Ok(()),
             UserEvent::FrameReady => {
                 if !frame_ready {
@@ -118,6 +121,7 @@ fn pump_events(
             }
             UserEvent::Message(message) => eprintln!("page: {message}"),
             UserEvent::PageError(error) => {
+                devtools::report_page_error(error.json());
                 error.emit_stderr();
                 if error.terminal && terminal_page_error.is_none() {
                     terminal_page_error = Some(error);
@@ -140,7 +144,8 @@ fn pump_events(
             | UserEvent::FrameSwapCompleted(_)
             | UserEvent::ChromeDragRegions { .. }
             | UserEvent::CursorChanged(_)
-            | UserEvent::CaretChanged(_) => {}
+            | UserEvent::CaretChanged(_)
+            | UserEvent::TextInputStateChanged(_) => {}
         }
     };
     println!("headless-closed");

@@ -1,0 +1,13 @@
+[package]
+name = "paint_skia"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }
+layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layoutng_style = { path = "../../layoutng/layoutng_style" }
+paint_model = { path = "../paint_model" }
+foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+skia = { path = "../../skia" }

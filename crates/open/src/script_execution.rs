@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use dom::{Document, DOM};
+use html::document_parser::DocumentParser;
 use html::html_parser::{HTMLDocumentParser, ParserScript};
 use javascript::javascript_runtime::{
     JavaScriptException, JavaScriptModuleResolver, JavaScriptRealm, JavaScriptResult,
@@ -64,7 +65,7 @@ impl ParserScriptTasks {
     // cpp: browser/browser.cc:1715-1722
     pub fn ExecuteClassic(
         &mut self,
-        parser: &mut HTMLDocumentParser<'_>,
+        parser: &mut DocumentParser<'_, '_>,
         script: ParserScript,
         loaded_source: Option<&str>,
         source_name: &str,
@@ -127,7 +128,7 @@ impl ParserScriptTasks {
     // Async/deferred scripts do not have a parser-blocking insertion point.
     pub fn ExecuteNonBlocking(
         &mut self,
-        parser: Option<&mut HTMLDocumentParser<'_>>,
+        parser: Option<&mut DocumentParser<'_, '_>>,
         script: ParserScript,
         source: &str,
         source_name: &str,
@@ -149,7 +150,7 @@ impl ParserScriptTasks {
 
     pub fn ExecuteModule(
         &mut self,
-        parser: Option<&mut HTMLDocumentParser<'_>>,
+        parser: Option<&mut DocumentParser<'_, '_>>,
         script: ParserScript,
         module: &javascript::javascript_runtime::JavaScriptValue,
         source_name: &str,
@@ -172,7 +173,7 @@ impl ParserScriptTasks {
 
     fn ExecuteNonBlockingKind(
         &mut self,
-        parser: Option<&mut HTMLDocumentParser<'_>>,
+        parser: Option<&mut DocumentParser<'_, '_>>,
         script: ParserScript,
         source: &str,
         source_name: &str,
@@ -311,7 +312,7 @@ mod tests {
                     "field.setAttribute('data-external','yes'); throw new Error('external failure')",
                 );
                 let result = tasks.ExecuteClassic(
-                    &mut parser,
+                    &mut DocumentParser::HTML(&mut parser),
                     parsed.script.unwrap(),
                     external_source,
                     "page.js",

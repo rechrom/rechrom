@@ -5,7 +5,11 @@ use dom::UserInteractionState;
 use dom::{Document, DOM};
 use layoutng_assembly::internal::layout_input::ConstraintSpace;
 use std::{cell::RefCell, rc::Rc};
-use style::media_queries::{media_values_cached::MediaValuesCachedData, scripting::Scripting};
+use style::media_queries::{
+    media_values_cached::MediaValuesCachedData,
+    scripting::Scripting,
+    web_preferences::{HoverType, PointerType},
+};
 #[cfg(test)]
 use webapi::dom_bindings::DOMBindingsHost;
 
@@ -31,12 +35,28 @@ impl StyleFontMetricsResolver {
 
     pub(crate) fn new(constraints: &ConstraintSpace) -> Self {
         let engine = Self::Engine(constraints);
+        Self::WithFontInputs(
+            constraints,
+            engine,
+            constraints.fonts.clone(),
+            constraints.font_queries.clone(),
+        )
+    }
+
+    /// Prepare a Document's CSSFontSelector before its inputs are published to
+    /// the surviving Frame's shared viewport/ConstraintSpace owner.
+    pub(crate) fn WithFontInputs(
+        constraints: &ConstraintSpace,
+        engine: font_engine::FontEngineHandle,
+        fonts: font_engine::FontFaceCatalog,
+        queries: Option<font_engine::FontQueryCollector>,
+    ) -> Self {
         Self {
             state: RefCell::new(StyleFontMetricsState {
                 engine,
-                fonts: constraints.fonts.clone(),
+                fonts,
                 backend: constraints.font_backend_factory.clone(),
-                queries: constraints.font_queries.clone(),
+                queries,
                 metrics_pending: false,
             }),
         }
@@ -102,6 +122,33 @@ impl StyleFontMetricsResolver {
 }
 
 impl style::resolver::production_style_builder::FontMetricsResolver for StyleFontMetricsResolver {
+    fn TextWidth(
+        &self,
+        description: &font_engine::FontDescription,
+        text: &[u16],
+        direction: foundation::TextDirection,
+        directional_override: bool,
+    ) -> font_engine::FontCompute<f32> {
+        let engine = self.state.borrow().engine.clone();
+        let measurement = engine.with_mut(|engine| {
+            engine.MeasureTextForStyle(description, text, direction, directional_override)
+        });
+        match measurement {
+            Ok(measurement) => {
+                self.QueueSystemQueries(&measurement.pending);
+                // Text width is font-dependent even when a currently admitted
+                // fallback supplied it. A newly completed face must remeasure
+                // this callback before Layout consumes the computed style.
+                self.state.borrow_mut().metrics_pending = true;
+                match measurement.width {
+                    Some(width) => font_engine::FontCompute::Ready(width),
+                    None => font_engine::FontCompute::Pending(measurement.pending),
+                }
+            }
+            Err(error) => font_engine::FontCompute::Error(error),
+        }
+    }
+
     fn WillUseFont(&self, description: &font_engine::FontDescription) {
         let engine = self.state.borrow().engine.clone();
         let result = engine.with_mut(|engine| {
@@ -156,12 +203,10 @@ pub(crate) fn MediaValuesForLayout(
         dynamic_viewport_height: height,
         device_width: width.round() as i32,
         device_height: height.round() as i32,
-        // LocalFrame::DevicePixelRatio is inspector/host DSF multiplied by
-        // LayoutZoomFactor. Media resolution and image selection consume this
-        // effective value once from the shared immutable environment.
-        device_pixel_ratio: (constraints.device_pixel_ratio
-            * constraints.layout_zoom_factor.max(f64::MIN_POSITIVE))
-            as f32,
+        // LocalFrame::DevicePixelRatio multiplies the inspector override by
+        // LayoutZoomFactor. ConstraintSpace stores that resolved product as
+        // the host device pixel ratio, so media resolution consumes it once.
+        device_pixel_ratio: constraints.device_pixel_ratio as f32,
         layout_zoom_factor: constraints.layout_zoom_factor as f32,
         em_size: 16.0,
         media_type: foundation::String::from(if constraints.printing {
@@ -170,8 +215,16 @@ pub(crate) fn MediaValuesForLayout(
             "screen"
         }),
         preferred_color_scheme,
+        prefers_reduced_motion: constraints.prefers_reduced_motion,
         forced_colors,
         scripting: Scripting::kEnabled,
+        // Rechrom's native desktop host routes precise mouse input and hover
+        // state. Match Chromium's desktop WebPreferences rather than the
+        // device-agnostic MediaValuesCachedData defaults (none/no-hover).
+        primary_pointer_type: PointerType::kPointerFineType,
+        available_pointer_types: PointerType::kPointerFineType as i32,
+        primary_hover_type: HoverType::kHoverHoverType,
+        available_hover_types: HoverType::kHoverHoverType as i32,
         scrollbar_theme_auto_thickness: scrollbar_theme.map_or(0, |theme| theme.auto_thickness),
         scrollbar_theme_thin_thickness: scrollbar_theme.map_or(0, |theme| theme.thin_thickness),
         scrollbar_theme_uses_overlay_scrollbars: scrollbar_theme
@@ -388,6 +441,8 @@ pub(crate) fn CreateLayoutBindingsHost(
 ) -> DOMBindingsHost {
     let resolve_document = document.clone();
     let resolve_constraints = constraints.clone();
+    let geometry_document = document.clone();
+    let geometry_constraints = constraints.clone();
     let engine = Rc::new(RefCell::new(crate::LayoutEngine::new(
         &crate::CreateLayoutAssembly(),
     )));
@@ -441,11 +496,20 @@ pub(crate) fn CreateLayoutBindingsHost(
         read_geometry: Some(Box::new(move |id| {
             let layout = geometry();
             let layout = layout.borrow();
+            let frame_layout_zoom =
+                geometry_constraints.borrow().layout_zoom_factor as f32;
+            let standardized_browser_zoom = geometry_document
+                .borrow()
+                .GetDocument()
+                .StandardizedBrowserZoomEnabled();
             layout
                 .Output()
                 .and_then(|output| output.Node(id))
                 .map_or_else(Vec::new, |node| {
-                    node.ClientRects()
+                    node.HTMLClientRectsForDocument(
+                        frame_layout_zoom,
+                        standardized_browser_zoom,
+                    )
                         .into_iter()
                         .map(|r| paint::paint_engine::PaintRect {
                             x: r.x,
@@ -514,7 +578,7 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColorsUsingFontMetrics(
     preferred_color_scheme: style::PreferredColorScheme,
     forced_colors: style::media_queries::forced_colors::ForcedColors,
     font_metrics: Rc<StyleFontMetricsResolver>,
-) {
+) -> bool {
     // Blink style resolution allocates ComputedStyle and its rare-data on the
     // document's cppgc heap before Layout begins. Keep that owner-thread heap
     // boundary in the browser assembly layer; StyleEngine itself remains
@@ -525,10 +589,13 @@ pub(crate) fn ResolveLayoutStylesWithEngineAndForcedColorsUsingFontMetrics(
     let sheets = user_agent.ForDocument(owner.GetDocument());
     font_metrics.Update(constraints);
     engine.SetFontMetricsResolver(font_metrics);
-    engine
-        .Update(owner, &environment, sheets)
-        .unwrap_or_else(|error| panic!("StyleEngine update failed: {error}"));
+    let complete = match engine.Update(owner, &environment, sheets) {
+        Ok(_) => true,
+        Err(style::DocumentStyleError::FontPending) => false,
+        Err(error) => panic!("StyleEngine update failed: {error}"),
+    };
     heap_scope.DeferCollection();
+    complete
 }
 
 pub(crate) fn EnsureComputedStyleForNode(
@@ -616,6 +683,28 @@ mod tests {
         javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
     };
     use webapi::dom_bindings::DOMJavaScriptBindings;
+
+    #[test]
+    fn desktop_media_values_expose_fine_pointer_and_hover() {
+        let mut constraints = ConstraintSpace::default();
+        constraints.available_size.width = 1280.0;
+        constraints.available_size.height = 800.0;
+        let values = MediaValuesForLayout(
+            &constraints,
+            style::PreferredColorScheme::kLight,
+            style::media_queries::forced_colors::ForcedColors::kNone,
+        );
+        assert_eq!(values.primary_pointer_type, PointerType::kPointerFineType);
+        assert_eq!(
+            values.available_pointer_types,
+            PointerType::kPointerFineType as i32
+        );
+        assert_eq!(values.primary_hover_type, HoverType::kHoverHoverType);
+        assert_eq!(
+            values.available_hover_types,
+            HoverType::kHoverHoverType as i32
+        );
+    }
 
     #[test]
     fn responsive_picture_uses_css_media_sizes_and_effective_dpr() {
@@ -721,8 +810,12 @@ mod tests {
 
     #[test]
     fn javascript_computed_style_reads_real_cascade_and_live_mutations() {
-        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML("<html><body><style>.old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}</style><div id=box class=old></div><input id=search placeholder=search></body></html>")));
-        let sheet=style::ParseCSS(".old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}");
+        let document = Rc::new(RefCell::new(html::html_parser::ParseHTML(
+            "<html><body><style>.old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}</style><div id=box class=old></div><input id=search placeholder=search></body></html>",
+        )));
+        let sheet = style::ParseCSS(
+            ".old{font-size:20px;padding-left:3px}.new{font-size:30px;padding-left:7px}input:placeholder-shown{font-weight:600}input:not(:placeholder-shown){font-weight:800}",
+        );
         document
             .borrow_mut()
             .GetDocumentMut()
@@ -850,7 +943,13 @@ mod measurement_tests {
             .Evaluate(&realm, webapi::DOMBootstrapSource(), "dom-webidl")
             .Succeeded());
         for stage in 0..3 {
-            let mutate=match stage {1=>"document.getElementById('box').className='wide'",2=>"document.getElementById('box').style.cssText='width:55.5px;height:40.75px';document.getElementById('box').appendChild(document.getElementById('move'))",_=>""};
+            let mutate = match stage {
+                1 => "document.getElementById('box').className='wide'",
+                2 => {
+                    "document.getElementById('box').style.cssText='width:55.5px;height:40.75px';document.getElementById('box').appendChild(document.getElementById('move'))"
+                }
+                _ => "",
+            };
             let result = runtime.Evaluate(&realm, mutate, "measurement-mutation");
             assert!(result.Succeeded(), "{:?}", result.exception);
             for line in

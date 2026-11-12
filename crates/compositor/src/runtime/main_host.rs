@@ -3,7 +3,7 @@
 //! implementation. Request/sequence effects are independent injected capabilities.
 use super::{
     host_owners::{ViewTransitionCaptureCallback, ViewTransitionRequest},
-    paint::CpuPaintServices,
+    paint::{CpuForeignLayer, CpuPaintServices},
     types::{CpuCompositorTypes, CpuSkiaBackend, MainMutatorHostIdentity, TaskRunner},
 };
 use crate::{
@@ -14,7 +14,9 @@ use crate::{
             host_impl_chunk_c::HostViewTransitionElementResourceRects,
             HostMetadataTransitionRequest,
         },
-        layer_tree_impl::{LayerTreeViewTransitionRequest, PropertyTreesFor},
+        layer_tree_impl::{
+            LayerTreeViewTransitionRequest, PropertyTreesFor, UIResourceId, UIResourceRequestType,
+        },
         main_layer::{
             LayerContext, MainLayerHost, MainLayerHostId, MainLayerHostRead, MainLayerHosts,
             MainLayerReadHosts, MainLayerServices,
@@ -77,6 +79,7 @@ pub struct CpuMainLayerHost<R: CpuSkiaBackend> {
     recording_scale_factor: f32,
     in_paint_layer_contents: bool,
     inside_will_commit: bool,
+    next_ui_resource_id: i32,
     // Source: cc/trees/layer_tree_host.h:1097-1100,1129; source external Proxy/
     // task-runner effects are lent via one independent typed capability.
     settings: LayerTreeSettings,
@@ -115,6 +118,7 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
             recording_scale_factor: 1.,
             in_paint_layer_contents: false,
             inside_will_commit: false,
+            next_ui_resource_id: 1,
             settings,
             id,
             threaded,
@@ -124,6 +128,31 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     }
     pub fn identity(&self) -> MainLayerHostId {
         self.id
+    }
+
+    /// Creates Blink's video ForeignLayer through the resident main-host
+    /// context. Browser receives only Paint's type-erased layer handle; cc
+    /// services, LayerContext and the concrete SurfaceLayer stay internal.
+    pub fn CreateVideoSurfaceForeignLayer(
+        &mut self,
+        services: &dyn MainLayerServices,
+        derived: &(dyn CpuPaintServices<B<R>> + 'static),
+        range: <B<R> as crate::adapter::layer_tree_impl::LayerTreeTypes>::SurfaceRange,
+    ) -> Arc<dyn paint::ForeignLayer> {
+        let layer = crate::runtime::owner_types::CreateCpuSurfaceLayer::<R>(services);
+        self.with_layer_context(services, derived, |c| {
+            layer.SetSurfaceRange(range, None, c);
+            // Blink's SurfaceLayerBridge stretches the child Surface into the
+            // layer bounds.  Besides ordinary element resizing, this is what
+            // maps a child frame expressed in CSS-pixel dimensions onto the
+            // device-pixel bounds used at higher device scale factors.
+            // Source: third_party/blink/renderer/platform/graphics/
+            //         surface_layer_bridge.cc:126-143.
+            layer.SetStretchContentToFillBounds(true, c);
+            layer.SetIsDrawable(true, c);
+            layer.SetHitTestable(true, c);
+            Arc::new(CpuForeignLayer::new(layer, c)) as Arc<dyn paint::ForeignLayer>
+        })
     }
 
     // Source: cc/trees/property_tree_layer_list_delegate.cc:53-110.
@@ -188,7 +217,10 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
     // Source: cc/trees/layer_tree_host.cc:1207-1244. Viewport scale/control
     // deltas are applied by their respective translated paths; this resident
     // layer-list host owns the ordinary scroll and scrollbar portions.
-    pub fn ApplyCompositorChanges(&mut self, data: &mut CompositorCommitData) {
+    pub fn ApplyCompositorChanges(
+        &mut self,
+        data: &mut CompositorCommitData,
+    ) -> crate::engine::CompositorScrollState {
         if self.unsafe_state.root_layer.is_some() {
             // Source: cc/trees/layer_tree_host.cc:1129-1201. The translated
             // commit value already carries the inner viewport element id, so
@@ -217,6 +249,46 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
                 );
             }
         }
+        // LayerTreeHost::ApplyPageScaleDeltaFromImplSide, cc:910-917,
+        // SetPageScaleFromImplSide, cc:1865-1878. This is the same pending
+        // factor committed back to the impl owner, never a second scale model.
+        if data.page_scale_delta != 1.0 {
+            self.pending.page_scale_factor *= data.page_scale_delta;
+            self.SetPropertyTreesNeedRebuild();
+        }
+        // LayerTreeHost.cc:1240: after native scroll offsets/scrollbars, the
+        // client receives the state belonging to this exact commit.
+        crate::engine::CompositorScrollState {
+            is_scroll_active: data.is_scroll_active,
+            scroll_latched_element_id: data.scroll_latched_element_id,
+            source_type: data.scroll_type,
+            done_containers: data
+                .scroll_end_data
+                .done_containers
+                .iter()
+                .copied()
+                .collect(),
+        }
+    }
+    // Source: cc/trees/layer_tree_host.cc:1459-1475.
+    pub fn SetHaveScrollEventHandlers(&mut self, value: bool) {
+        if self.pending.have_scroll_event_handlers == value {
+            return;
+        }
+        self.pending.have_scroll_event_handlers = value;
+        self.SetNeedsCommit();
+    }
+    pub fn SetEventListenerProperties(
+        &mut self,
+        class: crate::cc::input::event_listener_properties::EventListenerClass,
+        properties: crate::cc::input::event_listener_properties::EventListenerProperties,
+    ) {
+        let slot = &mut self.pending.event_listener_properties[class as usize];
+        if *slot == properties {
+            return;
+        }
+        *slot = properties;
+        self.SetNeedsCommit();
     }
     pub fn pending_commit_state(&self) -> &CommitState<B<R>> {
         &self.pending
@@ -417,6 +489,9 @@ impl<R: CpuSkiaBackend> CpuMainLayerHost<R> {
         }
     }
 
+    pub(crate) fn PageScaleFactor(&self) -> f32 {
+        self.pending.page_scale_factor
+    }
     // Source: cc/trees/layer_tree_host.cc:1592-1625.
     pub fn SetPageScaleFactorAndLimits(
         &mut self,
@@ -697,6 +772,49 @@ impl<R: CpuSkiaBackend> MainLayerHostRead<B<R>> for CpuMainLayerHost<R> {
     }
 }
 impl<R: CpuSkiaBackend> MainLayerHost<B<R>> for CpuMainLayerHost<R> {
+    fn CreateUIResource(
+        &mut self,
+        bitmap: <B<R> as crate::adapter::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap,
+    ) -> UIResourceId {
+        use crate::adapter::layer_tree_host_impl::HostUIResourceBitmap as _;
+        let id = UIResourceId(self.next_ui_resource_id);
+        self.next_ui_resource_id = self
+            .next_ui_resource_id
+            .checked_add(1)
+            .expect("UIResourceId overflow");
+        self.pending.ui_resource_sizes.insert(id, bitmap.GetSize());
+        self.pending
+            .ui_resource_request_queue
+            .push(super::host_owners::UIResourceRequest {
+                kind: UIResourceRequestType::kCreate,
+                id,
+                bitmap,
+            });
+        self.SetNeedsCommit();
+        id
+    }
+
+    fn DeleteUIResource(&mut self, id: UIResourceId) {
+        self.pending.ui_resource_sizes.remove(&id);
+        // DELETE retains the source request shape. The bitmap payload is not
+        // read by LayerTreeHostImpl for this request type.
+        self.pending
+            .ui_resource_request_queue
+            .push(super::host_owners::UIResourceRequest {
+                kind: UIResourceRequestType::kDelete,
+                id,
+                bitmap: super::host_resources::UIBitmap(std::sync::Arc::new(
+                    super::host_resources::RawUIBitmap::new(
+                        crate::adapter::geometry::Size::default(),
+                        Vec::new(),
+                        0,
+                        false,
+                    ),
+                )),
+            });
+        self.SetNeedsCommit();
+    }
+
     // Source: cc/trees/layer_tree_host.cc:1044-1090.
     fn AddViewTransitionRequest(&mut self, mut request: Box<ViewTransitionRequest>) {
         debug_assert!(!self

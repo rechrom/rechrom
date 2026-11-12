@@ -210,6 +210,9 @@ macro_rules! make_dispatch {
                 }
             }
 
+            fn present_with_feedback(self,swap_ack:crate::PresentCallback,presentation:crate::PresentationCallback,observer:Option<crate::NativeTransactionObserver>)->Result<(),SoftBufferError>{
+                match self { $( $(#[$attr])* Self::$name(s)=>s.present_with_feedback(swap_ack,presentation,observer), )* }
+            }
             fn present_with_callback(self, callback: crate::PresentCallback,
                 observer: Option<crate::NativeTransactionObserver>) -> Result<(), SoftBufferError> {
                 match self {

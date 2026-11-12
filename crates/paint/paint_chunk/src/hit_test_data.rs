@@ -84,6 +84,16 @@ impl std::fmt::Display for PaintHitTestData {
     }
 }
 
+/// Source: `hit_test_data.h:55` and `hit_test_data.cc:106-108`.
+///
+/// Rust's orphan rules do not allow implementing `Display` for
+/// `Option<&PaintHitTestData>`. This is the nullable-pointer stream overload:
+/// a missing value prints the same sentinel and a present value delegates to
+/// the resident value formatter.
+pub fn NullableHitTestDataToString(value: Option<&PaintHitTestData>) -> String {
+    value.map_or_else(|| "<null>".into(), ToString::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +116,20 @@ mod tests {
         };
         assert_eq!(left, right);
         assert!(!left.ToString().contains("scrolling_contents_cull_rect"));
+    }
+
+    #[test]
+    fn nullable_diagnostic_matches_the_pointer_stream_contract() {
+        assert_eq!(NullableHitTestDataToString(None), "<null>");
+        let data = PaintHitTestData {
+            scroll_hit_test_rect: PaintRect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0,
+            },
+            ..PaintHitTestData::default()
+        };
+        assert_eq!(NullableHitTestDataToString(Some(&data)), data.to_string());
     }
 }

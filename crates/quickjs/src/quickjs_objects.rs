@@ -2,8 +2,7 @@
 // These names have only forward pointer declarations here; their payload
 // definitions are added at their own class-specific source sections.
 macro_rules! forward_object_payloads {($($name:ident),*$(,)?)=>{$(#[repr(C)]struct $name{_opaque:[u8;0],_pin:core::marker::PhantomPinned})*};}
-forward_object_payloads!(
-);
+forward_object_payloads!();
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct JSObjectFunc {
@@ -197,6 +196,12 @@ pub unsafe fn JS_IsError(_ctx: *mut JSContext, val: JSValueConst) -> JS_BOOL {
 }
 pub unsafe fn JS_SetUncatchableException(ctx: *mut JSContext, flag: JS_BOOL) {
     (*(*ctx).rt).current_exception_is_uncatchable = flag as i8;
+}
+
+/// Non-consuming owner query used to prevent host callback reentry after a
+/// native interrupt has terminated the current VM execution.
+pub unsafe fn JS_IsUncatchableException(ctx: *mut JSContext) -> JS_BOOL {
+    (*(*ctx).rt).current_exception_is_uncatchable as JS_BOOL
 }
 pub unsafe fn JS_SetOpaque(obj: JSValue, opaque: *mut c_void) {
     if JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT {

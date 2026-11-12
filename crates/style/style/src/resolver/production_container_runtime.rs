@@ -258,6 +258,7 @@ pub(crate) struct ProductionContainerRuntime<'a> {
     pub document: &'a dom::Document,
     pub media: &'a MediaValuesCachedData,
     pub states: &'a HashMap<usize, ContainerState>,
+    pub snapped_dependencies: Option<&'a std::cell::RefCell<std::collections::HashSet<usize>>>,
     pub stored_custom: &'a HashMap<usize, Rc<CustomProperties>>,
     pub current_styles: Option<&'a HashMap<usize, ComputedStyleHandle>>,
     pub current_custom: Option<&'a HashMap<usize, Rc<CustomProperties>>>,
@@ -276,7 +277,7 @@ impl ProductionContainerRuntime<'_> {
                     .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
             })
     }
-    fn custom(&self, node: usize) -> Option<&CustomProperties> {
+    pub(crate) fn custom(&self, node: usize) -> Option<&CustomProperties> {
         self.current_custom
             .and_then(|custom| custom.get(&node))
             .or_else(|| self.stored_custom.get(&node))
@@ -380,7 +381,7 @@ impl ProductionContainerRuntime<'_> {
     // Width and height may come from different eligible ancestors. A size
     // container whose evaluator has no completed observation is skipped for
     // this axis; the caller performs Chromium's small-viewport fallback.
-    fn ContainerUnitSizeForAxis(&self, context: usize, horizontal: bool) -> Option<f64> {
+    pub(crate) fn ContainerUnitSizeForAxis(&self, context: usize, horizontal: bool) -> Option<f64> {
         let selector = ProductionContainerSelector::ForPhysicalAxis(horizontal);
         let mut starting = Some(context);
         while let Some(container) = self.FindContainer(starting, &selector) {
@@ -425,6 +426,12 @@ impl ProductionContainerRuntime<'_> {
             });
         };
         let style = self.style(container).ok_or("container-style-unavailable")?;
+        // ContainerQueryEvaluator.cc:316-324, dependency survives false matches.
+        if ProductionContainerSelector::FromQuery(query).flags & FEATURE_SNAP != 0 {
+            if let Some(dependencies) = self.snapped_dependencies {
+                dependencies.borrow_mut().insert(container);
+            }
+        }
         let values = DocumentMediaValues::ForContainer(
             self.document,
             container,
@@ -683,6 +690,7 @@ mod tests {
             document,
             media: &media,
             states: &states,
+            snapped_dependencies: None,
             stored_custom: &custom,
             current_styles: Some(&styles),
             current_custom: None,
@@ -780,6 +788,7 @@ mod tests {
             document,
             media: &media,
             states: &states,
+            snapped_dependencies: None,
             stored_custom: &custom,
             current_styles: Some(&styles),
             current_custom: None,

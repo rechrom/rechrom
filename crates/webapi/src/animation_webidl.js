@@ -119,6 +119,11 @@ class Animation extends EventTarget {
     if(css!==this._lastCSS){__domInvoke(this.effect.target,'animationSample',this._effectId,performance.now(),css);this._lastCSS=css;}
   }
 }
+for (const type of ['finish','cancel','remove']) Object.defineProperty(Animation.prototype, 'on'+type, {
+  configurable:true, enumerable:true,
+  get() { return __domInvoke(this, '__eventTargetHandlerGet', type); },
+  set(value) { __domInvoke(this, '__eventTargetHandlerSet', type, value); }
+});
 Object.assign(globalThis,{Animation,KeyframeEffect});
 const timelines=new WeakMap();Object.defineProperty(Document.prototype,'timeline',{get(){if(!timelines.has(this))timelines.set(this,{get currentTime(){return performance.now();}});return timelines.get(this);}});
 Element.prototype.animate=function(frames,options={}){const animation=new Animation(new KeyframeEffect(this,frames,options),this.ownerDocument.timeline);if(options.id!==undefined)animation.id=String(options.id);animation.play();return animation;};

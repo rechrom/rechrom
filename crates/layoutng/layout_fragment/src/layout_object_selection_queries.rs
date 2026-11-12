@@ -11,12 +11,37 @@ use foundation::UnsupportedLayout;
 
 impl LayoutObject {
     pub fn CanUpdateSelectionOnRootLineBoxes(&self) -> bool {
-        unsafe { LayoutObjectCanUpdateSelectionOnRootLineBoxesProvider(self) }
+        self.CheckIsNotDestroyed();
+        if self.NeedsLayout() {
+            return false;
+        }
+        unsafe { self.ContainingBlock().as_ref() }.is_some_and(|block| !block.NeedsLayout())
     }
 
     #[inline(never)]
     pub fn AbsoluteSelectionRect(&self) -> PhysicalRect {
-        unsafe { LayoutObjectAbsoluteSelectionRectProvider(self) }
+        // Source layout_object.cc2522-2535; MapToVisualRect retains the source
+        // overflow/transform/fragmentation chain, never AbsoluteQuads.
+        self.CheckIsNotDestroyed();
+        let mut rect = self.LocalSelectionVisualRect();
+        let view = self.View();
+        if !rect.IsEmpty() {
+            self.MapToVisualRectInAncestorSpacePhysical(
+                view as *const LayoutBoxModelObject,
+                &mut rect,
+                VisualRectFlags::default(),
+            );
+        }
+        if let Some(view) = unsafe { view.as_ref() } {
+            if let Some(area) = unsafe { view.GetScrollableArea().as_ref() } {
+                let scroll = area.GetScrollOffset();
+                rect.offset -= PhysicalOffset::FromPointFRound(&gfx::PointF::new(
+                    scroll.x() as f32,
+                    scroll.y() as f32,
+                ));
+            }
+        }
+        rect
     }
 
     pub fn CanBeSelectionLeaf(&self) -> bool {

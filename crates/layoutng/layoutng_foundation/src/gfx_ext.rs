@@ -9,6 +9,16 @@ pub struct Rect {
 }
 
 impl Rect {
+    // Source: ui/gfx/geometry/rect.cc:148-152,220-222.
+    pub fn ContainsPoint(&self, point: Point) -> bool {
+        point.x() >= self.x()
+            && point.x() < self.right()
+            && point.y() >= self.y()
+            && point.y() < self.bottom()
+    }
+    pub fn CenterPoint(&self) -> Point {
+        Point::new(self.x() + self.width() / 2, self.y() + self.height() / 2)
+    }
     fn clamped_dimension(origin: i32, dimension: i32) -> i32 {
         (((i64::from(origin) + i64::from(dimension))
             .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
@@ -74,6 +84,19 @@ impl Rect {
             Size::new(right.saturating_sub(left), bottom.saturating_sub(top)),
         );
     }
+    // Source: ui/gfx/geometry/rect.cc:163-181,213-218. Selection's two
+    // endpoint bounds preserve empty endpoint positions when taking a union.
+    pub fn UnionEvenIfEmpty(&mut self, rect: Self) {
+        let left = self.x().min(rect.x());
+        let top = self.y().min(rect.y());
+        *self = Self::new(
+            Point::new(left, top),
+            Size::new(
+                self.right().max(rect.right()).saturating_sub(left),
+                self.bottom().max(rect.bottom()).saturating_sub(top),
+            ),
+        );
+    }
     // cpp: foundation/gfx_geometry/rect.h:50-67,142-145
     pub fn set_x(&mut self, x: i32) {
         *self = Self::new(Point::new(x, self.y()), self.size);
@@ -105,6 +128,44 @@ pub struct RectF {
 }
 
 impl RectF {
+    // Source: ui/gfx/geometry/rect_f.cc:99-117,262-265.
+    pub fn ClosestPoint(&self, point: PointF) -> PointF {
+        PointF::new(
+            point.x().max(self.x()).min(self.right()),
+            point.y().max(self.y()).min(self.bottom()),
+        )
+    }
+    // Source: ui/gfx/geometry/rect_f.cc:89-96.
+    pub fn Contains(&self, rect: &RectF) -> bool {
+        rect.x() >= self.x()
+            && rect.right() <= self.right()
+            && rect.y() >= self.y()
+            && rect.bottom() <= self.bottom()
+    }
+    pub fn Intersects(&self, rect: &RectF) -> bool {
+        !self.IsEmpty()
+            && !rect.IsEmpty()
+            && rect.x() < self.right()
+            && rect.right() > self.x()
+            && rect.y() < self.bottom()
+            && rect.bottom() > self.y()
+    }
+    pub fn Intersect(&mut self, rect: RectF) {
+        if self.IsEmpty() || rect.IsEmpty() {
+            *self = Self::default();
+            return;
+        }
+        let (x, y) = (self.x().max(rect.x()), self.y().max(rect.y()));
+        let (right, bottom) = (
+            self.right().min(rect.right()),
+            self.bottom().min(rect.bottom()),
+        );
+        if x >= right || y >= bottom {
+            *self = Self::default();
+            return;
+        }
+        *self = Self::new(PointF::new(x, y), SizeF::new(right - x, bottom - y));
+    }
     pub fn new(origin: PointF, size: SizeF) -> Self {
         Self { origin, size }
     }
@@ -337,6 +398,28 @@ pub fn ToEnclosingRect(r: RectF) -> Rect {
     result.SetByBounds(left, top, right, bottom);
     result
 }
+// Source ui/gfx/geometry/rect.h:326-342. Preserve zero-size axes and the
+// source's enclosed (ceil-min/floor-max) integer conversion.
+pub fn ScaleToEnclosedRect(rect: Rect, scale: f32) -> Rect {
+    if scale == 1.0 {
+        return rect;
+    }
+    let x = (rect.x() as f32 * scale).ceil() as i32;
+    let y = (rect.y() as f32 * scale).ceil() as i32;
+    let right = if rect.width() == 0 {
+        x
+    } else {
+        (rect.right() as f32 * scale).floor() as i32
+    };
+    let bottom = if rect.height() == 0 {
+        y
+    } else {
+        (rect.bottom() as f32 * scale).floor() as i32
+    };
+    let mut result = Rect::default();
+    result.SetByBounds(x, y, right, bottom);
+    result
+}
 // Source: ui/gfx/geometry/rect_f.h:35-37; rect_f.cc:49-58;
 //         ui/gfx/geometry/insets_f.h and outsets_f.h symmetric value conversion.
 impl From<Rect> for RectF {
@@ -395,5 +478,33 @@ impl Rect {
             return;
         }
         self.SetByBounds(left, top, right, bottom);
+    }
+}
+
+impl RectF {
+    // ui/gfx/geometry/rect_f.h:100-104. Keep the source geometry API on
+    // its original type; scroll anchoring consumes these same corner values.
+    pub fn top_right(&self) -> PointF {
+        PointF::new(self.right(), self.y())
+    }
+    pub fn bottom_left(&self) -> PointF {
+        PointF::new(self.x(), self.bottom())
+    }
+}
+
+impl RectF {
+    // ui/gfx/geometry/rect_f.cc:118-132. Edge contact is an intersection,
+    // including zero-area targets used by native IntersectionObserver.
+    pub fn InclusiveIntersect(&mut self, rect: &Self) -> bool {
+        let rx = self.x().max(rect.x());
+        let ry = self.y().max(rect.y());
+        let rr = self.right().min(rect.right());
+        let rb = self.bottom().min(rect.bottom());
+        if rx > rr || ry > rb {
+            *self = Self::default();
+            return false;
+        }
+        *self = Self::new(PointF::new(rx, ry), SizeF::new(rr - rx, rb - ry));
+        true
     }
 }

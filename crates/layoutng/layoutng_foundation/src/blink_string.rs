@@ -81,6 +81,50 @@ impl Hash for BlinkString {
 
 #[allow(non_snake_case)]
 impl BlinkString {
+    // Source: wtf_string.h:534-536; string_impl.cc:375-382.
+    pub fn ContainsOnlyWhitespaceOrEmpty(&self) -> bool {
+        self.Span16()
+            .unwrap_or_default()
+            .iter()
+            .all(|&ch| ch == 0x20 || (0x09..=0x0d).contains(&ch))
+    }
+    // Source: wtf_string.cc:210-214; string_impl.cc:634-692. This overload
+    // uses the source's default kStripExtraWhiteSpace behavior.
+    pub fn SimplifyWhiteSpace(&self) -> Self {
+        let Some(from) = self.Span16() else {
+            return Self::default();
+        };
+        let mut to = Vec::with_capacity(from.len());
+        let mut changed_to_space = false;
+        let mut i = 0;
+        loop {
+            while i < from.len() && crate::unicode::IsSpaceOrNewline(from[i]) {
+                if from[i] != 0x20 {
+                    changed_to_space = true;
+                }
+                i += 1;
+            }
+            while i < from.len() && !crate::unicode::IsSpaceOrNewline(from[i]) {
+                to.push(from[i]);
+                i += 1;
+            }
+            if i < from.len() {
+                to.push(0x20);
+            } else {
+                break;
+            }
+        }
+        if to.last() == Some(&0x20) {
+            to.pop();
+        }
+        if to.len() == from.len() && !changed_to_space {
+            self.clone()
+        } else if self.Is8Bit() {
+            Self::from_latin1(&to.into_iter().map(|ch| ch as u8).collect::<Vec<_>>())
+        } else {
+            Self::from_utf16(&to)
+        }
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -245,12 +289,78 @@ impl BlinkString {
         Self::Create8BitIfPossible(&output)
     }
 
+    /// WTF String::DeprecatedLower / CaseMap::FastToLowerInvariant. ICU's
+    /// root locale preserves the source contextual and expanding mappings.
+    pub fn DeprecatedLower(&self) -> Self {
+        if self.empty() {
+            return self.clone();
+        }
+        let source = self.Span16().expect("nonempty string has code units");
+        let length = i32::try_from(source.len()).expect("ICU string length overflow");
+        let mut status = 0;
+        // SAFETY: explicit UTF-16 length, root locale and ICU preflight ABI.
+        let required = unsafe {
+            icu_bidi::ubidi_ffi::u_strToLower(
+                std::ptr::null_mut(),
+                0,
+                source.as_ptr(),
+                length,
+                c"".as_ptr(),
+                &mut status,
+            )
+        };
+        assert!(
+            status <= 0 || status == 15,
+            "ICU lowercase preflight: {status}"
+        );
+        let mut output = vec![0; usize::try_from(required).expect("ICU lowercase length")];
+        status = 0;
+        // SAFETY: destination capacity was obtained for these exact inputs.
+        let written = unsafe {
+            icu_bidi::ubidi_ffi::u_strToLower(
+                output.as_mut_ptr(),
+                required,
+                source.as_ptr(),
+                length,
+                c"".as_ptr(),
+                &mut status,
+            )
+        };
+        assert!(status <= 0, "ICU lowercase: {status}");
+        assert_eq!(written, required);
+        Self::Create8BitIfPossible(&output)
+    }
+
+    /// StringImpl's UTF-16 DeprecatedEqualIgnoringCase first compares lengths,
+    /// then calls ICU umemcasecmp; lowercasing both strings is not equivalent.
+    pub fn DeprecatedEqualIgnoringCase(&self, other: &Self) -> bool {
+        let first = self.Span16().unwrap_or_default();
+        let second = other.Span16().unwrap_or_default();
+        if first.len() != second.len() {
+            return false;
+        }
+        let length = i32::try_from(first.len()).expect("ICU string length overflow");
+        // SAFETY: both borrowed UTF-16 spans have the explicit same length.
+        unsafe {
+            icu_bidi::ubidi_ffi::u_memcasecmp(first.as_ptr(), second.as_ptr(), length, 0) == 0
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         self.storage
             .as_ref()
             .map_or("", |storage| storage.projection.as_ref())
     }
 
+    /// Append one Unicode scalar to this same UTF-16 String owner. Existing
+    /// code units (including unpaired surrogates) never pass through UTF-8.
+    pub fn push(&mut self, value: char) {
+        let mut encoded = [0u16; 2];
+        let appended = value.encode_utf16(&mut encoded);
+        let mut units = self.Span16().unwrap_or_default().to_vec();
+        units.extend_from_slice(appended);
+        *self = Self::from_utf16(&units);
+    }
     pub fn push_str(&mut self, value: &str) {
         let mut units = self.Span16().unwrap_or_default().to_vec();
         units.extend(value.encode_utf16());

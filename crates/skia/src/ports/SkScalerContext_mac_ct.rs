@@ -289,6 +289,25 @@ impl SkScalerContext_Mac {
                 mac_typeface.fOpszVariation,
             )
         };
+        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+            && (scale.fY - 14.0).abs() < 0.01
+        {
+            eprintln!(
+                "FONT_MAC_SCALER size={} opsz_set={} opsz={} flags={:#x} hinting={:?} mask={:?} transform=({},{},{},{},{},{})",
+                scale.fY,
+                mac_typeface.fOpszVariation.isSet,
+                mac_typeface.fOpszVariation.value,
+                base.getRec().fFlags,
+                base.getRec().get_hinting(),
+                base.getRec().fMaskFormat,
+                transform.a,
+                transform.b,
+                transform.c,
+                transform.d,
+                transform.tx,
+                transform.ty,
+            );
+        }
         let cgfont = unsafe {
             SkUniqueCFRef::from_raw(CTFontCopyGraphicsFont(font.get(), core::ptr::null_mut()))
         };
@@ -495,6 +514,24 @@ impl SkScalerContext_Mac {
         }
         bounds.roundOutRectTo(&mut metrics.bounds);
         metrics.bounds.outset(1.0, 1.0);
+        if std::env::var_os("RECHROM_TRACE_FONT_BINDING").is_some()
+            && (self.fBase.getRec().fTextSize - 14.0).abs() < 0.01
+            && self.fBase.getRec().get_hinting()
+                == crate::include::core::SkFontTypes::SkFontHinting::kNone
+        {
+            eprintln!(
+                "FONT_MAC_GLYPH id={} advance=({:.4},{:.4}) bounds=({:.4},{:.4},{:.4},{:.4}) opsz_set={} opsz={}",
+                id,
+                metrics.advance.fX,
+                metrics.advance.fY,
+                metrics.bounds.fLeft,
+                metrics.bounds.fTop,
+                metrics.bounds.fRight,
+                metrics.bounds.fBottom,
+                unsafe { self.fMacTypeface.as_ref() }.fOpszVariation.isSet,
+                unsafe { self.fMacTypeface.as_ref() }.fOpszVariation.value,
+            );
+        }
         metrics
     }
 }

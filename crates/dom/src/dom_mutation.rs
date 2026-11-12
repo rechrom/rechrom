@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::rc::Rc;
+
 use crate::error::{DOMException, DOMExceptionKind};
 use crate::persistent_document::{
     DOMAttribute, DOMNamespace, DOMNodeType, DOMShadowRootMode, DOMSlotAssignmentMode,
@@ -19,7 +21,9 @@ pub enum DOMMutationType {
     kCreateText,
     kCreateComment,
     kCreateFragment,
+    kAppendTextOrBr,
     kAttachShadowRoot,
+    kSetShadowReferenceTarget,
     kCloneNode,
     kImportNode,
     kAppendChild,
@@ -28,10 +32,12 @@ pub enum DOMMutationType {
     #[default]
     kSetAttribute,
     kRemoveAttribute,
+    kRemoveAllAttributes,
     kSetTextContent,
     kSetInnerHTML,
     kSetControlChecked,
     kSetControlValue,
+    kSetInputFiles,
     kSetControlIndeterminate,
     kSetDialogModal,
     kSetPopoverOpen,
@@ -42,6 +48,45 @@ pub enum DOMMutationType {
     /// CSSOM mutation scope completed without a changed declaration. Retain
     /// custom-element notification, without attribute/observer/style mutation.
     kNotifyInlineStyleUnchanged,
+    /// TextControlElement::SetInnerEditorValue, for programmatic view updates.
+    kSetTextControlInnerEditorValue,
+    /// Editable-content notification after commands mutate the resident editor.
+    kSyncTextControlValueFromInnerEditor,
+    kReplaceCharacterData,
+    kDeleteRangeContents,
+    kInsertRangeNode,
+    /// Source HTMLFormControlElementWithState user-interaction flag.
+    kSetControlUserEdited,
+    /// Source HTMLFormControlElement's canonical autofill state.
+    kSetControlAutofillState,
+    /// Source SetNonDirtyValue commits value and dirtyness atomically.
+    kSetNonDirtyControlValue,
+    kSetControlCheckednessDirty,
+    kSetControlNeedsValidityCheck,
+    kResetOutput,
+    /// HTMLOptionElement source state update without IDL selection-change behavior.
+    kSetOptionSelectedState,
+    kSetOptionDirty,
+    kUpdateOptionMutationObserver,
+    kSetSelectLastOnChangeOption,
+    kUpdateSelectSelectedcontents,
+}
+
+#[derive(Clone)]
+pub struct DOMFileListValue(pub Rc<fileapi::FileList>);
+impl PartialEq for DOMFileListValue {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for DOMFileListValue {}
+impl std::fmt::Debug for DOMFileListValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("FileList")
+            .field(&self.0.length())
+            .finish()
+    }
 }
 
 // cpp: dom/dom_mutation.h:40-51
@@ -50,25 +95,44 @@ pub struct DOMMutation {
     pub mutation_type: DOMMutationType,
     pub target_node_id: u64,
     pub name: String,
+    /// Canonical qualified name for source element/attribute edit commands. Scalar
+    /// name fields remain notification metadata only when this is present.
+    pub qualified_name: Option<foundation::QualifiedName>,
     /// Namespace prefix retained separately from the local name.  Ordinary
     /// HTML attributes leave this empty; namespace-aware DOM entry points
     /// populate it from the qualified name.
     pub prefix: String,
     pub value: String,
+    pub file_list: Option<DOMFileListValue>,
+    /// Exact JavaScript/WTF-16 value. None uses the UTF-8 convenience field.
+    pub utf16_value: Option<std::rc::Rc<[u16]>>,
+    /// ElementCreationOptions.is (one-shot ElementRareData, not an attribute).
+    pub is_value: Option<std::rc::Rc<[u16]>>,
     pub namespace_uri: String,
     pub bool_value: bool,
+    /// Source SetSelectedState skip_mutation_observer parameter.
+    pub option_skip_mutation_observer: bool,
+    /// Typed source autofill state for kSetControlAutofillState.
+    pub autofill_state: crate::DOMAutofillState,
     /// CSSOM's existing-declaration mutation classification for a null-namespace
     /// style attribute. Generic setAttribute/cssText writes leave this false.
     pub inline_style_independent: bool,
     /// Parsed declaration ownership travels with a CSSOM style write, before
     /// mutation callbacks can reenter the document. Concrete types stay private.
     pub inline_style: Option<cssom::CSSInlineStyle>,
+    /// ShadowRoot::referenceTarget nullable DOMString (also attachShadow init).
+    pub reference_target: Option<String>,
     pub child_node_id: u64,
     /// Source node for an import into target_node_id (the destination document).
     pub source_node_id: u64,
     pub before_node_id: u64,
     /// Ordered source identities for atomic HTMLSlotElement.assign().
     pub node_ids: Vec<u64>,
+    /// CharacterData::replaceData offsets/counts use UTF-16 code units.
+    pub offset: usize,
+    pub count: usize,
+    /// A live DOM-owned range, never a browser-owned endpoint map.
+    pub range: Option<crate::range::DOMRangeHandle>,
 }
 
 // cpp: dom/dom_mutation.h:53-54
@@ -105,6 +169,14 @@ pub(crate) fn ValidateDOMMutation(
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
                     message: "invalid node allocation mutation",
+                });
+            }
+        }
+        DOMMutationType::kSetShadowReferenceTarget => {
+            if document.ShadowHost(target).is_none() {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "referenceTarget requires a ShadowRoot",
                 });
             }
         }
@@ -189,15 +261,11 @@ pub(crate) fn ValidateDOMMutation(
                         message: "parent cannot contain children",
                     });
                 }
-                let mut ancestor = Some(target);
-                while let Some(index) = ancestor {
-                    if index == child {
-                        return Err(DOMException {
-                            kind: DOMExceptionKind::InvalidArgument,
-                            message: "insertion would create a cycle",
-                        });
-                    }
-                    ancestor = document.Node(index).Parent();
+                if document.IsShadowIncludingInclusiveAncestor(child, target) {
+                    return Err(DOMException {
+                        kind: DOMExceptionKind::InvalidArgument,
+                        message: "insertion would create a cycle",
+                    });
                 }
                 if mutation.mutation_type == DOMMutationType::kInsertBefore
                     && mutation.before_node_id != 0
@@ -215,6 +283,7 @@ pub(crate) fn ValidateDOMMutation(
         DOMMutationType::kParseDocument => {}
         DOMMutationType::kSetAttribute
         | DOMMutationType::kRemoveAttribute
+        | DOMMutationType::kRemoveAllAttributes
         | DOMMutationType::kNotifyInlineStyleUnchanged => {
             if document.Node(target).Type() != DOMNodeType::kElement {
                 return Err(DOMException {
@@ -222,10 +291,47 @@ pub(crate) fn ValidateDOMMutation(
                     message: "DOM attribute mutation target is not an element",
                 });
             }
-            if mutation.name.is_empty() {
+            if mutation.name.is_empty()
+                && mutation.mutation_type != DOMMutationType::kRemoveAllAttributes
+            {
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
                     message: "DOM attribute mutation name is empty",
+                });
+            }
+        }
+        DOMMutationType::kReplaceCharacterData => {
+            if !matches!(
+                document.Node(target).Type(),
+                DOMNodeType::kText | DOMNodeType::kComment | DOMNodeType::kProcessingInstruction
+            ) {
+                return Err(crate::range::DOMRangeError::InvalidNodeType.into());
+            }
+            if mutation.offset > document.Node(target).Data().encode_utf16().count() {
+                return Err(crate::range::DOMRangeError::InvalidOffset.into());
+            }
+        }
+        DOMMutationType::kDeleteRangeContents | DOMMutationType::kInsertRangeNode => {
+            let range = mutation.range.as_ref().ok_or_else(|| DOMMutationError {
+                kind: DOMExceptionKind::InvalidArgument,
+                message: "range mutation requires a live range",
+            })?;
+            if document.Range(range).is_none() {
+                return Err(crate::range::DOMRangeError::WrongDocument.into());
+            }
+            if mutation.mutation_type == DOMMutationType::kInsertRangeNode {
+                document.ValidateRangeInsertion(range, mutation.child_node_id)?;
+            }
+        }
+        DOMMutationType::kAppendTextOrBr => {
+            if !matches!(
+                document.Node(target).Type(),
+                DOMNodeType::kElement | DOMNodeType::kDocumentFragment
+            ) || mutation.utf16_value.is_none()
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "AppendTextOrBr requires a container and retained UTF-16 text",
                 });
             }
         }
@@ -286,10 +392,10 @@ pub(crate) fn ValidateDOMMutation(
             }
         }
         DOMMutationType::kSetPopoverOpen => {
-            if !document.IsPopover(target) {
+            if document.Node(target).Type() != DOMNodeType::kElement {
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
-                    message: "popover state mutation target is not a popover",
+                    message: "popover method requires an element receiver",
                 });
             }
         }
@@ -311,7 +417,24 @@ pub(crate) fn ValidateDOMMutation(
                 });
             }
         }
-        DOMMutationType::kSetOptionSelected => {
+        DOMMutationType::kSetSelectLastOnChangeOption
+        | DOMMutationType::kUpdateSelectSelectedcontents => {
+            if !document.Node(target).IsHTMLElement("select")
+                || mutation.child_node_id != 0
+                    && document
+                        .FindNodeById(mutation.child_node_id)
+                        .is_none_or(|option| document.OptionOwnerSelect(option) != Some(target))
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "select option mutation requires its owning select",
+                });
+            }
+        }
+        DOMMutationType::kSetOptionSelected
+        | DOMMutationType::kSetOptionSelectedState
+        | DOMMutationType::kSetOptionDirty
+        | DOMMutationType::kUpdateOptionMutationObserver => {
             if !document.Node(target).IsHTMLElement("option") {
                 return Err(DOMException {
                     kind: DOMExceptionKind::InvalidArgument,
@@ -319,7 +442,69 @@ pub(crate) fn ValidateDOMMutation(
                 });
             }
         }
-        DOMMutationType::kSetControlValue => {
+        DOMMutationType::kSetTextControlInnerEditorValue
+        | DOMMutationType::kSyncTextControlValueFromInnerEditor => {
+            if document.TextControlInnerEditorElement(target).is_none() {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "inner editor mutation target is not a text control",
+                });
+            }
+        }
+        DOMMutationType::kSetInputFiles => {
+            if !document.Node(target).IsHTMLElement("input") || mutation.file_list.is_none() {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "files mutation requires an input and FileList",
+                });
+            }
+        }
+        DOMMutationType::kSetControlCheckednessDirty => {
+            if !document.Node(target).IsHTMLElement("input") {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "checkedness dirty state requires an input",
+                });
+            }
+        }
+        DOMMutationType::kResetOutput => {
+            if !document.Node(target).IsHTMLElement("output") {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "output reset requires an output element",
+                });
+            }
+        }
+        DOMMutationType::kSetControlNeedsValidityCheck => {
+            if document.FormControlClass(target).is_none()
+                && !document.ElementInternalsTargetIsFormAssociated(target)
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "validity state requires a native listed form control",
+                });
+            }
+        }
+        DOMMutationType::kSetControlUserEdited | DOMMutationType::kSetControlAutofillState => {
+            if !document.ClassSupportsFormStateRestore(target) {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "control state mutation target has no native form state",
+                });
+            }
+        }
+        DOMMutationType::kSetControlValue | DOMMutationType::kSetNonDirtyControlValue => {
+            if document.InputType(target) == Some(crate::persistent_document::DOMInputType::kFile)
+                && mutation
+                    .utf16_value
+                    .as_ref()
+                    .map_or(!mutation.value.is_empty(), |value| !value.is_empty())
+            {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::InvalidArgument,
+                    message: "a file input value can only be cleared",
+                });
+            }
             if !document.Node(target).IsHTMLElement("input")
                 && !document.Node(target).IsHTMLElement("textarea")
                 && !document.Node(target).IsHTMLElement("select")
@@ -362,18 +547,67 @@ pub fn TryApplyDOMMutations(
                 });
             }
             DOMMutationType::kCreateElement => {
+                // bool_value distinguishes Document::createElementNS from the
+                // ordinary HTML creation convenience when namespace is null.
                 let namespace = match mutation.namespace_uri.as_str() {
                     "http://www.w3.org/2000/svg" => DOMNamespace::kSVG,
                     "http://www.w3.org/1998/Math/MathML" => DOMNamespace::kMathML,
+                    "http://www.w3.org/1999/xhtml" => DOMNamespace::kHTML,
+                    _ if mutation.bool_value => DOMNamespace::kNone,
                     _ => DOMNamespace::kHTML,
                 };
-                document.CreateElementDefault(namespace, mutation.name.clone());
+                let element = if let Some(name) = &mutation.qualified_name {
+                    document.CreateElementWithQualifiedName(namespace, name.clone(), Vec::new())
+                } else if !mutation.bool_value
+                    && mutation.prefix.is_empty()
+                    && mutation.namespace_uri.is_empty()
+                {
+                    document.CreateElementDefault(namespace, mutation.name.clone())
+                } else {
+                    document.CreateElementWithQualifiedName(
+                        namespace,
+                        foundation::QualifiedName::new(
+                            if mutation.prefix.is_empty() {
+                                foundation::AtomicString::default()
+                            } else {
+                                foundation::AtomicString::from_str(&mutation.prefix)
+                            },
+                            foundation::AtomicString::from_str(&mutation.name),
+                            if mutation.namespace_uri.is_empty() {
+                                foundation::AtomicString::default()
+                            } else {
+                                foundation::AtomicString::from_str(&mutation.namespace_uri)
+                            },
+                        ),
+                        Vec::new(),
+                    )
+                };
+                if let Some(is_value) = mutation.is_value.as_ref() {
+                    document.SetElementIsValueUTF16(element, is_value.clone());
+                }
+            }
+            DOMMutationType::kAppendTextOrBr => {
+                document.AppendTextOrBrUTF16(
+                    target,
+                    mutation
+                        .utf16_value
+                        .as_deref()
+                        .expect("AppendTextOrBr retains exact source text"),
+                );
             }
             DOMMutationType::kCreateText => {
-                document.CreateText(mutation.value.clone());
+                if let Some(units) = &mutation.utf16_value {
+                    document.CreateTextUTF16(units);
+                } else {
+                    document.CreateText(mutation.value.clone());
+                }
             }
             DOMMutationType::kCreateComment => {
-                document.CreateComment(mutation.value.clone());
+                if let Some(units) = &mutation.utf16_value {
+                    document.CreateCommentUTF16(units);
+                } else {
+                    document.CreateComment(mutation.value.clone());
+                }
             }
             DOMMutationType::kCreateFragment => {
                 document.CreateDocumentFragment();
@@ -391,7 +625,12 @@ pub fn TryApplyDOMMutations(
                 };
                 let root =
                     document.AttachShadowRootWithSlotAssignment(target, mode, slot_assignment);
+                document.SetShadowRootDelegatesFocus(root, mutation.bool_value);
+                document.SetShadowReferenceTarget(root, mutation.reference_target.clone());
                 debug_assert_eq!(document.Node(root).Id(), mutation.child_node_id);
+            }
+            DOMMutationType::kSetShadowReferenceTarget => {
+                document.SetShadowReferenceTarget(target, mutation.reference_target.clone());
             }
             DOMMutationType::kAssignSlotNodes => {
                 let nodes = mutation
@@ -443,17 +682,45 @@ pub fn TryApplyDOMMutations(
             }
             DOMMutationType::kParseDocument => {}
             DOMMutationType::kSetAttribute => {
-                document.SetAttributeWithInlineStyleChange(
-                    target,
-                    DOMAttribute {
-                        prefix: mutation.prefix.clone(),
-                        local_name: mutation.name.clone(),
-                        namespace_uri: mutation.namespace_uri.clone(),
-                        value: mutation.value.clone(),
-                        ..DOMAttribute::default()
-                    },
-                    mutation.inline_style_independent,
-                );
+                let attribute = DOMAttribute {
+                    prefix: mutation.prefix.clone(),
+                    local_name: mutation.name.clone(),
+                    namespace_uri: mutation.namespace_uri.clone(),
+                    value: mutation.value.clone(),
+                    ..DOMAttribute::default()
+                };
+                if let Some(name) = &mutation.qualified_name {
+                    document.SetAttributeByQualifiedNameUTF16(
+                        target,
+                        name,
+                        mutation
+                            .utf16_value
+                            .clone()
+                            .expect("qualified attribute write retains UTF-16 value"),
+                        mutation.inline_style_independent,
+                    );
+                } else if let Some(units) = mutation.utf16_value.clone().or_else(|| {
+                    mutation
+                        .inline_style
+                        .as_ref()
+                        .map(|style| Rc::from(style.SourceTextUTF16()))
+                }) {
+                    // The typed CSSOM source owns exact UTF-16 text. Its legacy
+                    // UTF-8 projection must not replace that value or discard
+                    // the independent-property invalidation classification.
+                    document.SetAttributeUTF16WithInlineStyleChange(
+                        target,
+                        attribute,
+                        units,
+                        mutation.inline_style_independent,
+                    );
+                } else {
+                    document.SetAttributeWithInlineStyleChange(
+                        target,
+                        attribute,
+                        mutation.inline_style_independent,
+                    );
+                }
                 if mutation.name == "style" && mutation.namespace_uri.is_empty() {
                     if let Some(style) = &mutation.inline_style {
                         document.Node(target).RetainInlineStyle(style.clone());
@@ -461,8 +728,13 @@ pub fn TryApplyDOMMutations(
                 }
             }
             DOMMutationType::kRemoveAttribute => {
-                document.RemoveAttribute(target, &mutation.name, &mutation.namespace_uri);
+                if let Some(name) = &mutation.qualified_name {
+                    document.RemoveAttributeByQualifiedName(target, name);
+                } else {
+                    document.RemoveAttribute(target, &mutation.name, &mutation.namespace_uri);
+                }
             }
+            DOMMutationType::kRemoveAllAttributes => document.RemoveAllAttributesForCloning(target),
             DOMMutationType::kNotifyInlineStyleUnchanged => {
                 // cpp: StyleAttributeMutationScope destructor notifies a custom
                 // element even when SetPropertyInternal returns kNoChanges.
@@ -478,8 +750,35 @@ pub fn TryApplyDOMMutations(
                     value,
                 );
             }
+            DOMMutationType::kReplaceCharacterData => {
+                if let Some(units) = &mutation.utf16_value {
+                    document.ReplaceDataUTF16(target, mutation.offset, mutation.count, units)?;
+                } else {
+                    document.ReplaceData(
+                        target,
+                        mutation.offset,
+                        mutation.count,
+                        &mutation.value,
+                    )?;
+                }
+            }
+            DOMMutationType::kDeleteRangeContents => {
+                document.DeleteRangeContents(
+                    mutation.range.as_ref().expect("validated range mutation"),
+                )?;
+            }
+            DOMMutationType::kInsertRangeNode => {
+                document.InsertRangeNode(
+                    mutation.range.as_ref().expect("validated range mutation"),
+                    mutation.child_node_id,
+                )?;
+            }
             DOMMutationType::kSetTextContent => {
-                document.SetTextContent(target, mutation.value.clone());
+                if let Some(units) = &mutation.utf16_value {
+                    document.SetTextContentUTF16(target, units);
+                } else {
+                    document.SetTextContent(target, mutation.value.clone());
+                }
             }
             DOMMutationType::kSetInnerHTML => {}
             DOMMutationType::kSetControlChecked => {
@@ -488,19 +787,11 @@ pub fn TryApplyDOMMutations(
             DOMMutationType::kSetControlIndeterminate => {
                 document.SetControlIndeterminate(target, mutation.bool_value);
             }
-            DOMMutationType::kSetDialogModal => {
-                if mutation.bool_value {
-                    document.ShowModalDialog(target);
-                } else {
-                    document.CloseDialog(target);
-                }
-            }
-            DOMMutationType::kSetPopoverOpen => {
-                if mutation.bool_value {
-                    document.ShowPopover(target);
-                } else {
-                    document.HidePopover(target);
-                }
+            DOMMutationType::kSetDialogModal | DOMMutationType::kSetPopoverOpen => {
+                return Err(DOMException {
+                    kind: DOMExceptionKind::LogicError,
+                    message: "popup methods require the shared native lifecycle transaction",
+                });
             }
             DOMMutationType::kRequestFullscreen => {
                 document.RequestFullscreen(target);
@@ -508,11 +799,92 @@ pub fn TryApplyDOMMutations(
             DOMMutationType::kExitFullscreen => {
                 document.ExitFullscreen();
             }
+            DOMMutationType::kSetSelectLastOnChangeOption => {
+                let option = (mutation.child_node_id != 0)
+                    .then(|| document.FindNodeById(mutation.child_node_id))
+                    .flatten();
+                document.SetSelectLastOnChangeOption(target, option);
+            }
+            DOMMutationType::kUpdateSelectSelectedcontents => {
+                let option = (mutation.child_node_id != 0)
+                    .then(|| document.FindNodeById(mutation.child_node_id))
+                    .flatten();
+                if mutation.bool_value {
+                    document.SelectUpdateAllSelectedcontentsMultiple(target);
+                } else {
+                    document.SelectUpdateAllSelectedcontentsSingle(target, option);
+                }
+            }
+            DOMMutationType::kSetOptionSelectedState => {
+                document.SetOptionSelectedStateWithObserverUpdate(
+                    target,
+                    mutation.bool_value,
+                    mutation.option_skip_mutation_observer,
+                );
+            }
+            DOMMutationType::kUpdateOptionMutationObserver => {
+                document.UpdateOptionMutationObserver(target, mutation.bool_value);
+            }
+            DOMMutationType::kSetOptionDirty => {
+                document.SetOptionDirty(target, mutation.bool_value);
+            }
             DOMMutationType::kSetOptionSelected => {
                 document.SetOptionSelected(target, mutation.bool_value);
             }
+            DOMMutationType::kSetInputFiles => {
+                document.AssignInputFiles(
+                    target,
+                    mutation
+                        .file_list
+                        .as_ref()
+                        .expect("validated FileList mutation")
+                        .0
+                        .clone(),
+                );
+            }
+            DOMMutationType::kSetControlCheckednessDirty => {
+                if mutation.bool_value {
+                    document.SetControlCheckednessDirty(target);
+                } else {
+                    document.ClearControlCheckednessDirty(target);
+                }
+            }
+            DOMMutationType::kSetControlNeedsValidityCheck => {
+                document.SetControlNeedsValidityCheck(target);
+            }
+            DOMMutationType::kResetOutput => {
+                document.ResetOutput(target);
+            }
+            DOMMutationType::kSetNonDirtyControlValue => {
+                if let Some(units) = &mutation.utf16_value {
+                    document.SetControlValueUTF16(target, units);
+                } else {
+                    document.SetControlValue(target, mutation.value.clone());
+                }
+                document.SetControlValueDirty(target, false);
+            }
+            DOMMutationType::kSetControlUserEdited => {
+                document.TextControlSetUserEdited(target, mutation.bool_value);
+            }
+            DOMMutationType::kSetControlAutofillState => {
+                document.SetAutofillState(target, mutation.autofill_state);
+            }
             DOMMutationType::kSetControlValue => {
-                document.SetControlValue(target, mutation.value.clone());
+                if let Some(units) = &mutation.utf16_value {
+                    document.SetControlValueUTF16(target, units);
+                } else {
+                    document.SetControlValue(target, mutation.value.clone());
+                }
+            }
+            DOMMutationType::kSetTextControlInnerEditorValue => {
+                if let Some(units) = &mutation.utf16_value {
+                    document.SetTextControlInnerEditorValueUTF16(target, units);
+                } else {
+                    document.SetTextControlInnerEditorValue(target, mutation.value.clone());
+                }
+            }
+            DOMMutationType::kSyncTextControlValueFromInnerEditor => {
+                document.SyncTextControlValueFromInnerEditor(target);
             }
         }
         if matches!(
@@ -541,7 +913,9 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kCreateText => "create-text",
         DOMMutationType::kCreateComment => "create-comment",
         DOMMutationType::kCreateFragment => "create-fragment",
+        DOMMutationType::kAppendTextOrBr => "append-text-or-br",
         DOMMutationType::kAttachShadowRoot => "attach-shadow-root",
+        DOMMutationType::kSetShadowReferenceTarget => "set-shadow-reference-target",
         DOMMutationType::kCloneNode => "clone-node",
         DOMMutationType::kImportNode => "import-node",
         DOMMutationType::kAppendChild => "append-child",
@@ -549,12 +923,32 @@ pub fn DOMMutationTypeName(mutation_type: DOMMutationType) -> &'static str {
         DOMMutationType::kRemoveChild => "remove-child",
         DOMMutationType::kSetAttribute => "set-attribute",
         DOMMutationType::kRemoveAttribute => "remove-attribute",
+        DOMMutationType::kRemoveAllAttributes => "remove-all-attributes",
         DOMMutationType::kSetTextContent => "set-text-content",
+        DOMMutationType::kReplaceCharacterData => "replace-character-data",
+        DOMMutationType::kDeleteRangeContents => "delete-range-contents",
+        DOMMutationType::kInsertRangeNode => "insert-range-node",
         DOMMutationType::kSetInnerHTML => "set-inner-html",
         DOMMutationType::kSetControlChecked => "set-control-checked",
         DOMMutationType::kSetControlIndeterminate => "set-control-indeterminate",
         DOMMutationType::kSetControlValue => "set-control-value",
+        DOMMutationType::kSetControlUserEdited => "set-control-user-edited",
+        DOMMutationType::kSetControlAutofillState => "set-control-autofill-state",
+        DOMMutationType::kSetNonDirtyControlValue => "set-non-dirty-control-value",
+        DOMMutationType::kSetControlCheckednessDirty => "set-control-checkedness-dirty",
+        DOMMutationType::kSetControlNeedsValidityCheck => "set-control-needs-validity-check",
+        DOMMutationType::kResetOutput => "reset-output",
+        DOMMutationType::kSetInputFiles => "set-input-files",
+        DOMMutationType::kSetTextControlInnerEditorValue => "set-text-control-inner-editor-value",
+        DOMMutationType::kSyncTextControlValueFromInnerEditor => {
+            "sync-text-control-value-from-inner-editor"
+        }
         DOMMutationType::kSetOptionSelected => "set-option-selected",
+        DOMMutationType::kSetOptionSelectedState => "set-option-selected-state",
+        DOMMutationType::kSetOptionDirty => "set-option-dirty",
+        DOMMutationType::kUpdateOptionMutationObserver => "update-option-mutation-observer",
+        DOMMutationType::kSetSelectLastOnChangeOption => "set-select-last-on-change-option",
+        DOMMutationType::kUpdateSelectSelectedcontents => "update-select-selectedcontents",
         DOMMutationType::kSetDialogModal => "set-dialog-modal",
         DOMMutationType::kSetPopoverOpen => "set-popover-open",
         DOMMutationType::kRequestFullscreen => "request-fullscreen",
@@ -574,6 +968,7 @@ pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
         DOMMutationType::kCreateComment,
         DOMMutationType::kCreateFragment,
         DOMMutationType::kAttachShadowRoot,
+        DOMMutationType::kSetShadowReferenceTarget,
         DOMMutationType::kCloneNode,
         DOMMutationType::kImportNode,
         DOMMutationType::kAppendChild,
@@ -585,6 +980,7 @@ pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
         DOMMutationType::kSetInnerHTML,
         DOMMutationType::kSetControlChecked,
         DOMMutationType::kSetControlValue,
+        DOMMutationType::kSetInputFiles,
         DOMMutationType::kSetControlIndeterminate,
         DOMMutationType::kSetDialogModal,
         DOMMutationType::kSetPopoverOpen,
@@ -592,7 +988,23 @@ pub fn DOMMutationTypeNameRaw(value: u8) -> &'static str {
         DOMMutationType::kExitFullscreen,
         DOMMutationType::kAssignSlotNodes,
         DOMMutationType::kNotifyInlineStyleUnchanged,
+        DOMMutationType::kSetTextControlInnerEditorValue,
+        DOMMutationType::kSyncTextControlValueFromInnerEditor,
+        DOMMutationType::kReplaceCharacterData,
+        DOMMutationType::kDeleteRangeContents,
+        DOMMutationType::kInsertRangeNode,
         DOMMutationType::kSetOptionSelected,
+        DOMMutationType::kSetControlUserEdited,
+        DOMMutationType::kSetControlAutofillState,
+        DOMMutationType::kSetNonDirtyControlValue,
+        DOMMutationType::kSetControlCheckednessDirty,
+        DOMMutationType::kSetControlNeedsValidityCheck,
+        DOMMutationType::kResetOutput,
+        DOMMutationType::kSetOptionSelectedState,
+        DOMMutationType::kSetOptionDirty,
+        DOMMutationType::kUpdateOptionMutationObserver,
+        DOMMutationType::kSetSelectLastOnChangeOption,
+        DOMMutationType::kUpdateSelectSelectedcontents,
     ]
     .into_iter()
     .find(|kind| *kind as u8 == value)

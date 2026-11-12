@@ -66,6 +66,30 @@ impl EngineMainEndpoint {
             protected_sequence: AtomicBool::new(false),
         }
     }
+    pub(crate) fn ApplySourceScrollAnimation(
+        &self,
+        mutation: scroll_animation::compositor_mutation::ScrollAnimationMutation,
+    ) -> Option<ElementId> {
+        let drop_delta = self.animations.ApplySourceScrollAnimation(mutation);
+        if self.animations.TakeNeedsCommit() {
+            self.SetNeedsCommit(false);
+        }
+        drop_delta
+    }
+    pub(crate) fn ApplySourceAnimationEvents(
+        &self,
+        events: Box<super::host_owners::MutatorEvents>,
+    ) {
+        self.animations.ApplySourceAnimationEvents(events);
+    }
+    pub(crate) fn TakeSourceScrollCompletions(
+        &self,
+    ) -> Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion> {
+        self.animations.TakeSourceScrollCompletions()
+    }
+    pub(crate) fn Clock(&self) -> Arc<dyn CompositorExecutor> {
+        self.executor.clone()
+    }
     fn Post(&self, effect: MainHostEffect) {
         self.commands
             .Push(super::execution::EngineTask::MainHost(effect));

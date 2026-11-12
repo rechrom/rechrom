@@ -166,8 +166,245 @@ pub enum StartCause {
 }
 
 /// Describes an event from a [`Window`].
+/// Native destination phase; platform backends retain the same feedback owner
+/// until drop/cancel. Action bits use copy=1, link=2, move=16.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeDragDropPhase {
+    Enter,
+    Over,
+    Drop,
+    Leave,
+}
+/// Platform lifetime owner, such as an AppKit security-scoped URL.
+pub trait NativeDragFileAccess: std::fmt::Debug + Send + Sync {}
+impl<T: std::fmt::Debug + Send + Sync> NativeDragFileAccess for T {}
+
+/// Metadata supplied by a native promised-file provider.
+#[derive(Clone, Debug)]
+pub struct NativeDragFileMetadata {
+    pub length: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+/// A retained native content owner. Calls run on the embedding's file executor,
+/// and may wait for an asynchronous native promise, never on the UI sequence.
+pub trait NativeDragDataReader: std::fmt::Debug + Send + Sync {
+    fn metadata(&self) -> std::io::Result<NativeDragFileMetadata>;
+    fn read_range(&self, offset: u64, length: usize) -> std::io::Result<Vec<u8>>;
+}
+#[derive(Clone, Debug)]
+pub struct NativeDragVirtualFileOffer {
+    pub name: std::ffi::OsString,
+    pub content_type: Option<String>,
+    pub metadata: Option<NativeDragFileMetadata>,
+    pub reader: std::sync::Arc<dyn NativeDragDataReader>,
+}
+impl PartialEq for NativeDragVirtualFileOffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.content_type == other.content_type
+            && std::sync::Arc::ptr_eq(&self.reader, &other.reader)
+    }
+}
+#[derive(Debug)]
+enum NativeDragPromiseState {
+    Pending,
+    Ready(std::sync::Arc<dyn NativeDragDataReader>),
+    Failed(std::io::ErrorKind, String),
+}
+#[derive(Debug)]
+pub struct NativeDragFilePromise {
+    state: std::sync::Mutex<NativeDragPromiseState>,
+    ready: std::sync::Condvar,
+}
+impl NativeDragFilePromise {
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(NativeDragPromiseState::Pending),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+    pub fn resolve(&self, reader: std::sync::Arc<dyn NativeDragDataReader>) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(*state, NativeDragPromiseState::Pending) {
+            *state = NativeDragPromiseState::Ready(reader);
+            self.ready.notify_all();
+        }
+    }
+    pub fn fail(&self, error: std::io::Error) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(*state, NativeDragPromiseState::Pending) {
+            *state = NativeDragPromiseState::Failed(error.kind(), error.to_string());
+            self.ready.notify_all();
+        }
+    }
+    fn reader(&self) -> std::io::Result<std::sync::Arc<dyn NativeDragDataReader>> {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            match &*state {
+                NativeDragPromiseState::Pending => state = self.ready.wait(state).unwrap(),
+                NativeDragPromiseState::Ready(reader) => return Ok(reader.clone()),
+                NativeDragPromiseState::Failed(kind, message) => {
+                    return Err(std::io::Error::new(*kind, message.clone()))
+                }
+            }
+        }
+    }
+    pub fn resolve_file(&self, file: NativeDragFileOffer) {
+        self.resolve(std::sync::Arc::new(NativeDragOfferedFileReader(file)));
+    }
+}
+impl NativeDragDataReader for NativeDragFilePromise {
+    fn metadata(&self) -> std::io::Result<NativeDragFileMetadata> {
+        self.reader()?.metadata()
+    }
+    fn read_range(&self, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
+        self.reader()?.read_range(offset, length)
+    }
+}
+#[derive(Debug)]
+struct NativeDragOfferedFileReader(NativeDragFileOffer);
+impl NativeDragDataReader for NativeDragOfferedFileReader {
+    fn metadata(&self) -> std::io::Result<NativeDragFileMetadata> {
+        let metadata = self.0.file.metadata()?;
+        Ok(NativeDragFileMetadata {
+            length: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+    fn read_range(&self, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
+        let mut result = vec![0; length];
+        let mut consumed = 0;
+        while consumed < length {
+            #[cfg(unix)]
+            let count = {
+                use std::os::unix::fs::FileExt;
+                self.0
+                    .file
+                    .read_at(&mut result[consumed..], offset + consumed as u64)?
+            };
+            #[cfg(windows)]
+            let count = {
+                use std::os::windows::fs::FileExt;
+                self.0
+                    .file
+                    .seek_read(&mut result[consumed..], offset + consumed as u64)?
+            };
+            #[cfg(not(any(unix, windows)))]
+            let count = {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "native file reads unavailable",
+                ));
+                0usize
+            };
+            if count == 0 {
+                break;
+            }
+            consumed += count;
+        }
+        result.truncate(consumed);
+        Ok(result)
+    }
+}
+
+/// A file admitted while native drag access is valid. The open descriptor is
+/// the authority; `path` is display metadata and must not be reopened later.
+#[derive(Clone, Debug)]
+pub struct NativeDragFileOffer {
+    pub path: PathBuf,
+    pub file: std::sync::Arc<std::fs::File>,
+    pub metadata: std::fs::Metadata,
+    pub access: Option<std::sync::Arc<dyn NativeDragFileAccess>>,
+}
+impl NativeDragFileOffer {
+    pub fn open(path: PathBuf) -> std::io::Result<Self> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // Admission must not block the UI on a FIFO/device disguised as a file.
+        #[cfg(all(
+            unix,
+            not(any(
+                target_os = "redox",
+                target_os = "android",
+                target_os = "ios",
+                target_os = "macos"
+            ))
+        ))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(4); // Darwin O_NONBLOCK.
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(0x02000000); // FILE_FLAG_BACKUP_SEMANTICS admits directories.
+        }
+        let file = options.open(&path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() && !metadata.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "drag offer is not a regular file or directory",
+            ));
+        }
+        Ok(Self {
+            path,
+            file: std::sync::Arc::new(file),
+            metadata,
+            access: None,
+        })
+    }
+}
+impl PartialEq for NativeDragFileOffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && std::sync::Arc::ptr_eq(&self.file, &other.file)
+    }
+}
+#[derive(Clone, Debug)]
+pub struct NativeDragDropEvent {
+    pub phase: NativeDragDropPhase,
+    pub paths: Vec<PathBuf>,
+    pub files: Vec<NativeDragFileOffer>,
+    pub virtual_files: Vec<NativeDragVirtualFileOffer>,
+    pub strings: Vec<(String, Vec<u16>)>,
+    /// MIME bytes, retained independently of the platform offer lifetime.
+    pub data: Vec<(String, std::sync::Arc<[u8]>)>,
+    pub position: PhysicalPosition<f64>,
+    pub screen_position: Option<PhysicalPosition<f64>>,
+    pub modifiers: i32,
+    pub source_operations: u32,
+    pub operation: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub observed_at: std::time::Instant,
+}
+
+impl PartialEq for NativeDragDropEvent {
+    fn eq(&self, other: &Self) -> bool {
+        self.phase == other.phase
+            && self.paths == other.paths
+            && self.files == other.files
+            && self.virtual_files == other.virtual_files
+            && self.strings == other.strings
+            && self.data == other.data
+            && self.position == other.position
+            && self.screen_position == other.screen_position
+            && self.modifiers == other.modifiers
+            && self.source_operations == other.source_operations
+            && std::sync::Arc::ptr_eq(&self.operation, &other.operation)
+            && self.observed_at == other.observed_at
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum WindowEvent {
+    /// Native destination drag transaction. Unlike per-file compatibility
+    /// events this preserves one platform packet, its position, source actions
+    /// and asynchronous destination-operation feedback owner.
+    NativeDragDrop(NativeDragDropEvent),
     /// The activation token was delivered back and now could be used.
     #[cfg_attr(
         not(any(x11_platform, wayland_platform)),
@@ -703,6 +940,8 @@ pub struct KeyEvent {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Modifiers {
     pub(crate) state: ModifiersState,
+    // None for synthetic resets and backends without native lock state.
+    pub(crate) caps_lock: Option<bool>,
 
     // NOTE: Currently pressed modifiers keys.
     //
@@ -714,6 +953,12 @@ impl Modifiers {
     /// The state of the modifiers.
     pub fn state(&self) -> ModifiersState {
         self.state
+    }
+
+    /// The native Caps Lock state, when supplied by the platform keyboard owner.
+    /// Synthetic modifier resets and unsupported backends return `None`.
+    pub fn caps_lock_state(&self) -> Option<bool> {
+        self.caps_lock
     }
 
     /// The state of the left shift key.
@@ -769,6 +1014,7 @@ impl From<ModifiersState> for Modifiers {
     fn from(value: ModifiersState) -> Self {
         Self {
             state: value,
+            caps_lock: None,
             pressed_mods: Default::default(),
         }
     }

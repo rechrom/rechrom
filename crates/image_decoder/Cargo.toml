@@ -22,3 +22,7 @@ features = ["rav1d"]
 [dev-dependencies]
 # Direct API tests cover malformed AV1 data below the container parser.
 rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"

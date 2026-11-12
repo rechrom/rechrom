@@ -513,8 +513,13 @@ pub(super) fn ExportClipPath(style: &ComputedStyle) -> Option<ClipPathPaint> {
             output.path_zoom = style.EffectiveZoom() as f64;
             output.even_odd = path.GetWindRule() == WindRule::RULE_EVENODD;
         }
-        ShapeType::kStyleRayType | ShapeType::kStyleShapeType => {
-            output.reference_error = Some("clip-path shape()/ray() is unsupported".into());
+        ShapeType::kStyleShapeType => {
+            output.compiled_shape = true;
+        }
+        ShapeType::kStyleRayType => {
+            // CSS ray() belongs only to offset-path; source StyleRay::GetPath
+            // is NOTREACHED and is never admitted by clip-path parsing.
+            output.reference_error = Some("ray is invalid in a clip-path".into());
         }
     }
     Some(output)

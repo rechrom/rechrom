@@ -1,0 +1,10 @@
+[package]
+name = "net_filename"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+icu_bidi = { path = "../icu_bidi" }
+url = "2.5.8"

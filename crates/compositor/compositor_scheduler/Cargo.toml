@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+scroll_animation = { path = "../../scroll_animation" }
 browser_tracing = { path = "../../tracing" }
 compositor_draw = { path = "../compositor_draw" }
 compositor_tile = { path = "../compositor_tile" }

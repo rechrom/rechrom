@@ -76,24 +76,11 @@ pub(super) fn metric(node: &LayoutNode<'_>, metric: LayoutMetric) -> Option<f64>
     // LayoutBoxModelObject::OffsetWidth/Height consume this source bounding
     // box, not just the first physical fragment's dimensions.
     // cpp: core/layout/layout_box.cc:4646-4672.
-    let mut bounds = PhysicalRect::default();
-    let mut first: Option<&PhysicalBoxFragment> = None;
-    if matches!(metric, OffsetWidth | OffsetHeight) {
-        for current in box_.PhysicalFragments() {
-            let offset = first.map_or(PhysicalOffset::default(), |first| {
-                current.OffsetFromRootFragmentationContext()
-                    - first.OffsetFromRootFragmentationContext()
-            });
-            if first.is_none() {
-                first = Some(current);
-            }
-            bounds.UniteEvenIfEmpty(&PhysicalRect::new(offset, current.Size()));
-            if unsafe { current.GetBreakToken().as_ref() }.is_some_and(|token| token.IsAtBlockEnd())
-            {
-                break;
-            }
-        }
-    }
+    let bounds = if matches!(metric, OffsetWidth | OffsetHeight) {
+        offset_bounds(box_)
+    } else {
+        PhysicalRect::default()
+    };
     let padding = box_.PhysicalPaddingBoxRect();
     let css_box = !(node.object.IsSVG()
         && !node.object.IsSVGRoot()
@@ -170,4 +157,37 @@ pub(super) fn metric(node: &LayoutNode<'_>, metric: LayoutMetric) -> Option<f64>
         MinimumScrollTop => unzoom(scroll_range(node).minimum.y),
         MaximumScrollTop => unzoom(scroll_range(node).maximum.y),
     })
+}
+
+// LayoutBox::OffsetWidth/Height, core/layout/layout_box.cc:4646-4672. Both
+// CSSOM and native media slider queries use this original fragment union.
+fn offset_bounds(box_: &LayoutBox) -> PhysicalRect {
+    let mut bounds = PhysicalRect::default();
+    let mut first: Option<&PhysicalBoxFragment> = None;
+    for fragment in box_.PhysicalFragments() {
+        let offset = first.map_or(PhysicalOffset::default(), |first| {
+            fragment.OffsetFromRootFragmentationContext()
+                - first.OffsetFromRootFragmentationContext()
+        });
+        if first.is_none() {
+            first = Some(fragment);
+        }
+        bounds.UniteEvenIfEmpty(&PhysicalRect::new(offset, fragment.Size()));
+        if unsafe { fragment.GetBreakToken().as_ref() }.is_some_and(|token| token.IsAtBlockEnd()) {
+            break;
+        }
+    }
+    bounds
+}
+pub(super) fn native_offset_width(node: &LayoutNode<'_>) -> Option<foundation::LayoutUnit> {
+    let _scope = LayoutPassScope::new(
+        &node.output.engine.algorithms_,
+        &node.output.engine.objects_,
+    );
+    if node.object.IsLayoutInline() && !node.object.IsSVG() {
+        let inline = unsafe { &*DynamicTo::<LayoutInline>(node.object as *const _) };
+        return Some(inline.ClientRectsInContainers().bounds.size.width);
+    }
+    let box_ = unsafe { DynamicTo::<LayoutBox>(node.object as *const _).as_ref() }?;
+    Some(offset_bounds(box_).size.width)
 }

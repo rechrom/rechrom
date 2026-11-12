@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -58,6 +58,53 @@ use paint_property_tree_builder::PaintPropertyTreeBuilder;
 #[derive(Clone, Copy)]
 pub struct PaintFragmentSource<'a>(PaintFragmentCursor<'a>);
 
+/// A LocalFrameView's actual resident LayoutView and its lifetime lease.
+/// The embedding supplies the owner fragment, never a copied child tree.
+#[derive(Clone)]
+pub struct EmbeddedLocalFrameView {
+    owner_client: u64,
+    root: PaintFragmentCursor<'static>,
+    lease: PaintFragmentLease,
+    cross_origin_to_parent: bool,
+    blocking_wheel_targets: Arc<[u64]>,
+}
+
+impl EmbeddedLocalFrameView {
+    pub fn new(
+        owner: PaintFragmentCursor<'_>,
+        layout: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        cross_origin_to_parent: bool,
+    ) -> Self {
+        assert!(owner
+            .paint
+            .replaced_content
+            .as_ref()
+            .is_some_and(|content| content.is_layout_embedded_content));
+        assert_ne!(owner.paint.display_item_client_id, 0);
+        // Exactly the same source-owner lease used by ResidentFragment. It
+        // outlives every cursor installed in the cross-document PrePaint tree.
+        Self {
+            owner_client: owner.paint.display_item_client_id,
+            root: unsafe {
+                std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
+                    layout.PaintCursor(),
+                )
+            },
+            lease: layout.PaintLease(),
+            cross_origin_to_parent,
+            blocking_wheel_targets: Arc::from([]),
+        }
+    }
+
+    pub fn Root(&self) -> PaintFragmentCursor<'_> {
+        self.root
+    }
+    pub fn WithBlockingWheelEventHandlerTargets(mut self, targets: Arc<[u64]>) -> Self {
+        self.blocking_wheel_targets = targets;
+        self
+    }
+}
+
 impl<'a> PaintFragmentSource<'a> {
     pub fn FromCursor(cursor: PaintFragmentCursor<'a>) -> Self {
         Self(cursor)
@@ -99,6 +146,7 @@ fn TransformCompositorState(
         role == PaintPropertyRole::PaintOffsetTranslation && fragment.paint.IsLayoutView();
     let ns = match role {
         PaintPropertyRole::StickyTranslation => Some(Ns::kStickyTranslation),
+        PaintPropertyRole::ElementCanvasTransform => Some(Ns::kElementCanvasTransform),
         PaintPropertyRole::Translate => Some(Ns::kTranslateTransform),
         PaintPropertyRole::Rotate => Some(Ns::kRotateTransform),
         PaintPropertyRole::Scale => Some(Ns::kScaleTransform),
@@ -355,6 +403,11 @@ fn PreviousFragment(
 }
 
 pub struct PaintTreeNode<'a> {
+    // This cursor borrows the exact source retained by PaintFragmentLease.
+    source_cursor: Option<PaintFragmentCursor<'static>>,
+    // Same boxed resource Paint nodes, indexed during the existing effects walk.
+    svg_resource_nodes: Option<Box<HashMap<u64, *const PaintTreeNode<'static>>>>,
+
     pub fragment: Option<ResidentFragment>,
     pub source_lifetime: std::marker::PhantomData<&'a FragmentPaintData>,
     physical_index: usize,
@@ -388,6 +441,7 @@ pub struct PaintTreeNode<'a> {
     pub clip: Option<PaintRect>,
     pub cull_rect: Option<PaintRect>,
     pub self_cull_rect: Option<PaintRect>,
+    pub(crate) cull_decision_inputs: crate::cull_rect_updater::CullRectDecisionInputs,
     pub transforms: Vec<TransformMatrix>,
     pub local_transforms: Vec<TransformMatrix>,
     /// ObjectPaintProperties::PaintOffsetTranslation. Keeping the source slot
@@ -419,6 +473,9 @@ pub struct PaintTreeNode<'a> {
     pub is_stacking_context: bool,
     pub is_stacked: bool,
     pub is_root: bool,
+    /// LocalFrameView owns a separate PaintLayer tree, painted by FramePainter.
+    pub is_embedded_local_frame_root: bool,
+    pub embedded_frame_is_cross_origin: bool,
     pub escapes_ancestor_geometry: bool,
     pub physical_ancestors: Vec<*const PaintTreeNode<'a>>,
     pub stacking_level: i32,
@@ -434,6 +491,10 @@ pub struct PaintTreeNode<'a> {
     /// PaintLayer::PreviousPaintResult for the current traversal. Persistent
     /// cache reuse is carried by SubsequenceMarkers at the recording boundary.
     pub previous_paint_result: Cell<paint_model::PaintResult>,
+    /// PaintLayerStackingNode's canonical derived lists. PaintWalk publishes
+    /// the exact lists it draws; hit testing only borrows them.
+    pub(crate) hit_test_layer_order:
+        RefCell<Option<crate::resident_hit_test::ResidentPaintLayerOrder>>,
     pub paint_layer_order_parent_unique_id: Option<u64>,
     pub paint_layer_order: i32,
     pub applies_transform: bool,
@@ -462,6 +523,10 @@ pub struct PaintTreeNode<'a> {
     /// nodes own only their canonical compositor operations, never this list.
     pub recording_filters: Vec<PaintFilterOperation>,
     pub properties: PropertyTreeState,
+    /// ObjectPaintProperties::LocalBorderBoxProperties().PreTransform().
+    /// Canvas background painting keeps the document element's clip/effect
+    /// state while replacing its CSS transform with this parent space.
+    pub pre_transform: Arc<TransformPaintPropertyNode>,
     pub contents_properties: PropertyTreeState,
     /// The composited fixed background paints in the LayoutView transform,
     /// while its BackgroundClip remains in this box's local transform space.
@@ -496,9 +561,37 @@ fn CullRectChangeNeedsRepaint(
             || old_contents.is_some_and(|old| old != new_contents))
 }
 
+// Cull-aware painters may omit individual border sides, shadows, images, or
+// descendants from a DrawingDisplayItem while the layer reports
+// kMayBeClippedByCullRect.  When the sliding cull window moves, rejecting only
+// the cached PaintLayer subsequence is insufficient: the freshly walked layer
+// can otherwise move one of those incomplete drawing records into the new
+// artifact.  Chromium's CullRectUpdater marks the PaintLayer for repaint and
+// invalidates its display-item client.  Rechrom has separate projected client
+// records, so raise each client owned by this fragment at the same boundary.
+fn InvalidateClientsForCullRectChange(fragment: &mut FragmentPaintData) {
+    fn raise(reason: &mut Option<PaintInvalidationReason>) {
+        let replacement = PaintInvalidationReason::kLayout;
+        if reason.is_none_or(|current| replacement > current) {
+            *reason = Some(replacement);
+        }
+    }
+
+    raise(&mut fragment.paint.display_item_client_invalidation_reason);
+    raise(&mut fragment.paint.paint_layer_client_invalidation_reason);
+    if fragment.paint.selection_client_id != 0 {
+        raise(&mut fragment.paint.selection_client_invalidation_reason);
+    }
+}
+
 impl<'a> Default for PaintTreeNode<'a> {
     fn default() -> Self {
+        let properties = PropertyTreeState::default();
+        let pre_transform = properties.nodes.transform.clone();
         Self {
+            source_cursor: None,
+            svg_resource_nodes: None,
+
             fragment: None,
             source_lifetime: std::marker::PhantomData,
             physical_index: 0,
@@ -522,6 +615,7 @@ impl<'a> Default for PaintTreeNode<'a> {
             clip: None,
             cull_rect: None,
             self_cull_rect: None,
+            cull_decision_inputs: Default::default(),
             transforms: Vec::new(),
             local_transforms: Vec::new(),
             paint_offset_translation: None,
@@ -544,6 +638,8 @@ impl<'a> Default for PaintTreeNode<'a> {
             is_stacking_context: false,
             is_stacked: false,
             is_root: false,
+            is_embedded_local_frame_root: false,
+            embedded_frame_is_cross_origin: false,
             escapes_ancestor_geometry: false,
             physical_ancestors: Vec::new(),
             stacking_level: 0,
@@ -557,6 +653,7 @@ impl<'a> Default for PaintTreeNode<'a> {
             // Source: paint_layer.cc:187. A new layer is conservative until
             // its first complete PaintLayerPainter traversal finishes.
             previous_paint_result: Cell::new(paint_model::PaintResult::kMayBeClippedByCullRect),
+            hit_test_layer_order: RefCell::new(None),
             paint_layer_order_parent_unique_id: None,
             paint_layer_order: 0,
             applies_transform: false,
@@ -581,7 +678,8 @@ impl<'a> Default for PaintTreeNode<'a> {
             outline_rects: Vec::new(),
             mask_layers: Vec::new(),
             recording_filters: Vec::new(),
-            properties: PropertyTreeState::default(),
+            properties,
+            pre_transform,
             contents_properties: PropertyTreeState::default(),
             fixed_background_properties: None,
             overflow_controls_properties: None,
@@ -614,6 +712,14 @@ impl PaintTreeNode<'_> {
             .map(|cache| (cache.revision, cache.subtree_revision))
     }
 
+    pub fn SourceCursor(&self) -> Option<PaintFragmentCursor<'_>> {
+        self.source_cursor
+    }
+    pub fn SvgResourceNode(&self, client: u64) -> Option<&PaintTreeNode<'static>> {
+        let pointer = *self.svg_resource_nodes.as_ref()?.get(&client)?;
+        // Directory rebuilt whenever topology changes; root owns every box.
+        unsafe { pointer.as_ref() }
+    }
     pub fn SetFragment(&mut self, source: &FragmentPaintData) {
         self.fragment = Some(ResidentFragment::FromSource(source));
     }
@@ -629,18 +735,18 @@ impl PaintTreeNode<'_> {
     pub fn ResolvedMaskClipRect(&self) -> Option<PaintRect> {
         let fragment = self.fragment.as_deref()?;
         let is_svg_effect_child = IsSvgEffectChild(fragment.paint.source_kind);
+        if !is_svg_effect_child {
+            let bounds = fragment.paint.css_mask_bounding_box?;
+            return Some(PaintRect {
+                x: self.paint_offset.x + bounds.offset.x,
+                y: self.paint_offset.y + bounds.offset.y,
+                width: bounds.size.width,
+                height: bounds.size.height,
+            });
+        }
         let mut rect = self.mask_layers.first().map(|layer| layer.clip_rect);
         for layer in self.mask_layers.iter().skip(1) {
             rect = Some(Union(rect.as_ref().unwrap().to_owned(), &layer.clip_rect));
-        }
-        // CSS mask-border is recorded by the PaintLayer mask path. Ordinary
-        // SVG children use SVGMaskPainter, whose ResourceBoundsForSVGChild()
-        // considers only mask layers and the object's local SVG visual rect.
-        if !is_svg_effect_child {
-            if let Some(mask_box) = fragment.paint.style.mask_box_image.as_ref() {
-                let bounds = NinePieceImageGeometry::Bounds(self, mask_box);
-                rect = Some(rect.map_or(bounds, |rect| Union(rect, &bounds)));
-            }
         }
         // SVGMaskPainter::ResourceBoundsForSVGChild unions every live mask
         // resource with VisualRectInLocalSVGCoordinates. Chromium fragment ink
@@ -685,12 +791,11 @@ impl PaintTreeNode<'_> {
     }
 
     pub fn RoundedPaintY(&self, y: f64) -> f64 {
-        // TextFragmentPainter::ComputePhysicalBoxGeometry rounds the physical
-        // line top as a LayoutUnit before the device transform is applied.
-        // Keep that whole CSS-pixel phase here; using the device scale would
-        // admit half-CSS-pixel baselines at DPR 2 and move every glyph mask by
-        // one physical pixel relative to Chromium.
-        SnapToPixel(y + self.paint_snap_offset.y, 1.0) - self.paint_snap_offset.y
+        // third_party/blink/renderer/core/paint/text_fragment_painter.cc
+        // ComputePhysicalBoxGeometry rounds the CSS LayoutUnit line top before
+        // projection into device pixels. LayoutUnit::Round is floor(value +
+        // 0.5), including negative half values; DPR is deliberately irrelevant.
+        (y + 0.5).floor()
     }
 }
 
@@ -699,7 +804,14 @@ use paint_reuse::pre_paint_state_compare as state_compare;
 /// The physical parent's actual builder context. A dirty bit permits work;
 /// these values decide whether that work must propagate into clean children.
 #[derive(Clone)]
+struct CanvasContentsContext {
+    layout_object: usize,
+    properties: PropertyTreeState,
+}
+#[derive(Clone)]
 struct InheritedContext {
+    inside_blocking_wheel_event_handler: bool,
+    blocking_wheel_event_handler_changed: bool,
     offset: Offset,
     paint_space: Offset,
     clip: Option<PaintRect>,
@@ -709,6 +821,7 @@ struct InheritedContext {
     scroll: Offset,
     fixed_background_acts_as_scroll: bool,
     properties: PropertyTreeState,
+    canvas_contents: Option<CanvasContentsContext>,
     rendering_context_id: u64,
     should_flatten_inherited_transform: bool,
     can_inherit_backface_visibility: bool,
@@ -720,6 +833,8 @@ struct InheritedContext {
 
 #[derive(Clone)]
 struct ChildContext {
+    inside_blocking_wheel_event_handler: bool,
+    blocking_wheel_event_handler_changed: bool,
     origin: Offset,
     paint_space: Offset,
     clip: Option<PaintRect>,
@@ -729,6 +844,7 @@ struct ChildContext {
     scroll: Offset,
     fixed_background_acts_as_scroll: bool,
     properties: PropertyTreeState,
+    canvas_contents: Option<CanvasContentsContext>,
     rendering_context_id: u64,
     should_flatten_inherited_transform: bool,
     can_inherit_backface_visibility: bool,
@@ -738,6 +854,9 @@ struct ChildContext {
     svg: Option<TransformMatrix>,
 }
 struct RootFixedPositionContext {
+    offset: Offset,
+    paint_space: Offset,
+    transforms: Vec<TransformMatrix>,
     clip: Option<PaintRect>,
     properties: PropertyTreeState,
     scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
@@ -761,6 +880,7 @@ struct NodeCache {
     // Physical links survive logical OOF ownership moves. Boxes stay owned by
     // retained_tree; topology changes must use the ordinary ownership update.
     physical_children: Vec<*mut PaintTreeNode<'static>>,
+    contains_local_frames: bool,
 }
 
 fn HasOwnPropertyRole(node: &PaintTreeNode<'_>, role: PaintPropertyRole) -> bool {
@@ -768,6 +888,12 @@ fn HasOwnPropertyRole(node: &PaintTreeNode<'_>, role: PaintPropertyRole) -> bool
 }
 
 impl PaintTreeNode<'_> {
+    pub fn HasOwnPaintProperties(&self) -> bool {
+        self.cache
+            .as_ref()
+            .is_some_and(|cache| !cache.own_keys.is_empty())
+    }
+
     /// ObjectPaintProperties slot query for Paint consumers that must
     /// distinguish an own node from an inherited final PropertyTreeState.
     pub fn HasOwnPropertyRole(&self, role: PaintPropertyRole) -> bool {
@@ -795,6 +921,9 @@ pub use crate::PrePaintUpdateStats;
 pub struct PrePaintTreeWalk {
     pub next_property_id: u64,
     pub property_node_store: PaintPropertyNodeStore,
+    visual_viewport_state: Option<paint_model::PaintVisualViewportState>,
+    visual_viewport_scroll_offset:
+        Option<(foundation::CompositorElementId, foundation::gfx::Vector2dF)>,
     // Completed geometry/cull state belongs to the resident paint lifecycle,
     // never to the published drawing artifact or a borrowed fragment tree.
     property_keys: BTreeMap<u64, PaintPropertyKey>,
@@ -805,12 +934,20 @@ pub struct PrePaintTreeWalk {
     pub retained_tree: Option<Box<PaintTreeNode<'static>>>,
     retained_source_lease: Option<PaintFragmentLease>,
     pending_source_lease: Option<PaintFragmentLease>,
+    source_owner_changed: bool,
     retained_tree_valid: bool,
     logical_tree_changed: bool,
     viewport: Option<PaintRect>,
     paint_invalidator: PaintInvalidator,
     viewport_properties: PropertyTreeState,
     root_fixed_position: Option<RootFixedPositionContext>,
+    local_frame_views: HashMap<u64, EmbeddedLocalFrameView>,
+    root_blocking_wheel_targets: Arc<[u64]>,
+    active_blocking_wheel_targets: Arc<[u64]>,
+    retained_local_frame_leases: Vec<PaintFragmentLease>,
+    local_frame_sources_changed: bool,
+    local_frame_depth: u32,
+    completed_local_frame_prepaint: HashSet<u64>,
     // Source: core/paint/paint_property_tree_builder.cc:4692-4701.
     requires_main_thread_for_background_attachment_fixed: Option<bool>,
     // LayoutView::BackgroundRect changes mark every registered fixed
@@ -819,7 +956,9 @@ pub struct PrePaintTreeWalk {
     prior_property_keys: BTreeMap<u64, PaintPropertyKey>,
     needs_post_update: bool,
     pub stats: PrePaintUpdateStats,
-    client_nodes: HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
+    intersection_observation_state:
+        foundation::intersection_observation_state::IntersectionObservationState,
+    pub(crate) client_nodes: HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
     resident_nodes: Vec<*mut PaintTreeNode<'static>>,
     walk_generation: u64,
 }
@@ -829,23 +968,34 @@ impl Default for PrePaintTreeWalk {
         Self {
             next_property_id: 1,
             property_node_store: Default::default(),
+            visual_viewport_state: None,
+            visual_viewport_scroll_offset: None,
             property_keys: BTreeMap::new(),
             reset_owners: BTreeSet::new(),
             retained_owner_lifetimes: false,
             retained_tree: None,
             retained_source_lease: None,
             pending_source_lease: None,
+            source_owner_changed: false,
             retained_tree_valid: false,
             logical_tree_changed: false,
             viewport: None,
             paint_invalidator: Default::default(),
             viewport_properties: PropertyTreeState::default(),
             root_fixed_position: None,
+            local_frame_views: HashMap::default(),
+            root_blocking_wheel_targets: Arc::from([]),
+            active_blocking_wheel_targets: Arc::from([]),
+            retained_local_frame_leases: Vec::new(),
+            local_frame_sources_changed: false,
+            local_frame_depth: 0,
+            completed_local_frame_prepaint: HashSet::new(),
             requires_main_thread_for_background_attachment_fixed: None,
             view_background_geometry_changed: false,
             prior_property_keys: BTreeMap::new(),
             needs_post_update: false,
             stats: PrePaintUpdateStats::default(),
+            intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
             resident_nodes: Vec::new(),
             walk_generation: 0,
@@ -867,6 +1017,82 @@ pub fn SvgViewBoxTransform(fragment: &FragmentPaintData) -> Option<TransformMatr
     (fragment.paint.source_kind == NodeKind::kSvgRoot)
         .then(|| fragment.paint.svg_viewport.map(|v| v.content_transform))
         .flatten()
+}
+
+// Source: core/paint/svg_root_painter.cc:22-65,
+// SVGRootPainter::PixelSnappedSize/TransformToPixelSnappedBorderBox. The
+// caller supplies context_.current.paint_offset after PaintOffsetTranslation,
+// so this consumes only the retained subpixel accumulation. DOM geometry uses
+// SvgViewBoxTransform above and intentionally remains unsnapped.
+pub fn SvgTransformToPixelSnappedBorderBox(
+    fragment: &FragmentPaintData,
+    paint_offset: Offset,
+    paint_snap_offset: Offset,
+    pixel_snap_scale: f64,
+) -> Option<TransformMatrix> {
+    if fragment.paint.source_kind != NodeKind::kSvgRoot {
+        return None;
+    }
+    let viewport = fragment.paint.svg_viewport?;
+    let pixel_snap_scale = if pixel_snap_scale.is_finite() && pixel_snap_scale > 0.0 {
+        pixel_snap_scale
+    } else {
+        1.0
+    };
+    // Chromium snaps this rect after effective zoom/device scale has entered
+    // layout coordinates. Rechrom retains CSS paint coordinates, so project
+    // through the same artifact-to-device scale and property-space offset as
+    // every other pixel-snapped paint rect before returning to local space.
+    let snap = |value: f64, offset: f64| SnapToPixel(value + offset, pixel_snap_scale) - offset;
+    let snapped_x = snap(paint_offset.x, paint_snap_offset.x);
+    let snapped_y = snap(paint_offset.y, paint_snap_offset.y);
+    let snap_size = |size: f64, location: f64, offset: f64| {
+        let mut snapped = SnapToPixel(location + offset + size, pixel_snap_scale)
+            - SnapToPixel(location + offset, pixel_snap_scale);
+        // foundation/blink_geometry/geometry/layout_unit.h:807-815.
+        // Keep a non-trivial LayoutUnit extent from disappearing when both
+        // edges round to the same CSS pixel.
+        if snapped == 0.0 && size.abs() * pixel_snap_scale > 4.0 / 64.0 {
+            snapped = size.signum() / pixel_snap_scale;
+        }
+        snapped
+    };
+    let snapped_width = snap_size(fragment.size.width, paint_offset.x, paint_snap_offset.x);
+    let snapped_height = snap_size(fragment.size.height, paint_offset.y, paint_snap_offset.y);
+    let mut offset_to_border_box = TranslationTransform(snapped_x, snapped_y);
+    if fragment.size.width != 0.0 && fragment.size.height != 0.0 {
+        let scale = if viewport.is_document_element {
+            Some((
+                snapped_width / fragment.size.width,
+                snapped_height / fragment.size.height,
+            ))
+        } else if viewport.inline_root_pixel_snapping_scale_adjustment
+            && (fragment.size.width > snapped_width || fragment.size.height > snapped_height)
+        {
+            let scale_x = snapped_width / fragment.size.width;
+            let scale_y = snapped_height / fragment.size.height;
+            let uniform_scale = scale_x.min(scale_y);
+            let scaled_width = fragment.size.width * uniform_scale;
+            let scaled_height = fragment.size.height * uniform_scale;
+            if snapped_width - scaled_width > 1.0 || snapped_height - scaled_height > 1.0 {
+                Some((scale_x, scale_y))
+            } else {
+                Some((uniform_scale, uniform_scale))
+            }
+        } else {
+            None
+        };
+        if let Some((scale_x, scale_y)) = scale {
+            let mut scale = TransformMatrix::default();
+            scale.values[0] = scale_x;
+            scale.values[5] = scale_y;
+            offset_to_border_box = MultiplyTransforms(&offset_to_border_box, &scale);
+        }
+    }
+    Some(MultiplyTransforms(
+        &offset_to_border_box,
+        &viewport.content_transform,
+    ))
 }
 
 // Geometry shared by painting and DOM box queries. Clips, effects and logical
@@ -903,6 +1129,10 @@ fn IsSvgLayoutChild(kind: NodeKind) -> bool {
             | NodeKind::kSvgHiddenContainer
             | NodeKind::kSvgResourceClipper
             | NodeKind::kSvgResourceMasker
+            | NodeKind::kSvgResourceGradient
+            | NodeKind::kSvgResourcePattern
+            | NodeKind::kSvgResourceFilter
+            | NodeKind::kSvgResourceMarker
             | NodeKind::kSvgForeignObject
             | NodeKind::kSvgText
             | NodeKind::kSvgInline
@@ -1159,20 +1389,15 @@ pub fn ResolveFragmentGeometry(
     {
         geometry.applies_transform = true;
         if has_paint_offset_translation {
-            // Source: paint_property_tree_builder.cc:738-803. Round the
-            // translation in the current property space and retain the
-            // fractional accumulation for local painting. SVGRootPainter uses
-            // the same node before its ReplacedContentTransform.
-            let scale = fragment
-                .paint
-                .resources
-                .as_ref()
-                .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
-                .max(f64::MIN_POSITIVE);
+            // Source: paint_property_tree_builder.cc:738-803. Blink uses
+            // ToRoundedVector2d on the LayoutUnit paint offset: this is CSS
+            // layout-pixel rounding, independent of device scale. Retain the
+            // fractional accumulation for local painting; SVGRootPainter
+            // consumes that residual in its ReplacedContentTransform.
             let translation_offset = Offset {
-                x: SnapToPixel(geometry.paint_offset.x + property_space_delta.x, scale)
+                x: SnapToPixel(geometry.paint_offset.x + property_space_delta.x, 1.0)
                     - property_space_delta.x,
-                y: SnapToPixel(geometry.paint_offset.y + property_space_delta.y, scale)
+                y: SnapToPixel(geometry.paint_offset.y + property_space_delta.y, 1.0)
                     - property_space_delta.y,
             };
             let translation = TranslationTransform(translation_offset.x, translation_offset.y);
@@ -1459,6 +1684,10 @@ fn PixelSnappedRectInPropertySpace(rect: &PaintRect, delta: Offset, scale: f64) 
     snapped.x -= delta.x;
     snapped.y -= delta.y;
     snapped
+}
+
+fn EnclosingMaskClipRectInPropertySpace(rect: PaintRect, delta: Offset) -> PaintRect {
+    PropertySpaceRect(rect, delta).enclosing()
 }
 
 fn Union(a: PaintRect, b: &PaintRect) -> PaintRect {
@@ -1900,6 +2129,69 @@ fn RoundedPolygonPath(points: &[Offset], requested_radius: f64) -> Vec<PaintPath
 }
 
 // cpp: core/style/basic_shapes.cc:136-320; style_path.cc:53-64.
+// Source: clip_path_clipper.cc:478-488; style_shape.cc:151-177.
+fn ResolveComputedShapeClipPath(
+    style: &PaintStyle,
+    reference: PaintRect,
+    svg_effect_child: bool,
+    output: &mut Vec<PaintPathCommand>,
+) -> Result<(PaintRect, bool), &'static str> {
+    use layoutng_style::style::{
+        basic_shapes::ShapeType,
+        clip_path_operation::{ClipPathOperation, OperationType},
+        shape_clip_path_operation::ShapeClipPathOperation,
+        style_shape::StyleShape,
+    };
+    let source = style
+        .Source()
+        .ok_or("compiled clip-path requires its resident style owner")?;
+    let operation = source
+        .ClipPath()
+        .and_then(|raw| unsafe { raw.as_ref() })
+        .filter(|operation| operation.GetType() == OperationType::kShape)
+        .ok_or("compiled clip-path requires its shape operation")?;
+    let operation =
+        unsafe { &*(operation as *const dyn ClipPathOperation as *const ShapeClipPathOperation) };
+    let shape = operation.GetBasicShape();
+    if shape.GetType() != ShapeType::kStyleShapeType {
+        return Err("compiled shape clip-path has an invalid style owner");
+    }
+    let shape = unsafe {
+        &*(shape as *const dyn layoutng_style::style::basic_shapes::BasicShape as *const StyleShape)
+    };
+    let zoom = source.EffectiveZoom().max(f32::MIN_POSITIVE);
+    let reference_scale = if svg_effect_child { zoom } else { 1. };
+    let rect = foundation::gfx::RectF::new(
+        foundation::gfx::PointF::new(
+            reference.x as f32 * reference_scale,
+            reference.y as f32 * reference_scale,
+        ),
+        foundation::gfx::SizeF::new(
+            reference.width as f32 * reference_scale,
+            reference.height as f32 * reference_scale,
+        ),
+    );
+    let mut sink = paint_model::basic_shape_commands::BasicShapeCommands::default();
+    paint_model::style_shape_path::BuildStyleShapePath(
+        shape,
+        rect,
+        if svg_effect_child { 1. / zoom } else { 1. },
+        &mut sink,
+    );
+    let even_odd = sink.even_odd;
+    let resolved = sink.Finish();
+    let commands = paint_model::basic_shape_commands::IntoPaintCommands(&resolved);
+    let bounds = resolved.Bounds();
+    let bounds = PaintRect {
+        x: f64::from(bounds.x()),
+        y: f64::from(bounds.y()),
+        width: f64::from(bounds.width()),
+        height: f64::from(bounds.height()),
+    };
+    output.extend(commands);
+    Ok((bounds, even_odd))
+}
+
 fn ResolveClipPath(
     input: &ClipPathPaint,
     origin: Offset,
@@ -2763,6 +3055,7 @@ fn IsSvgEffectChild(kind: NodeKind) -> bool {
     matches!(
         kind,
         NodeKind::kSvgGroup
+            | NodeKind::kSvgResourceMarker
             | NodeKind::kSvgViewportContainer
             | NodeKind::kSvgText
             | NodeKind::kSvgInline
@@ -2928,6 +3221,17 @@ fn MaskBox(
             width: table.grid_size.width,
             height: table.grid_size.height,
         };
+    } else if let Some(fieldset) = paint.fieldset.as_ref() {
+        // FieldsetPainter::PaintMask contracts the paint rect by the same
+        // legend-derived outsets used for its decoration background. Resolve
+        // CSS mask-origin/mask-clip against that contracted border box while
+        // the immutable fragment geometry is still available.
+        rect.x += fieldset.border_outsets.left;
+        rect.y += fieldset.border_outsets.top;
+        rect.width =
+            (rect.width - fieldset.border_outsets.left - fieldset.border_outsets.right).max(0.0);
+        rect.height =
+            (rect.height - fieldset.border_outsets.top - fieldset.border_outsets.bottom).max(0.0);
     }
     if box_type == BackgroundBox::kBorderBox {
         return rect;
@@ -3077,10 +3381,24 @@ fn MaskClipRadii(fragment: &FragmentPaintData, box_type: BackgroundBox) -> Paint
         inset.bottom += paint.padding.bottom;
         inset.left += paint.padding.left;
     }
-    let outer_size = paint
-        .table
-        .as_ref()
-        .map_or(fragment.size, |table| table.grid_size);
+    let outer_size = paint.table.as_ref().map_or_else(
+        || {
+            paint
+                .fieldset
+                .as_ref()
+                .map_or(fragment.size, |fieldset| Size {
+                    width: (fragment.size.width
+                        - fieldset.border_outsets.left
+                        - fieldset.border_outsets.right)
+                        .max(0.0),
+                    height: (fragment.size.height
+                        - fieldset.border_outsets.top
+                        - fieldset.border_outsets.bottom)
+                        .max(0.0),
+                })
+        },
+        |table| table.grid_size,
+    );
     ResolveCornerRadii(&paint.style, &paint.border_sides, outer_size, inset)
 }
 
@@ -3215,11 +3533,40 @@ fn ResolveMaskLayers(
                     });
             (positioning, clip, has_clip)
         } else {
-            (
-                MaskPositioningBox(fragment, absolute_offset, layer.image.origin),
-                MaskBox(fragment, absolute_offset, layer.image.clip),
-                true,
-            )
+            let positioning = MaskPositioningBox(fragment, absolute_offset, layer.image.origin);
+            if layer.image.clip == BackgroundBox::kNoClip {
+                let bounds = fragment
+                    .paint
+                    .css_mask_bounding_box
+                    .expect("source CSS mask bounding box");
+                (
+                    positioning,
+                    PaintRect {
+                        x: absolute_offset.x + bounds.offset.x,
+                        y: absolute_offset.y + bounds.offset.y,
+                        width: bounds.size.width,
+                        height: bounds.size.height,
+                    },
+                    false,
+                )
+            } else {
+                (
+                    positioning,
+                    MaskBox(fragment, absolute_offset, layer.image.clip),
+                    true,
+                )
+            }
+        };
+        // Source: BoxPainterBase::PaintFillLayer clips CSS padding/content
+        // mask boxes through ToPixelSnappedRect, while border-box image
+        // geometry is likewise painted into BackgroundImageGeometry's
+        // SnappedDestRect. Keep the clip in the same property-space pixel
+        // phase as the already-snapped tile; an unsnapped clip would apply
+        // fractional coverage a second time at the mask's top/left edges.
+        let clip = if !svg_effect_child && has_clip {
+            PixelSnappedRectInPropertySpace(&clip, property_space_delta, pixel_snap_scale)
+        } else {
+            clip
         };
         let image =
             if layer.image_state == PaintMaskImageState::kReady && layer.image.shader.is_none() {
@@ -3242,7 +3589,14 @@ fn ResolveMaskLayers(
             f64::from(fragment.paint.effective_zoom),
         );
         let tile_geometry = ResolveBackgroundTile(&layer.image, &positioning, tile_size);
-        let tile = if layer.image.shader.is_some() {
+        let tile = if layer.image.shader.is_some()
+            || (image.is_some() && !tile_geometry.repeat_x && !tile_geometry.repeat_y)
+        {
+            // Source: background_image_geometry.cc SetNoRepeatX/Y and
+            // box_painter_base.cc DrawTiledBackground. A single bitmap tile
+            // paints into SnappedDestRect; keeping the unsnapped mask origin
+            // here makes software playback filter the already-scaled image a
+            // second time at the layout-unit phase.
             PixelSnappedRectInPropertySpace(
                 &tile_geometry.tile_rect,
                 property_space_delta,
@@ -3285,16 +3639,32 @@ fn ResolveMaskLayers(
                 MaskClipRadii(fragment, layer.image.clip)
             },
             has_clip,
-            source_rect: image.map_or(PaintRect::default(), |image| {
-                let (width, height) = image_orientation
-                    .oriented_size(f64::from(image.width), f64::from(image.height));
-                PaintRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width,
-                    height,
-                }
-            }),
+            source_rect: image.map_or_else(
+                || {
+                    if layer.image.shader.is_some() {
+                        // Generated images without intrinsic dimensions are
+                        // created at BackgroundImageGeometry::TileSize.
+                        PaintRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: tile_size.width,
+                            height: tile_size.height,
+                        }
+                    } else {
+                        PaintRect::default()
+                    }
+                },
+                |image| {
+                    let (width, height) = image_orientation
+                        .oriented_size(f64::from(image.width), f64::from(image.height));
+                    PaintRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width,
+                        height,
+                    }
+                },
+            ),
             tile_rect: tile,
             repeat_x: tile_geometry.repeat_x,
             repeat_y: tile_geometry.repeat_y,
@@ -3670,29 +4040,88 @@ fn GatherInlineOutlineGroups<'a>(
     }
 }
 
-fn PrepareInlineOutlines(root: &mut PaintTreeNode<'_>) {
+fn PrepareSelfOutlineRects(node: &mut PaintTreeNode<'_>) {
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("PrePaint node must own a fragment");
+    if let Some(outline) = fragment.paint.self_outline.as_ref() {
+        node.outline_rects
+            .extend(outline.rects.iter().map(|rect| PaintRect {
+                x: node.paint_offset.x + rect.offset.x,
+                y: node.paint_offset.y + rect.offset.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            }));
+    }
+    for child in &mut node.children {
+        PrepareSelfOutlineRects(child);
+    }
+}
+
+/// Chromium's stable AutoDarkModeSVGSizeThreshold feature scopes the graphics
+/// context while an SVG root paints its children. The derived flag lives on
+/// each immutable PaintStyle snapshot so reparented PaintLayer descendants and
+/// ordinary retained children observe the same state without depending on walk
+/// call-stack shape. Image auto-dark admission intentionally ignores this flag.
+fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bool) {
+    const MAX_IMAGE_LENGTH: f64 = 64.0;
+    let child_paused = {
+        let fragment = node
+            .fragment
+            .as_deref()
+            .expect("PrePaint node must own a fragment");
+        if fragment.paint.source_kind == NodeKind::kSvgRoot && fragment.paint.style.force_dark() {
+            let snapped = node.PixelSnappedRect(&PaintRect {
+                x: node.paint_offset.x,
+                y: node.paint_offset.y,
+                width: fragment.size.width,
+                height: fragment.size.height,
+            });
+            let layout_zoom = fragment
+                .paint
+                .resources
+                .as_deref()
+                .map_or(1.0, |resources| resources.layout_zoom_factor)
+                .max(f64::MIN_POSITIVE);
+            snapped.width / layout_zoom > MAX_IMAGE_LENGTH
+                || snapped.height / layout_zoom > MAX_IMAGE_LENGTH
+        } else {
+            inherited_paused
+        }
+    };
+    {
+        let fragment = node
+            .fragment
+            .as_deref_mut()
+            .expect("PrePaint node must own a fragment");
+        fragment.paint.style.auto_dark_mode_paused = inherited_paused;
+        fragment.paint.selection_style.auto_dark_mode_paused = inherited_paused;
+        if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
+            style.auto_dark_mode_paused = inherited_paused;
+        }
+    }
+    for child in &mut node.children {
+        PropagateAutoDarkModeState(child, child_paused);
+    }
+}
+
+fn PrepareOutlines(root: &mut PaintTreeNode<'_>) {
+    PrepareSelfOutlineRects(root);
     let mut groups = BTreeMap::new();
     GatherInlineOutlineGroups(root, &mut groups);
     for (_unused_key, occurrences) in groups {
         let owner_pointer = occurrences[0];
-        unsafe { (*owner_pointer).outline_rects.reserve(occurrences.len()) };
+        let mut outline_rects = Vec::new();
         for occurrence_pointer in occurrences {
-            let occurrence = unsafe { &*occurrence_pointer };
-            let fragment = occurrence
-                .fragment
-                .as_deref()
-                .expect("PrePaint node must own a fragment");
-            let rect = PaintRect {
-                x: occurrence.paint_offset.x,
-                y: occurrence.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
-            };
-            unsafe { (*owner_pointer).outline_rects.push(rect) };
+            // The pointers refer to distinct boxed nodes that remain owned by
+            // the tree for this whole pass.
+            outline_rects.append(unsafe { &mut (*occurrence_pointer).outline_rects });
             if occurrence_pointer != owner_pointer {
                 unsafe { (*occurrence_pointer).paints_outline = false };
             }
         }
+        unsafe { (*owner_pointer).outline_rects = outline_rects };
     }
 }
 
@@ -3738,7 +4167,18 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
 fn GatherFinalEffects(
     node: &PaintTreeNode<'_>,
     effects: &mut BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
+    resources: &mut HashMap<u64, *const PaintTreeNode<'static>>,
 ) {
+    if let Some(fragment) = node
+        .fragment
+        .as_deref()
+        .filter(|f| f.paint.svg_hidden_container)
+    {
+        resources.insert(
+            fragment.paint.display_item_client_id,
+            node as *const PaintTreeNode<'_> as *const PaintTreeNode<'static>,
+        );
+    }
     // Include only this owner's slots, not inherited physical effect snapshots.
     let count = usize::from(
         node.applies_opacity
@@ -3772,7 +4212,7 @@ fn GatherFinalEffects(
         }
     }
     for child in &node.children {
-        GatherFinalEffects(child, effects);
+        GatherFinalEffects(child, effects, resources);
     }
 }
 
@@ -3896,6 +4336,9 @@ fn GatherRetainedRawPropertyIds(node: &PaintTreeNode<'_>, ids: &mut BTreeSet<u64
 }
 
 fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
+    // Full PrePaint postwalk includes topology/stacking-style changes. Impl
+    // scroll-only property refresh does not clear these source ordering lists.
+    *node.hit_test_layer_order.get_mut() = None;
     node.outline_rects.clear();
     node.paints_outline = true;
     for child in &mut node.children {
@@ -3950,17 +4393,39 @@ fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
         && a.paint.display_item_fragment == b.paint.display_item_fragment
 }
 
+// Chromium's display-lock path retains children because their LayoutObject and
+// FragmentData owners remain resident. Rechrom may do that only while the same
+// Paint sidecar lease remains current.
+fn CanRetainDisplayLockedChildren(
+    child_pre_paint_blocked_by_display_lock: bool,
+    source_owner_changed: bool,
+) -> bool {
+    child_pre_paint_blocked_by_display_lock && !source_owner_changed
+}
+
+fn RequiresFullSourceWalk(
+    source_owner_changed: bool,
+    retained_tree_valid: bool,
+    root_revision: u64,
+) -> bool {
+    // Chromium retains LayoutObject/FragmentData owners across PrePaint. A
+    // replacement LayoutResult in Rechrom owns a different sidecar allocation,
+    // so no retained raw FragmentPaintData pointer may cross this boundary.
+    // Rebuild while the preceding lease is still alive. UpdateNode then visits
+    // old/new nodes in lockstep once: O(n), without a recursive compatibility
+    // proof at every descendant.
+    source_owner_changed || !retained_tree_valid || root_revision == 0
+}
+
 // LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
 // descendants in immutable Layout snapshots for resource consumers, but do
 // not create ordinary paint owners, properties, or reparentable paint layers.
+// Source PrePaint also walks hidden resource subtrees, with independent
+// property context. Ordinary Paint skips their entry; resource Paint borrows it.
 fn OrdinaryPaintSourceChildren<'a>(
     fragment: PaintFragmentSource<'a>,
 ) -> impl Iterator<Item = PaintFragmentSource<'a>> {
-    let hidden = fragment.paint.svg_hidden_container;
-    fragment
-        .Children()
-        .into_iter()
-        .filter(move |child| !hidden && !child.paint.svg_hidden_container)
+    fragment.Children()
 }
 
 fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
@@ -4088,6 +4553,11 @@ fn ArtifactViewport(root: &FragmentPaintData) -> Option<PaintRect> {
 }
 
 impl PrePaintTreeWalk {
+    pub fn IntersectionObservationState(
+        &self,
+    ) -> foundation::intersection_observation_state::IntersectionObservationState {
+        self.intersection_observation_state
+    }
     fn RebindResidentPropertySnapshots(&mut self, trees: &mut PaintPropertyTrees) {
         let mut refresh = |state: &mut paint_model::paint_property_tree::PropertyTreeState| {
             trees.clear_state_change_markers(state);
@@ -4164,6 +4634,17 @@ impl PrePaintTreeWalk {
     /// The standalone LayoutView supplies the outer layout viewport. Paint's
     /// retained Page viewport nodes supply Chromium's scale-1 visual viewport;
     /// PAC receives references to both owners and only translates them to cc.
+    pub fn SetVisualViewportState(&mut self, state: paint_model::PaintVisualViewportState) {
+        assert!(state.scale.is_finite() && state.scale > 0.);
+        self.visual_viewport_state = Some(state);
+    }
+    pub fn SetVisualViewportScrollOffset(
+        &mut self,
+        element: foundation::CompositorElementId,
+        offset: foundation::gfx::Vector2dF,
+    ) {
+        self.visual_viewport_scroll_offset = Some((element, offset));
+    }
     pub fn ExportCompositorViewport(
         &self,
         root: &FragmentPaintData,
@@ -4194,9 +4675,29 @@ impl PrePaintTreeWalk {
                 .collect(),
         })
     }
+    fn SameCanvasContents(
+        &self,
+        a: &Option<CanvasContentsContext>,
+        b: &Option<CanvasContentsContext>,
+    ) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.layout_object == b.layout_object
+                    && state_compare::SameBuilderStructure(
+                        &a.properties.nodes,
+                        &b.properties.nodes,
+                        &self.property_keys,
+                        &self.prior_property_keys,
+                    )
+            }
+            _ => false,
+        }
+    }
     fn SameContext(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
         let cull_covers = Self::CullContextCovers(&a.cull, &b.cull);
-        a.offset == b.offset
+        a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
+            && a.offset == b.offset
             && a.paint_space == b.paint_space
             // A shrinking inherited clip/cull cannot expose content omitted
             // by the retained node. The updated ancestor still publishes its
@@ -4218,6 +4719,7 @@ impl PrePaintTreeWalk {
                 == b.subtree_should_use_infinite_cull_rect
             && a.root == b.root
             && a.flex_or_grid_item == b.flex_or_grid_item
+            && self.SameCanvasContents(&a.canvas_contents, &b.canvas_contents)
             && state_compare::SameBuilderStructure(
                 &a.properties.nodes,
                 &b.properties.nodes,
@@ -4234,7 +4736,8 @@ impl PrePaintTreeWalk {
     /// their values therefore do not make an otherwise clean descendant a new
     /// object.  Offsets, clips and topology still have to match exactly.
     fn SameRetainedContextStructure(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
-        a.offset == b.offset
+        a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
+            && a.offset == b.offset
             && a.paint_space == b.paint_space
             && a.clip == b.clip
             && a.transforms.len() == b.transforms.len()
@@ -4248,6 +4751,7 @@ impl PrePaintTreeWalk {
             && a.subtree_should_use_infinite_cull_rect == b.subtree_should_use_infinite_cull_rect
             && a.root == b.root
             && a.flex_or_grid_item == b.flex_or_grid_item
+            && self.SameCanvasContents(&a.canvas_contents, &b.canvas_contents)
             && state_compare::SameBuilderStructure(
                 &a.properties.nodes,
                 &b.properties.nodes,
@@ -4392,11 +4896,45 @@ impl PrePaintTreeWalk {
     fn UpdateNode(
         &mut self,
         fragment: PaintFragmentSource<'_>,
-        inherited: InheritedContext,
+        mut inherited: InheritedContext,
         parent_invalidation_context: PaintInvalidatorContext,
         mut previous: Option<Box<PaintTreeNode<'static>>>,
         force: bool,
     ) -> Box<PaintTreeNode<'static>> {
+        // Source pre_paint_tree_walk.cc:270-282,725-730. The source registry
+        // invalidates the affected native subtree; this existing walk updates
+        // its resident LayoutObject/FragmentData before paint invalidation.
+        inherited.blocking_wheel_event_handler_changed |= fragment
+            .paint
+            .pre_paint_invalidation
+            .blocking_wheel_event_handler_changed;
+        let has_handler = self
+            .active_blocking_wheel_targets
+            .binary_search(&fragment.node_id)
+            .is_ok()
+            || (fragment.paint.IsLayoutView()
+                && self.active_blocking_wheel_targets.binary_search(&0).is_ok());
+        let should_update = inherited.blocking_wheel_event_handler_changed
+            || (self.source_owner_changed
+                && (fragment.paint.LayoutObjectIdentity().is_some()
+                    || !self.active_blocking_wheel_targets.is_empty()));
+        let inside = inherited.inside_blocking_wheel_event_handler
+            || if should_update {
+                has_handler
+            } else {
+                fragment.paint.inside_blocking_wheel_event_handler
+            };
+        let mut resident = ResidentFragment::FromSource(&fragment);
+        let blocking_wheel_changed = resident.paint.UpdateInsideBlockingWheelEventHandler(inside);
+        if inherited.blocking_wheel_event_handler_changed || blocking_wheel_changed {
+            resident.paint.InvalidatePaintForHitTest();
+        }
+        if blocking_wheel_changed {
+            resident
+                .paint
+                .pre_paint_invalidation
+                .should_check_for_paint_invalidation = true;
+        }
         let old_paint_offset = previous.as_ref().map(|node| node.paint_offset);
         let old_had_paint_offset_translation = previous.as_ref().is_some_and(|node| {
             HasOwnPropertyRole(node, PaintPropertyRole::PaintOffsetTranslation)
@@ -4431,8 +4969,8 @@ impl PrePaintTreeWalk {
             });
         // A retained structural match does not prove that the old derived
         // geometry is current. Descend when CullRectUpdater exposes new area
-        // or a mutable ScrollTranslation changes: Paint's root-space culling
-        // consumes the flat transform vectors stored on each descendant.
+        // or a mutable ScrollTranslation changes: each retained cull remains
+        // in the corresponding local property state, matching FragmentData.
         let retained_geometry_covered = retained_context
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().is_some_and(|cache| {
@@ -4441,13 +4979,36 @@ impl PrePaintTreeWalk {
                         && cache.inherited.scroll == inherited.scroll
                 })
             });
-        let subtree_clean = (same_context || retained_geometry_covered)
-            && !should_run_invalidation
-            && !fragment.paint.pre_paint_invalidation.descendants()
-            && fragment.pre_paint_subtree_revision != 0
+        self.stats.same_context_nodes += same_context as usize;
+        self.stats.retained_context_nodes += retained_context as usize;
+        self.stats.retained_geometry_covered_nodes += retained_geometry_covered as usize;
+        self.stats.invalidation_nodes += should_run_invalidation as usize;
+        let subtree_revision_matches = fragment.pre_paint_subtree_revision != 0
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().unwrap().subtree_revision == fragment.pre_paint_subtree_revision
             });
+        let self_revision_matches = fragment.pre_paint_revision != 0
+            && previous.as_ref().is_some_and(|node| {
+                node.cache.as_ref().unwrap().revision == fragment.pre_paint_revision
+            });
+        // A replacement source owner forces this complete walk. Clean-subtree
+        // admission is therefore available only while the resident sidecar
+        // itself remains the owner of every raw FragmentPaintData pointer.
+        let source_tree_compatible = !self.source_owner_changed;
+        self.stats.subtree_revision_matches += subtree_revision_matches as usize;
+        self.stats.self_revision_matches += self_revision_matches as usize;
+        self.stats.source_tree_compatible_nodes += source_tree_compatible as usize;
+        let subtree_clean = !self
+            .local_frame_views
+            .contains_key(&fragment.paint.display_item_client_id)
+            && previous
+                .as_ref()
+                .is_none_or(|node| !node.cache.as_ref().unwrap().contains_local_frames)
+            && (same_context || retained_geometry_covered)
+            && !should_run_invalidation
+            && !fragment.paint.pre_paint_invalidation.descendants()
+            && subtree_revision_matches
+            && source_tree_compatible;
         if subtree_clean {
             let mut node = previous.unwrap();
             // Same-slot immutable snapshots need the same reference update that
@@ -4472,11 +5033,7 @@ impl PrePaintTreeWalk {
             self.stats.skipped_subtrees += 1;
             return node;
         }
-        let self_clean = (same_context || retained_geometry_covered)
-            && fragment.pre_paint_revision != 0
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().unwrap().revision == fragment.pre_paint_revision
-            });
+        let self_clean = (same_context || retained_geometry_covered) && self_revision_matches;
         let invalidation_only = same_context
             && previous.as_ref().is_some_and(|node| {
                 let old = node.fragment.as_deref().unwrap();
@@ -4512,6 +5069,7 @@ impl PrePaintTreeWalk {
                     inherited.scroll,
                     inherited.fixed_background_acts_as_scroll,
                     inherited.properties.clone(),
+                    inherited.canvas_contents.clone(),
                     inherited.rendering_context_id,
                     inherited.should_flatten_inherited_transform,
                     inherited.can_inherit_backface_visibility,
@@ -4531,6 +5089,14 @@ impl PrePaintTreeWalk {
                 built.self_cull_rect,
                 built.cull_rect,
             );
+            if cull_change_needs_repaint {
+                InvalidateClientsForCullRectChange(
+                    &mut built
+                        .fragment
+                        .as_mut()
+                        .expect("PrePaint node must own a fragment"),
+                );
+            }
             built.previous_paint_result.set(old_previous_paint_result);
             if let Some(mut old) = previous.take() {
                 let same_geometry = !force && self.SameGeometry(&old, &built);
@@ -4593,13 +5159,19 @@ impl PrePaintTreeWalk {
                 built.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
                 built.children = std::mem::take(&mut old.children);
                 built.physical_index = old.physical_index;
+                // Source retains FragmentData/property roots across a shallow
+                // update (paint_property_tree_builder.cc:4519-4532). The
+                // directory points to these same stable boxes; move its owner
+                // before replacing the root payload. A topology change still
+                // rebuilds it during the existing final-effects walk below.
+                built.svg_resource_nodes = old.svg_resource_nodes.take();
                 // Update dirty ancestors in place, preserving every Box address
                 // referenced by retained physical/logical ancestry.
-                *old = *built;
+                *old = built;
                 old
             } else {
                 self.needs_post_update = true;
-                built
+                Box::new(built)
             }
         };
         // LayoutImage::last_paint_rect_ belongs to the retained LayoutImage,
@@ -4615,9 +5187,15 @@ impl PrePaintTreeWalk {
                 .expect("PrePaint node must own a fragment"),
             PreviousFragment(old_fragment),
         );
-        if self_clean {
-            node.cache.as_mut().unwrap().inherited = inherited.clone();
-        }
+        node.cache.as_mut().unwrap().inherited = inherited.clone();
+        // Chromium runs invalidation after property construction. The initial
+        // admission above is only a clean-subtree proof: UpdateForObjectLocation
+        // may have dirtied a previously clean object through an ancestor move.
+        let needs_invalidation_after_properties =
+            PaintInvalidator::UpdateContext(&fragment, &mut invalidation_context);
+        self.stats.invalidation_nodes +=
+            (needs_invalidation_after_properties && !should_run_invalidation) as usize;
+        let should_run_invalidation = needs_invalidation_after_properties;
         let old_paint_offset = PaintInvalidator::UpdateFromTreeBuilderContext(
             node.directly_composited_container_paint_offset_subpixel_delta,
             old_paint_offset,
@@ -4696,12 +5274,51 @@ impl PrePaintTreeWalk {
             ObjectPaintInvalidator::InvalidatePaintWithComputedReason(resident_fragment, reason);
             self.paint_invalidator
                 .TrackPendingDelayedPaintInvalidation(resident_fragment);
+            // PaintInvalidator.cc:278-285. Visibility:hidden clients still
+            // invalidate observations even when they do not invalidate paint.
+            let invalidation = resident_fragment.paint.pre_paint_invalidation;
+            let client_reason = resident_fragment
+                .paint
+                .display_item_client_invalidation_reason
+                .unwrap_or(foundation::PaintInvalidationReason::kNone);
+            // PrePaintTreeWalk.cc:123-132: any actual paint invalidation
+            // requires the next scroll/visibility observation, even when the
+            // geometry did not change.
+            if client_reason != foundation::PaintInvalidationReason::kNone {
+                self.intersection_observation_state=self.intersection_observation_state.max(foundation::intersection_observation_state::IntersectionObservationState::ScrollAndVisibilityOnly);
+            }
+            if invalidation.should_check_layout_for_paint_invalidation
+                && (foundation::IsLayoutPaintInvalidationReason(client_reason)
+                    || client_reason == foundation::PaintInvalidationReason::kJustCreated
+                    || !resident_fragment.paint.style.visible())
+            {
+                self.intersection_observation_state=foundation::intersection_observation_state::IntersectionObservationState::Desired;
+            }
         }
-        let base = node.cache.as_ref().unwrap().children.clone();
+        // Same opaque retained lifetime as ResidentFragment; the caller keeps
+        // this result's PaintFragmentLease until replacement has been rebound.
+        node.source_cursor = Some(unsafe {
+            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
+                fragment.Cursor(),
+            )
+        });
+        let mut base = node.cache.as_ref().unwrap().children.clone();
+        base.inside_blocking_wheel_event_handler = inside;
+        base.blocking_wheel_event_handler_changed = inherited.blocking_wheel_event_handler_changed;
+        node.cache
+            .as_mut()
+            .unwrap()
+            .children
+            .inside_blocking_wheel_event_handler = inside;
+        node.cache
+            .as_mut()
+            .unwrap()
+            .children
+            .blocking_wheel_event_handler_changed = inherited.blocking_wheel_event_handler_changed;
         let own_keys = node.cache.as_ref().unwrap().own_keys.clone();
         self.property_keys.extend(own_keys.iter().copied());
         if inherited.root {
-            self.CaptureRootFixedPositionContext(&base);
+            self.CaptureRootFixedPositionContext(&base, &node);
         }
         // Source: core/paint/pre_paint_tree_walk.cc:1517-1535.
         // Display locking blocks only the child walk. WalkInternal has already
@@ -4710,11 +5327,14 @@ impl PrePaintTreeWalk {
         // the local equivalent of DisplayLockContext::SetNeedsPrePaintSubtreeWalk:
         // it prevents an ancestor clean-subtree fast path from hiding the work
         // after the lock opens.
-        if fragment
+        let child_pre_paint_blocked_by_display_lock = fragment
             .paint
             .pre_paint_invalidation
-            .child_pre_paint_blocked_by_display_lock
-        {
+            .child_pre_paint_blocked_by_display_lock;
+        if CanRetainDisplayLockedChildren(
+            child_pre_paint_blocked_by_display_lock,
+            self.source_owner_changed,
+        ) {
             let mut keys = own_keys;
             let mut nodes = 1;
             for child in &node.children {
@@ -4740,16 +5360,33 @@ impl PrePaintTreeWalk {
             cache.physical_children = physical_children;
             return node;
         }
+        // Chromium's locked subtree keeps pointers to resident LayoutObjects.
+        // Rechrom's equivalent references a result-local immutable sidecar. If
+        // Layout published an incompatible replacement tree while the lock was
+        // active, retaining the old children would require retaining both
+        // leases. Walk the replacement children instead so RetainTree can
+        // safely release the preceding lease; property/invalidation work is
+        // still skipped by the source's display-lock dirty-bit projection.
+        let embedded_view = self
+            .local_frame_views
+            .get(&fragment.paint.display_item_client_id)
+            .filter(|_| fragment.paint.CanPaintFragmentOccurrence())
+            .cloned();
+        let embedded_source = embedded_view
+            .as_ref()
+            .map(|view| PaintFragmentSource::FromCursor(view.root));
         let old_children = std::mem::take(&mut node.children);
         // Source: paint_property_tree_builder.cc:2728-2730. A changed filter
         // taint alters descendant Effect state even across paint-property
         // isolation. Reuse the existing piercing `force` channel for the
         // descendants; the current node has already been rebuilt above.
         let force_descendants = force || FilterTaintChanged(was_filter_origin_tainted, &node);
-        let same_children = old_children.len() == OrdinaryPaintSourceChildren(fragment).count()
+        let same_children = old_children.len()
+            == OrdinaryPaintSourceChildren(fragment).count()
+                + usize::from(embedded_source.is_some())
             && old_children
                 .iter()
-                .zip(OrdinaryPaintSourceChildren(fragment))
+                .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
                 .all(|(old, source)| SameSourceIdentity(old.fragment.as_deref().unwrap(), &source));
         if !same_children {
             self.needs_post_update = true;
@@ -4784,7 +5421,12 @@ impl PrePaintTreeWalk {
         };
         let mut keys = own_keys;
         let mut nodes = 1;
-        for (index, child) in OrdinaryPaintSourceChildren(fragment).enumerate() {
+        let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
+        let mut contains_local_frames = embedded_source.is_some();
+        for (index, child) in OrdinaryPaintSourceChildren(fragment)
+            .chain(embedded_source)
+            .enumerate()
+        {
             let previous = if let Some(children) = positional_children.as_mut() {
                 children.next()
             } else if child.fragment_instance_id != 0 {
@@ -4792,7 +5434,24 @@ impl PrePaintTreeWalk {
             } else {
                 None
             };
-            let child_context = self.ContextForChild(&child, &base);
+            let is_local_frame = index == ordinary_children && embedded_view.is_some();
+            let child_context = if is_local_frame {
+                self.ContextForFrame(&node, &base, embedded_view.as_ref().unwrap())
+            } else {
+                self.ContextForChild(&child, &base)
+            };
+            let frame_fixed_context = is_local_frame.then(|| self.root_fixed_position.take());
+            let previous_wheel_targets = is_local_frame.then(|| {
+                std::mem::replace(
+                    &mut self.active_blocking_wheel_targets,
+                    embedded_view
+                        .as_ref()
+                        .unwrap()
+                        .blocking_wheel_targets
+                        .clone(),
+                )
+            });
+            self.local_frame_depth += u32::from(is_local_frame);
             let mut child_node = self.UpdateNode(
                 child,
                 child_context,
@@ -4800,6 +5459,21 @@ impl PrePaintTreeWalk {
                 previous,
                 force_descendants,
             );
+            self.local_frame_depth -= u32::from(is_local_frame);
+            if let Some(previous) = previous_wheel_targets {
+                self.active_blocking_wheel_targets = previous;
+            }
+            child_node.is_embedded_local_frame_root = is_local_frame;
+            child_node.embedded_frame_is_cross_origin =
+                is_local_frame && embedded_view.as_ref().unwrap().cross_origin_to_parent;
+            if is_local_frame {
+                self.completed_local_frame_prepaint
+                    .insert(fragment.paint.display_item_client_id);
+            }
+            if let Some(fixed) = frame_fixed_context {
+                self.root_fixed_position = fixed;
+            }
+            contains_local_frames |= child_node.cache.as_ref().unwrap().contains_local_frames;
             if child_node.table_cell_geometry_changed {
                 node.table_cell_geometry_changed =
                     TableCellPaintInvalidator::InvalidateAncestorAndPropagate(
@@ -4847,14 +5521,119 @@ impl PrePaintTreeWalk {
         cache.subtree_keys = keys;
         cache.nodes = nodes;
         cache.physical_children = physical_children;
+        cache.contains_local_frames = contains_local_frames;
         node
+    }
+
+    pub(crate) fn viewport_cull_for_special_paint(&self) -> Option<PaintRect> {
+        self.viewport
+    }
+    pub(crate) fn viewport_contents_clip_for_special_paint(
+        &self,
+    ) -> std::sync::Arc<paint_model::paint_property_tree::ClipPaintPropertyNode> {
+        self.root_fixed_position
+            .as_ref()
+            .expect("resident root fixed-position context")
+            .properties
+            .nodes
+            .clip
+            .clone()
+    }
+    pub(crate) fn viewport_properties_for_special_paint(
+        &self,
+    ) -> paint_model::paint_property_tree::PropertyTreeState {
+        self.viewport_properties.nodes.clone()
+    }
+    /// Install current native views before entering the root lifecycle. Old
+    /// leases stay live until the existing tree has been rebound and retained.
+    pub fn SetLocalFrameViews(&mut self, views: impl IntoIterator<Item = EmbeddedLocalFrameView>) {
+        let views: HashMap<_, _> = views
+            .into_iter()
+            .map(|view| (view.owner_client, view))
+            .collect();
+        self.local_frame_sources_changed |= views.len() != self.local_frame_views.len()
+            || views.iter().any(|(owner, view)| {
+                self.local_frame_views.get(owner).is_none_or(|old| {
+                    !old.lease.PtrEq(&view.lease)
+                        || old.cross_origin_to_parent != view.cross_origin_to_parent
+                })
+            });
+        self.local_frame_views = views;
+    }
+    pub fn SetBlockingWheelEventHandlerTargets(&mut self, targets: Arc<[u64]>) {
+        self.root_blocking_wheel_targets = targets;
+    }
+
+    pub fn LocalFramePrePaintCompleted(&self, owner_client: u64) -> bool {
+        self.completed_local_frame_prepaint.contains(&owner_client)
+    }
+
+    pub fn LocalFrameViews(&self) -> impl Iterator<Item = &EmbeddedLocalFrameView> {
+        self.local_frame_views.values()
+    }
+
+    // Source: pre_paint_tree_walk.cc:1538-1575 and
+    // PaintPropertyTreeBuilder::SetupContextForFrame, source.cc:192-226.
+    fn ContextForFrame(
+        &self,
+        owner: &PaintTreeNode<'_>,
+        base: &ChildContext,
+        view: &EmbeddedLocalFrameView,
+    ) -> InheritedContext {
+        let replaced = owner
+            .fragment
+            .as_deref()
+            .unwrap()
+            .paint
+            .replaced_content
+            .as_ref()
+            .unwrap();
+        let mut properties = base.properties.clone();
+        if view.cross_origin_to_parent {
+            let mut effect = Some(properties.nodes.effect.clone());
+            let mut candidate = None;
+            while let Some(current) = effect {
+                if current.HasReferenceFilter() {
+                    candidate = current.parent.clone();
+                }
+                effect = current.parent.clone();
+            }
+            if let Some(effect) = candidate {
+                properties.effect_id = effect.id;
+                properties.nodes.effect = effect;
+            }
+        }
+        InheritedContext {
+            inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
+            blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,
+            offset: Offset {
+                x: (owner.paint_offset.x + replaced.offset.x).round() + base.paint_space.x,
+                y: (owner.paint_offset.y + replaced.offset.y).round() + base.paint_space.y,
+            },
+            paint_space: base.paint_space,
+            clip: base.clip,
+            cull: base.cull,
+            transforms: base.transforms.clone(),
+            opacity: base.opacity,
+            scroll: Offset::default(),
+            fixed_background_acts_as_scroll: false,
+            properties,
+            canvas_contents: None,
+            rendering_context_id: 0,
+            should_flatten_inherited_transform: true,
+            can_inherit_backface_visibility: true,
+            directly_composited_container_paint_offset_subpixel_delta: Offset::default(),
+            subtree_should_use_infinite_cull_rect: base.subtree_should_use_infinite_cull_rect,
+            root: true,
+            flex_or_grid_item: false,
+        }
     }
 
     pub fn SetRetainedOwnerLifetimes(&mut self, retained: bool) {
         self.retained_owner_lifetimes = retained;
     }
 
-    fn CaptureRootFixedPositionContext(&mut self, base: &ChildContext) {
+    fn CaptureRootFixedPositionContext(&mut self, base: &ChildContext, root: &PaintTreeNode<'_>) {
         // Blink paint_property_tree_builder.cc UpdateForChildren creates the
         // LayoutView OverflowClip before UpdateOutOfFlowContext. The latter
         // copies the current state, restoring only the pre-scroll transform.
@@ -4874,9 +5653,28 @@ impl PrePaintTreeWalk {
             scroll_translation = node.parent.clone();
         }
         let mut properties = base.properties.clone();
-        properties.transform_id = self.viewport_properties.transform_id;
-        properties.nodes.transform = self.viewport_properties.nodes.transform.clone();
+        let (offset, paint_space, transforms) = if self.local_frame_depth != 0 {
+            // Fixed descendants are rooted in this LocalFrame's pre-scroll
+            // LayoutView state, not the top document's visual viewport.
+            properties.transform_id = root.properties.transform_id;
+            properties.nodes.transform = root.properties.nodes.transform.clone();
+            (
+                root.absolute_offset,
+                Offset {
+                    x: root.absolute_offset.x - root.paint_offset.x,
+                    y: root.absolute_offset.y - root.paint_offset.y,
+                },
+                root.transforms.clone(),
+            )
+        } else {
+            properties.transform_id = self.viewport_properties.transform_id;
+            properties.nodes.transform = self.viewport_properties.nodes.transform.clone();
+            (Offset::default(), Offset::default(), Vec::new())
+        };
         self.root_fixed_position = Some(RootFixedPositionContext {
+            offset,
+            paint_space,
+            transforms,
             clip: base.clip,
             properties,
             scroll_translation,
@@ -4884,6 +5682,30 @@ impl PrePaintTreeWalk {
     }
 
     fn ContextForChild(&self, child: &FragmentPaintData, base: &ChildContext) -> InheritedContext {
+        // cpp: paint_property_tree_builder.cc:4519-4532.
+        if child.paint.svg_hidden_container {
+            return InheritedContext {
+                inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
+                blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,
+                offset: Offset::default(),
+                paint_space: Offset::default(),
+                clip: None,
+                cull: None,
+                transforms: Vec::new(),
+                opacity: 1.,
+                scroll: Offset::default(),
+                fixed_background_acts_as_scroll: false,
+                properties: PropertyTreeState::default(),
+                canvas_contents: None,
+                rendering_context_id: 0,
+                should_flatten_inherited_transform: true,
+                can_inherit_backface_visibility: true,
+                directly_composited_container_paint_offset_subpixel_delta: Offset::default(),
+                subtree_should_use_infinite_cull_rect: true,
+                root: false,
+                flex_or_grid_item: false,
+            };
+        }
         if child.paint.fixed_to_view && child.paint.establishes_paint_state {
             // Blink switches fixed-to-view descendants to the LayoutView's
             // fixed-position context. Its transform is above document scroll,
@@ -4894,15 +5716,18 @@ impl PrePaintTreeWalk {
                 .expect("root fixed-position context must precede descendants");
             let properties = fixed.properties.clone();
             return InheritedContext {
-                offset: Offset::default(),
-                paint_space: Offset::default(),
+                inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
+                blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,
+                offset: fixed.offset,
+                paint_space: fixed.paint_space,
                 clip: fixed.clip,
                 cull: fixed.clip,
-                transforms: Vec::new(),
+                transforms: fixed.transforms.clone(),
                 opacity: base.opacity,
                 scroll: Offset::default(),
                 fixed_background_acts_as_scroll: base.fixed_background_acts_as_scroll,
                 properties,
+                canvas_contents: base.canvas_contents.clone(),
                 rendering_context_id: 0,
                 should_flatten_inherited_transform: true,
                 can_inherit_backface_visibility: true,
@@ -4914,6 +5739,8 @@ impl PrePaintTreeWalk {
         }
         let properties = base.properties.clone();
         InheritedContext {
+            inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
+            blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,
             offset: ResolveChildGeometryOrigin(child, base.origin, base.paint_space),
             paint_space: base.paint_space,
             clip: base.clip,
@@ -4923,6 +5750,7 @@ impl PrePaintTreeWalk {
             scroll: base.scroll,
             fixed_background_acts_as_scroll: base.fixed_background_acts_as_scroll,
             properties,
+            canvas_contents: base.canvas_contents.clone(),
             rendering_context_id: base.rendering_context_id,
             should_flatten_inherited_transform: base.should_flatten_inherited_transform,
             can_inherit_backface_visibility: base.can_inherit_backface_visibility,
@@ -4959,11 +5787,15 @@ impl PrePaintTreeWalk {
         root: PaintFragmentSource<'_>,
         source_lease: PaintFragmentLease,
     ) -> Box<PaintTreeNode<'static>> {
+        self.active_blocking_wheel_targets = self.root_blocking_wheel_targets.clone();
         let source_owner_changed = self
             .retained_source_lease
             .as_ref()
             .is_none_or(|retained| !retained.PtrEq(&source_lease));
+        let source_owner_changed = source_owner_changed || self.local_frame_sources_changed;
+        self.source_owner_changed = source_owner_changed;
         self.pending_source_lease = Some(source_lease);
+        self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
@@ -4974,6 +5806,7 @@ impl PrePaintTreeWalk {
         // Do not clone and rebind the resident graph here: that would preserve
         // a second snapshot-local marker model which Chromium does not have.
         self.stats = PrePaintUpdateStats::default();
+        self.intersection_observation_state = Default::default();
         self.walk_generation = self
             .walk_generation
             .checked_add(1)
@@ -5022,11 +5855,11 @@ impl PrePaintTreeWalk {
                 );
             }
         }
-        // PaintTreeNode cull rectangles are in root (viewport) space, matching
-        // IsVisible's MapRectToRoot result. The root ScrollTranslation is
-        // already present in every scrolling descendant's transform chain;
-        // adding the scroll offset here would compare viewport-space visual
-        // rects with a document-space cull window.
+        // FragmentData cull rectangles live in their corresponding property
+        // state. The initial viewport rectangle is in viewport-properties
+        // space; CullRectUpdater maps it once at each descendant boundary.
+        // The root ScrollTranslation already lives in the descendant chain,
+        // so no scroll offset is added to this initial window.
         let visible_root_cull = viewport;
         if self.viewport_properties.clip_id != 0 {
             self.property_keys.insert(
@@ -5049,12 +5882,18 @@ impl PrePaintTreeWalk {
         if let Some(viewport) = viewport {
             let (_, _, visual_scroll_translation) = self
                 .property_node_store
-                .ensure_single_layout_viewport_nodes(viewport);
+                .ensure_single_layout_viewport_nodes(
+                    viewport,
+                    self.visual_viewport_scroll_offset,
+                    self.visual_viewport_state,
+                );
             self.viewport_properties.transform_id = visual_scroll_translation.id;
             self.viewport_properties.nodes.transform = visual_scroll_translation;
         }
         let properties = self.viewport_properties.clone();
         let context = InheritedContext {
+            inside_blocking_wheel_event_handler: false,
+            blocking_wheel_event_handler_changed: false,
             offset: Offset::default(),
             paint_space: Offset::default(),
             clip: viewport,
@@ -5068,6 +5907,7 @@ impl PrePaintTreeWalk {
             scroll: Offset::default(),
             fixed_background_acts_as_scroll: false,
             properties,
+            canvas_contents: None,
             rendering_context_id: 0,
             should_flatten_inherited_transform: true,
             can_inherit_backface_visibility: true,
@@ -5081,12 +5921,20 @@ impl PrePaintTreeWalk {
             &root,
             previous.as_ref().and_then(|node| node.fragment.as_deref()),
         );
-        // A viewport value change dirties the viewport clip and the LayoutView,
-        // not every descendant. UpdateNode still rebuilds nodes whose fragment
-        // revision or inherited geometry actually changed.
-        let force =
-            source_owner_changed || !self.retained_tree_valid || root.pre_paint_revision == 0;
-        let entirely_clean = !force
+        // A viewport value change dirties the viewport clip and LayoutView,
+        // not every descendant, while the same LayoutResult sidecar remains
+        // resident. A replacement owner is different: retained nodes contain
+        // raw references into the preceding sidecar, so Chromium's in-place
+        // FragmentData update cannot be emulated by identity-only rebinding.
+        // Force one linear old/new walk before releasing that preceding lease.
+        let force = RequiresFullSourceWalk(
+            source_owner_changed,
+            self.retained_tree_valid,
+            root.pre_paint_revision,
+        );
+        let entirely_clean = self.local_frame_views.is_empty()
+            && self.retained_local_frame_leases.is_empty()
+            && !force
             && !root.paint.pre_paint_invalidation.own()
             && !root.paint.pre_paint_invalidation.descendants()
             && root.pre_paint_subtree_revision != 0
@@ -5130,9 +5978,11 @@ impl PrePaintTreeWalk {
                 self.logical_tree_changed = RestoreLogicalOutOfFlowParents(&mut tree);
             }
             let mut effects = BTreeMap::new();
+            let mut svg_resources = HashMap::default();
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.GatherFinalEffects");
-                GatherFinalEffects(&tree, &mut effects);
+                GatherFinalEffects(&tree, &mut effects, &mut svg_resources);
+                tree.svg_resource_nodes = Some(Box::new(svg_resources));
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.PersistPropertyStates");
@@ -5143,20 +5993,46 @@ impl PrePaintTreeWalk {
                 );
                 PersistPropertyStates(&mut tree, &mut updater);
                 updater.finish();
+                self.intersection_observation_state = self
+                    .intersection_observation_state
+                    .max(self.property_node_store.intersection_observation_state);
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.ResetPostPaintData");
                 ResetPostPaintData(&mut tree);
             }
             {
-                let _trace = browser_tracing::span("prepaint", "PrePaint.PrepareInlineOutlines");
-                PrepareInlineOutlines(&mut tree);
+                let _trace = browser_tracing::span("prepaint", "PrePaint.PrepareOutlines");
+                PrepareOutlines(&mut tree);
             }
             {
                 let _trace = browser_tracing::span("prepaint", "PrePaint.MarkPaintPhaseNeeds");
                 MarkPaintPhaseNeeds(&mut tree);
             }
         }
+        {
+            let mut admission = browser_tracing::span("prepaint", "PrePaint.Admission");
+            admission.set("same_context", self.stats.same_context_nodes as f64);
+            admission.set("retained_context", self.stats.retained_context_nodes as f64);
+            admission.set(
+                "retained_covered",
+                self.stats.retained_geometry_covered_nodes as f64,
+            );
+            admission.set(
+                "subtree_revision_matches",
+                self.stats.subtree_revision_matches as f64,
+            );
+            admission.set(
+                "self_revision_matches",
+                self.stats.self_revision_matches as f64,
+            );
+            admission.set(
+                "source_tree_compatible",
+                self.stats.source_tree_compatible_nodes as f64,
+            );
+            admission.set("invalidation_nodes", self.stats.invalidation_nodes as f64);
+        }
+        PropagateAutoDarkModeState(&mut tree, false);
         PropagateSubsequenceRepaint(&mut tree);
         let mut retained_raw_ids = BTreeSet::new();
         GatherRetainedRawPropertyIds(&tree, &mut retained_raw_ids);
@@ -5213,7 +6089,15 @@ impl PrePaintTreeWalk {
             self.client_nodes.retain(|_, nodes| !nodes.is_empty());
         }
         self.retained_tree = Some(tree);
-        self.retained_source_lease = self.pending_source_lease.take();
+        if let Some(lease) = self.pending_source_lease.take() {
+            self.retained_source_lease = Some(lease);
+        }
+        self.retained_local_frame_leases = self
+            .local_frame_views
+            .values()
+            .map(|view| view.lease.clone())
+            .collect();
+        self.local_frame_sources_changed = false;
         self.retained_tree_valid = true;
     }
 
@@ -5304,27 +6188,64 @@ impl PrePaintTreeWalk {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClipsOverflow, CullRectChangeNeedsRepaint, FilterTaintChanged, HasFilterThatMovesPixels,
-        HasPerspective, MarkPaintPhaseNeeds, NeedsOverflowClip, NeedsPaintOffsetTranslation,
-        ObjectRequiresTreeBuilderContext, OwnFilterOriginTainted, PaintPropertyRole,
-        PaintPropertyTreeBuilder, PaintRect, PaintTreeNode, PixelSnappedRect, PrePaintTreeWalk,
-        PropagateSubsequenceRepaint, PropertyTreeState, ResidentFragment, ResolveClipPath,
-        ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, TransformPropertyRoles,
+        CanRetainDisplayLockedChildren, ClipsOverflow, CullRectChangeNeedsRepaint,
+        EnclosingMaskClipRectInPropertySpace, FilterTaintChanged, HasFilterThatMovesPixels,
+        HasPerspective, InvalidateClientsForCullRectChange, MarkPaintPhaseNeeds, NeedsOverflowClip,
+        NeedsPaintOffsetTranslation, ObjectRequiresTreeBuilderContext, OwnFilterOriginTainted,
+        PaintPropertyRole, PaintPropertyTreeBuilder, PaintRect, PaintTreeNode, PixelSnappedRect,
+        PrePaintTreeWalk, PrepareOutlines, PropagateAutoDarkModeState, PropagateSubsequenceRepaint,
+        PropertyTreeState, RequiresFullSourceWalk, ResidentFragment, ResolveClipPath,
+        ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, SamePhaseInputs,
+        SvgTransformToPixelSnappedBorderBox, TransformPropertyRoles,
     };
     use layoutng_assembly::fragment_tree::{
-        FragmentPaintData, FragmentPaintRect, PaintResources, ScrollContainerPaintData,
-        ScrollbarPaintAxis, ScrollbarPaintData,
+        FieldsetPaintData, FragmentKind, FragmentPaintData, FragmentPaintRect, PaintResources,
+        ScrollContainerPaintData, ScrollbarPaintAxis, ScrollbarPaintData, SelfOutlinePaintData,
     };
     use layoutng_assembly::internal::layout_input::{
-        FloatSide, NodeKind, Offset, Overflow, PaintPathCommand, PaintPathVerb, Position, Size,
-        SvgShapeData, SvgShapeGeometry, TransformMatrix,
+        BorderLineStyle, Display, FloatSide, NodeKind, Offset, Overflow, PaintPathCommand,
+        PaintPathVerb, Position, Size, SvgShapeData, SvgShapeGeometry, TransformMatrix,
     };
+    use layoutng_assembly::internal::layout_input_types::Color;
     use layoutng_assembly::internal::paint_input::{
         BackgroundBox, BackgroundImageLayer, ClipPathCircle, ClipPathLength, ClipPathPaint,
-        ClipPathRadiusKind, ClipPathShapeRadius, PaintCornerRadii, PaintFilterOperation,
-        PaintFilterType, PaintMaskImageState, PaintMaskLayer,
+        ClipPathRadiusKind, ClipPathShapeRadius, PaintColorStop, PaintCornerRadii,
+        PaintFilterOperation, PaintFilterType, PaintMaskImageState, PaintMaskLayer, PaintShader,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn cull_rect_change_invalidates_fragment_drawing_clients() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.paint_layer_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kNone);
+        fragment.paint.selection_client_id = 42;
+        fragment.paint.selection_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kNone);
+
+        InvalidateClientsForCullRectChange(&mut fragment);
+
+        assert_eq!(
+            fragment.paint.display_item_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kLayout)
+        );
+        assert_eq!(
+            fragment.paint.paint_layer_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kLayout)
+        );
+        assert_eq!(
+            fragment.paint.selection_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kLayout)
+        );
+
+        fragment.paint.display_item_client_invalidation_reason =
+            Some(foundation::PaintInvalidationReason::kJustCreated);
+        InvalidateClientsForCullRectChange(&mut fragment);
+        assert_eq!(
+            fragment.paint.display_item_client_invalidation_reason,
+            Some(foundation::PaintInvalidationReason::kJustCreated)
+        );
+    }
 
     #[test]
     fn new_descendant_client_invalidates_the_ancestor_layer_subsequence() {
@@ -5432,6 +6353,160 @@ mod tests {
     }
 
     #[test]
+    fn display_locked_children_do_not_outlive_an_incompatible_source_lease() {
+        assert!(CanRetainDisplayLockedChildren(true, false));
+        assert!(!CanRetainDisplayLockedChildren(true, true));
+        assert!(!CanRetainDisplayLockedChildren(false, true));
+    }
+
+    #[test]
+    fn replacement_source_owner_forces_follow_up_outline_walks() {
+        // The regression was a retained ResidentFragment pointer surviving a
+        // replacement LayoutResult lease. A later animation repaint entered
+        // SamePhaseInputs::outline_style after the old sidecar was freed.
+        // Every replacement round must therefore take the full linear walk,
+        // even when revisions are otherwise cacheable.
+        let mut resident_source: Option<Box<FragmentPaintData>> = None;
+        let mut resident_node: Option<Box<PaintTreeNode<'static>>> = None;
+        for revision in [1, 2, 3, u64::MAX] {
+            assert!(RequiresFullSourceWalk(true, true, revision));
+
+            let mut source = Box::new(FragmentPaintData::default());
+            source.paint.has_source = true;
+            source.paint.style.outline_style = if revision % 2 == 0 {
+                BorderLineStyle::kDashed
+            } else {
+                BorderLineStyle::kSolid
+            };
+            source.paint.style.outline_width = revision as f64;
+            let node = PaintPropertyTreeBuilder::new(&mut PrePaintTreeWalk::default()).BuildNode(
+                &source,
+                Offset::default(),
+                Offset::default(),
+                None,
+                None,
+                Vec::new(),
+                1.0,
+                Offset::default(),
+                false,
+                PropertyTreeState::default(),
+                None,
+                0,
+                true,
+                true,
+                Offset::default(),
+                false,
+                None,
+                false,
+                None,
+                None,
+                false,
+                false,
+            );
+            // Destroy the old retained node before its source owner, then
+            // install the replacement pair. This is the order enforced by
+            // Walk/RetainTree around the lease boundary.
+            resident_node = Some(Box::new(node));
+            resident_source = Some(source);
+            let current = resident_node
+                .as_deref()
+                .unwrap()
+                .fragment
+                .as_deref()
+                .unwrap();
+            assert_eq!(
+                current.paint.style.outline_style(),
+                resident_source
+                    .as_deref()
+                    .unwrap()
+                    .paint
+                    .style
+                    .outline_style()
+            );
+            assert!(SamePhaseInputs(current, current));
+        }
+        assert!(!RequiresFullSourceWalk(false, true, 1));
+        assert!(RequiresFullSourceWalk(false, false, 1));
+        assert!(RequiresFullSourceWalk(false, true, 0));
+    }
+
+    #[test]
+    fn inline_outline_group_joins_exact_source_rects_in_paint_space() {
+        fn occurrence(local_rects: Vec<FragmentPaintRect>) -> FragmentPaintData {
+            let mut fragment = FragmentPaintData::default();
+            fragment.node_id = 17;
+            fragment.fragmentainer_instance_id = 3;
+            fragment.kind = FragmentKind::kBox;
+            fragment.paint.has_source = true;
+            fragment.paint.establishes_paint_state = true;
+            fragment.paint.display = Display::kInline;
+            fragment.paint.style.SetVisibleForTesting(true);
+            fragment.paint.style.outline_width = 2.0;
+            fragment.paint.style.outline_style = BorderLineStyle::kSolid;
+            fragment.paint.style.outline_color = Color {
+                alpha: 1.0,
+                ..Color::default()
+            };
+            fragment.paint.self_outline = Some(SelfOutlinePaintData {
+                rects: local_rects,
+                width: 2.0,
+                offset: 0.0,
+            });
+            fragment
+        }
+
+        // AddSelfOutlineRects returns the complete inline continuation group
+        // relative to its one source outline owner. Non-owner occurrences
+        // export authoritative empty geometry.
+        let first = occurrence(vec![
+            FragmentPaintRect {
+                offset: Offset { x: 1.0, y: 2.0 },
+                size: Size {
+                    width: 10.0,
+                    height: 20.0,
+                },
+            },
+            FragmentPaintRect {
+                offset: Offset { x: 203.0, y: 204.0 },
+                size: Size {
+                    width: 30.0,
+                    height: 40.0,
+                },
+            },
+        ]);
+        let second = occurrence(Vec::new());
+        let mut owner = PaintTreeNode::default();
+        owner.SetOwnedFragmentForTesting(&first);
+        owner.paint_offset = Offset { x: 100.0, y: 200.0 };
+        let mut child = PaintTreeNode::default();
+        child.SetOwnedFragmentForTesting(&second);
+        child.paint_offset = Offset { x: 300.0, y: 400.0 };
+        owner.children.push(Box::new(child));
+
+        PrepareOutlines(&mut owner);
+
+        assert_eq!(
+            owner.outline_rects,
+            vec![
+                PaintRect {
+                    x: 101.0,
+                    y: 202.0,
+                    width: 10.0,
+                    height: 20.0,
+                },
+                PaintRect {
+                    x: 303.0,
+                    y: 404.0,
+                    width: 30.0,
+                    height: 40.0,
+                },
+            ]
+        );
+        assert!(!owner.children[0].paints_outline);
+        assert!(owner.children[0].outline_rects.is_empty());
+    }
+
+    #[test]
     fn rebuilt_image_fragment_retains_painted_rect_for_the_same_client() {
         let painted_rect = FragmentPaintRect {
             offset: Offset { x: 10.0, y: 20.0 },
@@ -5483,6 +6558,26 @@ mod tests {
         };
         assert_eq!(PixelSnappedRect(&rect, 1.0).y, 21.0);
         assert_eq!(PixelSnappedRect(&rect, 2.0), rect);
+    }
+
+    #[test]
+    fn text_line_top_snap_precedes_transform_subpixel_projection() {
+        let mut node = PaintTreeNode::default();
+        // Chromium rounds the CSS LayoutUnit line top, before device scaling.
+        node.paint_snap_offset.y = -0.5;
+        assert_eq!(node.RoundedPaintY(184.5), 185.0);
+        assert_eq!(node.RoundedPaintY(-1.5), -1.0);
+
+        // DPR does not participate in LayoutUnit::Round.
+        node.pixel_snap_scale = 2.0;
+        assert_eq!(node.RoundedPaintY(184.5), 185.0);
+        assert_eq!(node.RoundedPaintY(-1.5), -1.0);
+        assert_eq!(node.RoundedPaintY(114.75), 115.0);
+
+        // Fractional DPR likewise leaves CSS rounding unchanged.
+        node.pixel_snap_scale = 1.25;
+        assert_eq!(node.RoundedPaintY(58.0), 58.0);
+        assert_eq!(node.RoundedPaintY(276.4), 276.0);
     }
 
     #[test]
@@ -5548,6 +6643,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -5614,6 +6710,153 @@ mod tests {
         assert!(geometry.applies_paint_offset_translation);
         assert_eq!(transforms.len(), 1);
         assert_eq!(transforms[0], Default::default());
+    }
+
+    #[test]
+    fn paint_offset_translation_rounds_in_css_pixels_at_high_dpr() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.has_source = true;
+        fragment.paint.establishes_paint_state = true;
+        fragment.paint.is_box_model_object = true;
+        fragment.paint.is_layout_view = true;
+        fragment.paint.resources = Some(Arc::new(PaintResources {
+            device_pixel_ratio: 2.0,
+            ..Default::default()
+        }));
+
+        let mut transforms = Vec::new();
+        let geometry = ResolveFragmentGeometry(
+            &fragment,
+            Offset { x: 0.3, y: 0.0 },
+            Offset::default(),
+            &mut transforms,
+            Offset::default(),
+            Offset::default(),
+        );
+        assert_eq!(transforms[0].values[12], 0.0);
+        assert_eq!(geometry.paint_offset.x, 0.3);
+    }
+
+    #[test]
+    fn svg_root_transform_snaps_residual_and_scales_only_document_root() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.source_kind = NodeKind::kSvgRoot;
+        fragment.size = Size {
+            width: 100.0,
+            height: 99.984375,
+        };
+        fragment.paint.svg_viewport = Some(Default::default());
+        let paint_offset = Offset { x: 0.0, y: 0.5 };
+
+        let inline =
+            SvgTransformToPixelSnappedBorderBox(&fragment, paint_offset, Offset::default(), 1.0)
+                .unwrap();
+        assert_eq!(inline.values[12], 0.0);
+        assert_eq!(inline.values[13], 1.0);
+        assert_eq!(inline.values[0], 1.0);
+        assert_eq!(inline.values[5], 1.0);
+
+        fragment
+            .paint
+            .svg_viewport
+            .as_mut()
+            .unwrap()
+            .is_document_element = true;
+        let document =
+            SvgTransformToPixelSnappedBorderBox(&fragment, paint_offset, Offset::default(), 1.0)
+                .unwrap();
+        assert_eq!(document.values[12], 0.0);
+        assert_eq!(document.values[13], 1.0);
+        assert_eq!(document.values[0], 1.0);
+        assert_eq!(document.values[5], 99.0 / 99.984375);
+    }
+
+    #[test]
+    fn inline_svg_pixel_snap_adjustment_chooses_uniform_or_nonuniform_scale() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.source_kind = NodeKind::kSvgRoot;
+        fragment.paint.svg_viewport = Some(Default::default());
+        fragment
+            .paint
+            .svg_viewport
+            .as_mut()
+            .unwrap()
+            .inline_root_pixel_snapping_scale_adjustment = true;
+        fragment.size = Size {
+            width: 100.4,
+            height: 99.8,
+        };
+
+        let uniform = SvgTransformToPixelSnappedBorderBox(
+            &fragment,
+            Offset::default(),
+            Offset::default(),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(uniform.values[0], 100.0 / 100.4);
+        assert_eq!(uniform.values[5], 100.0 / 100.4);
+
+        fragment.size = Size {
+            width: 1000.4,
+            height: 10.4,
+        };
+        let nonuniform = SvgTransformToPixelSnappedBorderBox(
+            &fragment,
+            Offset::default(),
+            Offset::default(),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(nonuniform.values[0], 1000.0 / 1000.4);
+        assert_eq!(nonuniform.values[5], 10.0 / 10.4);
+    }
+
+    #[test]
+    fn svg_root_transform_snaps_in_artifact_device_space() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.source_kind = NodeKind::kSvgRoot;
+        fragment.size = Size {
+            width: 100.0,
+            height: 100.0,
+        };
+        fragment.paint.svg_viewport = Some(Default::default());
+
+        let transform = SvgTransformToPixelSnappedBorderBox(
+            &fragment,
+            Offset { x: 0.0, y: 1314.5 },
+            Offset::default(),
+            2.0,
+        )
+        .unwrap();
+
+        assert_eq!(transform.values[13], 1314.5);
+
+        let property_space = SvgTransformToPixelSnappedBorderBox(
+            &fragment,
+            Offset { x: 0.3, y: 0.3 },
+            Offset { x: 0.1, y: 0.1 },
+            2.0,
+        )
+        .unwrap();
+        assert_eq!(property_space.values[12], 0.4);
+        assert_eq!(property_space.values[13], 0.4);
+
+        fragment.size.width = 0.04;
+        fragment
+            .paint
+            .svg_viewport
+            .as_mut()
+            .unwrap()
+            .is_document_element = true;
+        let tiny_document = SvgTransformToPixelSnappedBorderBox(
+            &fragment,
+            Offset::default(),
+            Offset::default(),
+            2.0,
+        )
+        .unwrap();
+        assert_eq!(tiny_document.values[0] * fragment.size.width, 0.5);
     }
 
     #[test]
@@ -5688,6 +6931,42 @@ mod tests {
         );
         assert!(geometry.applies_paint_offset_translation);
         assert_eq!(transforms.len(), 6);
+
+        let mut walk = PrePaintTreeWalk::default();
+        let node = PaintPropertyTreeBuilder::new(&mut walk).BuildNode(
+            &fragment,
+            Offset::default(),
+            Offset::default(),
+            None,
+            None,
+            Vec::new(),
+            1.0,
+            Offset::default(),
+            false,
+            PropertyTreeState::default(),
+            None,
+            0,
+            true,
+            true,
+            Offset::default(),
+            false,
+            None,
+            false,
+            None,
+            None,
+            false,
+            false,
+        );
+        assert!(Arc::ptr_eq(
+            &node.pre_transform,
+            node.paint_offset_translation
+                .as_ref()
+                .expect("CSS transform properties follow paint-offset translation"),
+        ));
+        assert!(!Arc::ptr_eq(
+            &node.pre_transform,
+            &node.properties.nodes.transform,
+        ));
     }
 
     #[test]
@@ -5714,6 +6993,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -5778,6 +7058,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -5849,6 +7130,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -5923,6 +7205,7 @@ mod tests {
                     Offset::default(),
                     false,
                     PropertyTreeState::default(),
+                    None,
                     0,
                     true,
                     true,
@@ -5984,6 +7267,7 @@ mod tests {
                 Offset::default(),
                 false,
                 PropertyTreeState::default(),
+                None,
                 0,
                 true,
                 true,
@@ -6127,6 +7411,35 @@ mod tests {
     }
 
     #[test]
+    fn svg_foreign_object_mask_clip_uses_css_descendant_overflow_bounds() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.paint.source_kind = NodeKind::kSvgForeignObject;
+        // Layout exports LocalBoundingBoxIncludingSelfPaintingDescendants for
+        // a no-clip foreignObject mask. The negative origin and oversized
+        // extent represent descendant overflow outside the element itself.
+        fragment.paint.css_mask_bounding_box = Some(FragmentPaintRect {
+            offset: Offset { x: -8.0, y: -6.0 },
+            size: Size {
+                width: 140.0,
+                height: 120.0,
+            },
+        });
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        node.paint_offset = Offset { x: 20.0, y: 30.0 };
+
+        assert_eq!(
+            node.ResolvedMaskClipRect(),
+            Some(PaintRect {
+                x: 12.0,
+                y: 24.0,
+                width: 140.0,
+                height: 120.0,
+            })
+        );
+    }
+
+    #[test]
     fn svg_clip_path_does_not_reapply_parent_paint_offset() {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.has_source = true;
@@ -6156,6 +7469,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6210,6 +7524,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6258,6 +7573,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6320,6 +7636,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6366,6 +7683,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6569,6 +7887,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6658,6 +7977,7 @@ mod tests {
                 Offset::default(),
                 false,
                 PropertyTreeState::default(),
+                None,
                 0,
                 true,
                 true,
@@ -6721,6 +8041,7 @@ mod tests {
             Offset::default(),
             false,
             PropertyTreeState::default(),
+            None,
             0,
             true,
             true,
@@ -6810,7 +8131,7 @@ mod tests {
                 });
 
             let mut walk = PrePaintTreeWalk::default();
-            PaintPropertyTreeBuilder::new(&mut walk).BuildNode(
+            Box::new(PaintPropertyTreeBuilder::new(&mut walk).BuildNode(
                 &fragment,
                 Offset::default(),
                 Offset::default(),
@@ -6821,6 +8142,7 @@ mod tests {
                 Offset::default(),
                 false,
                 PropertyTreeState::default(),
+                None,
                 0,
                 true,
                 true,
@@ -6832,7 +8154,7 @@ mod tests {
                 None,
                 false,
                 false,
-            )
+            ))
         }
 
         let not_preferred = build(true, false);
@@ -6982,10 +8304,13 @@ mod tests {
                 content: image_resource::PaintImageContent::Bitmap(vec![255_u8; 2 * 1 * 4].into()),
                 ..Default::default()
             }],
+            canvases: Vec::new(),
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,
             layout_zoom_factor: 1.0,
+            base_background_color: Default::default(),
             paints_opaque_base_background: false,
+            should_clear_document_background: true,
             viewport: None,
         }));
         let layer = PaintMaskLayer {
@@ -7027,6 +8352,292 @@ mod tests {
                 y: 22.0,
                 width: 30.0,
                 height: 40.0,
+            }
+        );
+    }
+
+    #[test]
+    fn generated_mask_image_retains_its_tile_as_the_classifier_source_rect() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = Size {
+            width: 40.0,
+            height: 30.0,
+        };
+        let layer = PaintMaskLayer {
+            image: BackgroundImageLayer {
+                shader: Some(Arc::new(PaintShader {
+                    stops: vec![
+                        PaintColorStop {
+                            offset: 0.0,
+                            ..Default::default()
+                        },
+                        PaintColorStop {
+                            offset: 1.0,
+                            ..Default::default()
+                        },
+                    ],
+                    ..PaintShader::default()
+                })),
+                can_render: true,
+                ..BackgroundImageLayer::default()
+            },
+            ..PaintMaskLayer::default()
+        };
+
+        let resolved = ResolveMaskLayers(
+            &fragment,
+            Offset::default(),
+            Offset::default(),
+            1.0,
+            &[layer],
+        );
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].paint_shader.is_some());
+        assert_eq!(resolved[0].source_rect.width, resolved[0].tile_rect.width);
+        assert_eq!(resolved[0].source_rect.height, resolved[0].tile_rect.height);
+        assert!(resolved[0].source_rect.width > 0.0);
+        assert!(resolved[0].source_rect.height > 0.0);
+    }
+
+    #[test]
+    fn css_mask_clip_is_pixel_snapped_in_property_space() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = Size {
+            width: 160.0,
+            height: 28.0,
+        };
+        let layer = PaintMaskLayer {
+            image_state: PaintMaskImageState::kInvalid,
+            image: BackgroundImageLayer {
+                origin: BackgroundBox::kBorderBox,
+                clip: BackgroundBox::kBorderBox,
+                ..BackgroundImageLayer::default()
+            },
+            ..PaintMaskLayer::default()
+        };
+
+        let resolved = ResolveMaskLayers(
+            &fragment,
+            Offset {
+                x: 534.328125,
+                y: 145.4375,
+            },
+            Offset::default(),
+            1.0,
+            &[layer],
+        );
+
+        assert_eq!(
+            resolved[0].clip_rect,
+            PaintRect {
+                x: 534.0,
+                y: 145.0,
+                width: 160.0,
+                height: 28.0,
+            }
+        );
+    }
+
+    #[test]
+    fn css_mask_property_clip_encloses_fractional_border_box() {
+        assert_eq!(
+            EnclosingMaskClipRectInPropertySpace(
+                PaintRect {
+                    x: 534.328125,
+                    y: 145.4375,
+                    width: 160.0,
+                    height: 28.0,
+                },
+                Offset::default(),
+            ),
+            PaintRect {
+                x: 534.0,
+                y: 145.0,
+                width: 161.0,
+                height: 29.0,
+            }
+        );
+    }
+
+    #[test]
+    fn large_svg_pauses_descendant_auto_dark_and_nested_icon_reenables_it() {
+        let mut outer_fragment = FragmentPaintData::default();
+        outer_fragment.paint.source_kind = NodeKind::kSvgRoot;
+        outer_fragment.paint.style.force_dark = true;
+        outer_fragment.size = Size {
+            width: 200.0,
+            height: 100.0,
+        };
+        let mut outer = PaintTreeNode::default();
+        outer.SetOwnedFragmentForTesting(&outer_fragment);
+
+        let mut direct_fragment = FragmentPaintData::default();
+        direct_fragment.paint.source_kind = NodeKind::kSvgShape;
+        direct_fragment.paint.style.force_dark = true;
+        direct_fragment.paint.selection_style.force_dark = true;
+        let mut direct = PaintTreeNode::default();
+        direct.SetOwnedFragmentForTesting(&direct_fragment);
+
+        let mut nested_fragment = FragmentPaintData::default();
+        nested_fragment.paint.source_kind = NodeKind::kSvgRoot;
+        nested_fragment.paint.style.force_dark = true;
+        nested_fragment.size = Size {
+            width: 32.0,
+            height: 32.0,
+        };
+        let mut nested = PaintTreeNode::default();
+        nested.SetOwnedFragmentForTesting(&nested_fragment);
+
+        let mut nested_child_fragment = FragmentPaintData::default();
+        nested_child_fragment.paint.source_kind = NodeKind::kSvgShape;
+        nested_child_fragment.paint.style.force_dark = true;
+        let mut nested_child = PaintTreeNode::default();
+        nested_child.SetOwnedFragmentForTesting(&nested_child_fragment);
+        nested.children.push(Box::new(nested_child));
+
+        outer.children.push(Box::new(direct));
+        outer.children.push(Box::new(nested));
+        PropagateAutoDarkModeState(&mut outer, false);
+
+        assert!(!outer
+            .fragment
+            .as_deref()
+            .unwrap()
+            .paint
+            .style
+            .auto_dark_mode_paused());
+        let direct = outer.children[0].fragment.as_deref().unwrap();
+        assert!(direct.paint.style.auto_dark_mode_paused());
+        assert!(direct.paint.selection_style.auto_dark_mode_paused());
+        let nested = outer.children[1].as_ref();
+        assert!(nested
+            .fragment
+            .as_deref()
+            .unwrap()
+            .paint
+            .style
+            .auto_dark_mode_paused());
+        assert!(!nested.children[0]
+            .fragment
+            .as_deref()
+            .unwrap()
+            .paint
+            .style
+            .auto_dark_mode_paused());
+    }
+
+    #[test]
+    fn css_no_clip_mask_uses_source_maximum_region_without_clipping() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = Size {
+            width: 100.0,
+            height: 80.0,
+        };
+        fragment.paint.css_mask_bounding_box = Some(FragmentPaintRect {
+            offset: Offset { x: -7.0, y: -9.0 },
+            size: Size {
+                width: 140.0,
+                height: 120.0,
+            },
+        });
+        let layer = PaintMaskLayer {
+            image_state: PaintMaskImageState::kInvalid,
+            image: BackgroundImageLayer {
+                origin: BackgroundBox::kContentBox,
+                clip: BackgroundBox::kNoClip,
+                ..BackgroundImageLayer::default()
+            },
+            ..PaintMaskLayer::default()
+        };
+
+        let resolved = ResolveMaskLayers(
+            &fragment,
+            Offset { x: 20.0, y: 30.0 },
+            Offset::default(),
+            1.0,
+            &[layer],
+        );
+        assert_eq!(resolved.len(), 1);
+        assert!(!resolved[0].has_clip);
+        assert_eq!(
+            resolved[0].clip_rect,
+            PaintRect {
+                x: 13.0,
+                y: 21.0,
+                width: 140.0,
+                height: 120.0,
+            }
+        );
+
+        let mut node = PaintTreeNode::default();
+        node.SetOwnedFragmentForTesting(&fragment);
+        node.paint_offset = Offset { x: 20.0, y: 30.0 };
+        node.mask_layers = resolved;
+        assert_eq!(
+            node.ResolvedMaskClipRect(),
+            Some(PaintRect {
+                x: 13.0,
+                y: 21.0,
+                width: 140.0,
+                height: 120.0,
+            })
+        );
+    }
+
+    #[test]
+    fn fieldset_css_mask_uses_the_legend_contracted_border_box() {
+        let mut fragment = FragmentPaintData::default();
+        fragment.size = Size {
+            width: 100.0,
+            height: 80.0,
+        };
+        fragment.paint.fieldset = Some(Arc::new(FieldsetPaintData {
+            border_outsets: layoutng_assembly::internal::layout_input::Edges {
+                top: 7.0,
+                right: 4.0,
+                bottom: 3.0,
+                left: 6.0,
+            },
+            ..FieldsetPaintData::default()
+        }));
+        fragment.paint.border.top = 4.0;
+        fragment.paint.border.right = 3.0;
+        fragment.paint.border.bottom = 5.0;
+        fragment.paint.border.left = 2.0;
+        fragment.paint.padding.top = 8.0;
+        fragment.paint.padding.right = 7.0;
+        fragment.paint.padding.bottom = 9.0;
+        fragment.paint.padding.left = 6.0;
+        fragment.content_size = Size {
+            width: 72.0,
+            height: 44.0,
+        };
+        let layer = PaintMaskLayer {
+            image_state: PaintMaskImageState::kInvalid,
+            image: BackgroundImageLayer {
+                origin: BackgroundBox::kBorderBox,
+                clip: BackgroundBox::kContentBox,
+                ..BackgroundImageLayer::default()
+            },
+            ..PaintMaskLayer::default()
+        };
+
+        let resolved = ResolveMaskLayers(
+            &fragment,
+            Offset { x: 20.0, y: 30.0 },
+            Offset::default(),
+            1.0,
+            &[layer],
+        );
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].clip_rect,
+            PaintRect {
+                x: 34.0,
+                y: 49.0,
+                width: 72.0,
+                height: 44.0,
             }
         );
     }

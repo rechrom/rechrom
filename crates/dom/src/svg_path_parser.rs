@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 
 use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
-use std::ffi::c_char;
 
 unsafe extern "C" {
-    fn strtod(input: *const c_char, end: *mut *mut c_char) -> f64;
     fn isalpha(c: std::ffi::c_int) -> std::ffi::c_int;
     fn isspace(c: std::ffi::c_int) -> std::ffi::c_int;
     fn isdigit(c: std::ffi::c_int) -> std::ffi::c_int;
@@ -59,16 +57,26 @@ fn Add(a: Offset, b: Offset) -> Offset {
         y: a.y + b.y,
     }
 }
-fn Subtract(a: Offset, b: Offset) -> Offset {
-    Offset {
-        x: a.x - b.x,
-        y: a.y - b.y,
-    }
-}
 fn Scale(point: Offset, scale: f64) -> Offset {
     Offset {
         x: point.x * scale,
         y: point.y * scale,
+    }
+}
+
+fn AddPathPoints(a: Offset, b: Offset) -> Offset {
+    Offset {
+        x: f64::from(a.x as f32 + b.x as f32),
+        y: f64::from(a.y as f32 + b.y as f32),
+    }
+}
+
+fn SmoothPathControl(current: Offset, previous: Offset) -> Offset {
+    let delta_x = current.x as f32 - previous.x as f32;
+    let delta_y = current.y as f32 - previous.y as f32;
+    Offset {
+        x: f64::from(current.x as f32 + delta_x),
+        y: f64::from(current.y as f32 + delta_y),
     }
 }
 
@@ -297,14 +305,99 @@ impl Parser {
         if self.cursor == self.end() {
             return None;
         }
-        let begin = unsafe { self.storage.as_ptr().add(self.cursor).cast::<c_char>() };
-        let mut parsed_end = std::ptr::null_mut();
-        let value = unsafe { strtod(begin, &mut parsed_end) };
-        if parsed_end == begin.cast_mut() || !value.is_finite() {
+
+        // Source: svg_parser_utilities.cc GenericParseNumber<float>. SVG path
+        // segment storage is float-based in Blink. Its decimal parser performs
+        // every accumulation in float precision; parsing as double and casting
+        // afterwards is observably different for values such as `.018` and
+        // `9.94`, and shifts antialiased arc coverage by a few levels.
+        let mut cursor = self.cursor;
+        let sign = if self.storage[cursor] == b'+' {
+            cursor += 1;
+            1.0_f32
+        } else if self.storage[cursor] == b'-' {
+            cursor += 1;
+            -1.0_f32
+        } else {
+            1.0_f32
+        };
+        if cursor == self.end() || (!IsDigit(self.storage[cursor]) && self.storage[cursor] != b'.')
+        {
             return None;
         }
-        self.cursor += unsafe { parsed_end.offset_from(begin) } as usize;
-        Some(value)
+
+        let integer_start = cursor;
+        while cursor < self.end() && IsDigit(self.storage[cursor]) {
+            cursor += 1;
+        }
+        let mut integer = 0.0_f32;
+        let mut multiplier = 1.0_f32;
+        for byte in self.storage[integer_start..cursor].iter().rev() {
+            integer += multiplier * f32::from(*byte - b'0');
+            multiplier *= 10.0_f32;
+        }
+        if !integer.is_finite() {
+            return None;
+        }
+
+        let mut digits_count = cursor - integer_start;
+        let mut decimal = 0.0_f32;
+        if cursor < self.end() && self.storage[cursor] == b'.' {
+            cursor += 1;
+            if cursor == self.end() || !IsDigit(self.storage[cursor]) {
+                return None;
+            }
+            let mut fraction = 1.0_f32;
+            while cursor < self.end() && IsDigit(self.storage[cursor]) {
+                fraction *= 0.1_f32;
+                decimal += f32::from(self.storage[cursor] - b'0') * fraction;
+                digits_count += 1;
+                cursor += 1;
+            }
+        }
+        if digits_count == 0 {
+            return None;
+        }
+
+        let mut value = (integer + decimal) * sign;
+        if cursor + 1 < self.end()
+            && matches!(self.storage[cursor], b'e' | b'E')
+            && !matches!(self.storage[cursor + 1], b'x' | b'm')
+        {
+            cursor += 1;
+            let exponent_is_negative = if self.storage[cursor] == b'+' {
+                cursor += 1;
+                false
+            } else if self.storage[cursor] == b'-' {
+                cursor += 1;
+                true
+            } else {
+                false
+            };
+            if cursor == self.end() || !IsDigit(self.storage[cursor]) {
+                return None;
+            }
+            let mut exponent = 0.0_f32;
+            while cursor < self.end() && IsDigit(self.storage[cursor]) {
+                exponent *= 10.0_f32;
+                exponent += f32::from(self.storage[cursor] - b'0');
+                cursor += 1;
+            }
+            if exponent_is_negative {
+                exponent = -exponent;
+            }
+            if exponent > f32::MAX_10_EXP as f32 {
+                return None;
+            }
+            if exponent != 0.0 {
+                value *= 10.0_f64.powf(f64::from(exponent)) as f32;
+            }
+        }
+        if !value.is_finite() {
+            return None;
+        }
+        self.cursor = cursor;
+        Some(f64::from(value))
     }
     fn Flag(&mut self) -> Option<bool> {
         self.SkipSeparators();
@@ -323,7 +416,10 @@ impl Parser {
         };
         let point = Offset { x, y };
         Some(if relative {
-            Add(self.current, point)
+            // SVGPathBuilder carries both segment values and current_point_ as
+            // gfx::PointF. Preserve its float addition at every relative
+            // segment boundary instead of retaining a higher-precision sum.
+            AddPathPoints(self.current, point)
         } else {
             point
         })
@@ -645,7 +741,11 @@ impl Parser {
             b'H' => {
                 let x = self.Number()?;
                 self.AddLine(Offset {
-                    x: if relative { self.current.x + x } else { x },
+                    x: if relative {
+                        f64::from(self.current.x as f32 + x as f32)
+                    } else {
+                        x
+                    },
                     y: self.current.y,
                 });
             }
@@ -653,7 +753,11 @@ impl Parser {
                 let y = self.Number()?;
                 self.AddLine(Offset {
                     x: self.current.x,
-                    y: if relative { self.current.y + y } else { y },
+                    y: if relative {
+                        f64::from(self.current.y as f32 + y as f32)
+                    } else {
+                        y
+                    },
                 });
             }
             b'C' => {
@@ -672,7 +776,7 @@ impl Parser {
                     return None;
                 };
                 let c1 = if matches!(self.previous_command, b'C' | b'S') {
-                    Subtract(Scale(self.current, 2.0), self.previous_cubic_control)
+                    SmoothPathControl(self.current, self.previous_cubic_control)
                 } else {
                     self.current
                 };
@@ -689,7 +793,7 @@ impl Parser {
             b'T' => {
                 let point = self.Point(relative)?;
                 let control = if matches!(self.previous_command, b'Q' | b'T') {
-                    Subtract(Scale(self.current, 2.0), self.previous_quadratic_control)
+                    SmoothPathControl(self.current, self.previous_quadratic_control)
                 } else {
                     self.current
                 };

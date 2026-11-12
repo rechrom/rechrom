@@ -21,6 +21,7 @@ pub mod paint_order;
 pub mod paint_phase;
 pub mod paint_property_tree;
 pub mod paint_result;
+pub mod path_hit_test;
 pub mod property_filter_operations;
 pub mod property_node_geometry;
 pub mod stroke_data;
@@ -34,7 +35,9 @@ pub use geometry::PaintRect;
 pub use paint_flags::PaintFlags;
 pub use paint_phase::PaintPhase;
 pub use paint_result::{kMaxPaintResult, PaintResult};
-pub use viewport::{PaintCompositorViewport, PaintCompositorViewportMode};
+pub use viewport::{
+    PaintCompositorViewport, PaintCompositorViewportMode, PaintVisualViewportState,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PaintWalkMetrics {
@@ -65,3 +68,19 @@ pub mod cc {
         pub mod tile_mode;
     }
 }
+
+pub mod geometry_mapper_source;
+pub mod source_enum_set;
+pub mod source_geometry;
+pub mod source_input_geometry;
+pub mod source_transform;
+
+pub mod basic_shape_commands;
+pub mod basic_shape_path;
+pub mod style_shape_path;
+
+pub mod border_shape_path;
+
+pub mod contoured_rect;
+
+pub mod paint_timing;

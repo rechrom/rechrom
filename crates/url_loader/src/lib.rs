@@ -12,11 +12,18 @@ mod url_loader;
 pub use default_url_loader::{DefaultURLLoader, DefaultURLLoaderOptions};
 pub use http_transport::{IsSameOrigin, ReferrerPolicy};
 pub use url_loader::{
-    RequestDefer, RequestDestination, ScriptType, URLLoadOperation, URLLoader, URLRequest,
-    URLResponse,
+    RequestDefer, RequestDestination, ResourceLoadPriority, ScriptType, URLLoadOperation,
+    URLLoader, URLRequest, URLResponse,
 };
 
 mod stream;
 pub use stream::{URLLoadEvent, URLResponseHead, URLStreamOperation, URLWakeCallback};
 
 mod file_stream;
+
+pub use http_transport::{
+    FetchCredentialsMode, FetchKeepaliveMetrics, FetchKeepaliveMetricsSnapshot,
+    FetchKeepaliveRequestState, FetchMode, FetchOrigin, FetchRedirectMode, NetworkFetchOptions,
+};
+
+pub use http_transport::IPAddressSpace;

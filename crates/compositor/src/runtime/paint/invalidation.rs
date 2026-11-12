@@ -133,6 +133,12 @@ impl RasterInvalidationItem for DisplayItem {
     fn VisualRect(&self) -> Rect {
         enclosing(self.VisualRect())
     }
+    fn RectKnownToBeOpaque(&self) -> Rect {
+        enclosing(self.RectKnownToBeOpaque())
+    }
+    fn IsBoxDecorationBackground(&self) -> bool {
+        self.id.r#type == paint::display_item_id::DisplayItemIdType::kBoxDecorationBackground
+    }
     fn GetPaintInvalidationReason(&self) -> PaintInvalidationReason {
         self.GetPaintInvalidationReason()
             .expect("validated native DisplayItem reason")

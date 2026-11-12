@@ -19,7 +19,7 @@ pub(super) fn ApplyStyleShape(builder: &mut ComputedStyleBuilder, extra: &Extend
             validate_coordinate(&point.y, field);
         };
         match shape.kind {
-            ShapeOutsideKind::kReferenceBox => {
+            ShapeOutsideKind::kCompiledPath | ShapeOutsideKind::kReferenceBox => {
                 if !shape.contour.is_empty() {
                     Invalid("shape_outside reference contour");
                 }

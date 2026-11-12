@@ -25,12 +25,18 @@ pub(super) type PlatformRasterPlayback<'request, 'image> = RasterPlayback<
 pub(super) struct RasterBackendTarget {
     size: Size,
     format: SharedImageFormat,
+    color_space: RasterColorSpace,
     expected_len: usize,
     pixels: Vec<u8>,
 }
 
 impl RasterBackendTarget {
-    pub fn new(size: Size, format: SharedImageFormat, pixels: Vec<u8>) -> io::Result<Self> {
+    pub fn new(
+        size: Size,
+        format: SharedImageFormat,
+        color_space: RasterColorSpace,
+        pixels: Vec<u8>,
+    ) -> io::Result<Self> {
         let expected_len = pixel_len(size)?;
         if pixels.len() != expected_len {
             return Err(io::Error::other(
@@ -40,6 +46,7 @@ impl RasterBackendTarget {
         Ok(Self {
             size,
             format,
+            color_space,
             expected_len,
             pixels,
         })
@@ -51,6 +58,10 @@ impl RasterBackendTarget {
 
     pub fn format(&self) -> SharedImageFormat {
         self.format
+    }
+
+    pub fn color_space(&self) -> &RasterColorSpace {
+        &self.color_space
     }
 
     pub fn row_bytes(&self) -> usize {
@@ -77,6 +88,25 @@ impl RasterBackendTarget {
 /// `RasterEngine` through `CompositorRasterProvider`; it never selects a Skia
 /// implementation or receives a Canvas.
 pub(super) trait RasterBackend: Send + Sync {
+    fn RasterLinkDragImage(
+        &self,
+        size: (i32, i32),
+        scale: f32,
+        text: &[((f32, f32), font_engine::plain_text_painter::PlainTextPaint)],
+    ) -> io::Result<Option<image_resource::ImmutableImageBitmap>>;
+    fn RasterDragImage(
+        &self,
+        record: &compositor_core::engine::ImmutablePaintRecord,
+        layout_size: (f64, f64),
+        paint_offset: (f64, f64),
+        scale: f32,
+        opacity: f32,
+        snapshots: &std::collections::BTreeMap<
+            u32,
+            canvas::child_paint_record::CanvasSnapshotReplacement,
+        >,
+    ) -> io::Result<Option<image_resource::ImmutableImageBitmap>>;
+
     fn Raster(
         &self,
         request: PlatformRasterPlayback<'_, '_>,

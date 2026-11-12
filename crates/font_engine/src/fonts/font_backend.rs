@@ -30,7 +30,7 @@ pub struct FontBackendGlyphMetrics {
 }
 
 // cpp: font_engine/fonts/font_backend.h:34-45
-pub trait FontBackend {
+pub trait FontBackend: Send + Sync {
     fn Metrics(
         &self,
         size: f32,
@@ -59,14 +59,33 @@ pub trait FontBackend {
         self.GlyphMetrics(glyph, size, synthetic_bold, synthetic_italic)
             .advance
     }
+    /// Source: skia/skia_text_metrics.cc:38-72.
+    ///
+    /// HarfBuzz normally requests a whole glyph run at once. Keep that batch
+    /// boundary in the platform abstraction so Skia can resolve every width
+    /// from one strike, exactly as Blink does. Non-Skia backends retain the
+    /// scalar fallback.
+    fn GlyphAdvancesForShaping(
+        &self,
+        glyphs: &[u16],
+        size: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+        advances: &mut [f32],
+    ) {
+        assert_eq!(glyphs.len(), advances.len());
+        for (advance, glyph) in advances.iter_mut().zip(glyphs) {
+            *advance = self.GlyphAdvanceForShaping(*glyph, size, synthetic_bold, synthetic_italic);
+        }
+    }
     fn WithVariations(&self, variations: &[FontVariation]) -> Arc<dyn FontBackend>;
 }
 
 // cpp: font_engine/fonts/font_backend.h:47-56
-pub trait FontBackendFactory {
+pub trait FontBackendFactory: Send + Sync {
     fn Create(
         &self,
-        bytes: &[u8],
+        bytes: &crate::SharedFontBytes,
         face_index: u32,
         variations: &[FontVariation],
         resolved_family: &str,

@@ -61,6 +61,11 @@ pub unsafe fn JS_SetInterruptHandler(
     (*rt).interrupt_handler = cb;
     (*rt).interrupt_opaque = opaque;
 }
+/// Set the per-execution native regexp backtrack limit for this runtime.
+/// The default zero preserves the original engine's unlimited behavior.
+pub unsafe fn JS_SetRegExpBacktrackLimit(rt: *mut JSRuntime, limit: u32) {
+    (*rt).regexp_backtrack_limit = limit;
+}
 pub unsafe fn JS_SetCanBlock(rt: *mut JSRuntime, can_block: JS_BOOL) {
     (*rt).can_block = can_block as i8;
 }

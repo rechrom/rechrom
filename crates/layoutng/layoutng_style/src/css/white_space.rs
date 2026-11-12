@@ -1,6 +1,14 @@
 // cpp: layoutng_style/css/white_space.h:11
 // Pending connection to //src/foundation:style_values_api.
 use foundation::{TextWrapMode, TextWrapStyle};
+// ComputedStyle::IsCollapsibleWhiteSpace, computed_style.h:2275-2284.
+pub fn IsCollapsibleWhiteSpace(character: u16, collapse: WhiteSpaceCollapse) -> bool {
+    match character {
+        0x20 | 0x09 => ShouldCollapseWhiteSpaces(collapse),
+        0x0a => ShouldCollapseBreaks(collapse),
+        _ => false,
+    }
+}
 
 // cpp: layoutng_style/css/white_space.h:21-33
 // C++ enum class with u8 underlying type permits any combined bit pattern.

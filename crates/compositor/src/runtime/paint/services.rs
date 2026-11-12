@@ -44,7 +44,13 @@ pub enum PaintConfigurationError {
 }
 impl std::fmt::Display for PaintConfigurationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self{Self::UnderInvalidationRasterBackendRequired=>write!(f,"under-invalidation checking needs a real diagnostic raster/overlay backend; disable that diagnostic explicitly for the CPU Paint constructor"),Self::Entropy(e)=>write!(f,"Paint metric sampler entropy: {e}")}
+        match self {
+            Self::UnderInvalidationRasterBackendRequired => write!(
+                f,
+                "under-invalidation checking needs a real diagnostic raster/overlay backend; disable that diagnostic explicitly for the CPU Paint constructor"
+            ),
+            Self::Entropy(e) => write!(f, "Paint metric sampler entropy: {e}"),
+        }
     }
 }
 impl std::error::Error for PaintConfigurationError {}

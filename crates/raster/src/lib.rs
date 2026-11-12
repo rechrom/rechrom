@@ -16,7 +16,12 @@ pub use reflection_mask::CompileReflectionMaskLayers;
 pub mod execution;
 #[cfg(target_vendor = "apple")]
 pub use execution::SkiaFontBackendFactory;
-pub use execution::{MapResourceForRead, RasterEngine, RasterReadView};
+pub use execution::{
+    Canvas2DRasterBackendFactory, ImageBitmapRespectingOrientation, MapResourceForRead,
+    MapVideoResourceForRead, Nv12ReadView, RasterEngine, RasterReadView,
+    RasterizeDocumentDragImage, RasterizeDocumentImageBitmap, ResizeAndOrientDragImage,
+    ResizeDragImageBitmap, ScaleCachedDragImage, ScaleDocumentDragImage,
+};
 #[cfg(any(test, feature = "artifact_test_support"))]
 pub use execution::{
     RasterizePaintArtifact, RasterizePaintArtifactTransparent, RasterizePaintArtifactWithScale,

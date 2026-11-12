@@ -6,6 +6,7 @@ pub struct SharedFontBytes(Arc<Backing>);
 
 enum Backing {
     Owned(Arc<[u8]>),
+    Static(&'static [u8]),
     #[cfg(unix)]
     Mapped(ReadOnlyMapping),
 }
@@ -16,14 +17,24 @@ impl SharedFontBytes {
         Arc::ptr_eq(&a.0, &b.0)
             || match (&*a.0, &*b.0) {
                 (Backing::Owned(a), Backing::Owned(b)) => Arc::ptr_eq(a, b),
+                (Backing::Static(a), Backing::Static(b)) => std::ptr::eq(*a, *b),
                 #[cfg(unix)]
+                _ => false,
+                #[cfg(not(unix))]
                 _ => false,
             }
     }
 
+    /// Retain bytes embedded in the executable without copying them. Repeated
+    /// handles to the same static slice preserve resource identity across
+    /// Document and Page replacement.
+    pub fn from_static(bytes: &'static [u8]) -> Self {
+        Self(Arc::new(Backing::Static(bytes)))
+    }
+
     pub fn is_mapped(&self) -> bool {
         match &*self.0 {
-            Backing::Owned(_) => false,
+            Backing::Owned(_) | Backing::Static(_) => false,
             #[cfg(unix)]
             Backing::Mapped(_) => true,
         }
@@ -106,6 +117,7 @@ impl Deref for SharedFontBytes {
     fn deref(&self) -> &[u8] {
         match &*self.0 {
             Backing::Owned(bytes) => bytes,
+            Backing::Static(bytes) => bytes,
             #[cfg(unix)]
             Backing::Mapped(mapping) => {
                 // SAFETY: The entire nonempty file is mapped, the pointer and
@@ -207,6 +219,17 @@ mod tests {
         assert!(a != SharedFontBytes::from(b"other font"));
         assert!(!a.is_mapped());
         assert!(SharedFontBytes::default().is_empty());
+    }
+
+    #[test]
+    fn static_storage_preserves_identity_without_copying() {
+        static FONT: &[u8] = b"embedded font bytes";
+        let a = SharedFontBytes::from_static(FONT);
+        let b = SharedFontBytes::from_static(FONT);
+        assert!(SharedFontBytes::ptr_eq(&a, &b));
+        assert_eq!(a.as_ptr(), FONT.as_ptr());
+        assert_eq!(b.as_ptr(), FONT.as_ptr());
+        assert!(!a.is_mapped());
     }
 
     #[cfg(unix)]
