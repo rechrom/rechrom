@@ -1022,6 +1022,20 @@ fn build_graphs(document: &FilterDocument<'_>) -> Arc<Vec<SvgFilterGraph>> {
         .map(|index| build_one(document, index))
         .collect();
     trace.set("filters", graphs.len() as f64);
+    trace.set(
+        "primitives",
+        graphs
+            .iter()
+            .map(|graph| graph.primitives.len())
+            .sum::<usize>() as f64,
+    );
+    trace.set(
+        "unsupported",
+        graphs
+            .iter()
+            .filter(|graph| graph.unsupported.is_some())
+            .count() as f64,
+    );
     Arc::new(graphs)
 }
 // cpp: FilterEffectBuilder::BuildReferenceFilter / SVGFilterBuilder::BuildGraph.

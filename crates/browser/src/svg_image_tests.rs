@@ -14,6 +14,46 @@ const ANIMATED_SVG: &[u8] = br#"
 </svg>
 "#;
 
+const TURBULENCE_FILTER_SVG: &[u8] = br#"
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160">
+  <filter id="noise">
+    <feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="3"/>
+  </filter>
+  <rect width="160" height="160" filter="url(#noise)"/>
+</svg>
+"#;
+
+#[test]
+fn document_image_svg_filter_uses_the_svg_visual_reference_box() {
+    crate::test_thread::run(|| {
+        let assembly = crate::CreateLayoutAssembly();
+        let mut decoder = crate::CreateSVGImageDecoder(&assembly);
+        let container = ContainerKey::new(160, 160, 1.0, 1.0);
+        let created = decoder
+            .create(
+                29,
+                Arc::from(TURBULENCE_FILTER_SVG),
+                "image/svg+xml",
+                &container,
+            )
+            .unwrap();
+        let record = paint::paint_engine::downcast_document_paint_record::<
+            paint::paint_engine::DocumentPaintArtifactRecord,
+        >(&created.initial_frame.record)
+        .unwrap();
+        let filter = record
+            .artifact
+            .items
+            .iter()
+            .find(|item| item.r#type == paint::paint_engine::DisplayItemType::kSaveLayerFilter)
+            .expect("the SVG reference filter produces a filter display item");
+        assert!(
+            !filter.canonical_filters.is_empty(),
+            "a non-empty SVG visual rect must lower the reference filter"
+        );
+    });
+}
+
 #[test]
 fn document_image_timeline_publishes_immutable_changed_records_only() {
     crate::test_thread::run(|| {

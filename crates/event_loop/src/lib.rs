@@ -128,6 +128,7 @@ pub struct EventLoopEngine<T, F> {
     next_delayed_order: u64,
     stopped: bool,
     executing: bool,
+    rendered_last_turn: bool,
 }
 
 impl<T, F> Default for EventLoopEngine<T, F> {
@@ -140,6 +141,7 @@ impl<T, F> Default for EventLoopEngine<T, F> {
             next_delayed_order: 0,
             stopped: false,
             executing: false,
+            rendered_last_turn: false,
         }
     }
 }
@@ -231,11 +233,33 @@ impl<T, F> EventLoopEngine<T, F> {
 
         let result = if let Some(task) = self.TakeReady(TaskPriority::UserBlocking) {
             Self::RunCompleteTask(executor, TaskPriority::UserBlocking, task)
+        } else if self.rendered_last_turn {
+            if let Some(task) = self.TakeReady(TaskPriority::Normal) {
+                self.rendered_last_turn = false;
+                Self::RunCompleteTask(executor, TaskPriority::Normal, task)
+            } else if let Some((context, frame)) = self.pending_rendering.pop_first() {
+                self.rendered_last_turn = true;
+                executor.UpdateRendering(context, frame)
+            } else if let Some(task) = self.TakeReady(TaskPriority::Background) {
+                self.rendered_last_turn = false;
+                Self::RunCompleteTask(executor, TaskPriority::Background, task)
+            } else {
+                Ok(())
+            }
         } else if let Some((context, frame)) = self.pending_rendering.pop_first() {
+            // Chromium's renderer scheduler prioritizes a pending rendering
+            // opportunity, but it also prevents compositor work from starving
+            // the default task queues. Once one rendering turn has run, admit
+            // one ready normal task before another frame. This matters when a
+            // frame takes longer than VSync: resource/decode completions must
+            // still reach the document while newer BeginMainFrames coalesce.
+            self.rendered_last_turn = true;
             executor.UpdateRendering(context, frame)
         } else if let Some(task) = self.TakeReady(TaskPriority::Normal) {
+            self.rendered_last_turn = false;
             Self::RunCompleteTask(executor, TaskPriority::Normal, task)
         } else if let Some(task) = self.TakeReady(TaskPriority::Background) {
+            self.rendered_last_turn = false;
             Self::RunCompleteTask(executor, TaskPriority::Background, task)
         } else {
             Ok(())
@@ -409,6 +433,37 @@ mod tests {
                 "render:1:10",
                 "task:1:Normal:ordinary"
             ]
+        );
+    }
+
+    #[test]
+    fn continuous_rendering_does_not_starve_regular_tasks() {
+        let now = Instant::now();
+        let mut engine = EventLoopEngine::New();
+        engine.Apply(
+            EventLoopMutation::BeginMainFrame {
+                context: ExecutionContextId(1),
+                frame: 10,
+            },
+            now,
+        );
+        let mut client = TestExecutor::default();
+        engine.OnWake(now, &mut client).unwrap();
+
+        engine.Apply(task(1, 1, TaskPriority::Normal, "resource"), now);
+        engine.Apply(
+            EventLoopMutation::BeginMainFrame {
+                context: ExecutionContextId(1),
+                frame: 11,
+            },
+            now,
+        );
+        engine.OnWake(now, &mut client).unwrap();
+        engine.OnWake(now, &mut client).unwrap();
+
+        assert_eq!(
+            client.log,
+            ["render:1:10", "task:1:Normal:resource", "render:1:11"]
         );
     }
 

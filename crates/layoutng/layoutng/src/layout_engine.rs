@@ -541,6 +541,14 @@ impl LayoutEngine {
         else {
             return None;
         };
+        // ImageLoader is shared by image-like HTML elements (including video
+        // poster handling), while this entry point is specifically
+        // ImageLoader::UpdateLayoutObject for LayoutImage. Keep the native
+        // type admission ahead of the LayoutImageResource facts query and
+        // downcast; specialized media objects use their own updater below.
+        if !unsafe { &*object }.IsLayoutImage() {
+            return None;
+        }
         let query = self
             .objects_
             .replaced_image_resource_facts

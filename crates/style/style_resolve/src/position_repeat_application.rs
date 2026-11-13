@@ -56,8 +56,8 @@ fn Ident(id: CSSPropertyID, value: &Value) -> Result<CSSValueID> {
 }
 // cpp: style_builder_converter.cc ConvertLength; css_numeric_literal_value.cc
 // ComputeLengthDouble. Reuse the production literal resolver's admitted units.
-// Typed math uses the same length resolver as transform application. Missing
-// font/container metrics and non-transform zoom policies remain collaborators.
+// Typed math uses the same zoom-aware length resolver as the other generated
+// longhands; computed fixed lengths retain Blink's effective-zoom scaling.
 pub(super) fn ConvertLength(
     id: CSSPropertyID,
     value: &Value,
@@ -65,22 +65,6 @@ pub(super) fn ConvertLength(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> Result<Length> {
-    if b.EffectiveZoom() != 1.0
-        && !matches!(value.Payload(), CSSValuePayload::kNumericLiteralClass(n) if n.GetType() == UnitType::kPercentage)
-        && !matches!(
-            id,
-            CSSPropertyID::kTransform
-                | CSSPropertyID::kTranslate
-                | CSSPropertyID::kTransformOrigin
-                | CSSPropertyID::kPerspectiveOrigin
-                | CSSPropertyID::kWebkitTransformOriginX
-                | CSSPropertyID::kWebkitTransformOriginY
-                | CSSPropertyID::kWebkitPerspectiveOriginX
-                | CSSPropertyID::kWebkitPerspectiveOriginY
-        )
-    {
-        return Err(LonghandApplicationError::Unsupported(id));
-    }
     let mut resolver = super::production_style_builder::MathLengthResolver(
         id,
         b.GetFontDescription().ComputedSize(),
@@ -1042,12 +1026,17 @@ mod tests {
         assert!(b.AccessBackgroundLayers().PositionX() == &before);
         assert!(b.AccessBackgroundLayers().Next().is_null());
         b.SetEffectiveZoom(2.0);
-        assert_eq!(
-            apply(&mut b, CSSPropertyID::kObjectPosition, "1px", None),
-            Err(LonghandApplicationError::Unsupported(
-                CSSPropertyID::kObjectPosition
-            ))
-        );
+        apply(&mut b, CSSPropertyID::kObjectPosition, "1px", None).unwrap();
+        assert_eq!(b.ObjectPosition().X().Pixels(), 2.0);
         assert!(apply(&mut b, CSSPropertyID::kObjectPosition, "20%", None).is_ok());
+        apply(
+            &mut b,
+            CSSPropertyID::kBackgroundSize,
+            "96px 12px",
+            None,
+        )
+        .unwrap();
+        assert_eq!(b.AccessBackgroundLayers().SizeLength().Width().Pixels(), 192.0);
+        assert_eq!(b.AccessBackgroundLayers().SizeLength().Height().Pixels(), 24.0);
     }
 }

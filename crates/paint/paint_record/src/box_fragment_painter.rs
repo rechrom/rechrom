@@ -3747,6 +3747,23 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .then_some(u8::from(paint_style.used_dark_color_scheme())),
             )
         });
+        if browser_tracing::enabled() {
+            if let (Some(image), Some(container)) = (image, &document_image_container_key) {
+                browser_tracing::instant(
+                    "paint_record",
+                    "PaintRecord.DocumentBackgroundContainer",
+                    &[
+                        ("tile_width", tile.width),
+                        ("tile_height", tile.height),
+                        ("image_width", f64::from(image.width)),
+                        ("image_height", f64::from(image.height)),
+                        ("container_width", f64::from(container.width)),
+                        ("container_height", f64::from(container.height)),
+                        ("size_mode", layer.size_mode as i32 as f64),
+                    ],
+                );
+            }
+        }
         let no_repeat_bitmap_destination = if image.is_some() && !repeat_x && !repeat_y {
             let image_origin = self.node.PixelSnappedOffset(Offset {
                 x: tile.x,

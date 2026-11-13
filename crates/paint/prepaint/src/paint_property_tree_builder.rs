@@ -1009,22 +1009,41 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // paint_property_tree_builder.cc:2602,2609-2612. A pixel-moving layer
             // uses its stitched visual overflow including self-painting layer
             // descendants, not this physical fragment's border box.
-            let local_reference_box = fragment
-                .paint
-                .paint_layer_filter_reference_box
-                .map(|rect| PaintRect {
-                    x: node.paint_offset.x + rect.offset.x,
-                    y: node.paint_offset.y + rect.offset.y,
-                    width: rect.size.width,
-                    height: rect.size.height,
-                })
-                .unwrap_or_else(|| {
-                    if fragment.paint.PaintLayerStateIsAuthoritative() && node.is_paint_layer {
-                        PaintRect::default()
-                    } else {
-                        NinePieceImageGeometry::ReferenceRect(&node)
-                    }
-                });
+            let local_reference_box = if IsSvgEffectChild(fragment.paint.source_kind) {
+                // Source: paint_property_tree_builder.cc:2615-2627 and
+                // LayoutSVGModelObject::VisualRectInLocalSVGCoordinates().
+                // SVG children do not use a PaintLayer filter reference box;
+                // their decorated local SVG visual rect is the filter input
+                // and output-bounds reference.  The anonymous NG fragment can
+                // be empty, so a box-decoration reference rect is not an
+                // equivalent fallback.
+                fragment
+                    .paint
+                    .svg_visual_rect
+                    .map_or_else(PaintRect::default, |rect| PaintRect {
+                        x: node.paint_offset.x + rect.offset.x,
+                        y: node.paint_offset.y + rect.offset.y,
+                        width: rect.size.width,
+                        height: rect.size.height,
+                    })
+            } else {
+                fragment
+                    .paint
+                    .paint_layer_filter_reference_box
+                    .map(|rect| PaintRect {
+                        x: node.paint_offset.x + rect.offset.x,
+                        y: node.paint_offset.y + rect.offset.y,
+                        width: rect.size.width,
+                        height: rect.size.height,
+                    })
+                    .unwrap_or_else(|| {
+                        if fragment.paint.PaintLayerStateIsAuthoritative() && node.is_paint_layer {
+                            PaintRect::default()
+                        } else {
+                            NinePieceImageGeometry::ReferenceRect(&node)
+                        }
+                    })
+            };
             let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
                 1.0
             } else {

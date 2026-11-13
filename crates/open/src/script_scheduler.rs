@@ -132,6 +132,11 @@ struct ParserResources {
     scripting: bool,
     preloads: crate::preload::Preloads,
     preload_csp_seen: bool,
+    // HTMLImageElement::InsertedInto schedules ImageLoader::UpdateFromElement.
+    // The parser temporarily owns the Document arena, so retain only element
+    // identities here and attach the authoritative loaders as soon as that
+    // same arena is returned to ResourceFetcher after the bounded parser turn.
+    parser_image_loaders: Vec<u64>,
 }
 
 impl ParserResources {
@@ -372,19 +377,11 @@ impl HTMLParserHost for ParserHost {
             let page = self.0.borrow().page.clone();
             if let Some(page) = page {
                 let selection = page.SelectResponsiveImageInDocument(document, element);
-                let source = selection.as_ref().map(|s| s.source.clone());
                 document.SetResponsiveImageSelection(element, selection);
-                if let Some(source) = source {
-                    let image = document.Node(element);
-                    let attr = |name| image.FindAttribute(name).map_or("", |a| a.value.as_str());
-                    page.QueueImageWithPolicy(
-                        &source,
-                        None,
-                        !attr("loading").eq_ignore_ascii_case("lazy"),
-                        url_loader::ReferrerPolicy::FromString(attr("referrerpolicy")),
-                    )
-                    .expect("source URL resolution");
-                }
+                self.0
+                    .borrow_mut()
+                    .parser_image_loaders
+                    .push(document.Node(element).Id());
             }
         }
         if let Some(sheet) = sheet {
@@ -396,6 +393,38 @@ impl HTMLParserHost for ParserHost {
             *stored = Some(sheet);
         }
     }
+}
+
+fn FlushParserImageLoaders(
+    resources: &Rc<RefCell<ParserResources>>,
+    document: &Rc<RefCell<DOM>>,
+) -> io::Result<()> {
+    let (page, nodes) = {
+        let mut resources = resources.borrow_mut();
+        (
+            resources.page.clone(),
+            std::mem::take(&mut resources.parser_image_loaders),
+        )
+    };
+    let Some(page) = page else {
+        return Ok(());
+    };
+    let nodes = {
+        let owner = document.borrow();
+        let document = owner.GetDocument();
+        nodes
+            .into_iter()
+            .filter_map(|node| document.FindNodeById(node))
+            .collect::<Vec<_>>()
+    };
+    for node in nodes {
+        page.UpdateHTMLImageLoader(
+            node,
+            dom::persistent_document::ImageLoaderUpdate::Normal,
+            false,
+        )?;
+    }
+    Ok(())
 }
 
 /// Scoped arena handoff required by the existing JS parser-script adapters.
@@ -734,6 +763,7 @@ impl ScriptScheduler {
                 scripting: true,
                 preloads: Default::default(),
                 preload_csp_seen: false,
+                parser_image_loaders: Vec::new(),
             })),
             script_resources: HashMap::new(),
             render_blocking_scripts: HashMap::new(),
@@ -1478,8 +1508,10 @@ impl ScriptScheduler {
             // same arena to the embedding for its synchronous DOM lifecycle
             // effects before any ready async or parser-blocking script runs.
             DOM::WithDocument(&self.document, arena.owner.GetDocumentMut(), || {
+                FlushParserImageLoaders(&self.resources, &self.document)?;
                 client.DidPumpParserWithRuntime(runtime, realm);
-            });
+                Ok::<_, io::Error>(())
+            })?;
         }
         loader.WithParser(arena.owner.GetDocumentMut(), &mut host, |parser| {
             // Reserve executable parser scripts before async JS can mutate the
@@ -1890,6 +1922,7 @@ impl ParserResourceDiscovery {
                 scripting: false,
                 preloads: Default::default(),
                 preload_csp_seen: false,
+                parser_image_loaders: Vec::new(),
             })),
             import_map: HashMap::new(),
         }
@@ -1924,6 +1957,7 @@ impl ParserResourceDiscovery {
         // Document, including allocation-driven InputType initialization.
         drop(owner);
         if progress.parser_made_progress {
+            FlushParserImageLoaders(&self.resources, &self.document)?;
             client.DidPumpParser();
         }
         if progress.parser.status == HTMLParserStatus::kWaitingForScript {

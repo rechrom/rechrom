@@ -367,7 +367,25 @@ impl<M: RasterInvalidationTypes> RasterInvalidator<M> {
             } else {
                 Reason::kNone
             };
-            let resource_changed = chunks.artifact().ChunkHasResourceChange(index);
+            // Chromium's PaintRecord keeps ImageResourceContent identity live,
+            // so a moved cached subsequence observes a completed image without
+            // replacing its record. Rechrom publishes immutable resource
+            // snapshots across the Paint -> Compositor boundary. Compare the
+            // exact per-record revision proof here before taking Chromium's
+            // moved-subsequence shortcut; otherwise the old (often
+            // provisional/empty) cc display list survives after the image
+            // record becomes available.
+            let old_chunk_index =
+                self.old_paint_chunks_info_[matched_index].index_in_paint_artifact;
+            let resource_changed = chunks.artifact().ChunkHasResourceChange(index)
+                || self
+                    .old_paint_artifact_
+                    .as_ref()
+                    .expect("source old artifact")
+                    .ImageContentRevisionsInChunk(old_chunk_index)
+                    != chunks
+                        .artifact()
+                        .ImageContentRevisionsInChunk(index);
             if !offset_changed
                 && reason == Reason::kNone
                 && new.is_moved_from_cached_subsequence()

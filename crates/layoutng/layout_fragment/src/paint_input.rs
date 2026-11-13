@@ -2325,10 +2325,13 @@ impl PaintStyle {
     }
 
     fn BindFilterResources(&self, filters: &mut [PaintFilterOperation]) {
+        let mut references = 0usize;
+        let mut bound = 0usize;
         for filter in filters {
             if filter.r#type != PaintFilterType::kReference {
                 continue;
             }
+            references += 1;
             let Some(id) = filter
                 .reference_url
                 .as_deref()
@@ -2347,7 +2350,19 @@ impl PaintStyle {
                 graph.stroke_paint = self.data.svg_stroke;
                 filter.reference_error = graph.unsupported.clone();
                 filter.reference_graph = Some(Arc::new(graph));
+                bound += 1;
             }
+        }
+        if browser_tracing::enabled() && references != 0 {
+            browser_tracing::instant(
+                "layout_fragment",
+                "PaintStyle.BindFilterResources",
+                &[
+                    ("references", references as f64),
+                    ("graphs", self.data.svg_filter_graphs.len() as f64),
+                    ("bound", bound as f64),
+                ],
+            );
         }
     }
 

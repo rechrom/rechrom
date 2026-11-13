@@ -4930,6 +4930,32 @@ impl PageState {
                 state.lazy_image_nodes.borrow_mut().remove(&node);
             }
         }));
+        // Source: ImageLoader::UpdateLayoutObject and
+        // LayoutImage::ImageChanged. ImageResourceContent completion updates
+        // the resident LayoutImage which observes that exact content owner;
+        // rebuilding DOM/style inputs alone cannot replace this notification
+        // because LayoutImageResource intentionally preserves native object
+        // identity across lifecycle updates.
+        let image_layout_state = Rc::downgrade(self);
+        resources.SetHTMLImageLoaderLayoutUpdate(Rc::new(move |node, update| {
+            let Some(state) = image_layout_state.upgrade() else {
+                return;
+            };
+            let Some(result) = state
+                .layout_engine
+                .borrow_mut()
+                .UpdateHTMLImageResource(node, update)
+            else {
+                return;
+            };
+            if result.needs_layout {
+                state.InvalidateLayoutOutput();
+            } else {
+                state.DocumentLifecycle().ScheduleVisualUpdate();
+            }
+            state.scroll_only.set(false);
+            state.dirty.set(true);
+        }));
         self.style_engine
             .borrow()
             .CSSOMSource()
