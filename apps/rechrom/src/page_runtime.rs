@@ -2852,6 +2852,12 @@ fn run_document(
                         frame.display_items.recording_revision,
                     )
                 });
+                let artifact_before_was_published = page.CurrentFrame().is_some_and(|frame| {
+                    published.is_some_and(|publication| {
+                        publication.0 == frame.sequence
+                            && publication.1 == frame.compositor_scroll_sequence
+                    })
+                });
                 if std::mem::take(&mut resize_event_pending) && params.scripting {
                     let _ = page.Evaluate(
                         "window.dispatchEvent(new Event('resize'))",
@@ -2893,12 +2899,6 @@ fn run_document(
                     _ => false,
                 };
                 let has_no_artifact = page.CurrentFrame().is_none();
-                let current_frame_was_published = page.CurrentFrame().is_some_and(|frame| {
-                    published.is_some_and(|publication| {
-                        publication.0 == frame.sequence
-                            && publication.1 == frame.compositor_scroll_sequence
-                    })
-                });
                 if first_response_for_epoch
                     && !embedder_revision_changed
                     && !copy_output_fence_pending
@@ -2909,7 +2909,13 @@ fn run_document(
                     // a previously published frame here leaves cc permanently
                     // waiting on main, so the later dirty parse can never ask
                     // for the BMF that creates the actual first frame.
-                    && (has_no_artifact || current_frame_was_published)
+                    // Test publication before UpdateRendering: reflecting an
+                    // impl scroll advances PageFrame provenance while retaining
+                    // the already-published PaintArtifact. Testing the updated
+                    // sequence mistakes that acknowledgement for new content
+                    // and commits the artifact's stale main-thread scroll base
+                    // back to cc, rolling the active offset toward the edge.
+                    && (has_no_artifact || artifact_before_was_published)
                     && (pending_resize_provenance.is_none() || has_no_artifact)
                 {
                     send_event_timing_requests(&page, &impl_sender, false)?;

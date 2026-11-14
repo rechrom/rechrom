@@ -152,35 +152,51 @@ impl LayoutEngine {
         position: Offset,
         _source_type: scroll_snap::scroll_source_type::ScrollSourceType,
     ) -> Option<NativeCompositorScrollUpdate> {
-        let tree = self.GetLayoutTree()?;
-        let _scope = self.NativeScrollPassScope();
-        let view = unsafe {
-            foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(
-                tree.Root() as *const LayoutObject,
+        let (target_node_id, offset) = {
+            let tree = self.GetLayoutTree()?;
+            let _scope = self.NativeScrollPassScope();
+            let view = unsafe {
+                foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(
+                    tree.Root() as *const LayoutObject,
+                )
+                .as_ref()
+            }?;
+            let area = view.RegisteredScrollableAreas().into_iter().find(|area| {
+                let pointer = area.Get();
+                !pointer.is_null()
+                    && !unsafe { &*pointer }.HasBeenDisposed()
+                    && unsafe { &*pointer }.GetScrollElementId() == expected
+            })?;
+            let area = unsafe { &*area.Get() };
+            let box_ = unsafe { area.GetLayoutBox().as_ref() }?;
+            let node = unsafe { box_.GetNode().as_ref() }?;
+            let position = gfx::PointF::new(position.x as f32, position.y as f32);
+            (
+                node.InputId(),
+                area.ClampScrollOffset(&area.ScrollPositionToOffset(&position)),
             )
-            .as_ref()
-        }?;
-        let area = view.RegisteredScrollableAreas().into_iter().find(|area| {
-            let pointer = area.Get();
-            !pointer.is_null()
-                && !unsafe { &*pointer }.HasBeenDisposed()
-                && unsafe { &*pointer }.GetScrollElementId() == expected
-        })?;
-        let area = unsafe { &mut *area.Get() };
-        let box_ = unsafe { area.GetLayoutBox().as_ref() }?;
-        let node = unsafe { box_.GetNode().as_ref() }?;
-        let position = gfx::PointF::new(position.x as f32, position.y as f32);
-        let offset = area.ClampScrollOffset(&area.ScrollPositionToOffset(&position));
-        area.UpdateScrollOffset(
+        };
+        let offset = Offset {
+            x: f64::from(offset.x()),
+            y: f64::from(offset.y()),
+        };
+        // ScrollableArea::DidCompositorScroll mutates the one resident
+        // PaintLayerScrollableArea in Chromium. Rechrom's retained attachment
+        // descriptor is not a second owner, but it is the input sampled by the
+        // next incremental lifecycle and by LayoutOutput::ScrollOffsets. Keep
+        // it on the same value in this transaction; otherwise a concurrent
+        // animation layout exports the pre-scroll value and Page reflects that
+        // stale value back into both DOM and the next compositor commit.
+        if !self.GetLayoutTreeMut()?.UpdateScrollOffset(
+            target_node_id,
             offset,
             layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
-        );
+        ) {
+            return None;
+        }
         Some(NativeCompositorScrollUpdate {
-            target_node_id: node.InputId(),
-            offset: Offset {
-                x: f64::from(offset.x()),
-                y: f64::from(offset.y()),
-            },
+            target_node_id,
+            offset,
         })
     }
 

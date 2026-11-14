@@ -240,6 +240,170 @@ pub use sse2::S32_alpha_D32_filter_DX;
 #[cfg(target_arch = "aarch64")]
 pub mod neon {
     use std::arch::aarch64::*;
+
+    #[inline(always)]
+    unsafe fn bilerp_eight_channels(
+        a00: uint16x8_t,
+        a01: uint16x8_t,
+        a10: uint16x8_t,
+        a11: uint16x8_t,
+        x: uint16x8_t,
+        y: uint16x8_t,
+        scale: u32,
+    ) -> uint16x8_t {
+        let sixteen = vdupq_n_u16(16);
+        let inverse_x = vsubq_u16(sixteen, x);
+        let inverse_y = vsubq_u16(sixteen, y);
+        let left = vmlaq_u16(vmulq_u16(a00, inverse_y), a10, y);
+        let right = vmlaq_u16(vmulq_u16(a01, inverse_y), a11, y);
+        let mut result = vmlaq_u16(vmulq_u16(left, inverse_x), right, x);
+        if scale < 256 {
+            result = vshrq_n_u16::<8>(result);
+            result = vmulq_u16(result, vdupq_n_u16(scale as u16));
+        }
+        result
+    }
+
+    #[inline(always)]
+    unsafe fn four_pixel_weights(values: [u16; 4]) -> (uint16x8_t, uint16x8_t) {
+        let packed = vld1_u16(values.as_ptr());
+        (
+            vcombine_u16(
+                vdup_n_u16(vget_lane_u16::<0>(packed)),
+                vdup_n_u16(vget_lane_u16::<1>(packed)),
+            ),
+            vcombine_u16(
+                vdup_n_u16(vget_lane_u16::<2>(packed)),
+                vdup_n_u16(vget_lane_u16::<3>(packed)),
+            ),
+        )
+    }
+
+    #[inline(always)]
+    unsafe fn filter_four_vectors_by_alpha(
+        a00: uint32x4_t,
+        a01: uint32x4_t,
+        a10: uint32x4_t,
+        a11: uint32x4_t,
+        x: [u16; 4],
+        y: [u16; 4],
+        dst: *mut u32,
+        scale: u32,
+    ) {
+        let pixels = |values: uint32x4_t| {
+            let bytes = vreinterpretq_u8_u32(values);
+            (vmovl_u8(vget_low_u8(bytes)), vmovl_u8(vget_high_u8(bytes)))
+        };
+        let (a00_low, a00_high) = pixels(a00);
+        let (a01_low, a01_high) = pixels(a01);
+        let (a10_low, a10_high) = pixels(a10);
+        let (a11_low, a11_high) = pixels(a11);
+        let (x_low, x_high) = four_pixel_weights(x);
+        let (y_low, y_high) = four_pixel_weights(y);
+        let low = bilerp_eight_channels(a00_low, a01_low, a10_low, a11_low, x_low, y_low, scale);
+        let high = bilerp_eight_channels(
+            a00_high, a01_high, a10_high, a11_high, x_high, y_high, scale,
+        );
+        let result = vcombine_u8(vshrn_n_u16::<8>(low), vshrn_n_u16::<8>(high));
+        vst1q_u32(dst, vreinterpretq_u32_u8(result));
+    }
+
+    /// Four-pixel form of the same native NEON bilerp producer.  Each weight
+    /// is replicated across that pixel's BGRA lanes; arithmetic order and
+    /// narrowing match `filter_and_scale_by_alpha` exactly.
+    pub(crate) unsafe fn filter_four_by_alpha(
+        a00: [u32; 4],
+        a01: [u32; 4],
+        a10: [u32; 4],
+        a11: [u32; 4],
+        x: [u16; 4],
+        y: [u16; 4],
+        dst: *mut u32,
+        scale: u32,
+    ) {
+        filter_four_vectors_by_alpha(
+            vld1q_u32(a00.as_ptr()),
+            vld1q_u32(a01.as_ptr()),
+            vld1q_u32(a10.as_ptr()),
+            vld1q_u32(a11.as_ptr()),
+            x,
+            y,
+            dst,
+            scale,
+        );
+    }
+
+    /// Fast form for the common shallow-affine run where four adjacent output
+    /// samples address the same two source rows and consecutive source columns.
+    /// The bilerp weights remain per-pixel, so this is bit-identical to the
+    /// general translated SkBitmapProcState DXDY producer.
+    pub(crate) unsafe fn filter_four_contiguous_by_alpha(
+        row0: *const u32,
+        row1: *const u32,
+        x0: usize,
+        x: [u16; 4],
+        y: [u16; 4],
+        dst: *mut u32,
+        scale: u32,
+    ) {
+        filter_four_vectors_by_alpha(
+            vld1q_u32(row0.add(x0)),
+            vld1q_u32(row0.add(x0 + 1)),
+            vld1q_u32(row1.add(x0)),
+            vld1q_u32(row1.add(x0 + 1)),
+            x,
+            y,
+            dst,
+            scale,
+        );
+    }
+
+    /// Four-pixel specialization of the bilerp-alpha plus DstIn channel scale
+    /// used by the software renderer's fractional mask tiles.
+    pub(crate) unsafe fn dst_in_bilerp_four(
+        a00: [u32; 4],
+        a10: [u32; 4],
+        a01: [u32; 4],
+        a11: [u32; 4],
+        wx0: f32,
+        fx: f32,
+        wy0: f32,
+        fy: f32,
+        paint_scale: f32,
+        destination: *mut u32,
+    ) {
+        let alpha = |values: &[u32; 4]| vcvtq_f32_u32(vld1q_u32(values.as_ptr()));
+        let a00 = vmulq_n_f32(vmulq_n_f32(alpha(&a00), wx0), wy0);
+        let a10 = vmulq_n_f32(vmulq_n_f32(alpha(&a10), fx), wy0);
+        let a01 = vmulq_n_f32(vmulq_n_f32(alpha(&a01), wx0), fy);
+        let a11 = vmulq_n_f32(vmulq_n_f32(alpha(&a11), fx), fy);
+        let sampled = vaddq_f32(vaddq_f32(vaddq_f32(a00, a10), a01), a11);
+        let scale = vmulq_n_f32(sampled, paint_scale);
+        let bytes = vreinterpretq_u8_u32(vld1q_u32(destination));
+        let scale_two = |channels: uint8x8_t, first: f32, second: f32| {
+            let channels = vmovl_u8(channels);
+            let scale_channels = |channels: uint16x4_t, scale: f32| {
+                let channels = vcvtq_f32_u32(vmovl_u16(channels));
+                let rounded = vaddq_f32(vmulq_n_f32(channels, scale), vdupq_n_f32(0.5));
+                vminq_u32(vcvtq_u32_f32(rounded), vdupq_n_u32(255))
+            };
+            let first = scale_channels(vget_low_u16(channels), first);
+            let second = scale_channels(vget_high_u16(channels), second);
+            vmovn_u16(vcombine_u16(vmovn_u32(first), vmovn_u32(second)))
+        };
+        let low = scale_two(
+            vget_low_u8(bytes),
+            vgetq_lane_f32::<0>(scale),
+            vgetq_lane_f32::<1>(scale),
+        );
+        let high = scale_two(
+            vget_high_u8(bytes),
+            vgetq_lane_f32::<2>(scale),
+            vgetq_lane_f32::<3>(scale),
+        );
+        vst1q_u32(destination, vreinterpretq_u32_u8(vcombine_u8(low, high)));
+    }
+
     pub fn filter_and_scale_by_alpha(
         x: u32,
         y: u32,
@@ -397,6 +561,73 @@ pub unsafe fn S32_alpha_D32_filter_DXDY(
     let rb = s.fPixmap.rowBytes();
     let mut xy_offset = 0;
     let mut color_offset = 0;
+    static CONTIGUOUS_SIMD_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let contiguous_simd = *CONTIGUOUS_SIMD_ENABLED
+        .get_or_init(|| std::env::var("BROWSER_DISABLE_N32_CONTIGUOUS_SIMD").as_deref() != Ok("1"));
+    while count >= 4 {
+        let mut x0s = [0usize; 4];
+        let mut x1s = [0usize; 4];
+        let mut y0s = [0usize; 4];
+        let mut y1s = [0usize; 4];
+        let mut x = [0; 4];
+        let mut y = [0; 4];
+        for lane in 0..4 {
+            let (y0, y1, wy) = decode_packed_coordinates_and_weight(xy[xy_offset]);
+            xy_offset += 1;
+            let (x0, x1, wx) = decode_packed_coordinates_and_weight(xy[xy_offset]);
+            xy_offset += 1;
+            x0s[lane] = x0 as usize;
+            x1s[lane] = x1 as usize;
+            y0s[lane] = y0 as usize;
+            y1s[lane] = y1 as usize;
+            x[lane] = wx as u16;
+            y[lane] = wy as u16;
+        }
+        let contiguous = (1..4).all(|lane| {
+            x0s[lane] == x0s[0] + lane
+                && x1s[lane] == x1s[0] + lane
+                && y0s[lane] == y0s[0]
+                && y1s[lane] == y1s[0]
+        }) && x1s[0] == x0s[0] + 1;
+        if contiguous_simd && contiguous {
+            let row0 = src.add(y0s[0] * rb).cast::<u32>();
+            let row1 = src.add(y1s[0] * rb).cast::<u32>();
+            neon::filter_four_contiguous_by_alpha(
+                row0,
+                row1,
+                x0s[0],
+                x,
+                y,
+                colors.as_mut_ptr().add(color_offset),
+                s.fAlphaScale.assume_init() as u32,
+            );
+        } else {
+            let mut a00 = [0; 4];
+            let mut a01 = [0; 4];
+            let mut a10 = [0; 4];
+            let mut a11 = [0; 4];
+            for lane in 0..4 {
+                let row0 = src.add(y0s[lane] * rb).cast::<u32>();
+                let row1 = src.add(y1s[lane] * rb).cast::<u32>();
+                a00[lane] = row0.add(x0s[lane]).read();
+                a01[lane] = row0.add(x1s[lane]).read();
+                a10[lane] = row1.add(x0s[lane]).read();
+                a11[lane] = row1.add(x1s[lane]).read();
+            }
+            neon::filter_four_by_alpha(
+                a00,
+                a01,
+                a10,
+                a11,
+                x,
+                y,
+                colors.as_mut_ptr().add(color_offset),
+                s.fAlphaScale.assume_init() as u32,
+            );
+        }
+        color_offset += 4;
+        count -= 4;
+    }
     loop {
         let old = count;
         count -= 1;

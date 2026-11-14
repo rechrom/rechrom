@@ -533,6 +533,8 @@ impl<'pixels> RasterTarget<'pixels> {
         let fy = (source_translate_y + 1.).rem_euclid(1.);
         let wx0 = 1. - fx;
         let wy0 = 1. - fy;
+        #[cfg(target_arch = "aarch64")]
+        let dst_in_simd = std::env::var("BROWSER_DISABLE_N32_DST_IN_SIMD").as_deref() != Ok("1");
 
         // This is the constant-translation specialization of Skia's original
         // bilerp_clamp_8888 + DstIn program (SkRasterPipeline_opts.h). Unlike
@@ -549,7 +551,39 @@ impl<'pixels> RasterTarget<'pixels> {
                 let mut source_x = x.saturating_add(source_floor_x);
                 let mut destination_pixel =
                     destination.add(y as usize * destination_stride + x as usize);
-                for _ in 0..width {
+                let mut remaining = width;
+                #[cfg(target_arch = "aarch64")]
+                while dst_in_simd && remaining >= 4 {
+                    let mut a00 = [0; 4];
+                    let mut a10 = [0; 4];
+                    let mut a01 = [0; 4];
+                    let mut a11 = [0; 4];
+                    for lane in 0..4 {
+                        let sx = source_x.saturating_add(lane as i32);
+                        let x0 = sx.clamp(0, source_limit_x) as usize;
+                        let x1 = sx.saturating_add(1).clamp(0, source_limit_x) as usize;
+                        a00[lane] = row0.add(x0 * 4).read() as u32;
+                        a10[lane] = row0.add(x1 * 4).read() as u32;
+                        a01[lane] = row1.add(x0 * 4).read() as u32;
+                        a11[lane] = row1.add(x1 * 4).read() as u32;
+                    }
+                    crate::src::opts::SkBitmapProcState_opts::neon::dst_in_bilerp_four(
+                        a00,
+                        a10,
+                        a01,
+                        a11,
+                        wx0,
+                        fx,
+                        wy0,
+                        fy,
+                        paint_scale,
+                        destination_pixel,
+                    );
+                    source_x = source_x.saturating_add(4);
+                    destination_pixel = destination_pixel.add(4);
+                    remaining -= 4;
+                }
+                for _ in 0..remaining {
                     let x0 = source_x.clamp(0, source_limit_x) as usize;
                     let x1 = source_x.saturating_add(1).clamp(0, source_limit_x) as usize;
                     let a00 = row0.add(x0 * 4).read() as f32;
@@ -575,6 +609,154 @@ impl<'pixels> RasterTarget<'pixels> {
             }
             true
         }
+    }
+
+    /// Composite a 1:1 N32 subset at a fractional device translation using
+    /// Skia's original clamp-bilerp kernel and N32 row blitter.
+    ///
+    /// `SkImageShader` selects the same `filter_and_scale_by_alpha` producer
+    /// for this scale/translate case. Keeping the invariant source Y and the
+    /// linear X progression here avoids rebuilding the general shader and
+    /// matrix-coordinate buffers for every retained compositor tile.
+    pub fn blit_n32_linear_src_over_spans(
+        &mut self,
+        source: &[u8],
+        source_width: i32,
+        source_height: i32,
+        source_row_bytes: usize,
+        subset_x: i32,
+        subset_y: i32,
+        subset_width: i32,
+        subset_height: i32,
+        source_translate_x: f32,
+        source_translate_y: f32,
+        spans: &[(i32, i32, i32)],
+        alpha: u8,
+        source_opaque: bool,
+    ) -> bool {
+        let mut trace = browser_tracing::span("renderer", "Renderer.Skia.N32Blit");
+        trace.set("mode", 4.);
+        trace.set(
+            "pixels",
+            spans
+                .iter()
+                .map(|&(_, _, width)| f64::from(width.max(0)))
+                .sum(),
+        );
+        if self.format != PixelFormat::Bgra8888
+            || source_width <= 0
+            || source_height <= 0
+            || subset_width <= 0
+            || subset_height <= 0
+            || spans.is_empty()
+            || subset_x < 0
+            || subset_y < 0
+            || subset_x.saturating_add(subset_width) > source_width
+            || subset_y.saturating_add(subset_height) > source_height
+            || !source_translate_x.is_finite()
+            || !source_translate_y.is_finite()
+            || spans.iter().any(|&(x, y, width)| {
+                x < 0
+                    || y < 0
+                    || width <= 0
+                    || x.saturating_add(width) > self.width
+                    || y >= self.height
+            })
+            || source_row_bytes < source_width as usize * 4
+            || self.row_bytes < self.width as usize * 4
+            || source_row_bytes % 4 != 0
+            || self.row_bytes % 4 != 0
+            || source_row_bytes
+                .checked_mul(source_height as usize)
+                .is_none_or(|required| required > source.len())
+            || self
+                .row_bytes
+                .checked_mul(self.height as usize)
+                .is_none_or(|required| required > self.pixel_len)
+            || alpha != 255
+        {
+            return false;
+        }
+
+        let source_stride = source_row_bytes / 4;
+        let destination_stride = self.row_bytes / 4;
+        let source_start = subset_y as usize * source_stride + subset_x as usize;
+        let source_pixels = unsafe { source.as_ptr().cast::<u32>().add(source_start) };
+        let destination = self.pixels.as_ptr().cast::<u32>();
+        let source_limit_x = subset_width - 1;
+        let source_limit_y = subset_height - 1;
+        let source_floor_x = source_translate_x.floor() as i32;
+        let source_floor_y = source_translate_y.floor() as i32;
+        // SkBitmapProcState's clamp filter stores the high four fractional
+        // bits in its packed coordinate (SkBitmapProcState_matrixProcs::pack).
+        let weight = |translation: f32| ((translation.rem_euclid(1.) * 16.).floor() as u32).min(15);
+        let wx = weight(source_translate_x);
+        let wy = weight(source_translate_y);
+        let alpha_scale = 256;
+        let mut filtered = vec![0u32; spans.iter().map(|span| span.2).max().unwrap_or(0) as usize];
+        let mut flags = 0;
+        if !source_opaque {
+            flags |= crate::src::core::SkBlitRow::SkBlitRow::kSrcPixelAlpha_Flag32;
+        }
+        let blend = crate::src::core::SkBlitRow::SkBlitRow::Factory32_raw(flags);
+
+        unsafe {
+            for &(x, y, width) in spans {
+                let source_y = y.saturating_add(source_floor_y);
+                let y0 = source_y.clamp(0, source_limit_y) as usize;
+                let y1 = source_y.saturating_add(1).clamp(0, source_limit_y) as usize;
+                let row0 = source_pixels.add(y0 * source_stride);
+                let row1 = source_pixels.add(y1 * source_stride);
+                let mut source_x = x.saturating_add(source_floor_x);
+                let mut output = 0usize;
+                #[cfg(target_arch = "aarch64")]
+                while output + 4 <= width as usize {
+                    let mut a00 = [0; 4];
+                    let mut a01 = [0; 4];
+                    let mut a10 = [0; 4];
+                    let mut a11 = [0; 4];
+                    for lane in 0..4 {
+                        let sx = source_x.saturating_add(lane as i32);
+                        let x0 = sx.clamp(0, source_limit_x) as usize;
+                        let x1 = sx.saturating_add(1).clamp(0, source_limit_x) as usize;
+                        a00[lane] = row0.add(x0).read();
+                        a01[lane] = row0.add(x1).read();
+                        a10[lane] = row1.add(x0).read();
+                        a11[lane] = row1.add(x1).read();
+                    }
+                    crate::src::opts::SkBitmapProcState_opts::neon::filter_four_by_alpha(
+                        a00,
+                        a01,
+                        a10,
+                        a11,
+                        [wx as u16; 4],
+                        [wy as u16; 4],
+                        filtered.as_mut_ptr().add(output),
+                        alpha_scale,
+                    );
+                    source_x = source_x.saturating_add(4);
+                    output += 4;
+                }
+                for output in &mut filtered[output..width as usize] {
+                    let x0 = source_x.clamp(0, source_limit_x) as usize;
+                    let x1 = source_x.saturating_add(1).clamp(0, source_limit_x) as usize;
+                    crate::src::opts::SkBitmapProcState_opts::filter_and_scale_by_alpha(
+                        wx,
+                        wy,
+                        row0.add(x0).read(),
+                        row0.add(x1).read(),
+                        row1.add(x0).read(),
+                        row1.add(x1).read(),
+                        output,
+                        alpha_scale,
+                    );
+                    source_x = source_x.saturating_add(1);
+                }
+                let target = destination.add(y as usize * destination_stride + x as usize);
+                blend(target, filtered.as_ptr(), width, alpha as u32);
+            }
+        }
+        true
     }
 
     // End the temporary Pin borrow before calling any operation that can restore

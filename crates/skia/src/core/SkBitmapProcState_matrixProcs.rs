@@ -137,6 +137,7 @@ unsafe fn nofilter_affine(
 }
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:156-156
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:159-160
+#[inline(always)]
 pub(crate) fn extract_low_bits_clamp_clamp(fx: i32, _max: i32) -> u32 {
     ((fx >> 12) & 15) as u32
 }
@@ -147,7 +148,12 @@ pub(crate) fn extract_low_bits_general(fx: i32, max: i32) -> u32 {
 }
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:183-190
 // Function parameters substitute the C++ compile-time function-pointer arguments.
-pub(crate) fn pack(f: i32, max: u32, one: i32, tile: TileProc, extract_low_bits: TileProc) -> u32 {
+#[inline(always)]
+pub(crate) fn pack<T, E>(f: i32, max: u32, one: i32, tile: T, extract_low_bits: E) -> u32
+where
+    T: Fn(i32, i32) -> u32,
+    E: Fn(i32, i32) -> u32,
+{
     let mut packed = tile(f, max as i32);
     packed = (packed << 4) | extract_low_bits(f, max as i32);
     packed = (packed << 14) | tile(f.wrapping_add(one), max as i32);
@@ -224,16 +230,21 @@ unsafe fn filter_scale<const TRY_DECAL: bool>(
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:249-250
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:252-260
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:262-265
-unsafe fn filter_affine(
+#[inline(always)]
+unsafe fn filter_affine<TX, TY, E>(
     s: &SkBitmapProcState<'_>,
     xy: &mut [u32],
     count: i32,
     x: i32,
     y: i32,
-    tilex: TileProc,
-    tiley: TileProc,
-    extract: TileProc,
-) {
+    tilex: TX,
+    tiley: TY,
+    extract: E,
+) where
+    TX: Copy + Fn(i32, i32) -> u32,
+    TY: Copy + Fn(i32, i32) -> u32,
+    E: Copy + Fn(i32, i32) -> u32,
+{
     crate::SkASSERT!(@source b"src/core/SkBitmapProcState_matrixProcs.cpp\0".as_ptr(),245; @condition b"!s.fInvMatrix.hasPerspective()\0".as_ptr(); !s.fInvMatrix.hasPerspective());
     let mapper = SkBitmapProcStateAutoMapper::new(s, x, y, None);
     let oneX = s.fFilterOneX.assume_init();
@@ -269,6 +280,7 @@ pub(crate) fn mirror(fx: i32, max: i32) -> u32 {
     SK_USHIFT16(((fx ^ s) & 65535).wrapping_mul(max + 1) as u32)
 }
 // Source: src/core/SkBitmapProcState_matrixProcs.cpp:286-288
+#[inline(always)]
 pub(crate) fn clamp(fx: i32, max: i32) -> u32 {
     (fx >> 16).max(0).min(max) as u32
 }

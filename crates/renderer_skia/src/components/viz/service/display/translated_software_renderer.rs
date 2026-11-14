@@ -761,8 +761,23 @@ impl TranslatedSoftwareRenderer {
             && (has_rectangular_clip || draw_region.is_some())
             && !antialias
             && mask.IsEmpty();
+        let linear_src_over_eligible = self.n32_tile_blit
+            && blend == SkBlendMode::kSrcOver
+            && alpha == 255
+            && !*nearest_neighbor
+            && axis_aligned_one_to_one
+            && !pixel_aligned_one_to_one
+            && integral_source_subset
+            && has_rectangular_clip
+            && !antialias
+            && mask.IsEmpty();
+        let linear_n32_eligible = linear_dst_in_eligible || linear_src_over_eligible;
         let mut tile_trace = browser_tracing::span("renderer", "Renderer.Skia.TilePath");
         tile_trace.set("axis_one_to_one", axis_aligned_one_to_one as u8 as f64);
+        tile_trace.set("scale_x", transform.rc(0, 0));
+        tile_trace.set("skew_x", transform.rc(0, 1));
+        tile_trace.set("skew_y", transform.rc(1, 0));
+        tile_trace.set("scale_y", transform.rc(1, 1));
         tile_trace.set("blend", blend as u8 as f64);
         tile_trace.set("source_width", source.width().into());
         tile_trace.set("source_height", source.height().into());
@@ -772,7 +787,7 @@ impl TranslatedSoftwareRenderer {
         tile_trace.set("alignment_y", device_top - source.y() as f64);
         if !self.n32_tile_blit {
             self.update.tile_blit_disabled_quads += 1;
-        } else if !pixel_aligned_one_to_one && !linear_dst_in_eligible {
+        } else if !pixel_aligned_one_to_one && !linear_n32_eligible {
             self.update.tile_blit_misaligned_quads += 1;
         } else if !has_rectangular_clip {
             self.update.tile_blit_complex_clip_quads += 1;
@@ -807,7 +822,7 @@ impl TranslatedSoftwareRenderer {
                 }
             }
         }
-        if linear_dst_in_eligible {
+        if linear_n32_eligible {
             self.update.tile_blit_eligible_quads += 1;
             let mapping = raster::execution::MapResourceForRead(lease.as_ref())?;
             let format = mapping.format();
@@ -892,20 +907,41 @@ impl TranslatedSoftwareRenderer {
                     self.update.tile_blit_quads += 1;
                     return Ok(());
                 }
-                if target.blit_n32_linear_dst_in_spans(
-                    mapping.bytes(),
-                    mapping.size().width(),
-                    mapping.size().height(),
-                    mapping.row_bytes(),
-                    source.x().round() as i32,
-                    source.y().round() as i32,
-                    source.width().round() as i32,
-                    source.height().round() as i32,
-                    (self.current_rect.x as f64 - device_left) as f32,
-                    (self.current_rect.y as f64 - device_top) as f32,
-                    &spans,
-                    alpha,
-                ) {
+                let source_translate_x = (self.current_rect.x as f64 - device_left) as f32;
+                let source_translate_y = (self.current_rect.y as f64 - device_top) as f32;
+                let blitted = if linear_dst_in_eligible {
+                    target.blit_n32_linear_dst_in_spans(
+                        mapping.bytes(),
+                        mapping.size().width(),
+                        mapping.size().height(),
+                        mapping.row_bytes(),
+                        source.x().round() as i32,
+                        source.y().round() as i32,
+                        source.width().round() as i32,
+                        source.height().round() as i32,
+                        source_translate_x,
+                        source_translate_y,
+                        &spans,
+                        alpha,
+                    )
+                } else {
+                    target.blit_n32_linear_src_over_spans(
+                        mapping.bytes(),
+                        mapping.size().width(),
+                        mapping.size().height(),
+                        mapping.row_bytes(),
+                        source.x().round() as i32,
+                        source.y().round() as i32,
+                        source.width().round() as i32,
+                        source.height().round() as i32,
+                        source_translate_x,
+                        source_translate_y,
+                        &spans,
+                        alpha,
+                        lease.is_opaque(),
+                    )
+                };
+                if blitted {
                     self.update.tile_blit_quads += 1;
                     return Ok(());
                 }

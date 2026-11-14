@@ -610,13 +610,17 @@ impl<S: Copy + Eq> DamageTracker<S> {
                 .UnionReasons(reasons);
         }
         let mut property_change_on_non_target_node = false;
-        if layer.LayerPropertyChangedFromPropertyTrees(context.property_trees()) {
-            let effect_id = context
+        let mut target_effect_id = kContentsRootPropertyNodeId;
+        let mut target_transform_id = kContentsRootPropertyNodeId;
+        let changed_from_property_trees =
+            layer.LayerPropertyChangedFromPropertyTrees(context.property_trees());
+        if changed_from_property_trees {
+            target_effect_id = context
                 .surface(layer.render_target(context.property_trees()))
                 .EffectTreeIndex();
-            let transform_id = context.EffectTransformId(effect_id);
-            property_change_on_non_target_node = layer.effect_tree_index() != effect_id
-                || layer.transform_tree_index() != transform_id;
+            target_transform_id = context.EffectTransformId(target_effect_id);
+            property_change_on_non_target_node = layer.effect_tree_index() != target_effect_id
+                || layer.transform_tree_index() != target_transform_id;
         }
         if layer_is_new
             || !layer.update_rect().IsEmpty()
@@ -628,6 +632,32 @@ impl<S: Copy + Eq> DamageTracker<S> {
             self.has_damage_from_contributing_content_.set(
                 self.has_damage_from_contributing_content_.get()
                     | !self.damage_for_this_update_.borrow().IsEmpty(),
+            );
+        }
+        if browser_tracing::enabled() && changed_from_property_trees {
+            browser_tracing::instant(
+                "compositor.draw",
+                "Compositor.Draw.LayerDamage",
+                &[
+                    ("layer_id", layer.id() as f64),
+                    ("effect_id", layer.effect_tree_index() as f64),
+                    ("transform_id", layer.transform_tree_index() as f64),
+                    ("target_effect_id", target_effect_id as f64),
+                    ("target_transform_id", target_transform_id as f64),
+                    (
+                        "non_target_property_change",
+                        property_change_on_non_target_node as u8 as f64,
+                    ),
+                    (
+                        "non_property_change",
+                        layer.LayerPropertyChangedNotFromPropertyTrees() as u8 as f64,
+                    ),
+                    ("layer_is_new", layer_is_new as u8 as f64),
+                    (
+                        "contributing_damage",
+                        self.has_damage_from_contributing_content_.get() as u8 as f64,
+                    ),
+                ],
             );
         }
     }
