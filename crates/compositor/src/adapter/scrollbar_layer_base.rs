@@ -21,6 +21,16 @@ pub trait ScrollbarLayerTypes: MainLayerTypes<Layer: ScrollbarLayerImplTarget<Se
         logical_size: super::geometry::Size,
         pixel_size: super::geometry::Size,
     ) -> <Self as super::layer_tree_impl::LayerTreeTypes>::UIResourceBitmap;
+    /// Rechrom crosses Paint's package boundary with an immutable scrollbar
+    /// snapshot instead of Blink's live WebScrollbar adapter.  A platform
+    /// scrollbar animation therefore replaces only the animated fields on
+    /// that snapshot before cc runs the ordinary PaintedScrollbarLayer update.
+    fn WithPaintedScrollbarAnimation(
+        scrollbar: &Self::Scrollbar,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> Arc<Self::Scrollbar>;
     /// Optional same-package constructor capabilities. The default CPU family
     /// declares absence for owners outside its canonical closure. A capability
     /// is the exact native constructor function, never a replacement algorithm.

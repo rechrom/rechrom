@@ -465,11 +465,11 @@ impl LocalFrameDomain {
             // Child-frame property nodes enter the same cc tree in their
             // Layout coordinate space, so the impl offset already matches the
             // resolved child Layout owner and must not be scaled a second time.
-            let update = runtime.layout.borrow_mut().DidCompositorScroll(
-                element,
-                offset,
-                source_type,
-            );
+            let update =
+                runtime
+                    .layout
+                    .borrow_mut()
+                    .DidCompositorScroll(element, offset, source_type);
             if let Some(update) = update {
                 let target = update.target_node_id;
                 if runtime
@@ -523,6 +523,26 @@ impl LocalFrameDomain {
                 frame.MarkNavigationDirty();
             }
             return changed;
+        }
+        false
+    }
+    pub(super) fn InvalidateCompositorScrollbarElement(
+        &self,
+        element: foundation::CompositorElementId,
+    ) -> bool {
+        let frames = self.frames.borrow().values().cloned().collect::<Vec<_>>();
+        for frame in frames {
+            let Some(runtime) = frame.runtime.borrow().clone() else {
+                continue;
+            };
+            let target = runtime.layout.borrow().CompositorScrollbarOwner(element);
+            let Some(target) = target else {
+                continue;
+            };
+            if runtime.document.borrow_mut().InvalidatePaintForNode(target) {
+                frame.MarkNavigationDirty();
+            }
+            return true;
         }
         false
     }

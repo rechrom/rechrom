@@ -79,8 +79,215 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 pub(super) struct TranslatedSkiaBackend {
-    _image_cache_byte_limit: usize,
+    record_shader_cache: RecordShaderCache,
     typeface_cache: TypefaceCache,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct RecordShaderCacheKey {
+    bounds: [u32; 4],
+    tile_scale: [u32; 2],
+    color_type: i32,
+    color_space_hash: u64,
+    surface_flags: u32,
+    pixel_geometry: i32,
+    text_contrast: u32,
+    text_gamma: u32,
+}
+
+struct CachedRecordShaderPixels {
+    pixels: Arc<[u8]>,
+    info: SkImageInfo,
+    row_bytes: usize,
+}
+
+fn retained_raster_image(
+    pixels: Arc<[u8]>,
+    info: &SkImageInfo,
+    row_bytes: usize,
+) -> io::Result<Arc<dyn skia::src::image::SkImage::SkImage>> {
+    unsafe extern "C" fn release_pixels(_pixels: *const u8, context: *mut core::ffi::c_void) {
+        unsafe {
+            drop(Box::from_raw(context.cast::<Arc<[u8]>>()));
+        }
+    }
+    let owner = Box::new(pixels);
+    let pixmap = SkPixmap::new(info, owner.as_ref().as_ptr(), row_bytes);
+    let context = Box::into_raw(owner);
+    let image = unsafe {
+        skia::src::image::SkImage_RasterFactories::RasterFromPixmap(
+            &pixmap,
+            Some(release_pixels),
+            context.cast(),
+        )
+    };
+    if image.is_none() {
+        unsafe {
+            drop(Box::from_raw(context));
+        }
+    }
+    image.ok_or_else(|| io::Error::other("translated retained raster image allocation failed"))
+}
+
+enum RecordShaderCacheValue {
+    Building,
+    Ready(Arc<CachedRecordShaderPixels>),
+}
+
+struct RecordShaderCacheEntry {
+    record: CpuPaintRecord<SkRegion>,
+    key: RecordShaderCacheKey,
+    value: RecordShaderCacheValue,
+    bytes: usize,
+    last_use: u64,
+}
+
+struct RecordShaderCacheState {
+    entries: Vec<RecordShaderCacheEntry>,
+    bytes: usize,
+    sequence: u64,
+}
+
+struct RecordShaderCache {
+    byte_limit: usize,
+    state: std::sync::Mutex<RecordShaderCacheState>,
+    ready: std::sync::Condvar,
+}
+
+enum RecordShaderCacheAcquire {
+    Hit(Arc<CachedRecordShaderPixels>),
+    BuildCached,
+    BuildUncached,
+}
+
+impl RecordShaderCache {
+    fn new(byte_limit: usize) -> Self {
+        Self {
+            byte_limit,
+            state: std::sync::Mutex::new(RecordShaderCacheState {
+                entries: Vec::new(),
+                bytes: 0,
+                sequence: 0,
+            }),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    fn same_record(a: &CpuPaintRecord<SkRegion>, b: &CpuPaintRecord<SkRegion>) -> bool {
+        match (a.buffer(), b.buffer()) {
+            (Some(a), Some(b)) => std::ptr::eq(a, b),
+            _ => false,
+        }
+    }
+
+    fn acquire(
+        &self,
+        record: &CpuPaintRecord<SkRegion>,
+        key: RecordShaderCacheKey,
+        bytes: usize,
+    ) -> io::Result<RecordShaderCacheAcquire> {
+        if self.byte_limit == 0
+            || bytes > self.byte_limit
+            || record
+                .buffer()
+                .is_none_or(|buffer| buffer.canonical_metadata().has_discardable_images())
+        {
+            return Ok(RecordShaderCacheAcquire::BuildUncached);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("translated record shader cache poisoned"))?;
+        loop {
+            if let Some(index) = state
+                .entries
+                .iter()
+                .position(|entry| entry.key == key && Self::same_record(&entry.record, record))
+            {
+                state.sequence = state.sequence.wrapping_add(1);
+                let sequence = state.sequence;
+                state.entries[index].last_use = sequence;
+                match &state.entries[index].value {
+                    RecordShaderCacheValue::Ready(value) => {
+                        return Ok(RecordShaderCacheAcquire::Hit(value.clone()));
+                    }
+                    RecordShaderCacheValue::Building => {
+                        state = self.ready.wait(state).map_err(|_| {
+                            io::Error::other("translated record shader cache poisoned")
+                        })?;
+                    }
+                }
+            } else {
+                state.sequence = state.sequence.wrapping_add(1);
+                let sequence = state.sequence;
+                state.entries.push(RecordShaderCacheEntry {
+                    record: record.clone(),
+                    key,
+                    value: RecordShaderCacheValue::Building,
+                    bytes: 0,
+                    last_use: sequence,
+                });
+                return Ok(RecordShaderCacheAcquire::BuildCached);
+            }
+        }
+    }
+
+    fn complete(
+        &self,
+        record: &CpuPaintRecord<SkRegion>,
+        key: RecordShaderCacheKey,
+        value: Arc<CachedRecordShaderPixels>,
+    ) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("translated record shader cache poisoned"))?;
+        let Some(index) = state
+            .entries
+            .iter()
+            .position(|entry| entry.key == key && Self::same_record(&entry.record, record))
+        else {
+            self.ready.notify_all();
+            return Ok(());
+        };
+        let bytes = value.pixels.len();
+        state.entries[index].bytes = bytes;
+        state.entries[index].value = RecordShaderCacheValue::Ready(value);
+        state.bytes = state.bytes.saturating_add(bytes);
+        while state.bytes > self.byte_limit {
+            let Some(eviction) = state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| matches!(entry.value, RecordShaderCacheValue::Ready(_)))
+                .min_by_key(|(_, entry)| entry.last_use)
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let entry = state.entries.remove(eviction);
+            state.bytes = state.bytes.saturating_sub(entry.bytes);
+        }
+        self.ready.notify_all();
+        Ok(())
+    }
+
+    fn fail(&self, record: &CpuPaintRecord<SkRegion>, key: RecordShaderCacheKey) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("translated record shader cache poisoned"))?;
+        if let Some(index) = state
+            .entries
+            .iter()
+            .position(|entry| entry.key == key && Self::same_record(&entry.record, record))
+        {
+            let entry = state.entries.remove(index);
+            state.bytes = state.bytes.saturating_sub(entry.bytes);
+        }
+        self.ready.notify_all();
+        Ok(())
+    }
 }
 
 #[cfg(target_vendor = "apple")]
@@ -953,7 +1160,7 @@ fn raster_typeface(
 impl TranslatedSkiaBackend {
     pub fn new(image_cache_byte_limit: usize) -> Self {
         Self {
-            _image_cache_byte_limit: image_cache_byte_limit,
+            record_shader_cache: RecordShaderCache::new(image_cache_byte_limit),
             typeface_cache: TypefaceCache::default(),
         }
     }
@@ -3884,6 +4091,7 @@ fn orient_image_pixels(
 struct TranslatedCanvas<'target, 'pixels> {
     target: &'target mut RasterTarget<'pixels>,
     typeface_cache: Option<&'target TypefaceCache>,
+    record_shader_cache: Option<&'target RecordShaderCache>,
     error: Option<io::Error>,
     depth: usize,
     mask_stack: Vec<Vec<MaskLayer>>,
@@ -3908,6 +4116,7 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         Self {
             target,
             typeface_cache: None,
+            record_shader_cache: None,
             error: None,
             depth: 0,
             mask_stack: Vec::new(),
@@ -3937,6 +4146,11 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
 
     fn with_typeface_cache(mut self, cache: &'target TypefaceCache) -> Self {
         self.typeface_cache = Some(cache);
+        self
+    }
+
+    fn with_record_shader_cache(mut self, cache: &'target RecordShaderCache) -> Self {
+        self.record_shader_cache = Some(cache);
         self
     }
 
@@ -4954,13 +5168,16 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             tile_rect.bottom(),
         );
         let total = SkMatrix::Concat(&device, &local);
+        let target_info = self.target.image_info();
+        let target_color_space = target_info.refColorSpace();
+        let target_props = self.target.surface_props();
         let tile = CachedImageInfo::Make(
             &bounds,
             &total,
-            SkColorType::kRGBA_8888_SkColorType,
-            None,
+            target_info.colorType(),
+            target_color_space.as_ref(),
             0,
-            &SkSurfaceProps::default(),
+            &target_props,
         );
         if !tile.success {
             return Ok(());
@@ -4973,42 +5190,168 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
         let length = row_bytes
             .checked_mul(height as usize)
             .ok_or_else(|| io::Error::other("translated record shader allocation overflow"))?;
-        let mut pixels = Vec::new();
-        pixels.try_reserve_exact(length).map_err(io::Error::other)?;
-        pixels.resize(length, 0);
-        {
-            let mut target = RasterTarget::new_with_color_space(
-                &mut pixels,
-                width,
-                height,
-                row_bytes,
-                PixelFormat::Rgba8888,
-                tile.imageInfo.refColorSpace(),
-                Some(&tile.props),
-            )
-            .map_err(|error| raster_error("translated record shader target failed", error))?;
-            target.set_matrix(&tile.matrixForDraw);
-            {
-                let mut replay = TranslatedCanvas::new(&mut target, false, 1.);
-                replay.record(record, params);
-                replay.finish_replay()?;
+        let key = RecordShaderCacheKey {
+            bounds: [
+                bounds.fLeft.to_bits(),
+                bounds.fTop.to_bits(),
+                bounds.fRight.to_bits(),
+                bounds.fBottom.to_bits(),
+            ],
+            tile_scale: [
+                tile.tileScale.width().to_bits(),
+                tile.tileScale.height().to_bits(),
+            ],
+            color_type: tile.imageInfo.colorType() as i32,
+            color_space_hash: tile.imageInfo.colorSpace().map_or(0, |space| space.hash()),
+            surface_flags: tile.props.flags(),
+            pixel_geometry: tile.props.pixelGeometry() as i32,
+            text_contrast: tile.props.textContrast().to_bits(),
+            text_gamma: tile.props.textGamma().to_bits(),
+        };
+        let mut shader_trace = browser_tracing::span("raster.detail", "RecordShader");
+        shader_trace.set("tile_width", width as f64);
+        shader_trace.set("tile_height", height as f64);
+        shader_trace.set("record_bounds_width", bounds.width() as f64);
+        shader_trace.set("record_bounds_height", bounds.height() as f64);
+        shader_trace.set("record_scale_x", total.getScaleX() as f64);
+        shader_trace.set("record_scale_y", total.getScaleY() as f64);
+        shader_trace.set("tile_scale_x", tile.tileScale.width() as f64);
+        shader_trace.set("tile_scale_y", tile.tileScale.height() as f64);
+        shader_trace.set("destination_width", destination.width() as f64);
+        shader_trace.set("destination_height", destination.height() as f64);
+        shader_trace.set("tile_mode_x", tile_mode_x as u8 as f64);
+        shader_trace.set("tile_mode_y", tile_mode_y as u8 as f64);
+
+        let acquire = if let Some(cache) = self.record_shader_cache {
+            let _trace = browser_tracing::span("raster.detail", "RecordShader.CacheAcquire");
+            cache.acquire(record, key, length)?
+        } else {
+            RecordShaderCacheAcquire::BuildUncached
+        };
+        let cache_hit = matches!(acquire, RecordShaderCacheAcquire::Hit(_));
+        shader_trace.set("cache_hit", cache_hit as u8 as f64);
+        let cached = match acquire {
+            RecordShaderCacheAcquire::Hit(value) => value,
+            build @ (RecordShaderCacheAcquire::BuildCached
+            | RecordShaderCacheAcquire::BuildUncached) => {
+                let rasterized = (|| -> io::Result<Arc<CachedRecordShaderPixels>> {
+                    let mut raster_trace =
+                        browser_tracing::span("raster.detail", "RecordShader.RasterTile");
+                    raster_trace.set("width", width as f64);
+                    raster_trace.set("height", height as f64);
+                    let mut pixels = Vec::new();
+                    pixels.try_reserve_exact(length).map_err(io::Error::other)?;
+                    pixels.resize(length, 0);
+                    {
+                        let mut target = RasterTarget::new_with_color_space(
+                            &mut pixels,
+                            width,
+                            height,
+                            row_bytes,
+                            PixelFormat::Rgba8888,
+                            tile.imageInfo.refColorSpace(),
+                            Some(&tile.props),
+                        )
+                        .map_err(|error| {
+                            raster_error("translated record shader target failed", error)
+                        })?;
+                        target.set_matrix(&tile.matrixForDraw);
+                        {
+                            let mut replay = TranslatedCanvas::new(&mut target, false, 1.);
+                            if let Some(cache) = self.typeface_cache {
+                                replay = replay.with_typeface_cache(cache);
+                            }
+                            if let Some(cache) = self.record_shader_cache {
+                                replay = replay.with_record_shader_cache(cache);
+                            }
+                            replay.record(record, params);
+                            replay.finish_replay()?;
+                        }
+                        target.finish().map_err(|error| {
+                            raster_error("translated record shader finish failed", error)
+                        })?;
+                    }
+                    drop(raster_trace);
+                    Ok(Arc::new(CachedRecordShaderPixels {
+                        pixels: Arc::from(pixels),
+                        info: tile.imageInfo.clone(),
+                        row_bytes,
+                    }))
+                })();
+                let value = match rasterized {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if matches!(build, RecordShaderCacheAcquire::BuildCached) {
+                            if let Some(cache) = self.record_shader_cache {
+                                cache.fail(record, key)?;
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+                if matches!(build, RecordShaderCacheAcquire::BuildCached) {
+                    if let Some(cache) = self.record_shader_cache {
+                        cache.complete(record, key, value.clone())?;
+                    }
+                }
+                value
             }
-            target
-                .finish()
-                .map_err(|error| raster_error("translated record shader finish failed", error))?;
-        }
-        let info = tile.imageInfo.clone();
-        let pixmap = SkPixmap::new(&info, pixels.as_ptr(), row_bytes);
-        let image =
-            unsafe { skia::src::image::SkImage_RasterFactories::RasterFromPixmapCopy(&pixmap) }
-                .ok_or_else(|| {
-                    io::Error::other("translated record shader image allocation failed")
-                })?;
+        };
         let image_to_record = tile
             .matrixForDraw
             .invert()
             .ok_or_else(|| io::Error::other("translated record shader tile matrix is singular"))?;
         let shader_matrix = SkMatrix::Concat(&local, &image_to_record);
+        let paint = converted_paint_core(flags, folded_alpha);
+        let source = SkRect::MakeIWH(width, height);
+        let draw_bounds = SkRect::MakeLTRB(
+            destination.x(),
+            destination.y(),
+            destination.right(),
+            destination.bottom(),
+        );
+
+        let image = {
+            let _trace = browser_tracing::span("raster.detail", "RecordShader.MakeImage");
+            retained_raster_image(cached.pixels.clone(), &cached.info, cached.row_bytes)?
+        };
+        let mut paint = paint;
+        // Source: SkImageShader's non-repeating image specialization and
+        // SkCanvas::drawImageRect. A decal/decal picture shader has no tiling;
+        // after its cached picture tile exists it is exactly one image mapped
+        // by the shader's scale/translation and clipped by the DrawRect. Route
+        // that source-equivalent case through Skia's image blitter instead of
+        // rebuilding the general per-pixel shader pipeline for every cc tile.
+        if tile_mode_x == paint::cc::paint::tile_mode::TileMode::kDecal
+            && tile_mode_y == paint::cc::paint::tile_mode::TileMode::kDecal
+            && shader_matrix.isScaleTranslate()
+        {
+            shader_trace.set("direct_image", 1.);
+            let image_destination = shader_matrix.mapRect_value(&source);
+            let save_count = self.target.save();
+            self.target
+                .clip_rect(&draw_bounds, SkClipOp::kIntersect, flags.isAntiAlias());
+            let draw = unsafe {
+                self.target.draw_image_rect(
+                    &image,
+                    Some(&source),
+                    &image_destination,
+                    &SkSamplingOptions::with_filter(SkFilterMode::kLinear),
+                    Some(&paint),
+                    SrcRectConstraint::kStrict_SrcRectConstraint,
+                )
+            }
+            .map_err(|error| raster_error("translated record image draw failed", error));
+            let restore = self
+                .target
+                .restore_to_count(save_count)
+                .map_err(|error| raster_error("translated record image restore failed", error));
+            return match (draw, restore) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            };
+        }
+        shader_trace.set("direct_image", 0.);
         let shader = image
             .makeShaderWithMatrix(
                 translated_tile_mode(tile_mode_x),
@@ -5017,8 +5360,8 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 &shader_matrix,
             )
             .ok_or_else(|| io::Error::other("translated record image shader creation failed"))?;
-        let mut paint = converted_paint_core(flags, folded_alpha);
         paint.setShader(Some(shader));
+        let _draw_trace = browser_tracing::span("raster.detail", "RecordShader.Draw");
         unsafe {
             self.target.draw_rect(
                 &SkRect::MakeLTRB(
@@ -6072,7 +6415,36 @@ impl CpuPaintCanvas<SkRegion> for TranslatedCanvas<'_, '_> {
             };
             let trace_index = self.trace_op_index;
             self.trace_op_index += 1;
+            // Per-op replay attribution is producer-filtered by category, so
+            // normal traces and non-tracing raster stay on the same binary.
+            let mut replay_trace = browser_tracing::span("raster.detail", trace_label);
+            replay_trace.set("op", trace_index as f64);
             let draw_alpha = item.alpha * self.opacity;
+            if let FoldedOp::Borrowed(CpuPaintOpRef::Converted(CpuPaintOp::DrawRect(
+                value,
+                flags,
+            ))) = &item.op
+            {
+                replay_trace.set("width", value.width() as f64);
+                replay_trace.set("height", value.height() as f64);
+                replay_trace.set("alpha", flags.getAlphaf() as f64 * draw_alpha as f64);
+                replay_trace.set("antialias", flags.isAntiAlias() as u8 as f64);
+                replay_trace.set("dither", flags.isDither() as u8 as f64);
+                replay_trace.set("blend", flags.getBlendMode() as u8 as f64);
+                replay_trace.set("style", flags.getStyle() as u8 as f64);
+                replay_trace.set("image_filter", flags.image_filter.is_some() as u8 as f64);
+                replay_trace.set("color_filter", flags.color_filter.is_some() as u8 as f64);
+                replay_trace.set("looper", flags.looper.is_some() as u8 as f64);
+                replay_trace.set(
+                    "shader",
+                    match flags.shader.as_deref() {
+                        None => 0.,
+                        Some(CpuPaintShader::ImagePattern { .. }) => 1.,
+                        Some(CpuPaintShader::GeneratedPattern { .. }) => 2.,
+                        Some(CpuPaintShader::PaintRecord { .. }) => 3.,
+                    },
+                );
+            }
             match item.op {
                 FoldedOp::Borrowed(CpuPaintOpRef::PaintRecord { op, record }) => {
                     if self.trace_pixel.is_some() {
@@ -6850,7 +7222,8 @@ impl RasterBackend for TranslatedSkiaBackend {
                     ))
                 });
             let mut canvas = TranslatedCanvas::new(&mut target, false, 1.)
-                .with_typeface_cache(&self.typeface_cache);
+                .with_typeface_cache(&self.typeface_cache)
+                .with_record_shader_cache(&self.record_shader_cache);
             if let Some((x, y)) = trace {
                 let device_x = x - request.content_rect.x;
                 let device_y = y - request.content_rect.y;
@@ -6882,9 +7255,16 @@ impl RasterBackend for TranslatedSkiaBackend {
                 raster_inducing_scroll_offsets: Some(request.raster_inducing_scroll_offsets),
                 image_provider: Some(request.image_provider),
             };
+            let mut replay_trace =
+                browser_tracing::span("raster.detail", "Raster.ReplayDisplayList");
+            replay_trace.set("content_width", request.content_rect.width as f64);
+            replay_trace.set("content_height", request.content_rect.height as f64);
+            replay_trace.set("dirty_width", request.invalid_content_rect.width as f64);
+            replay_trace.set("dirty_height", request.invalid_content_rect.height as f64);
             for _ in 0..source.slow_down_raster_scale_factor_for_debug.max(1) {
                 list.RasterWithParams(&mut canvas, &mut params);
             }
+            drop(replay_trace);
             canvas.unwind_to_depth(0);
             canvas.finish_replay()
         })();

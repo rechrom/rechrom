@@ -473,10 +473,6 @@ impl FactoryOptions {
         // is the invariant used by Blink's GetTilingInterestAreaSizes().
         settings.tiling_interest_area_padding = 18000;
         settings.skewport_extrapolation_limit_in_screen_pixels = 12000;
-        // PictureLayerTiling otherwise turns content farther than 1000
-        // screen pixels into image-decode-only work. At 2x scale that is only
-        // 500 CSS px, shorter than one fast precision-wheel frame. Let the CPU
-        // backend raster content across the same 12000 px skewport runway.
         settings.max_preraster_distance_in_screen_pixels = 12000;
         // Source: third_party/blink/renderer/platform/widget/compositing/
         //         layer_tree_settings.cc:135-204,559-561. Desktop renderers

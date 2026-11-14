@@ -300,6 +300,23 @@ fn transform_style_difference(
     diff
 }
 
+// Source: core/paint/paint_layer_painter.cc:167-190.
+//
+// PaintLayer::StyleDidChange compares this predicate before and after a style
+// replacement. Crossing the near-zero-opacity boundary changes the
+// `effectively_invisible` bit inherited by every descendant PaintChunk, so a
+// normal invalidation of only this LayoutObject is insufficient: cached child
+// subsequences must be recorded again as well.
+fn painted_output_invisible(style: &ComputedStyle) -> bool {
+    if style.HasNonInitialBackdropFilter()
+        || style.HasWillChangeProperty(foundation::CSSPropertyID::kOpacity)
+        || style.HasCurrentOpacityAnimation()
+    {
+        return false;
+    }
+    style.Opacity() < 0.0004
+}
+
 // cpp: layoutng/internal/layout_object_core_services.cc:164-182
 #[inline(never)]
 pub(super) fn LayoutObjectSetStyleWithChanges(
@@ -320,9 +337,12 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
     }
     let old_style = object.StylePtr();
     let mut difference = StyleDifference::default();
+    let mut painted_output_invisible_changed = false;
     if !old_style.is_null() {
         let old_style_ref = unsafe { &*old_style };
         let new_style_ref = unsafe { &*style };
+        painted_output_invisible_changed =
+            painted_output_invisible(old_style_ref) != painted_output_invisible(new_style_ref);
         difference = transform_style_difference(old_style_ref, new_style_ref);
         // Source: core/layout/layout_object.cc:3102-3227. Chromium starts
         // SetStyle() with ComputedStyle::VisualInvalidationDiff(). The layout
@@ -363,5 +383,13 @@ pub(super) fn LayoutObjectSetStyleWithChanges(
                 foundation::PaintInvalidationReason::kStyle,
             );
         }
+    }
+    // Source: core/paint/paint_layer.cc:2525-2538. The ancestor layer's
+    // opacity scope stamped descendant chunks in the previous artifact; make
+    // the subtree repaint when that scope starts or stops suppressing output.
+    if painted_output_invisible_changed {
+        object.SetSubtreeShouldDoFullPaintInvalidation(
+            foundation::PaintInvalidationReason::kSubtree,
+        );
     }
 }

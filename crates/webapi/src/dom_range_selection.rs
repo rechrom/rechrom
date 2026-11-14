@@ -61,10 +61,7 @@ impl DOMJavaScriptBindings {
         Ok(dom::DOMStaticRange { start, end })
     }
 
-    fn NodeContentsEnd(
-        document: &dom::Document,
-        node: usize,
-    ) -> dom::DOMBoundaryPoint {
+    fn NodeContentsEnd(document: &dom::Document, node: usize) -> dom::DOMBoundaryPoint {
         let value = document.Node(node);
         let offset = if matches!(
             value.Type(),
@@ -232,11 +229,7 @@ impl DOMJavaScriptBindings {
         Some(Self::value(result))
     }
 
-    fn SelectionCall(
-        &self,
-        member: &str,
-        arguments: &[HostValue],
-    ) -> Option<HostResult> {
+    fn SelectionCall(&self, member: &str, arguments: &[HostValue]) -> Option<HostResult> {
         if !member.starts_with("__selection") {
             return None;
         }
@@ -391,9 +384,7 @@ impl DOMJavaScriptBindings {
                     Err(error) => Self::RangeError(error),
                 })
             }
-            "__selectionToString" => {
-                Some(Self::value(HostValue::String16((host.text)().into())))
-            }
+            "__selectionToString" => Some(Self::value(HostValue::String16((host.text)().into()))),
             "__selectionDeleteFromDocument" => {
                 let Some(snapshot) = (host.read)() else {
                     return Some(Self::value(HostValue::default()));

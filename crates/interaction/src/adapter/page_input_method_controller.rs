@@ -10,9 +10,9 @@ use super::{
     page_event_dispatcher::{DispatchEventResult, EventDispatcher},
 };
 use crate::{
+    editing_owners::{PageEditingOwners, Selection, SelectionState, SyntheticEventDispatcher},
     input_event::{CompositionEvent, CompositionEventType, TextInputEvent},
     ownership::{InteractionDOMMutationEmitter, InteractionDocument, ReadNode},
-    editing_owners::{Selection, SelectionState, SyntheticEventDispatcher, PageEditingOwners},
 };
 use dom::{
     dom_mutation::{DOMMutation, DOMMutationType},
@@ -1084,9 +1084,7 @@ pub(crate) fn DispatchPageCompositionEvent(
         // immediately before its first nonempty update, as Blink does.
         CompositionEventType::kStart => {}
         CompositionEventType::kUpdate => {
-            let (start, end) = event
-                .selection
-                .unwrap_or((text.len(), text.len()));
+            let (start, end) = event.selection.unwrap_or((text.len(), text.len()));
             controller.SetComposition(
                 &text,
                 &event.spans,

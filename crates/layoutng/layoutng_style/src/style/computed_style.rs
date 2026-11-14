@@ -915,8 +915,7 @@ impl ComputedStyle {
         // Source: core/style/computed_style.cc:2260-2270.
         !self.InheritedVariables().IsEmpty()
             || !self.NonInheritedVariables().IsEmpty()
-            || unsafe { self.InitialData().as_ref() }
-                .is_some_and(|data| data.HasInitialVariables())
+            || unsafe { self.InitialData().as_ref() }.is_some_and(|data| data.HasInitialVariables())
     }
 
     // C++ wtf_size_t is a 32-bit count.
@@ -965,8 +964,9 @@ impl ComputedStyle {
             self.NonInheritedVariables().GetData(name)
         };
         data.unwrap_or_else(|| {
-            unsafe { self.InitialData().as_ref() }
-                .map_or(std::ptr::null_mut(), |initial| initial.GetVariableData(name))
+            unsafe { self.InitialData().as_ref() }.map_or(std::ptr::null_mut(), |initial| {
+                initial.GetVariableData(name)
+            })
         })
     }
 

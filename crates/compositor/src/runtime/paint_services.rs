@@ -776,6 +776,77 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
     pub(crate) fn CreateCompositor(&self,callbacks:std::rc::Weak<dyn crate::cc::trees::property_tree::ScrollCallbacks>,c:&mut LayerContext<'_,Root<R>>)->crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<Root<R>>{
         crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor::new(callbacks,c,self)
     }
+    /// Source: PaintArtifactCompositor::DirectlyUpdateTransform and
+    /// DirectlyUpdateCompositedOpacityValue. Page has already run Blink's
+    /// deferred property builder and admitted only simple animated values.
+    pub(crate) fn ApplyCompositedAnimationProperties(
+        &self,
+        pac: &crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<Root<R>>,
+        update: &::paint::CompositedAnimationPropertyUpdate,
+        context: &mut LayerContext<'_, Root<R>>,
+    ) -> bool {
+        let mut trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.DirectAnimationPropertyUpdate",
+        );
+        trace.set("transform_updates", update.transforms.len() as f64);
+        trace.set("effect_updates", update.effects.len() as f64);
+        if let Some(node) = update.transforms.first() {
+            trace.set("transform_x", node.Matrix().values[12]);
+            trace.set("transform_y", node.Matrix().values[13]);
+        }
+        if let Some(node) = update.effects.first() {
+            trace.set("opacity", node.opacity as f64);
+        }
+        for node in &update.transforms {
+            let transform = paint::TransformNode::<R>::from_arc(node.clone());
+            if !pac.DirectlyUpdateTransform(&transform, context) {
+                trace.set("applied", 0.0);
+                return false;
+            }
+        }
+        for node in &update.effects {
+            let effect = paint::EffectNode::<R>::from_arc(node.clone());
+            if !pac.DirectlyUpdateCompositedOpacityValue(&effect, context) {
+                trace.set("applied", 0.0);
+                return false;
+            }
+        }
+        for node in &update.transforms {
+            node.lifecycle.CompositorSimpleValuesUpdated();
+        }
+        for node in &update.effects {
+            node.lifecycle.CompositorSimpleValuesUpdated();
+        }
+        trace.set("applied", 1.0);
+        true
+    }
+
+    pub(crate) fn ApplyScrollbarPaintMutation(
+        &self,
+        pac: &crate::third_party::blink::renderer::platform::graphics::compositing::paint_artifact_compositor::PaintArtifactCompositor<Root<R>>,
+        mutation: &crate::engine::ScrollbarPaintMutation,
+        context: &mut LayerContext<'_, Root<R>>,
+    ) -> bool {
+        let mut trace = browser_tracing::span(
+            "compositor.layerize",
+            "Compositor.Layerize.ScrollbarPaintMutation",
+        );
+        trace.set("element", mutation.element.GetInternalValue() as f64);
+        trace.set("opacity", f64::from(mutation.opacity));
+        trace.set("thumb_width", mutation.thumb_width as f64);
+        let applied = pac.UpdateScrollbarPaintedAnimation(
+            mutation.element,
+            mutation.opacity,
+            mutation.thumb_width,
+            mutation.needs_repaint,
+            context,
+            self,
+        );
+        trace.set("applied", applied as u8 as f64);
+        applied
+    }
+
     /// Validation happens before any canonical owner is mutated. Input retains
     /// exactly the supplied artifact Arc; all layerization stays inside PAC.
     pub(crate) fn UpdateCompositor(

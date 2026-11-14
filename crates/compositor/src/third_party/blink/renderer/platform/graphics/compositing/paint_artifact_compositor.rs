@@ -1722,12 +1722,13 @@ impl<B: PaintArtifactCompositorTypes> compositor_layerize::full_update::FullUpda
             for (index, pending) in self.compositor.pending_layers_.iter().enumerate() {
                 let transform = pending.GetPropertyTreeState().TransformNode();
                 eprintln!(
-                    "will-change-final-before-decompose index={} first={} chunks={} bounds={:?} offset={:?} transform-direct={} nearest-direct={}",
+                    "will-change-final-before-decompose index={} first={} chunks={} bounds={:?} offset={:?} draws={} transform-direct={} nearest-direct={}",
                     index,
                     pending.FirstPaintChunk().IdToString(),
                     pending.Chunks().len(),
                     pending.BoundsForTesting(),
                     pending.OffsetOfDecompositedTransforms(),
+                    pending.DrawsContent(),
                     transform.HasDirectCompositingReasons(),
                     transform.NearestDirectlyCompositedAncestor().is_some(),
                 );
@@ -2600,6 +2601,46 @@ impl<B: PaintArtifactCompositorTypes> PaintArtifactCompositor<B> {
             }
         }
         false
+    }
+    /// Rechrom's immutable PaintArtifact boundary cannot retain Blink's live
+    /// WebScrollbar adapter.  Apply the same source-owned animated values to
+    /// the resident PaintedScrollbarLayer before taking Chromium's
+    /// SetScrollbarNeedsDisplay path. Returning false preserves Blink's
+    /// non-composited scrollbar fallback.
+    pub fn UpdateScrollbarPaintedAnimation(
+        &self,
+        element: ElementId,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+        c: &mut LayerContext<'_, B>,
+        services: &dyn PaintArtifactCompositorServices<B>,
+    ) -> bool
+    where
+        B: crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes,
+    {
+        debug_assert!(self.root_layer_.is_some());
+        assert!(services.IsScrollbarElementId(element));
+        let Some(host) = self.root_layer_.as_ref().expect("source root").host_id() else {
+            return false;
+        };
+        let Some(layer) = c.Host(host).LayerByElementId(element) else {
+            return false;
+        };
+        layer.WithSource(c, |object, context| {
+            if !object.UpdatePaintedScrollbarAnimation(
+                opacity,
+                thumb_width,
+                needs_repaint,
+            ) {
+                return false;
+            }
+            let bounds = object.base().bounds(context);
+            let rect = Rect::new(0, 0, bounds.width(), bounds.height());
+            drop(bounds);
+            object.SetNeedsDisplayRect(&rect, context);
+            true
+        })
     }
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.cc:1784-1802.
     // Source: third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h:268-271.

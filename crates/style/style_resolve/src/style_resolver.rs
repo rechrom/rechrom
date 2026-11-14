@@ -175,10 +175,7 @@ pub trait StyleResolverBackend {
     fn VisuallyOrdered(&self, document: &Self::Document) -> bool;
     fn InForcedColorsMode(&self, document: &Self::Document) -> bool;
     fn InDesignMode(&self, document: &Self::Document) -> bool;
-    fn ContentLanguage<'d>(
-        &'d self,
-        document: &'d Self::Document,
-    ) -> &'d AtomicString;
+    fn ContentLanguage<'d>(&'d self, document: &'d Self::Document) -> &'d AtomicString;
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32;
     fn MediaType<'v>(&self, view: &'v Self::LocalFrameView) -> &'v str;
     fn UpdateActiveStyle(&self, engine: &Self::StyleEngine);

@@ -30,7 +30,10 @@ pub use prepaint::{clip_path_clipper, resident_hit_test, resident_layer_clipper}
 
 pub use layout_object_counter::LayoutObjectCounter;
 pub use paint_engine::PaintRect;
-pub use paint_engine::{ForeignLayer, LocalFrameViewPaintInput, PaintArtifact, PaintEngine};
+pub use paint_engine::{
+    CompositedAnimationPropertyUpdate, ForeignLayer, LocalFrameViewPaintInput, PaintArtifact,
+    PaintEngine,
+};
 pub use paint_event::PaintEvent;
 pub use performance::PaintPerformanceSnapshot;
 
@@ -39,7 +42,8 @@ pub use paint_model::property_node_geometry;
 pub use paint_record::paint_auto_dark_mode;
 pub use paint_record::{PaintController, PaintControllerPersistentData};
 pub use prepaint::{
-    BlockPaintInvalidator, BoxPaintInvalidator, CompositingReasonFinder, CullRectUpdater,
+    BlockPaintInvalidator, BoxPaintInvalidator, CompositedAnimationProperty,
+    CompositedAnimationPropertyBinding, CompositingReasonFinder, CullRectUpdater,
     ObjectPaintInvalidator, PaintInvalidator, PaintInvalidatorContext, TableCellPaintInvalidator,
 };
 

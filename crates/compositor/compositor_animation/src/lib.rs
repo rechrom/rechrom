@@ -14,12 +14,14 @@ pub enum ElementListType {
 pub mod animation;
 pub mod animation_events;
 pub mod animation_timeline;
+pub mod compositor_mutation;
 pub mod cubic_bezier;
 pub mod gfx_keyframe_effect;
 pub mod gfx_keyframe_model;
 pub mod host_iteration;
 pub mod keyframe_effect;
 pub mod keyframe_model;
+pub mod keyframed_animation_curve;
 pub mod paint_worklet;
 pub mod property_animation_state;
 pub mod scroll_offset_animation_curve;

@@ -27,9 +27,13 @@ use crate::{
                 Animation, AnimationContext, AnimationDelegateId, AnimationHostId, AnimationRef,
             },
             animation_events::{AnimationEvents, AnimationPlaybackEvent, PlaybackType},
+            animation_id_provider::AnimationIdProvider,
             animation_timeline::{AnimationTimelineContext, AnimationTimelineTypes},
             keyframe_effect::{BoundElementAnimations, KeyframeEffect},
-            keyframe_model::{KeyframeCurve, KeyframeModel, KeyframeModelTrace, LimitDirection},
+            keyframe_model::{
+                CompositorAnimationCurve, KeyframeCurve, KeyframeModel, KeyframeModelTrace,
+                LimitDirection,
+            },
             scroll_offset_animation_curve::{
                 ScrollCurveConfig, ScrollCurveTarget, ScrollOffsetAnimationCurve,
             },
@@ -50,7 +54,7 @@ use std::{
     },
 };
 
-type Curve = ScrollOffsetAnimationCurve;
+type Curve = CompositorAnimationCurve;
 type AnimationHandle = AnimationRef<Curve>;
 
 #[derive(Debug)]
@@ -74,6 +78,7 @@ struct AnimationState {
     timelines: BTreeMap<i32, ScrollTimelineRef>,
     animations: BTreeMap<i32, AnimationHandle>,
     source_scroll_animations: BTreeMap<i32, AnimationHandle>,
+    source_property_animations: BTreeMap<u64, (i32, AnimationHandle)>,
     source_scroll_completions:
         Vec<scroll_animation::compositor_mutation::ScrollAnimationCompletion>,
     scroll_updates: compositor_animation::scroll_offset_animations::ScrollOffsetAnimations,
@@ -117,10 +122,20 @@ impl compositor_animation::host_iteration::TimelineTickContext for TimelineTickA
     }
 
     fn tick_timeline(&mut self, index: usize) -> bool {
-        self.timelines[index]
+        let timeline = self.timelines[index].clone();
+        let (id, is_scroll_timeline) = {
+            let timeline = timeline
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (timeline.id(), timeline.IsScrollTimeline())
+        };
+        self.call.selected_timeline = Some((id, is_scroll_timeline));
+        let animated = timeline
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .TickTimeLinkedAnimations(self.ticking, self.time, self.is_impl_only, self.call)
+            .TickTimeLinkedAnimations(self.ticking, self.time, self.is_impl_only, self.call);
+        self.call.selected_timeline = None;
+        animated
     }
 }
 
@@ -344,6 +359,7 @@ impl Default for AnimationHostOwner {
                 timelines: BTreeMap::new(),
                 animations: BTreeMap::new(),
                 source_scroll_animations: BTreeMap::new(),
+                source_property_animations: BTreeMap::new(),
                 source_scroll_completions: Vec::new(),
                 scroll_updates: Default::default(),
                 ticking: BTreeSet::new(),
@@ -372,6 +388,110 @@ impl AnimationHostOwner {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        use crate::cc::animation::{
+            animation_timeline::AnimationTimeline, keyframe_model::TargetPropertyId,
+        };
+        use compositor_animation::compositor_mutation::PropertyAnimationMutation as M;
+
+        let identity = match &mutation {
+            M::Install { identity, .. } | M::Remove { identity } => *identity,
+        };
+        // Release AnimationState before native detach callbacks re-enter the
+        // host's element/timeline registration methods. An if-let condition
+        // temporary would otherwise retain the non-recursive mutex for the
+        // complete body and deadlock the first element-id rebind.
+        let existing = { self.lock().source_property_animations.remove(&identity) };
+        if let Some((timeline_id, animation)) = existing {
+            let mut call = AnimationCall::detached(self);
+            if animation
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .element_id()
+                .IsValid()
+            {
+                animation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .DetachElement(&mut call);
+            }
+            let timeline = { self.lock().timelines.get(&timeline_id).cloned() };
+            if let Some(timeline) = timeline {
+                timeline
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .DetachAnimation(&animation, &mut call);
+                timeline
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .SetAnimationHost(None, &mut call);
+                self.lock().timelines.remove(&timeline_id);
+            }
+        }
+        let M::Install {
+            element,
+            curve,
+            target_property,
+            iterations,
+            iteration_start,
+            start_delay,
+            direction,
+            playback_rate,
+            fill_mode,
+            start_time,
+            hold_time,
+            ..
+        } = mutation
+        else {
+            return;
+        };
+
+        let timeline_id = AnimationIdProvider::NextTimelineId();
+        let animation_id = AnimationIdProvider::NextAnimationId();
+        let timeline = Arc::new(Mutex::new(
+            AnimationTimeline::<ScrollAnimationTypes>::Create(timeline_id, false),
+        ));
+        let animation = Animation::Create(animation_id);
+        let mut call = AnimationCall::detached(self);
+        call.AddAnimationTimeline(timeline.clone());
+        timeline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .AttachAnimation(animation.clone(), &mut call);
+        animation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .AttachElement(element, &mut call);
+
+        let mut model = KeyframeModel::Create(
+            Some(curve),
+            AnimationIdProvider::NextKeyframeModelId(),
+            AnimationIdProvider::NextGroupId(),
+            TargetPropertyId::new(target_property),
+            self.trace.clone(),
+        );
+        model.set_iterations(iterations);
+        model.set_iteration_start(iteration_start);
+        model.set_start_delay(start_delay);
+        model.set_direction(direction);
+        model.set_playback_rate(playback_rate);
+        model.set_fill_mode(fill_mode);
+        if let Some(start_time) = start_time {
+            model.base_mut().set_start_time(start_time);
+        }
+        model.set_hold_time(hold_time);
+        animation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .AddKeyframeModel(Box::new(model), &mut call);
+        self.lock()
+            .source_property_animations
+            .insert(identity, (timeline_id, animation));
     }
 
     /// Platform CompositorAnimation.cc:39-105. All commands target the same
@@ -492,7 +612,7 @@ impl AnimationHostOwner {
                 ..
             } => {
                 let mut model = KeyframeModel::Create(
-                    Some(curve),
+                    Some(Curve::Scroll(curve)),
                     model,
                     group,
                     TargetPropertyId::new(TargetProperty::SCROLL_OFFSET as i32),
@@ -611,6 +731,7 @@ impl AnimationHostOwner {
         let mut state = self.lock();
         state.timelines.clear();
         state.animations.clear();
+        state.source_property_animations.clear();
         state.ticking.clear();
         state.elements.clear();
         state.current_frame_had_raf = false;
@@ -660,6 +781,7 @@ impl AnimationHostOwner {
             target,
             property_trees: None,
             selected_element,
+            selected_timeline: None,
             now: TimeTicks::default(),
             active: true,
         };
@@ -768,6 +890,7 @@ impl AnimationHostOwner {
             target: Some(target),
             property_trees: None,
             selected_element: None,
+            selected_timeline: None,
             now: time,
             active: is_active,
         };
@@ -1097,6 +1220,10 @@ struct AnimationCall<'a> {
     target: Option<&'a mut dyn AnimationMutationTarget>,
     property_trees: Option<&'a PropertyTreesFor<CompositorTypes>>,
     selected_element: Option<ElementId>,
+    // Timeline methods own their mutex while entering Animation. Preserve the
+    // already-known kind in this synchronous call context so Animation does
+    // not lock the same resident Timeline again.
+    selected_timeline: Option<(i32, bool)>,
     now: TimeTicks,
     active: bool,
 }
@@ -1231,6 +1358,7 @@ impl<'a> AnimationCall<'a> {
             target: None,
             property_trees: None,
             selected_element: None,
+            selected_timeline: None,
             now: TimeTicks::default(),
             active: true,
         }
@@ -1244,6 +1372,7 @@ impl<'a> AnimationCall<'a> {
             target: Some(target),
             property_trees: None,
             selected_element: None,
+            selected_timeline: None,
             now: TimeTicks::default(),
             active: true,
         }
@@ -1258,6 +1387,7 @@ impl<'a> AnimationCall<'a> {
             target: None,
             property_trees: Some(property_trees),
             selected_element: None,
+            selected_timeline: None,
             now: TimeTicks::default(),
             active: true,
         }
@@ -1301,20 +1431,60 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         time: TimeDelta,
         property: i32,
         model: &KeyframeModel<Curve>,
-        _limit: LimitDirection,
+        limit: LimitDirection,
     ) {
+        let mut trace =
+            browser_tracing::span("compositor.animation", "Compositor.Animation.TickCurve");
+        trace.set("property", property as f64);
+        trace.set("local_time_us", time.InMicroseconds() as f64);
         if let Some(target) = self.target.as_deref_mut() {
             let element = self.selected_element.expect("selected animation element");
-            curve.Tick(
-                time,
-                property,
-                model,
-                Some(&mut ScrollTickTarget {
-                    target,
-                    element,
-                    active: self.active,
-                }),
-            );
+            let element = if model.element_id().IsValid() {
+                model.element_id()
+            } else {
+                element
+            };
+            let list = if self.active {
+                ElementListType::ACTIVE
+            } else {
+                ElementListType::PENDING
+            };
+            if browser_tracing::enabled() {
+                trace.set(
+                    "active_tree_has_element",
+                    target.IsElementInPropertyTrees(element, ElementListType::ACTIVE) as u8 as f64,
+                );
+                trace.set(
+                    "pending_tree_has_element",
+                    target.IsElementInPropertyTrees(element, ElementListType::PENDING) as u8 as f64,
+                );
+            }
+            match curve {
+                Curve::Scroll(curve) => curve.Tick(
+                    time,
+                    property,
+                    model,
+                    Some(&mut ScrollTickTarget {
+                        target,
+                        element,
+                        active: self.active,
+                    }),
+                ),
+                Curve::Float(curve) => {
+                    let value = curve.GetValue(time, limit);
+                    trace.set("opacity", value as f64);
+                    target.SetElementOpacityMutated(element, list, value);
+                }
+                Curve::Transform(curve) => {
+                    let operations = curve.GetValue(time, limit);
+                    let matrix = compositor_animation::keyframed_animation_curve::TransformOperationsToMatrix(
+                        &operations,
+                    );
+                    trace.set("translate_x", matrix[12]);
+                    trace.set("translate_y", matrix[13]);
+                    target.SetElementTransformMutated(element, list, &matrix);
+                }
+            }
         }
     }
     fn HostIsOwnerThread(&self, host: AnimationHostId) -> bool {
@@ -1374,6 +1544,11 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         }
     }
     fn TimelineIsScrollTimeline(&self, timeline: i32) -> bool {
+        if let Some((selected, is_scroll_timeline)) = self.selected_timeline {
+            if selected == timeline {
+                return is_scroll_timeline;
+            }
+        }
         self.owner
             .lock()
             .timelines
@@ -1450,7 +1625,9 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         if !event.is_impl_only {
             panic!("non-impl animation events must use the resident AnimationEvents owner");
         }
-        if event.kind == PlaybackType::kFinished {
+        if event.kind == PlaybackType::kFinished
+            && event.target_property == TargetProperty::SCROLL_OFFSET as i32
+        {
             let Some(element) = self.selected_element else {
                 return;
             };
@@ -1504,6 +1681,9 @@ impl AnimationContext<Curve> for AnimationCall<'_> {
         _property: i32,
         _group: i32,
     ) {
+        if _property != TargetProperty::SCROLL_OFFSET as i32 {
+            return;
+        }
         if self
             .owner
             .lock()

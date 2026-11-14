@@ -64,6 +64,23 @@ impl Scrollbar {
             needs_update_display: value.needs_update_display,
         }
     }
+
+    /// Blink's cc::Scrollbar retains a live WebScrollbar adapter, so
+    /// ScrollableArea animation values are observed by the resident layer
+    /// without rebuilding the PaintArtifact.  Rechrom's package boundary is
+    /// immutable; replace precisely those live-adapter values instead.
+    pub fn WithPaintedAnimation(
+        &self,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> Self {
+        let mut updated = self.clone();
+        updated.painted_opacity = opacity;
+        updated.painted_thumb_width = thumb_width;
+        updated.needs_update_display |= needs_repaint || self.painted_thumb_width != thumb_width;
+        updated
+    }
 }
 
 /// Transparent N32-premultiplied bitmap used by PaintedScrollbarLayer's

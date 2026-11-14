@@ -1127,7 +1127,7 @@ impl EffectPaintPropertyNode {
     }
 
     pub fn MayHaveBackdropEffect(&self) -> bool {
-        self.blend_mode != PaintBlendMode::kNormal || self.MayHaveBackdropFilter()
+        self.is_mask || self.blend_mode != PaintBlendMode::kNormal || self.MayHaveBackdropFilter()
     }
 
     pub fn HasValidViewTransitionElementResourceId(&self) -> bool {
@@ -2194,6 +2194,53 @@ impl PaintPropertyNodeStore {
         key: PaintPropertyKey,
     ) -> Option<&Arc<TransformPaintPropertyNode>> {
         self.transforms.get(&key)
+    }
+
+    pub fn EffectOwnerForKey(
+        &self,
+        key: PaintPropertyKey,
+    ) -> Option<&Arc<EffectPaintPropertyNode>> {
+        self.effects.get(&key)
+    }
+
+    /// Source: LocalFrameView::ExecuteAllPendingUpdates and
+    /// ObjectPaintProperties' direct transform/opacity updates. Rechrom keeps
+    /// published property values as immutable snapshots, so a direct update
+    /// replaces only the current owner/role slot while retaining its native
+    /// lifecycle identity. Older PaintArtifacts continue to own their prior
+    /// snapshots until the compositor consumes this value update.
+    pub fn PublishDirectTransformSnapshot(
+        &mut self,
+        key: PaintPropertyKey,
+        snapshot: Arc<TransformPaintPropertyNode>,
+        change: PaintPropertyChangeType,
+    ) {
+        debug_assert!(self
+            .transforms
+            .get(&key)
+            .is_some_and(|current| current.lifecycle.same_node(&snapshot.lifecycle)));
+        if change != PaintPropertyChangeType::Unchanged {
+            self.changed = self.changed.max(change);
+            self.change_markers_cleared = false;
+            self.transforms.insert(key, snapshot);
+        }
+    }
+
+    pub fn PublishDirectEffectSnapshot(
+        &mut self,
+        key: PaintPropertyKey,
+        snapshot: Arc<EffectPaintPropertyNode>,
+        change: PaintPropertyChangeType,
+    ) {
+        debug_assert!(self
+            .effects
+            .get(&key)
+            .is_some_and(|current| current.lifecycle.same_node(&snapshot.lifecycle)));
+        if change != PaintPropertyChangeType::Unchanged {
+            self.changed = self.changed.max(change);
+            self.change_markers_cleared = false;
+            self.effects.insert(key, snapshot);
+        }
     }
 
     pub fn ClipForKey(&self, key: PaintPropertyKey) -> Option<&ClipPaintPropertyNode> {
@@ -3546,7 +3593,23 @@ fn transform_state_change(
     a: &TransformPaintPropertyNode,
     b: &TransformPaintPropertyNode,
 ) -> PaintPropertyChangeType {
-    transform_state_change_with_animation(a, b, TransformAnimationState::default())
+    // Chromium's deferred transform path classifies a sampled matrix as a
+    // composited-value change once the resident property node is already an
+    // active transform-animation node. Rechrom samples CSS keyframes on the
+    // document sequence before forwarding that value through the same
+    // PaintArtifactCompositor direct-update API, so preserve that change
+    // category here. `transform_state_change_with_animation` still returns
+    // ChangedOnlyValues for parent, scroll, compositing-reason, or any other
+    // structural difference; only matrix/origin values receive the downgrade.
+    let directly_sampled_active_animation =
+        a.HasActiveTransformAnimation() && b.HasActiveTransformAnimation();
+    transform_state_change_with_animation(
+        a,
+        b,
+        TransformAnimationState {
+            is_running_animation_on_compositor: directly_sampled_active_animation,
+        },
+    )
 }
 fn clip_state_change(
     a: &ClipPaintPropertyNode,

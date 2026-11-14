@@ -55,7 +55,7 @@ pub const fn SkFloatToFixed_Check(x: f32) -> SkFixed {
 #[inline]
 pub const fn SkFloatToFixed_Check<T>(x: T) -> SkFixed
 where
-    T: [const] SkCppMul<i32>,
+    T: Copy + [const] SkCppMul<i32>,
     f32: [const] SkCastFrom<<T as SkCppMul<i32>>::Output>,
 {
     SkFloatToFixed(x)

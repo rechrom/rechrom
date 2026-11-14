@@ -48,8 +48,8 @@ use layoutng_style::style::computed_style_constants::PseudoId;
 
 use super::{
     dom_event::DomEventTargets, event::EventTargetResolver,
-    interaction_contract::InteractionDocument, page_focus_controller,
-    page_input_type::DefaultActionState, page_editing_owners::PageEditingOwners,
+    interaction_contract::InteractionDocument, page_editing_owners::PageEditingOwners,
+    page_focus_controller, page_input_type::DefaultActionState,
 };
 
 #[path = "page_focusgroup.rs"]

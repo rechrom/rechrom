@@ -287,8 +287,11 @@ impl InteractionInputCompletion for Completion<'_> {
 struct BoundFrame<'scope> {
     frame: Rc<PageEventHandlerFrame<'scope>>,
     handler: Rc<EventHandler<'scope, PageEventHandlerHitResult>>,
-    input:
-        NativeInteraction<'scope, PageEventHandlerHitResult, super::page_editing_owners::PageEditingOwners>,
+    input: NativeInteraction<
+        'scope,
+        PageEventHandlerHitResult,
+        super::page_editing_owners::PageEditingOwners,
+    >,
     completion: Rc<Completion<'scope>>,
     nodes: Rc<PageEventHandlerNodes>,
     _state: super::interaction::EmitStateMutationAtExit,

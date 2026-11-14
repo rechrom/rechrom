@@ -1,4 +1,7 @@
-use crate::adapter::{geometry::TracedValue as _, property_types::PropertyTrace as _};
+use crate::adapter::{
+    geometry::TracedValue as _, property_tree::PropertyTreeTransform as _,
+    property_types::PropertyTrace as _,
+};
 use compositor_frame::swap_promise::{
     BreakSwapPromises as BreakSwapPromisesPolicy, ClearSwapPromises as ClearSwapPromisesPolicy,
     FinishSwapPromises as FinishSwapPromisesPolicy, PassSwapPromises as PassSwapPromisesPolicy,
@@ -2559,9 +2562,63 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         transform: &B::Transform,
         context: &mut LayerTreeContext<'_, B>,
     ) {
+        let mut trace = browser_tracing::span(
+            "compositor.animation",
+            "Compositor.Animation.ApplyTransform",
+        );
+        if browser_tracing::enabled() {
+            trace.set("element_id", id.GetInternalValue() as f64);
+            if let Some(node) = self
+                .property_trees_
+                .transform_tree()
+                .FindNodeFromElementId(id)
+            {
+                let node_id = node.id;
+                let tree = self.property_trees_.transform_tree();
+                trace.set("property_node", node_id as f64);
+                if let Some(layer) = self.layer_list_.iter().find(|layer| {
+                    let mut current = layer.transform_tree_index();
+                    while current != kInvalidPropertyNodeId {
+                        if current == node_id {
+                            return true;
+                        }
+                        current = tree.Node(current).parent_id;
+                    }
+                    false
+                }) {
+                    let visible = layer.visible_layer_rect();
+                    trace.set("first_layer_id", layer.id() as f64);
+                    trace.set(
+                        "first_layer_draws_content",
+                        layer.draws_content() as u8 as f64,
+                    );
+                    trace.set(
+                        "first_layer_effect_drawn",
+                        self.property_trees_
+                            .effect_tree()
+                            .Node(layer.effect_tree_index())
+                            .is_drawn as u8 as f64,
+                    );
+                    trace.set(
+                        "first_layer_checks_backface",
+                        layer.should_check_backface_visibility() as u8 as f64,
+                    );
+                    trace.set(
+                        "first_layer_visible_pixels",
+                        visible.width.max(0) as f64 * visible.height.max(0) as f64,
+                    );
+                    trace.set(
+                        "first_layer_contributes",
+                        layer.contributes_to_drawn_render_surface() as u8 as f64,
+                    );
+                }
+            }
+        }
         self.ValidateEffectTreeMapping(id, PropertyMutation::kTransform, context);
         let (tree, mut mutation) = self.property_trees_.transform_tree_with_context();
-        if tree.OnTransformAnimated(id, transform, &mut mutation) {
+        let changed = tree.OnTransformAnimated(id, transform, &mut mutation);
+        trace.set("changed", changed as u8 as f64);
+        if changed {
             self.set_needs_update_draw_properties();
             self.RequestCommitForPropertyMutationIfNeeded(PropertyMutation::kTransform, context);
         }
@@ -2573,9 +2630,70 @@ impl<B: LayerTreeTypes> LayerTreeImpl<B> {
         opacity: f32,
         context: &mut LayerTreeContext<'_, B>,
     ) {
+        let mut trace =
+            browser_tracing::span("compositor.animation", "Compositor.Animation.ApplyOpacity");
+        if browser_tracing::enabled() {
+            let effect_elements = self
+                .property_trees_
+                .effect_tree()
+                .element_id_to_node_index();
+            trace.set("element_id", id.GetInternalValue() as f64);
+            trace.set(
+                "effect_mapped",
+                self.property_trees_
+                    .effect_tree()
+                    .FindNodeFromElementId(id)
+                    .is_some() as u8 as f64,
+            );
+            trace.set("effect_element_count", effect_elements.len() as f64);
+            if let Some(node) = self.property_trees_.effect_tree().FindNodeFromElementId(id) {
+                let node_id = node.id;
+                let tree = self.property_trees_.effect_tree();
+                let affected_layers = self
+                    .layer_list_
+                    .iter()
+                    .filter(|layer| {
+                        let mut current = layer.effect_tree_index();
+                        while current != kInvalidPropertyNodeId {
+                            if current == node_id {
+                                return true;
+                            }
+                            current = tree.Node(current).parent_id;
+                        }
+                        false
+                    })
+                    .count();
+                trace.set("property_node", node_id as f64);
+                trace.set("affected_layers", affected_layers as f64);
+                if let Some(layer) = self.layer_list_.iter().find(|layer| {
+                    let mut current = layer.effect_tree_index();
+                    while current != kInvalidPropertyNodeId {
+                        if current == node_id {
+                            return true;
+                        }
+                        current = tree.Node(current).parent_id;
+                    }
+                    false
+                }) {
+                    let bounds = layer.bounds(&self.property_trees_);
+                    let visible = layer.visible_layer_rect();
+                    trace.set("first_layer_id", layer.id() as f64);
+                    trace.set(
+                        "first_layer_bounds_pixels",
+                        bounds.width().max(0) as f64 * bounds.height().max(0) as f64,
+                    );
+                    trace.set(
+                        "first_layer_visible_pixels",
+                        visible.width.max(0) as f64 * visible.height.max(0) as f64,
+                    );
+                }
+            }
+        }
         self.ValidateEffectTreeMapping(id, PropertyMutation::kOpacity, context);
         let (tree, state) = self.property_trees_.effect_tree_with_state();
-        if tree.OnOpacityAnimated(id, opacity, state) {
+        let changed = tree.OnOpacityAnimated(id, opacity, state);
+        trace.set("changed", changed as u8 as f64);
+        if changed {
             self.set_needs_update_draw_properties();
             self.RequestCommitForPropertyMutationIfNeeded(PropertyMutation::kOpacity, context);
         }

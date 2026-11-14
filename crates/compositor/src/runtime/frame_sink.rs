@@ -156,6 +156,30 @@ impl FrameSinkTransport<crate::CompositorTypes> for OutputFrameSink {
                 .sum::<usize>() as f64,
         );
         trace.set("resources", frame.resource_list.len() as f64);
+        if browser_tracing::enabled() {
+            let mut property_signature = 0.0;
+            let mut opacity_sum = 0.0;
+            for (index, state) in frame
+                .render_pass_list
+                .iter()
+                .flat_map(|pass| pass.shared_quad_state_list.iter())
+                .enumerate()
+            {
+                let transform = state.quad_to_target_transform.as_source();
+                let weight = index as f64 + 1.0;
+                property_signature += weight
+                    * (transform.rc(0, 0)
+                        + transform.rc(0, 1) * 3.0
+                        + transform.rc(0, 3) * 5.0
+                        + transform.rc(1, 0) * 7.0
+                        + transform.rc(1, 1) * 11.0
+                        + transform.rc(1, 3) * 13.0
+                        + state.opacity as f64 * 17.0);
+                opacity_sum += state.opacity as f64;
+            }
+            trace.set("property_signature", property_signature);
+            trace.set("opacity_sum", opacity_sum);
+        }
         self.output.Submit(crate::CompositorFrameSubmission {
             local_surface_id: self.local_surface_id,
             frame,

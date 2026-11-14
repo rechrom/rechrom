@@ -769,9 +769,8 @@ impl<'a> Interaction<'a> {
             }
             let text = document.TextControlInnerEditorValueUTF16(index);
             let selection = selection.Start().min(text.len())..selection.End().min(text.len());
-            let composition = composition.map(|range| {
-                range.Start().min(text.len())..range.End().min(text.len())
-            });
+            let composition =
+                composition.map(|range| range.Start().min(text.len())..range.End().min(text.len()));
             Some(TextInputState {
                 text: text.to_vec(),
                 selection,
@@ -937,14 +936,10 @@ impl<'a> Interaction<'a> {
         backward: bool,
     ) -> bool {
         let focused = self.state.borrow().focused_node_id == Some(id);
-        if !self.editor.SetControlSelectionRange(
-            document,
-            id,
-            start,
-            end,
-            backward,
-            focused,
-        ) {
+        if !self
+            .editor
+            .SetControlSelectionRange(document, id, start, end, backward, focused)
+        {
             return false;
         }
         if !focused {

@@ -35,7 +35,10 @@ pub use compositing_reason_finder::CompositingReasonFinder;
 pub use cull_rect_updater::CullRectUpdater;
 pub use object_paint_invalidator::ObjectPaintInvalidator;
 pub use paint_invalidator::{PaintInvalidator, PaintInvalidatorContext};
-pub use pre_paint_tree_walk::{PaintFragmentSource, PaintTreeNode, PrePaintTreeWalk};
+pub use pre_paint_tree_walk::{
+    CompositedAnimationProperty, CompositedAnimationPropertyBinding,
+    DirectCompositedAnimationPropertyUpdate, PaintFragmentSource, PaintTreeNode, PrePaintTreeWalk,
+};
 pub use table_cell_paint_invalidator::TableCellPaintInvalidator;
 
 #[derive(Clone, Copy, Debug, Default)]

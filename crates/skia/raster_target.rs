@@ -46,12 +46,14 @@ pub enum TargetError {
     CanvasCreationFailed,
 }
 
-/// The two Porter-Duff operations supported by Skia's original N32 sprite
-/// row blitter. Other blend modes continue through Canvas.
+/// Porter-Duff operations with a translated Skia N32 fast path. `Src` and
+/// `SrcOver` use the original sprite row blitter; `DstIn` uses Skia's original
+/// RasterPipeline stages because the row blitter does not expose that mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum N32BlitMode {
     Src,
     SrcOver,
+    DstIn,
 }
 
 /// Convert one tightly packed straight-alpha RGBA8888 image into Skia's
@@ -170,6 +172,17 @@ impl<'pixels> RasterTarget<'pixels> {
         self.canvas.as_mut().setRasterPhaseOrigin(x, y);
     }
 
+    /// Source: SkCanvas::imageInfo / SkCanvas::getBaseProps. Picture shaders
+    /// choose their cached raster tile from the actual destination color and
+    /// surface identities, not from an embedding-wide default.
+    pub fn image_info(&self) -> SkImageInfo {
+        self.canvas.as_ref().get_ref().imageInfo()
+    }
+
+    pub fn surface_props(&self) -> SkSurfaceProps {
+        self.canvas.as_ref().get_ref().getBaseProps()
+    }
+
     /// Borrow the entire visible target, including any padding between rows.
     /// `row_bytes` is the physical stride; `width` remains the visible width.
     pub fn new(
@@ -240,8 +253,8 @@ impl<'pixels> RasterTarget<'pixels> {
         })
     }
 
-    /// Composite a clipped, pixel-aligned N32 sprite using the original
-    /// `SkBlitRow` implementation selected by Skia for this architecture.
+    /// Composite a clipped, pixel-aligned N32 sprite using Skia's original
+    /// `SkBlitRow` or `SkRasterPipeline` implementation.
     ///
     /// This is the same terminal row operation used by Skia's sprite blitter;
     /// it avoids rebuilding an image shader for the common 1:1 tile case. The
@@ -264,6 +277,9 @@ impl<'pixels> RasterTarget<'pixels> {
         alpha: u8,
         source_opaque: bool,
     ) -> bool {
+        let mut trace = browser_tracing::span("renderer", "Renderer.Skia.N32Blit");
+        trace.set("mode", mode as u8 as f64);
+        trace.set("pixels", width.max(0) as f64 * height.max(0) as f64);
         if !matches!(self.format, PixelFormat::Bgra8888 | PixelFormat::Bgrx8888)
             || source_width <= 0
             || source_height <= 0
@@ -289,8 +305,127 @@ impl<'pixels> RasterTarget<'pixels> {
                 .checked_mul(self.height as usize)
                 .is_none_or(|required| required > self.pixel_len)
             || (mode == N32BlitMode::Src && alpha != 255)
+            || (mode == N32BlitMode::DstIn && self.format != PixelFormat::Bgra8888)
         {
             return false;
+        }
+
+        let source_stride = source_row_bytes / 4;
+        let destination_stride = self.row_bytes / 4;
+        let source_start = source_y as usize * source_stride + source_x as usize;
+        let destination_start =
+            destination_y as usize * destination_stride + destination_x as usize;
+
+        if mode == N32BlitMode::DstIn {
+            if alpha == 255 && source_opaque {
+                return true;
+            }
+            if alpha == 255 {
+                // Source: src/opts/SkRasterPipeline_opts.h:6239-6270.
+                // The lowp DstIn pipeline is four independent
+                // div255_accurate(destination * source_alpha) channels. Keep
+                // that exact arithmetic while specializing the common N32
+                // mask row: fully opaque mask pixels are a no-op, and fully
+                // transparent pixels clear without entering the general
+                // RasterPipeline stage chain. CSS mask gradients commonly
+                // contain a wide opaque plateau, so this also avoids writing
+                // most of the retained offscreen pass.
+                #[inline(always)]
+                fn div255_accurate_pair(value: u32) -> u32 {
+                    const PAIR_MASK: u32 = 0x00ff_00ff;
+                    let biased = value.wrapping_add(0x0080_0080);
+                    (biased.wrapping_add((biased >> 8) & PAIR_MASK) >> 8) & PAIR_MASK
+                }
+
+                unsafe {
+                    let mut src_row = source.as_ptr().cast::<u32>().add(source_start);
+                    let mut dst_row = self.pixels.as_ptr().cast::<u32>().add(destination_start);
+                    for _ in 0..height {
+                        let mut src = src_row;
+                        let mut dst = dst_row;
+                        for _ in 0..width {
+                            let source_alpha = src.read() >> 24;
+                            if source_alpha == 0 {
+                                dst.write(0);
+                            } else if source_alpha != 255 {
+                                let pixel = dst.read();
+                                let rb = div255_accurate_pair(
+                                    (pixel & 0x00ff_00ff).wrapping_mul(source_alpha),
+                                );
+                                let ag = div255_accurate_pair(
+                                    ((pixel >> 8) & 0x00ff_00ff).wrapping_mul(source_alpha),
+                                );
+                                dst.write(rb | (ag << 8));
+                            }
+                            src = src.add(1);
+                            dst = dst.add(1);
+                        }
+                        src_row = src_row.add(source_stride);
+                        dst_row = dst_row.add(destination_stride);
+                    }
+                }
+                return true;
+            }
+            let Ok(source_stride) = i32::try_from(source_stride) else {
+                return false;
+            };
+            let Ok(destination_stride) = i32::try_from(destination_stride) else {
+                return false;
+            };
+            use crate::src::core::SkRasterPipelineOpContexts::MemoryCtx;
+            let mut source_context = MemoryCtx {
+                pixels: unsafe {
+                    source
+                        .as_ptr()
+                        .cast::<u32>()
+                        .add(source_start)
+                        .cast_mut()
+                        .cast()
+                },
+                stride: source_stride,
+            };
+            let mut destination_context = MemoryCtx {
+                pixels: unsafe {
+                    self.pixels
+                        .as_ptr()
+                        .cast::<u32>()
+                        .add(destination_start)
+                        .cast()
+                },
+                stride: destination_stride,
+            };
+            let mut paint_alpha = alpha as f32 / 255.;
+            let mut storage = core::pin::pin!(
+                crate::src::core::SkArenaAlloc::SkSTArenaAlloc::<256>::new(0)
+            );
+            // This is the same source -> paint alpha -> destination -> blend ->
+            // store program assembled by SkRasterPipelineBlitter. Validation
+            // above proves both disjoint MemoryCtx spans remain live through
+            // the synchronous run.
+            unsafe {
+                let mut pipeline = crate::src::core::SkRasterPipeline::SkRasterPipeline::new(
+                    storage.as_mut().arena(),
+                );
+                // DstIn reads only source alpha and multiplies every retained
+                // destination channel by that same value. Viewing native BGRA
+                // bytes as RGBA is therefore identical for this operation and
+                // lets Skia omit three otherwise redundant swap_rb stages.
+                let color_type = SkColorType::kRGBA_8888_SkColorType;
+                pipeline.appendLoad(color_type, &mut source_context);
+                if alpha != 255 {
+                    pipeline.append(
+                        crate::src::core::SkRasterPipelineOpList::SkRasterPipelineOp::scale_1_float,
+                        (&mut paint_alpha as *mut f32).cast(),
+                    );
+                }
+                pipeline.appendLoadDst(color_type, &mut destination_context);
+                crate::src::core::SkBlendMode::SkBlendMode_AppendStages(
+                    SkBlendMode::kDstIn,
+                    &mut pipeline,
+                );
+                pipeline.appendStore(color_type, &mut destination_context);
+                return pipeline.run(0, 0, width as usize, height as usize).is_ok();
+            }
         }
 
         let mut flags = 0;
@@ -301,11 +436,6 @@ impl<'pixels> RasterTarget<'pixels> {
             flags |= crate::src::core::SkBlitRow::SkBlitRow::kGlobalAlpha_Flag32;
         }
         let procedure = crate::src::core::SkBlitRow::SkBlitRow::Factory32_raw(flags);
-        let source_stride = source_row_bytes / 4;
-        let destination_stride = self.row_bytes / 4;
-        let source_start = source_y as usize * source_stride + source_x as usize;
-        let destination_start =
-            destination_y as usize * destination_stride + destination_x as usize;
         // Validation above proves every addressed row lies inside its live
         // allocation. Raster resources and render-pass targets are disjoint
         // owners, satisfying SkBlitRow's source/destination alias contract.
@@ -319,6 +449,132 @@ impl<'pixels> RasterTarget<'pixels> {
             }
         }
         true
+    }
+
+    /// Composite a strictly clamped N32 subset through Skia's translated
+    /// bilinear image-shader and `DstIn` RasterPipeline stages.
+    ///
+    /// Chromium's software renderer frequently positions an otherwise 1:1
+    /// mask tile at a fractional device origin. That is not a sprite (each
+    /// destination pixel samples two source rows and columns), but it also
+    /// does not require constructing a general SkCanvas image shader. The
+    /// caller supplies the device-to-subset translation and the non-AA clip
+    /// spans. Returning `false` leaves the general Canvas draw as the
+    /// authoritative fallback.
+    pub fn blit_n32_linear_dst_in_spans(
+        &mut self,
+        source: &[u8],
+        source_width: i32,
+        source_height: i32,
+        source_row_bytes: usize,
+        subset_x: i32,
+        subset_y: i32,
+        subset_width: i32,
+        subset_height: i32,
+        source_translate_x: f32,
+        source_translate_y: f32,
+        spans: &[(i32, i32, i32)],
+        alpha: u8,
+    ) -> bool {
+        let mut trace = browser_tracing::span("renderer", "Renderer.Skia.N32Blit");
+        trace.set("mode", 3.);
+        trace.set(
+            "pixels",
+            spans
+                .iter()
+                .map(|&(_, _, width)| f64::from(width.max(0)))
+                .sum(),
+        );
+        if self.format != PixelFormat::Bgra8888
+            || source_width <= 0
+            || source_height <= 0
+            || subset_width <= 0
+            || subset_height <= 0
+            || spans.is_empty()
+            || subset_x < 0
+            || subset_y < 0
+            || subset_x.saturating_add(subset_width) > source_width
+            || subset_y.saturating_add(subset_height) > source_height
+            || !source_translate_x.is_finite()
+            || !source_translate_y.is_finite()
+            || spans.iter().any(|&(x, y, width)| {
+                x < 0
+                    || y < 0
+                    || width <= 0
+                    || x.saturating_add(width) > self.width
+                    || y >= self.height
+            })
+            || source_row_bytes < source_width as usize * 4
+            || self.row_bytes < self.width as usize * 4
+            || source_row_bytes % 4 != 0
+            || self.row_bytes % 4 != 0
+            || source_row_bytes
+                .checked_mul(source_height as usize)
+                .is_none_or(|required| required > source.len())
+            || self
+                .row_bytes
+                .checked_mul(self.height as usize)
+                .is_none_or(|required| required > self.pixel_len)
+        {
+            return false;
+        }
+
+        let source_stride = source_row_bytes / 4;
+        let destination_stride = self.row_bytes / 4;
+        let source_start = subset_y as usize * source_stride + subset_x as usize;
+        let source_alpha = unsafe { source.as_ptr().add(source_start * 4 + 3) };
+        let destination = self.pixels.as_ptr().cast::<u32>();
+        let source_limit_x = subset_width - 1;
+        let source_limit_y = subset_height - 1;
+        let paint_scale = alpha as f32 / (255. * 255.);
+        let source_floor_x = source_translate_x.floor() as i32;
+        let source_floor_y = source_translate_y.floor() as i32;
+        let fx = (source_translate_x + 1.).rem_euclid(1.);
+        let fy = (source_translate_y + 1.).rem_euclid(1.);
+        let wx0 = 1. - fx;
+        let wy0 = 1. - fy;
+
+        // This is the constant-translation specialization of Skia's original
+        // bilerp_clamp_8888 + DstIn program (SkRasterPipeline_opts.h). Unlike
+        // the general gather stage it reads only the alpha channel required by
+        // DstIn. Pixel-center coordinates, clamp sampling, bilerp weights and
+        // round-to-N32 storage remain the same as that pipeline.
+        unsafe {
+            for &(x, y, width) in spans {
+                let source_y = y.saturating_add(source_floor_y);
+                let y0 = source_y.clamp(0, source_limit_y) as usize;
+                let y1 = source_y.saturating_add(1).clamp(0, source_limit_y) as usize;
+                let row0 = source_alpha.add(y0 * source_row_bytes);
+                let row1 = source_alpha.add(y1 * source_row_bytes);
+                let mut source_x = x.saturating_add(source_floor_x);
+                let mut destination_pixel =
+                    destination.add(y as usize * destination_stride + x as usize);
+                for _ in 0..width {
+                    let x0 = source_x.clamp(0, source_limit_x) as usize;
+                    let x1 = source_x.saturating_add(1).clamp(0, source_limit_x) as usize;
+                    let a00 = row0.add(x0 * 4).read() as f32;
+                    let a10 = row0.add(x1 * 4).read() as f32;
+                    let a01 = row1.add(x0 * 4).read() as f32;
+                    let a11 = row1.add(x1 * 4).read() as f32;
+                    let sampled_alpha =
+                        a00 * wx0 * wy0 + a10 * fx * wy0 + a01 * wx0 * fy + a11 * fx * fy;
+                    let scale = sampled_alpha * paint_scale;
+                    let pixel = destination_pixel.read();
+                    let scale_channel = |shift: u32| {
+                        ((((pixel >> shift) & 0xffu32) as f32 * scale + 0.5) as u32).min(0xff)
+                    };
+                    destination_pixel.write(
+                        scale_channel(0)
+                            | (scale_channel(8) << 8)
+                            | (scale_channel(16) << 16)
+                            | (scale_channel(24) << 24),
+                    );
+                    source_x = source_x.saturating_add(1);
+                    destination_pixel = destination_pixel.add(1);
+                }
+            }
+            true
+        }
     }
 
     // End the temporary Pin borrow before calling any operation that can restore

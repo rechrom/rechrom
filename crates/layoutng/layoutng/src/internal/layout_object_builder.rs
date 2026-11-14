@@ -10,6 +10,7 @@ use super::layout_font_resolver::FontResolver;
 use super::layout_inline::LayoutInline;
 use super::layout_input::{
     ComputedStyle, ConstraintSpace, DocumentRole, ElementData, NodeConstructionData, NodeKind,
+    StyleReferencesSvgResource,
 };
 use super::layout_node_metadata::{ContainerNode, Node, NodeMetadataRelations, Text as TextNode};
 use super::layout_object::{AllowDestroyingLayoutObjectInFinalizerScope, LayoutObject};

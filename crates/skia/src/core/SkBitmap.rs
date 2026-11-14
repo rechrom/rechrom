@@ -1146,6 +1146,7 @@ impl SkBitmap {
         mut offset: Option<&mut SkIPoint>,
     ) -> Result<bool, crate::RasterError> {
         use super::SkMask::{AllocType, Format, SkAutoMaskFreeImage, SkMaskBuilder};
+        #[cfg(sk_debug)]
         self.validate();
         let mut temporary = Self::default();
         let identity = super::SkMatrix::SkMatrix::default();
@@ -1245,6 +1246,7 @@ impl SkBitmap {
             offset.fX = destination_mask.fBounds.fLeft;
             offset.fY = destination_mask.fBounds.fTop;
         }
+        #[cfg(sk_debug)]
         temporary.validate();
         temporary.swap(destination);
         Ok(true)

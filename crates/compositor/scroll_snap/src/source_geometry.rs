@@ -640,6 +640,7 @@ impl AddAssign<Vector2dF> for QuadF {
 }
 
 pub trait Transform: Sized {
+    fn FromColMajor(matrix: &[f64; 16]) -> Self;
     fn rc(&self, row: usize, column: usize) -> f64;
     fn TransformVector4(&self, vector: &mut [f32; 4]);
     fn IsIdentityOrIntegerTranslation(&self) -> bool;

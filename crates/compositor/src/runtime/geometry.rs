@@ -90,6 +90,9 @@ impl<R: RoundedRectTransformBackend> Transform<R> {
     }
 }
 impl<R: RoundedRectTransformBackend> crate::adapter::geometry::Transform for Transform<R> {
+    fn FromColMajor(matrix: &[f64; 16]) -> Self {
+        Self::FromColMajor(matrix)
+    }
     fn rc(&self, row: usize, column: usize) -> f64 {
         self.source.rc(row, column)
     }

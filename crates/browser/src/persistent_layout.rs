@@ -169,14 +169,14 @@ pub(crate) fn MeasurementInputsMatch(
         .copied()
         .collect::<Vec<_>>();
     let matches = nodes.into_iter().all(|id| {
-        owner.EmitPaintInputs(id, interaction, |mutation| match mutation {
+        owner.EmitGeometryInput(id, interaction, |mutation| match mutation {
             LayoutMutation::PaintInput {
                 node_id,
                 style,
                 resources,
                 element,
             } => engine.GeometryInputMatches(node_id, style, resources, &element),
-            _ => unreachable!("EmitPaintInputs emits typed inputs"),
+            _ => unreachable!("EmitGeometryInput emits a typed input"),
         })
     });
     if matches {
@@ -337,7 +337,9 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     fn contains(node: PaintFragmentCursor<'_>, id: u64) -> bool {
         node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
     }
-    if !owner.GetDocument().StyleState().impact.IsEmpty()
+    let style_impact = owner.GetDocument().StyleState().impact;
+    if style_impact.layout
+        || style_impact.reattach
         || !changes.iter().all(|&(id, _, _)| contains(root, id))
     {
         return None;
@@ -350,11 +352,9 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     let mut heap_scope = foundation::LayoutHeapScope::new();
     heap_scope.DeferCollection();
     for &(id, offset, scroll_type) in changes {
-        let mut applied = false;
         if !owner.EmitScrollOffset(id, offset, scroll_type, |mutation| {
-            applied = engine.ApplyMutation(mutation);
-        }) || !applied
-        {
+            engine.ApplyMutation(mutation)
+        }) {
             return None;
         }
     }

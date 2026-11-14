@@ -5023,6 +5023,18 @@ mod source_chunk_b {
 
         fn add_viewport_damage(&mut self) {
             let viewport_damage = self.host.viewport_damage_rect_;
+            if browser_tracing::enabled() {
+                browser_tracing::instant(
+                    "compositor.draw",
+                    "Compositor.Draw.ViewportDamage",
+                    &[
+                        ("x", viewport_damage.x as f64),
+                        ("y", viewport_damage.y as f64),
+                        ("width", viewport_damage.width as f64),
+                        ("height", viewport_damage.height as f64),
+                    ],
+                );
+            }
             self.host.WithActiveTreeDamage(self.context, |damage| {
                 damage
                     .damage_tracker(
@@ -5233,13 +5245,30 @@ mod source_chunk_b {
         fn update_damage_tracking(&mut self) {
             self.host.WithActiveTreeDamage(self.context, |damage| {
                 DamageTracker::UpdateDamageTracking(damage);
-                self.frame.damage_reasons = damage
-                    .damage_tracker(
-                        damage
-                            .GetRenderSurface(kContentsRootPropertyNodeId)
-                            .unwrap(),
-                    )
-                    .GetDamageReasons();
+                let root = damage
+                    .GetRenderSurface(kContentsRootPropertyNodeId)
+                    .unwrap();
+                let tracker = damage.damage_tracker(root);
+                self.frame.damage_reasons = tracker.GetDamageReasons();
+                if browser_tracing::enabled() {
+                    let mut rect = Rect::default();
+                    let valid = tracker.GetDamageRectIfValid(&mut rect);
+                    browser_tracing::instant(
+                        "compositor.draw",
+                        "Compositor.Draw.DamageTracking",
+                        &[
+                            ("root_damage_x", rect.x as f64),
+                            ("root_damage_y", rect.y as f64),
+                            ("root_damage_width", rect.width as f64),
+                            ("root_damage_height", rect.height as f64),
+                            (
+                                "damage_reasons",
+                                self.frame.damage_reasons.ToEnumBitmask() as f64,
+                            ),
+                            ("valid", valid as u8 as f64),
+                        ],
+                    );
+                }
             });
         }
 
@@ -20332,6 +20361,21 @@ impl<B: HostImplTypes> crate::adapter::animation_host::AnimationMutationTarget
     ) {
         self.host
             .SetElementScrollOffsetMutated(id, list, value, &mut self.context);
+    }
+    fn SetElementOpacityMutated(&mut self, id: ElementId, list: ElementListType, value: f32) {
+        self.host
+            .SetElementOpacityMutated(id, list, value, &mut self.context);
+    }
+    fn SetElementTransformMutated(
+        &mut self,
+        id: ElementId,
+        list: ElementListType,
+        matrix: &[f64; 16],
+    ) {
+        use crate::adapter::geometry::Transform as _;
+        let transform = <B as LayerTreeTypes>::Transform::FromColMajor(matrix);
+        self.host
+            .SetElementTransformMutated(id, list, &transform, &mut self.context);
     }
     fn ScrollOffsetAnimationFinished(
         &mut self,

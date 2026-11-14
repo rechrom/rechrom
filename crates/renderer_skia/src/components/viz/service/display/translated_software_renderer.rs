@@ -425,6 +425,37 @@ impl TranslatedSoftwareRenderer {
                     .ok_or_else(|| io::Error::other("quad lacks SharedQuadState"))?,
             )
             .ok_or_else(|| io::Error::other("invalid SharedQuadState handle"))?;
+        let material = match &quad.material {
+            QuadMaterial::SolidColor { .. } => 0,
+            QuadMaterial::Tile { .. } => 1,
+            QuadMaterial::Texture { .. } => 2,
+            QuadMaterial::DebugBorder { .. } => 3,
+            QuadMaterial::CompositorRenderPass { .. } => 4,
+            QuadMaterial::Picture { .. } => 5,
+            QuadMaterial::SharedElement { .. } => 6,
+            QuadMaterial::Surface { .. } => 7,
+        };
+        let mut trace = browser_tracing::span("renderer", "Renderer.Skia.DrawQuad");
+        trace.set("material", material as f64);
+        trace.set(
+            "pixels",
+            quad.geometry.visible_rect.width.max(0) as f64
+                * quad.geometry.visible_rect.height.max(0) as f64,
+        );
+        trace.set(
+            "root_pass",
+            (self.direct_root_pass == Some(pass.RenderPassId())) as u8 as f64,
+        );
+        trace.set("layer_id", shared.layer_id as f64);
+        trace.set("opacity", shared.opacity as f64);
+        trace.set(
+            "translate_x",
+            shared.quad_to_target_transform.as_source().rc(0, 3),
+        );
+        trace.set(
+            "translate_y",
+            shared.quad_to_target_transform.as_source().rc(1, 3),
+        );
         let current_rect = self.current_rect;
         let scissor = self.scissor_rect;
         let settings = self.settings.clone();
@@ -462,6 +493,10 @@ impl TranslatedSoftwareRenderer {
             } else {
                 SkBlendMode::kSrc
             };
+            trace.set("antialias", antialias as u8 as f64);
+            trace.set("blend", blend as u8 as f64);
+            trace.set("scale_x", transform.rc(0, 0).into());
+            trace.set("scale_y", transform.rc(1, 1).into());
             if let Some(region) = draw_region {
                 Self::clip_draw_region(target, region, quad.geometry.visible_rect);
             }
@@ -479,6 +514,7 @@ impl TranslatedSoftwareRenderer {
                         blend,
                         antialias,
                         draw_region.is_none(),
+                        draw_region,
                     )?;
                     self.update.tile_quads += 1;
                 }
@@ -605,6 +641,7 @@ impl TranslatedSoftwareRenderer {
         blend: SkBlendMode,
         antialias: bool,
         has_rectangular_clip: bool,
+        draw_region: Option<&[PointF; 4]>,
     ) -> io::Result<()> {
         let QuadMaterial::Tile {
             resource_id,
@@ -636,7 +673,7 @@ impl TranslatedSoftwareRenderer {
         // concatenated the subset matrix with the device CTM.
         let device_left = quad.geometry.visible_rect.x as f64 + transform.rc(0, 3);
         let device_top = quad.geometry.visible_rect.y as f64 + transform.rc(1, 3);
-        let pixel_aligned_one_to_one = nearly(
+        let axis_aligned_one_to_one = nearly(
             source.width() as f64,
             quad.geometry.visible_rect.width as f64,
         ) && nearly(
@@ -645,7 +682,8 @@ impl TranslatedSoftwareRenderer {
         ) && nearly(transform.rc(0, 0), 1.)
             && nearly(transform.rc(1, 1), 1.)
             && nearly(transform.rc(0, 1), 0.)
-            && nearly(transform.rc(1, 0), 0.)
+            && nearly(transform.rc(1, 0), 0.);
+        let pixel_aligned_one_to_one = axis_aligned_one_to_one
             && integral(device_left - source.x() as f64)
             && integral(device_top - source.y() as f64);
         let sampling = SkSamplingOptions::with_filter(if *nearest_neighbor {
@@ -696,16 +734,45 @@ impl TranslatedSoftwareRenderer {
         .clamp(0, 255) as u8;
         let mask = &shared.mask_filter_info;
         let mut rounded_corner_regions = None;
-        let blend_supported = matches!(blend, SkBlendMode::kSrc | SkBlendMode::kSrcOver);
+        let blend_supported = matches!(
+            blend,
+            SkBlendMode::kSrc | SkBlendMode::kSrcOver | SkBlendMode::kDstIn
+        );
         let blit_eligible = self.n32_tile_blit
             && pixel_aligned_one_to_one
             && has_rectangular_clip
             && !antialias
             && !mask.HasGradientMask()
             && blend_supported;
+        let integral_source_subset = integral(source.x() as f64)
+            && integral(source.y() as f64)
+            && integral(source.right() as f64)
+            && integral(source.bottom() as f64);
+        // SkImageShader keeps linear filtering for a fractional translation,
+        // even at 1:1 scale. Use the same clamp-bilerp semantics specialized
+        // to the alpha-only software mask operation that otherwise dominates
+        // the offscreen pass.
+        let linear_dst_in_eligible = self.n32_tile_blit
+            && blend == SkBlendMode::kDstIn
+            && !*nearest_neighbor
+            && axis_aligned_one_to_one
+            && !pixel_aligned_one_to_one
+            && integral_source_subset
+            && (has_rectangular_clip || draw_region.is_some())
+            && !antialias
+            && mask.IsEmpty();
+        let mut tile_trace = browser_tracing::span("renderer", "Renderer.Skia.TilePath");
+        tile_trace.set("axis_one_to_one", axis_aligned_one_to_one as u8 as f64);
+        tile_trace.set("blend", blend as u8 as f64);
+        tile_trace.set("source_width", source.width().into());
+        tile_trace.set("source_height", source.height().into());
+        tile_trace.set("target_width", quad.geometry.visible_rect.width as f64);
+        tile_trace.set("target_height", quad.geometry.visible_rect.height as f64);
+        tile_trace.set("alignment_x", device_left - source.x() as f64);
+        tile_trace.set("alignment_y", device_top - source.y() as f64);
         if !self.n32_tile_blit {
             self.update.tile_blit_disabled_quads += 1;
-        } else if !pixel_aligned_one_to_one {
+        } else if !pixel_aligned_one_to_one && !linear_dst_in_eligible {
             self.update.tile_blit_misaligned_quads += 1;
         } else if !has_rectangular_clip {
             self.update.tile_blit_complex_clip_quads += 1;
@@ -738,6 +805,113 @@ impl TranslatedSoftwareRenderer {
                         quad.geometry.visible_rect,
                     );
                 }
+            }
+        }
+        if linear_dst_in_eligible {
+            self.update.tile_blit_eligible_quads += 1;
+            let mapping = raster::execution::MapResourceForRead(lease.as_ref())?;
+            let format = mapping.format();
+            if format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
+                || format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
+            {
+                // With AA disabled, Skia covers exactly the device pixels
+                // whose centers lie inside the mapped destination rectangle.
+                let target_left = device_left - self.current_rect.x as f64;
+                let target_top = device_top - self.current_rect.y as f64;
+                let target_right = target_left + quad.geometry.visible_rect.width as f64;
+                let target_bottom = target_top + quad.geometry.visible_rect.height as f64;
+                let mut destination = Rect::FromBounds(
+                    (target_left - 0.5).ceil() as i32,
+                    (target_top - 0.5).ceil() as i32,
+                    (target_right - 0.5).ceil() as i32,
+                    (target_bottom - 0.5).ceil() as i32,
+                );
+                destination.Intersect(Rect::new(
+                    0,
+                    0,
+                    self.current_rect.width,
+                    self.current_rect.height,
+                ));
+                if let Some(scissor) = self.scissor_rect {
+                    destination.Intersect(scissor);
+                }
+                if destination.IsEmpty() {
+                    self.update.tile_blit_quads += 1;
+                    return Ok(());
+                }
+                let mut spans = Vec::with_capacity(destination.height.max(0) as usize);
+                if let Some(region) = draw_region {
+                    let points = region.map(|point| {
+                        (
+                            point.x() as f64 - quad.geometry.visible_rect.x as f64,
+                            point.y() as f64 - quad.geometry.visible_rect.y as f64,
+                        )
+                    });
+                    let transform_x = transform.rc(0, 3);
+                    let transform_y = transform.rc(1, 3);
+                    for y in destination.y..destination.bottom() {
+                        // This is the non-AA pixel-center scan conversion of
+                        // the same local polygon installed by
+                        // SoftwareRenderer::DoDrawQuad.
+                        let local_y = y as f64 + self.current_rect.y as f64 + 0.5 - transform_y;
+                        let mut intersections = [0.; 4];
+                        let mut count = 0;
+                        for edge in 0..4 {
+                            let (x0, y0) = points[edge];
+                            let (x1, y1) = points[(edge + 1) % 4];
+                            if (y0 <= local_y && local_y < y1) || (y1 <= local_y && local_y < y0) {
+                                intersections[count] = x0 + (local_y - y0) * (x1 - x0) / (y1 - y0);
+                                count += 1;
+                            }
+                        }
+                        if count < 2 {
+                            continue;
+                        }
+                        let (mut left, mut right) = (intersections[0], intersections[0]);
+                        for &x in &intersections[1..count] {
+                            left = left.min(x);
+                            right = right.max(x);
+                        }
+                        let start = ((transform_x + left - self.current_rect.x as f64 - 0.5).ceil()
+                            as i32)
+                            .max(destination.x);
+                        let end = ((transform_x + right - self.current_rect.x as f64 - 0.5).ceil()
+                            as i32)
+                            .min(destination.right());
+                        if start < end {
+                            spans.push((start, y, end - start));
+                        }
+                    }
+                } else {
+                    spans.extend(
+                        (destination.y..destination.bottom())
+                            .map(|y| (destination.x, y, destination.width)),
+                    );
+                }
+                if spans.is_empty() {
+                    self.update.tile_blit_quads += 1;
+                    return Ok(());
+                }
+                if target.blit_n32_linear_dst_in_spans(
+                    mapping.bytes(),
+                    mapping.size().width(),
+                    mapping.size().height(),
+                    mapping.row_bytes(),
+                    source.x().round() as i32,
+                    source.y().round() as i32,
+                    source.width().round() as i32,
+                    source.height().round() as i32,
+                    (self.current_rect.x as f64 - device_left) as f32,
+                    (self.current_rect.y as f64 - device_top) as f32,
+                    &spans,
+                    alpha,
+                ) {
+                    self.update.tile_blit_quads += 1;
+                    return Ok(());
+                }
+                self.update.tile_blit_failed_quads += 1;
+            } else {
+                self.update.tile_blit_unsupported_format_quads += 1;
             }
         }
         if blit_eligible {
@@ -790,10 +964,11 @@ impl TranslatedSoftwareRenderer {
             if format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRA_8888
                 || format == compositor_core::adapter::resource_types::SinglePlaneFormat::BGRX_8888
             {
-                let mode = if blend == SkBlendMode::kSrc {
-                    N32BlitMode::Src
-                } else {
-                    N32BlitMode::SrcOver
+                let mode = match blend {
+                    SkBlendMode::kSrc => N32BlitMode::Src,
+                    SkBlendMode::kSrcOver => N32BlitMode::SrcOver,
+                    SkBlendMode::kDstIn => N32BlitMode::DstIn,
+                    _ => unreachable!("blend_supported admits only N32 fast-path modes"),
                 };
 
                 // Skia's sprite path can still use its row blitter under a
@@ -1112,6 +1287,7 @@ impl TranslatedSoftwareRenderer {
             blend,
             antialias,
             has_rectangular_clip,
+            None,
         )
     }
 

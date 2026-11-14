@@ -67,9 +67,23 @@ impl EngineMutation for LayoutEngine {
         resources: &crate::style_projection::StyleResourceBindings<'_>,
         element: &Option<crate::internal::layout_input::ElementData>,
     ) -> bool {
-        self.tree_.as_ref().is_some_and(|tree| {
-            !tree.Root().NeedsLayout() && tree.GeometryInputMatches(id, style, resources, element)
-        })
+        let mut trace =
+            browser_tracing::span("layout", "layout_invalidation.GeometryInputMatches");
+        trace.set("node_id", id as f64);
+        let Some(tree) = self.tree_.as_ref() else {
+            trace.set("tree_present", 0.0);
+            return false;
+        };
+        trace.set("tree_present", 1.0);
+        let root_needs_layout = tree.Root().NeedsLayout();
+        trace.set("root_needs_layout", root_needs_layout as u8 as f64);
+        if root_needs_layout {
+            trace.set("matched", 0.0);
+            return false;
+        }
+        let matched = tree.GeometryInputMatches(id, style, resources, element);
+        trace.set("matched", matched as u8 as f64);
+        matched
     }
 
     #[inline(never)]
@@ -387,6 +401,7 @@ impl EngineMutation for LayoutEngine {
                     self.tree_facts_ = None;
                     if let Some(fragments) = &mut self.fragments {
                         let mut found = false;
+                        let mut updated_opacity = 0.0f32;
                         let paint_style = crate::internal::boundary::paint_style_export::ExportStyleWithResourceBindings(
                                 style,
                                 binding.image_resource_id,
@@ -394,8 +409,12 @@ impl EngineMutation for LayoutEngine {
                                 &binding.svg_clip_resources,
                             );
                         VisitMutablePaintInputs(fragments, &self.objects_, &mut |fragment| {
-                            UpdateFragmentPaintStyle(fragment, node_id, &paint_style, &mut found)
+                            UpdateFragmentPaintStyle(fragment, node_id, &paint_style, &mut found);
+                            if fragment.node_id == node_id {
+                                updated_opacity = fragment.paint.style.opacity();
+                            }
                         });
+                        trace.set("fragment_opacity", updated_opacity as f64);
                         if !found {
                             self.fragments = None;
                             return false;

@@ -97,7 +97,9 @@ fn Previous(node: *mut Node, boundary: *mut Node) -> *mut Node {
         std::ptr::null_mut()
     } else {
         let parent = unsafe { &mut (*parent).node } as *mut Node;
-        (parent != boundary).then_some(parent).unwrap_or(std::ptr::null_mut())
+        (parent != boundary)
+            .then_some(parent)
+            .unwrap_or(std::ptr::null_mut())
     }
 }
 

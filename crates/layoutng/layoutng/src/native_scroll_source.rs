@@ -58,6 +58,45 @@ fn OffsetFromPhysical(offset: PhysicalOffset) -> Offset {
     }
 }
 impl LayoutEngine {
+    /// Resolve Blink's composited scrollbar element id back to the resident
+    /// ScrollableArea owner for the non-composited fallback path.
+    pub fn CompositorScrollbarOwner(
+        &self,
+        expected: foundation::CompositorElementId,
+    ) -> Option<u64> {
+        use crate::internal::scrollbar_orientation::ScrollbarOrientation;
+        let tree = self.GetLayoutTree()?;
+        let _scope = self.NativeScrollPassScope();
+        let view = unsafe {
+            foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(
+                tree.Root() as *const LayoutObject,
+            )
+            .as_ref()
+        }?;
+        for owner in view.RegisteredScrollableAreas() {
+            let Some(area) = (unsafe { owner.Get().as_ref() }) else {
+                continue;
+            };
+            if area.HasBeenDisposed() {
+                continue;
+            }
+            let matches = (area.HasHorizontalScrollbar()
+                && area.GetScrollbarElementId(ScrollbarOrientation::kHorizontalScrollbar)
+                    == expected)
+                || (area.HasVerticalScrollbar()
+                    && area.GetScrollbarElementId(ScrollbarOrientation::kVerticalScrollbar)
+                        == expected);
+            if matches {
+                return Some(
+                    unsafe { &*area.GetLayoutBox() }
+                        .InputOwnerForLayout()
+                        .InputId(),
+                );
+            }
+        }
+        None
+    }
+
     /// LocalFrameView::ScrollableAreaWithElementId, local_frame_view.cc:4279-4289.
     ///
     /// The compositor element id names the resident PaintLayerScrollableArea,

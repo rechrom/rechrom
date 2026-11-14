@@ -199,6 +199,14 @@ impl ProductionActiveInterpolationsMap {
     pub(crate) fn IsEmpty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// CSSAnimations::UpdateAnimationFlagsForEffect queries whether each
+    /// retained effect affects a known property. The production boundary owns
+    /// sampled property stacks rather than AnimationEffect objects, so the
+    /// equivalent query is over these canonical CSSPropertyName keys.
+    pub(crate) fn Affects(&self, property: foundation::CSSPropertyID) -> bool {
+        self.entries.iter().any(|(name, _)| name.Id() == property)
+    }
 }
 
 /// Converts the existing document-owned animation samples to the typed owner
@@ -1767,10 +1775,7 @@ impl StyleResolverBackend for ProductionStyleCascadeBackend<'_> {
     fn InDesignMode(&self, document: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(
-        &'d self,
-        document: &'d Self::Document,
-    ) -> &'d AtomicString {
+    fn ContentLanguage<'d>(&'d self, document: &'d Self::Document) -> &'d AtomicString {
         &self.language
     }
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32 {

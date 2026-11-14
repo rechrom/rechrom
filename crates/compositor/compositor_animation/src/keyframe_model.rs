@@ -75,6 +75,76 @@ pub trait KeyframeCurve: gfx::AnimationCurve + AnimationEventCurve {
     fn ScrollHasSetInitialValue(&self) -> bool;
     fn ScrollSetInitialValue(&mut self, value: PointF);
 }
+
+/// Rust's closed tagged equivalent of gfx::AnimationCurve's source virtual
+/// hierarchy. Keeping one curve type preserves the translated generic
+/// Animation/Timeline object graph while admitting every supported property.
+#[derive(Clone)]
+pub enum CompositorAnimationCurve {
+    Scroll(super::scroll_offset_animation_curve::ScrollOffsetAnimationCurve),
+    Float(super::keyframed_animation_curve::KeyframedFloatAnimationCurve),
+    Transform(super::keyframed_animation_curve::KeyframedTransformAnimationCurve),
+}
+
+impl CompositorAnimationCurve {
+    pub fn AsScroll(&self) -> &super::scroll_offset_animation_curve::ScrollOffsetAnimationCurve {
+        match self {
+            Self::Scroll(curve) => curve,
+            _ => panic!("scroll animation requires a scroll curve"),
+        }
+    }
+    pub fn AsScrollMut(
+        &mut self,
+    ) -> &mut super::scroll_offset_animation_curve::ScrollOffsetAnimationCurve {
+        match self {
+            Self::Scroll(curve) => curve,
+            _ => panic!("scroll animation requires a scroll curve"),
+        }
+    }
+}
+
+impl gfx::AnimationCurve for CompositorAnimationCurve {
+    fn Duration(&self) -> TimeDelta {
+        match self {
+            Self::Scroll(curve) => curve.Duration(),
+            Self::Float(curve) => curve.Duration(),
+            Self::Transform(curve) => curve.Duration(),
+        }
+    }
+}
+
+impl AnimationEventCurve for CompositorAnimationCurve {
+    fn CloneCurve(&self) -> Self {
+        self.clone()
+    }
+}
+
+impl KeyframeCurve for CompositorAnimationCurve {
+    fn TypeName(&self) -> &'static str {
+        match self {
+            Self::Scroll(_) => "ScrollOffsetAnimationCurve",
+            Self::Float(_) => "KeyframedFloatAnimationCurve",
+            Self::Transform(_) => "KeyframedTransformAnimationCurve",
+        }
+    }
+    fn PreservesAxisAlignment(&self) -> bool {
+        match self {
+            Self::Transform(curve) => curve.PreservesAxisAlignment(),
+            _ => true,
+        }
+    }
+    fn ScrollHasSetInitialValue(&self) -> bool {
+        match self {
+            Self::Scroll(curve) => curve.HasSetInitialValue(),
+            _ => true,
+        }
+    }
+    fn ScrollSetInitialValue(&mut self, value: PointF) {
+        if let Self::Scroll(curve) = self {
+            curve.SetInitialValue(value, TimeDelta::default(), 0.0);
+        }
+    }
+}
 pub trait KeyframeModelTrace: Send + Sync {
     fn Begin(&self, model_id: u64, name: &str);
     fn End(&self, model_id: u64);

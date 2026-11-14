@@ -28,6 +28,13 @@ pub trait AnimationMutationTarget: AnimationHostQueries {
         list: ElementListType,
         value: &PointF,
     );
+    fn SetElementOpacityMutated(&mut self, element: ElementId, list: ElementListType, value: f32);
+    fn SetElementTransformMutated(
+        &mut self,
+        element: ElementId,
+        list: ElementListType,
+        matrix: &[f64; 16],
+    );
     fn ScrollOffsetAnimationFinished(
         &mut self,
         element: ElementId,

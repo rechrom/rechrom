@@ -2024,8 +2024,7 @@ mod tests {
         let text = foundation::String::from_utf16(&['B' as u16]);
         let locale = foundation::AtomicString::default();
         let shape = || unsafe {
-            &*crate::HarfBuzzShaper::new(text.clone())
-                .Shape(font, foundation::TextDirection::kLtr)
+            &*crate::HarfBuzzShaper::new(text.clone()).Shape(font, foundation::TextDirection::kLtr)
         };
         let all_glyphs_present = |result: &crate::ShapeResult| {
             result.RunsOrParts().iter().all(|run| {

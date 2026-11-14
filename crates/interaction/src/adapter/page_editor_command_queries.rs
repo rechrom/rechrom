@@ -298,12 +298,7 @@ impl EditorCommandQueryContext for CommandQuery<'_, '_, '_> {
         self.CanEdit() && crate::adapter::page_input_method_controller::PasteCanEditRichly(self.0)
     }
     fn HasMark(&self) -> bool {
-        self.0
-            .EditingOwners()
-            .ime_typing
-            .editor
-            .Mark()
-            .is_some()
+        self.0.EditingOwners().ime_typing.editor.Mark().is_some()
     }
     fn CanUndo(&self) -> bool {
         self.0

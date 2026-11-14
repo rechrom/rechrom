@@ -553,9 +553,9 @@ impl PageFrameSelection {
     /// FrameSelection remains the source of endpoints; this only projects its
     /// inner-editor positions back onto the same control's cached UTF-16 owner.
     pub(crate) fn ActivateFocusedTextControlSelection(&self, focused: Option<u64>) {
-        let Some(focused) = focused.filter(|&id| {
-            super::page_editing_owners::IsTextControl(&self.document, id)
-        }) else {
+        let Some(focused) =
+            focused.filter(|&id| super::page_editing_owners::IsTextControl(&self.document, id))
+        else {
             return;
         };
         let projected = self.Current().and_then(|selection| {

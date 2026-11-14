@@ -574,10 +574,11 @@ where
                     })
                 {
                     eprintln!(
-                        "tile-quad-provenance resource={resource:?} tile_layer={} content={:?} geometry={geometry:?} visible={offset_visible:?} texture={:?}",
+                        "tile-quad-provenance resource={resource:?} tile_layer={} content={:?} geometry={geometry:?} visible={offset_visible:?} texture={:?} layer_opaque={} blending={blending}",
                         tile.TraceLayerId(),
                         tile.TraceContentRect(),
                         iter.texture_rect(),
+                        self.base_.contents_opaque(),
                     );
                 }
                 let quad = pass.CreateAndAppendTileDrawQuad();

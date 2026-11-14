@@ -186,8 +186,7 @@ pub fn analyze(s: &Snapshot) -> Value {
             }
             "InputToPresentReturn" => latencies.push(milliseconds(e.duration_ns)),
             "InputOwnerQueue" => owner_wait.push(milliseconds(e.duration_ns)),
-            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) =>
-            {
+            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) => {
                 nonblocking_dom_input_wait.push(milliseconds(e.duration_ns))
             }
             "InputQueue" => input_wait.push(milliseconds(e.duration_ns)),
@@ -285,8 +284,7 @@ pub fn analyze(s: &Snapshot) -> Value {
                     // Diagnose phase crossings even when submission cadence
                     // is healthy; gesture pauses are handled separately.
                     if commit_gap <= p + p / 2
-                        && (old_frame.is_some_and(|f| f.scroll)
-                            || handling_interaction(old_frame))
+                        && (old_frame.is_some_and(|f| f.scroll) || handling_interaction(old_frame))
                         && (frame.is_some_and(|f| f.scroll) || handling_interaction(frame))
                     {
                         let display_gap = target.saturating_sub(old_target);
@@ -505,9 +503,8 @@ pub fn analyze(s: &Snapshot) -> Value {
             // ScrollApplied fallback local to nearby commits, just like the
             // explicit scroll marker above, so pauses are not reported as
             // dropped frames.
-            let active = gap <= p.saturating_mul(4)
-                && handling_interaction(af)
-                && handling_interaction(bf);
+            let active =
+                gap <= p.saturating_mul(4) && handling_interaction(af) && handling_interaction(bf);
             if !nearby_scroll && !active {
                 continue;
             }
@@ -594,10 +591,7 @@ pub fn analyze(s: &Snapshot) -> Value {
                 ("input_latency", "Input to commit > one interval")
             }
             "InputOwnerQueue" => ("input_owner_wait", "Native input owner wait"),
-            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) =>
-            {
-                continue
-            }
+            "InputQueue" if number(e, "compositor_nonblocking") == Some(1.) => continue,
             "InputQueue" => ("input_frame_wait", "Blocking frame-aligned input wait"),
             "PresentQueue" => ("present_wait", "Window-thread presentation wait"),
             "ForegroundTasks" | "BackgroundTasks" => {
@@ -910,10 +904,7 @@ mod tests {
         ];
         let r = analyze(&snapshot(spans, instants));
         assert_eq!(r["metrics"]["input_frame_wait"]["count"], 1);
-        assert_eq!(
-            r["metrics"]["nonblocking_dom_input_frame_wait"]["count"],
-            1
-        );
+        assert_eq!(r["metrics"]["nonblocking_dom_input_frame_wait"]["count"], 1);
         assert_eq!(
             r["issues"]
                 .as_array()

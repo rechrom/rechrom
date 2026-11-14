@@ -49,5 +49,5 @@ pub use engine::{
     CompositorOutput, CompositorPaintInputKind, CompositorRasterProvider, CompositorScrollState,
     CompositorViewportState, FrameLifecycleMutation, PaintHoldingReason,
     PresentationUnavailableReason, ScrollAnimationAreaClassification, ScrollAnimationCommitToken,
-    ScrollPhase, ScrollSourceType, TargetSnapAreaElementIds,
+    ScrollPhase, ScrollSourceType, ScrollbarPaintMutation, TargetSnapAreaElementIds,
 };

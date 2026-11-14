@@ -76,6 +76,15 @@ impl EngineMainEndpoint {
         }
         drop_delta
     }
+    pub(crate) fn ApplySourcePropertyAnimation(
+        &self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        self.animations.ApplySourcePropertyAnimation(mutation);
+        if self.animations.TakeNeedsCommit() {
+            self.SetNeedsCommit(false);
+        }
+    }
     pub(crate) fn ApplySourceAnimationEvents(
         &self,
         events: Box<super::host_owners::MutatorEvents>,

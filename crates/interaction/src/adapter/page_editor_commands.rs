@@ -38,32 +38,19 @@ impl MarkCommandContext for ExtendedContext<'_, '_, '_> {
             .CreateVisibleSelection(self.0.FrameSelection().Current())
     }
     fn MarkVisibleSelection(&self) -> Option<DOMSelection> {
-        self.0.FrameSelection().CreateVisibleSelection(
-            self.0
-                .EditingOwners()
-                .ime_typing
-                .editor
-                .Mark()
-                .map(|s| s.0),
-        )
+        self.0
+            .FrameSelection()
+            .CreateVisibleSelection(self.0.EditingOwners().ime_typing.editor.Mark().map(|s| s.0))
     }
     fn MarkIsDirectional(&self) -> bool {
-        self.0
-            .EditingOwners()
-            .ime_typing
-            .editor
-            .MarkIsDirectional()
+        self.0.EditingOwners().ime_typing.editor.MarkIsDirectional()
     }
     fn SetMarkFromCurrentSelection(&self) {
-        self.0
-            .EditingOwners()
-            .ime_typing
-            .editor
-            .SetMarkSelection(
-                self.CurrentVisibleSelection()
-                    .map(crate::adapter::page_input_method_controller::ImeTypingSelection),
-                self.0.FrameSelection().SelectionIsDirectional(),
-            );
+        self.0.EditingOwners().ime_typing.editor.SetMarkSelection(
+            self.CurrentVisibleSelection()
+                .map(crate::adapter::page_input_method_controller::ImeTypingSelection),
+            self.0.FrameSelection().SelectionIsDirectional(),
+        );
     }
     fn UnionMarkAndSelection(
         &self,

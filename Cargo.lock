@@ -100,6 +100,8 @@ checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 name = "animation"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
+ "compositor_animation",
  "cssom",
 ]
 
@@ -3522,6 +3524,7 @@ dependencies = [
 name = "raster"
 version = "0.0.1"
 dependencies = [
+ "browser_tracing",
  "canvas",
  "compositor",
  "font_engine",

@@ -9,9 +9,9 @@ use super::{
     page_event_dispatcher::MouseFrameGeometryRef, page_focus_controller::FocusController,
 };
 use crate::{
+    editing_owners::{PageEditingOwners, SyntheticEventDispatcher},
     input_type::IsTextField,
     ownership::InteractionDocument,
-    editing_owners::{SyntheticEventDispatcher, PageEditingOwners},
 };
 use dom::{DOMBoundaryPoint, Document};
 use interaction_default::core::dom::{

@@ -17,6 +17,15 @@ use foundation::{gfx, Persistent};
 pub struct NativePointerResizeArea {
     area: Persistent<PaintLayerScrollableArea>,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct NativeMacScrollbarAnimationUpdate {
+    pub compositor_element_id: foundation::CompositorElementId,
+    pub target_node_id: u64,
+    pub painted_opacity: f32,
+    pub painted_thumb_width: i32,
+    pub needs_repaint: bool,
+    pub hidden_changed: bool,
+}
 impl NativePointerResizeArea {
     pub fn Identity(&self) -> usize {
         self.area.Get() as usize
@@ -69,12 +78,34 @@ impl LayoutEngine {
         thumb_dirty: bool,
         track_dirty: bool,
         hidden: Option<bool>,
-    ) -> bool {
+    ) -> Option<NativeMacScrollbarAnimationUpdate> {
         let _scope = self.NativeScrollPassScope();
         let Some(area) = (unsafe { scrollbar.ScrollableArea().as_mut() }) else {
-            return false;
+            return None;
         };
-        area.PublishMacScrollbarAnimation(scrollbar.Orientation() == crate::internal::scrollbar_orientation::ScrollbarOrientation::kHorizontalScrollbar, thumb, track, width, thumb_dirty, track_dirty, hidden)
+        let orientation = scrollbar.Orientation();
+        let hidden_before = area.ScrollbarsHiddenIfOverlay();
+        if !area.PublishMacScrollbarAnimation(
+            orientation
+                == crate::internal::scrollbar_orientation::ScrollbarOrientation::kHorizontalScrollbar,
+            thumb,
+            track,
+            width,
+            thumb_dirty,
+            track_dirty,
+            hidden,
+        ) {
+            return None;
+        }
+        let box_ = unsafe { &*area.GetLayoutBox() };
+        Some(NativeMacScrollbarAnimationUpdate {
+            compositor_element_id: area.GetScrollbarElementId(orientation),
+            target_node_id: box_.InputOwnerForLayout().InputId(),
+            painted_opacity: area.ScrollbarPaintedOpacity(orientation),
+            painted_thumb_width: area.ScrollbarPaintedThumbWidth(scrollbar),
+            needs_repaint: thumb_dirty || track_dirty,
+            hidden_changed: hidden_before != area.ScrollbarsHiddenIfOverlay(),
+        })
     }
     /// scrollbar.cc:226-231,845-855. Geometry is evaluated at the source
     /// ScrollAnimator's DesiredTargetOffset, preserving its native theme.

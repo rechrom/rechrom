@@ -193,6 +193,14 @@ impl<R: CpuSkiaBackend> crate::adapter::scrollbar_layer_base::ScrollbarLayerType
             ),
         ))
     }
+    fn WithPaintedScrollbarAnimation(
+        scrollbar: &Self::Scrollbar,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> std::sync::Arc<Self::Scrollbar> {
+        std::sync::Arc::new(scrollbar.WithPaintedAnimation(opacity, thumb_width, needs_repaint))
+    }
     fn PaintedScrollbarConstructor(
     ) -> Option<crate::adapter::scrollbar_layer_base::ScrollbarConstructor<Self>> {
         Some(crate::cc::layers::painted_scrollbar_layer::PaintedScrollbarLayer::<Self>::Constructor)

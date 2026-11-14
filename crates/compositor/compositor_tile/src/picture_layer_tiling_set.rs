@@ -1017,6 +1017,8 @@ impl<B: PictureLayerTilingTypes> PictureLayerTilingSet<B> {
         ) {
             return auto_clear_state.invalidated;
         }
+        let mut trace =
+            browser_tracing::span("compositor.tile", "Compositor.Tile.UpdatePriorityGeometry");
         // Split only the actual fields needed by the single canonical geometry
         // body, while AutoClear retains the source state field's mutable borrow.
         PriorityGeometry {
@@ -1040,6 +1042,26 @@ impl<B: PictureLayerTilingTypes> PictureLayerTilingSet<B> {
                     .expect("priority update raster source")
                     .recorded_bounds()
             },
+        );
+        trace.set("tree", self.tree_ as u8 as f64);
+        trace.set("tilings", self.tilings_.len() as f64);
+        trace.set("visible_y", self.visible_rect_in_layer_space_.y as f64);
+        trace.set(
+            "visible_height",
+            self.visible_rect_in_layer_space_.height as f64,
+        );
+        trace.set("skewport_y", self.skewport_rect_in_layer_space_.y as f64);
+        trace.set(
+            "skewport_height",
+            self.skewport_rect_in_layer_space_.height as f64,
+        );
+        trace.set(
+            "eventually_y",
+            self.eventually_rect_in_layer_space_.y as f64,
+        );
+        trace.set(
+            "eventually_height",
+            self.eventually_rect_in_layer_space_.height as f64,
         );
         self.all_tiles_done_ = true;
         for tiling in &mut self.tilings_ {

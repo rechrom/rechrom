@@ -2918,6 +2918,23 @@ impl PaintLayerScrollableArea {
 }
 
 impl PaintLayerScrollableArea {
+    /// Source: ScrollableArea::GetScrollbarElementId. The scrollbar layer is
+    /// keyed by the stable LayoutBox identity and orientation namespace.
+    pub fn GetScrollbarElementId(
+        &self,
+        orientation: ScrollbarOrientation,
+    ) -> foundation::CompositorElementId {
+        let namespace = if orientation == ScrollbarOrientation::kHorizontalScrollbar {
+            foundation::CompositorElementIdNamespace::kHorizontalScrollbar
+        } else {
+            foundation::CompositorElementIdNamespace::kVerticalScrollbar
+        };
+        foundation::CompositorElementIdFromUniqueObjectId(
+            unsafe { &*self.GetLayoutBox() }.UniqueId(),
+            namespace,
+        )
+    }
+
     pub fn PublishMacScrollbarAnimation(
         &mut self,
         horizontal: bool,

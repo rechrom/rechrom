@@ -254,6 +254,9 @@ impl Page {
     pub fn HasPendingFrameInput(&self) -> bool {
         !self.begin_frame.inputs.IsEmpty()
     }
+    pub fn HasPendingAnimationFrameRequest(&self) -> bool {
+        self.state.animation_begin_frame_requested.get()
+    }
     pub fn HasPendingWheelFrameInput(&self) -> bool {
         self.begin_frame.inputs.HasWheel()
     }
@@ -277,8 +280,16 @@ impl Page {
         // animate. Page readiness owns that first BeginMainFrame; admitting
         // cc's internal demand earlier can leave this owner-side request bit
         // attached to a no-update bootstrap transaction.
-        let compositor_demand =
-            self.frame.is_some() && self.state.rendering.borrow().NeedsBeginFrames();
+        // An external compositor owns its physical BeginFrame demand on the
+        // impl sequence.  Routing that demand back through Page's source would
+        // turn a compositor-only animation into ProxyMain::SetNeedsCommit:
+        // Scheduler would wait for an empty BeginMainFrame before drawing the
+        // active tree.  The embedding already keeps the physical source armed
+        // while its resident compositor reports NeedsBeginFrames().  Only the
+        // in-Page compositor needs this document-side forwarding path.
+        let compositor_demand = !self.external_compositor
+            && self.frame.is_some()
+            && self.state.rendering.borrow().NeedsBeginFrames();
         let demand = compositor_demand
             || (self.IsRenderingReady()
                 && (self.begin_frame.inputs.NeedsBeginFrame()

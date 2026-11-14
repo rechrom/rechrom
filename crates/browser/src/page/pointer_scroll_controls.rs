@@ -191,21 +191,40 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         hidden: Option<bool>,
     ) {
         let state = self.state();
-        if state.Layout().borrow().PublishPointerMacScrollbarAnimation(
-            unsafe { &*owner.Get() },
-            thumb,
-            track,
-            width,
-            thumb_dirty,
-            track_dirty,
-            hidden,
-        ) {
-            // The native ScrollableArea now owns newer painted alpha/width
-            // values. Route that typed source change through the ordinary
-            // paint-only lifecycle; `dirty` alone would let Page retain the
-            // previous artifact because no DOM style impact accompanies a
-            // platform scrollbar animation.
-            state.Document().borrow_mut().InvalidatePaint();
+        let update = {
+            let layout = state.Layout().borrow();
+            layout.PublishPointerMacScrollbarAnimation(
+                unsafe { &*owner.Get() },
+                thumb,
+                track,
+                width,
+                thumb_dirty,
+                track_dirty,
+                hidden,
+            )
+        };
+        if let Some(update) = update {
+            state
+                .pending_compositor_mutations
+                .borrow_mut()
+                .push(PageBrowserInput::Compositor(
+                    compositor::CompositorMutation::ScrollbarPaint(
+                        compositor::ScrollbarPaintMutation {
+                            element: compositor::adapter::input_types::ElementId::new(
+                                update.compositor_element_id.GetInternalValue(),
+                            ),
+                            opacity: update.painted_opacity,
+                            thumb_width: update.painted_thumb_width,
+                            needs_repaint: update.needs_repaint,
+                        },
+                    ),
+                ));
+            // Scrollbar visibility lives in the scroll property tree rather
+            // than the painted layer snapshot. Admit only its native owner to
+            // Paint; ordinary opacity/width animation stays compositor-direct.
+            if update.hidden_changed {
+                state.InvalidatePaintForNode(update.target_node_id);
+            }
             state.dirty.set(true);
         }
     }
@@ -458,6 +477,15 @@ impl PointerFrameState {
             frame.MarkNavigationDirty();
         } else {
             self.page.ApplyMutation(PageMutation::DOMMutation(mutation));
+        }
+    }
+    fn InvalidatePaintForNode(&self, node: u64) {
+        if self.Document().borrow_mut().InvalidatePaintForNode(node) {
+            if let Some((frame, _)) = &self.child {
+                frame.MarkNavigationDirty();
+            } else {
+                self.page.dirty.set(true);
+            }
         }
     }
 }

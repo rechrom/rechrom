@@ -226,6 +226,20 @@ pub trait LayerObject<B: MainLayerTypes>: Send + Sync {
     {
         false
     }
+    /// Package-boundary equivalent of Blink's resident WebScrollbar adapter
+    /// observing an updated macOS painted opacity/width. Other layer kinds do
+    /// not accept this mutation.
+    fn UpdatePaintedScrollbarAnimation(
+        &self,
+        _opacity: f32,
+        _thumb_width: i32,
+        _needs_repaint: bool,
+    ) -> bool
+    where
+        B: crate::adapter::scrollbar_layer_base::ScrollbarLayerTypes,
+    {
+        false
+    }
     fn AsScrollbarLayer(
         &self,
     ) -> Option<&dyn super::scrollbar_layer_base::ScrollbarLayerObject<B>> {

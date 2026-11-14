@@ -26,6 +26,15 @@ use crate::{
     },
     CompositorFrameSubmission,
 };
+pub use compositor_animation::compositor_mutation::PropertyAnimationMutation;
+pub use compositor_animation::keyframe_model::{
+    CompositorAnimationCurve, Direction as AnimationDirection, FillMode as AnimationFillMode,
+};
+pub use compositor_animation::keyframed_animation_curve::{
+    KeyframedFloatAnimationCurve, KeyframedTransformAnimationCurve,
+    TimingFunction as AnimationTimingFunction,
+};
+pub use compositor_tree::target_property::Type as AnimationTargetProperty;
 use paint::PaintArtifact;
 use std::{fmt, io, sync::Arc};
 
@@ -238,6 +247,16 @@ pub struct ScrollAnimationAreaClassification {
     pub uses_composited_scrolling: bool,
     pub reasons: crate::cc::input::main_thread_scrolling_reason::MainThreadRepaintReasons,
 }
+/// Blink's live WebScrollbar values needed by the resident composited
+/// PaintedScrollbarLayer. The producer identity stays an ElementId; no Layout
+/// or Paint owner crosses the compositor boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct ScrollbarPaintMutation {
+    pub element: ElementId,
+    pub opacity: f32,
+    pub thumb_width: i32,
+    pub needs_repaint: bool,
+}
 /// Ordered Page-to-compositor commands; curves retain the canonical shared
 /// value type while raw input keeps its original Copy event semantics.
 #[derive(Clone, Debug)]
@@ -247,6 +266,12 @@ pub enum CompositorMutation {
     },
     FrameLifecycle(FrameLifecycleMutation),
     Input(CompositorInput),
+    /// Blink's deferred transform/opacity property-node update. The values
+    /// retain Paint's canonical node identities and update the resident PAC;
+    /// no replacement PaintArtifact crosses this boundary.
+    CompositedAnimationProperties(paint::CompositedAnimationPropertyUpdate),
+    ScrollbarPaint(ScrollbarPaintMutation),
+    PropertyAnimation(compositor_animation::compositor_mutation::PropertyAnimationMutation),
     ScrollAnimation(scroll_animation::compositor_mutation::ScrollAnimationMutation),
     FinalizeScrollAnimations {
         token: ScrollAnimationCommitToken,
@@ -374,6 +399,11 @@ pub enum CompositorMainThreadEffect {
     ScrollbarsHiddenChanged {
         element: ElementId,
         hidden: bool,
+    },
+    /// The scrollbar did not have a resident composited layer. Blink falls
+    /// back to its ordinary targeted scrollbar paint invalidation.
+    ScrollbarPaintFallback {
+        element: ElementId,
     },
     WheelDisposition {
         compositor_owned: bool,
@@ -579,6 +609,9 @@ impl CompositorEngine {
     pub fn FinishMainFrameWithoutUpdates(&mut self) -> Result<CompositorOutput, CompositorError> {
         self.assembly.FinishMainFrameWithoutUpdates()
     }
+    pub fn CanApplyCompositedAnimationProperties(&self) -> bool {
+        self.assembly.CanApplyCompositedAnimationProperties()
+    }
     pub fn BeginFrame(
         &mut self,
         args: BeginFrameArgs,
@@ -600,6 +633,15 @@ impl CompositorEngine {
                 self.assembly.ApplyFrameLifecycle(mutation)
             }
             CompositorMutation::Input(input) => self.assembly.Input(input),
+            CompositorMutation::CompositedAnimationProperties(update) => {
+                self.assembly.ApplyCompositedAnimationProperties(update)
+            }
+            CompositorMutation::ScrollbarPaint(mutation) => {
+                self.assembly.ApplyScrollbarPaintMutation(mutation)
+            }
+            CompositorMutation::PropertyAnimation(mutation) => {
+                self.assembly.ApplySourcePropertyAnimation(mutation)
+            }
             CompositorMutation::ScrollAnimation(mutation) => {
                 self.assembly.ApplySourceScrollAnimation(mutation)
             }

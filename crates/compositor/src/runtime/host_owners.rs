@@ -478,7 +478,7 @@ pub trait MutatorEventsBackend {
         &mut self,
         callback: &mut dyn FnMut(
             &mut crate::cc::animation::animation_events::AnimationEvents<
-                crate::cc::animation::scroll_offset_animation_curve::ScrollOffsetAnimationCurve,
+                crate::cc::animation::keyframe_model::CompositorAnimationCurve,
             >,
         ),
     );
@@ -489,7 +489,7 @@ impl MutatorEvents {
         &mut self,
         callback: &mut dyn FnMut(
             &mut crate::cc::animation::animation_events::AnimationEvents<
-                crate::cc::animation::scroll_offset_animation_curve::ScrollOffsetAnimationCurve,
+                crate::cc::animation::keyframe_model::CompositorAnimationCurve,
             >,
         ),
     ) {

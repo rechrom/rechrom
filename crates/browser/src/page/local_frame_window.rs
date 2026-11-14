@@ -923,10 +923,7 @@ fn FrameDOMHost(frame: &Rc<LocalFrame>, runtime: &Rc<LocalFrameRuntime>) -> DOMB
                 .Output()
                 .and_then(|output| output.Node(id))
                 .map_or_else(Vec::new, |node| {
-                    node.HTMLClientRectsForDocument(
-                        frame_layout_zoom,
-                        standardized_browser_zoom,
-                    )
+                    node.HTMLClientRectsForDocument(frame_layout_zoom, standardized_browser_zoom)
                         .into_iter()
                         .map(|rect| paint::PaintRect {
                             x: rect.x,

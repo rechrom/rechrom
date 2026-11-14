@@ -41,9 +41,10 @@ use paint_model::geometry_mapper::{
 };
 use paint_model::paint_order::ClassifyFragmentPaintLayer;
 use paint_model::paint_property_tree::{
-    ClipPaintPropertyNode, EffectPaintPropertyNode, PaintBackfaceVisibility,
-    PaintCompositorStickyConstraint, PaintPropertyKey, PaintPropertyNodeStore, PaintPropertyOwner,
-    PaintPropertyRole, PaintPropertyTrees, PropertyNodeUpdater, ScrollPaintPropertyNode,
+    ClipPaintPropertyNode, EffectAnimationState, EffectPaintPropertyNode, PaintBackfaceVisibility,
+    PaintCompositorStickyConstraint, PaintPropertyChangeType, PaintPropertyKey,
+    PaintPropertyNodeStore, PaintPropertyOwner, PaintPropertyRole, PaintPropertyTrees,
+    PropertyNodeUpdater, ScrollPaintPropertyNode, TransformAnimationState,
     TransformPaintPropertyNode,
 };
 use paint_model::{DisplayMaskLayer, ResolveDocumentImageContainerKey};
@@ -917,6 +918,29 @@ fn FilterTaintChanged(was_origin_tainted: bool, current: &PaintTreeNode<'_>) -> 
 }
 
 pub use crate::PrePaintUpdateStats;
+
+/// Canonical ObjectPaintProperties snapshots changed by Blink's pending
+/// transform/opacity update path. The lifecycle identity is retained; these
+/// values are ready for PaintArtifactCompositor's direct update methods.
+#[derive(Clone, Debug, Default)]
+pub struct DirectCompositedAnimationPropertyUpdate {
+    pub transforms: Vec<Arc<TransformPaintPropertyNode>>,
+    pub effects: Vec<Arc<EffectPaintPropertyNode>>,
+    pub bindings: Vec<CompositedAnimationPropertyBinding>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompositedAnimationProperty {
+    Transform,
+    Opacity,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CompositedAnimationPropertyBinding {
+    pub node_id: u64,
+    pub property: CompositedAnimationProperty,
+    pub element_id: foundation::CompositorElementId,
+}
 
 pub struct PrePaintTreeWalk {
     pub next_property_id: u64,
@@ -4734,12 +4758,14 @@ impl PrePaintTreeWalk {
     /// newly admitted by the cull window.  The flat transform/scroll vectors
     /// here are builder inputs mirrored by the semantic property slots below;
     /// their values therefore do not make an otherwise clean descendant a new
-    /// object.  Offsets, clips and topology still have to match exactly.
+    /// object. Offsets and topology still have to match, while the retained
+    /// clip/cull window may be larger than the exact successor window.
     fn SameRetainedContextStructure(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
         a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
             && a.offset == b.offset
             && a.paint_space == b.paint_space
-            && a.clip == b.clip
+            && (Self::ClipContextCovers(&a.clip, &b.clip)
+                || Self::CullContextCovers(&a.cull, &b.cull))
             && a.transforms.len() == b.transforms.len()
             && a.opacity == b.opacity
             && a.fixed_background_acts_as_scroll == b.fixed_background_acts_as_scroll
@@ -4967,16 +4993,19 @@ impl PrePaintTreeWalk {
                     self.SameRetainedContextStructure(&cache.inherited, &inherited)
                 })
             });
-        // A retained structural match does not prove that the old derived
-        // geometry is current. Descend when CullRectUpdater exposes new area
-        // or a mutable ScrollTranslation changes: each retained cull remains
-        // in the corresponding local property state, matching FragmentData.
+        // Source: pre_paint_tree_walk.cc:1498-1508 and
+        // paint_property_tree_builder.cc:3769-3827. A mutable composited
+        // transform (including ScrollTranslation) keeps its property slot and
+        // does not dirty clean descendants. CullRectUpdater's sliding window
+        // is the coverage proof: descend only when the successor exposes area
+        // that the retained subtree did not record. Fixed-background geometry
+        // is the exception because its paint position is scroll-relative.
         let retained_geometry_covered = retained_context
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().is_some_and(|cache| {
                     Self::CullContextCovers(&cache.inherited.cull, &inherited.cull)
-                        && cache.inherited.transforms == inherited.transforms
-                        && cache.inherited.scroll == inherited.scroll
+                        && (!inherited.fixed_background_acts_as_scroll
+                            || cache.inherited.scroll == inherited.scroll)
                 })
             });
         self.stats.same_context_nodes += same_context as usize;
@@ -6101,10 +6130,399 @@ impl PrePaintTreeWalk {
         self.retained_tree_valid = true;
     }
 
+    /// Source: LocalFrameView::ExecuteAllPendingUpdates and
+    /// PaintPropertyTreeBuilder::DirectlyUpdate{TransformMatrix,OpacityValue}.
+    ///
+    /// Layout has already refreshed the canonical FragmentData sidecars for
+    /// these objects. Update only their existing ObjectPaintProperties slots;
+    /// topology, compositing-reason, or owner changes reject this path so the
+    /// caller can run the ordinary complete PrePaint walk.
+    pub fn DirectlyUpdateCompositedAnimationProperties(
+        &mut self,
+        targeted_nodes: &[u64],
+    ) -> Option<DirectCompositedAnimationPropertyUpdate> {
+        let mut trace = browser_tracing::span("prepaint", "PrePaint.DirectAnimationPropertyUpdate");
+        let targeted = targeted_nodes.iter().copied().collect::<BTreeSet<_>>();
+        trace.set("targeted_nodes", targeted.len() as f64);
+        if targeted.is_empty() || !self.retained_tree_valid || self.retained_tree.is_none() {
+            trace.set("rejection", 1.0);
+            return None;
+        }
+
+        let mut matched = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        let mut transform_proposals = BTreeMap::new();
+        let mut effect_proposals = BTreeMap::new();
+        let mut rejection = 0u8;
+
+        for &pointer in &self.resident_nodes {
+            // RetainTree owns every pointer in this directory. It is rebuilt
+            // whenever topology changes and no Box moves during this method.
+            let node = unsafe { &*pointer };
+            let Some(fragment) = node.fragment.as_deref() else {
+                continue;
+            };
+            if !targeted.contains(&fragment.node_id) {
+                continue;
+            }
+            trace.set("fragment_opacity", fragment.paint.style.opacity() as f64);
+            matched.insert(fragment.node_id);
+            if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
+                continue;
+            }
+            let style = &fragment.paint.style;
+            let client = fragment.paint.display_item_client_id;
+            if client == 0 {
+                rejection = 2;
+                break;
+            }
+            let owner = PaintPropertyOwner::Fragment {
+                client,
+                fragment: fragment.paint.display_item_fragment,
+            };
+
+            let active_transform_roles = [
+                (
+                    PaintPropertyRole::Translate,
+                    style.active_translate_animation(),
+                ),
+                (PaintPropertyRole::Rotate, style.active_rotate_animation()),
+                (PaintPropertyRole::Scale, style.active_scale_animation()),
+                (
+                    PaintPropertyRole::Transform,
+                    style.active_transform_animation(),
+                ),
+            ];
+            let reference_rect = ResolveTransformReferenceRect(
+                style.transform_reference_box(),
+                fragment.size,
+                fragment.paint.border,
+                fragment.paint.padding,
+            );
+            let transform_origin = style.transform_origin();
+            for (role, is_active) in active_transform_roles {
+                if !is_active {
+                    continue;
+                }
+                active.insert(fragment.node_id);
+                if IsSvgLayoutChild(fragment.paint.source_kind)
+                    || !node.applies_transform
+                    || !TransformPropertyRoles(fragment, style).contains(&role)
+                {
+                    rejection = 2;
+                    break;
+                }
+                let key = PaintPropertyKey { owner, role };
+                if transform_proposals.contains_key(&key) {
+                    continue;
+                }
+                let Some(current) = self.property_node_store.TransformOwnerForKey(key) else {
+                    rejection = 2;
+                    break;
+                };
+                if !current.HasActiveTransformAnimation()
+                    || current.direct_compositing_reasons
+                        != CompositingReasonFinder::TransformReasons(fragment, role, false)
+                {
+                    rejection = 3;
+                    break;
+                }
+                let resolved = TransformPayloadForRole(style, role).as_ref().map_or_else(
+                    TransformMatrix::default,
+                    |transform| {
+                        ResolveLocalTransformAroundReferenceBox(
+                            transform,
+                            Offset {
+                                x: node.paint_offset.x + node.paint_snap_offset.x,
+                                y: node.paint_offset.y + node.paint_snap_offset.y,
+                            },
+                            reference_rect,
+                            transform_origin.as_ref(),
+                        )
+                    },
+                );
+                let matrix = MultiplyTransforms(
+                    &TranslationTransform(-node.paint_snap_offset.x, -node.paint_snap_offset.y),
+                    &resolved,
+                );
+                let mut next = (**current).clone();
+                let change = next.DirectlyUpdateTransformAndOrigin(
+                    matrix,
+                    [0.0; 3],
+                    TransformAnimationState {
+                        is_running_animation_on_compositor: true,
+                    },
+                );
+                if !matches!(
+                    change,
+                    PaintPropertyChangeType::Unchanged
+                        | PaintPropertyChangeType::ChangedOnlyCompositedValues
+                ) {
+                    rejection = 4;
+                    break;
+                }
+                transform_proposals.insert(key, (Arc::new(next), change, fragment.node_id));
+            }
+            if rejection != 0 {
+                break;
+            }
+
+            if style.active_opacity_animation() {
+                active.insert(fragment.node_id);
+                let key = PaintPropertyKey {
+                    owner,
+                    role: PaintPropertyRole::Effect,
+                };
+                if !effect_proposals.contains_key(&key) {
+                    let Some(current) = self.property_node_store.EffectOwnerForKey(key) else {
+                        rejection = 2;
+                        break;
+                    };
+                    let mut reasons = CompositingReasonFinder::EffectReasons(fragment);
+                    reasons.PutAll(CompositingReasonFinder::AdditionalEffectCompositingTrigger(
+                        fragment,
+                    ));
+                    if !current.HasActiveOpacityAnimation()
+                        || current.direct_compositing_reasons != reasons
+                    {
+                        rejection = 3;
+                        break;
+                    }
+                    let mut next = (**current).clone();
+                    let change = next.DirectlyUpdateOpacity(
+                        MaskAdjustedOpacity(style),
+                        EffectAnimationState {
+                            is_running_opacity_animation_on_compositor: true,
+                            ..Default::default()
+                        },
+                    );
+                    if !matches!(
+                        change,
+                        PaintPropertyChangeType::Unchanged
+                            | PaintPropertyChangeType::ChangedOnlyCompositedValues
+                    ) {
+                        rejection = 4;
+                        break;
+                    }
+                    effect_proposals.insert(key, (Arc::new(next), change, fragment.node_id));
+                }
+            }
+        }
+
+        if rejection == 0 && matched != targeted {
+            rejection = 5;
+        }
+        if rejection == 0 && active != targeted {
+            rejection = 6;
+        }
+        trace.set("matched_targets", matched.len() as f64);
+        trace.set("active_targets", active.len() as f64);
+        trace.set("transform_updates", transform_proposals.len() as f64);
+        trace.set("effect_updates", effect_proposals.len() as f64);
+        trace.set("rejection", rejection as f64);
+        if rejection != 0 || (transform_proposals.is_empty() && effect_proposals.is_empty()) {
+            return None;
+        }
+
+        let mut update = DirectCompositedAnimationPropertyUpdate::default();
+        for (key, (snapshot, change, node_id)) in transform_proposals {
+            self.property_node_store
+                .PublishDirectTransformSnapshot(key, snapshot.clone(), change);
+            update.transforms.push(snapshot);
+            let element_id = update
+                .transforms
+                .last()
+                .unwrap()
+                .compositor
+                .compositor_element_id;
+            if foundation::CompositorElementId::IsValidInternalValue(element_id.GetInternalValue())
+            {
+                update.bindings.push(CompositedAnimationPropertyBinding {
+                    node_id,
+                    property: CompositedAnimationProperty::Transform,
+                    element_id,
+                });
+            }
+        }
+        for (key, (snapshot, change, node_id)) in effect_proposals {
+            self.property_node_store
+                .PublishDirectEffectSnapshot(key, snapshot.clone(), change);
+            update.effects.push(snapshot);
+            let element_id = update
+                .effects
+                .last()
+                .unwrap()
+                .compositor
+                .compositor_element_id;
+            if foundation::CompositorElementId::IsValidInternalValue(element_id.GetInternalValue())
+            {
+                update.bindings.push(CompositedAnimationPropertyBinding {
+                    node_id,
+                    property: CompositedAnimationProperty::Opacity,
+                    element_id,
+                });
+            }
+        }
+        trace.set("admitted", 1.0);
+        Some(update)
+    }
+
     /// Objects whose full invalidation remains delayed after this PrePaint
     /// pass. Layout consumes this at the source commit boundary.
     pub fn PendingDelayedPaintInvalidations(&self) -> &HashSet<u64> {
         self.paint_invalidator.PendingDelayedPaintInvalidations()
+    }
+
+    /// Return the compositor element ids created by the completed PrePaint
+    /// walk for CSS transform/opacity animation targets. Chromium creates the
+    /// KeyframeModel and its paint-property node in the same main-frame
+    /// commit. Rechrom keeps those owners in separate packages, so Page uses
+    /// this typed identity list to preserve that ordering without exposing the
+    /// resident Paint tree.
+    pub fn CompositedAnimationPropertyBindings(
+        &self,
+        targeted_nodes: &[u64],
+    ) -> Vec<CompositedAnimationPropertyBinding> {
+        fn collect_transform(
+            node_id: u64,
+            mut node: Option<&Arc<TransformPaintPropertyNode>>,
+            seen: &mut HashSet<u64>,
+            output: &mut Vec<CompositedAnimationPropertyBinding>,
+        ) {
+            while let Some(current) = node {
+                let element_id = current.compositor.compositor_element_id;
+                let internal = element_id.GetInternalValue();
+                if current.HasActiveTransformAnimation()
+                    && foundation::CompositorElementId::IsValidInternalValue(internal)
+                    && seen.insert(internal)
+                {
+                    output.push(CompositedAnimationPropertyBinding {
+                        node_id,
+                        property: CompositedAnimationProperty::Transform,
+                        element_id,
+                    });
+                }
+                node = current.parent.as_ref();
+            }
+        }
+
+        fn collect_effect(
+            node_id: u64,
+            mut node: Option<&Arc<EffectPaintPropertyNode>>,
+            seen: &mut HashSet<u64>,
+            output: &mut Vec<CompositedAnimationPropertyBinding>,
+        ) {
+            while let Some(current) = node {
+                let element_id = current.compositor.compositor_element_id;
+                let internal = element_id.GetInternalValue();
+                if current.HasActiveOpacityAnimation()
+                    && foundation::CompositorElementId::IsValidInternalValue(internal)
+                    && seen.insert(internal)
+                {
+                    output.push(CompositedAnimationPropertyBinding {
+                        node_id,
+                        property: CompositedAnimationProperty::Opacity,
+                        element_id,
+                    });
+                }
+                node = current.parent.as_ref();
+            }
+        }
+
+        fn walk(
+            node: &PaintTreeNode<'_>,
+            targeted: &HashSet<u64>,
+            matched: &mut HashSet<u64>,
+            seen_transforms: &mut HashSet<u64>,
+            seen_effects: &mut HashSet<u64>,
+            output: &mut Vec<CompositedAnimationPropertyBinding>,
+        ) {
+            let node_id = node
+                .fragment
+                .as_deref()
+                .map_or(0, |fragment| fragment.node_id);
+            if targeted.contains(&node_id) {
+                matched.insert(node_id);
+                browser_tracing::instant(
+                    "prepaint",
+                    "PrePaint.CompositedAnimationTarget",
+                    &[
+                        ("node_id", node_id as f64),
+                        ("present", 1.0),
+                        ("applies_transform", node.applies_transform as u8 as f64),
+                        ("applies_opacity", node.applies_opacity as u8 as f64),
+                        (
+                            "active_transform",
+                            node.properties
+                                .nodes
+                                .transform
+                                .HasActiveTransformAnimation() as u8
+                                as f64,
+                        ),
+                        (
+                            "active_opacity",
+                            node.properties.nodes.effect.HasActiveOpacityAnimation() as u8 as f64,
+                        ),
+                    ],
+                );
+                if node.applies_transform {
+                    collect_transform(
+                        node_id,
+                        Some(&node.properties.nodes.transform),
+                        seen_transforms,
+                        output,
+                    );
+                }
+                if node.applies_opacity {
+                    collect_effect(
+                        node_id,
+                        Some(&node.properties.nodes.effect),
+                        seen_effects,
+                        output,
+                    );
+                }
+            }
+            for child in &node.children {
+                walk(
+                    child,
+                    targeted,
+                    matched,
+                    seen_transforms,
+                    seen_effects,
+                    output,
+                );
+            }
+        }
+
+        let Some(tree) = self.retained_tree.as_deref() else {
+            return Vec::new();
+        };
+        let targeted = targeted_nodes.iter().copied().collect::<HashSet<_>>();
+        let mut matched = HashSet::new();
+        let mut output = Vec::new();
+        walk(
+            tree,
+            &targeted,
+            &mut matched,
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+            &mut output,
+        );
+        for node_id in targeted.difference(&matched) {
+            browser_tracing::instant(
+                "prepaint",
+                "PrePaint.CompositedAnimationTarget",
+                &[
+                    ("node_id", *node_id as f64),
+                    ("present", 0.0),
+                    ("applies_transform", 0.0),
+                    ("applies_opacity", 0.0),
+                    ("active_transform", 0.0),
+                    ("active_opacity", 0.0),
+                ],
+            );
+        }
+        output
     }
 
     /// PaintController validation changes client metadata even without a new

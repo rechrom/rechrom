@@ -103,11 +103,7 @@ impl<'listener: 'frame, 'frame> PageEventHandlerTextInput<'listener, 'frame> {
         Editor::WithState(
             selection,
             commands,
-            self.dispatcher
-                .EditingOwners()
-                .ime_typing
-                .editor
-                .clone(),
+            self.dispatcher.EditingOwners().ime_typing.editor.clone(),
         )
         .CanEdit()
     }
@@ -211,12 +207,7 @@ impl<'listener: 'frame, 'frame> EventHandlerTextInput
         let selection = Rc::new(TextSelection {
             dispatcher: self.dispatcher.clone(),
         });
-        let retained = self
-            .dispatcher
-            .EditingOwners()
-            .ime_typing
-            .editor
-            .clone();
+        let retained = self.dispatcher.EditingOwners().ime_typing.editor.clone();
         let editor = Editor::WithState(selection, commands, retained);
         let _events = self.dispatcher.EditorCommandEventQueueScope();
         let handled = editor.HandleTextEvent(&data, &PreparedEditorGeometry);

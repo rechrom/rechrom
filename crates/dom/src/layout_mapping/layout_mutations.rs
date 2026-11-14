@@ -156,21 +156,40 @@ impl DOM {
                                 && resolved.placeholder.is_none()
                                 && resolved.marker.is_none()
                         });
+                let geometry_only = state.geometry_input_nodes.contains(&id)
+                    && !state.layout_style_nodes.contains(&id);
                 let applied = geometry_has_no_layout_consumer
-                    || self.EmitPaintInputs(id, interaction, |mutation| match mutation {
-                        LayoutMutation::PaintInput {
-                            node_id,
-                            style,
-                            resources,
-                            element,
-                        } => receive(LayoutMutation::NodeInput {
-                            node_id,
-                            style,
-                            resources,
-                            element,
-                        }),
-                        _ => unreachable!("EmitPaintInputs emits typed node inputs"),
-                    });
+                    || if geometry_only {
+                        self.EmitGeometryInput(id, interaction, |mutation| match mutation {
+                            LayoutMutation::PaintInput {
+                                node_id,
+                                style,
+                                resources,
+                                element,
+                            } => receive(LayoutMutation::NodeInput {
+                                node_id,
+                                style,
+                                resources,
+                                element,
+                            }),
+                            _ => unreachable!("EmitGeometryInput emits a typed node input"),
+                        })
+                    } else {
+                        self.EmitPaintInputs(id, interaction, |mutation| match mutation {
+                            LayoutMutation::PaintInput {
+                                node_id,
+                                style,
+                                resources,
+                                element,
+                            } => receive(LayoutMutation::NodeInput {
+                                node_id,
+                                style,
+                                resources,
+                                element,
+                            }),
+                            _ => unreachable!("EmitPaintInputs emits typed node inputs"),
+                        })
+                    };
                 if applied {
                     unrepresented_geometry += geometry_has_no_layout_consumer as usize;
                     locally_applied.push(id);
@@ -269,10 +288,11 @@ impl DOM {
     /// objects. Text uses its resolved flat-tree parent's style, exactly as
     /// AppendChildren does during attachment. Generated/flattened sources keep
     /// the ordinary export path until their separate source can be retained.
-    pub fn EmitPaintInputs(
+    fn EmitPaintInputsWithTextChildren(
         &self,
         node_id: u64,
         interaction: &UserInteractionState,
+        include_text_children: bool,
         mut receive: impl FnMut(LayoutMutation<'_>) -> bool,
     ) -> bool {
         use crate::persistent_document::{DOMNamespace, DOMNodeType};
@@ -331,6 +351,9 @@ impl DOM {
         }) {
             return false;
         }
+        if !include_text_children {
+            return true;
+        }
         for &child in super::persistent_tree_builder::AttachmentChildren(document, index).iter() {
             let node = document.Node(child);
             if node.Type() == DOMNodeType::kText
@@ -348,6 +371,32 @@ impl DOM {
         true
     }
 
+    /// Deliver an element's geometry metadata without projecting inherited
+    /// style onto its text children. Blink's local geometry notifications
+    /// (including scroll offset and replaced-resource facts) target the
+    /// element's existing LayoutObject. A whitespace text child may
+    /// legitimately have no LayoutObject and cannot reject that update.
+    pub fn EmitGeometryInput(
+        &self,
+        node_id: u64,
+        interaction: &UserInteractionState,
+        receive: impl FnMut(LayoutMutation<'_>) -> bool,
+    ) -> bool {
+        self.EmitPaintInputsWithTextChildren(node_id, interaction, false, receive)
+    }
+
+    /// Deliver ordinary paint/style input and inherited text-child style to
+    /// resident objects. Unlike a geometry-only notification, a parent style
+    /// update must refresh the existing text LayoutObjects which inherit it.
+    pub fn EmitPaintInputs(
+        &self,
+        node_id: u64,
+        interaction: &UserInteractionState,
+        receive: impl FnMut(LayoutMutation<'_>) -> bool,
+    ) -> bool {
+        self.EmitPaintInputsWithTextChildren(node_id, interaction, true, receive)
+    }
+
     /// Return whether a live DOM node was found and a scroll mutation emitted.
     /// A receiver can separately inspect its source engine's application result.
     pub fn EmitScrollOffset(
@@ -355,17 +404,28 @@ impl DOM {
         node_id: u64,
         offset: Offset,
         scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
-        mut receive: impl FnMut(LayoutMutation<'_>),
+        mut receive: impl FnMut(LayoutMutation<'_>) -> bool,
     ) -> bool {
         if !self.SetScrollOffset(node_id, offset) {
             return false;
         }
-        receive(LayoutMutation::ScrollOffset {
+        let applied = receive(LayoutMutation::ScrollOffset {
             node_id,
             offset,
             scroll_type,
         });
-        true
+        if applied {
+            // SetScrollOffset also records the generic NodeInput fallback used
+            // when no resident ScrollableArea accepts this mutation. Once the
+            // owning LayoutEngine has consumed the dedicated scroll mutation,
+            // retaining that fallback would replay the same offset on the next
+            // unrelated style lifecycle and spuriously dirty Layout.
+            self.GetDocumentMut()
+                .StyleStateMut()
+                .geometry_input_nodes
+                .remove(&node_id);
+        }
+        applied
     }
 
     pub fn EmitEditing(&self, node_id: u64, mut receive: impl FnMut(LayoutMutation<'_>)) -> bool {

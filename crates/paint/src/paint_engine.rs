@@ -398,6 +398,182 @@ pub struct PreparedPrePaint {
     source: layoutng_assembly::layout_engine::PaintFragmentLease,
 }
 
+/// Paint-property values admitted by Blink's deferred transform/opacity
+/// update path. The nodes retain their canonical property identity; this is
+/// not a copied compositor tree or a replacement PaintArtifact.
+#[derive(Clone, Debug, Default)]
+pub struct CompositedAnimationPropertyUpdate {
+    pub transforms: Vec<Arc<paint_model::paint_property_tree::TransformPaintPropertyNode>>,
+    pub effects: Vec<Arc<paint_model::paint_property_tree::EffectPaintPropertyNode>>,
+    pub bindings: Vec<prepaint::CompositedAnimationPropertyBinding>,
+}
+
+fn CollectCompositedAnimationPropertyUpdate(
+    tree: &crate::pre_paint_tree_walk::PaintTreeNode<'_>,
+    targeted_nodes: &[u64],
+) -> Option<CompositedAnimationPropertyUpdate> {
+    use paint_model::paint_property_tree::{
+        EffectPaintPropertyNode, PaintPropertyChangeType, TransformPaintPropertyNode,
+    };
+    use std::collections::HashSet;
+
+    #[derive(Default)]
+    struct Collector {
+        valid: bool,
+        rejection: u8,
+        rejected_change: PaintPropertyChangeType,
+        matched_targets: HashSet<u64>,
+        transforms: Vec<Arc<TransformPaintPropertyNode>>,
+        effects: Vec<Arc<EffectPaintPropertyNode>>,
+        bindings: Vec<prepaint::CompositedAnimationPropertyBinding>,
+        seen_transforms: HashSet<usize>,
+        seen_effects: HashSet<usize>,
+        seen_transform_bindings: HashSet<u64>,
+        seen_effect_bindings: HashSet<u64>,
+    }
+
+    impl Collector {
+        fn transform(&mut self, node_id: u64, node: &Arc<TransformPaintPropertyNode>) {
+            if !self.valid
+                || !self
+                    .seen_transforms
+                    .insert(Arc::as_ptr(&node.lifecycle.identity) as usize)
+            {
+                return;
+            }
+            if node.HasActiveTransformAnimation() {
+                let element_id = node.compositor.compositor_element_id;
+                let internal = element_id.GetInternalValue();
+                if foundation::CompositorElementId::IsValidInternalValue(internal)
+                    && self.seen_transform_bindings.insert(internal)
+                {
+                    self.bindings
+                        .push(prepaint::CompositedAnimationPropertyBinding {
+                            node_id,
+                            property: prepaint::CompositedAnimationProperty::Transform,
+                            element_id,
+                        });
+                }
+                match node.lifecycle.node_changed() {
+                    PaintPropertyChangeType::Unchanged => {}
+                    PaintPropertyChangeType::ChangedOnlyCompositedValues => {
+                        self.transforms.push(node.clone());
+                    }
+                    PaintPropertyChangeType::ChangedOnlySimpleValues
+                        if node.HasDirectCompositingReasons() =>
+                    {
+                        self.transforms.push(node.clone());
+                    }
+                    change => {
+                        self.valid = false;
+                        self.rejection = 1;
+                        self.rejected_change = change;
+                    }
+                }
+            }
+            if let Some(parent) = &node.parent {
+                self.transform(node_id, parent);
+            }
+        }
+
+        fn effect(&mut self, node_id: u64, node: &Arc<EffectPaintPropertyNode>) {
+            if !self.valid
+                || !self
+                    .seen_effects
+                    .insert(Arc::as_ptr(&node.lifecycle.identity) as usize)
+            {
+                return;
+            }
+            if node.HasActiveOpacityAnimation() {
+                let element_id = node.compositor.compositor_element_id;
+                let internal = element_id.GetInternalValue();
+                if foundation::CompositorElementId::IsValidInternalValue(internal)
+                    && self.seen_effect_bindings.insert(internal)
+                {
+                    self.bindings
+                        .push(prepaint::CompositedAnimationPropertyBinding {
+                            node_id,
+                            property: prepaint::CompositedAnimationProperty::Opacity,
+                            element_id,
+                        });
+                }
+                match node.lifecycle.node_changed() {
+                    PaintPropertyChangeType::Unchanged
+                    | PaintPropertyChangeType::ChangedOnlyCompositedValues => {}
+                    PaintPropertyChangeType::ChangedOnlySimpleValues
+                        if node.HasDirectCompositingReasons() =>
+                    {
+                        self.effects.push(node.clone());
+                    }
+                    change => {
+                        self.valid = false;
+                        self.rejection = 2;
+                        self.rejected_change = change;
+                    }
+                }
+            }
+            if let Some(parent) = &node.parent {
+                self.effect(node_id, parent);
+            }
+        }
+
+        fn tree(
+            &mut self,
+            node: &crate::pre_paint_tree_walk::PaintTreeNode<'_>,
+            targeted_nodes: &HashSet<u64>,
+        ) {
+            let node_id = node
+                .fragment
+                .as_deref()
+                .map_or(0, |fragment| fragment.node_id);
+            if targeted_nodes.contains(&node_id) {
+                self.matched_targets.insert(node_id);
+                // Blink's pending sets contain LayoutObjects, not every
+                // property ancestor reachable through their state. Inspect
+                // only the local slots this object applies.
+                if node.applies_transform {
+                    self.transform(node_id, &node.properties.nodes.transform);
+                }
+                if node.applies_opacity {
+                    self.effect(node_id, &node.properties.nodes.effect);
+                }
+            }
+            for child in &node.children {
+                self.tree(child, targeted_nodes);
+            }
+        }
+    }
+
+    let targeted_nodes = targeted_nodes.iter().copied().collect::<HashSet<_>>();
+    let mut collector = Collector {
+        valid: true,
+        ..Default::default()
+    };
+    collector.tree(tree, &targeted_nodes);
+    if collector.matched_targets.len() != targeted_nodes.len() {
+        collector.valid = false;
+        collector.rejection = 3;
+    }
+    let mut trace =
+        browser_tracing::span("prepaint", "PrePaint.CompositedAnimationPropertyAdmission");
+    trace.set("admitted", collector.valid as u8 as f64);
+    trace.set("rejection", collector.rejection as f64);
+    trace.set("rejected_change", collector.rejected_change as u8 as f64);
+    trace.set("targeted_nodes", targeted_nodes.len() as f64);
+    trace.set("matched_targets", collector.matched_targets.len() as f64);
+    trace.set("transform_updates", collector.transforms.len() as f64);
+    trace.set("effect_updates", collector.effects.len() as f64);
+    (collector.valid
+        && (!collector.transforms.is_empty()
+            || !collector.effects.is_empty()
+            || !collector.bindings.is_empty()))
+    .then_some(CompositedAnimationPropertyUpdate {
+        transforms: collector.transforms,
+        effects: collector.effects,
+        bindings: collector.bindings,
+    })
+}
+
 fn RecordPaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
@@ -489,9 +665,11 @@ fn RecordPaint(
             output.resources = Some(resources.clone());
         }
     }
-    let caret_geometry = editing
-        .caret
-        .and_then(|state| state.native.map(|native| (native.local_rect(), native.shape)));
+    let caret_geometry = editing.caret.and_then(|state| {
+        state
+            .native
+            .map(|native| (native.local_rect(), native.shape))
+    });
     let drag_caret_geometry = editing
         .drag_caret
         .and_then(|state| state.native.map(|native| native.local_rect()));
@@ -914,6 +1092,65 @@ impl PaintEngine {
             source: layout_output.PaintLease(),
         }
     }
+
+    /// Source: LocalFrameView::ExecuteAllPendingUpdates and
+    /// PaintPropertyTreeBuilder::DirectlyUpdate{TransformMatrix,OpacityValue}.
+    /// First execute Chromium's targeted pending transform/opacity update on
+    /// the canonical retained ObjectPaintProperties slots. Any structural,
+    /// owner, or compositing-reason change rejects that path and runs the
+    /// ordinary complete PrePaint walk, leaving it prepared for Paint.
+    pub fn PrePaintCompositedAnimationUpdate(
+        &mut self,
+        layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        targeted_nodes: &[u64],
+        lifecycle: &dyn PaintLifecycleObserver,
+    ) -> (
+        Option<PreparedPrePaint>,
+        Option<CompositedAnimationPropertyUpdate>,
+    ) {
+        lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
+        if let Some(update) = self
+            .pre_paint
+            .DirectlyUpdateCompositedAnimationProperties(targeted_nodes)
+        {
+            lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
+            return (
+                None,
+                Some(CompositedAnimationPropertyUpdate {
+                    transforms: update.transforms,
+                    effects: update.effects,
+                    bindings: update.bindings,
+                }),
+            );
+        }
+        self.pre_paint.SetRetainedOwnerLifetimes(false);
+        let tree = WalkPrePaint(
+            &mut self.pre_paint,
+            PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
+            layout_output.PaintLease(),
+        );
+        let update = CollectCompositedAnimationPropertyUpdate(&tree, targeted_nodes);
+        self.pre_paint.RetainTree(tree);
+        lifecycle.SetIntersectionObservationState(self.pre_paint.IntersectionObservationState());
+        lifecycle.AdvanceTo(PaintLifecyclePhase::PrePaintClean);
+        (
+            Some(PreparedPrePaint {
+                source: layout_output.PaintLease(),
+            }),
+            update,
+        )
+    }
+
+    /// Typed handoff for KeyframeModels created by the same complete
+    /// PrePaint/Paint lifecycle as their compositor property nodes.
+    pub fn CompositedAnimationPropertyBindings(
+        &self,
+        targeted_nodes: &[u64],
+    ) -> Vec<prepaint::CompositedAnimationPropertyBinding> {
+        self.pre_paint
+            .CompositedAnimationPropertyBindings(targeted_nodes)
+    }
+
     pub fn PaintAfterPrePaint(
         &mut self,
         layout_output: &layoutng_assembly::layout_engine::LayoutPaintOutput,

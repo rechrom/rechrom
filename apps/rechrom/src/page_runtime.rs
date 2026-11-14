@@ -2862,6 +2862,13 @@ fn run_document(
                 if let Err(error) = result {
                     return Err(error);
                 }
+                // WebFrameWidgetImpl finishes Blink's lifecycle before
+                // ProxyMain closes the BeginMainFrame transaction. Deliver
+                // property-tree mutations and input acknowledgements produced
+                // by that lifecycle while the current transaction still owns
+                // them; sending FinishMainFrameWithoutUpdates first turns a
+                // composited animation sample into a second, frame-late commit.
+                send_page_compositor_continuations(&mut page, &impl_sender)?;
                 // A browser-owned patch revision belongs to the first frame
                 // lifecycle that runs after the DOM mutation. Publishing the
                 // revision on the preceding PaintArtifact lets Display accept
@@ -3229,35 +3236,7 @@ fn run_document(
                 let _ = reply.send(result);
             }
         }
-        // WidgetInputHandlerManager.cc:505-520 posts its completed main-thread
-        // hit test back to the input owner. WebFrameWidgetImpl.cc:4353-4355
-        // posts injected scrollbar gestures to that same sequenced ingress.
-        // Wheel acknowledgements and scrollbar begin/update/end retain FIFO
-        // order after the synchronous document input transaction completes.
-        for disposition in page.TakeWheelDispositions()? {
-            let _ = impl_sender.send(ImplCommand::WheelAck {
-                document_generation: disposition.document_generation,
-                result: disposition.result,
-            });
-        }
-        for input in page.TakePendingBrowserInputs() {
-            let command = match input {
-                browser::page::PageBrowserInput::DocumentDetached { generation } => {
-                    ImplCommand::DocumentDetached { generation }
-                }
-                browser::page::PageBrowserInput::Compositor(input) => {
-                    ImplCommand::InputContinuation(input)
-                }
-                browser::page::PageBrowserInput::Gesture(gesture) => ImplCommand::Gesture {
-                    gesture,
-                    queued_at: Instant::now(),
-                    samples: 1,
-                },
-            };
-            impl_sender
-                .send(command)
-                .map_err(|_| io::Error::other("Page input executor stopped"))?;
-        }
+        send_page_compositor_continuations(&mut page, &impl_sender)?;
         let count = patches.len();
         for _ in 0..count {
             let (revision, patch) = patches.pop_front().unwrap();
@@ -3416,6 +3395,19 @@ fn run_document(
                             viewport,
                         })
                         .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
+                    page.DidPublishFrameToExternalCompositor(frame.sequence);
+                    // Page can request its next animation opportunity while
+                    // producing this commit. That earlier request reaches the
+                    // impl queue before Commit and may be subsumed by the
+                    // transaction it is answering. Restate the still-live
+                    // demand after the artifact so Scheduler owns the next
+                    // BeginMainFrame, matching ProxyMain's retained commit
+                    // request bit.
+                    if page.HasPendingAnimationFrameRequest() {
+                        impl_sender
+                            .send(ImplCommand::RequestMainFrame)
+                            .map_err(|_| io::Error::other("Page compositor executor stopped"))?;
+                    }
                     copy_output_fence_pending = false;
                     published = Some(identity);
                     if params.document.0 == 0 {
@@ -3490,6 +3482,41 @@ fn run_document(
                 page.MemoryDiagnostics()
             );
         }
+    }
+    Ok(())
+}
+fn send_page_compositor_continuations(
+    page: &mut Page,
+    impl_sender: &mpsc::Sender<ImplCommand>,
+) -> io::Result<()> {
+    // WidgetInputHandlerManager.cc:505-520 posts its completed main-thread
+    // hit test back to the input owner. WebFrameWidgetImpl.cc:4353-4355 posts
+    // injected scrollbar gestures to that same sequenced ingress. Preserve
+    // wheel acknowledgements and all Page-produced continuations in FIFO order
+    // after the synchronous document transaction completes.
+    for disposition in page.TakeWheelDispositions()? {
+        let _ = impl_sender.send(ImplCommand::WheelAck {
+            document_generation: disposition.document_generation,
+            result: disposition.result,
+        });
+    }
+    for input in page.TakePendingBrowserInputs() {
+        let command = match input {
+            browser::page::PageBrowserInput::DocumentDetached { generation } => {
+                ImplCommand::DocumentDetached { generation }
+            }
+            browser::page::PageBrowserInput::Compositor(input) => {
+                ImplCommand::InputContinuation(input)
+            }
+            browser::page::PageBrowserInput::Gesture(gesture) => ImplCommand::Gesture {
+                gesture,
+                queued_at: Instant::now(),
+                samples: 1,
+            },
+        };
+        impl_sender
+            .send(command)
+            .map_err(|_| io::Error::other("Page input executor stopped"))?;
     }
     Ok(())
 }

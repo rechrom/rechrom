@@ -267,11 +267,12 @@ impl TypingCommandHost<ImeTypingSelection> for Host<'_, '_, '_, '_> {
         structural::SelectionStartsInTableStructure(self, selection, command)
     }
     fn SelectionStart(&self, selection: &ImeTypingSelection) -> Option<usize> {
-        if super::super::page_editing_owners::IsTextControl(
-            &self.commands.document,
-            self.root,
-        ) {
-            return self.commands.selection.Current().map(|selection| selection.Start());
+        if super::super::page_editing_owners::IsTextControl(&self.commands.document, self.root) {
+            return self
+                .commands
+                .selection
+                .Current()
+                .map(|selection| selection.Start());
         }
         match self.Frame().CompositionText(Query::Offsets {
             root: self.root,

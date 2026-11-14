@@ -314,10 +314,7 @@ fn attach_commands_with_expected_viewport(
                         // `buttons` carries the currently depressed buttons.
                         // Preserve that distinction so headless input can
                         // exercise the native drag/selection path.
-                        buttons: if matches!(
-                            kind,
-                            MouseEventType::kDown | MouseEventType::kMove
-                        ) {
+                        buttons: if matches!(kind, MouseEventType::kDown | MouseEventType::kMove) {
                             button.ButtonsMask()
                         } else {
                             0
@@ -358,9 +355,7 @@ fn attach_commands_with_expected_viewport(
     }));
     let composition_commands = commands.clone();
     devtools::set_ime_composition_handler(Arc::new(move |composition| {
-        use interaction::input_event::{
-            CompositionEvent, CompositionEventType, InputEvent,
-        };
+        use interaction::input_event::{CompositionEvent, CompositionEventType, InputEvent};
 
         // CDP already uses Blink's UTF-16 composition-selection contract.
         let selection = Some((composition.selection_start, composition.selection_end));

@@ -1528,10 +1528,8 @@ pub fn FrameCaretForSelection(
         if node.FindAttribute("disabled").is_some() || node.FindAttribute("readonly").is_some() {
             return None;
         }
-        let raw_selection = super::page_frame_selection::CurrentDOMSelectionForFocus(
-            document,
-            selections,
-        )?;
+        let raw_selection =
+            super::page_frame_selection::CurrentDOMSelectionForFocus(document, selections)?;
         let position = FrameCaretPosition(document, layout, Some(raw_selection))?;
         let source_position = SourcePosition(position);
         let editing_offset = source_position

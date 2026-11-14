@@ -367,6 +367,8 @@ pub trait LayerTreeLayer<B: LayerTreeTypes> {
     ) -> impl std::ops::Deref<Target = crate::cc::base::region::Region<B::RegionBackend>> + '_;
     fn non_composited_scroll_hit_test_rects(&self) -> Option<&[ScrollHitTestRect]>;
     fn visible_layer_rect(&self) -> Rect;
+    fn draws_content(&self) -> bool;
+    fn should_check_backface_visibility(&self) -> bool;
     fn ResetChangeTracking(&mut self);
     fn AsHeadsUpDisplayLayer(&self) -> Option<&dyn LayerTreeHUD> {
         None

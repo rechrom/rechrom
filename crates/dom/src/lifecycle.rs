@@ -35,7 +35,14 @@ impl DOM {
             .Merge(StyleUpdateImpact::LAYOUT);
     }
 
+    #[track_caller]
     pub fn InvalidatePaint(&mut self) {
+        let caller = std::panic::Location::caller();
+        browser_tracing::instant(
+            "lifecycle",
+            "DOM.InvalidatePaint",
+            &[("source_line", caller.line() as f64)],
+        );
         self.GetDocumentMut()
             .StyleStateMut()
             .impact
@@ -43,6 +50,24 @@ impl DOM {
                 paint: true,
                 ..Default::default()
             });
+    }
+
+    /// Targeted equivalent of Blink's
+    /// ScrollControlWasSetNeedsPaintInvalidation. The resident LayoutObject
+    /// already owns the changed scrollbar values; this only admits its owning
+    /// fragment to the next paint refresh when no composited layer handled the
+    /// direct invalidation.
+    pub fn InvalidatePaintForNode(&mut self, node_id: u64) -> bool {
+        if self.GetDocument().FindNodeById(node_id).is_none() {
+            return false;
+        }
+        let state = self.GetDocumentMut().StyleStateMut();
+        state.paint_style_nodes.insert(node_id);
+        state.impact.Merge(StyleUpdateImpact {
+            paint: true,
+            ..Default::default()
+        });
+        true
     }
 
     pub fn SetRegionCaptureCropId(&mut self, node_id: u64, crop_id: [u64; 2]) -> bool {

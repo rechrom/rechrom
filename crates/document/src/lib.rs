@@ -156,6 +156,21 @@ impl DocumentEngine {
                     resource: Vec::new(),
                 }
             }
+            animation::DocumentMutation::SetPropertyFlags(flags) => {
+                let changed = self
+                    .dom
+                    .borrow_mut()
+                    .GetDocumentMut()
+                    .SetAnimationPropertyFlags(
+                        flags
+                            .into_iter()
+                            .map(|flags| (flags.node_id, flags.transform, flags.opacity)),
+                    );
+                DocumentEffects {
+                    style: changed.then_some(StyleMutation::Recalculate),
+                    ..Default::default()
+                }
+            }
         }
     }
 

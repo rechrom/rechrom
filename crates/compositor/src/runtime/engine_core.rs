@@ -71,6 +71,11 @@ pub(crate) struct EngineCore {
     // activation from the frame produced by the commit that Page submitted.
     last_committed_source_frame_number: Option<i32>,
     prepared_paint_commit: bool,
+    // ProxyMain advances only as far as the highest requested pipeline stage.
+    // A new PaintArtifact requests UPDATE_LAYERS, while Blink's direct
+    // transform/opacity path calls only SetNeedsCommit and must retain the
+    // existing PictureLayer recording/raster source.
+    prepared_update_layers: bool,
     // `ready_commit` is built on the Page sequence before the Scheduler may
     // open the BeginMainFrame that owns it. Keep the source distinction
     // between a prepared commit and ProxyImpl's already-notified
@@ -247,6 +252,7 @@ impl EngineCore {
             ready_commit: None,
             last_committed_source_frame_number: None,
             prepared_paint_commit: false,
+            prepared_update_layers: false,
             ready_commit_notified: false,
             awaiting_main: false,
             main_frame_applied_deltas: false,
@@ -366,11 +372,90 @@ impl EngineCore {
         drop(layerize_trace);
 
         self.prepared_paint_commit = true;
+        self.prepared_update_layers = true;
         Ok(())
     }
     pub(crate) fn HasPreparedPaintCommit(&self) -> bool {
         self.prepared_paint_commit
     }
+
+    pub(crate) fn CanPrepareCompositedAnimationCommit(&self) -> bool {
+        self.previous_artifact.is_some()
+            && self.ready_commit.is_none()
+            && !self.prepared_paint_commit
+    }
+
+    pub(crate) fn ApplyScrollbarPaintMutation(
+        &mut self,
+        mutation: &crate::engine::ScrollbarPaintMutation,
+    ) {
+        let applied = {
+            let mut hosts = CpuMainLayerHosts {
+                host: &mut self.main,
+            };
+            let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
+                .WithDerivedServices(self.paint.as_ref());
+            self.pac.as_ref().is_some_and(|pac| {
+                self.paint
+                    .ApplyScrollbarPaintMutation(pac, mutation, &mut context)
+            })
+        };
+        if !applied {
+            self.effects
+                .push(CompositorMainThreadEffect::ScrollbarPaintFallback {
+                    element: mutation.element,
+                });
+        }
+    }
+
+    pub(crate) fn HasResidentPaintArtifact(&self) -> bool {
+        self.previous_artifact.is_some()
+    }
+
+    /// Apply Blink's deferred animated property values to the resident PAC
+    /// main tree. The current BeginMainFrame still owns final commit
+    /// preparation, so FinishMainFrameWithoutUpdates completes this prepared
+    /// property-only commit instead of aborting the transaction.
+    pub(crate) fn PrepareCompositedAnimationCommit(
+        &mut self,
+        update: &paint::CompositedAnimationPropertyUpdate,
+    ) -> Result<(), CompositorError> {
+        if self.previous_artifact.is_none() {
+            return Err(CompositorError::NotReady {
+                stage: "composited animation requires a resident paint artifact",
+            });
+        }
+        if self.ready_commit.is_some() || self.prepared_paint_commit {
+            return Err(CompositorError::NotReady {
+                stage: "previous main commit awaits scheduler",
+            });
+        }
+        let mut hosts = CpuMainLayerHosts {
+            host: &mut self.main,
+        };
+        let mut context = LayerContext::new(&mut hosts, self.paint.as_ref())
+            .WithDerivedServices(self.paint.as_ref());
+        if !self.paint.ApplyCompositedAnimationProperties(
+            self.pac.as_ref().unwrap(),
+            update,
+            &mut context,
+        ) {
+            return Err(CompositorError::NotReady {
+                stage: "resident compositor property mapping is unavailable",
+            });
+        }
+        self.prepared_paint_commit = true;
+        self.prepared_update_layers = false;
+        // Direct PAC updates call LayerTreeHost::SetNeedsCommit. When this
+        // mutation belongs to the currently open BMF, that request is already
+        // being fulfilled by its property-only commit; suppress a redundant
+        // BMF request while retaining the request for out-of-frame callers.
+        if self.awaiting_main {
+            self.endpoint.DidBeginCommit();
+        }
+        Ok(())
+    }
+
     pub(crate) fn ClassifyScrollAnimationAreas(
         &self,
         areas: &[crate::adapter::input_types::ElementId],
@@ -408,13 +493,17 @@ impl EngineCore {
             "same PAC preparation before finalizing native animation commit"
         );
         self.prepared_paint_commit = false;
+        let update_layers = std::mem::take(&mut self.prepared_update_layers);
         let mut tree_trace = Span(CompositorPackage::Tree, "Compositor.Tree.BuildCommit");
         tree_trace.set(
             "property_owner_sequence",
             self.property_owner_sequence as f64,
         );
-        self.main
-            .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
+        tree_trace.set("update_layers", update_layers as u8 as f64);
+        if update_layers {
+            self.main
+                .UpdateLayers(self.paint.as_ref(), self.paint.as_ref(), features);
+        }
         self.main
             .WillCommit(self.paint.as_ref(), self.paint.as_ref());
         let property_owner = PropertyTreesOwnerId::FromOwnerValue(self.property_owner_sequence);
@@ -628,6 +717,12 @@ impl EngineCore {
                 pac.DropCompositorScrollDeltaNextCommit(element, &mut context);
             }
         }
+    }
+    pub(crate) fn ApplySourcePropertyAnimation(
+        &mut self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) {
+        self.endpoint.ApplySourcePropertyAnimation(mutation);
     }
     fn ApplySourceAnimationEvents(&mut self) {
         // ProxyImpl.cc:820 -> ProxyMain.cc:351-352 -> AnimationHost.cc:795-822.

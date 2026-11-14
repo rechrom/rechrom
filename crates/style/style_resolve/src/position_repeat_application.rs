@@ -1029,14 +1029,14 @@ mod tests {
         apply(&mut b, CSSPropertyID::kObjectPosition, "1px", None).unwrap();
         assert_eq!(b.ObjectPosition().X().Pixels(), 2.0);
         assert!(apply(&mut b, CSSPropertyID::kObjectPosition, "20%", None).is_ok());
-        apply(
-            &mut b,
-            CSSPropertyID::kBackgroundSize,
-            "96px 12px",
-            None,
-        )
-        .unwrap();
-        assert_eq!(b.AccessBackgroundLayers().SizeLength().Width().Pixels(), 192.0);
-        assert_eq!(b.AccessBackgroundLayers().SizeLength().Height().Pixels(), 24.0);
+        apply(&mut b, CSSPropertyID::kBackgroundSize, "96px 12px", None).unwrap();
+        assert_eq!(
+            b.AccessBackgroundLayers().SizeLength().Width().Pixels(),
+            192.0
+        );
+        assert_eq!(
+            b.AccessBackgroundLayers().SizeLength().Height().Pixels(),
+            24.0
+        );
     }
 }

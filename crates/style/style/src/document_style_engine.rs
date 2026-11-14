@@ -4941,15 +4941,18 @@ impl DocumentStyleEngine {
                             // traversing the same large boundary payload a second time.
                             if !equal && old != Some(&resolved) {
                                 stats.changed_nodes += 1;
-                                if ensure_target.is_none() {
+                                let visual_impact = if ensure_target.is_none() {
                                     let (change, reattach) =
                                         StyleImpact(document, index, old, &resolved);
                                     impact.Merge(change);
                                     if reattach {
                                         pending_reattach.insert(node.Id());
                                     }
-                                }
-                                resolved_to_commit = Some(resolved);
+                                    Some(change)
+                                } else {
+                                    None
+                                };
+                                resolved_to_commit = Some((resolved, visual_impact));
                             }
                             next_parent = Some(index);
                             drop(finalize_trace);
@@ -5089,12 +5092,13 @@ impl DocumentStyleEngine {
                 {
                     document_owner.SetOverscrollAreaParentStyle(index, None);
                 }
-            } else if let Some(resolved) = resolved_to_commit {
+            } else if let Some((resolved, visual_impact)) = resolved_to_commit {
                 CommitResolvedStyle(
                     document_owner,
                     &mut self.viewport_dependent_elements,
                     index,
                     resolved,
+                    visual_impact,
                 );
                 changed_style_nodes.insert(index);
             }
@@ -7476,6 +7480,22 @@ impl DocumentStyleEngine {
         };
         collaborators.originating_style = Some(parent_handle.clone());
         collaborators.subject_node = Some(index);
+        let animation_subject = match kind {
+            PseudoStyleKind::BeforeMarker | PseudoStyleKind::AfterMarker => {
+                let parent_kind = if kind == PseudoStyleKind::BeforeMarker {
+                    PseudoId::kPseudoIdBefore
+                } else {
+                    PseudoId::kPseudoIdAfter
+                };
+                document
+                    .GeneratedPseudoElement(index, parent_kind)
+                    .and_then(|parent| {
+                        document.GeneratedPseudoElement(parent, PseudoId::kPseudoIdMarker)
+                    })
+            }
+            _ => document.GeneratedPseudoElement(index, kind.Id()),
+        };
+        collaborators.animation_subject_node = animation_subject;
         collaborators.container_runtime = Some(&container_runtime);
         collaborators.parent_custom_properties = Some(originating_custom.as_ref());
         collaborators.substitution_context = resolver_substitution;
@@ -7483,6 +7503,32 @@ impl DocumentStyleEngine {
         collaborators.property_registry = Some(&self.property_registry);
         collaborators.function_registry = function_registry;
         collaborators.font_metrics = self.font_metrics.as_deref();
+        let animation_samples =
+            animation_subject.map(|subject| document.AnimationStyles(document.Node(subject).Id()));
+        let animation_interpolations = match animation_samples {
+            Some(samples) if !samples.is_empty() => Some(
+                crate::resolver::production_style_cascade::ParseAnimationInterpolations(
+                    samples,
+                    DocumentParserMode(document),
+                )
+                .map_err(|_| DocumentStyleError::Unsupported("pseudo-animation-sample-parse"))?,
+            ),
+            _ => None,
+        };
+        let transition_samples =
+            animation_subject.map(|subject| document.TransitionStyles(document.Node(subject).Id()));
+        let transition_interpolations = match transition_samples {
+            Some(samples) if !samples.is_empty() => Some(
+                crate::resolver::production_style_cascade::ParseTransitionInterpolations(
+                    samples,
+                    DocumentParserMode(document),
+                )
+                .map_err(|_| DocumentStyleError::Unsupported("pseudo-transition-sample-parse"))?,
+            ),
+            _ => None,
+        };
+        collaborators.animations = animation_interpolations.as_ref();
+        collaborators.transitions = transition_interpolations.as_ref();
         collaborators.matched_properties_cache = Some(self.matched_properties_cache.clone());
         collaborators.selectors = Some(self.selectors.clone());
         collaborators.selector_backend = Some(selector_backend);
@@ -8356,13 +8402,18 @@ fn CommitResolvedStyle(
     viewport_dependent_elements: &mut HashSet<usize>,
     index: usize,
     style: ResolvedNodeStyle,
+    visual_impact: Option<StyleUpdateImpact>,
 ) {
     if ResolvedStyleUsesViewportUnits(&style) {
         viewport_dependent_elements.insert(index);
     } else {
         viewport_dependent_elements.remove(&index);
     }
-    document.SetResolvedStyle(index, style);
+    if let Some(impact) = visual_impact {
+        document.SetResolvedStyleWithImpact(index, style, impact);
+    } else {
+        document.SetResolvedStyle(index, style);
+    }
 }
 
 // Immutable owner metadata used by the translated active-sheet comparison.
@@ -8639,10 +8690,10 @@ fn StyleImpact(
                 let fields = style_diff::FieldInvalidationDiff(old_style, new_style);
                 let layout = StyleFieldsNeedLayout(old_style, new_style, fields);
                 pseudo_impact.layout |= layout;
-                pseudo_impact.paint |= layout
-                    || fields != 0
-                    || style_diff::ComputeDifference(old_style, new_style)
-                        != ComputedStyleDifference::kEqual;
+                // ComputeDifference controls inheritance propagation. Visual
+                // invalidation is driven by the generated field groups and
+                // the translated special-case layout comparison instead.
+                pseudo_impact.paint |= layout || fields != 0;
             }
             _ => return (StyleUpdateImpact::TREE, reattach),
         }
@@ -8656,7 +8707,6 @@ fn StyleImpact(
     {
         return (StyleUpdateImpact::TREE, reattach);
     }
-    let difference = style_diff::ComputeDifference(old_computed_style, new_computed_style);
     let fields = style_diff::FieldInvalidationDiff(old_computed_style, new_computed_style);
     // cpp: ComputedStyle::VisualInvalidationDiff, computed_style.cc:753-780.
     let layout = StyleFieldsNeedLayout(old_computed_style, new_computed_style, fields);
@@ -8664,10 +8714,7 @@ fn StyleImpact(
         StyleUpdateImpact {
             reattach: false,
             layout: pseudo_impact.layout || layout,
-            paint: pseudo_impact.paint
-                || difference != ComputedStyleDifference::kEqual
-                || fields != 0
-                || layout,
+            paint: pseudo_impact.paint || fields != 0 || layout,
         },
         reattach,
     )

@@ -196,6 +196,29 @@ impl<B: PaintedScrollbarLayerTypes> LayerObject<B> for PaintedScrollbarLayer<B> 
             .unwrap_or_else(|e| e.into_inner()) = scrollbar;
         true
     }
+    fn UpdatePaintedScrollbarAnimation(
+        &self,
+        opacity: f32,
+        thumb_width: i32,
+        needs_repaint: bool,
+    ) -> bool {
+        let current = self
+            .scrollbar_
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let updated = B::WithPaintedScrollbarAnimation(
+            current.as_ref(),
+            opacity,
+            thumb_width,
+            needs_repaint,
+        );
+        *self
+            .scrollbar_
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = updated;
+        true
+    }
     fn AsScrollbarLayer(&self) -> Option<&dyn ScrollbarLayerObject<B>> {
         Some(self)
     }

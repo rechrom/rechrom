@@ -68,6 +68,38 @@ fn StyleImageResourceBindings(style: &StyleComputedStyle) -> Vec<(String, u64)> 
     output
 }
 
+fn SvgClipResourceBindingChangedForStyles(
+    old_style: &StyleComputedStyle,
+    new_style: &StyleComputedStyle,
+    old: &crate::internal::paint_input::SvgClipResourceBinding,
+    new: &crate::internal::paint_input::SvgClipResourceBinding,
+) -> bool {
+    old != new
+        && (StyleReferencesSvgResource(old_style) || StyleReferencesSvgResource(new_style))
+}
+
+fn StyleResourceBindingsChangedForStyles(
+    old_style: &StyleComputedStyle,
+    new_style: &StyleComputedStyle,
+    old: &crate::internal::layout_input::StyleResourceData,
+    new: &crate::internal::layout_input::StyleResourceData,
+) -> bool {
+    old.image_resource_id != new.image_resource_id
+        || old.svg_filter_graphs != new.svg_filter_graphs
+        || SvgClipResourceBindingChangedForStyles(
+            old_style,
+            new_style,
+            &old.svg_clip_resources,
+            &new.svg_clip_resources,
+        )
+        || old.svg_mask_resource != new.svg_mask_resource
+        || old.svg_pattern_content_target != new.svg_pattern_content_target
+        || old.svg_fill_server != new.svg_fill_server
+        || old.svg_stroke_server != new.svg_stroke_server
+        || old.svg_markers != new.svg_markers
+        || old.replaced_image_shader != new.replaced_image_shader
+}
+
 pub(super) fn StyleImageResourceBindingsChanged(
     old: &StyleComputedStyle,
     new: &StyleComputedStyle,
@@ -93,6 +125,8 @@ pub(super) fn update_paint_style(
         .map(|key| &storage.managed[key])
         .any(|record| {
             record.input.style.svg_clip_resources.snapshot.version != clip_resource_version
+                && unsafe { record.effective_computed_style.as_ref() }
+                    .is_none_or(StyleReferencesSvgResource)
         })
     {
         return None;
@@ -184,10 +218,14 @@ pub(super) fn paint_input_plan(
         let new = style;
         let fields = ComputedStyleBase::FieldInvalidationDiff(old, new);
         let inline = DynamicTo::<LayoutInline>(record.object);
-        if !inline.is_null()
+        let inline_topology_changed = !inline.is_null()
             && crate::internal::boundary::layout_boundary::ComputedStyleRequiresPaintBackedInlineFragment(old)
-                != crate::internal::boundary::layout_boundary::ComputedStyleRequiresPaintBackedInlineFragment(new)
-        {
+                != crate::internal::boundary::layout_boundary::ComputedStyleRequiresPaintBackedInlineFragment(new);
+        trace.set(
+            "inline_topology_changed",
+            inline_topology_changed as u8 as f64,
+        );
+        if inline_topology_changed {
             return None;
         }
         let geometry = (F::kLayout
@@ -212,18 +250,30 @@ pub(super) fn paint_input_plan(
             && fields & F::kTextDecoration.bits() != 0;
         let other_ink =
             old.DiffNeedsRecomputeVisualOverflow(new, fields & !F::kTextDecoration.bits());
-        if fields & geometry != 0
-            || other_ink
-            || object.NeedsLayout()
-            || object.IsSVG()
-            || (record.input.style_generated
-                && !(record.input.kind == NodeKind::kText && record.input.id != id))
-            || record.input.first_line_style.is_some()
-            || unsafe { &*record.node }.InputHasFirstLineStyles()
-            || !layout_equivalent
-            || record.input.resources.svg_clip_resources.snapshot.version
-                != resources.svg_clip_resources.snapshot.version
-        {
+        let style_generated_rejects = record.input.style_generated
+            && !(record.input.kind == NodeKind::kText && record.input.id != id);
+        let input_has_first_line = record.input.first_line_style.is_some();
+        let node_has_first_line = unsafe { &*record.node }.InputHasFirstLineStyles();
+        let resource_version_changed = SvgClipResourceBindingChangedForStyles(
+            old,
+            new,
+            &record.input.resources.svg_clip_resources,
+            resources.svg_clip_resources,
+        );
+        // The trace recorder deliberately bounds per-span fields. Keep every
+        // admission cause in one stable bitset so a rejected fast path remains
+        // diagnosable without relinking for each individual predicate.
+        let rejection_bits = u16::from(fields & geometry != 0)
+            | (u16::from(other_ink) << 1)
+            | (u16::from(object.NeedsLayout()) << 2)
+            | (u16::from(object.IsSVG()) << 3)
+            | (u16::from(style_generated_rejects) << 4)
+            | (u16::from(input_has_first_line) << 5)
+            | (u16::from(node_has_first_line) << 6)
+            | (u16::from(!layout_equivalent) << 7)
+            | (u16::from(resource_version_changed) << 8);
+        trace.set("rejection_bits", rejection_bits as f64);
+        if rejection_bits != 0 {
             return None;
         }
         let candidate = if record.input.kind == NodeKind::kText {
@@ -231,14 +281,19 @@ pub(super) fn paint_input_plan(
         } else {
             element
         };
-        if !GeometryMetadataEqual(candidate, &record.input.element)
-            && !LayoutImageNaturalSizeChangeIsPaintOnly(
+        let metadata_equal = GeometryMetadataEqual(candidate, &record.input.element);
+        let natural_size_change_is_paint_only = LayoutImageNaturalSizeChangeIsPaintOnly(
                 record.object,
                 candidate,
                 &record.input.element,
                 style,
-            )
-        {
+            );
+        trace.set("metadata_equal", metadata_equal as u8 as f64);
+        trace.set(
+            "natural_size_paint_only",
+            natural_size_change_is_paint_only as u8 as f64,
+        );
+        if !metadata_equal && !natural_size_change_is_paint_only {
             trace.set("metadata_requires_export", 1.0);
             return None;
         }
@@ -247,6 +302,7 @@ pub(super) fn paint_input_plan(
         }
     }
     drop(records);
+    trace.set("admitted", 1.0);
     Some((ids, inline_ink_changes))
 }
 
@@ -306,7 +362,12 @@ pub(super) fn update_paint_input(
                 foundation::PaintInvalidationReason::kStyle,
             );
         } else if fields != 0
-            || record.input.resources.as_ref() != &new_resources
+            || StyleResourceBindingsChangedForStyles(
+                previous,
+                unsafe { &*layout_style },
+                record.input.resources.as_ref(),
+                &new_resources,
+            )
             || control_paint_state_changed
         {
             unsafe { &mut *record.object }.SetShouldDoFullPaintInvalidationWithoutLayoutChange(

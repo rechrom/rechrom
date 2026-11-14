@@ -2044,6 +2044,7 @@ pub struct ComputedStyle {
 
 #[path = "../../../layout_invalidation/src/computed_style_equivalence.rs"]
 mod layout_invalidation_computed_style_equivalence;
+pub(crate) use layout_invalidation_computed_style_equivalence::StyleReferencesSvgResource;
 
 #[cfg(test)]
 mod computed_style_layout_equivalence_tests {

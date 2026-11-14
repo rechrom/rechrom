@@ -6,6 +6,9 @@
 //! classification. It does not read a clock, mutate a document, run style or
 //! paint, or know which thread hosts those engines.
 
+use compositor_animation::keyframed_animation_curve::{
+    CanInterpolateTransformOperations, TransformOperation, TransformOperations,
+};
 use cssom::CSSDeclaration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -74,6 +77,51 @@ impl Default for CSSTimingFunction {
     }
 }
 
+fn SameTimingNumber(left: f64, right: f64) -> bool {
+    left == right || (left.is_nan() && right.is_nan())
+}
+
+fn SameTimingFunction(left: &CSSTimingFunction, right: &CSSTimingFunction) -> bool {
+    match (left, right) {
+        (CSSTimingFunction::Linear, CSSTimingFunction::Linear) => true,
+        (CSSTimingFunction::CubicBezier(left), CSSTimingFunction::CubicBezier(right)) => left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| SameTimingNumber(*left, *right)),
+        (
+            CSSTimingFunction::Steps {
+                count: left_count,
+                jump_at_start: left_jump,
+            },
+            CSSTimingFunction::Steps {
+                count: right_count,
+                jump_at_start: right_jump,
+            },
+        ) => left_count == right_count && left_jump == right_jump,
+        _ => false,
+    }
+}
+
+fn SameAnimationTiming(left: &CSSAnimationTiming, right: &CSSAnimationTiming) -> bool {
+    SameTimingNumber(left.delay, right.delay)
+        && SameTimingNumber(left.duration, right.duration)
+        && SameTimingNumber(left.iterations, right.iterations)
+        && left.direction == right.direction
+        && left.fill == right.fill
+        && left.play_state == right.play_state
+        && SameTimingFunction(&left.easing, &right.easing)
+}
+
+fn AnimationTimingDifferenceMask(left: &CSSAnimationTiming, right: &CSSAnimationTiming) -> u32 {
+    u32::from(!SameTimingNumber(left.delay, right.delay))
+        | (u32::from(!SameTimingNumber(left.duration, right.duration)) << 1)
+        | (u32::from(!SameTimingNumber(left.iterations, right.iterations)) << 2)
+        | (u32::from(left.direction != right.direction) << 3)
+        | (u32::from(left.fill != right.fill) << 4)
+        | (u32::from(left.play_state != right.play_state) << 5)
+        | (u32::from(!SameTimingFunction(&left.easing, &right.easing)) << 6)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CSSAnimationTiming {
     pub delay: f64,
@@ -97,6 +145,25 @@ pub struct CSSAnimationDefinition {
     pub name: String,
     pub timing: CSSAnimationTiming,
     pub keyframes: Vec<CSSKeyframe>,
+}
+
+#[derive(Clone, Debug)]
+pub enum CompositorPropertyCurve {
+    Opacity(Vec<(f64, f32)>),
+    Transform(Vec<(f64, TransformOperations)>),
+}
+
+#[derive(Clone, Debug)]
+pub struct CompositorAnimationCandidate {
+    pub key: CSSAnimationKey,
+    pub effect_id: u64,
+    /// Changes whenever an installed compositor model must be replaced even
+    /// though the CSS animation-list slot retained its source identity.
+    pub generation: u64,
+    pub timing: CSSAnimationTiming,
+    pub local_time: f64,
+    pub sample_time: Option<Instant>,
+    pub curves: Vec<CompositorPropertyCurve>,
 }
 
 /// Typed marker for declarations that the current vertical slice cannot
@@ -132,6 +199,14 @@ pub enum AnimationMutation {
 #[derive(Clone)]
 pub enum DocumentMutation {
     ApplyStyleBatch(Vec<AnimationStyleSample>),
+    SetPropertyFlags(Vec<AnimationPropertyFlags>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationPropertyFlags {
+    pub node_id: u64,
+    pub transform: bool,
+    pub opacity: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,14 +244,18 @@ pub struct AnimationEngine {
     css_time: f64,
     next_css_effect_id: u64,
     css_animations: BTreeMap<CSSAnimationKey, RetainedCSSAnimation>,
+    published_property_flags: Vec<AnimationPropertyFlags>,
 }
 
 struct RetainedCSSAnimation {
     effect_id: u64,
+    compositor_generation: u64,
     definition: CSSAnimationDefinition,
     start_time: f64,
     hold_time: f64,
     last_sample: Vec<CSSDeclaration>,
+    compositor_driven: BTreeSet<String>,
+    compositor_eligible: BTreeSet<String>,
 }
 
 impl Default for AnimationEngine {
@@ -191,6 +270,7 @@ impl Default for AnimationEngine {
             css_time: 0.0,
             next_css_effect_id: 1u64 << 63,
             css_animations: BTreeMap::new(),
+            published_property_flags: Vec::new(),
         }
     }
 }
@@ -208,6 +288,9 @@ impl AnimationEngine {
         &mut self,
         definitions: Vec<CSSAnimationDefinition>,
     ) -> AnimationOutput {
+        let mut trace = browser_tracing::span("animation", "Animation.SynchronizeCSSAnimations");
+        trace.set("existing", self.css_animations.len() as f64);
+        trace.set("incoming", definitions.len() as f64);
         let mut incoming = definitions
             .into_iter()
             .map(|definition| (definition.key, definition))
@@ -218,6 +301,7 @@ impl AnimationEngine {
             .filter(|key| !incoming.contains_key(key))
             .copied()
             .collect::<Vec<_>>();
+        trace.set("removed", removed.len() as f64);
         let mut output = AnimationOutput::default();
         for key in removed {
             if let Some(effect) = self.css_animations.remove(&key) {
@@ -233,11 +317,17 @@ impl AnimationEngine {
                 }
             }
         }
+        let mut retained = 0usize;
+        let mut timing_changed = 0usize;
+        let mut timing_change_mask = 0u32;
+        let mut replaced = 0usize;
         for (key, definition) in incoming.iter_mut() {
+            let replacing = self.css_animations.contains_key(key);
             if let Some(current) = self.css_animations.get_mut(key) {
                 if current.definition.name == definition.name
                     && current.definition.keyframes == definition.keyframes
                 {
+                    retained += 1;
                     let was_paused = current.definition.timing.play_state == CSSPlayState::Paused;
                     let is_paused = definition.timing.play_state == CSSPlayState::Paused;
                     if was_paused != is_paused {
@@ -247,54 +337,246 @@ impl AnimationEngine {
                             current.start_time = self.css_time - current.hold_time;
                         }
                     }
+                    if !SameAnimationTiming(&current.definition.timing, &definition.timing) {
+                        timing_changed += 1;
+                        let difference = AnimationTimingDifferenceMask(
+                            &current.definition.timing,
+                            &definition.timing,
+                        );
+                        timing_change_mask |= difference;
+                        browser_tracing::instant(
+                            "animation",
+                            "Animation.CSSAnimationTimingChanged",
+                            &[
+                                ("node_id", key.node_id as f64),
+                                ("list_index", key.list_index as f64),
+                                ("difference_mask", difference as f64),
+                                (
+                                    "old_play_state",
+                                    (current.definition.timing.play_state == CSSPlayState::Paused)
+                                        as u8 as f64,
+                                ),
+                                (
+                                    "new_play_state",
+                                    (definition.timing.play_state == CSSPlayState::Paused) as u8
+                                        as f64,
+                                ),
+                                (
+                                    "compositor_owned_properties",
+                                    current.compositor_driven.len() as f64,
+                                ),
+                                (
+                                    "compositor_curve_count",
+                                    CompositorCurves(definition).map_or(0, |curves| curves.len())
+                                        as f64,
+                                ),
+                                ("generation", current.compositor_generation as f64),
+                            ],
+                        );
+                        // Chromium updates the existing KeyframeModel when CSS
+                        // timing changes. Rechrom replaces that model through
+                        // the same stable animation identity and retained
+                        // property-tree element. Ownership stays on the
+                        // compositor so pause/resume cannot create a one-frame
+                        // document-sequence fallback.
+                        current.compositor_generation =
+                            current.compositor_generation.wrapping_add(1).max(1);
+                    }
                     current.definition = definition.clone();
                     continue;
                 }
             }
+            replaced += usize::from(replacing);
             let effect_id = self.next_css_effect_id;
             self.next_css_effect_id = self.next_css_effect_id.wrapping_add(1).max(1u64 << 63);
             self.css_animations.insert(
                 *key,
                 RetainedCSSAnimation {
                     effect_id,
+                    compositor_generation: 1,
                     definition: definition.clone(),
                     start_time: self.css_time,
                     hold_time: 0.0,
                     last_sample: Vec::new(),
+                    compositor_driven: BTreeSet::new(),
+                    compositor_eligible: CompositorCurves(definition)
+                        .into_iter()
+                        .flatten()
+                        .map(|curve| match curve {
+                            CompositorPropertyCurve::Transform(_) => "transform".to_owned(),
+                            CompositorPropertyCurve::Opacity(_) => "opacity".to_owned(),
+                        })
+                        .collect(),
                 },
             );
+        }
+        trace.set("retained", retained as f64);
+        trace.set("timing_changed", timing_changed as f64);
+        trace.set("timing_change_mask", timing_change_mask as f64);
+        trace.set("replaced", replaced as f64);
+        trace.set(
+            "compositor_owned",
+            self.css_animations
+                .values()
+                .map(|effect| effect.compositor_driven.len())
+                .sum::<usize>() as f64,
+        );
+        let mut flags = BTreeMap::<u64, (bool, bool)>::new();
+        for effect in self.css_animations.values() {
+            for declaration in effect
+                .definition
+                .keyframes
+                .iter()
+                .flat_map(|keyframe| &keyframe.declarations)
+            {
+                let entry = flags.entry(effect.definition.key.node_id).or_default();
+                match declaration.property.as_str() {
+                    "transform" => entry.0 = true,
+                    "opacity" => entry.1 = true,
+                    _ => {}
+                }
+            }
+        }
+        let flags = flags
+            .into_iter()
+            .filter_map(|(node_id, (transform, opacity))| {
+                (transform || opacity).then_some(AnimationPropertyFlags {
+                    node_id,
+                    transform,
+                    opacity,
+                })
+            })
+            .collect::<Vec<_>>();
+        if flags != self.published_property_flags {
+            self.published_property_flags = flags.clone();
+            output
+                .document
+                .push(DocumentMutation::SetPropertyFlags(flags));
         }
         output.Merge(self.SampleCSSAnimations());
         output
     }
 
+    pub fn CompositorCandidates(&self) -> Vec<CompositorAnimationCandidate> {
+        self.css_animations
+            .values()
+            .filter_map(|effect| {
+                let curves = CompositorCurves(&effect.definition)?;
+                let local_time = if effect.definition.timing.play_state == CSSPlayState::Paused {
+                    effect.hold_time
+                } else {
+                    self.css_time - effect.start_time
+                };
+                Some(CompositorAnimationCandidate {
+                    key: effect.definition.key,
+                    effect_id: effect.effect_id,
+                    generation: effect.compositor_generation,
+                    timing: effect.definition.timing.clone(),
+                    local_time,
+                    sample_time: self.last_frame_time,
+                    curves,
+                })
+            })
+            .collect()
+    }
+
+    pub fn SetCompositorDriven(
+        &mut self,
+        key: CSSAnimationKey,
+        properties: impl IntoIterator<Item = String>,
+    ) {
+        if let Some(effect) = self.css_animations.get_mut(&key) {
+            effect.compositor_driven.extend(properties);
+        }
+    }
+
     fn SampleCSSAnimations(&mut self) -> AnimationOutput {
         let mut output = AnimationOutput::default();
         let mut active = false;
+        let mut changed_samples = Vec::new();
         for effect in self.css_animations.values_mut() {
             let local_time = if effect.definition.timing.play_state == CSSPlayState::Paused {
                 effect.hold_time
             } else {
                 self.css_time - effect.start_time
             };
-            let sample = SampleCSSAnimation(effect, local_time, &mut output.unsupported);
-            active |= sample.active;
+            let mut sample = SampleCSSAnimation(effect, local_time, &mut output.unsupported);
+            // A compositor-owned property keeps the computed-style value from
+            // the handoff commit. Chromium stops main-thread interpolation;
+            // it does not remove the animation-origin declaration or the
+            // active-animation bit which owns the paint property node. Keep
+            // that base value stable while continuing to sample any sibling
+            // properties which remain on the document sequence.
+            for declaration in &mut sample.declarations {
+                if effect.compositor_driven.contains(&declaration.property) {
+                    if let Some(retained) = effect
+                        .last_sample
+                        .iter()
+                        .find(|retained| retained.property == declaration.property)
+                    {
+                        *declaration = retained.clone();
+                    }
+                }
+            }
+            let has_main_thread_property = sample
+                .declarations
+                .iter()
+                .any(|declaration| !effect.compositor_driven.contains(&declaration.property));
+            active |= sample.active
+                && effect.definition.timing.play_state == CSSPlayState::Running
+                && has_main_thread_property;
             if sample.declarations != effect.last_sample {
                 effect.last_sample = sample.declarations.clone();
-                output.document.push(DocumentMutation::ApplyStyleBatch(vec![
-                    AnimationStyleSample {
-                        node_id: effect.definition.key.node_id,
-                        effect_id: effect.effect_id,
-                        cascade_origin: AnimationCascadeOrigin::Animation,
-                        declarations: sample.declarations,
-                    },
-                ]));
+                let sample = AnimationStyleSample {
+                    node_id: effect.definition.key.node_id,
+                    effect_id: effect.effect_id,
+                    cascade_origin: AnimationCascadeOrigin::Animation,
+                    declarations: sample.declarations,
+                };
+                changed_samples.push(sample.clone());
+                output
+                    .document
+                    .push(DocumentMutation::ApplyStyleBatch(vec![sample]));
             }
         }
+        self.RecordTargetedProperties(&changed_samples, &mut output);
         if active {
             output.effects.push(AnimationEffect::RequestBeginFrame);
         }
         output
+    }
+
+    /// Blink keeps transform/opacity animation samples on the paint-property
+    /// update path. CSS animations produced by this engine must use the same
+    /// classification as externally supplied animation ticks; otherwise the
+    /// identical declarations fall back to a full document paint walk.
+    fn RecordTargetedProperties(
+        &mut self,
+        samples: &[AnimationStyleSample],
+        output: &mut AnimationOutput,
+    ) {
+        if samples.is_empty() {
+            return;
+        }
+        let targeted = samples.iter().all(|sample| {
+            sample.declarations.iter().all(|declaration| {
+                matches!(
+                    declaration.property.as_str(),
+                    "opacity" | "transform" | "transform-origin"
+                )
+            })
+        }) && self.targeted_batch_compatible;
+
+        if targeted {
+            self.targeted_nodes
+                .extend(samples.iter().map(|sample| sample.node_id));
+        } else {
+            self.targeted_nodes.clear();
+            self.targeted_batch_compatible = false;
+        }
+        output.paint.push(PaintMutation::SetTargetedProperties {
+            node_ids: self.targeted_nodes.iter().copied().collect(),
+        });
     }
 
     pub fn ApplyMutation(
@@ -367,31 +649,12 @@ impl AnimationEngine {
         }
         self.last_time = tick.monotonic_time;
 
-        let targeted = tick.samples.iter().all(|sample| {
-            sample.declarations.iter().all(|declaration| {
-                matches!(
-                    declaration.property.as_str(),
-                    "opacity" | "transform" | "transform-origin"
-                )
-            })
-        }) && self.targeted_batch_compatible;
-
-        if targeted {
-            self.targeted_nodes
-                .extend(tick.samples.iter().map(|sample| sample.node_id));
-        } else {
-            self.targeted_nodes.clear();
-            self.targeted_batch_compatible = false;
-        }
-
         let mut output = AnimationOutput::default();
         if !tick.samples.is_empty() {
             output
                 .document
-                .push(DocumentMutation::ApplyStyleBatch(tick.samples));
-            output.paint.push(PaintMutation::SetTargetedProperties {
-                node_ids: self.targeted_nodes.iter().copied().collect(),
-            });
+                .push(DocumentMutation::ApplyStyleBatch(tick.samples.clone()));
+            self.RecordTargetedProperties(&tick.samples, &mut output);
         }
         if tick.has_active_animations {
             output.effects.push(AnimationEffect::RequestBeginFrame);
@@ -580,6 +843,218 @@ fn SampleKeyframes(
         });
     }
     result
+}
+
+fn ParseNumber(value: &str) -> Option<f64> {
+    value
+        .trim()
+        .parse()
+        .ok()
+        .filter(|value: &f64| value.is_finite())
+}
+
+fn ParseLengthPx(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if value == "0" {
+        return Some(0.0);
+    }
+    ParseNumber(value.strip_suffix("px")?)
+}
+
+fn ParseAngleDegrees(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if let Some(value) = value.strip_suffix("deg") {
+        ParseNumber(value)
+    } else if let Some(value) = value.strip_suffix("turn") {
+        Some(ParseNumber(value)? * 360.0)
+    } else if value == "0" {
+        Some(0.0)
+    } else {
+        None
+    }
+}
+
+fn ParseTransformOperations(value: &str) -> Option<TransformOperations> {
+    let value = value.trim();
+    if value == "none" {
+        return Some(Vec::new());
+    }
+    let mut operations = Vec::new();
+    let mut rest = value;
+    while !rest.trim_start().is_empty() {
+        rest = rest.trim_start();
+        let open = rest.find('(')?;
+        let close = rest[open + 1..].find(')')? + open + 1;
+        let name = rest[..open].trim();
+        let arguments = rest[open + 1..close]
+            .split(',')
+            .flat_map(|part| part.split_ascii_whitespace())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        let operation = match name {
+            "translateY" if arguments.len() == 1 => TransformOperation::Translate {
+                x: 0.0,
+                y: ParseLengthPx(arguments[0])?,
+                z: 0.0,
+            },
+            "translateX" if arguments.len() == 1 => TransformOperation::Translate {
+                x: ParseLengthPx(arguments[0])?,
+                y: 0.0,
+                z: 0.0,
+            },
+            "translate" if (1..=2).contains(&arguments.len()) => TransformOperation::Translate {
+                x: ParseLengthPx(arguments[0])?,
+                y: arguments
+                    .get(1)
+                    .map_or(Some(0.0), |value| ParseLengthPx(value))?,
+                z: 0.0,
+            },
+            "translate3d" if arguments.len() == 3 => TransformOperation::Translate {
+                x: ParseLengthPx(arguments[0])?,
+                y: ParseLengthPx(arguments[1])?,
+                z: ParseLengthPx(arguments[2])?,
+            },
+            "scale" if (1..=2).contains(&arguments.len()) => {
+                let x = ParseNumber(arguments[0])?;
+                TransformOperation::Scale {
+                    x,
+                    y: arguments
+                        .get(1)
+                        .map_or(Some(x), |value| ParseNumber(value))?,
+                    z: 1.0,
+                }
+            }
+            "scaleX" if arguments.len() == 1 => TransformOperation::Scale {
+                x: ParseNumber(arguments[0])?,
+                y: 1.0,
+                z: 1.0,
+            },
+            "scaleY" if arguments.len() == 1 => TransformOperation::Scale {
+                x: 1.0,
+                y: ParseNumber(arguments[0])?,
+                z: 1.0,
+            },
+            "rotate" | "rotateZ" if arguments.len() == 1 => TransformOperation::RotateZ {
+                degrees: ParseAngleDegrees(arguments[0])?,
+            },
+            _ => return None,
+        };
+        operations.push(operation);
+        rest = &rest[close + 1..];
+    }
+    Some(operations)
+}
+
+fn CompatibleTransformKeyframes(values: &[(f64, TransformOperations)]) -> bool {
+    if values.is_empty() {
+        return false;
+    }
+    values
+        .windows(2)
+        .all(|pair| CanInterpolateTransformOperations(&pair[0].1, &pair[1].1))
+}
+
+fn TraceCompositorCurveRejection(
+    definition: &CSSAnimationDefinition,
+    reason: u8,
+    property: u8,
+    parsed_keyframes: usize,
+    left_operations: usize,
+    right_operations: usize,
+) {
+    browser_tracing::instant(
+        "animation",
+        "Animation.CompositorCurveRejected",
+        &[
+            ("node_id", definition.key.node_id as f64),
+            ("list_index", definition.key.list_index as f64),
+            ("reason", reason as f64),
+            ("property", property as f64),
+            ("source_keyframes", definition.keyframes.len() as f64),
+            ("parsed_keyframes", parsed_keyframes as f64),
+            ("left_operations", left_operations as f64),
+            ("right_operations", right_operations as f64),
+        ],
+    );
+}
+
+fn CompositorCurves(definition: &CSSAnimationDefinition) -> Option<Vec<CompositorPropertyCurve>> {
+    let mut properties = BTreeSet::new();
+    for frame in &definition.keyframes {
+        properties.extend(
+            frame
+                .declarations
+                .iter()
+                .map(|value| value.property.as_str()),
+        );
+    }
+    if properties.is_empty() {
+        TraceCompositorCurveRejection(definition, 1, 0, 0, 0, 0);
+        return None;
+    }
+    if properties
+        .iter()
+        .any(|property| !matches!(*property, "opacity" | "transform"))
+    {
+        TraceCompositorCurveRejection(definition, 2, 0, 0, 0, 0);
+        return None;
+    }
+    let mut curves = Vec::new();
+    for property in properties {
+        if property == "opacity" {
+            let values = definition
+                .keyframes
+                .iter()
+                .filter_map(|frame| {
+                    frame
+                        .declarations
+                        .iter()
+                        .rev()
+                        .find(|value| value.property == property && !value.important)
+                        .and_then(|value| value.value.parse::<f32>().ok())
+                        .map(|value| (frame.offset, value))
+                })
+                .collect::<Vec<_>>();
+            if values.first().is_none_or(|value| value.0 != 0.0)
+                || values.last().is_none_or(|value| value.0 != 1.0)
+            {
+                TraceCompositorCurveRejection(definition, 3, 1, values.len(), 0, 0);
+                return None;
+            }
+            curves.push(CompositorPropertyCurve::Opacity(values));
+        } else {
+            let values = definition
+                .keyframes
+                .iter()
+                .filter_map(|frame| {
+                    frame
+                        .declarations
+                        .iter()
+                        .rev()
+                        .find(|value| value.property == property && !value.important)
+                        .and_then(|value| ParseTransformOperations(&value.value))
+                        .map(|value| (frame.offset, value))
+                })
+                .collect::<Vec<_>>();
+            if values.first().is_none_or(|value| value.0 != 0.0)
+                || values.last().is_none_or(|value| value.0 != 1.0)
+            {
+                TraceCompositorCurveRejection(definition, 4, 2, values.len(), 0, 0);
+                return None;
+            }
+            if !CompatibleTransformKeyframes(&values) {
+                let incompatible = values
+                    .windows(2)
+                    .find(|pair| !CanInterpolateTransformOperations(&pair[0].1, &pair[1].1));
+                let (left, right) =
+                    incompatible.map_or((0, 0), |pair| (pair[0].1.len(), pair[1].1.len()));
+                TraceCompositorCurveRejection(definition, 5, 2, values.len(), left, right);
+                return None;
+            }
+            curves.push(CompositorPropertyCurve::Transform(values));
+        }
+    }
+    Some(curves)
 }
 
 fn InterpolateCSSValue(start: &str, end: &str, progress: f64) -> Option<String> {

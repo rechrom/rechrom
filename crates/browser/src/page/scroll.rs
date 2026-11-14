@@ -293,19 +293,18 @@ impl Page {
         // already committed layout state.  It must not enter the document
         // lifecycle from input dispatch: a dirty style tree is serviced by
         // the next normal lifecycle update.
-        let native_element =
-            foundation::CompositorElementId::new(element.GetInternalValue());
+        let native_element = foundation::CompositorElementId::new(element.GetInternalValue());
         // Paint's resident scroll nodes and cc's scroll tree share Layout's
         // zoomed coordinate space. InputRouter scales pixel wheel deltas into
         // that space before cc consumes them, so the absolute impl offset is
         // already the value ScrollingCoordinator must reflect. Multiplying it
         // again here made every main-thread commit reset the active tree to a
         // different offset, observed as a jump or rebound at DPR != 1.
-        let main = self
-            .state
-            .layout_engine
-            .borrow_mut()
-            .DidCompositorScroll(native_element, offset, source_type);
+        let main = self.state.layout_engine.borrow_mut().DidCompositorScroll(
+            native_element,
+            offset,
+            source_type,
+        );
         let Some(update) = main else {
             let target = self
                 .state
@@ -394,8 +393,7 @@ impl Page {
                     // fallback hit test in Blink's CSS viewport coordinates,
                     // so cross back through the same current active-artifact
                     // scale before borrowing Interaction's resident cursor.
-                    let widget_scale =
-                        f64::from(self.state.rendering.borrow().InputWidgetScale());
+                    let widget_scale = f64::from(self.state.rendering.borrow().InputWidgetScale());
                     let scroll_element_id = self.ScrollableContainerAt(Offset {
                         x: f64::from(position.x()) / widget_scale,
                         y: f64::from(position.y()) / widget_scale,
@@ -544,10 +542,37 @@ impl Page {
                             .layout_engine
                             .borrow_mut()
                             .UpdateScrollbarsHiddenIfOverlay(target, hidden)
-                    })
-                    {
+                    }) {
                         self.state.InvalidateLayoutOutput();
                         self.state.scroll_only.set(true);
+                        self.state.dirty.set(true);
+                        requested_main_frame = true;
+                    }
+                }
+                CompositorMainThreadEffect::ScrollbarPaintFallback { element } => {
+                    let native_element =
+                        foundation::CompositorElementId::new(element.GetInternalValue());
+                    if self
+                        .state
+                        .local_frames
+                        .get()
+                        .unwrap()
+                        .InvalidateCompositorScrollbarElement(native_element)
+                    {
+                        requested_main_frame = true;
+                        continue;
+                    }
+                    let target = self
+                        .state
+                        .layout_engine
+                        .borrow()
+                        .CompositorScrollbarOwner(native_element);
+                    if target.is_some_and(|target| {
+                        self.state
+                            .document
+                            .borrow_mut()
+                            .InvalidatePaintForNode(target)
+                    }) {
                         self.state.dirty.set(true);
                         requested_main_frame = true;
                     }
@@ -566,7 +591,16 @@ impl Page {
         let Some(frame) = self.frame.as_mut() else {
             return;
         };
-        frame.sequence = frame.sequence.wrapping_add(1).max(1);
+        // An impl-only draw presents the active compositor tree; it does not
+        // publish a new main-thread PaintArtifact. Keep the content sequence
+        // stable so PaintArtifactCompositor's direct property updates remain
+        // admissible while scrolling. The independently acknowledged scroll
+        // generation below is the only PageFrame provenance changed here.
+        //
+        // Source: cc/trees/layer_tree_host_impl.cc::DrawLayers and
+        // cc/trees/layer_tree_host.cc::FinishCommitOnImplThread. A compositor
+        // draw advances frame-token/submission state, not the source-frame
+        // number owned by the last main-thread commit.
         frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
         self.state.client.borrow_mut().DidPresentFrame(frame);
     }

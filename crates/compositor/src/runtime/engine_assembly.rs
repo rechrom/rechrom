@@ -39,6 +39,7 @@ enum PendingWheelStage {
 pub(crate) struct EngineAssembly {
     core: EngineCore,
     scroll_animation_commit: Option<crate::engine::ScrollAnimationCommitToken>,
+    pending_composited_animation: Option<paint::CompositedAnimationPropertyUpdate>,
     next_scroll_animation_commit: u64,
     pending_wheel_inputs: std::collections::BTreeMap<u64, PendingWheelInput>,
     next_wheel_request: u64,
@@ -147,6 +148,7 @@ impl EngineAssembly {
             wheel_events_async: false,
             core,
             scroll_animation_commit: None,
+            pending_composited_animation: None,
             next_scroll_animation_commit: 0,
             scheduler,
             commands,
@@ -292,6 +294,11 @@ impl EngineAssembly {
                 stage: "no BeginMainFrame awaits a no-update response",
             });
         }
+        if self.core.HasPreparedPaintCommit() {
+            self.core.FinalizePreparedCommit(&self.main_features)?;
+            self.ScheduleFinalizedMainCommit();
+            return self.Poll();
+        }
         self.core.FinishMainFrameWithoutUpdates(&mut self.scheduler);
         self.Poll()
     }
@@ -314,6 +321,86 @@ impl EngineAssembly {
     ) -> Result<CompositorOutput, CompositorError> {
         self.core.ApplySourceScrollAnimation(mutation);
         self.Poll()
+    }
+    pub(crate) fn ApplySourcePropertyAnimation(
+        &mut self,
+        mutation: compositor_animation::compositor_mutation::PropertyAnimationMutation,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.core.ApplySourcePropertyAnimation(mutation);
+        self.Poll()
+    }
+
+    pub(crate) fn ApplyCompositedAnimationProperties(
+        &mut self,
+        update: paint::CompositedAnimationPropertyUpdate,
+    ) -> Result<CompositorOutput, CompositorError> {
+        if !self.core.HasResidentPaintArtifact() {
+            return Err(CompositorError::NotReady {
+                stage: "composited animation requires a resident paint artifact",
+            });
+        }
+        if !self.core.CanPrepareCompositedAnimationCommit() {
+            let mut trace = Span(
+                CompositorPackage::Animation,
+                "Compositor.Animation.CoalescePropertyUpdate",
+            );
+            trace.set("transform_updates", update.transforms.len() as f64);
+            trace.set("effect_updates", update.effects.len() as f64);
+            let retained = self
+                .pending_composited_animation
+                .get_or_insert_with(Default::default);
+            for transform in update.transforms {
+                retained
+                    .transforms
+                    .retain(|current| !current.lifecycle.same_node(&transform.lifecycle));
+                retained.transforms.push(transform);
+            }
+            for effect in update.effects {
+                retained
+                    .effects
+                    .retain(|current| !current.lifecycle.same_node(&effect.lifecycle));
+                retained.effects.push(effect);
+            }
+            for binding in update.bindings {
+                retained.bindings.retain(|current| {
+                    current.node_id != binding.node_id || current.property != binding.property
+                });
+                retained.bindings.push(binding);
+            }
+            return self.Poll();
+        }
+        self.PrepareCompositedAnimationProperties(update)?;
+        self.Poll()
+    }
+
+    pub(crate) fn ApplyScrollbarPaintMutation(
+        &mut self,
+        mutation: crate::engine::ScrollbarPaintMutation,
+    ) -> Result<CompositorOutput, CompositorError> {
+        self.core.ApplyScrollbarPaintMutation(&mutation);
+        self.Poll()
+    }
+
+    fn PrepareCompositedAnimationProperties(
+        &mut self,
+        update: paint::CompositedAnimationPropertyUpdate,
+    ) -> Result<(), CompositorError> {
+        let awaiting_main = self.core.awaiting_main;
+        self.core.PrepareCompositedAnimationCommit(&update)?;
+        // A style/animation task can execute Blink's pending property updates
+        // before Scheduler has opened a BeginMainFrame. In that case there is
+        // no Page response which could call FinishMainFrameWithoutUpdates;
+        // publish the already-prepared DataForCommit immediately and let the
+        // normal ready-commit Scheduler path open its owning transaction.
+        if !awaiting_main {
+            self.core.FinalizePreparedCommit(&self.main_features)?;
+            self.ScheduleFinalizedMainCommit();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn CanApplyCompositedAnimationProperties(&self) -> bool {
+        self.core.HasResidentPaintArtifact()
     }
     pub(crate) fn ApplyFrameLifecycle(
         &mut self,
@@ -687,6 +774,18 @@ impl EngineAssembly {
                 input.is_some_and(|input| input.IsCurrentlyScrolling(runtime))
             });
             if compositor_owned {
+                // Chromium's RequiresHighResToDraw gate keeps the previous
+                // complete frame when visible required-for-draw tiles have not
+                // finished yet, then Scheduler redraws from the tile-ready
+                // callback. Rechrom's injected CPU raster endpoint has no GPU
+                // fallback coverage, so admit compositor-owned precision-wheel
+                // motion through that existing gate before its frame-aligned
+                // update can reach a newly visible tile. This changes only the
+                // draw readiness policy; tile priority, raster selection and
+                // scroll ownership stay in their translated cc owners.
+                if !host.use_gpu_rasterization() {
+                    host.SetRequiresHighResToDraw();
+                }
                 let position = point(position)?;
                 if !delta.x().is_finite() || !delta.y().is_finite() {
                     return Err(CompositorError::Backend(std::io::Error::new(
@@ -1667,6 +1766,18 @@ impl EngineAssembly {
             };
             self.scheduler.SetCanDraw(can_draw, &mut self.core);
 
+            // Direct animation values may arrive one VSync before the
+            // preceding property-only commit activates. Chromium retains the
+            // latest pending value on the compositor sequence instead of
+            // failing the Page. Once the native commit slot is free, prepare
+            // exactly one coalesced follow-up commit.
+            if self.core.CanPrepareCompositedAnimationCommit() {
+                if let Some(update) = self.pending_composited_animation.take() {
+                    self.PrepareCompositedAnimationProperties(update)?;
+                    progressed = true;
+                }
+            }
+
             // ScheduleTasks deliberately mutates only Chromium's resident task
             // graph while TileManager/Host borrows are live.  Once this source
             // turn has ended, hand the graph to the injected raster executor.
@@ -1716,6 +1827,7 @@ impl EngineAssembly {
             needs_begin_frames: self.needs_begin_frames,
             work_pending,
             main_commit_pending: self.core.HasReadyCommit()
+                || self.pending_composited_animation.is_some()
                 || self.scroll_animation_commit.is_some(),
         })
     }
@@ -1757,6 +1869,7 @@ impl EngineAssembly {
             needs_begin_frames: self.needs_begin_frames,
             work_pending: false,
             main_commit_pending: self.core.HasReadyCommit()
+                || self.pending_composited_animation.is_some()
                 || self.scroll_animation_commit.is_some(),
         }
     }

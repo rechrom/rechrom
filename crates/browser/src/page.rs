@@ -61,7 +61,7 @@ use renderer_skia::{PixelFormat, RendererSkiaBackend};
 use resource::ResourceEngine;
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io,
     rc::{Rc, Weak},
     sync::Arc,
@@ -1196,6 +1196,16 @@ impl PageRenderPipeline {
 
     pub fn NeedsBeginFrames(&self) -> bool {
         self.needs_begin_frames
+    }
+
+    /// A direct PaintArtifactCompositor property update is admissible only
+    /// after this Page domain has installed at least one PaintArtifact in its
+    /// resident compositor. During navigation the Paint retained tree can
+    /// legitimately precede that boundary; callers must use ordinary Paint.
+    pub fn CanApplyCompositedAnimationProperties(&self) -> bool {
+        self.compositor
+            .as_ref()
+            .is_some_and(|compositor| compositor.CanApplyCompositedAnimationProperties())
     }
 
     pub fn NeedsPump(&self) -> bool {
@@ -2545,6 +2555,146 @@ struct PageDomainServices {
     /// Host view activation is independent of Document's focused element.
     page_focused: Cell<bool>,
 }
+#[derive(Clone, Copy)]
+struct CompositorAnimationInstallation {
+    identity: u64,
+    generation: u64,
+    element_id: u64,
+}
+
+const COMPOSITOR_TRANSFORM_ANIMATION_SALT: u64 = 0x5452_414e_5346_4f52;
+const COMPOSITOR_OPACITY_ANIMATION_SALT: u64 = 0x4f50_4143_4954_5900;
+
+fn CompositorAnimationIdentity(effect_id: u64, property: &'static str) -> u64 {
+    effect_id
+        ^ match property {
+            "transform" => COMPOSITOR_TRANSFORM_ANIMATION_SALT,
+            "opacity" => COMPOSITOR_OPACITY_ANIMATION_SALT,
+            _ => unreachable!("unsupported compositor animation property"),
+        }
+}
+
+fn CompositorAnimationTimingFunction(
+    easing: &animation::CSSTimingFunction,
+) -> compositor::engine::AnimationTimingFunction {
+    match easing {
+        animation::CSSTimingFunction::Linear => compositor::engine::AnimationTimingFunction::Linear,
+        animation::CSSTimingFunction::CubicBezier([x1, y1, x2, y2]) => {
+            compositor::engine::AnimationTimingFunction::CubicBezier(
+                scroll_animation::cubic_bezier::CubicBezier::new(*x1, *y1, *x2, *y2),
+            )
+        }
+        animation::CSSTimingFunction::Steps {
+            count,
+            jump_at_start,
+        } => compositor::engine::AnimationTimingFunction::Steps {
+            count: *count,
+            jump_at_start: *jump_at_start,
+        },
+    }
+}
+
+fn CompositorPropertyAnimationMutation(
+    candidate: &animation::CompositorAnimationCandidate,
+    binding: &paint::CompositedAnimationPropertyBinding,
+    start_time: Option<compositor::adapter::time::TimeTicks>,
+) -> Option<(&'static str, compositor::engine::PropertyAnimationMutation)> {
+    let (property, curve, target_property) = match binding.property {
+        paint::CompositedAnimationProperty::Transform => {
+            let animation::CompositorPropertyCurve::Transform(keyframes) = candidate
+                .curves
+                .iter()
+                .find(|curve| matches!(curve, animation::CompositorPropertyCurve::Transform(_)))?
+            else {
+                unreachable!()
+            };
+            let mut curve = compositor::engine::KeyframedTransformAnimationCurve::default();
+            for (offset, value) in keyframes {
+                curve.AddKeyframe(
+                    compositor::adapter::time::TimeDelta::Microseconds(
+                        (candidate.timing.duration.max(0.0) * offset * 1_000_000.0) as i64,
+                    ),
+                    value.clone(),
+                    CompositorAnimationTimingFunction(&candidate.timing.easing),
+                );
+            }
+            (
+                "transform",
+                compositor::engine::CompositorAnimationCurve::Transform(curve),
+                compositor::engine::AnimationTargetProperty::TRANSFORM as i32,
+            )
+        }
+        paint::CompositedAnimationProperty::Opacity => {
+            let animation::CompositorPropertyCurve::Opacity(keyframes) = candidate
+                .curves
+                .iter()
+                .find(|curve| matches!(curve, animation::CompositorPropertyCurve::Opacity(_)))?
+            else {
+                unreachable!()
+            };
+            let mut curve = compositor::engine::KeyframedFloatAnimationCurve::default();
+            for (offset, value) in keyframes {
+                curve.AddKeyframe(
+                    compositor::adapter::time::TimeDelta::Microseconds(
+                        (candidate.timing.duration.max(0.0) * offset * 1_000_000.0) as i64,
+                    ),
+                    *value,
+                    CompositorAnimationTimingFunction(&candidate.timing.easing),
+                );
+            }
+            (
+                "opacity",
+                compositor::engine::CompositorAnimationCurve::Float(curve),
+                compositor::engine::AnimationTargetProperty::OPACITY as i32,
+            )
+        }
+    };
+    let identity = CompositorAnimationIdentity(candidate.effect_id, property);
+    let direction = match candidate.timing.direction {
+        animation::CSSPlaybackDirection::Normal => compositor::engine::AnimationDirection::NORMAL,
+        animation::CSSPlaybackDirection::Reverse => compositor::engine::AnimationDirection::REVERSE,
+        animation::CSSPlaybackDirection::Alternate => {
+            compositor::engine::AnimationDirection::ALTERNATE_NORMAL
+        }
+        animation::CSSPlaybackDirection::AlternateReverse => {
+            compositor::engine::AnimationDirection::ALTERNATE_REVERSE
+        }
+    };
+    let fill_mode = match candidate.timing.fill {
+        animation::CSSFillMode::None => compositor::engine::AnimationFillMode::NONE,
+        animation::CSSFillMode::Forwards => compositor::engine::AnimationFillMode::FORWARDS,
+        animation::CSSFillMode::Backwards => compositor::engine::AnimationFillMode::BACKWARDS,
+        animation::CSSFillMode::Both => compositor::engine::AnimationFillMode::BOTH,
+    };
+    Some((
+        property,
+        compositor::engine::PropertyAnimationMutation::Install {
+            identity,
+            element: compositor::adapter::input_types::ElementId::new(
+                binding.element_id.GetInternalValue(),
+            ),
+            curve,
+            target_property,
+            iterations: candidate.timing.iterations,
+            iteration_start: 0.0,
+            start_delay: compositor::adapter::time::TimeDelta::Microseconds(
+                (candidate.timing.delay * 1_000_000.0) as i64,
+            ),
+            direction,
+            playback_rate: 1.0,
+            fill_mode,
+            start_time,
+            hold_time: (candidate.timing.play_state == animation::CSSPlayState::Paused).then(
+                || {
+                    compositor::adapter::time::TimeDelta::Microseconds(
+                        (candidate.local_time * 1_000_000.0) as i64,
+                    )
+                },
+            ),
+        },
+    ))
+}
+
 struct PageState {
     domain: Rc<PageDomainServices>,
     validation_message: RefCell<Option<validation_message::VisibleValidationMessage>>,
@@ -2622,6 +2772,12 @@ struct PageState {
     // compositor batch into a main-thread Paint update.
     compositor_scroll_updates: Cell<bool>,
     animation_engine: RefCell<animation::AnimationEngine>,
+    compositor_driven_animations: RefCell<
+        BTreeMap<(animation::CSSAnimationKey, &'static str), CompositorAnimationInstallation>,
+    >,
+    pending_property_animation_replacements:
+        RefCell<Vec<compositor::engine::PropertyAnimationMutation>>,
+    pending_property_animation_removals: RefCell<BTreeSet<u64>>,
     animation_begin_frame_requested: Cell<bool>,
     pending_compositor_mutations: RefCell<Vec<PageBrowserInput>>,
     window_performance_timing: Rc<webapi::window_bindings::WindowPerformanceTiming>,
@@ -4091,6 +4247,80 @@ impl PageState {
             .unwrap_or_else(|_| {
                 dom::error::invalid_argument("CSS animation synchronization failed")
             });
+        // CSSAnimations::MaybeApplyPendingUpdate removes or replaces the cc
+        // KeyframeModel before the corresponding source effect resumes main-
+        // thread sampling. Multiple effects targeting one property require
+        // Blink's group-composition path; until that path is translated, keep
+        // them on the document sequence instead of choosing one arbitrarily.
+        let candidates = self.animation_engine.borrow().CompositorCandidates();
+        let mut eligible =
+            BTreeMap::<(animation::CSSAnimationKey, &'static str), Option<(u64, u64)>>::new();
+        for candidate in &candidates {
+            for property in candidate.curves.iter().map(|curve| match curve {
+                animation::CompositorPropertyCurve::Transform(_) => "transform",
+                animation::CompositorPropertyCurve::Opacity(_) => "opacity",
+            }) {
+                eligible
+                    .entry((candidate.key, property))
+                    .and_modify(|value| *value = None)
+                    .or_insert(Some((candidate.effect_id, candidate.generation)));
+            }
+        }
+        let mut replacements = Vec::new();
+        {
+            let mut removals = self.pending_property_animation_removals.borrow_mut();
+            self.compositor_driven_animations
+                .borrow_mut()
+                .retain(|(key, property), installed| {
+                    let current = eligible
+                        .get(&(*key, *property))
+                        .and_then(|candidate| *candidate);
+                    let Some((effect_id, generation)) = current else {
+                        removals.insert(installed.identity);
+                        return false;
+                    };
+                    if installed.identity != CompositorAnimationIdentity(effect_id, *property) {
+                        removals.insert(installed.identity);
+                        return false;
+                    }
+                    if installed.generation == generation {
+                        return true;
+                    }
+                    let Some(candidate) = candidates.iter().find(|candidate| {
+                        candidate.key == *key && candidate.generation == generation
+                    }) else {
+                        removals.insert(installed.identity);
+                        return false;
+                    };
+                    let binding = paint::CompositedAnimationPropertyBinding {
+                        node_id: key.node_id,
+                        property: match *property {
+                            "transform" => paint::CompositedAnimationProperty::Transform,
+                            "opacity" => paint::CompositedAnimationProperty::Opacity,
+                            _ => unreachable!("unsupported compositor animation property"),
+                        },
+                        element_id: foundation::CompositorElementId::new(installed.element_id),
+                    };
+                    let start_time = candidate.sample_time.map(|sample_time| {
+                        self.rendering.borrow().executor.TimeTicks(sample_time)
+                            - compositor::adapter::time::TimeDelta::Microseconds(
+                                (candidate.local_time * 1_000_000.0) as i64,
+                            )
+                    });
+                    let Some((_, mutation)) =
+                        CompositorPropertyAnimationMutation(candidate, &binding, start_time)
+                    else {
+                        removals.insert(installed.identity);
+                        return false;
+                    };
+                    replacements.push(mutation);
+                    installed.generation = generation;
+                    true
+                });
+        }
+        self.pending_property_animation_replacements
+            .borrow_mut()
+            .extend(replacements);
         let changed = !output.document.is_empty();
         self.ApplyAnimationOutput(output);
         changed
@@ -4214,6 +4444,28 @@ impl PageState {
         let document_font_inputs = PageDocumentFontInputs::Initial(&constraints);
         let replacing = previous.is_some();
         document_font_inputs.pending.set(replacing);
+        // A navigation replaces the document-owned AnimationEngine while the
+        // Page-domain compositor intentionally survives. Carry the old
+        // KeyframeModel identities into the replacement document's first
+        // transaction so animations cannot keep ticking against retired
+        // property-tree element ids.
+        let mut pending_property_animation_removals = previous
+            .map(|previous| {
+                previous
+                    .pending_property_animation_removals
+                    .borrow()
+                    .clone()
+            })
+            .unwrap_or_default();
+        if let Some(previous) = previous {
+            pending_property_animation_removals.extend(
+                previous
+                    .compositor_driven_animations
+                    .borrow()
+                    .values()
+                    .map(|installed| installed.identity),
+            );
+        }
         let system_fonts = previous.map_or_else(
             || {
                 crate::font_session::SystemFontSession::with_engine(
@@ -4322,6 +4574,9 @@ impl PageState {
             scroll_updates: RefCell::new(Vec::new()),
             compositor_scroll_updates: Cell::new(false),
             animation_engine: RefCell::new(animation::AnimationEngine::new()),
+            compositor_driven_animations: RefCell::new(BTreeMap::new()),
+            pending_property_animation_replacements: RefCell::new(Vec::new()),
+            pending_property_animation_removals: RefCell::new(pending_property_animation_removals),
             animation_begin_frame_requested: Cell::new(false),
             pending_compositor_mutations: RefCell::new(Vec::new()),
             window_performance_timing,
@@ -4628,6 +4883,8 @@ impl PageState {
         }
     }
     fn ApplyAnimationMutation(&self, mutation: animation::AnimationMutation) {
+        let begin_frame_sample =
+            matches!(&mutation, animation::AnimationMutation::BeginFrame { .. });
         let output = self
             .animation_engine
             .borrow_mut()
@@ -4635,6 +4892,54 @@ impl PageState {
             .unwrap_or_else(|_| {
                 dom::error::invalid_argument("animation time must be finite and frame ordered")
             });
+        if begin_frame_sample {
+            let mut trace = browser_tracing::span("animation", "Animation.SampleCSSAnimations");
+            trace.set("document_mutations", output.document.len() as f64);
+            trace.set("paint_mutations", output.paint.len() as f64);
+            trace.set("requested_begin_frame", output.effects.len() as f64);
+            if browser_tracing::enabled() {
+                let compositor_driven = self.compositor_driven_animations.borrow();
+                for mutation in &output.document {
+                    if let animation::DocumentMutation::ApplyStyleBatch(samples) = mutation {
+                        for sample in samples {
+                            trace.set("sample_node_id", sample.node_id as f64);
+                            trace.set("sample_effect_id", sample.effect_id as f64);
+                            trace.set("sample_declarations", sample.declarations.len() as f64);
+                            trace.set(
+                                "sample_compositor_transform",
+                                compositor_driven.keys().any(|(key, property)| {
+                                    key.node_id == sample.node_id && *property == "transform"
+                                }) as u8 as f64,
+                            );
+                            trace.set(
+                                "sample_compositor_opacity",
+                                compositor_driven.keys().any(|(key, property)| {
+                                    key.node_id == sample.node_id && *property == "opacity"
+                                }) as u8 as f64,
+                            );
+                            for declaration in &sample.declarations {
+                                if declaration.property == "opacity" {
+                                    if let Ok(value) = declaration.value.parse::<f64>() {
+                                        trace.set("sample_opacity", value);
+                                    }
+                                } else if declaration.property == "transform" {
+                                    let number = declaration
+                                        .value
+                                        .split(|character: char| {
+                                            !(character.is_ascii_digit()
+                                                || matches!(character, '.' | '-' | '+' | 'e' | 'E'))
+                                        })
+                                        .find_map(|value| value.parse::<f64>().ok());
+                                    if let Some(value) = number {
+                                        trace.set("sample_transform_first_number", value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.ApplyAnimationOutput(output);
     }
     fn ApplyInteractionOutput(&self, output: ::interaction::InteractionOutput) {
@@ -5145,14 +5450,14 @@ impl PageState {
                             frame_layout_zoom,
                             standardized_browser_zoom,
                         )
-                            .into_iter()
-                            .map(|rect| paint::paint_engine::PaintRect {
-                                x: rect.x,
-                                y: rect.y,
-                                width: rect.width,
-                                height: rect.height,
-                            })
-                            .collect()
+                        .into_iter()
+                        .map(|rect| paint::paint_engine::PaintRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                        })
+                        .collect()
                     })
             })),
         };
@@ -5166,6 +5471,61 @@ impl PageState {
                 .BindBlockingWheelInvalidation(&bindings.borrow());
         }
     }
+    /// Element::RecalcOwnStyle still installs a visually identical computed
+    /// style on its LayoutObject. Chromium performs that owner update during
+    /// UpdateStyleAndLayoutTree without scheduling Layout/PrePaint/Paint. Keep
+    /// the same identity/lifecycle here before a retained scroll or frame can
+    /// observe the canonical Element style.
+    fn SynchronizeNonVisualStyleOwners(&self) {
+        let (geometry_can_remain_current, owner_updates, geometry_revision) = {
+            let owner = self.document.borrow();
+            let state = owner.GetDocument().StyleState();
+            (
+                self.styles_resolved.get()
+                    && state.impact.IsEmpty()
+                    && state.paint_style_nodes.is_empty()
+                    && !state.layout_inputs_require_tree
+                    && state.layout_tree_roots.is_empty()
+                    && state.layout_reattach_nodes.is_empty()
+                    && state.geometry_input_nodes.is_empty()
+                    && state.editing_input_nodes.is_empty(),
+                !state.layout_style_nodes.is_empty(),
+                state.measurement_geometry_revision,
+            )
+        };
+        let revision_needs_certification = self.layout_revision.get() != Some(geometry_revision);
+        if !geometry_can_remain_current || (!owner_updates && !revision_needs_certification) {
+            return;
+        }
+        let mut trace = browser_tracing::span("lifecycle", "Page.SynchronizeNonVisualStyleOwners");
+        if owner_updates {
+            crate::persistent_layout::SynchronizeLayoutTreeWithEngine(
+                &mut self.layout_engine.borrow_mut(),
+                &mut self.document.borrow_mut(),
+                &self.interaction.borrow(),
+                &self.constraints.borrow(),
+            );
+        }
+        let geometry_current = self.layout_engine.borrow().Output().is_some();
+        if geometry_current {
+            // Style recalc may have conservatively revoked Page's revision
+            // before the native SetStyle diff proved that no LayoutObject needs
+            // layout. Re-certify the same resident result; never do this when
+            // the owning LayoutEngine reports a dirty root.
+            self.MarkLayoutCurrent();
+        }
+        trace.set("owner_updates", owner_updates as u8 as f64);
+        trace.set("geometry_current", geometry_current as u8 as f64);
+        trace.set(
+            "remaining",
+            self.document
+                .borrow()
+                .GetDocument()
+                .StyleState()
+                .layout_style_nodes
+                .len() as f64,
+        );
+    }
     fn ApplyPendingScrollUpdates(&self, frame: Option<&mut PageFrame>) -> bool {
         let mut trace = browser_tracing::span("lifecycle", "Page.ApplyPendingScrollUpdates");
         let mut updates = self.scroll_updates.borrow_mut();
@@ -5177,9 +5537,14 @@ impl PageState {
         let compositor_owned = self.compositor_scroll_updates.get();
         let mut reused_recordings = false;
         let reused = frame.is_some_and(|frame| {
-            // Reject mixed lifecycles before copy-on-write can duplicate an old
-            // snapshot that the ordinary layout export will replace anyway.
-            if !self.document.borrow().GetStyleImpact().IsEmpty() {
+            // A pending tree/layout change must replace the resident geometry,
+            // but an unresolved selector mutation or a paint-only style change
+            // does not stop Blink from synchronizing the compositor delta to
+            // its existing ScrollableArea before scroll events run.  Do not
+            // manufacture a layout invalidation merely because style recalc
+            // has not classified that mutation yet.
+            let style_impact = self.document.borrow().GetStyleImpact();
+            if style_impact.layout || style_impact.reattach {
                 trace.set("impact_rejected", 1.0);
                 return false;
             }
@@ -5189,16 +5554,15 @@ impl PageState {
             // impact; only a committed Paint does. Re-admit that resolved noop
             // here, without skipping the resource/style flush above or the
             // engine's native NeedsLayout/result-identity checks below.
-            let offset_only = self.scroll_only.get()
-                || (self.styles_resolved.get() && {
-                    let owner = self.document.borrow();
-                    let style = owner.GetDocument().StyleState();
-                    !style.all_dirty && style.changes.is_empty()
-                });
+            let offset_only =
+                self.scroll_only.get() || (!style_impact.layout && !style_impact.reattach);
             trace.set("offset_only", offset_only as u8 as f64);
             trace.set(
                 "resolved_noop",
-                (offset_only && !self.scroll_only.get()) as u8 as f64,
+                (self.styles_resolved.get()
+                    && style_impact.IsEmpty()
+                    && offset_only
+                    && !self.scroll_only.get()) as u8 as f64,
             );
             // A synchronous script/layout query may have advanced Layout to a
             // geometry-only result while the presented frame still owns the
@@ -5255,14 +5619,33 @@ impl PageState {
                     .CommitRetainedPaint(layout_output);
                 return false;
             };
-            if !self.styles_resolved.get() {
-                // Source post-layout snapshot invalidation resumes the same
-                // ordinary style/layout lifecycle before PrePaint consumes it.
+            let style_or_paint_pending = !self.styles_resolved.get() || style_impact.paint;
+            if style_or_paint_pending {
+                // The scroll event must observe the synchronized ScrollableArea,
+                // but the ordinary rendering update still owns pending Style
+                // and Paint work. Return the resident owner without declaring
+                // the lifecycle PaintClean. A cull refresh specifically needs
+                // a later Paint even if style recalc proves visually identical.
                 frame.fragments = self
                     .layout_engine
                     .borrow_mut()
                     .CommitRetainedPaint(layout_output);
-                return false;
+                self.MarkLayoutCurrent();
+                if scroll_layout != crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry
+                    && style_impact.IsEmpty()
+                {
+                    self.document.borrow_mut().InvalidatePaint();
+                }
+                trace.set("deferred_lifecycle", 1.0);
+                trace.set(
+                    "retained_geometry",
+                    (scroll_layout
+                        == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry)
+                        as u8 as f64,
+                );
+                reused_recordings =
+                    scroll_layout == crate::persistent_layout::ScrollLayoutUpdate::RetainedGeometry;
+                return true;
             }
             trace.set(
                 "retained_geometry",
@@ -5394,11 +5777,9 @@ impl PageState {
                 let mut layout = self.layout_engine.borrow_mut();
                 let mut document = self.document.borrow_mut();
                 for &(node_id, offset, scroll_type) in updates.iter() {
-                    let mut applied = false;
                     if document.EmitScrollOffset(node_id, offset, scroll_type, |mutation| {
-                        applied = layout.ApplyMutation(mutation);
-                    }) && applied
-                    {
+                        layout.ApplyMutation(mutation)
+                    }) {
                         applied_scrolls += 1;
                     }
                 }
@@ -6385,6 +6766,7 @@ pub struct Page {
     // Native Page runtimes place the compositor on their impl executor. Direct
     // embedders keep the inline pipeline used by PaintInto.
     external_compositor: bool,
+    external_compositor_published_frame_sequence: Option<u64>,
     processed_compositor_scroll_sequence: u64,
     /// ChromeClient screen-info input, supplied by the host independently of
     /// CSS/viewport size. Absence is an integration error, never a guessed size.
@@ -6975,6 +7357,7 @@ impl Page {
             hover_state_dirty: false,
             wheel_scroll_active: false,
             external_compositor: false,
+            external_compositor_published_frame_sequence: None,
             processed_compositor_scroll_sequence: 0,
             cursor_hit_test: None,
             wheel_event_regions: RefCell::new(Default::default()),
@@ -7330,6 +7713,21 @@ impl Page {
             .borrow_mut()
             .SetExternalPresentation(external);
         self.external_compositor = external;
+        if !external {
+            self.external_compositor_published_frame_sequence = None;
+        }
+    }
+
+    /// The host has enqueued this exact immutable PageFrame on the Page's
+    /// compositor sequence. This is an ordering acknowledgement only; Page
+    /// receives no compositor internals or mutable state.
+    pub fn DidPublishFrameToExternalCompositor(&mut self, sequence: u64) {
+        assert!(self.external_compositor);
+        assert_eq!(
+            self.frame.as_ref().map(|frame| frame.sequence),
+            Some(sequence)
+        );
+        self.external_compositor_published_frame_sequence = Some(sequence);
     }
 
     pub fn BindExternalCompositorPresentationClock(&self, clock: PageCompositorClockMapping) {
@@ -7409,6 +7807,7 @@ impl Page {
         if let Some(frame) = self.frame.take() {
             self.previous_document_frame_sequence = frame.sequence;
         }
+        self.external_compositor_published_frame_sequence = None;
         self.cursor_hit_test = None;
         self.hover_state_dirty = self.cursor_position.is_some();
         self.wheel_scroll_active = false;
@@ -8109,7 +8508,20 @@ impl Page {
             }
         }
 
-        let position = if self.active {
+        // FrameSelection::UpdateAppearance only asks Layout for caret geometry
+        // when the active frame owns an editable or document selection. Flushing
+        // style and layout unconditionally on every BeginFrame creates a new
+        // layout-only paint sidecar before a transform/opacity animation can
+        // update the resident PrePaint properties.
+        let focused_node = self.state.interaction.borrow().focused_node_id;
+        let has_document_selection = self.state.layout_editing.selections.Document().is_some();
+        let has_text_control_selection = self
+            .interaction
+            .TextInputState(&self.state.document.Handle())
+            .is_some();
+        let needs_caret_geometry =
+            self.active && (has_text_control_selection || has_document_selection);
+        let position = if needs_caret_geometry {
             self.state.EnsureLayoutOutput();
             let layout = self.state.layout_engine.borrow();
             let document = self.state.document.borrow();
@@ -8118,7 +8530,7 @@ impl Page {
                     document.GetDocument(),
                     output,
                     &self.state.layout_editing.selections,
-                    self.state.interaction.borrow().focused_node_id,
+                    focused_node,
                 )
             })
         } else {
@@ -8134,6 +8546,7 @@ impl Page {
             "Page.CaretState",
             &[
                 ("restart", restart as u8 as f64),
+                ("geometry_needed", needs_caret_geometry as u8 as f64),
                 ("position", position.is_some() as u8 as f64),
                 ("enabled", caret.IsCaretEnabled() as u8 as f64),
                 (
@@ -8832,6 +9245,186 @@ impl Page {
         self.state.UpdateValidationMessage();
         self.state.local_frames.get().unwrap().UpdateIntersections()
     }
+
+    fn RoutePendingPropertyAnimationRemovals(&mut self) -> io::Result<()> {
+        let removals =
+            std::mem::take(&mut *self.state.pending_property_animation_removals.borrow_mut());
+        for identity in removals {
+            self.RouteCompositorMutation(compositor::CompositorMutation::PropertyAnimation(
+                compositor::engine::PropertyAnimationMutation::Remove { identity },
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn RoutePendingPropertyAnimationReplacements(&mut self) -> io::Result<()> {
+        let replacements = std::mem::take(
+            &mut *self
+                .state
+                .pending_property_animation_replacements
+                .borrow_mut(),
+        );
+        for replacement in replacements {
+            self.RouteCompositorMutation(compositor::CompositorMutation::PropertyAnimation(
+                replacement,
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn InstallCompositorPropertyAnimations(
+        &mut self,
+        bindings: &[paint::CompositedAnimationPropertyBinding],
+    ) -> io::Result<()> {
+        let mut trace =
+            browser_tracing::span("animation", "Animation.InstallCompositorPropertyAnimations");
+        let candidates = self.state.animation_engine.borrow().CompositorCandidates();
+        trace.set("bindings", bindings.len() as f64);
+        trace.set("candidates", candidates.len() as f64);
+        for candidate in &candidates {
+            let mut transform = false;
+            let mut opacity = false;
+            for curve in &candidate.curves {
+                match curve {
+                    animation::CompositorPropertyCurve::Transform(_) => transform = true,
+                    animation::CompositorPropertyCurve::Opacity(_) => opacity = true,
+                }
+            }
+            browser_tracing::instant(
+                "animation",
+                "Animation.CompositorCandidate",
+                &[
+                    ("node_id", candidate.key.node_id as f64),
+                    ("list_index", candidate.key.list_index as f64),
+                    ("generation", candidate.generation as f64),
+                    ("transform", transform as u8 as f64),
+                    ("opacity", opacity as u8 as f64),
+                ],
+            );
+        }
+        for binding in bindings {
+            browser_tracing::instant(
+                "animation",
+                "Animation.CompositorBinding",
+                &[
+                    ("node_id", binding.node_id as f64),
+                    (
+                        "property",
+                        match binding.property {
+                            paint::CompositedAnimationProperty::Transform => 1.0,
+                            paint::CompositedAnimationProperty::Opacity => 2.0,
+                        },
+                    ),
+                    ("element_id", binding.element_id.GetInternalValue() as f64),
+                ],
+            );
+        }
+        let mut planned = BTreeSet::new();
+        let mut installed = Vec::new();
+        let mut mutations = Vec::new();
+        let mut missing_candidate = 0usize;
+        let mut ambiguous_candidate = 0usize;
+        let mut duplicate_binding = 0usize;
+        let mut already_installed = 0usize;
+        let mut unsupported_mutation = 0usize;
+        for binding in bindings {
+            let property = match binding.property {
+                paint::CompositedAnimationProperty::Transform => "transform",
+                paint::CompositedAnimationProperty::Opacity => "opacity",
+            };
+            let mut matching = candidates.iter().filter(|candidate| {
+                candidate.key.node_id == binding.node_id
+                    && candidate.curves.iter().any(|curve| {
+                        matches!(
+                            (property, curve),
+                            (
+                                "transform",
+                                animation::CompositorPropertyCurve::Transform(_)
+                            ) | ("opacity", animation::CompositorPropertyCurve::Opacity(_))
+                        )
+                    })
+            });
+            let Some(candidate) = matching.next() else {
+                missing_candidate += 1;
+                continue;
+            };
+            // Blink's effect stack owns composition when multiple animations
+            // target one property. Until that translated owner is connected,
+            // leave the ambiguous property on the document sequence.
+            if matching.next().is_some() {
+                ambiguous_candidate += 1;
+                continue;
+            }
+            if !planned.insert((candidate.key, property)) {
+                duplicate_binding += 1;
+                continue;
+            }
+            let identity = CompositorAnimationIdentity(candidate.effect_id, property);
+            if self
+                .state
+                .compositor_driven_animations
+                .borrow()
+                .get(&(candidate.key, property))
+                .is_some_and(|current| {
+                    current.identity == identity
+                        && current.generation == candidate.generation
+                        && current.element_id == binding.element_id.GetInternalValue()
+                })
+            {
+                already_installed += 1;
+                continue;
+            }
+            let start_time = candidate.sample_time.map(|sample_time| {
+                self.state
+                    .rendering
+                    .borrow()
+                    .executor
+                    .TimeTicks(sample_time)
+                    - compositor::adapter::time::TimeDelta::Microseconds(
+                        (candidate.local_time * 1_000_000.0) as i64,
+                    )
+            });
+            let Some((property, mutation)) =
+                CompositorPropertyAnimationMutation(candidate, binding, start_time)
+            else {
+                unsupported_mutation += 1;
+                continue;
+            };
+            mutations.push(mutation);
+            installed.push((
+                candidate.key,
+                property,
+                CompositorAnimationInstallation {
+                    identity,
+                    generation: candidate.generation,
+                    element_id: binding.element_id.GetInternalValue(),
+                },
+            ));
+        }
+        trace.set("missing_candidate", missing_candidate as f64);
+        trace.set("ambiguous_candidate", ambiguous_candidate as f64);
+        trace.set("duplicate_binding", duplicate_binding as f64);
+        trace.set("already_installed", already_installed as f64);
+        trace.set("unsupported_mutation", unsupported_mutation as f64);
+        for mutation in mutations {
+            self.RouteCompositorMutation(compositor::CompositorMutation::PropertyAnimation(
+                mutation,
+            ))?;
+        }
+        trace.set("installed", installed.len() as f64);
+        for (key, property, installation) in installed {
+            self.state
+                .animation_engine
+                .borrow_mut()
+                .SetCompositorDriven(key, [property.to_owned()]);
+            self.state
+                .compositor_driven_animations
+                .borrow_mut()
+                .insert((key, property), installation);
+        }
+        Ok(())
+    }
+
     fn UpdateFrameIfNeededInternal(&mut self) -> io::Result<()> {
         if !self.external_compositor {
             let pending =
@@ -8962,6 +9555,9 @@ impl Page {
             // compositor active tree drawable while BeginMainFrame is busy.
             self.ResolveStylesAndLoadResources(0)?;
         }
+        self.RoutePendingPropertyAnimationReplacements()?;
+        self.RoutePendingPropertyAnimationRemovals()?;
+        self.state.SynchronizeNonVisualStyleOwners();
         let resources_done = profile.map(|start| start.elapsed());
         let reused_recordings = self.state.ApplyPendingScrollUpdates(self.frame.as_mut());
         trace.set("scroll_records_reused", reused_recordings as u8 as f64);
@@ -9011,13 +9607,38 @@ impl Page {
             .document
             .borrow()
             .GetMeasurementGeometryRevision();
-        let layout_geometry_current = self.state.layout_revision.get() == Some(revision)
-            && self.state.layout_engine.borrow().Output().is_some()
+        let published_layout_revision = self.state.layout_revision.get();
+        let layout_revision_current = published_layout_revision == Some(revision);
+        let layout_output_current = self.state.layout_engine.borrow().Output().is_some();
+        let measurement_inputs_match = layout_revision_current
+            && layout_output_current
             && crate::persistent_layout::MeasurementInputsMatch(
                 &self.state.layout_engine.borrow(),
                 &mut self.state.document.borrow_mut(),
                 &self.state.interaction.borrow(),
             );
+        let layout_geometry_current =
+            layout_revision_current && layout_output_current && measurement_inputs_match;
+        browser_tracing::instant(
+            "lifecycle",
+            "Page.LayoutGeometryDecision",
+            &[
+                ("document_revision", revision as f64),
+                (
+                    "published_revision",
+                    published_layout_revision.unwrap_or(u64::MAX) as f64,
+                ),
+                (
+                    "layout_revision_current",
+                    layout_revision_current as u8 as f64,
+                ),
+                ("layout_output_current", layout_output_current as u8 as f64),
+                (
+                    "measurement_inputs_match",
+                    measurement_inputs_match as u8 as f64,
+                ),
+            ],
+        );
         trace.set(
             "resident_fragments_before_layout",
             self.state
@@ -9047,12 +9668,47 @@ impl Page {
                 impact.paint && !impact.layout && !impact.reattach
             });
         trace.set("paint_only_style", paint_only_style as u8 as f64);
-        if self.frame.is_some()
-            && self.PresentedFrameHasCurrentLayoutResult()
+        let frame_present = self.frame.is_some();
+        let presented_layout_current = self.PresentedFrameHasCurrentLayoutResult();
+        let style_impact_empty = self.state.document.borrow().GetStyleImpact().IsEmpty();
+        let local_frame_lifecycle_pending = self.state.local_frames.get().unwrap().NeedsLifecycle();
+        browser_tracing::instant(
+            "lifecycle",
+            "Page.FrameRetentionDecision",
+            &[
+                ("frame_present", frame_present as u8 as f64),
+                (
+                    "presented_layout_current",
+                    presented_layout_current as u8 as f64,
+                ),
+                ("editing_paint_dirty", self.editing_paint_dirty as u8 as f64),
+                (
+                    "document_image_environment_dirty",
+                    self.document_image_environment_dirty as u8 as f64,
+                ),
+                (
+                    "layout_geometry_current",
+                    layout_geometry_current as u8 as f64,
+                ),
+                ("style_impact_empty", style_impact_empty as u8 as f64),
+                (
+                    "paint_resource_repaint",
+                    paint_resource_update_requires_repaint as u8 as f64,
+                ),
+                (
+                    "local_frame_lifecycle_pending",
+                    local_frame_lifecycle_pending as u8 as f64,
+                ),
+                ("scroll_records_reused", reused_recordings as u8 as f64),
+                ("scroll_only", self.state.scroll_only.get() as u8 as f64),
+            ],
+        );
+        if frame_present
+            && presented_layout_current
             && !self.editing_paint_dirty
             && !self.document_image_environment_dirty
             && layout_geometry_current
-            && self.state.document.borrow().GetStyleImpact().IsEmpty()
+            && style_impact_empty
             && !paint_resource_update_requires_repaint
         {
             trace.set("frame_retained", 1.0);
@@ -9289,6 +9945,346 @@ impl Page {
             .get()
             .unwrap()
             .PreparePaint(&self.state.layout_engine.borrow())?;
+        let mut prepared_animation_prepaint = None;
+        // Chromium's deferred transform/opacity update is rejected whenever
+        // the LayoutObject already needs a full paint-property update. A
+        // document-image frame arriving while animation style is sampled is
+        // the package-boundary equivalent: the retained PaintArtifact must
+        // first publish the new image record, otherwise the direct property
+        // update can animate a layer whose drawable content is still empty.
+        let direct_animation_update_admissible = !self.state.paint_resources_dirty.get()
+            && self.state.pending_paint_mutations.borrow().is_empty();
+        trace.set(
+            "animation_direct_update_admissible",
+            direct_animation_update_admissible as u8 as f64,
+        );
+        if direct_animation_update_admissible
+            && !animation_paint_nodes.is_empty()
+            && child_paint.is_empty()
+        {
+            self.state.SyncVisualViewportPaintState();
+            let direct_compositor_ready = if self.external_compositor {
+                self.frame.as_ref().is_some_and(|frame| {
+                    self.external_compositor_published_frame_sequence == Some(frame.sequence)
+                })
+            } else {
+                self.state
+                    .rendering
+                    .borrow()
+                    .CanApplyCompositedAnimationProperties()
+            };
+            trace.set("animation_paint_nodes", animation_paint_nodes.len() as f64);
+            trace.set("animation_child_paint", child_paint.len() as f64);
+            trace.set(
+                "animation_direct_compositor_ready",
+                direct_compositor_ready as u8 as f64,
+            );
+            let (prepared, update) = {
+                let layout = self.state.layout_engine.borrow();
+                let _layout_paint_scope = layout.PaintScope();
+                let _svg_resources =
+                    layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                        layout
+                            .GetLayoutTree()
+                            .expect("PrePaint retains native SVG resource owners"),
+                    );
+                let mut paint = self.state.paint_engine.borrow_mut();
+                if direct_compositor_ready {
+                    paint.PrePaintCompositedAnimationUpdate(
+                        &layout_output,
+                        &animation_paint_nodes,
+                        &PagePaintLifecycle(self.state.DocumentLifecycle()),
+                    )
+                } else {
+                    (
+                        Some(paint.PrePaintWithLifecycle(
+                            &layout_output,
+                            &PagePaintLifecycle(self.state.DocumentLifecycle()),
+                        )),
+                        None,
+                    )
+                }
+            };
+            if let Some(update) = update {
+                trace.set("composited_animation_property_update", 1.0);
+                // Blink snapshots eligible keyframes once, binds them to the
+                // compositor element id published by PrePaint, and lets cc
+                // tick the active property tree thereafter. The first direct
+                // update supplies that canonical binding; later BeginFrames
+                // no longer sample the same property on the document thread.
+                let mut install_trace = browser_tracing::span(
+                    "animation",
+                    "Animation.InstallDirectCompositorPropertyAnimations",
+                );
+                let candidates = self.state.animation_engine.borrow().CompositorCandidates();
+                install_trace.set("bindings", update.bindings.len() as f64);
+                install_trace.set("candidates", candidates.len() as f64);
+                let mut installed = Vec::new();
+                let mut animation_mutations = Vec::new();
+                for binding in &update.bindings {
+                    let property_name = match binding.property {
+                        paint::CompositedAnimationProperty::Transform => "transform",
+                        paint::CompositedAnimationProperty::Opacity => "opacity",
+                    };
+                    let mut matching = candidates.iter().filter(|candidate| {
+                        candidate.key.node_id == binding.node_id
+                            && candidate.curves.iter().any(|curve| {
+                                matches!(
+                                    (property_name, curve),
+                                    (
+                                        "transform",
+                                        animation::CompositorPropertyCurve::Transform(_)
+                                    ) | ("opacity", animation::CompositorPropertyCurve::Opacity(_))
+                                )
+                            })
+                    });
+                    let Some(candidate) = matching.next() else {
+                        continue;
+                    };
+                    if matching.next().is_some() {
+                        continue;
+                    }
+                    let (curve, target_property) = match binding.property {
+                        paint::CompositedAnimationProperty::Transform => {
+                            let Some(animation::CompositorPropertyCurve::Transform(keyframes)) =
+                                candidate.curves.iter().find(|curve| {
+                                    matches!(
+                                        curve,
+                                        animation::CompositorPropertyCurve::Transform(_)
+                                    )
+                                })
+                            else {
+                                continue;
+                            };
+                            let mut curve =
+                                compositor::engine::KeyframedTransformAnimationCurve::default();
+                            let easing = || match &candidate.timing.easing {
+                                animation::CSSTimingFunction::Linear => {
+                                    compositor::engine::AnimationTimingFunction::Linear
+                                }
+                                animation::CSSTimingFunction::CubicBezier([x1, y1, x2, y2]) => {
+                                    compositor::engine::AnimationTimingFunction::CubicBezier(
+                                        scroll_animation::cubic_bezier::CubicBezier::new(
+                                            *x1, *y1, *x2, *y2,
+                                        ),
+                                    )
+                                }
+                                animation::CSSTimingFunction::Steps {
+                                    count,
+                                    jump_at_start,
+                                } => compositor::engine::AnimationTimingFunction::Steps {
+                                    count: *count,
+                                    jump_at_start: *jump_at_start,
+                                },
+                            };
+                            for (offset, value) in keyframes {
+                                curve.AddKeyframe(
+                                    compositor::adapter::time::TimeDelta::Microseconds(
+                                        (candidate.timing.duration.max(0.0) * offset * 1_000_000.0)
+                                            as i64,
+                                    ),
+                                    value.clone(),
+                                    easing(),
+                                );
+                            }
+                            (
+                                compositor::engine::CompositorAnimationCurve::Transform(curve),
+                                compositor::engine::AnimationTargetProperty::TRANSFORM as i32,
+                            )
+                        }
+                        paint::CompositedAnimationProperty::Opacity => {
+                            let Some(animation::CompositorPropertyCurve::Opacity(keyframes)) =
+                                candidate.curves.iter().find(|curve| {
+                                    matches!(curve, animation::CompositorPropertyCurve::Opacity(_))
+                                })
+                            else {
+                                continue;
+                            };
+                            let mut curve =
+                                compositor::engine::KeyframedFloatAnimationCurve::default();
+                            let easing = || match &candidate.timing.easing {
+                                animation::CSSTimingFunction::Linear => {
+                                    compositor::engine::AnimationTimingFunction::Linear
+                                }
+                                animation::CSSTimingFunction::CubicBezier([x1, y1, x2, y2]) => {
+                                    compositor::engine::AnimationTimingFunction::CubicBezier(
+                                        scroll_animation::cubic_bezier::CubicBezier::new(
+                                            *x1, *y1, *x2, *y2,
+                                        ),
+                                    )
+                                }
+                                animation::CSSTimingFunction::Steps {
+                                    count,
+                                    jump_at_start,
+                                } => compositor::engine::AnimationTimingFunction::Steps {
+                                    count: *count,
+                                    jump_at_start: *jump_at_start,
+                                },
+                            };
+                            for (offset, value) in keyframes {
+                                curve.AddKeyframe(
+                                    compositor::adapter::time::TimeDelta::Microseconds(
+                                        (candidate.timing.duration.max(0.0) * offset * 1_000_000.0)
+                                            as i64,
+                                    ),
+                                    *value,
+                                    easing(),
+                                );
+                            }
+                            (
+                                compositor::engine::CompositorAnimationCurve::Float(curve),
+                                compositor::engine::AnimationTargetProperty::OPACITY as i32,
+                            )
+                        }
+                    };
+                    let identity = CompositorAnimationIdentity(candidate.effect_id, property_name);
+                    if self
+                        .state
+                        .compositor_driven_animations
+                        .borrow()
+                        .get(&(candidate.key, property_name))
+                        .is_some_and(|installed| {
+                            installed.identity == identity
+                                && installed.generation == candidate.generation
+                                && installed.element_id == binding.element_id.GetInternalValue()
+                        })
+                    {
+                        continue;
+                    }
+                    let direction = match candidate.timing.direction {
+                        animation::CSSPlaybackDirection::Normal => {
+                            compositor::engine::AnimationDirection::NORMAL
+                        }
+                        animation::CSSPlaybackDirection::Reverse => {
+                            compositor::engine::AnimationDirection::REVERSE
+                        }
+                        animation::CSSPlaybackDirection::Alternate => {
+                            compositor::engine::AnimationDirection::ALTERNATE_NORMAL
+                        }
+                        animation::CSSPlaybackDirection::AlternateReverse => {
+                            compositor::engine::AnimationDirection::ALTERNATE_REVERSE
+                        }
+                    };
+                    let fill_mode = match candidate.timing.fill {
+                        animation::CSSFillMode::None => compositor::engine::AnimationFillMode::NONE,
+                        animation::CSSFillMode::Forwards => {
+                            compositor::engine::AnimationFillMode::FORWARDS
+                        }
+                        animation::CSSFillMode::Backwards => {
+                            compositor::engine::AnimationFillMode::BACKWARDS
+                        }
+                        animation::CSSFillMode::Both => compositor::engine::AnimationFillMode::BOTH,
+                    };
+                    animation_mutations.push(
+                        compositor::engine::PropertyAnimationMutation::Install {
+                            identity,
+                            element: compositor::adapter::input_types::ElementId::new(
+                                binding.element_id.GetInternalValue(),
+                            ),
+                            curve,
+                            target_property,
+                            iterations: candidate.timing.iterations,
+                            iteration_start: 0.0,
+                            start_delay: compositor::adapter::time::TimeDelta::Microseconds(
+                                (candidate.timing.delay * 1_000_000.0) as i64,
+                            ),
+                            direction,
+                            playback_rate: 1.0,
+                            fill_mode,
+                            start_time: candidate.sample_time.map(|sample_time| {
+                                self.state
+                                    .rendering
+                                    .borrow()
+                                    .executor
+                                    .TimeTicks(sample_time)
+                                    - compositor::adapter::time::TimeDelta::Microseconds(
+                                        (candidate.local_time * 1_000_000.0) as i64,
+                                    )
+                            }),
+                            hold_time: (candidate.timing.play_state
+                                == animation::CSSPlayState::Paused)
+                                .then(|| {
+                                    compositor::adapter::time::TimeDelta::Microseconds(
+                                        (candidate.local_time * 1_000_000.0) as i64,
+                                    )
+                                }),
+                        },
+                    );
+                    installed.push((
+                        candidate.key,
+                        property_name,
+                        CompositorAnimationInstallation {
+                            identity,
+                            generation: candidate.generation,
+                            element_id: binding.element_id.GetInternalValue(),
+                        },
+                    ));
+                }
+                install_trace.set("mutations", animation_mutations.len() as f64);
+                install_trace.set("installed", installed.len() as f64);
+                // Publish the property-tree element mapping before its
+                // KeyframeModel can tick. Chromium transfers both in one
+                // commit; this ordering is the package-boundary equivalent
+                // and prevents an installation-triggered commit from racing
+                // ahead with the preceding property tree during startup.
+                self.RouteCompositorMutation(
+                    compositor::CompositorMutation::CompositedAnimationProperties(update),
+                )?;
+                for mutation in animation_mutations {
+                    self.RouteCompositorMutation(
+                        compositor::CompositorMutation::PropertyAnimation(mutation),
+                    )?;
+                }
+                for (key, property, installation) in installed {
+                    self.state
+                        .animation_engine
+                        .borrow_mut()
+                        .SetCompositorDriven(key, [property.to_owned()]);
+                    self.state
+                        .compositor_driven_animations
+                        .borrow_mut()
+                        .insert((key, property), installation);
+                }
+                self.state.CommitRetainedPaintLifecycle();
+                let fragments = self
+                    .state
+                    .layout_engine
+                    .borrow_mut()
+                    .CommitRetainedPaint(layout_output);
+                let frame = self.frame.as_mut().unwrap();
+                frame.fragments = fragments;
+                frame.compositor_scroll_sequence = self.processed_compositor_scroll_sequence;
+                self.state.MarkLayoutCurrent();
+                self.state.document.borrow_mut().DidCommitPaint();
+                debug_assert!(self.state.pending_paint_mutations.borrow().is_empty());
+                self.state
+                    .ApplyAnimationMutation(animation::AnimationMutation::CommitPaint);
+                self.state.scroll_only.set(false);
+                self.state.dirty.set(false);
+                // PaintArtifactCompositor::DirectlyUpdateCompositedOpacityValue
+                // and DirectlyUpdateTransform never enter Blink's paint
+                // lifecycle.  In particular, they must not run the post-paint
+                // IntersectionObserver/ResizeObserver update: doing so turns a
+                // compositor-only animation into synchronous geometry queries
+                // and a document-wide Layout paint-data publication every
+                // frame.  The ordinary Paint paths below remain the sole
+                // owners of PageScripts::DidPaint.
+                self.UpdateCursor();
+                return Ok(());
+            }
+            prepared_animation_prepaint = prepared;
+        }
+        let compositor_animation_nodes = self
+            .state
+            .animation_engine
+            .borrow()
+            .CompositorCandidates()
+            .into_iter()
+            .map(|candidate| candidate.key.node_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut full_paint_animation_bindings = Vec::new();
         let paint_output = {
             trace.set("full_paint", 1.0);
             {
@@ -9318,16 +10314,25 @@ impl Page {
                     .GetDocument()
                     .CanvasDocumentIdentity();
                 self.state.SyncVisualViewportPaintState();
-                self.state
-                    .paint_engine
-                    .borrow_mut()
-                    .PaintWithLocalFrameViews(
+                let mut paint = self.state.paint_engine.borrow_mut();
+                if let Some(prepared) = prepared_animation_prepaint.take() {
+                    paint.PaintAfterPrePaintWithLocalFrameViews(
+                        &layout_output,
+                        &views,
+                        self.state.layout_editing.PaintState(),
+                        &lifecycle,
+                        document,
+                        prepared,
+                    );
+                } else {
+                    paint.PaintWithLocalFrameViews(
                         &layout_output,
                         &views,
                         self.state.layout_editing.PaintState(),
                         &lifecycle,
                         document,
                     );
+                }
             }
             let document_image_requirements = self
                 .state
@@ -9382,6 +10387,8 @@ impl Page {
                     );
             }
             let mut paint = self.state.paint_engine.borrow_mut();
+            full_paint_animation_bindings =
+                paint.CompositedAnimationPropertyBindings(&compositor_animation_nodes);
             paint.CommitPaintResult()
         };
         self.state
@@ -9472,6 +10479,11 @@ impl Page {
             .client
             .borrow_mut()
             .DidPresentFrame(self.frame.as_ref().unwrap());
+        // The complete PaintArtifact must enter the Page-domain compositor
+        // before its KeyframeModels. This is the package-boundary form of
+        // Chromium's single main-frame commit: the element ids above name the
+        // property nodes in this exact artifact, never the retired tree.
+        self.InstallCompositorPropertyAnimations(&full_paint_animation_bindings)?;
         trace.set("presented", 1.0);
         self.UpdateCursor();
         Ok(())

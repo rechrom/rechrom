@@ -496,8 +496,7 @@ pub(crate) fn CreateLayoutBindingsHost(
         read_geometry: Some(Box::new(move |id| {
             let layout = geometry();
             let layout = layout.borrow();
-            let frame_layout_zoom =
-                geometry_constraints.borrow().layout_zoom_factor as f32;
+            let frame_layout_zoom = geometry_constraints.borrow().layout_zoom_factor as f32;
             let standardized_browser_zoom = geometry_document
                 .borrow()
                 .GetDocument()
@@ -506,10 +505,7 @@ pub(crate) fn CreateLayoutBindingsHost(
                 .Output()
                 .and_then(|output| output.Node(id))
                 .map_or_else(Vec::new, |node| {
-                    node.HTMLClientRectsForDocument(
-                        frame_layout_zoom,
-                        standardized_browser_zoom,
-                    )
+                    node.HTMLClientRectsForDocument(frame_layout_zoom, standardized_browser_zoom)
                         .into_iter()
                         .map(|r| paint::paint_engine::PaintRect {
                             x: r.x,

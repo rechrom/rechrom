@@ -1425,6 +1425,7 @@ pub struct PersistentDocument {
     // transitions are distinct retained cascade buckets even when an effect
     // producer publishes the same declaration representation for both.
     animated_styles: HashMap<u64, BTreeMap<u64, Vec<CSSDeclaration>>>,
+    animation_property_flags: HashMap<u64, (bool, bool)>,
     transitioned_styles: HashMap<u64, BTreeMap<u64, Vec<CSSDeclaration>>>,
     cssom: CSSOM<DOMOwnerHandle>,
     // Ownerless sheets appended through Document are explicitly attached to
@@ -1663,6 +1664,7 @@ impl PersistentDocument {
             cached_directionality: HashMap::new(),
             part_names_maps: HashMap::new(),
             animated_styles: HashMap::new(),
+            animation_property_flags: HashMap::new(),
             transitioned_styles: HashMap::new(),
             cssom: CSSOM::default(),
             ownerless_style_sheet_scopes: HashMap::new(),
@@ -9631,7 +9633,10 @@ impl PersistentDocument {
     pub fn SetAnimationStyle(&mut self, node: u64, effect: u64, declarations: Vec<CSSDeclaration>) {
         Self::SetSampledStyle(&mut self.animated_styles, node, effect, declarations);
         if let Some(index) = self.FindNodeById(node) {
-            self.RecordStyleChange(crate::style_state::StyleChange::Animation(index));
+            self.RecordStyleChange(crate::style_state::StyleChange::Animation(
+                self.PseudoElementFacts(index)
+                    .map_or(index, |facts| facts.originating_element),
+            ));
         }
     }
     pub fn SetTransitionStyle(
@@ -9642,7 +9647,10 @@ impl PersistentDocument {
     ) {
         Self::SetSampledStyle(&mut self.transitioned_styles, node, effect, declarations);
         if let Some(index) = self.FindNodeById(node) {
-            self.RecordStyleChange(crate::style_state::StyleChange::Animation(index));
+            self.RecordStyleChange(crate::style_state::StyleChange::Animation(
+                self.PseudoElementFacts(index)
+                    .map_or(index, |facts| facts.originating_element),
+            ));
         }
     }
     fn SetSampledStyle(
@@ -9666,6 +9674,56 @@ impl PersistentDocument {
         self.animated_styles
             .get(&node)
             .unwrap_or_else(|| EMPTY.get_or_init(BTreeMap::new))
+    }
+    pub fn SetAnimationPropertyFlags(
+        &mut self,
+        flags: impl IntoIterator<Item = (u64, bool, bool)>,
+    ) -> bool {
+        let next = flags
+            .into_iter()
+            .filter_map(|(node_id, transform, opacity)| {
+                (transform || opacity).then_some((node_id, (transform, opacity)))
+            })
+            .collect::<HashMap<_, _>>();
+        for (&node_id, &(transform, opacity)) in &next {
+            browser_tracing::instant(
+                "style",
+                "Style.RetainedAnimationPropertyFlags",
+                &[
+                    ("node_id", node_id as f64),
+                    ("transform", transform as u8 as f64),
+                    ("opacity", opacity as u8 as f64),
+                ],
+            );
+        }
+        if next == self.animation_property_flags {
+            return false;
+        }
+        let changed = self
+            .animation_property_flags
+            .keys()
+            .chain(next.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|node_id| self.animation_property_flags.get(node_id) != next.get(node_id))
+            .collect::<Vec<_>>();
+        self.animation_property_flags = next;
+        for node_id in changed {
+            if let Some(index) = self.FindNodeById(node_id) {
+                self.RecordStyleChange(crate::style_state::StyleChange::Animation(
+                    self.PseudoElementFacts(index)
+                        .map_or(index, |facts| facts.originating_element),
+                ));
+            }
+        }
+        true
+    }
+    pub fn AnimationPropertyFlags(&self, node: u64) -> (bool, bool) {
+        self.animation_property_flags
+            .get(&node)
+            .copied()
+            .unwrap_or_default()
     }
     pub fn TransitionStyles(&self, node: u64) -> &BTreeMap<u64, Vec<CSSDeclaration>> {
         static EMPTY: OnceLock<BTreeMap<u64, Vec<CSSDeclaration>>> = OnceLock::new();
@@ -10809,7 +10867,30 @@ impl PersistentDocument {
         }
         false
     }
-    pub fn SetResolvedStyle(&mut self, node: usize, mut style: ResolvedNodeStyle) {
+    pub fn SetResolvedStyle(&mut self, node: usize, style: ResolvedNodeStyle) {
+        self.SetResolvedStyleInternal(node, style, None);
+    }
+
+    /// Publish Style's canonical owner together with the source
+    /// VisualInvalidationDiff classification. Even a visually identical
+    /// style must reach the resident LayoutObject so Element and Layout keep
+    /// the same ComputedStyle owner; it must not, however, manufacture Paint
+    /// or attachment work merely because animation timing metadata changed.
+    pub fn SetResolvedStyleWithImpact(
+        &mut self,
+        node: usize,
+        style: ResolvedNodeStyle,
+        impact: crate::style_state::StyleUpdateImpact,
+    ) {
+        self.SetResolvedStyleInternal(node, style, Some(impact));
+    }
+
+    fn SetResolvedStyleInternal(
+        &mut self,
+        node: usize,
+        mut style: ResolvedNodeStyle,
+        visual_impact: Option<crate::style_state::StyleUpdateImpact>,
+    ) {
         if self.ResolvedStyleFor(node) == Some(&style) {
             return;
         }
@@ -10843,10 +10924,13 @@ impl PersistentDocument {
         self.style_state
             .layout_style_nodes
             .insert(self.arena[node].id);
-        self.style_state
-            .paint_style_nodes
-            .insert(self.arena[node].id);
-        if requires_export {
+        let needs_visual_update = visual_impact.is_none_or(|impact| !impact.IsEmpty());
+        if needs_visual_update {
+            self.style_state
+                .paint_style_nodes
+                .insert(self.arena[node].id);
+        }
+        if needs_visual_update && requires_export {
             // Generated/flattened children need attachment context once. A
             // newly styled element has no resident attachment yet, so start
             // at its parent rather than enqueueing every new child separately.
@@ -10859,8 +10943,8 @@ impl PersistentDocument {
                 .layout_tree_roots
                 .insert(self.arena[root].id);
         }
-        self.style_state.paint_style_requires_export |= requires_export;
-        if self.AffectsSVGResourceClients(node) {
+        self.style_state.paint_style_requires_export |= needs_visual_update && requires_export;
+        if needs_visual_update && self.AffectsSVGResourceClients(node) {
             self.style_state.layout_inputs_require_tree = true;
         }
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);

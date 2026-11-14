@@ -47,13 +47,13 @@ use super::{
     },
 };
 use crate::{
+    editing_owners::{PageEditingOwners, SyntheticEventDispatcher},
     event::{
         Event, EventListenerDispatcher, EventListenerInterestRef, EventType, MakeSyntheticEvent,
     },
     focus_controller::FocusController,
     input_type::InputTypeContext,
     ownership::{InteractionDOMMutationEmitter, InteractionDocument},
-    editing_owners::{SyntheticEventDispatcher, PageEditingOwners},
 };
 
 impl interaction_default::core::page::focus_controller::FocusEventDispatch

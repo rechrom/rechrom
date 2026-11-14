@@ -21,5 +21,9 @@ pub trait DiscardableMemory: Send {
 
 // Source: include/private/chromium/SkDiscardableMemory.h:24-24
 // Actual Chromium factory TU, not the separate native none/pool configuration.
-#[cfg(all(sk_native_ndebug, not(DCHECK_ALWAYS_ON)))]
+#[cfg(all(
+    feature = "chromium_embedding",
+    sk_native_ndebug,
+    not(DCHECK_ALWAYS_ON)
+))]
 pub use crate::skia::ext::SkDiscardableMemory_chrome::Create;

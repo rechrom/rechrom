@@ -1,6 +1,7 @@
 //! Invalidation-owned comparison of projected layout style inputs.
 
 use layoutng_style::style::computed_style_base::ComputedStyleBase;
+use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 
 use super::ComputedStyle;
 
@@ -100,15 +101,7 @@ fn geometry_inputs_equal(style: &ComputedStyle, other: &ComputedStyle) -> bool {
     // actual reference clients; ordinary elements must not relayout because
     // another SVG resource changed elsewhere in the document.
     let references_resource = |input: &ComputedStyle| {
-        unsafe { input.style.as_ref() }.is_none_or(|style| {
-            style.HasMarkers()
-                || style.HasMask()
-                || style.FillPaint().HasUrl()
-                || style.StrokePaint().HasUrl()
-                || style.ClipPath().is_some()
-                || style.Filter().HasReferenceFilter()
-                || style.BackdropFilter().HasReferenceFilter()
-        })
+        unsafe { input.style.as_ref() }.is_none_or(StyleReferencesSvgResource)
     };
     let resource_equal = !(references_resource(style) || references_resource(other))
         || style.svg_clip_resources == other.svg_clip_resources;
@@ -152,4 +145,18 @@ fn geometry_inputs_equal(style: &ComputedStyle, other: &ComputedStyle) -> bool {
             column_count,
             grid_template_columns,
         )
+}
+
+/// Chromium invalidates SVG resources through explicit client edges.  The
+/// document snapshot is carried by every projected style so definitions keep
+/// stable scope/generation identity, but a generation change only affects a
+/// style which can actually consume an SVG resource.
+pub(crate) fn StyleReferencesSvgResource(style: &StyleComputedStyle) -> bool {
+    style.HasMarkers()
+        || style.HasMask()
+        || style.FillPaint().HasUrl()
+        || style.StrokePaint().HasUrl()
+        || style.ClipPath().is_some()
+        || style.Filter().HasReferenceFilter()
+        || style.BackdropFilter().HasReferenceFilter()
 }

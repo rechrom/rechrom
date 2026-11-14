@@ -6,10 +6,11 @@ use super::{
     animation_id_provider::AnimationIdProvider,
     animation_timeline::{AnimationTimeline, AnimationTimelineContext, AnimationTimelineTypes},
     keyframe_effect::{KeyframeEffect, KeyframeEffectContext},
-    keyframe_model::{KeyframeModel, KeyframeModelTrace, RunState, TargetPropertyId},
-    scroll_offset_animation_curve::{
-        ScrollCurveConfig, ScrollOffsetAnimationCurve as Curve, ScrollType,
+    keyframe_model::{
+        CompositorAnimationCurve as Curve, KeyframeModel, KeyframeModelTrace, RunState,
+        TargetPropertyId,
     },
+    scroll_offset_animation_curve::{ScrollCurveConfig, ScrollOffsetAnimationCurve, ScrollType},
     scroll_offset_animation_curve_factory::ScrollOffsetAnimationCurveFactory as Factory,
 };
 use compositor_scheduler::{TimeDelta, TimeTicks};
@@ -218,7 +219,7 @@ impl ScrollOffsetAnimationImpl {
     fn ScrollAnimationCreateInternal(
         &mut self,
         element: ElementId,
-        curve: Curve,
+        curve: ScrollOffsetAnimationCurve,
         start: TimeDelta,
         selected: Option<&mut dyn ScrollAnimationSelectedReceiver>,
         c: &mut impl ScrollOffsetAnimationsContext,
@@ -228,7 +229,7 @@ impl ScrollOffsetAnimationImpl {
             Some(curve.Duration().InMicrosecondsF() / 1000.0),
         );
         let mut model = KeyframeModel::Create(
-            Some(curve),
+            Some(Curve::Scroll(curve)),
             AnimationIdProvider::NextKeyframeModelId(),
             AnimationIdProvider::NextGroupId(),
             TargetPropertyId::new(Property::SCROLL_OFFSET as i32),
@@ -277,9 +278,9 @@ impl ScrollOffsetAnimationImpl {
                     return (None, Some(("No keyframe model exists", None)));
                 };
                 if delta.IsZero() {
-                    return (Some(model.curve().unwrap().target_value()), None);
+                    return (Some(model.curve().unwrap().AsScroll().target_value()), None);
                 }
-                let target = model.curve().unwrap().target_value();
+                let target = model.curve().unwrap().AsScroll().target_value();
                 let mut x = target.x() + delta.x();
                 let mut y = target.y() + delta.y();
                 if x < 0.0 {
@@ -302,7 +303,7 @@ impl ScrollOffsetAnimationImpl {
                     model.TrimTimeToCurrentIteration(frame, None)
                 };
                 trimmed -= delayed;
-                let curve = model.curve_mut().unwrap();
+                let curve = model.curve_mut().unwrap().AsScrollMut();
                 curve.UpdateTarget(trimmed, target);
                 (
                     Some(curve.target_value()),
@@ -342,10 +343,14 @@ impl ScrollOffsetAnimationImpl {
             c.TraceScrollAnimation("no scroll adjustment no keyframe model", None);
             return;
         };
-        let mut curve = model.curve().unwrap().CloneToScrollOffsetAnimationCurve();
+        let mut curve = model
+            .curve()
+            .unwrap()
+            .AsScroll()
+            .CloneToScrollOffsetAnimationCurve();
         curve.ApplyAdjustment(*adjustment);
         let mut next = KeyframeModel::Create(
-            Some(curve),
+            Some(Curve::Scroll(curve)),
             AnimationIdProvider::NextKeyframeModelId(),
             AnimationIdProvider::NextGroupId(),
             TargetPropertyId::new(Property::SCROLL_OFFSET as i32),

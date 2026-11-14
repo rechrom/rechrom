@@ -171,11 +171,7 @@ impl PaintChunker {
         // must go through UnionBounds: a drawing outside previously recorded
         // opaque hit-test data makes the enlarged chunk mixed rather than
         // allowing the opaque region to cover the un-hit-testable gap.
-        self.UnionBounds(
-            chunks,
-            visual_rect,
-            PaintHitTestOpaqueness::Transparent,
-        );
+        self.UnionBounds(chunks, visual_rect, PaintHitTestOpaqueness::Transparent);
         let chunk = chunks.last_mut().unwrap();
         chunk.bounds_are_complete &= visual_rect_is_accurate;
         if draws_content {

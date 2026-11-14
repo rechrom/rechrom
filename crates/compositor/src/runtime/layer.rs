@@ -602,6 +602,12 @@ where
     fn visible_layer_rect(&self) -> Rect {
         self.impl_base().visible_layer_rect()
     }
+    fn draws_content(&self) -> bool {
+        self.impl_base().draws_content()
+    }
+    fn should_check_backface_visibility(&self) -> bool {
+        self.impl_base().should_check_backface_visibility()
+    }
     fn id(&self) -> i32 {
         self.impl_base().id()
     }

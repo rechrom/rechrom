@@ -616,10 +616,7 @@ impl StyleResolverBackend for ProductionInitialStyleHost<'_> {
     fn InDesignMode(&self, _document: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(
-        &'d self,
-        document: &'d Self::Document,
-    ) -> &'d AtomicString {
+    fn ContentLanguage<'d>(&'d self, document: &'d Self::Document) -> &'d AtomicString {
         &document.content_language
     }
     fn LayoutZoomFactor(&self, frame: &Self::LocalFrame) -> f32 {
@@ -1272,6 +1269,12 @@ pub(crate) struct ProductionBaseStyleCollaborators<'a> {
     pub search_text: SearchTextRequest,
     pub originating_style: Option<Persistent<ComputedStyle>>,
     pub subject_node: Option<usize>,
+    /// The live ElementAnimations owner. For an ordinary element this is the
+    /// cascade subject. A generated pseudo request continues matching rules
+    /// against its originating element while animation state belongs to the
+    /// retained PseudoElement node, matching StyleResolverState's distinct
+    /// originating and animating element identities.
+    pub animation_subject_node: Option<usize>,
     pub container_runtime: Option<&'a ProductionContainerRuntime<'a>>,
     pub custom_properties: Option<&'a CustomProperties>,
     pub parent_custom_properties: Option<&'a CustomProperties>,
@@ -1342,6 +1345,7 @@ impl ProductionBaseStyleCollaborators<'_> {
             search_text: SearchTextRequest::kNone,
             originating_style: None,
             subject_node: None,
+            animation_subject_node: None,
             container_runtime: None,
             custom_properties: None,
             parent_custom_properties: None,
@@ -1693,11 +1697,7 @@ impl<'d> ProductionRuleMatchingHost<'d> {
                 None
             };
             if let Some(user_modify) = user_modify {
-                self.SetLonghandProperty(
-                    properties,
-                    CSSPropertyID::kWebkitUserModify,
-                    user_modify,
-                );
+                self.SetLonghandProperty(properties, CSSPropertyID::kWebkitUserModify, user_modify);
                 if user_modify != CSSValueID::kReadOnly {
                     self.SetLonghandProperty(
                         properties,
@@ -2354,10 +2354,7 @@ impl StyleResolverBackend for ProductionRuleMatchingHost<'_> {
     fn InDesignMode(&self, _: &Self::Document) -> bool {
         false
     }
-    fn ContentLanguage<'d>(
-        &'d self,
-        _: &'d Self::Document,
-    ) -> &'d AtomicString {
+    fn ContentLanguage<'d>(&'d self, _: &'d Self::Document) -> &'d AtomicString {
         &foundation::atomic_string::g_null_atom
     }
     fn LayoutZoomFactor(&self, _: &Self::LocalFrame) -> f32 {
@@ -3838,10 +3835,37 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         Rc::new(state.element.clone())
     }
     fn StateAnimatingElement(&self, state: &Self::StyleResolverState) -> Option<Rc<Self::Element>> {
-        (!state.pseudo
-            && (self.cascade.animations.is_some_and(|map| !map.IsEmpty())
-                || self.cascade.transitions.is_some_and(|map| !map.IsEmpty())))
-        .then(|| Rc::new(state.element.clone()))
+        let animation_subject = if state.pseudo {
+            self.cascade.animation_subject_node?
+        } else {
+            state.element.index
+        };
+        let (transform, opacity) = self
+            .document
+            .AnimationPropertyFlags(self.document.Node(animation_subject).Id());
+        if transform || opacity {
+            browser_tracing::instant(
+                "style",
+                "Style.RetainedAnimationOwner",
+                &[
+                    ("node_id", self.document.Node(animation_subject).Id() as f64),
+                    ("transform", transform as u8 as f64),
+                    ("opacity", opacity as u8 as f64),
+                ],
+            );
+        }
+        (transform
+            || opacity
+            || self.cascade.animations.is_some_and(|map| !map.IsEmpty())
+            || self.cascade.transitions.is_some_and(|map| !map.IsEmpty()))
+        .then(|| {
+            Rc::new(ProductionResolverElement::ForNode(
+                self.document,
+                animation_subject,
+                &state.element.media_type,
+                true,
+            ))
+        })
     }
     fn StatePseudoElement(&self, state: &Self::StyleResolverState) -> Option<Rc<Self::Element>> {
         self.IsPseudoElement(&state.element)
@@ -4774,7 +4798,14 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         builder.SetPseudoElementStyles(bits)
     }
     fn CascadeApply(&self, cascade: &mut Self::StyleCascade, filter: CascadeFilter) {
-        let _trace = browser_tracing::span("style_resolve", "StyleResolver.ApplyCascade");
+        let mut trace = browser_tracing::span("style_resolve", "StyleResolver.ApplyCascade");
+        trace.set(
+            "has_animations",
+            cascade
+                .animations
+                .as_ref()
+                .is_some_and(|animations| !animations.IsEmpty()) as u8 as f64,
+        );
         let Some(mut state_ptr) = cascade.state else {
             self.unsupported("base:missing-cascade-state");
             return;
@@ -4820,6 +4851,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             filter,
         ) {
             Ok(output) => {
+                trace.set(
+                    "output_opacity",
+                    Self::style(&output.style).Opacity() as f64,
+                );
                 state.builder = ComputedStyleBuilder::from_style(Self::style(&output.style));
                 if let Some(base_data) = retained_base_data {
                     // The inner production cascade rebuilds its state from the
@@ -5207,11 +5242,20 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         Default::default()
     }
     fn ElementAnimations(&self, element: &Self::Element) -> Option<Rc<Self::ElementAnimations>> {
+        let (effect_transform, effect_opacity) = self
+            .document
+            .AnimationPropertyFlags(self.document.Node(element.index).Id());
         let animations = ProductionElementAnimations {
-            has_animations: self.cascade.animations.is_some_and(|map| !map.IsEmpty()),
+            has_animations: effect_transform
+                || effect_opacity
+                || self.cascade.animations.is_some_and(|map| !map.IsEmpty()),
             has_transitions: self.cascade.transitions.is_some_and(|map| !map.IsEmpty()),
         };
-        (self.cascade.subject_node == Some(element.index)
+        (self
+            .cascade
+            .animation_subject_node
+            .or(self.cascade.subject_node)
+            == Some(element.index)
             && (animations.has_animations || animations.has_transitions))
             .then(|| Rc::new(animations))
     }
@@ -5290,8 +5334,58 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         can_trigger: bool,
     ) {
         // `Document::AnimationStyles` is already the sampled animation update
-        // produced by the document owner. There is no second update to
-        // calculate here.
+        // produced by the document owner. Preserve CSSAnimations::
+        // UpdateAnimationFlagsForEffect even though there is no second update
+        // to calculate here: CompositingReasonFinder consumes these flags to
+        // keep transform/opacity effects on Blink's property update path.
+        use foundation::CSSPropertyID as Id;
+        let maps = [
+            self.cascade.animations.as_ref(),
+            self.cascade.transitions.as_ref(),
+        ];
+        let affects = |property| maps.iter().flatten().any(|map| map.Affects(property));
+        let (effect_transform, effect_opacity) = self
+            .document
+            .AnimationPropertyFlags(self.document.Node(animating.index).Id());
+        let opacity = effect_opacity || affects(Id::kOpacity);
+        let transform = effect_transform || affects(Id::kTransform);
+        let rotate = affects(Id::kRotate);
+        let scale = affects(Id::kScale);
+        let translate = affects(Id::kTranslate);
+        let filter = affects(Id::kFilter);
+        let backdrop_filter = affects(Id::kBackdropFilter);
+        let clip_path = affects(Id::kClipPath);
+        state.builder.SetHasCurrentOpacityAnimation(opacity);
+        state.builder.SetHasCurrentTransformAnimation(transform);
+        state.builder.SetHasCurrentRotateAnimation(rotate);
+        state.builder.SetHasCurrentScaleAnimation(scale);
+        state.builder.SetHasCurrentTranslateAnimation(translate);
+        state.builder.SetHasCurrentFilterAnimation(filter);
+        state
+            .builder
+            .SetHasCurrentBackdropFilterAnimation(backdrop_filter);
+        state.builder.SetHasCurrentClipPathAnimation(clip_path);
+        if browser_tracing::enabled()
+            && (effect_transform || effect_opacity || maps.iter().any(|map| map.is_some()))
+        {
+            browser_tracing::instant(
+                "style",
+                "Style.AnimationFlags",
+                &[
+                    ("node_id", self.document.Node(animating.index).Id() as f64),
+                    ("opacity", opacity as u8 as f64),
+                    ("transform", transform as u8 as f64),
+                    ("rotate", rotate as u8 as f64),
+                    ("scale", scale as u8 as f64),
+                    ("translate", translate as u8 as f64),
+                    ("filter", filter as u8 as f64),
+                    ("clip_path", clip_path as u8 as f64),
+                ],
+            );
+        }
+        state
+            .builder
+            .SetHasCurrentBackgroundColorAnimation(affects(Id::kBackgroundColor));
     }
     fn CalculateTransitionUpdate(
         &self,

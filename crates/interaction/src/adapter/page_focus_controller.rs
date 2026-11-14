@@ -5,9 +5,9 @@
 //! order and detects synchronous changes made by those listeners.
 
 use crate::{
+    editing_owners::{PageEditingOwners, SyntheticEventDispatcher},
     event::{EventType, MakeSyntheticEvent},
     ownership::{InteractionDocument, ReadNode},
-    editing_owners::{SyntheticEventDispatcher, PageEditingOwners},
 };
 use dom::UserInteractionState;
 use interaction_default::core::editing::frame_selection::{RevealExtentOption, SelectionAlignment};

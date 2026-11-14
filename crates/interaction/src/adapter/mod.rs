@@ -11,6 +11,7 @@ pub mod wheel_event_regions;
 pub mod native_interaction;
 pub mod page_cursor;
 pub mod page_default_event_handler;
+pub mod page_editing_owners;
 pub mod page_element_focusability;
 pub mod page_event;
 pub mod page_event_dispatcher;
@@ -30,7 +31,6 @@ pub mod page_main_thread_scroll;
 pub mod page_mouse_autoscroll;
 pub mod page_pointer_hit_test;
 pub mod page_scroll_manager;
-pub mod page_editing_owners;
 pub mod page_wheel_event_regions;
 
 pub mod page_editing_context;

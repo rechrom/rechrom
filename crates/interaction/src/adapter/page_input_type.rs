@@ -6,6 +6,7 @@
 //! bridge preserve Page's existing callback contract and stay explicit below.
 
 use crate::{
+    editing_owners::{PageEditingOwners, SyntheticEventDispatcher},
     event::{Event, EventType, MakeSyntheticEvent},
     focus_controller::FocusController,
     input_event::MouseButton,
@@ -13,7 +14,6 @@ use crate::{
         Attribute, HasAttribute, InteractionDOMMutationEmitter, InteractionDocument, IsElement,
         ReadNode,
     },
-    editing_owners::{SyntheticEventDispatcher, PageEditingOwners},
 };
 use dom::{
     dom_mutation::{DOMMutation, DOMMutationType},

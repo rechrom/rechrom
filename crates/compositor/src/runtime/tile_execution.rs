@@ -174,6 +174,7 @@ pub(crate) struct TileDiagnostics {
 pub(crate) struct RasterTraceScope {
     events: Arc<dyn EventSink>,
     event: &'static str,
+    trace: browser_tracing::Span,
 }
 impl Drop for RasterTraceScope {
     fn drop(&mut self) {
@@ -200,6 +201,7 @@ impl TileDiagnostics {
         RasterTraceScope {
             events: self.events.clone(),
             event,
+            trace: browser_tracing::span("compositor.raster", event),
         }
     }
 }
@@ -244,7 +246,12 @@ impl TileManagerWorkerDiagnostics for TileDiagnostics {
                 tile.0, resolution as u8
             ),
         );
-        Box::new(self.Scope("RasterTask"))
+        let mut trace = self.Scope("RasterTask");
+        trace.trace.set("tile", tile.0 as f64);
+        trace.trace.set("resolution", resolution as u8 as f64);
+        trace.trace.set("source_frame", source_frame_number as f64);
+        trace.trace.set("layer", layer_id as f64);
+        Box::new(trace)
     }
 }
 impl TileTaskManagerServices for TileDiagnostics {

@@ -161,11 +161,11 @@ fn page_threads() -> io::Result<browser::page::PageThreads> {
         // than the image-decode sequence (script_streamer.cc:1104-1109), so a
         // document with several large bundles cannot make decode or compile
         // wait behind the other class of work.
-        let compile_lanes = script_compile_lanes(
-            std::thread::available_parallelism()
-                .map(std::num::NonZeroUsize::get)
-                .unwrap_or(2),
-        );
+        let parallelism = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(2);
+        let compile_lanes = script_compile_lanes(parallelism);
+        let raster_lanes = renderer_raster_lanes(parallelism);
         (
             Arc::new(executor::PoolExecutor::new(
                 "page-work",
@@ -186,7 +186,7 @@ fn page_threads() -> io::Result<browser::page::PageThreads> {
             Arc::new(executor::PoolExecutor::new(
                 "page-raster",
                 16 * 1024 * 1024,
-                8,
+                raster_lanes,
             )?),
         )
     };
@@ -209,11 +209,20 @@ fn script_compile_lanes(parallelism: usize) -> usize {
     parallelism.saturating_sub(2).clamp(2, 8)
 }
 
+// Source: content/browser/gpu/compositor_util.cc,
+// NumberOfRendererRasterThreads. Desktop Chromium uses half the logical
+// processors and clamps the pool to one through four workers. In particular,
+// do not occupy every core with tile playback: the document and compositor
+// sequences must remain runnable while foreground raster work fills coverage.
+fn renderer_raster_lanes(parallelism: usize) -> usize {
+    (parallelism / 2).clamp(1, 4)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        coalesce_pending_resizes, root_resize_changes_visual_properties, script_compile_lanes,
-        Message,
+        coalesce_pending_resizes, renderer_raster_lanes, root_resize_changes_visual_properties,
+        script_compile_lanes, Message,
     };
     use crate::engine::{Command, ResizeRequest, Viewport};
     use std::{
@@ -227,6 +236,13 @@ mod tests {
         assert_eq!(script_compile_lanes(4), 2);
         assert_eq!(script_compile_lanes(10), 8);
         assert_eq!(script_compile_lanes(64), 8);
+    }
+
+    #[test]
+    fn raster_pool_matches_chromium_desktop_bounds() {
+        assert_eq!(renderer_raster_lanes(1), 1);
+        assert_eq!(renderer_raster_lanes(8), 4);
+        assert_eq!(renderer_raster_lanes(64), 4);
     }
 
     #[test]

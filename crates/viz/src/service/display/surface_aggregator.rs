@@ -1288,11 +1288,21 @@ impl SurfaceAggregator {
         )
         .map_err(VizError::Frame)?;
 
+        // Chromium requires full damage when an active Surface frame skips an
+        // index because the producer damage only describes adjacent frames.
+        // The Engine adapter retains and unions every submitted frame's damage
+        // until DidDraw, so an index gap remains incremental while that chain
+        // is continuous. Fall back to Chromium's full-damage behavior if any
+        // producer frame in the chain was lost.
+        let damage_continuous = damage_tracker
+            .State(surface_id)
+            .is_none_or(|state| state.continuous);
         let force_full = self.full_damage_.contains(&surface_id)
             || match self.resolved_frames_.get(&surface_id) {
                 None => true,
                 Some(record) if frame.frame_index == record.frame_index => false,
-                Some(record) => frame.frame_index != record.frame_index.wrapping_add(1),
+                Some(record) if frame.frame_index == record.frame_index.wrapping_add(1) => false,
+                Some(_) => !damage_continuous,
             };
         let root = resolved.root_pass().render_pass();
         let pass_damage: BTreeMap<_, _> = frame

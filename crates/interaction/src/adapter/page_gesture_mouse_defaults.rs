@@ -181,9 +181,7 @@ impl<'a, 'listener, 'frame> PageGestureMouseDefaults<'a, 'listener, 'frame> {
         // transaction so the final mouse event reaches caret/selection Paint.
         self.dispatcher
             .FrameSelection()
-            .ActivateFocusedTextControlSelection(
-                self.dispatcher.state.borrow().focused_node_id,
-            );
+            .ActivateFocusedTextControlSelection(self.dispatcher.state.borrow().focused_node_id);
         Ok(result)
     }
 }
@@ -444,6 +442,14 @@ impl crate::core::input::mouse_event_manager::MouseDraggedDefaultPort<MouseDefau
             .SelectedHtmlForClipboard()
         {
             Ok(html) => html.is_empty(),
+            // Chromium's FrameSelection::SelectedHtmlForClipboard returns a
+            // String, and this drag/autoscroll eligibility probe treats an
+            // unavailable serialized style as an empty selection.  A
+            // transiently unstyled endpoint must not escape the synchronous
+            // input transaction as a terminal Page error.
+            Err(
+                interaction_default::core::editing::serializers::styled_markup_serializer::SerializationError::MissingStyle,
+            ) => true,
             Err(error) => {
                 self.parent
                     .frame
