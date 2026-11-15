@@ -9,17 +9,7 @@ use super::{
 };
 use crate::cc::base::region::Region;
 // Source dependency: ui/gfx/display_color_spaces.h:36-45.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(u8)]
-pub enum ContentColorUsage {
-    #[default]
-    kSRGB = 0,
-    kWideColorGamut = 1,
-    kHDR = 2,
-}
-impl ContentColorUsage {
-    pub const kMaxValue: Self = Self::kHDR;
-}
+pub use compositor_frame::surface_id::ContentColorUsage;
 /// CheckedNumeric<uint32_t> retains invalid state through additional additions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckedU32(Option<u32>);

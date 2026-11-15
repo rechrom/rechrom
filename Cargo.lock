@@ -535,7 +535,9 @@ dependencies = [
  "compositor_draw",
  "compositor_resource",
  "compositor_scheduler",
+ "compositor_tile",
  "compositor_tree",
+ "image_resource",
 ]
 
 [[package]]

@@ -80,20 +80,6 @@ impl ExportableClientResource for Imported {
         self.exported_count += 1;
     }
 }
-impl ReturnedClientResource<RasterSyncToken> for RasterReturnedResource {
-    fn Id(&self) -> ResourceId {
-        self.id
-    }
-    fn Count(&self) -> i32 {
-        self.count
-    }
-    fn Lost(&self) -> bool {
-        self.lost
-    }
-    fn SyncToken(&self) -> &RasterSyncToken {
-        &self.sync_token
-    }
-}
 struct ProviderState {
     release_capabilities: Option<ReleaseCapabilities>,
     imports: HashMap<ResourceId, Imported>,

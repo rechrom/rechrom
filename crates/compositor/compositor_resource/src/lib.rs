@@ -11,6 +11,7 @@ pub mod managed_memory_policy;
 pub mod memory_history;
 pub mod resource_pool;
 pub mod resource_pool_boundary;
+pub mod returned_resource;
 pub mod resource_types;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
