@@ -422,7 +422,7 @@ pub(super) fn RasterLinkDragImage(
                 #[cfg(target_vendor = "apple")]
                 let typeface = cache.GetOrCreate(&item, &face)?;
                 #[cfg(not(target_vendor = "apple"))]
-                let typeface = create_raster_typeface(&item, &face, &item.font_variations)?;
+                let typeface = cache.GetOrCreate(&item, &face)?;
                 let mut font = SkFont::with_size(Some(typeface), run.size);
                 font.setEmbolden(run.synthetic_bold);
                 font.setSkewX(if run.synthetic_italic { -0.25 } else { 0. });

@@ -290,7 +290,6 @@ impl RecordShaderCache {
     }
 }
 
-#[cfg(target_vendor = "apple")]
 struct CachedTypeface {
     identity: command::FontDataIdentity,
     variations: Vec<command::FontVariation>,
@@ -298,17 +297,11 @@ struct CachedTypeface {
     typeface: skia::src::core::SkTypeface::SkTypefaceRef,
 }
 
-#[cfg(target_vendor = "apple")]
 #[derive(Default)]
 struct TypefaceCache {
     entries: std::sync::Mutex<Vec<CachedTypeface>>,
 }
 
-#[cfg(not(target_vendor = "apple"))]
-#[derive(Default)]
-struct TypefaceCache;
-
-#[cfg(target_vendor = "apple")]
 impl TypefaceCache {
     fn GetOrCreate(
         &self,
@@ -379,7 +372,6 @@ fn sfnt_checksum(bytes: &[u8]) -> u32 {
     })
 }
 
-#[cfg(target_vendor = "apple")]
 fn sfnt_face_table<'a>(bytes: &'a [u8], face_index: u32, tag: &[u8; 4]) -> Option<&'a [u8]> {
     let index = face_index & 0xffff;
     let face_offset = if bytes.starts_with(b"ttcf") {
@@ -806,7 +798,6 @@ fn create_raster_typeface(
     Ok(cloned)
 }
 
-#[cfg(target_vendor = "apple")]
 fn raster_typeface(
     item: &DrawCommand,
     resources: &ResourceContext<'_>,
@@ -1145,16 +1136,39 @@ impl font_engine::FontBackend for SkiaFontBackend {
     }
 }
 
+/// Off Apple platforms the raster face is Skia's Fontations typeface
+/// (src/ports/SkTypeface_fontations.cpp, SkTypeface_Make_Fontations), built
+/// from the exact face bytes with the face's collection index and the
+/// requested variation design coordinates, as Chromium's
+/// FontPlatformData::CreateSkFont configures a typeface's variations.
 #[cfg(not(target_vendor = "apple"))]
-fn raster_typeface(
+fn create_raster_typeface(
     _item: &DrawCommand,
-    _resources: &ResourceContext<'_>,
-    _cache: Option<&TypefaceCache>,
+    face: &command::FontFace<'_>,
+    variations: &[command::FontVariation],
 ) -> io::Result<skia::src::core::SkTypeface::SkTypefaceRef> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "translated typeface creation is not connected on this platform",
-    ))
+    use skia::include::core::SkFontArguments::{Coordinate, VariationPosition};
+    if face.bytes.is_empty() {
+        return Err(io::Error::other("translated glyph font has no bytes"));
+    }
+    let data = unsafe {
+        skia::src::core::SkData::SkData::MakeWithCopy(face.bytes.as_ptr(), face.bytes.len())
+    };
+    let coordinates: Vec<Coordinate> = variations
+        .iter()
+        .map(|variation| Coordinate {
+            axis: variation.tag,
+            value: variation.value,
+        })
+        .collect();
+    let mut arguments = SkFontArguments::new();
+    arguments.setCollectionIndex(face.face_index as i32);
+    arguments.setVariationDesignPosition(VariationPosition {
+        coordinates: coordinates.as_ptr(),
+        coordinateCount: coordinates.len() as i32,
+    });
+    skia::src::ports::SkTypeface_fontations::SkTypeface_Make_Fontations(data, &arguments)
+        .ok_or_else(|| io::Error::other("translated Fontations typeface creation failed"))
 }
 
 impl TranslatedSkiaBackend {

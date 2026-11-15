@@ -861,18 +861,15 @@ impl FontFace<'_> {
 // The raster cache outlives a borrowed resource snapshot. Retain the exact
 // immutable owner, like SkTypeface/SkData, or copy unowned source bytes. A live
 // owner makes its full-slice address a safe fast path, without address reuse.
-#[cfg(any(target_os = "macos", test))]
 enum FontDataBacking {
     Shared(std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>),
     Copied(Box<[u8]>),
 }
-#[cfg(any(target_os = "macos", test))]
 #[doc(hidden)]
 pub struct FontDataIdentity {
     bytes: FontDataBacking,
     face_index: u32,
 }
-#[cfg(any(target_os = "macos", test))]
 impl FontDataIdentity {
     pub fn new(face: &FontFace<'_>) -> Self {
         Self {
