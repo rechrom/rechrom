@@ -501,7 +501,6 @@ impl SkStrike {
 }
 // Source: src/core/SkStrike.h:138-138
 // Source: src/core/SkStrike.cpp:295-308
-#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
 impl SkStrike {
     pub fn dump(&self) {
         let mut lock_storage =
@@ -802,7 +801,6 @@ impl SkStrikeGlyphRunGuard<'_> {
     }
 }
 // Source: src/core/SkStrike.cpp:310-335
-#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
 impl SkStrike {
     pub fn dumpMemoryStatistics(
         &self,

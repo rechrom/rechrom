@@ -42,7 +42,7 @@ pub struct SkMipmapAccessor {
     fUpper: SkPixmap,
 }
 // Source: src/core/SkMipmapAccessor.cpp:24-33
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 fn try_load_mips(image: &dyn SkImage_Base) -> Result<Option<SkMipmap>, crate::RasterError> {
     let mut mips = image.refMips();
     if mips.is_none() {
@@ -53,7 +53,7 @@ fn try_load_mips(image: &dyn SkImage_Base) -> Result<Option<SkMipmap>, crate::Ra
     }
     Ok(mips)
 }
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 impl SkMipmapAccessor {
     // Source: src/core/SkMipmapAccessor.cpp:35-38
     // Source: src/core/SkMipmapAccessor.cpp:40-40

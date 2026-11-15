@@ -3057,6 +3057,8 @@ unsafe fn transfer_function_invert_raw(
 }
 
 use crate::modules::skcms::src::skcms_Transform::{baseline, Op};
+#[cfg(target_arch = "x86_64")]
+use crate::modules::skcms::src::skcms_Transform::{hsw, skx};
 use crate::modules::skcms::src::skcms_public::{
     skcms_CurveParametric, skcms_Matrix3x4, skcms_SetXYZD50, skcms_Signature,
 };
@@ -3284,17 +3286,79 @@ pub unsafe fn skcms_ApproximateCurve(
 }
 
 // Source: modules/skcms/skcms.cc:2475-2475
-// Only the selected ARM64 CPU variant is represented; x86 runtime dispatch is outside this configuration.
 #[derive(Clone, Copy)]
 enum CpuType {
     Baseline,
+    #[cfg(target_arch = "x86_64")]
+    HSW,
+    #[cfg(target_arch = "x86_64")]
+    SKX,
 }
-// Source: modules/skcms/skcms.cc:2477-2480
-#[cfg(target_arch = "aarch64")]
+// Source: modules/skcms/skcms.cc:2477-2479 (SKCMS_PORTABLE or not __x86_64__)
+#[cfg(any(skcms_portable, not(target_arch = "x86_64")))]
 fn cpu_type() -> CpuType {
     CpuType::Baseline
 }
-// Source: modules/skcms/skcms.cc:2537-2540
+// Source: modules/skcms/skcms.cc:2484-2534: one-time cpuid(1), cpuid(7) and
+// xgetbv(0) probe, gated by sAllowRuntimeCPUDetection.
+#[cfg(all(target_arch = "x86_64", not(skcms_portable)))]
+fn cpu_type() -> CpuType {
+    static TYPE: std::sync::OnceLock<CpuType> = std::sync::OnceLock::new();
+    *TYPE.get_or_init(|| unsafe {
+        use core::arch::x86_64::__cpuid_count;
+        #[target_feature(enable = "xsave")]
+        unsafe fn xgetbv0() -> u32 {
+            unsafe { core::arch::x86_64::_xgetbv(0) as u32 }
+        }
+        if !sAllowRuntimeCPUDetection.load(core::sync::atomic::Ordering::Relaxed) {
+            return CpuType::Baseline;
+        }
+        // See http://www.sandpile.org/x86/cpuid.htm
+
+        // First, a basic cpuid(1) lets us check prerequisites for HSW, SKX.
+        let leaf1 = __cpuid_count(1, 0);
+        let (ecx, edx) = (leaf1.ecx, leaf1.edx);
+        if (edx & (1u32 << 25)) != 0      // SSE
+            && (edx & (1u32 << 26)) != 0  // SSE2
+            && (ecx & (1u32 << 0)) != 0   // SSE3
+            && (ecx & (1u32 << 9)) != 0   // SSSE3
+            && (ecx & (1u32 << 12)) != 0  // FMA (N.B. not used, avoided even)
+            && (ecx & (1u32 << 19)) != 0  // SSE4.1
+            && (ecx & (1u32 << 20)) != 0  // SSE4.2
+            && (ecx & (1u32 << 26)) != 0  // XSAVE
+            && (ecx & (1u32 << 27)) != 0  // OSXSAVE
+            && (ecx & (1u32 << 28)) != 0  // AVX
+            && (ecx & (1u32 << 29)) != 0
+        // F16C
+        {
+            // Call cpuid(7) to check for AVX2 and AVX-512 bits.
+            let ebx = __cpuid_count(7, 0).ebx;
+            // eax from xgetbv(0) will tell us whether XMM, YMM, and ZMM state is saved.
+            let xcr0 = xgetbv0();
+            if (xcr0 & (1u32 << 1)) != 0      // XMM register state saved?
+                && (xcr0 & (1u32 << 2)) != 0  // YMM register state saved?
+                && (ebx & (1u32 << 5)) != 0
+            // AVX2
+            {
+                // At this point we're at least HSW.  Continue checking for SKX.
+                if (xcr0 & (1u32 << 5)) != 0      // Opmasks state saved?
+                    && (xcr0 & (1u32 << 6)) != 0  // First 16 ZMM registers saved?
+                    && (xcr0 & (1u32 << 7)) != 0  // High 16 ZMM registers saved?
+                    && (ebx & (1u32 << 16)) != 0  // AVX512F
+                    && (ebx & (1u32 << 17)) != 0  // AVX512DQ
+                    && (ebx & (1u32 << 28)) != 0  // AVX512CD
+                    && (ebx & (1u32 << 30)) != 0  // AVX512BW
+                    && (ebx & (1u32 << 31)) != 0
+                // AVX512VL
+                {
+                    return CpuType::SKX;
+                }
+                return CpuType::HSW;
+            }
+        }
+        CpuType::Baseline
+    })
+}// Source: modules/skcms/skcms.cc:2537-2540
 fn tf_is_gamma(tf: &skcms_TransferFunction) -> bool {
     tf.g > 0.0
         && tf.a == 1.0
@@ -3578,7 +3642,6 @@ fn prep_for_destination(
 // Source: modules/skcms/skcms.cc:2755-3139
 /// Caller retains borrowed ICC tables/CLUTs and valid source/destination pixel storage for this call.
 /// Profiles use native object-representation equality; no Rust owner or buffer lifetime is erased.
-#[cfg(target_arch = "aarch64")]
 pub unsafe fn skcms_Transform(
     src: *const c_void,
     srcFmt: skcms_PixelFormat,
@@ -3916,8 +3979,17 @@ pub unsafe fn skcms_Transform(
     }
     assert!(cursor <= program.len());
     assert!(cursor <= context.len());
-    let run = baseline::run_program;
+    // Source: modules/skcms/skcms.cc:3119-3135. With SKCMS_DISABLE_SKX/HSW the
+    // source falls through to the next case; those namespaces' run_program are
+    // then the disabled-ISA wrappers that reach the baseline interpreter.
+    #[allow(unused_mut)]
+    let mut run: unsafe fn(*const Op, *const *const c_void, isize, *const u8, *mut u8, i32, usize, usize) =
+        baseline::run_program;
     match cpu_type() {
+        #[cfg(target_arch = "x86_64")]
+        CpuType::SKX => run = skx::run_program,
+        #[cfg(target_arch = "x86_64")]
+        CpuType::HSW => run = hsw::run_program,
         CpuType::Baseline => {}
     }
     unsafe {

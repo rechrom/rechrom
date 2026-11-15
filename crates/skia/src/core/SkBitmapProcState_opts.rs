@@ -2,7 +2,8 @@ use super::SkBitmapProcState::SampleProc32;
 #[derive(Clone, Copy)]
 pub(crate) struct Dispatch {
     pub dx: SampleProc32,
-    pub dxdy: SampleProc32,
+    // Null off ARM64, as the source's S32_alpha_D32_filter_DXDY nullptr default.
+    pub dxdy: Option<SampleProc32>,
 }
 // Source: src/core/SkBitmapProcState_opts.cpp:21-22
 fn defaults() -> Dispatch {
@@ -10,6 +11,9 @@ fn defaults() -> Dispatch {
     use crate::src::opts::SkBitmapProcState_opts as k;
     let mut d = Dispatch {
         dx: k::S32_alpha_D32_filter_DX,
+        #[cfg(target_arch = "aarch64")]
+        dxdy: Some(k::S32_alpha_D32_filter_DXDY),
+        #[cfg(not(target_arch = "aarch64"))]
         dxdy: k::S32_alpha_D32_filter_DXDY,
     };
     // DEFINE_DEFAULT uses the native configured CPU level, not Rust's profile
@@ -99,10 +103,13 @@ unsafe fn dispatch_dxdy(
     n: i32,
     out: &mut [u32],
 ) {
-    (selected().dxdy)(s, xy, n, out)
+    (selected().dxdy.expect("DXDY sampler is only installed where one exists"))(s, xy, n, out)
 }
 pub static S32_alpha_D32_filter_DX: Option<SampleProc32> = Some(dispatch_dx);
+#[cfg(target_arch = "aarch64")]
 pub static S32_alpha_D32_filter_DXDY: Option<SampleProc32> = Some(dispatch_dxdy);
+#[cfg(not(target_arch = "aarch64"))]
+pub static S32_alpha_D32_filter_DXDY: Option<SampleProc32> = None;
 // Source: src/core/SkBitmapProcState_opts.cpp:42-44
 pub fn Init_BitmapProcState() {
     let _ = selected();

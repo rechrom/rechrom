@@ -1,4 +1,4 @@
-//! Translation of the selected desktop POSIX stdio branch.
+//! Translation of the desktop stdio branch, POSIX and SK_BUILD_FOR_WIN.
 //! Calls retain native FILE-position and error semantics; no Rust File owner is substituted.
 use crate::src::core::SkOSFile::{kRead_SkFILE_Flag, kWrite_SkFILE_Flag, SkFILE_Flags, FILE};
 use std::ffi::{c_char, c_void};
@@ -8,16 +8,26 @@ use std::ffi::{c_char, c_void};
 unsafe extern "C" {
     static mut __stderrp: *mut FILE;
 }
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(all(not(target_vendor = "apple"), not(windows)))]
 unsafe extern "C" {
     static mut stderr: *mut FILE;
+}
+#[cfg(windows)]
+unsafe extern "C" {
+    fn __acrt_iob_func(index: u32) -> *mut FILE;
+    fn _wfopen(path: *const u16, mode: *const u16) -> *mut FILE;
+    fn _mkdir(path: *const c_char) -> i32;
 }
 unsafe fn stderr() -> *mut FILE {
     #[cfg(target_vendor = "apple")]
     {
         __stderrp
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(windows)]
+    {
+        __acrt_iob_func(2)
+    }
+    #[cfg(all(not(target_vendor = "apple"), not(windows)))]
     {
         stderr
     }
@@ -37,6 +47,9 @@ pub unsafe fn sk_fopen(path: *const c_char, flags: SkFILE_Flags) -> *mut FILE {
         p += 1;
     }
     perm[p] = b'b' as c_char;
+    #[cfg(windows)]
+    let file = fopen_win(path, &perm);
+    #[cfg(not(windows))]
     let file = libc::fopen(path, perm.as_ptr());
     if file.is_null() && flags & kWrite_SkFILE_Flag != 0 {
         #[cfg(all(sk_debug, target_vendor = "apple", target_arch = "aarch64"))]
@@ -49,6 +62,51 @@ pub unsafe fn sk_fopen(path: *const c_char, flags: SkFILE_Flags) -> *mut FILE {
         }
     }
     file
+}
+
+// Source: src/ports/SkOSFile_stdio.cpp:27-34
+#[cfg(windows)]
+unsafe fn is_ascii(mut s: *const c_char) -> bool {
+    loop {
+        let v = *s;
+        s = s.add(1);
+        if v == 0 {
+            return true;
+        }
+        if (v as u8 & 0x80) != 0 {
+            return false;
+        }
+    }
+}
+
+// Source: src/ports/SkOSFile_stdio.cpp:36-61
+#[cfg(windows)]
+unsafe fn fopen_win(utf8path: *const c_char, perm: &[c_char; 4]) -> *mut FILE {
+    use crate::src::core::SkUTF::{NextUTF8, ToUTF16};
+    if is_ascii(utf8path) {
+        return libc::fopen(utf8path, perm.as_ptr());
+    }
+    let start = utf8path.cast::<u8>();
+    let end = start.add(libc::strlen(utf8path));
+    let mut ptr = start;
+    let mut n = 0;
+    while ptr < end {
+        let u = NextUTF8(&mut ptr, end);
+        if u < 0 {
+            return std::ptr::null_mut(); // malformed UTF-8
+        }
+        n += ToUTF16(u, std::ptr::null_mut());
+    }
+    let mut wchars = vec![0u16; n + 1];
+    let mut out = wchars.as_mut_ptr();
+    ptr = start;
+    while ptr < end {
+        out = out.add(ToUTF16(NextUTF8(&mut ptr, end), out));
+    }
+    crate::SkASSERT!(@source b"src/ports/SkOSFile_stdio.cpp\0".as_ptr(),57; @condition b"out == &wchars[n]\0".as_ptr(); out == wchars.as_mut_ptr().add(n));
+    *out = 0; // final null
+    let wperms = [perm[0] as u16, perm[1] as u16, perm[2] as u16, perm[3] as u16];
+    _wfopen(wchars.as_ptr(), wperms.as_ptr())
 }
 
 // Source: src/ports/SkOSFile_stdio.cpp:99-115
@@ -101,7 +159,7 @@ pub unsafe fn sk_fclose(f: *mut FILE) {
 pub unsafe fn sk_isdir(path: *const c_char) -> bool {
     let mut status: libc::stat = std::mem::zeroed();
     if libc::stat(path, &mut status) == 0 {
-        return status.st_mode & libc::S_IFDIR != 0;
+        return status.st_mode as u32 & libc::S_IFDIR as u32 != 0;
     }
     false
 }
@@ -122,9 +180,16 @@ pub unsafe fn sk_mkdir(path: *const c_char) -> bool {
         );
         return false;
     }
-    let retval = libc::mkdir(path, 0o777);
-    if retval != 0 {
-        libc::perror(b"mkdir() failed with error: \0".as_ptr().cast());
-    }
+    // Source: src/ports/SkOSFile_stdio.cpp:170-179
+    #[cfg(windows)]
+    let retval = _mkdir(path);
+    #[cfg(not(windows))]
+    let retval = {
+        let retval = libc::mkdir(path, 0o777);
+        if retval != 0 {
+            libc::perror(b"mkdir() failed with error: \0".as_ptr().cast());
+        }
+        retval
+    };
     retval == 0
 }

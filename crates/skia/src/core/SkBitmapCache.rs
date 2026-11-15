@@ -58,7 +58,7 @@ pub struct SkBitmapCache;
 // The cache owns the original stable boxed Rec. Native callbacks carry its raw
 // identity, not a retained state owner. Exact contended final-unlock backend
 // lifetime remains an unsafe native precondition, recorded separately as pending.
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 mod bitmap_cache {
     use super::*;
     use crate::include::private::chromium::SkDiscardableMemory::SkDiscardableMemory;
@@ -391,7 +391,7 @@ mod bitmap_cache {
         }
     }
 }
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 pub use bitmap_cache::{BitmapCacheRec, BitmapRecPtr};
 
 // Source: src/core/SkBitmapCache.cpp:228-229
@@ -409,7 +409,7 @@ macro_rules! CHECK_LOCAL{
 // The adapted Key allocation has no C++ ABI identity. Native sizeof(MipMapKey)==48
 // was measured by including the original SkBitmapCache.cpp on ARM64/64-bit.
 // Keep that exact native budget; other ABI footprints are pending verification.
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 mod mipmap_cache {
     use super::*;
     use crate::src::core::SkMipmap::SkMipmap;

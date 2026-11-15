@@ -1,6 +1,7 @@
 // Copyright 2018 Google LLC. BSD-style license.
 
-// Selected native configuration: baselineN4, ARM64 NEON, SKCMS_HAS_MUSTTAIL=0.
+// ARM64: the N=4 NEON baseline. Elsewhere the SKCMS_PORTABLE scalar instance,
+// which computes the same per-lane results as the 4-lane vector baseline.
 // Source: modules/skcms/src/skcms_TransformBaseline.cc:42-43
 #[cfg(all(target_arch = "aarch64", not(skcms_portable)))]
 pub const N: usize = 4;
@@ -18,15 +19,15 @@ pub use super::Transform_inl::{F, I32, U16, U32, U64, U8};
 pub use super::Transform_inl::run_program;
 
 // Source: modules/skcms/src/skcms_TransformBaseline.cc:39-40
-#[cfg(skcms_portable)]
+#[cfg(any(skcms_portable, not(target_arch = "aarch64")))]
 pub const N: usize = 1;
-#[cfg(skcms_portable)]
+#[cfg(any(skcms_portable, not(target_arch = "aarch64")))]
 pub type V<T> = T;
 // Source: modules/skcms/src/skcms_TransformBaseline.cc:46-46
 // The real scalar source instance, not the NEON four-lane program.
-#[cfg(skcms_portable)]
+#[cfg(any(skcms_portable, not(target_arch = "aarch64")))]
 mod portable_instance {
     crate::modules::skcms::src::Transform_inl::instantiate_transform_portable_backend!();
 }
-#[cfg(skcms_portable)]
+#[cfg(any(skcms_portable, not(target_arch = "aarch64")))]
 pub use portable_instance::run_program;

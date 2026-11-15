@@ -11,9 +11,13 @@ use super::SkSLDefines::SKSL_INT;
 // preexisting classic-stream adaptation. The corresponding non-Darwin classic
 // locale producer remains an explicit unresolved dependency for float streams;
 // no foreign symbol or alternate formatting algorithm is fabricated here.
-#[cfg(target_vendor = "apple")]
+// Windows supplies the same primitives from the MSVC CRT (_snprintf_l,
+// _strtod_l/_strtof_l with a classic "C" _locale_t); the num_get stage-2 atoms
+// and classic space mask keep libc++'s values so SkSL float text is identical.
+#[cfg(any(target_vendor = "apple", windows))]
 mod classic {
     use core::ffi::{c_char, c_int, c_void};
+    #[cfg(target_vendor = "apple")]
     unsafe extern "C" {
         fn snprintf_l(
             out: *mut c_char,
@@ -30,6 +34,7 @@ mod classic {
     // (Mach-O's leading underscore is omitted in Rust link_name).
     // __locale:373-380 selects uint32_t mask / _CTYPE_S for Apple;
     // __locale:548-550 performs ASCII-only mask lookup; _ctype.h:79 defines 0x4000.
+    #[cfg(target_vendor = "apple")]
     #[link(name = "c++")]
     unsafe extern "C" {
         #[link_name = "_ZNSt3__114__num_get_base5__srcE"]
@@ -37,8 +42,60 @@ mod classic {
         #[link_name = "_ZNSt3__15ctypeIcE13classic_tableEv"]
         fn classic_ctype_table() -> *const u32;
     }
+    #[cfg(target_vendor = "apple")]
     unsafe extern "C" {
         fn strtof_l(input: *const c_char, end: *mut *mut c_char, locale: *mut c_void) -> f32;
+    }
+    #[cfg(target_vendor = "apple")]
+    unsafe fn is_classic_space(c: u8) -> bool {
+        c < 128 && (*classic_ctype_table().add(c as usize) & 0x4000) != 0
+    }
+    // SDK locale:242-243 _LIBCPP_GET_C_LOCALE is literally 0 on Apple.
+    #[cfg(target_vendor = "apple")]
+    fn c_locale() -> *mut c_void {
+        core::ptr::null_mut()
+    }
+
+    #[cfg(windows)]
+    unsafe extern "C" {
+        fn _snprintf_l(
+            out: *mut c_char,
+            count: usize,
+            format: *const c_char,
+            locale: *mut c_void,
+            ...
+        ) -> c_int;
+        fn _strtod_l(input: *const c_char, end: *mut *mut c_char, locale: *mut c_void) -> f64;
+        fn _strtof_l(input: *const c_char, end: *mut *mut c_char, locale: *mut c_void) -> f32;
+        pub(super) fn strtoull(input: *const c_char, end: *mut *mut c_char, base: c_int) -> u64;
+        fn _errno() -> *mut c_int;
+        fn _create_locale(category: c_int, locale: *const c_char) -> *mut c_void;
+    }
+    // libc++ __num_get_base::__src.
+    #[cfg(windows)]
+    static NUM_GET_ATOMS: [u8; 33] = *b"0123456789abcdefABCDEFxX+-pPiInN\0";
+    // The classic ctype<char> space class: SP, HT, LF, VT, FF, CR.
+    #[cfg(windows)]
+    unsafe fn is_classic_space(c: u8) -> bool {
+        matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+    }
+    #[cfg(windows)]
+    fn c_locale() -> *mut c_void {
+        struct Locale(*mut c_void);
+        unsafe impl Send for Locale {}
+        unsafe impl Sync for Locale {}
+        static LOCALE: std::sync::OnceLock<Locale> = std::sync::OnceLock::new();
+        LOCALE
+            .get_or_init(|| Locale(unsafe { _create_locale(0 /* LC_ALL */, c"C".as_ptr()) }))
+            .0
+    }
+    #[cfg(windows)]
+    unsafe fn strtof_l(input: *const c_char, end: *mut *mut c_char, locale: *mut c_void) -> f32 {
+        _strtof_l(input, end, locale)
+    }
+    #[cfg(windows)]
+    unsafe fn strtod_l(input: *const c_char, end: *mut *mut c_char, locale: *mut c_void) -> f64 {
+        _strtod_l(input, end, locale)
     }
     // Internal stream state preserves consumption/EOF even though SkSL::stod only
     // exposes fail() and finite(). EOF by itself is success, never failbit.
@@ -55,11 +112,9 @@ mod classic {
     pub(super) unsafe fn extract_float(input: &[u8], out: *mut f32) -> FloatExtraction {
         // New stringstream: goodbit, skipws, no tied stream. Classic ctype<char>
         // applies its actual runtime classic mask table only to ASCII bytes.
-        let masks = classic_ctype_table();
         let mut consumed = 0usize;
         while consumed < input.len() {
-            let c = input[consumed];
-            if c >= 128 || (*masks.add(c as usize) & 0x4000) == 0 {
+            if !is_classic_space(input[consumed]) {
                 break;
             }
             consumed += 1;
@@ -130,8 +185,7 @@ mod classic {
             let saved_errno = *errno();
             *errno() = 0;
             let mut end = core::ptr::null_mut();
-            // SDK locale:242-243 _LIBCPP_GET_C_LOCALE is literally 0 on Apple.
-            let converted = strtof_l(chars.as_ptr().cast(), &mut end, core::ptr::null_mut());
+            let converted = strtof_l(chars.as_ptr().cast(), &mut end, c_locale());
             let current_errno = *errno();
             if current_errno == 0 {
                 *errno() = saved_errno;
@@ -162,16 +216,35 @@ mod classic {
         }
     }
     pub(super) unsafe fn errno() -> *mut c_int {
-        __error()
+        #[cfg(target_vendor = "apple")]
+        {
+            __error()
+        }
+        #[cfg(windows)]
+        {
+            _errno()
+        }
     }
     pub(super) fn emit(value: f64, precision: i32) -> Vec<u8> {
         let mut buf = [0u8; 30];
+        #[cfg(target_vendor = "apple")]
         let n = unsafe {
             snprintf_l(
                 buf.as_mut_ptr().cast(),
                 buf.len(),
                 core::ptr::null_mut(),
                 c"%.*g".as_ptr(),
+                precision,
+                value,
+            )
+        };
+        #[cfg(windows)]
+        let n = unsafe {
+            _snprintf_l(
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                c"%.*g".as_ptr(),
+                c_locale(),
                 precision,
                 value,
             )
@@ -197,7 +270,7 @@ mod classic {
         unsafe {
             let old = *errno();
             *errno() = 0;
-            let value = strtod_l(buf.as_ptr().cast(), &mut end, core::ptr::null_mut());
+            let value = strtod_l(buf.as_ptr().cast(), &mut end, c_locale());
             let current = *errno();
             if current == 0 {
                 *errno() = old;

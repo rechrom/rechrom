@@ -747,7 +747,7 @@ impl<K: crate::src::core::SkChecksum::UniqueObjectRepresentation> HashPolicy<K>
 }
 // Adapted/uncredited selected-ARM64 thin-pointer address bridge. Never hash
 // raw provenance-bearing pointer bytes or dereference/name-hash the pointee.
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 impl<T: Sized> HashPolicy<*const T> for crate::src::core::SkChecksum::SkGoodHash {
     fn hash(&self, key: &*const T) -> u32 {
         self.hash_thin_pointer(*key)

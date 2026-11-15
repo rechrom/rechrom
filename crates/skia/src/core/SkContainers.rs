@@ -13,12 +13,14 @@ unsafe extern "C" {
     fn malloc_size(ptr: *const c_void) -> usize;
     #[cfg(target_os = "linux")]
     fn malloc_usable_size(ptr: *mut c_void) -> usize;
+    #[cfg(windows)]
+    fn _msize(ptr: *mut c_void) -> usize;
 }
 
 // Selected native allocator ABI adaptation. It retains the exact Apple/Unix
 // usable-size branches of sk_malloc_size, without claiming those dependency lines.
 // Unsupported platform branches are not silently replaced with requested capacity.
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
 compile_error!(
     "SkContainers native allocator usable-size branch remains untranslated for this target"
 );
@@ -30,6 +32,13 @@ unsafe fn allocation_size(p: *mut u8, requested: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
         let actual = unsafe { malloc_usable_size(p.cast()) };
+        debug_assert!(actual >= requested);
+        actual
+    }
+    // Source: src/ports/SkMemory_malloc.cpp:132-134 (SK_BUILD_FOR_WIN)
+    #[cfg(windows)]
+    {
+        let actual = unsafe { _msize(p.cast()) };
         debug_assert!(actual >= requested);
         actual
     }

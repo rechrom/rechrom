@@ -107,7 +107,7 @@ struct BitmapProcShaderContext {
 /// once into final arena placement, then pinned before setup. No subsequent moves are permitted.
 /// Returned context owns neither state nor shader/image: arena teardown destroys context/state;
 /// callers never delete them individually or retain a mutable arena lease across their use.
-#[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
 pub unsafe fn MakeContext(
     shader: &dyn SkShaderBase,
     tmx: crate::include::core::SkTileMode::SkTileMode,

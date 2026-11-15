@@ -203,13 +203,16 @@ pub mod src {
     pub mod ports {
         pub mod SkGlobalInitialization_default;
         pub mod SkLog_stdio;
+        pub mod SkLog_win;
         pub mod SkMemory_malloc;
         #[cfg(SK_BUILD_FOR_IOS)]
         pub mod SkOSFile_ios;
         #[cfg(unix)]
         pub mod SkOSFile_posix;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         pub mod SkOSFile_stdio;
+        #[cfg(windows)]
+        pub mod SkOSFile_win;
         #[cfg(target_vendor = "apple")]
         pub mod SkScalerContext_mac_ct;
         #[cfg(target_vendor = "apple")]
@@ -508,7 +511,7 @@ pub mod src {
         pub mod SkMipmapHQDownSampler;
         pub mod SkNextID;
         pub mod SkNoDestructor;
-        #[cfg(all(unix, not(target_os = "ios")))]
+        #[cfg(any(all(unix, not(target_os = "ios")), windows))]
         pub mod SkOSFile;
         pub mod SkOpts;
         pub mod SkPaint;

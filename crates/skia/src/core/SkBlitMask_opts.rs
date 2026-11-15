@@ -1,21 +1,18 @@
 // Copyright 2023 Google LLC. BSD-style license.
-// This translation implements the selected ARM64 build configuration. The
-// native x86 SSSE3 runtime initializer is explicitly pending, not replaced by
-// the ARM64/default path on x86.
 // Source: src/core/SkBlitMask_opts.cpp:21-21
-#[cfg(target_arch = "aarch64")]
+// The default binding is the build's own SK_OPTS_NS implementation: NEON on
+// ARM64, the SSE2 baseline (portable SkBlitMask_opts.h path) on x86-64.
 pub static blit_mask_d32_a8: crate::src::core::SkBlitMask::BlitMaskProc =
     crate::src::opts::SkBlitMask_opts::blit_mask_d32_a8;
 
 // Source: src/core/SkBlitMask_opts.cpp:25-34
-#[cfg(target_arch = "aarch64")]
 fn init() -> bool {
-    // In the original selected ARM64 preprocessor branch no x86 CPU probe or
-    // SSSE3 initializer runs. The default is the actual native NEON dispatcher.
+    // ARM64 runs no CPU probe. On x86-64 the source replaces the default with
+    // ssse3::blit_mask_d32_a8 when SkCpu::SSSE3 is available; that SSSE3
+    // translation is pending, so the SSE2 baseline default stays installed.
     true
 }
 // Source: src/core/SkBlitMask_opts.cpp:36-38
-#[cfg(target_arch = "aarch64")]
 pub fn Init_BlitMask() {
     // Rust's OnceLock retains native function-local static one-time execution.
     static INITIALIZED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

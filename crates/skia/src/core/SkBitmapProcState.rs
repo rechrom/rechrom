@@ -8,7 +8,7 @@ use crate::src::image::SkImage_Base::SkImage_Base;
 use std::mem::MaybeUninit;
 impl SkBitmapProcState<'_> {
     // Source: src/core/SkBitmapProcState.h:32-35
-    #[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
     pub fn setup(
         mut self: std::pin::Pin<&mut Self>,
         inv: &SkMatrix,
@@ -413,7 +413,7 @@ impl SkBitmapProcState<'_> {
     // Source: src/core/SkBitmapProcState.cpp:242-243
     // Source: src/core/SkBitmapProcState.cpp:245-248
     // Source: src/core/SkBitmapProcState.cpp:250-251
-    #[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
     fn init(
         mut self: std::pin::Pin<&mut Self>,
         inv: &SkMatrix,

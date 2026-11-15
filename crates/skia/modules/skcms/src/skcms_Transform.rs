@@ -181,10 +181,8 @@ baseline_vector_lane!(f32, i32, u64, u32, u16, u8);
 pub use super::skcms_TransformBaseline as baseline;
 
 // Source: modules/skcms/src/skcms_Transform.h:153-159
-// The selected ARM64 native disabled-ISA namespace reaches the actual baseline
-// interpreter through its original HSW wrapper, not an enabled-AVX substitute.
-#[cfg(target_arch = "aarch64")]
+// Off x86-64 the HSW/SKX namespaces are the source's disabled-ISA wrappers,
+// which reach the baseline interpreter; on x86-64 they are the N=8/N=16 programs.
 pub use super::skcms_TransformHsw as hsw;
 // Source: modules/skcms/src/skcms_Transform.h:160-166
-#[cfg(target_arch = "aarch64")]
 pub use super::skcms_TransformSkx as skx;

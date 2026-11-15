@@ -4,12 +4,12 @@
     not(any(target_os = "windows", target_os = "android"))
 ))]
 pub use crate::src::ports::SkLog_stdio::SkLogVAList;
-// Real platform-defined entry: its Windows/Android body is outside this admitted
-// stdio source. This declaration is not an output fallback or implemented sink.
-#[cfg(all(
-    skia_use_default_log,
-    any(target_os = "windows", target_os = "android")
-))]
+// Source: src/ports/SkLog_win.cpp
+#[cfg(all(skia_use_default_log, target_os = "windows"))]
+pub use crate::src::ports::SkLog_win::SkLogVAList;
+// Real platform-defined entry: its Android body (SkLog_android.cpp) is not
+// translated. This declaration is not an output fallback or implemented sink.
+#[cfg(all(skia_use_default_log, target_os = "android"))]
 unsafe extern "C" {
     pub fn SkLogVAList(
         priority: crate::include::private::SkLogPriority::SkLogPriority,

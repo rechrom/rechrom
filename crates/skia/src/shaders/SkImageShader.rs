@@ -300,7 +300,7 @@ pub(crate) fn legacy_shader_can_handle(inv: &crate::src::core::SkMatrix::SkMatri
 // Source: src/shaders/SkImageShader.cpp:273-274
 // Source: src/shaders/SkImageShader.cpp:277-278
 impl SkImageShader {
-    #[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
     unsafe fn legacy_context(
         &self,
         rec: &ContextRec<'_>,
@@ -1075,7 +1075,7 @@ impl SkShaderBase for SkImageShader {
     ) -> Result<bool, crate::RasterError> {
         unsafe { self.append_stages(rec, mRec) }
     }
-    #[cfg(all(target_arch = "aarch64", target_pointer_width = "64"))]
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_pointer_width = "64"))]
     // Source: src/shaders/SkImageShader.h:89-89
     unsafe fn onMakeContext(
         &self,

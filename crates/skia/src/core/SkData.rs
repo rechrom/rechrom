@@ -295,12 +295,12 @@ impl SkData {
     }
 }
 // Source: src/core/SkData.cpp:167-171
-#[cfg(all(unix, not(target_os = "ios")))]
+#[cfg(any(all(unix, not(target_os = "ios")), windows))]
 unsafe extern "C" fn sk_mmap_releaseproc(addr: *const u8, ctx: *mut c_void) {
     let length = ctx as usize;
     crate::src::core::SkOSFile::sk_fmunmap(addr.cast(), length);
 }
-#[cfg(all(unix, not(target_os = "ios")))]
+#[cfg(any(all(unix, not(target_os = "ios")), windows))]
 impl SkData {
     // Source: src/core/SkData.cpp:173-181
     /// Borrows a live FILE; returned data owns only the mapping, not the FILE.

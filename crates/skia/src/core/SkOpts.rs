@@ -73,17 +73,15 @@ pub static start_pipeline_lowp: std::sync::LazyLock<Option<StartPipelineFn>> =
 // Rust namespace projection of the genuine default bindings/initializers in
 // their original implementation files. Selected ARM64 has no runtime replacement
 // in these units; this is not a second dispatch table or initialization backend.
-pub use super::SkBitmapProcState_opts::{
-    Init_BitmapProcState, S32_alpha_D32_filter_DX, S32_alpha_D32_filter_DXDY,
-};
+pub use super::SkBitmapProcState_opts::Init_BitmapProcState;
 #[cfg(target_arch = "aarch64")]
+pub use super::SkBitmapProcState_opts::{S32_alpha_D32_filter_DX, S32_alpha_D32_filter_DXDY};
 pub use super::SkBlitMask_opts::Init_BlitMask;
 pub use super::SkBlitRow_opts::blit_row_s32a_opaque;
 pub use super::SkBlitRow_opts::{blit_row_color32, Init_BlitRow};
 pub use super::SkMemset_opts::{
     memset16, memset32, memset64, rect_memset16, rect_memset32, rect_memset64, Init_Memset,
 };
-#[cfg(target_arch = "aarch64")]
 pub use super::SkSwizzler_opts::Init_Swizzler;
 // Preserve the previously exposed real non-ARM defaults; runtime replacement
 // implementations remain pending and no ARM64 Init function is exported there.

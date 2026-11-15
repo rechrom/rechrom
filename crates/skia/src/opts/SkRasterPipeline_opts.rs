@@ -739,12 +739,12 @@ pub mod ml4 {
     // Source: src/opts/SkRasterPipeline_opts.h:353-353
     #[target_feature(enable = "avx512f,avx512dq,avx512vl,avx512bw,avx2,fma")]
     pub unsafe fn floor_(v: F) -> F {
-        _mm512_floor_ps(v)
+        _mm512_roundscale_ps::<_MM_FROUND_FLOOR>(v)
     }
     // Source: src/opts/SkRasterPipeline_opts.h:354-354
     #[target_feature(enable = "avx512f,avx512dq,avx512vl,avx512bw,avx2,fma")]
     pub unsafe fn ceil_(v: F) -> F {
-        _mm512_ceil_ps(v)
+        _mm512_roundscale_ps::<_MM_FROUND_CEIL>(v)
     }
     // Source: src/opts/SkRasterPipeline_opts.h:355-355
     #[target_feature(enable = "avx512f,avx512dq,avx512vl,avx512bw,avx2,fma")]
@@ -3121,8 +3121,8 @@ pub mod avx2_literals {
     pub unsafe fn approx_powf(x: F, y: F) -> F {
         avx2::if_then_else_f32(
             _mm256_castps_si256(_mm256_or_ps(
-                _mm256_cmpeq_ps(x, F_(0.0)),
-                _mm256_cmpeq_ps(x, F_(1.0)),
+                _mm256_cmp_ps::<_CMP_EQ_OQ>(x, F_(0.0)),
+                _mm256_cmp_ps::<_CMP_EQ_OQ>(x, F_(1.0)),
             )),
             x,
             approx_pow2(_mm256_mul_ps(approx_log2(x), y)),
@@ -10332,7 +10332,7 @@ pub mod x86_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:6014-6014
     #[target_feature(enable = "avx512f,avx512dq,avx512vl,avx512bw,avx2,fma")]
     pub unsafe fn ml4_floor_(x: ml4::F) -> ml4::F {
-        _mm512_floor_ps(x)
+        _mm512_roundscale_ps::<_MM_FROUND_FLOOR>(x)
     }
     // Source: src/opts/SkRasterPipeline_opts.h:6016-6018
     #[target_feature(enable = "avx2")]
@@ -20183,7 +20183,7 @@ pub mod neon_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -20194,7 +20194,7 @@ pub mod neon_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -57333,7 +57333,7 @@ pub mod x86_sse_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -57344,7 +57344,7 @@ pub mod x86_sse_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -63642,7 +63642,7 @@ pub mod x86_sse_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -63681,7 +63681,7 @@ pub mod x86_sse_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         let mut src = common.src;
         let mut dst = common.dst.cast::<I32>();
         let end = dst.add(common.slots as usize);
@@ -63714,7 +63714,7 @@ pub mod x86_sse_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -63754,7 +63754,7 @@ pub mod x86_sse_shuffle {
     ) {
         let common = &ctx.base;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -96179,7 +96179,7 @@ pub mod x86_avx2_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -96198,7 +96198,7 @@ pub mod x86_avx2_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -107445,7 +107445,7 @@ pub mod x86_avx2_ternary {
 pub mod x86_avx2_additional_math {
     #![allow(unused_variables)]
 
-    use super::x86_avx2::{self as n, F};
+    use super::x86_avx2::{self as n, F, F_};
     use super::x86_avx2_vectors as v;
     // Source: src/opts/SkRasterPipeline_opts.h:5227-5246
     /// Safety: ninealignedinitializedliveframevectors,first4exclusive/disjoint
@@ -134911,7 +134911,7 @@ pub mod x86_ml4_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -134930,7 +134930,7 @@ pub mod x86_ml4_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -146182,7 +146182,7 @@ pub mod x86_ml4_ternary {
 pub mod x86_ml4_additional_math {
     #![allow(unused_variables)]
 
-    use super::x86_ml4::{self as n, F};
+    use super::x86_ml4::{self as n, F, F_};
     use super::x86_ml4_vectors as v;
     // Source: src/opts/SkRasterPipeline_opts.h:5227-5246
     /// Safety: ninealignedinitializedliveframevectors,first4exclusive/disjoint
@@ -172127,9 +172127,8 @@ pub mod x86_sse_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 8);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 8);
         let x = x.as_ptr().cast::<[S; 8]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -181381,9 +181380,8 @@ pub mod x86_avx2_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 16);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 16);
         let x = x.as_ptr().cast::<[S; 16]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -190600,9 +190598,8 @@ pub mod x86_ml4_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 16);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 16);
         let x = x.as_ptr().cast::<[S; 16]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -201137,7 +201134,7 @@ pub mod x86_sse41_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -201156,7 +201153,7 @@ pub mod x86_sse41_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -207397,7 +207394,7 @@ pub mod x86_sse41_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -207436,7 +207433,7 @@ pub mod x86_sse41_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         let mut src = common.src;
         let mut dst = common.dst.cast::<I32>();
         let end = dst.add(common.slots as usize);
@@ -207469,7 +207466,7 @@ pub mod x86_sse41_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -207509,7 +207506,7 @@ pub mod x86_sse41_shuffle {
     ) {
         let common = &ctx.base;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -223512,9 +223509,8 @@ pub mod x86_sse41_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 8);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 8);
         let x = x.as_ptr().cast::<[S; 8]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -234072,7 +234068,7 @@ pub mod x86_avx_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -234091,7 +234087,7 @@ pub mod x86_avx_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -240332,7 +240328,7 @@ pub mod x86_avx_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -240371,7 +240367,7 @@ pub mod x86_avx_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         let mut src = common.src;
         let mut dst = common.dst.cast::<I32>();
         let end = dst.add(common.slots as usize);
@@ -240404,7 +240400,7 @@ pub mod x86_avx_shuffle {
     ) {
         let common = ctx;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -240444,7 +240440,7 @@ pub mod x86_avx_shuffle {
     ) {
         let common = &ctx.base;
         let mut offsets = common.indirectOffset.cast::<U32>().read();
-        offsets = v::min(offsets, [common.indirectLimit; 4]);
+        offsets = v::min(&offsets, &[common.indirectLimit; 4]);
         offsets = v::mul(&offsets, &[4u32; 4]);
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const {
@@ -270146,7 +270142,7 @@ next(params,program,from_lanes(r),from_lanes(g),from_lanes(b),from_lanes(a));
                 patches: &mut [MemoryCtxPatch],
                 mut tail: *mut u8,
             ) {
-                let zero: StageF = from_lanes([0.0f32; 8]);
+                let zero: StageF = from_lanes([0.0f32; 4]);
                 let mut scratch = core::mem::MaybeUninit::<u8>::uninit();
                 if tail.is_null() {
                     tail = scratch.as_mut_ptr();
@@ -270208,7 +270204,7 @@ next(params,program,from_lanes(r),from_lanes(g),from_lanes(b),from_lanes(a));
                 patches: &mut [MemoryCtxPatch],
                 mut tail: *mut u8,
             ) {
-                let zero: StageF = from_lanes([0.0f32; 8]);
+                let zero: StageF = from_lanes([0.0f32; 4]);
                 let mut scratch = core::mem::MaybeUninit::<u8>::uninit();
                 if tail.is_null() {
                     tail = scratch.as_mut_ptr();
@@ -271275,9 +271271,8 @@ pub mod x86_avx_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 8);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 8);
         let x = x.as_ptr().cast::<[S; 8]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -282950,9 +282945,8 @@ pub mod lasx_pipe_lowp_vectors {
         }
     }
     pub unsafe fn cast<const L: usize, D: Copy, S: CastLane<D>>(x: &[S; L]) -> [D; L] {
-        const {
-            assert!(L == 16);
-        }
+        // Generic L cannot appear in a const block under generic_const_exprs.
+        assert!(L == 16);
         let x = x.as_ptr().cast::<[S; 16]>().read_unaligned();
         let y = S::vector(x);
         y.as_ptr().cast::<[D; L]>().read_unaligned()
@@ -284394,7 +284388,7 @@ pub mod lasx_pipe_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -284413,7 +284407,7 @@ pub mod lasx_pipe_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -338329,7 +338323,7 @@ pub mod lsx_pipe_color {
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
         *r = v::add(
             &n::cast(U32_(dx as u32)),
-            &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]],
+            &core::array::from_fn(|i| IOTA[i]),
         );
         *g = v::add(&n::cast(U32_(dy as u32)), &F_(0.5));
         *b = F_(1.0);
@@ -338340,7 +338334,7 @@ pub mod lsx_pipe_color {
         const IOTA: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         const _: () =
             assert!(IOTA.len() >= crate::src::core::SkRasterPipelineOpContexts::kMaxStride_highp);
-        let X = v::add(&U32_(dx as u32), &[IOTA[0], IOTA[1], IOTA[2], IOTA[3]]);
+        let X = v::add(&U32_(dx as u32), &core::array::from_fn(|i| IOTA[i]));
         let mut Y = U32_(dy as u32);
         Y = v::bit_xor(&Y, &X);
         let M = v::bit_or(
@@ -377942,14 +377936,16 @@ pub mod stage_values {
         pub type StageU16 = super::U16x8;
         pub use super::{from_lanes, to_lanes};
     }
+    // The AVX instantiation is the four-lane SSE leaf pipeline built with AVX
+    // enabled (x86_avx::F = [f32; 4]); its stage values are SSE4.1's widths.
     pub mod x86_avx {
-        pub type StageF = super::F32x8;
-        pub type StageI32 = super::I32x8;
-        pub type StageU32 = super::U32x8;
-        pub type StageU64 = super::U64x8;
-        pub type StageHighpU16 = super::U16x8;
-        pub type StageU8 = super::U8x8;
-        pub type StageMask = super::I32x8;
+        pub type StageF = super::F32x4;
+        pub type StageI32 = super::I32x4;
+        pub type StageU32 = super::U32x4;
+        pub type StageU64 = super::U64x4;
+        pub type StageHighpU16 = super::U16x4;
+        pub type StageU8 = super::U8x4;
+        pub type StageMask = super::I32x4;
         pub type StageU16 = super::U16x8;
         pub use super::{from_lanes, to_lanes};
     }

@@ -1,5 +1,6 @@
 // Copyright 2016 Google Inc. BSD-style license.
 // Selected original ARM64/NEON default target. Native intrinsics retain their exact lane operations.
+#[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
 // Source: src/opts/SkSwizzler_opts.inc:47-47
 const kFastUnpremul: bool = false;
@@ -19,13 +20,38 @@ fn reciprocal_alpha_portable(a: f32) -> f32 {
         0.0
     }
 }
-// Source: src/opts/SkSwizzler_opts.inc:61-63
+// Source: src/opts/SkSwizzler_opts.inc:61-63 (NEON) and 89-91 (portable)
+#[cfg(not(target_arch = "x86_64"))]
 fn reciprocal_alpha_times_255(a: f32) -> f32 {
     reciprocal_alpha_times_255_portable(a)
 }
-// Source: src/opts/SkSwizzler_opts.inc:65-67
+// Source: src/opts/SkSwizzler_opts.inc:65-67 (NEON) and 93-95 (portable)
+#[cfg(not(target_arch = "x86_64"))]
 fn reciprocal_alpha(a: f32) -> f32 {
     reciprocal_alpha_portable(a)
+}
+// Source: src/opts/SkSwizzler_opts.inc:68-86: SSE, hardened against timing
+// attacks (branchless divide-and-mask).
+#[cfg(target_arch = "x86_64")]
+fn sse_reciprocal(numerator: f32, a: f32) -> f32 {
+    use std::arch::x86_64::*;
+    unsafe {
+        let vA = _mm_set1_ps(a);
+        let q = _mm_div_ps(_mm_set1_ps(numerator), vA);
+        _mm_cvtss_f32(_mm_and_ps(_mm_cmpneq_ps(vA, _mm_setzero_ps()), q))
+    }
+}
+// Source: src/opts/SkSwizzler_opts.inc:72-78
+#[cfg(target_arch = "x86_64")]
+fn reciprocal_alpha_times_255(a: f32) -> f32 {
+    crate::SkASSERT!(@source b"src/opts/SkSwizzler_opts.inc\0".as_ptr(),74; @condition b"0 <= a && a <= 255\0".as_ptr(); 0.0 <= a && a <= 255.0);
+    sse_reciprocal(255.0, a)
+}
+// Source: src/opts/SkSwizzler_opts.inc:80-86
+#[cfg(target_arch = "x86_64")]
+fn reciprocal_alpha(a: f32) -> f32 {
+    crate::SkASSERT!(@source b"src/opts/SkSwizzler_opts.inc\0".as_ptr(),82; @condition b"0 <= a && a <= 1\0".as_ptr(); 0.0 <= a && a <= 1.0);
+    sse_reciprocal(1.0, a)
 }
 // Source: src/opts/SkSwizzler_opts.inc:98-112
 pub unsafe fn RGBA_to_rgbA_portable(dst: *mut u32, src: *const u32, count: i32) {
@@ -46,7 +72,20 @@ pub unsafe fn RGBA_to_rgbA_portable(dst: *mut u32, src: *const u32, count: i32) 
 // Source: src/opts/SkSwizzler_opts.inc:125-125
 // Source: src/opts/SkSwizzler_opts.inc:134-134
 fn pixel_round_as_RP(n: f32) -> u32 {
-    unsafe { vrndns_f32(n) as u32 }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        vrndns_f32(n) as u32
+    }
+    // SK_CPU_SSE_LEVEL >= SSE2: _mm_cvtps_epi32 rounds to nearest even.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use std::arch::x86_64::{_mm_cvtps_epi32, _mm_cvtsi128_si32, _mm_set_ss};
+        _mm_cvtsi128_si32(_mm_cvtps_epi32(_mm_set_ss(n))) as u32
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        (n + 0.5) as u32
+    }
 }
 // Source: src/opts/SkSwizzler_opts.inc:147-149
 fn unpremul_quick(reciprocalA: f32, c: f32) -> u32 {
@@ -187,10 +226,12 @@ pub unsafe fn inverted_CMYK_to_BGR1_portable(dst: *mut u32, src: *const u32, cou
 }
 // Source: src/opts/SkSwizzler_opts.inc:298-298
 // Source: src/opts/SkSwizzler_opts.inc:318-319
+#[cfg(target_arch = "aarch64")]
 unsafe fn div255_round(x: uint16x8_t) -> uint8x8_t {
     vraddhn_u16(x, vrshrq_n_u16::<8>(x))
 }
 // Source: src/opts/SkSwizzler_opts.inc:322-324
+#[cfg(target_arch = "aarch64")]
 unsafe fn scale(x: uint8x8_t, y: uint8x8_t) -> uint8x8_t {
     div255_round(vmull_u8(x, y))
 }
@@ -200,6 +241,7 @@ unsafe fn scale(x: uint8x8_t, y: uint8x8_t) -> uint8x8_t {
 // Source: src/opts/SkSwizzler_opts.inc:337-339
 // Source: src/opts/SkSwizzler_opts.inc:342-355
 // Source: src/opts/SkSwizzler_opts.inc:358-360
+#[cfg(target_arch = "aarch64")]
 unsafe fn premul_should_swapRB(
     kSwapRB: bool,
     mut dst: *mut u32,
@@ -237,10 +279,12 @@ unsafe fn premul_should_swapRB(
     proc(dst, src, count);
 }
 // Source: src/opts/SkSwizzler_opts.inc:362-364
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn RGBA_to_rgbA(dst: *mut u32, src: *const u32, count: i32) {
     premul_should_swapRB(false, dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:366-368
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn RGBA_to_bgrA(dst: *mut u32, src: *const u32, count: i32) {
     premul_should_swapRB(true, dst, src, count)
 }
@@ -253,6 +297,7 @@ pub unsafe fn RGBA_to_bgrA(dst: *mut u32, src: *const u32, count: i32) {
 // Source: src/opts/SkSwizzler_opts.inc:391-391
 // Source: src/opts/SkSwizzler_opts.inc:394-398
 // Source: src/opts/SkSwizzler_opts.inc:400-401
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn RGBA_to_BGRA(mut dst: *mut u32, mut src: *const u32, mut count: i32) {
     while count >= 16 {
         let mut rgba = vld4q_u8(src.cast());
@@ -283,6 +328,7 @@ pub unsafe fn RGBA_to_BGRA(mut dst: *mut u32, mut src: *const u32, mut count: i3
 // Source: src/opts/SkSwizzler_opts.inc:439-443
 // Source: src/opts/SkSwizzler_opts.inc:446-450
 // Source: src/opts/SkSwizzler_opts.inc:452-454
+#[cfg(target_arch = "aarch64")]
 unsafe fn expand_grayA(kPremul: bool, mut dst: *mut u32, mut src: *const u8, mut count: i32) {
     while count >= 16 {
         let mut ga = vld2q_u8(src);
@@ -317,14 +363,17 @@ unsafe fn expand_grayA(kPremul: bool, mut dst: *mut u32, mut src: *const u8, mut
     proc(dst, src, count);
 }
 // Source: src/opts/SkSwizzler_opts.inc:456-458
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn grayA_to_RGBA(dst: *mut u32, src: *const u8, count: i32) {
     expand_grayA(false, dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:460-462
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn grayA_to_rgbA(dst: *mut u32, src: *const u8, count: i32) {
     expand_grayA(true, dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:464-464
+#[cfg(target_arch = "aarch64")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Format {
     kRGB1,
@@ -336,6 +385,7 @@ enum Format {
 // Source: src/opts/SkSwizzler_opts.inc:476-478
 // Source: src/opts/SkSwizzler_opts.inc:481-496
 // Source: src/opts/SkSwizzler_opts.inc:498-500
+#[cfg(target_arch = "aarch64")]
 unsafe fn inverted_cmyk_to(format: Format, mut dst: *mut u32, mut src: *const u32, mut count: i32) {
     while count >= 8 {
         let mut pixels = vld4_u8(src.cast());
@@ -370,10 +420,12 @@ unsafe fn inverted_cmyk_to(format: Format, mut dst: *mut u32, mut src: *const u3
     proc(dst, src, count);
 }
 // Source: src/opts/SkSwizzler_opts.inc:502-504
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn inverted_CMYK_to_RGB1(dst: *mut u32, src: *const u32, count: i32) {
     inverted_cmyk_to(Format::kRGB1, dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:506-508
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn inverted_CMYK_to_BGR1(dst: *mut u32, src: *const u32, count: i32) {
     inverted_cmyk_to(Format::kBGR1, dst, src, count)
 }
@@ -393,6 +445,7 @@ pub unsafe fn inverted_CMYK_to_BGR1(dst: *mut u32, src: *const u32, count: i32) 
 // Source: src/opts/SkSwizzler_opts.inc:566-572
 // Source: src/opts/SkSwizzler_opts.inc:574-578
 // Source: src/opts/SkSwizzler_opts.inc:581-586
+#[cfg(target_arch = "aarch64")]
 unsafe fn common_rgbA_to_RGBA<const swapRB: bool>(
     mut dst: *mut u32,
     mut src: *const u32,
@@ -447,10 +500,12 @@ unsafe fn common_rgbA_to_RGBA<const swapRB: bool>(
     }
 }
 // Source: src/opts/SkSwizzler_opts.inc:588-590
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn rgbA_to_RGBA(dst: *mut u32, src: *const u32, count: i32) {
     common_rgbA_to_RGBA::<false>(dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:592-594
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn rgbA_to_BGRA(dst: *mut u32, src: *const u32, count: i32) {
     common_rgbA_to_RGBA::<true>(dst, src, count)
 }
@@ -469,6 +524,7 @@ pub unsafe fn gray_to_RGB1_portable(dst: *mut u32, src: *const u8, count: i32) {
 // Source: src/opts/SkSwizzler_opts.inc:1650-1650
 // Source: src/opts/SkSwizzler_opts.inc:1653-1657
 // Source: src/opts/SkSwizzler_opts.inc:1660-1666
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn gray_to_RGB1(mut dst: *mut u32, mut src: *const u8, mut count: i32) {
     while count >= 16 {
         let gray = vld1q_u8(src);
@@ -519,6 +575,7 @@ pub unsafe fn RGB_to_BGR1_portable(dst: *mut u32, mut src: *const u8, count: i32
 // Source: src/opts/SkSwizzler_opts.inc:1860-1869
 // Source: src/opts/SkSwizzler_opts.inc:1872-1876
 // Source: src/opts/SkSwizzler_opts.inc:1879-1881
+#[cfg(target_arch = "aarch64")]
 unsafe fn insert_alpha_should_swaprb(
     kSwapRB: bool,
     mut dst: *mut u32,
@@ -557,10 +614,58 @@ unsafe fn insert_alpha_should_swaprb(
     proc(dst, src, count);
 }
 // Source: src/opts/SkSwizzler_opts.inc:1883-1885
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn RGB_to_RGB1(dst: *mut u32, src: *const u8, count: i32) {
     insert_alpha_should_swaprb(false, dst, src, count)
 }
 // Source: src/opts/SkSwizzler_opts.inc:1886-1888
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn RGB_to_BGR1(dst: *mut u32, src: *const u8, count: i32) {
     insert_alpha_should_swaprb(true, dst, src, count)
 }
+// Source: src/opts/SkSwizzler_opts.inc:1580-1618, 1798-1802, 2017-2024 ("No Opts"):
+// without NEON, SSSE3, AVX2 or LASX at compile time every swizzler is its
+// portable form. This is x86-64's SSE2 baseline; SkSwizzler_opts.cpp:41-48
+// replaces it at runtime via Init_Swizzler_ssse3/ml3, not translated yet.
+#[cfg(not(target_arch = "aarch64"))]
+mod baseline {
+    use super::*;
+    pub unsafe fn RGBA_to_rgbA(dst: *mut u32, src: *const u32, count: i32) {
+        RGBA_to_rgbA_portable(dst, src, count)
+    }
+    pub unsafe fn RGBA_to_bgrA(dst: *mut u32, src: *const u32, count: i32) {
+        RGBA_to_bgrA_portable(dst, src, count)
+    }
+    pub unsafe fn RGBA_to_BGRA(dst: *mut u32, src: *const u32, count: i32) {
+        RGBA_to_BGRA_portable(dst, src, count)
+    }
+    pub unsafe fn grayA_to_RGBA(dst: *mut u32, src: *const u8, count: i32) {
+        grayA_to_RGBA_portable(dst, src, count)
+    }
+    pub unsafe fn grayA_to_rgbA(dst: *mut u32, src: *const u8, count: i32) {
+        grayA_to_rgbA_portable(dst, src, count)
+    }
+    pub unsafe fn inverted_CMYK_to_RGB1(dst: *mut u32, src: *const u32, count: i32) {
+        inverted_CMYK_to_RGB1_portable(dst, src, count)
+    }
+    pub unsafe fn inverted_CMYK_to_BGR1(dst: *mut u32, src: *const u32, count: i32) {
+        inverted_CMYK_to_BGR1_portable(dst, src, count)
+    }
+    pub unsafe fn rgbA_to_RGBA(dst: *mut u32, src: *const u32, count: i32) {
+        rgbA_to_RGBA_portable(dst, src, count)
+    }
+    pub unsafe fn rgbA_to_BGRA(dst: *mut u32, src: *const u32, count: i32) {
+        rgbA_to_BGRA_portable(dst, src, count)
+    }
+    pub unsafe fn gray_to_RGB1(dst: *mut u32, src: *const u8, count: i32) {
+        gray_to_RGB1_portable(dst, src, count)
+    }
+    pub unsafe fn RGB_to_RGB1(dst: *mut u32, src: *const u8, count: i32) {
+        RGB_to_RGB1_portable(dst, src, count)
+    }
+    pub unsafe fn RGB_to_BGR1(dst: *mut u32, src: *const u8, count: i32) {
+        RGB_to_BGR1_portable(dst, src, count)
+    }
+}
+#[cfg(not(target_arch = "aarch64"))]
+pub use baseline::*;
