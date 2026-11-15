@@ -27,7 +27,6 @@ paint_model = { path = "../paint/paint_model" }
 paint_skia = { path = "../paint/paint_skia" }
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 skia = { path = "../skia" }
-image_decoder = { path = "../image_decoder", default-features = false }
 serde_json = "1"
 getrandom = "0.4"
 

@@ -272,7 +272,6 @@ impl ScaledImageCache {
 // Source: cc/tiles/software_image_decode_cache_utils.cc:189-263.
 fn GenerateScaledImage(
     source: Arc<Vec<u8>>,
-    encoded: Option<&[u8]>,
     source_size: Size,
     source_rect: crate::adapter::geometry::Rect,
     target_size: Size,
@@ -320,37 +319,11 @@ fn GenerateScaledImage(
     let target_len = target_row_bytes
         .checked_mul(target_size.height() as usize)
         .ok_or_else(|| io::Error::other("software image target allocation overflow"))?;
-    // Source: SoftwareImageDecodeCache::DecodeImageIfNecessary asks a lazy
-    // PaintImageGenerator for the exact supported mip allocation before it
-    // falls back to GenerateCacheEntryFromCandidate. JPEGImageDecoder exposes
-    // libjpeg's 1/8 scale numerators, so preserve that codec path here.
-    let codec_target = if source_rect.x == 0
-        && source_rect.y == 0
-        && source_rect.width == source_size.width()
-        && source_rect.height == source_size.height()
-    {
-        encoded
-            .map(|bytes| {
-                image_decoder::jpeg_scaled_decode::decode_to_n32(
-                    bytes,
-                    target_size.width(),
-                    target_size.height(),
-                )
-            })
-            .transpose()?
-            .flatten()
-    } else {
-        None
-    };
-    if let Some(target) = codec_target {
-        return Ok(Arc::new(ScaledImage {
-            _source: source,
-            pixels: Arc::new(target),
-            size: target_size,
-            scale_adjustment,
-            src_rect_offset,
-        }));
-    }
+    // SoftwareImageDecodeCache::DecodeImageIfNecessary first asks the lazy
+    // PaintImageGenerator for a codec-supported reduced decode, which
+    // JPEGImageDecoder answers with libjpeg-turbo's N/8 scaled IDCT. That
+    // decoder is not translated, so every image takes the
+    // GenerateCacheEntryFromCandidate full-decode-and-scale path below.
     let mut target = vec![0; target_len];
     let target_info = SkImageInfo::Make(
         target_size.width(),
@@ -500,7 +473,6 @@ impl ImageDecodeCacheBackend<B> for SoftwareImages {
                             Some(scaled) => Ok(scaled),
                             None => GenerateScaledImage(
                                 pixels,
-                                image.image.0.GetEncodedData().as_deref(),
                                 image.image.0.size(),
                                 source_rect,
                                 target_size,
@@ -708,7 +680,6 @@ mod tests {
         }
         let image = GenerateScaledImage(
             Arc::new(source),
-            None,
             Size::new(4, 4),
             Rect::new(0, 0, 4, 4),
             Size::new(2, 2),

@@ -499,7 +499,6 @@ dependencies = [
  "compositor_tile",
  "compositor_tree",
  "getrandom 0.4.3",
- "image_decoder",
  "layoutng_assembly",
  "layoutng_foundation",
  "paint",
@@ -2047,7 +2046,6 @@ dependencies = [
  "crabby-avif",
  "image",
  "image_resource",
- "pkg-config",
  "rav1d",
  "zune-jpeg",
 ]
