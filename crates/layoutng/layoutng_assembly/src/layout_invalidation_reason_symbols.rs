@@ -32,3 +32,10 @@ reason!(kAttributeChanged, b"Attribute changed\0");
 reason!(kTextControlChanged, b"Text control changed\0");
 
 reason!(kSliderValueChanged, b"Slider value changed\0");
+
+// Labels from Chromium 6c1d401f layout_invalidation_reason.cc, needed by callers
+// that MSVC links even where other linkers dead-strip them.
+reason!(kListValueChange, b"List value change\0");
+reason!(kListStyleTypeChange, b"List style type change\0");
+reason!(kDevtools, b"Inspected by devtools\0");
+reason!(kAnchorPositioning, b"Anchor positioning\0");
