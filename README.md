@@ -39,8 +39,12 @@ The current implementation includes:
 ## Build
 
 The project uses the Rust toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml).
+The translated Skia uses nightly language features on that stable toolchain, so
+every build runs with `RUSTC_BOOTSTRAP=1` set in the environment
+(`$env:RUSTC_BOOTSTRAP = "1"` in PowerShell).
 
 ```bash
+export RUSTC_BOOTSTRAP=1
 cargo build --release -p rechrom_app
 cargo run --release -p rechrom_app -- https://rechrom.dev
 ```
@@ -51,7 +55,7 @@ Install the pinned Rust toolchain through rustup and the platform development
 libraries. For Debian/Ubuntu:
 
 ```bash
-sudo apt-get install build-essential pkg-config libharfbuzz-dev libicu-dev \
+sudo apt-get install build-essential pkg-config \
   libfontconfig-dev libfreetype-dev libx11-dev libxkbcommon-dev libwayland-dev
 cargo build --locked -p rechrom_app
 cargo run --locked -p rechrom_app -- --url https://rechrom.dev
@@ -61,17 +65,30 @@ A visible window needs an X11 or Wayland session; use `--headless` below on
 servers without a display. Rust registry dependencies still need downloading
 on the first build.
 
+### Windows prerequisites
+
+Install Visual Studio 2022 Build Tools with the "Desktop development with C++"
+workload (MSVC and a Windows SDK) and the pinned Rust toolchain through rustup.
+No other libraries are needed.
+
+```powershell
+cargo build --locked -p rechrom_app
+cargo run --locked -p rechrom_app -- --url https://rechrom.dev
+```
+
 The translated foundation primitives are owned by `crates/layoutng/layoutng_foundation/base`;
 `crates/layoutng/layoutng_foundation` preserves the higher-level foundation interfaces. The
 Roboto fallback/test font is bundled in `assets/fonts` with its license.
-Linux and macOS currently use the internal Rust Skia software renderer. Text shaping uses
-`rustybuzz`; OpenType metadata, glyph metrics, math and Unicode helpers still
-use native HarfBuzz. Neither normal application build needs a sibling source checkout or
-C++ Skia library. On macOS the translated Rust scaler calls Apple's system
-CoreText/CoreGraphics APIs directly; that platform FFI is not a C++ Skia bridge.
-System HarfBuzz and ICU development libraries are still required, so the whole
-browser is not yet free of native C/C++ dependencies. macOS also needs Xcode
-command-line tools (`brew install pkg-config harfbuzz icu4c` for dependencies).
+All platforms use the internal Rust Skia software renderer. Text shaping uses
+HarfRust, the HarfBuzz project's Rust port, with `read-fonts` for OpenType
+tables and metrics. The ICU4C APIs Blink calls (bidi, break iteration,
+properties, case mapping, collation search, IDNA, spoof checks and date/time
+symbols) are provided by `crates/icu_bidi` on ICU4X, with the Unicode UTS #39
+security data vendored in `crates/icu_bidi/data`. No build needs system
+HarfBuzz or ICU, a sibling source checkout or a C++ Skia library. On macOS the
+translated Rust scaler calls Apple's system CoreText/CoreGraphics APIs
+directly; that platform FFI is not a C++ Skia bridge. macOS needs Xcode
+command-line tools.
 
 Raster work has one production route: compositor-selected work enters
 `raster::RasterEngine`, whose current private backend replays it through
