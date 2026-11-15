@@ -16,6 +16,18 @@ pub(crate) fn FilePathFromURL(url: &str) -> io::Result<PathBuf> {
     if part.starts_with("localhost/") {
         part = &part[9..];
     }
+    // net/base/filename_util.cc FileURLToFilePath (Windows): a non-localhost
+    // host names a UNC share.
+    #[cfg(windows)]
+    let unc_host = match part.find('/') {
+        Some(0) => None,
+        Some(slash) => {
+            let host = &part[..slash];
+            part = &part[slash..];
+            Some(host)
+        }
+        None => return Err(invalid("file URL has no path")),
+    };
     if !part.starts_with('/') {
         return Err(invalid("file URL authority is unsupported"));
     }
@@ -28,9 +40,28 @@ pub(crate) fn FilePathFromURL(url: &str) -> io::Result<PathBuf> {
     }
     #[cfg(not(unix))]
     {
-        Ok(PathBuf::from(
-            String::from_utf8(decoded).map_err(|_| invalid("invalid file URL path"))?,
-        ))
+        let path = String::from_utf8(decoded).map_err(|_| invalid("invalid file URL path"))?;
+        #[cfg(windows)]
+        {
+            // "/C:/dir/file" -> "C:\dir\file"; "//host/share" -> "\\host\share".
+            let path = path.replace('/', "\\");
+            if let Some(host) = unc_host {
+                return Ok(PathBuf::from(format!("\\\\{host}{path}")));
+            }
+            let bytes = path.as_bytes();
+            let path = if bytes.len() >= 3
+                && bytes[0] == b'\\'
+                && bytes[1].is_ascii_alphabetic()
+                && matches!(bytes[2], b':' | b'|')
+            {
+                format!("{}:{}", &path[1..2], &path[3..])
+            } else {
+                path
+            };
+            Ok(PathBuf::from(path))
+        }
+        #[cfg(not(windows))]
+        Ok(PathBuf::from(path))
     }
 }
 
