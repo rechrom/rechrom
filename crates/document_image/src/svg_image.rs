@@ -865,6 +865,36 @@ impl image_resource::DocumentImageDecoder for SVGImageDecoder {
         mime_type: &str,
         container: &ContainerKey,
     ) -> io::Result<CreatedDocumentImage> {
+        // This package owns the isolated Layout run, so a LayoutEngine
+        // argument/runtime failure becomes an image decode error here instead
+        // of escaping to the resource loader as a layout type.
+        let created = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.CreateDocumentImage(resource_id, bytes, mime_type, container)
+        }));
+        match created {
+            Ok(result) => result,
+            Err(payload) => {
+                use layoutng_assembly::layout_engine::LayoutEngineError;
+                match payload.downcast_ref::<LayoutEngineError>() {
+                    Some(LayoutEngineError::InvalidArgument(message)) => {
+                        Err(io::Error::new(io::ErrorKind::InvalidInput, *message))
+                    }
+                    Some(LayoutEngineError::RuntimeError(message)) => Err(io::Error::other(*message)),
+                    None => std::panic::resume_unwind(payload),
+                }
+            }
+        }
+    }
+}
+
+impl SVGImageDecoder {
+    fn CreateDocumentImage(
+        &mut self,
+        resource_id: ImageId,
+        bytes: Arc<[u8]>,
+        mime_type: &str,
+        container: &ContainerKey,
+    ) -> io::Result<CreatedDocumentImage> {
         // Creation performs the same isolated Style/Layout/Paint lifecycle as
         // later animation mutations and may allocate native ComputedStyle.
         let mut heap_scope = foundation::LayoutHeapScope::new();

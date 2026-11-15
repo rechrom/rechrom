@@ -2264,17 +2264,6 @@ fn ImageResultBoundary<T>(work: impl FnOnce() -> io::Result<T>) -> io::Result<T>
                     io::ErrorKind::Unsupported,
                     error.to_string(),
                 ))
-            } else if let Some(error) =
-                error.downcast_ref::<layoutng_assembly::layout_engine::LayoutEngineError>()
-            {
-                match error {
-                    layoutng_assembly::layout_engine::LayoutEngineError::InvalidArgument(
-                        message,
-                    ) => Err(io::Error::new(io::ErrorKind::InvalidInput, *message)),
-                    layoutng_assembly::layout_engine::LayoutEngineError::RuntimeError(message) => {
-                        Err(io::Error::other(*message))
-                    }
-                }
             } else {
                 std::panic::resume_unwind(error)
             }
