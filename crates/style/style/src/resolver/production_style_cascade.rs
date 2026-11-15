@@ -527,55 +527,30 @@ pub(crate) fn SupportsBaseAppearance(
 
 // cpp: css_pending_system_font_value.cc:25-32;
 // layout_theme_font_provider_default.cc:34-56; each ConvertFont* pending
-// branch in style_builder_converter.cc. Chromium's non-Windows provider uses
-// Arial and subtracts two points at 96dpi for the three WebKit control fonts.
+// branch in style_builder_converter.cc. The family and size come from the
+// platform's LayoutThemeFontProvider below.
 fn ResolveSystemFontLonghand(
     property: CSSPropertyID,
     system_font: CSSValueID,
     document: &dom::Document,
 ) -> Result<Rc<production_css_value::Value>, ()> {
-    #[cfg(target_os = "windows")]
-    {
-        // The Windows provider reads live FontCache menu/status/caption data;
-        // no such owner is retained by this browser target yet.
-        let _ = (property, system_font, document);
-        return Err(());
-    }
-    #[cfg(not(target_os = "windows"))]
     {
         use CSSPropertyID::*;
         let value = match property {
             kFontFamily => production_css_value::list(
                 vec![Rc::new(production_css_value::Value::new(
                     CSSValuePayload::kFontFamilyClass(production_css_value::CSSFontFamilyValue(
-                        foundation::String::from("Arial"),
+                        foundation::String::from(SystemFontFamily(system_font).as_str()),
                     )),
                 ))],
                 production_css_value::ListSeparator::Comma,
             ),
-            kFontSize => {
-                // cpp: layout_theme_font_provider.cc:52-64 and
-                // font_size_functions.cc:221-240.  Medium has scale factor
-                // one: zero means the provider's 16px fallback and all other
-                // out-of-table values are clamped by minimum logical size 1.
-                let configured_size = document.DefaultFontSize();
-                let mut size = if configured_size == 0.0 {
-                    16.0
-                } else {
-                    configured_size.max(1.0)
-                };
-                if matches!(
-                    system_font,
-                    CSSValueID::kWebkitMiniControl
-                        | CSSValueID::kWebkitSmallControl
-                        | CSSValueID::kWebkitControl
-                ) {
-                    size -= 2.0 / 72.0 * 96.0;
-                }
-                // Keep a negative result: FontBuilder::SetSize rejects it and
-                // therefore preserves the inherited size, as Chromium does.
-                production_css_value::numeric(size as f64, UnitType::kPixels)
-            }
+            // Keep a negative result: FontBuilder::SetSize rejects it and
+            // therefore preserves the inherited size, as Chromium does.
+            kFontSize => production_css_value::numeric(
+                SystemFontSize(system_font, document) as f64,
+                UnitType::kPixels,
+            ),
             kFontOpticalSizing | kFontKerning => {
                 production_css_value::identifier(CSSValueID::kAuto)
             }
@@ -597,6 +572,75 @@ fn ResolveSystemFontLonghand(
             _ => return Err(()),
         };
         Ok(value)
+    }
+}
+
+// cpp: layout_theme_font_provider_win.cc:36-40 and _default.cc. One point is
+// 1/72 of an inch.
+fn PointsToPixels(points: f32) -> f32 {
+    const kPixelsPerInch: f32 = 96.0;
+    const kPointsPerInch: f32 = 72.0;
+    points / kPointsPerInch * kPixelsPerInch
+}
+
+// cpp: layout_theme_font_provider.cc:47-63 and font_size_functions.cc:221-240.
+// Medium has scale factor one: zero means the provider's 16px fallback and all
+// other out-of-table values are clamped by minimum logical size 1.
+fn DefaultGUIFont() -> std::string::String {
+    "Arial".to_owned()
+}
+fn DefaultFontSize(document: &dom::Document) -> f32 {
+    let configured_size = document.DefaultFontSize();
+    if configured_size == 0.0 {
+        16.0
+    } else {
+        configured_size.max(1.0)
+    }
+}
+
+// cpp: layout_theme_font_provider_win.cc:43-56. FontCache's Windows statics are
+// set by the embedding from the NONCLIENTMETRICS system fonts.
+#[cfg(target_os = "windows")]
+fn SystemFontFamily(system_font: CSSValueID) -> std::string::String {
+    use font_engine::fonts::font_cache_win as font_cache;
+    match system_font {
+        CSSValueID::kSmallCaption => font_cache::SmallCaptionFontFamily(),
+        CSSValueID::kMenu => font_cache::MenuFontFamily(),
+        CSSValueID::kStatusBar => font_cache::StatusFontFamily(),
+        _ => DefaultGUIFont(),
+    }
+}
+
+// cpp: layout_theme_font_provider_win.cc:59-75
+#[cfg(target_os = "windows")]
+fn SystemFontSize(system_font: CSSValueID, document: &dom::Document) -> f32 {
+    use font_engine::fonts::font_cache_win as font_cache;
+    match system_font {
+        CSSValueID::kSmallCaption => font_cache::SmallCaptionFontHeight() as f32,
+        CSSValueID::kMenu => font_cache::MenuFontHeight() as f32,
+        CSSValueID::kStatusBar => font_cache::StatusFontHeight() as f32,
+        // Why 2 points smaller? Because that's what Gecko does.
+        CSSValueID::kWebkitMiniControl
+        | CSSValueID::kWebkitSmallControl
+        | CSSValueID::kWebkitControl => DefaultFontSize(document) - PointsToPixels(2.0),
+        _ => DefaultFontSize(document),
+    }
+}
+
+// cpp: layout_theme_font_provider_default.cc:34-56
+#[cfg(not(target_os = "windows"))]
+fn SystemFontFamily(_system_font: CSSValueID) -> std::string::String {
+    DefaultGUIFont()
+}
+
+// cpp: layout_theme_font_provider_default.cc:34-56
+#[cfg(not(target_os = "windows"))]
+fn SystemFontSize(system_font: CSSValueID, document: &dom::Document) -> f32 {
+    match system_font {
+        CSSValueID::kWebkitMiniControl
+        | CSSValueID::kWebkitSmallControl
+        | CSSValueID::kWebkitControl => DefaultFontSize(document) - PointsToPixels(2.0),
+        _ => DefaultFontSize(document),
     }
 }
 #[derive(Clone)]
