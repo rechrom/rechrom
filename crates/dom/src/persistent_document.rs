@@ -1886,6 +1886,71 @@ impl PersistentDocument {
             .copied()
             .find(|&node| self.arena[node].node_type == DOMNodeType::kElement)
     }
+    /// cpp: document.cc:2226-2250 (SetTitleElement) and 2140-2185
+    /// (UpdateTitle/CanonicalizedTitle), evaluated on demand. An `<svg>` root
+    /// uses the textContent of its first SVG `<title>` child; otherwise the
+    /// first HTML `<title>` in tree order supplies HTMLTitleElement::text(),
+    /// the data of its child Text nodes.
+    pub fn Title(&self) -> String {
+        let root = self.DocumentElement();
+        let raw_title = if root.is_some_and(|root| self.Node(root).IsElement("svg", DOMNamespace::kSVG)) {
+            let root = root.expect("checked root");
+            let title = self
+                .Node(root)
+                .Children()
+                .iter()
+                .copied()
+                .find(|&child| self.Node(child).IsElement("title", DOMNamespace::kSVG));
+            let mut text = String::new();
+            let mut pending: Vec<usize> = title.into_iter().collect();
+            while let Some(index) = pending.pop() {
+                let node = self.Node(index);
+                if node.Type() == DOMNodeType::kText {
+                    text.push_str(node.Data());
+                }
+                pending.extend(node.Children().iter().rev().copied());
+            }
+            text
+        } else {
+            let mut pending = vec![self.Root()];
+            let mut title = None;
+            while let Some(index) = pending.pop() {
+                let node = self.Node(index);
+                if node.IsHTMLElement("title") {
+                    title = Some(index);
+                    break;
+                }
+                pending.extend(node.Children().iter().rev().copied());
+            }
+            title.map_or_else(String::new, |title| {
+                self.Node(title)
+                    .Children()
+                    .iter()
+                    .map(|&child| self.Node(child))
+                    .filter(|child| child.Type() == DOMNodeType::kText)
+                    .map(|child| child.Data())
+                    .collect()
+            })
+        };
+        // CanonicalizedTitle: control characters become spaces, leading and
+        // trailing spaces are trimmed and internal whitespace collapses.
+        let mut title = String::with_capacity(raw_title.len());
+        let mut pending_whitespace = false;
+        for c in raw_title.chars() {
+            if (c <= ' ' && c != '\u{000B}') || c == '\u{007F}' {
+                if !title.is_empty() {
+                    pending_whitespace = true;
+                }
+            } else {
+                if pending_whitespace {
+                    title.push(' ');
+                    pending_whitespace = false;
+                }
+                title.push(c);
+            }
+        }
+        title
+    }
     /// Document.cc:4112-4124. Dynamic classes are selected by the native
     /// element factory, including createElementNS in a non-HTML document.
     pub fn BodyElement(&self) -> Option<usize> {

@@ -9004,6 +9004,14 @@ impl Page {
     pub fn Document(&self) -> std::cell::Ref<'_, DOM> {
         self.state.document.borrow()
     }
+    /// The main frame's title as Document::DispatchDidReceiveTitle reports it
+    /// to the browser: the canonical document title, shortened to
+    /// mojom::blink::kMaxTitleChars.
+    pub fn Title(&self) -> String {
+        const kMaxTitleChars: usize = 4 * 1024;
+        let title = self.state.document.borrow().GetDocument().Title();
+        title.chars().take(kMaxTitleChars).collect()
+    }
     #[cfg(test)]
     pub(crate) fn WindowOwnersForTesting(
         &self,

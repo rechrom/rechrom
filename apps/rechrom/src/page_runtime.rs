@@ -3543,30 +3543,8 @@ fn send_event_timing_requests(
     Ok(())
 }
 fn title(page: &Page) -> String {
-    let owner = page.Document();
-    let doc = owner.GetDocument();
-    let mut pending = vec![doc.Root()];
-    let mut title = None;
-    while let Some(index) = pending.pop() {
-        let node = doc.Node(index);
-        if node.IsHTMLElement("title") {
-            title = Some(index);
-            break;
-        }
-        pending.extend(node.Children().iter().rev().copied());
-    }
-    let mut value = String::new();
-    if let Some(title) = title {
-        let mut pending = vec![title];
-        while let Some(index) = pending.pop() {
-            let node = doc.Node(index);
-            if node.Type() == dom::persistent_document::DOMNodeType::kText {
-                value.push_str(node.Data());
-            }
-            pending.extend(node.Children().iter().rev().copied());
-        }
-    }
-    value.trim().chars().take(100).collect()
+    // The window chrome shows at most 100 characters of the Page's title.
+    page.Title().chars().take(100).collect()
 }
 fn drag_regions(page: &Page, viewport: Viewport) -> Vec<crate::chrome::DragRegion> {
     use layoutng_assembly::{internal::layout_input::Offset, layout_engine::PaintFragmentCursor};
