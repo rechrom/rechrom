@@ -2,6 +2,8 @@
 //! Calls retain native FILE-position and error semantics; no Rust File owner is substituted.
 use crate::src::core::SkOSFile::{kRead_SkFILE_Flag, kWrite_SkFILE_Flag, SkFILE_Flags, FILE};
 use std::ffi::{c_char, c_void};
+#[cfg(sk_debug)]
+use std::ffi::c_int;
 
 // System ABI spelling only, not another logging implementation.
 #[cfg(target_vendor = "apple")]
@@ -52,12 +54,26 @@ pub unsafe fn sk_fopen(path: *const c_char, flags: SkFILE_Flags) -> *mut FILE {
     #[cfg(not(windows))]
     let file = libc::fopen(path, perm.as_ptr());
     if file.is_null() && flags & kWrite_SkFILE_Flag != 0 {
-        #[cfg(all(sk_debug, target_vendor = "apple", target_arch = "aarch64"))]
+        #[cfg(sk_debug)]
         {
-            let error = *libc::__error();
+            unsafe extern "C" {
+                #[cfg(target_vendor = "apple")]
+                fn __error() -> *mut c_int;
+                #[cfg(not(any(target_vendor = "apple", windows)))]
+                fn __errno_location() -> *mut c_int;
+                #[cfg(windows)]
+                fn _errno() -> *mut c_int;
+                fn strerror(error: c_int) -> *mut c_char;
+            }
+            #[cfg(target_vendor = "apple")]
+            let error = *__error();
+            #[cfg(not(any(target_vendor = "apple", windows)))]
+            let error = *__errno_location();
+            #[cfg(windows)]
+            let error = *_errno();
             crate::SkDebugf!(@source b"src/ports/SkOSFile_stdio.cpp\0".as_ptr(),93;
                 b"sk_fopen: fopen(\"%s\", \"%s\") returned nullptr (errno:%d): %s\n\0".as_ptr(),
-                path,perm.as_ptr(),error,libc::strerror(error),
+                path,perm.as_ptr(),error,strerror(error),
             );
         }
     }

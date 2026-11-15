@@ -549,7 +549,7 @@ impl SkStrikeSpec {
     }
 }
 
-#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+// Upstream compiles this debug dump on every platform.
 impl SkStrikeSpec {
     // Source: src/core/SkStrikeSpec.h:98-98
     // Source: src/core/SkStrikeSpec.cpp:129-131
