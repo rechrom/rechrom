@@ -80,6 +80,7 @@ static REGISTRY: LazyLock<Mutex<Vec<Arc<LayoutLocale>>>> = LazyLock::new(|| Mute
 pub struct LayoutLocale {
     string_: AtomicString,
     string_for_sk_font_mgr_: OnceLock<CString>,
+    #[allow(dead_code)]
     harfbuzz_language_: Option<harfrust::Language>,
     script_: i32,
     script_for_han_: AtomicI32,
@@ -169,7 +170,10 @@ impl LayoutLocale {
     }
 
     // cpp: third_party/blink/renderer/platform/text/layout_locale.h:53-55
-    pub fn HarfbuzzLanguage(&self) -> Option<&harfrust::Language> {
+    // The shapers currently set the buffer language from the locale tag
+    // string, so this cached value has no caller yet.
+    #[allow(dead_code)]
+    pub(crate) fn HarfbuzzLanguage(&self) -> Option<&harfrust::Language> {
         self.harfbuzz_language_.as_ref()
     }
 
