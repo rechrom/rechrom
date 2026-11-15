@@ -1,4 +1,4 @@
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::Size,
         layer_tree_host_impl::{HostUICanvas, HostUISourceBitmap, HostUISurface},

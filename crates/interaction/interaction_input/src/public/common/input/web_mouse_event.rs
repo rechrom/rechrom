@@ -10,7 +10,7 @@ use std::any::Any;
 use std::ops::{Deref, DerefMut};
 
 use crate::base::time::time::TimeTicks;
-use foundation::gfx_geometry::{PointF, Vector2dF};
+use foundation_base::gfx_geometry::{PointF, Vector2dF};
 
 use super::pointer_id::PointerId;
 use super::web_input_event::{Type, WebInputEvent, WebInputEventPayload};

@@ -8,7 +8,7 @@ path = "src/lib.rs"
 
 [dependencies]
 browser_tracing = { path = "../../tracing" }
-foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" }
+foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 icu_bidi = { path = "../../icu_bidi" }
 

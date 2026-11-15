@@ -6,7 +6,7 @@ use crate::{
         web_input_event::Type,
     },
 };
-use foundation::gfx_geometry::Vector2dF;
+use foundation_base::gfx_geometry::Vector2dF;
 
 pub struct FlingBooster {
     cutoff_time_for_boost: TimeTicks,

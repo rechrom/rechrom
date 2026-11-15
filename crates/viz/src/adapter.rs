@@ -21,7 +21,7 @@ use crate::{
         },
     },
 };
-use compositor_core::runtime::{
+use compositor::runtime::{
     frame::QuadMaterial,
     resources::{RasterReturnedResource, RasterTransferableResource},
     types::{
@@ -29,7 +29,7 @@ use compositor_core::runtime::{
         SurfaceId as RuntimeSurfaceIdValue, SurfaceRange as RuntimeSurfaceRangeValue,
     },
 };
-use compositor_core::{
+use compositor::{
     adapter::layer_tree_impl::ResourceId, runtime::frame::RenderPassId, CompositorFrame,
     RasterResourceLease,
 };
@@ -40,12 +40,12 @@ use std::{
     sync::Arc,
 };
 
-pub type DeviceRect = compositor_core::adapter::geometry::Rect;
+pub type DeviceRect = compositor::adapter::geometry::Rect;
 pub use crate::common::quads::aggregated_render_pass::{
     AggregatedRenderPass, SharedQuadState, Transform,
 };
 pub use crate::service::display::aggregated_frame::AggregatedFrame;
-pub use compositor_core::adapter::layer_tree_impl::Color4f;
+pub use compositor::adapter::layer_tree_impl::Color4f;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SurfaceId(pub u64);
@@ -129,7 +129,7 @@ pub struct PresentedSurfaceFrame {
     pub surface_id: SurfaceId,
     pub submission: u64,
     pub frame_token: u32,
-    pub frame_id: compositor_core::adapter::begin_frame::BeginFrameId,
+    pub frame_id: compositor::adapter::begin_frame::BeginFrameId,
 }
 pub struct FrameSubmission {
     pub submission: u64,
@@ -284,7 +284,7 @@ impl VizEngine {
                 .render_pass_list
                 .last()
                 .ok_or(VizError::MissingRenderPass)?;
-            let size = compositor_core::adapter::geometry::Size::new(
+            let size = compositor::adapter::geometry::Size::new(
                 root.output_rect.width,
                 root.output_rect.height,
             );
@@ -353,7 +353,7 @@ impl VizEngine {
             .referenced_surfaces
             .iter()
             .map(|range| {
-                let cv = |id: &compositor_core::runtime::types::SurfaceId| {
+                let cv = |id: &compositor::runtime::types::SurfaceId| {
                     CoreSurfaceId::new(
                         CoreFrameSinkId::new(id.frame_sink_id.client_id, id.frame_sink_id.sink_id),
                         CoreLocalSurfaceId::new(
@@ -529,7 +529,7 @@ impl VizEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compositor_core::{
+    use compositor::{
         adapter::layer_tree_impl::Color4f,
         adapter::resource_pool::{ResourcePoolMemoryDump, SharedImageTracingImportance},
         runtime::frame::{QuadMaterial, RenderPassId, SharedQuadStateHandle},
@@ -583,7 +583,7 @@ mod tests {
 
     fn frame(token: u32, damage: DeviceRect, contributing_damage: bool) -> CompositorFrame {
         let rect = DeviceRect::new(0, 0, 10, 10);
-        let mut pass = compositor_core::CompositorRenderPass::default();
+        let mut pass = compositor::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = damage;
@@ -598,7 +598,7 @@ mod tests {
     fn frame_with_gpu_like_resource(token: u32) -> CompositorFrame {
         let rect = DeviceRect::new(0, 0, 10, 10);
         let child_id = ResourceId(7);
-        let mut pass = compositor_core::CompositorRenderPass::default();
+        let mut pass = compositor::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = rect;
@@ -610,8 +610,8 @@ mod tests {
             state.are_contents_opaque = true;
         }
         pass.quad_list
-            .push(compositor_core::runtime::frame::DrawQuad {
-                geometry: compositor_core::runtime::frame::QuadGeometry {
+            .push(compositor::runtime::frame::DrawQuad {
+                geometry: compositor::runtime::frame::QuadGeometry {
                     shared_quad_state: Some(shared),
                     rect,
                     visible_rect: rect,
@@ -619,7 +619,7 @@ mod tests {
                 },
                 material: QuadMaterial::Tile {
                     resource_id: child_id,
-                    tex_coord_rect: compositor_core::adapter::geometry::RectF::new(
+                    tex_coord_rect: compositor::adapter::geometry::RectF::new(
                         0.0, 0.0, 10.0, 10.0,
                     ),
                     nearest_neighbor: false,
@@ -697,7 +697,7 @@ mod tests {
         color: Color4f,
         background: Color4f,
     ) -> CompositorFrame {
-        let mut pass = compositor_core::CompositorRenderPass::default();
+        let mut pass = compositor::CompositorRenderPass::default();
         pass.id = RenderPassId(1);
         pass.output_rect = rect;
         pass.damage_rect = rect;
@@ -710,8 +710,8 @@ mod tests {
             state.are_contents_opaque = true;
         }
         pass.quad_list
-            .push(compositor_core::runtime::frame::DrawQuad {
-                geometry: compositor_core::runtime::frame::QuadGeometry {
+            .push(compositor::runtime::frame::DrawQuad {
+                geometry: compositor::runtime::frame::QuadGeometry {
                     shared_quad_state: Some(shared),
                     rect,
                     visible_rect: rect,

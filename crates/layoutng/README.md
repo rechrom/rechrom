@@ -576,7 +576,7 @@ old `layoutng_*` source-package names at the repository boundary.
   fragment-owned shared handle. Shared edges, border styles, resolved appearance/control/font enums,
   font variations, host viewport geometry, linear paint colors, the three-value
   Layout/Paint writing mode, and the 4×4 boundary transform live in
-  `layoutng_foundation`, so these values do not depend on the concrete Layout
+  `foundation` (`crates/foundation`), so these values do not depend on the concrete Layout
   engine. Table and canvas payloads are parameterized by the assembly-owned
   immutable style snapshot, keeping their topology and geometry in the
   fragment owner without importing LayoutNG's style implementation. The

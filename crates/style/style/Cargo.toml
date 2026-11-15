@@ -14,7 +14,7 @@ style_resolve = { path = "../style_resolve" }
 style_diff = { path = "../style_diff" }
 style_commit = { path = "../style_commit" }
 browser_tracing = { path = "../../tracing" }
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 layoutng_style = { path = "../../layoutng/layoutng_style" }
 font_engine = { path = "../../font_engine" }
 

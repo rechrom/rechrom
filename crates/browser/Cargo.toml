@@ -56,7 +56,7 @@ url_loader = { path = "../url_loader" }
 renderer = { path = "../renderer" }
 renderer_skia = { path = "../renderer_skia" }
 raster = { path = "../raster" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 web_font = { path = "../web_font" }
 font_engine = { path = "../font_engine" }
 compositor = { path = "../compositor" }

@@ -12,7 +12,7 @@ navigation_history = { path = "../../document/navigation_history" }
 interaction_dispatch = { path = "../interaction_dispatch" }
 interaction_input = { path = "../interaction_input" }
 
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 layoutng_style = { path = "../../layoutng/layoutng_style" }
 layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }

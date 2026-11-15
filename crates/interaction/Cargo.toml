@@ -11,7 +11,7 @@ paint = { path = "../paint" }
 # reciprocal modules are assembled behind LayoutNG's translation feature; the
 # Interaction facade must select the same production assembly as Browser.
 layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 interaction_default = { path = "interaction_default" }

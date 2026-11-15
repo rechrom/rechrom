@@ -7,7 +7,7 @@ edition = "2021"
 canvas = { path = "../canvas" }
 animation = { path = "../animation" }
 browser_tracing = { path = "../tracing" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 image_resource = { path = "../image_resource" }
 paint_model = { path = "paint_model" }

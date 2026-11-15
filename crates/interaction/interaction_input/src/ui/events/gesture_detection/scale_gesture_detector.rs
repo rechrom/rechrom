@@ -7,7 +7,7 @@ use crate::public::common::input::web_gesture_event::WebGestureEvent;
 use crate::public::common::input::web_input_event::Type;
 use crate::public::common::input::web_touch_event::WebTouchEvent;
 use crate::public::common::input::web_touch_point::TouchState;
-use foundation::gfx_geometry::PointF;
+use foundation_base::gfx_geometry::PointF;
 
 impl GestureProvider {
     pub(super) fn scale(&mut self, e: &WebTouchEvent, events: &mut Vec<WebGestureEvent>) {

@@ -8,7 +8,7 @@ edition = "2021"
 # lives in the adjacent Chromium checkout, so offline builds never fetch it.
 xml = { path = "../../../vendor/xml" }
 dom = { path = "../../dom" }
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 
 # DOM retains layout objects; standalone tests link the Rust replaced-object
 # boundary and the source inline implementation used by their destructor.

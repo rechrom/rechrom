@@ -5,7 +5,7 @@
 use crate::common::quads::aggregated_render_pass::{
     AggregatedRenderPass, AggregatedRenderPassList,
 };
-use compositor_core::{
+use compositor::{
     adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage},
     runtime::{
         input::LatencyInfo,

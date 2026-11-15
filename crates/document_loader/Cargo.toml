@@ -10,7 +10,7 @@ navigation_history = { path = "../document/navigation_history" }
 fetch_policy = { path = "../resource/fetch_policy" }
 url = "2"
 browser_tracing = { path = "../tracing" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 url_loader = { path = "../url_loader" }
 resource = { path = "../resource" }
 decode = { path = "../decode" }
@@ -27,5 +27,4 @@ style = { path = "../style/style" }
 
 [dev-dependencies]
 image_decoder = { path = "../image_decoder" }
-layoutng_replaced = { package = "layout_algo_replaced", path = "../layoutng/layout_algo_replaced" }
 layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }

@@ -4,7 +4,7 @@
 //! local_frame_view.cc:222-246, paint_artifact_compositor.cc:63-81,142-164.
 use super::*;
 use canvas::{canvas_2d::*, child_paint_record::*};
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::{SizeF, Vector2dF},
         resource_types::{SharedImageFormat, SinglePlaneFormat},
@@ -119,7 +119,7 @@ impl CpuDecodedImageLease for ImageLease {
 pub(super) struct CanvasImageProvider<'a> {
     pub(super) frames: Option<&'a BTreeMap<i32, usize>>,
     pub(super) error: Option<io::Error>,
-    pub(super) values: Arc<dyn compositor_core::runtime::paint::CpuPaintValueServices<SkRegion>>,
+    pub(super) values: Arc<dyn compositor::runtime::paint::CpuPaintValueServices<SkRegion>>,
 }
 impl CpuImageProvider<SkRegion> for CanvasImageProvider<'_> {
     fn GetRasterContent(&mut self, image: &CpuDrawImage) -> CpuScopedRasterResult<SkRegion> {

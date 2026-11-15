@@ -4,7 +4,7 @@
 // source policy (mobile and ExperimentalFlingAnimation are disabled there).
 use super::{fixed_velocity_curve::FixedVelocityCurve, fling_curve::FlingCurve};
 use crate::public::common::input::web_gesture_event::GestureDevice;
-use foundation::gfx_geometry::Vector2dF;
+use foundation_base::gfx_geometry::Vector2dF;
 enum Curve {
     Fling(FlingCurve),
     Fixed(FixedVelocityCurve),

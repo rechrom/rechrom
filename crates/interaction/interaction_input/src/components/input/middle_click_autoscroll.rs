@@ -7,7 +7,7 @@ use crate::{
         web_input_event::Type,
     },
 };
-use foundation::gfx_geometry::PointF;
+use foundation_base::gfx_geometry::PointF;
 
 #[derive(Default)]
 pub struct MiddleClickAutoscroll {

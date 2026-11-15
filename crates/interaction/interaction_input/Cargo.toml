@@ -5,5 +5,5 @@ edition = "2021"
 publish = false
 
 [dependencies]
-foundation = { path = "../../layoutng/layoutng_foundation/base" }
-foundation_transform = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation_base = { path = "../../foundation/base" }
+foundation = { path = "../../foundation" }

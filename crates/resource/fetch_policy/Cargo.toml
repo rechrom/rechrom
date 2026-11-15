@@ -3,5 +3,5 @@ name = "fetch_policy"
 version = "0.0.1"
 edition = "2021"
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 url = "2"

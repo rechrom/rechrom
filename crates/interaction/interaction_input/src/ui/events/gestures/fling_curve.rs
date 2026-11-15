@@ -1,5 +1,5 @@
 // Chromium ui/events/gestures/fling_curve.h:18-47; .cc:14-93.
-use foundation::gfx_geometry::Vector2dF;
+use foundation_base::gfx_geometry::Vector2dF;
 const ALPHA: f32 = -5.70762e3;
 const BETA: f32 = 1.72e2;
 const GAMMA: f32 = 3.7;

@@ -41,7 +41,7 @@ use std::any::Any;
 use crate::base::time::time::TimeTicks;
 use crate::ui::events::event_latency_metadata::EventLatencyMetadata;
 use crate::ui::events::types::event_type::EventType as UiEventType;
-use foundation::gfx_geometry::Vector2dF;
+use foundation_base::gfx_geometry::Vector2dF;
 
 // Source: third_party/blink/public/common/input/web_input_event.h:54-78
 // KeyDown combines RawKeyDown and Char; the browser supplies input-method

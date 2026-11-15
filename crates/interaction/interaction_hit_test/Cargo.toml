@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 interaction_input = { path = "../interaction_input" }
 layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
 paint = { path = "../../paint" }

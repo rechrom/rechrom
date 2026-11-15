@@ -3,10 +3,10 @@
 #![allow(non_snake_case)]
 
 use crate::common::surfaces::surface_id::SurfaceId;
-use compositor_core::adapter::{
+use compositor::adapter::{
     begin_frame::BeginFrameArgs, geometry::Rect, scheduler_host::BeginFrameAck,
 };
-use compositor_core::{runtime::frame::RenderPassId, CompositorFrame};
+use compositor::{runtime::frame::RenderPassId, CompositorFrame};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Instant,

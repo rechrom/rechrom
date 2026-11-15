@@ -9,7 +9,7 @@
 #![allow(non_snake_case)]
 
 use crate::components::viz::common::display::renderer_settings::OcclusionCullerSettings;
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::{Rect, Transform as _},
         occlusion::OcclusionTransform as _,
@@ -55,8 +55,8 @@ impl OcclusionCuller {
             && sqs.are_contents_opaque
             && matches!(
                 sqs.blend_mode,
-                compositor_core::adapter::occlusion::SkBlendMode::kSrcOver
-                    | compositor_core::adapter::occlusion::SkBlendMode::kSrc
+                compositor::adapter::occlusion::SkBlendMode::kSrcOver
+                    | compositor::adapter::occlusion::SkBlendMode::kSrc
             )
             && sqs
                 .quad_to_target_transform

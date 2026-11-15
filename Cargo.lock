@@ -266,6 +266,7 @@ dependencies = [
  "executor",
  "fileapi",
  "font_engine",
+ "foundation",
  "getrandom 0.4.3",
  "html",
  "icu_bidi",
@@ -287,7 +288,6 @@ dependencies = [
  "layout_algo_table",
  "layout_fragment",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "navigation_history",
  "open",
@@ -404,7 +404,7 @@ dependencies = [
 name = "canvas"
 version = "0.0.1"
 dependencies = [
- "layoutng_foundation",
+ "foundation",
 ]
 
 [[package]]
@@ -498,9 +498,9 @@ dependencies = [
  "compositor_scheduler",
  "compositor_tile",
  "compositor_tree",
+ "foundation",
  "getrandom 0.4.3",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint",
  "paint_model",
  "paint_skia",
@@ -735,8 +735,8 @@ dependencies = [
 name = "css_parser"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "layoutng",
- "layoutng_foundation",
 ]
 
 [[package]]
@@ -744,7 +744,7 @@ name = "cssom"
 version = "0.0.1"
 dependencies = [
  "css_parser",
- "layoutng_foundation",
+ "foundation",
 ]
 
 [[package]]
@@ -895,10 +895,10 @@ version = "0.0.1"
 dependencies = [
  "cssom",
  "dom",
+ "foundation",
  "html",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "paint",
  "style",
@@ -915,14 +915,13 @@ dependencies = [
  "fetch_policy",
  "fileapi",
  "font_engine",
+ "foundation",
  "getrandom 0.4.3",
  "html",
  "image_decoder",
  "image_resource",
  "javascript",
- "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_foundation",
  "navigation_history",
  "page_mutation",
  "resource",
@@ -943,6 +942,7 @@ dependencies = [
  "cssom",
  "fileapi",
  "font_engine",
+ "foundation",
  "getrandom 0.4.3",
  "html",
  "image_resource",
@@ -950,7 +950,6 @@ dependencies = [
  "layout_algo_block",
  "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "navigation_history",
  "resize_observer",
@@ -1161,7 +1160,7 @@ dependencies = [
 name = "fetch_policy"
 version = "0.0.1"
 dependencies = [
- "layoutng_foundation",
+ "foundation",
  "url",
 ]
 
@@ -1186,7 +1185,7 @@ name = "fileapi"
 version = "0.0.1"
 dependencies = [
  "encoding_rs",
- "layoutng_foundation",
+ "foundation",
 ]
 
 [[package]]
@@ -1243,10 +1242,10 @@ dependencies = [
 name = "font_engine"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "harfrust",
  "icu_bidi",
  "icu_properties",
- "layoutng_foundation",
  "libc",
  "read-fonts 0.47.0",
  "ttf-parser",
@@ -1290,6 +1289,17 @@ dependencies = [
 
 [[package]]
 name = "foundation"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "foundation_base",
+ "icu_bidi",
+ "smallvec",
+ "url",
+]
+
+[[package]]
+name = "foundation_base"
 version = "0.1.0"
 
 [[package]]
@@ -1508,9 +1518,9 @@ name = "html"
 version = "0.0.1"
 dependencies = [
  "dom",
+ "foundation",
  "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_foundation",
  "xml",
 ]
 
@@ -1557,12 +1567,12 @@ dependencies = [
  "bytes",
  "fetch_policy",
  "flate2",
+ "foundation",
  "h2",
  "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
- "layoutng_foundation",
  "percent-encoding",
  "rustls",
  "rustls-rustcrypto",
@@ -2084,6 +2094,7 @@ dependencies = [
  "dom",
  "fileapi",
  "font_engine",
+ "foundation",
  "html",
  "image_resource",
  "interaction_default",
@@ -2092,7 +2103,6 @@ dependencies = [
  "interaction_input",
  "interaction_scroll",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "navigation_history",
  "paint",
@@ -2104,12 +2114,12 @@ name = "interaction_default"
 version = "0.0.1"
 dependencies = [
  "font_engine",
+ "foundation",
  "icu_bidi",
  "image_resource",
  "interaction_dispatch",
  "interaction_input",
  "intersection_observer",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "navigation_history",
@@ -2124,8 +2134,8 @@ version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "fileapi",
+ "foundation",
  "interaction_input",
- "layoutng_foundation",
  "navigation_history",
  "url",
 ]
@@ -2134,9 +2144,9 @@ dependencies = [
 name = "interaction_hit_test"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "interaction_input",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "paint",
@@ -2147,17 +2157,17 @@ name = "interaction_input"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layoutng_foundation",
+ "foundation_base",
 ]
 
 [[package]]
 name = "interaction_scroll"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "interaction_dispatch",
  "interaction_hit_test",
  "interaction_input",
- "layoutng_foundation",
  "scroll_animation",
  "scroll_snap",
 ]
@@ -2166,7 +2176,7 @@ dependencies = [
 name = "intersection_observer"
 version = "0.0.1"
 dependencies = [
- "layoutng_foundation",
+ "foundation",
 ]
 
 [[package]]
@@ -2194,12 +2204,12 @@ dependencies = [
  "browser_tracing",
  "executor",
  "fixed_decimal",
+ "foundation",
  "icu_datetime",
  "icu_decimal",
  "icu_locale",
  "icu_plurals",
  "icu_provider",
- "layoutng_foundation",
  "quickjs",
  "unicode-segmentation",
  "writeable",
@@ -2289,8 +2299,8 @@ name = "layout_algo_block"
 version = "0.0.1"
 dependencies = [
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "paint",
@@ -2306,8 +2316,8 @@ name = "layout_algo_flex"
 version = "0.0.1"
 dependencies = [
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2317,8 +2327,8 @@ name = "layout_algo_float"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2329,8 +2339,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2345,8 +2355,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2357,8 +2367,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "icu_bidi",
- "layoutng_foundation",
 ]
 
 [[package]]
@@ -2368,6 +2378,7 @@ dependencies = [
  "browser_tracing",
  "cssom",
  "font_engine",
+ "foundation",
  "icu_bidi",
  "image_resource",
  "layout_algo_custom",
@@ -2376,7 +2387,6 @@ dependencies = [
  "layout_fragment",
  "layout_invalidation",
  "layout_reuse",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "skia",
@@ -2388,8 +2398,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
 ]
 
@@ -2401,9 +2411,9 @@ version = "0.0.1"
 name = "layout_algo_multicol"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "layout_algo_block",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2413,8 +2423,8 @@ name = "layout_algo_out_of_flow"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2424,9 +2434,9 @@ name = "layout_algo_replaced"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2441,8 +2451,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
 ]
@@ -2454,11 +2464,11 @@ dependencies = [
  "browser_tracing",
  "cssom",
  "dom",
+ "foundation",
  "html",
  "layout_algo_block",
  "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "style",
@@ -2479,8 +2489,8 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "font_engine",
+ "foundation",
  "image_resource",
- "layoutng_foundation",
  "scroll_snap",
 ]
 
@@ -2496,7 +2506,7 @@ name = "layout_reuse"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_geometry",
 ]
 
@@ -2507,12 +2517,12 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "font_engine",
+ "foundation",
  "image_resource",
  "intersection_observer",
  "layout_commit",
  "layout_invalidation",
  "layout_reuse",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "resize_observer",
@@ -2528,6 +2538,7 @@ dependencies = [
  "canvas",
  "cssom",
  "font_engine",
+ "foundation",
  "icu_bidi",
  "image_resource",
  "intersection_observer",
@@ -2537,7 +2548,6 @@ dependencies = [
  "layout_fragment",
  "layout_invalidation",
  "layout_reuse",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "resize_observer",
@@ -2546,21 +2556,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "layoutng_foundation"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "foundation",
- "icu_bidi",
- "smallvec",
- "url",
-]
-
-[[package]]
 name = "layoutng_geometry"
 version = "0.0.1"
 dependencies = [
- "layoutng_foundation",
+ "foundation",
 ]
 
 [[package]]
@@ -2568,8 +2567,8 @@ name = "layoutng_style"
 version = "0.0.1"
 dependencies = [
  "font_engine",
+ "foundation",
  "image_resource",
- "layoutng_foundation",
  "layoutng_geometry",
 ]
 
@@ -3145,10 +3144,10 @@ dependencies = [
  "cssom",
  "document_loader",
  "dom",
+ "foundation",
  "html",
  "interaction",
  "javascript",
- "layoutng_foundation",
  "navigation_history",
  "resource",
  "style",
@@ -3211,9 +3210,9 @@ dependencies = [
  "animation",
  "browser_tracing",
  "canvas",
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint_chunk",
  "paint_commit",
  "paint_model",
@@ -3227,8 +3226,8 @@ dependencies = [
 name = "paint_chunk"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint_model",
 ]
 
@@ -3237,8 +3236,8 @@ name = "paint_commit"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint_model",
  "paint_record",
  "prepaint",
@@ -3248,9 +3247,9 @@ dependencies = [
 name = "paint_model"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "scroll_snap",
@@ -3264,9 +3263,9 @@ dependencies = [
  "browser_tracing",
  "canvas",
  "font_engine",
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "paint_chunk",
  "paint_model",
@@ -3287,8 +3286,8 @@ dependencies = [
 name = "paint_skia"
 version = "0.0.1"
 dependencies = [
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "paint_model",
@@ -3496,9 +3495,9 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_geometry",
  "layoutng_style",
  "paint_model",
@@ -3658,9 +3657,9 @@ dependencies = [
  "canvas",
  "compositor",
  "font_engine",
+ "foundation",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint",
  "skia",
 ]
@@ -3745,13 +3744,13 @@ dependencies = [
  "event_loop",
  "executor",
  "fileapi",
+ "foundation",
  "icu_bidi",
  "image_decoder",
  "image_resource",
  "interaction",
  "javascript",
  "layoutng_assembly",
- "layoutng_foundation",
  "libc",
  "navigation_history",
  "net_filename",
@@ -3857,7 +3856,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "compositor",
- "layoutng_foundation",
+ "foundation",
  "viz",
 ]
 
@@ -3868,8 +3867,8 @@ dependencies = [
  "browser_tracing",
  "bytemuck",
  "compositor",
+ "foundation",
  "layoutng_assembly",
- "layoutng_foundation",
  "paint",
  "raster",
  "renderer",
@@ -3888,9 +3887,9 @@ dependencies = [
  "browser_tracing",
  "decode",
  "fetch_policy",
+ "foundation",
  "image_decoder",
  "image_resource",
- "layoutng_foundation",
  "url_loader",
 ]
 
@@ -4384,10 +4383,10 @@ dependencies = [
  "cssom",
  "dom",
  "font_engine",
+ "foundation",
  "html",
  "image_resource",
  "layoutng_assembly",
- "layoutng_foundation",
  "layoutng_style",
  "style_commit",
  "style_diff",
@@ -4406,7 +4405,7 @@ name = "style_commit"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_diff",
  "style_model",
@@ -4425,7 +4424,7 @@ name = "style_invalidation"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "style_model",
 ]
 
@@ -4434,7 +4433,7 @@ name = "style_match"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_model",
  "style_parser",
@@ -4446,7 +4445,7 @@ dependencies = [
 name = "style_model"
 version = "0.0.1"
 dependencies = [
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
 ]
 
@@ -4455,7 +4454,7 @@ name = "style_parser"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_model",
  "url",
@@ -4467,7 +4466,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "font_engine",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_match",
  "style_model",
@@ -4479,7 +4478,7 @@ name = "style_rules"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_invalidation",
  "style_model",
@@ -4491,7 +4490,7 @@ name = "style_walk"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_foundation",
+ "foundation",
  "layoutng_style",
  "style_invalidation",
  "style_model",
@@ -5074,6 +5073,7 @@ dependencies = [
  "cssom",
  "dom",
  "fileapi",
+ "foundation",
  "getrandom 0.4.3",
  "html",
  "http_transport",
@@ -5081,7 +5081,6 @@ dependencies = [
  "javascript",
  "layout_algo_replaced",
  "layoutng_assembly",
- "layoutng_foundation",
  "navigation_history",
  "paint",
  "percent-encoding",

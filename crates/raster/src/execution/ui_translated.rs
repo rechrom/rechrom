@@ -1,7 +1,7 @@
 //! UI resource drawing through the translated SkCanvas backend. HostImpl owns
 //! sizing and lifecycle policy; this module owns concrete image/surface values.
 use super::*;
-use compositor_core::{
+use compositor::{
     adapter::layer_tree_host_impl::{
         HostUICanvas, HostUIPixmap, HostUISharedImageUsage, HostUISourceBitmap, HostUISurface,
     },

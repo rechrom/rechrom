@@ -8,7 +8,7 @@
 pub use super::pointer_id::PointerId;
 pub use crate::public::mojom::input::input_event::Button;
 pub use crate::ui::events::event_constants::EventPointerType as PointerType;
-pub use foundation::gfx_geometry::PointF;
+pub use foundation_base::gfx_geometry::PointF;
 
 // Source: third_party/blink/public/common/input/web_pointer_properties.h:29-37
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 icu_bidi = { path = "../icu_bidi" }
 # HarfRust is the HarfBuzz project's Rust port; read-fonts is the exact
 # version it shapes with, used here for face, metric and OpenType table data.

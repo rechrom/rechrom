@@ -4,15 +4,15 @@
 // payloads remain Renderer capabilities; pass/quads and copy algorithms live here.
 #![allow(non_snake_case)]
 
-use compositor_core::adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage};
-use compositor_core::runtime::{
+use compositor::adapter::{geometry::Rect, layer_tree_host_impl::ContentColorUsage};
+use compositor::runtime::{
     frame::{DrawQuad as FrameDrawQuad, FrameValueTypes, QuadMaterial, RenderPassId},
     skia::SkRegion,
 };
-use compositor_core::CompositorTypes;
+use compositor::CompositorTypes;
 
-pub type Transform = compositor_core::runtime::geometry::Transform<SkRegion>;
-pub type SharedQuadState = compositor_core::runtime::frame::SharedQuadState<Transform>;
+pub type Transform = compositor::runtime::geometry::Transform<SkRegion>;
+pub type SharedQuadState = compositor::runtime::frame::SharedQuadState<Transform>;
 pub type DrawQuad = FrameDrawQuad<<CompositorTypes as FrameValueTypes>::PictureDisplayItemList>;
 pub type FrameFilters = <CompositorTypes as FrameValueTypes>::FrameFilters;
 pub type Path = <CompositorTypes as FrameValueTypes>::FramePath;
@@ -120,7 +120,7 @@ impl AggregatedRenderPass {
             _ => panic!("expected CompositorRenderPass quad"),
         }
         copy.geometry.shared_quad_state = Some(
-            compositor_core::runtime::frame::SharedQuadStateHandle::FromIndex(
+            compositor::runtime::frame::SharedQuadStateHandle::FromIndex(
                 self.shared_quad_state_list.len() - 1,
             ),
         );
@@ -132,7 +132,7 @@ impl AggregatedRenderPass {
         assert!(!matches!(quad.material, QuadMaterial::SharedElement { .. }));
         let mut copy = quad.clone();
         copy.geometry.shared_quad_state = Some(
-            compositor_core::runtime::frame::SharedQuadStateHandle::FromIndex(
+            compositor::runtime::frame::SharedQuadStateHandle::FromIndex(
                 self.shared_quad_state_list.len() - 1,
             ),
         );
@@ -187,7 +187,7 @@ impl AggregatedRenderPass {
     }
     pub fn TrySharedQuadState(
         &self,
-        handle: compositor_core::runtime::frame::SharedQuadStateHandle,
+        handle: compositor::runtime::frame::SharedQuadStateHandle,
     ) -> Option<&SharedQuadState> {
         self.shared_quad_state_list.get(handle.Index())
     }

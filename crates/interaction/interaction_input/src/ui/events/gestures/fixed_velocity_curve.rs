@@ -1,5 +1,5 @@
 // Chromium ui/events/gestures/fixed_velocity_curve.h:16-34; .cc:10-29.
-use foundation::gfx_geometry::Vector2dF;
+use foundation_base::gfx_geometry::Vector2dF;
 pub struct FixedVelocityCurve {
     velocity: Vector2dF,
 }

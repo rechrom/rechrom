@@ -17,7 +17,7 @@ use crate::{
         blink::fling_booster::FlingBooster, gestures::web_gesture_curve_impl::WebGestureCurveImpl,
     },
 };
-use foundation::gfx_geometry::{PointF, Vector2dF};
+use foundation_base::gfx_geometry::{PointF, Vector2dF};
 
 #[derive(Clone, Copy, Default)]
 pub struct Config {

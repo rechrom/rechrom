@@ -10,7 +10,7 @@ use super::{
 use crate::components::viz::common::display::renderer_settings::{
     DebugRendererSettings, RendererSettings,
 };
-use compositor_core::{
+use compositor::{
     adapter::geometry::{PointF, Rect, RectF, Size},
     cc::base::math_util::MathUtil,
     runtime::frame::{QuadMaterial, RenderPassId},

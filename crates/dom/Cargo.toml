@@ -20,7 +20,7 @@ layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 
 css_parser = { path = "../css_parser", features = ["tokenizer"] }
 font_engine = { path = "../font_engine" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 image_resource = { path = "../image_resource" }
 layoutng_style = { path = "../layoutng/layoutng_style" }
 style_parser = { path = "../style/style_parser" }

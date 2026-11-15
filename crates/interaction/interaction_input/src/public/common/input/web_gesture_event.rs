@@ -10,8 +10,8 @@ use super::web_mouse_event::WebGestureEventView;
 use super::web_pointer_properties::PointerType;
 use crate::base::time::time::TimeTicks;
 use crate::ui::events::types::scroll_types::ScrollGranularity;
-use foundation::gfx_geometry::{PointF, SizeF, Vector2dF};
-use foundation_transform::gfx::Transform;
+use foundation_base::gfx_geometry::{PointF, SizeF, Vector2dF};
+use foundation::gfx::Transform;
 use std::{
     any::Any,
     ops::{Deref, DerefMut},

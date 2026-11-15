@@ -7,8 +7,8 @@ edition = "2021"
 browser_tracing = { path = "../tracing" }
 renderer = { path = "../renderer" }
 bytemuck = "1.24"
-compositor_core = { package = "compositor", path = "../compositor" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+compositor = { path = "../compositor" }
+foundation = { path = "../foundation" }
 skia = { path = "../skia" }
 paint = { path = "../paint" }
 viz = { path = "../viz" }

@@ -5,13 +5,13 @@
 #![allow(non_snake_case)]
 
 use crate::{common::surfaces::surface_id::SurfaceId, service::surfaces::surface::FrameData};
-use compositor_core::adapter::{
+use compositor::adapter::{
     geometry::{Rect, Vector2dF},
     input_services::OffsetTag,
     layer_tree_impl::ResourceId,
 };
-use compositor_core::runtime::frame::{QuadMaterial, RenderPassId};
-use compositor_core::{CompositorFrame, CompositorRenderPass};
+use compositor::runtime::frame::{QuadMaterial, RenderPassId};
+use compositor::{CompositorFrame, CompositorRenderPass};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     error::Error,

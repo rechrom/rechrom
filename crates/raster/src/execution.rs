@@ -19,7 +19,7 @@ pub use translated::{
 };
 mod ui_translated;
 use backend::{RasterBackend, RasterBackendTarget};
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::{AxisTransform2d, Rect, Size},
         layer_tree_impl::ResourceId,
@@ -494,7 +494,7 @@ impl RasterEngine {
     }
     pub fn RasterizeDragImageRecord(
         &self,
-        record: &compositor_core::engine::ImmutablePaintRecord,
+        record: &compositor::engine::ImmutablePaintRecord,
         layout_size: (f64, f64),
         paint_offset: (f64, f64),
         scale: f32,
@@ -1269,7 +1269,7 @@ impl<'image>
 /// The compositor's only injected pixel capability. Cloning this handle shares
 /// the same allocation/cache owners; it does not clone pixel storage.
 /// Canonical cc code continues to choose tasks, resources and completion order.
-impl compositor_core::CompositorRasterProvider for RasterEngine {
+impl compositor::CompositorRasterProvider for RasterEngine {
     fn CreateSharedImage(
         &self,
         resource: ResourceId,
@@ -1286,7 +1286,7 @@ impl compositor_core::CompositorRasterProvider for RasterEngine {
         format: &SharedImageFormat,
         resource_content_id: u64,
         previous_content_id: u64,
-    ) -> io::Result<Box<compositor_core::runtime::paint::TileRasterBufferValue>> {
+    ) -> io::Result<Box<compositor::runtime::paint::TileRasterBufferValue>> {
         let buffer = <Self as RasterBufferProviderBackend<
             RasterSourceStorage<SkRegion>,
             RasterTransform,

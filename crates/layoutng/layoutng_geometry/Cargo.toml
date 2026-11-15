@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-foundation = { package = "layoutng_foundation", path = "../layoutng_foundation" }
+foundation = { path = "../../foundation" }
 
 [lib]
 path = "src/lib.rs"

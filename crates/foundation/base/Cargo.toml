@@ -1,9 +1,9 @@
 [package]
-name = "foundation"
+name = "foundation_base"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [lib]
-name = "foundation"
+name = "foundation_base"
 path = "src/lib.rs"

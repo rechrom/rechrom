@@ -1,7 +1,7 @@
-use compositor_core::adapter::geometry::{
+use compositor::adapter::geometry::{
     CrossProduct, DotProduct3, Point3F, PointF, QuadF, RectF, Vector3dF,
 };
-use compositor_core::cc::base::math_util::MathUtil;
+use compositor::cc::base::math_util::MathUtil;
 use viz::common::quads::aggregated_render_pass::Transform;
 
 // Source: components/viz/service/display/draw_polygon.cc:20-34

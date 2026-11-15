@@ -8,6 +8,6 @@ publish = false
 base64 = "0.22"
 navigation_history = { path = "../../document/navigation_history" }
 fileapi = { path = "../../webapi/fileapi" }
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 interaction_input = { path = "../interaction_input" }
 url = "2"

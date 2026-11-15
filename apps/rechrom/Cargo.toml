@@ -19,7 +19,7 @@ chromeos = []
 webgl_vertical_slice = ["browser/webgl_vertical_slice"]
 
 [dev-dependencies]
-foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
+foundation = { path = "../../crates/foundation" }
 
 [dependencies]
 icu_bidi = { path = "../../crates/icu_bidi" }
@@ -29,7 +29,7 @@ executor = { path = "../../crates/executor" }
 browser_tracing = { path = "../../crates/tracing" }
 event_loop = { path = "../../crates/event_loop" }
 devtools = { path = "../../crates/devtools" }
-foundation = { package = "layoutng_foundation", path = "../../crates/layoutng/layoutng_foundation" }
+foundation = { path = "../../crates/foundation" }
 paint = { path = "../../crates/paint" }
 browser = { path = "../../crates/browser" }
 net_filename = { path = "../../crates/resource/net_filename" }

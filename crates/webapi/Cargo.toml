@@ -12,7 +12,7 @@ webgl_vertical_slice = []
 [dependencies]
 style = { path = "../style/style" }
 browser_tracing = { path = "../tracing" }
-foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
+foundation = { path = "../foundation" }
 interaction = { path = "../interaction" }
 navigation_history = { path = "../document/navigation_history" }
 fileapi = { path = "fileapi" }

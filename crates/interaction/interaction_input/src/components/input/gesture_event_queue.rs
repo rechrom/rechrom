@@ -122,7 +122,7 @@ impl<Callback> GestureEventQueue<Callback> {
     pub fn fling_in_progress(&self) -> bool {
         self.fling_controller.fling_in_progress()
     }
-    pub fn CurrentFlingVelocity(&self) -> foundation::gfx_geometry::Vector2dF {
+    pub fn CurrentFlingVelocity(&self) -> foundation_base::gfx_geometry::Vector2dF {
         self.fling_controller.CurrentFlingVelocity()
     }
     pub fn OnWheelEventAck(&mut self, result: InputEventResultState) {

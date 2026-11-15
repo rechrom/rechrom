@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 scroll_animation = { path = "../../compositor/scroll_animation" }
 scroll_snap = { path = "../../compositor/scroll_snap" }
-foundation = { package = "layoutng_foundation", path = "../../layoutng/layoutng_foundation" }
+foundation = { path = "../../foundation" }
 interaction_dispatch = { path = "../interaction_dispatch" }
 interaction_hit_test = { path = "../interaction_hit_test" }
 interaction_input = { path = "../interaction_input" }

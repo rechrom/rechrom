@@ -21,7 +21,7 @@ use crate::{
         surfaces::surface_manager::SurfaceManager,
     },
 };
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::{Rect, RectF, ToEnclosingRect},
         layer_tree_impl::Color4f,
@@ -671,7 +671,7 @@ impl SurfaceAggregator {
                                 mask_resource_id: ResourceId::default(),
                                 mask_uv_rect: Default::default(),
                                 mask_texture_size: Default::default(),
-                                filters_scale: compositor_core::adapter::geometry::Vector2dF::new(
+                                filters_scale: compositor::adapter::geometry::Vector2dF::new(
                                     1.0, 1.0,
                                 ),
                                 filters_origin: Default::default(),
@@ -740,7 +740,7 @@ impl SurfaceAggregator {
         passes: &mut Vec<OwnedAggregatedRenderPass>,
         roots: &mut Vec<RootPresentation>,
         output_damage_rects: &[Rect],
-        color_usage: compositor_core::adapter::layer_tree_host_impl::ContentColorUsage,
+        color_usage: compositor::adapter::layer_tree_host_impl::ContentColorUsage,
         background_color: Color4f,
         solid_color_quads: &[crate::adapter::DisplayRootSolidColorQuad],
     ) {
@@ -766,10 +766,10 @@ impl SurfaceAggregator {
                     && !pass.quad_list.is_empty()
                     && !pass.cache_render_pass
                     && !pass.generate_mipmap
-                    && compositor_core::adapter::property_types::FilterOperations::IsEmpty(
+                    && compositor::adapter::property_types::FilterOperations::IsEmpty(
                         &pass.filters,
                     )
-                    && compositor_core::adapter::property_types::FilterOperations::IsEmpty(
+                    && compositor::adapter::property_types::FilterOperations::IsEmpty(
                         &pass.backdrop_filters,
                     )
                     && pass.backdrop_filter_bounds.is_none()
@@ -885,8 +885,8 @@ impl SurfaceAggregator {
                 display_root.shared_quad_state_list.push(state);
                 display_root
                     .quad_list
-                    .push(compositor_core::runtime::frame::DrawQuad {
-                        geometry: compositor_core::runtime::frame::QuadGeometry {
+                    .push(compositor::runtime::frame::DrawQuad {
+                        geometry: compositor::runtime::frame::QuadGeometry {
                             shared_quad_state: Some(SharedQuadStateHandle::FromIndex(state_index)),
                             rect: source,
                             visible_rect: source,
@@ -897,7 +897,7 @@ impl SurfaceAggregator {
                             mask_resource_id: ResourceId::default(),
                             mask_uv_rect: Default::default(),
                             mask_texture_size: Default::default(),
-                            filters_scale: compositor_core::adapter::geometry::Vector2dF::new(
+                            filters_scale: compositor::adapter::geometry::Vector2dF::new(
                                 1.0, 1.0,
                             ),
                             filters_origin: Default::default(),
@@ -960,8 +960,8 @@ impl SurfaceAggregator {
             display_root.shared_quad_state_list.push(state);
             display_root
                 .quad_list
-                .push(compositor_core::runtime::frame::DrawQuad {
-                    geometry: compositor_core::runtime::frame::QuadGeometry {
+                .push(compositor::runtime::frame::DrawQuad {
+                    geometry: compositor::runtime::frame::QuadGeometry {
                         shared_quad_state: Some(SharedQuadStateHandle::FromIndex(state_index)),
                         rect: backdrop.destination,
                         visible_rect: visible,
@@ -989,8 +989,8 @@ impl SurfaceAggregator {
         display_root.shared_quad_state_list.push(background_state);
         display_root
             .quad_list
-            .push(compositor_core::runtime::frame::DrawQuad {
-                geometry: compositor_core::runtime::frame::QuadGeometry {
+            .push(compositor::runtime::frame::DrawQuad {
+                geometry: compositor::runtime::frame::QuadGeometry {
                     shared_quad_state: Some(SharedQuadStateHandle::FromIndex(
                         background_state_index,
                     )),
@@ -1093,7 +1093,7 @@ fn CalculateClipRect(surface_clip: Option<Rect>, quad_clip: Option<Rect>) -> Opt
     }
 }
 
-fn ComputeDrawableRectForQuad<L>(quad: &compositor_core::runtime::frame::DrawQuad<L>) -> Rect {
+fn ComputeDrawableRectForQuad<L>(quad: &compositor::runtime::frame::DrawQuad<L>) -> Rect {
     let mut rect = quad.geometry.visible_rect;
     rect.Intersect(quad.geometry.rect);
     rect
@@ -1681,5 +1681,5 @@ fn _source_equivalent_helpers_are_linked() {
     let _ = CalculateClipRect(None, None);
     let _ = ExternalCapability::DelegatedInk;
     let _ = ComputeDrawableRectForQuad::<()>
-        as fn(&compositor_core::runtime::frame::DrawQuad<()>) -> Rect;
+        as fn(&compositor::runtime::frame::DrawQuad<()>) -> Rect;
 }

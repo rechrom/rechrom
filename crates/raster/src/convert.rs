@@ -896,10 +896,10 @@ mod font_identity_tests {
         assert_eq!(mask.dynamic_range_limit.standard_mix, 95.0 / 127.0);
         assert_eq!(mask.dynamic_range_limit.constrained_high_mix, 16.0 / 127.0);
 
-        let mut target = compositor_core::runtime::paint::TargetColorParams::default();
+        let mut target = compositor::runtime::paint::TargetColorParams::default();
         target.hdr_headroom = Some(4.0);
-        let limited = compositor_core::runtime::paint::LimitTargetDynamicRange(
-            compositor_core::runtime::paint::CpuDynamicRangeLimit::new(0.25, 0.5),
+        let limited = compositor::runtime::paint::LimitTargetDynamicRange(
+            compositor::runtime::paint::CpuDynamicRangeLimit::new(0.25, 0.5),
             target,
         );
         assert_eq!(limited.hdr_headroom, Some(1.5));

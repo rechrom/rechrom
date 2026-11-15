@@ -5,7 +5,7 @@
 //! used for one synchronous draw or publication call.
 
 use crate::render_target::{PixelFormat, PixelStorage, RenderTarget};
-use compositor_core::{
+use compositor::{
     adapter::{
         geometry::{RRectF, Rect, RectF},
         layer_tree_impl::{Color4f, ResourceId},
@@ -448,18 +448,18 @@ fn bt709_apple_to_srgb_byte(encoded: f32) -> u8 {
 #[cfg(test)]
 fn convert_nv12_bt709_apple_to_srgb(
     video: Nv12Planes<'_>,
-    matrix_id: compositor_core::runtime::resources::ColorMatrixId,
+    matrix_id: compositor::runtime::resources::ColorMatrixId,
 ) -> io::Result<Vec<u8>> {
     convert_nv12_bt709_apple_to_srgb_scaled(video, matrix_id, video.width, video.height)
 }
 
 fn convert_nv12_bt709_apple_to_srgb_scaled(
     video: Nv12Planes<'_>,
-    matrix_id: compositor_core::runtime::resources::ColorMatrixId,
+    matrix_id: compositor::runtime::resources::ColorMatrixId,
     output_width: usize,
     output_height: usize,
 ) -> io::Result<Vec<u8>> {
-    use compositor_core::runtime::resources::ColorMatrixId;
+    use compositor::runtime::resources::ColorMatrixId;
 
     let chroma_width = video.width.div_ceil(2);
     let chroma_height = video.height.div_ceil(2);
@@ -638,7 +638,7 @@ pub(crate) fn video_lease_image_scaled(
     output_width: i32,
     output_height: i32,
 ) -> io::Result<Arc<dyn SkImage>> {
-    use compositor_core::runtime::resources::{ColorPrimaryId, ColorRangeId, ColorTransferId};
+    use compositor::runtime::resources::{ColorPrimaryId, ColorRangeId, ColorTransferId};
     let video = MapVideoResourceForRead(lease.as_ref())?;
     let width = video.size.width();
     let height = video.size.height();
@@ -683,7 +683,7 @@ pub(crate) fn video_lease_image_scaled(
 #[cfg(test)]
 mod video_tests {
     use super::*;
-    use compositor_core::runtime::resources::ColorMatrixId;
+    use compositor::runtime::resources::ColorMatrixId;
 
     #[test]
     fn bt709_apple_transfer_thresholds_preserve_exact_quantization() {

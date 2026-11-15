@@ -1,5 +1,5 @@
 [package]
-name = "layoutng_foundation"
+name = "foundation"
 version = "0.0.1"
 edition = "2021"
 
@@ -8,10 +8,10 @@ name = "foundation"
 path = "src/lib.rs"
 
 [dependencies]
-browser_tracing = { path = "../../tracing" }
+browser_tracing = { path = "../tracing" }
 # Keep translated primitives independent of the higher-level interfaces here.
-foundation_base = { package = "foundation", path = "base" }
-icu_bidi = { path = "../../icu_bidi" }
+foundation_base = { path = "base" }
+icu_bidi = { path = "../icu_bidi" }
 smallvec = { version = "1.16.2", features = ["const_generics"] }
 
 url = "2"
