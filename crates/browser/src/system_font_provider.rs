@@ -22,6 +22,9 @@ mod linux;
 #[cfg(target_os = "macos")]
 #[path = "system_font_provider_macos.rs"]
 mod macos;
+#[cfg(target_os = "windows")]
+#[path = "system_font_provider_windows.rs"]
+mod windows;
 
 #[derive(Clone, Debug, PartialEq)]
 struct HostFace {
@@ -48,6 +51,8 @@ pub struct BrowserSystemFontProvider {
     files: HashMap<String, Option<SharedFontBytes>>,
     #[cfg(target_os = "linux")]
     platform: linux::LinuxFontHost,
+    #[cfg(target_os = "windows")]
+    platform: windows::WindowsFontHost,
 }
 
 impl Default for BrowserSystemFontProvider {
@@ -59,6 +64,8 @@ impl Default for BrowserSystemFontProvider {
 impl BrowserSystemFontProvider {
     pub fn new(version: FontContextVersion) -> Self {
         static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+        #[cfg(target_os = "windows")]
+        windows::InitializeSystemFontMetrics();
         Self {
             version,
             instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
@@ -67,6 +74,8 @@ impl BrowserSystemFontProvider {
             files: HashMap::new(),
             #[cfg(target_os = "linux")]
             platform: linux::LinuxFontHost::default(),
+            #[cfg(target_os = "windows")]
+            platform: windows::WindowsFontHost::default(),
         }
     }
 
@@ -84,6 +93,10 @@ impl BrowserSystemFontProvider {
             #[cfg(target_os = "linux")]
             {
                 self.platform = linux::LinuxFontHost::default();
+            }
+            #[cfg(target_os = "windows")]
+            {
+                self.platform = windows::WindowsFontHost::default();
             }
         }
     }
@@ -241,7 +254,9 @@ impl SystemFontProvider for BrowserSystemFontProvider {
         let hosts = self.platform.Query(&request.query, base);
         #[cfg(target_os = "macos")]
         let hosts = macos::Query(&request.query, base);
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(target_os = "windows")]
+        let hosts = self.platform.Query(&request.query, base);
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         let hosts: Vec<HostFace> = {
             let _ = base;
             Vec::new()

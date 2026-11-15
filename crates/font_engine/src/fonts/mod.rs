@@ -5,6 +5,7 @@ mod emoji_presentation_scanner_tables;
 pub mod font;
 pub mod font_backend;
 pub mod font_baseline;
+pub mod font_cache_win;
 pub mod font_data;
 pub mod font_description;
 pub(crate) mod font_fallback_iterator;
