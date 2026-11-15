@@ -1,5 +1,13 @@
 #![allow(non_camel_case_types, non_upper_case_globals)]
 
+//! The ICU4C API surface Blink and Chromium call, implemented on ICU4X and
+//! pure-Rust Unicode crates; no system ICU is linked.
+
+mod collation_search;
+#[cfg(test)]
+mod tests;
+mod ustring;
+
 pub mod date_time_locale;
 pub mod idna;
 pub mod string_search;

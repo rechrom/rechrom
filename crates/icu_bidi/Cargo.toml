@@ -2,7 +2,25 @@
 name = "icu_bidi"
 version = "0.0.1"
 edition = "2021"
-build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
+
+# The ICU4C C API surface Blink and Chromium call, implemented on ICU4X and
+# pure-Rust Unicode crates. No system ICU, pkg-config or build script.
+[dependencies]
+icu_calendar = "2"
+icu_casemap = "2"
+icu_collator = "2"
+icu_collections = "2"
+icu_datetime = "2"
+icu_decimal = "2"
+icu_locale_core = "2"
+icu_normalizer = "2"
+icu_properties = "2"
+icu_segmenter = "2"
+encoding_rs = "0.8"
+idna = "1.1"
+regex = "1"
+unicode-bidi = "0.3.18"
+writeable = "0.6"
