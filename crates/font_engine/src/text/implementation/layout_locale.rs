@@ -2,13 +2,13 @@
 // Partial mapping. The supplied source omits definitions for CaseMapLocale,
 // GetQuotesData, LocaleWithBreakKeyword, SetHyphenationForTesting, and
 // AcceptLanguagesChanged. The ICU UScriptCode type is also not connected.
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, CString};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use foundation::{g_null_atom, AtomicString};
 
-use super::harfbuzz::hb_language_from_string;
+
 use super::hyphenation::Hyphenation;
 use super::hyphenation_services::CurrentHyphenationResolver;
 
@@ -80,7 +80,7 @@ static REGISTRY: LazyLock<Mutex<Vec<Arc<LayoutLocale>>>> = LazyLock::new(|| Mute
 pub struct LayoutLocale {
     string_: AtomicString,
     string_for_sk_font_mgr_: OnceLock<CString>,
-    harfbuzz_language_: usize,
+    harfbuzz_language_: Option<harfrust::Language>,
     script_: i32,
     script_for_han_: AtomicI32,
     has_script_for_han_: AtomicBool,
@@ -93,13 +93,12 @@ impl LayoutLocale {
     // cpp: third_party/blink/renderer/platform/text/layout_locale.cc:62-66
     fn new(locale: &AtomicString) -> Self {
         let ascii = locale.Ascii();
-        let harfbuzz_language = unsafe {
-            hb_language_from_string(ascii.as_ptr().cast::<c_char>(), locale.length() as i32)
-        };
+        // hb_language_from_string
+        let harfbuzz_language = harfrust::Language::new(ascii.as_bytes());
         Self {
             string_: locale.clone(),
             string_for_sk_font_mgr_: OnceLock::new(),
-            harfbuzz_language_: harfbuzz_language as usize,
+            harfbuzz_language_: harfbuzz_language,
             script_: ScriptForLocale(&ascii),
             script_for_han_: AtomicI32::new(USCRIPT_COMMON),
             has_script_for_han_: AtomicBool::new(false),
@@ -170,8 +169,8 @@ impl LayoutLocale {
     }
 
     // cpp: third_party/blink/renderer/platform/text/layout_locale.h:53-55
-    pub fn HarfbuzzLanguage(&self) -> *const c_void {
-        self.harfbuzz_language_ as *const c_void
+    pub fn HarfbuzzLanguage(&self) -> Option<&harfrust::Language> {
+        self.harfbuzz_language_.as_ref()
     }
 
     // cpp: third_party/blink/renderer/platform/text/layout_locale.h:55-56

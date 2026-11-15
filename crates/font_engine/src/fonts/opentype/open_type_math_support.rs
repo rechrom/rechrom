@@ -1,7 +1,17 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use crate::fonts::shaping::harfbuzz_face::HarfBuzzFace;
-use crate::text::implementation::harfbuzz as hb;
+use crate::text::implementation::opentype_layout;
+use read_fonts::TableProvider;
+
+fn MathTable(face: &HarfBuzzFace) -> Option<&[u8]> {
+    face.Font()
+        .HarfRustFont()
+        .tables()
+        .data_for_tag(harfrust::Tag::new(b"MATH"))
+        .map(|data| data.as_bytes())
+        .filter(|data| opentype_layout::HasMathData(data))
+}
 
 // Values index the OpenType MATH constants subtable.
 // cpp: font_engine/fonts/opentype/open_type_math_support.h:25-84
@@ -74,8 +84,7 @@ impl OpenTypeMathSupport {
         if face.is_null() {
             return false;
         }
-        let font = unsafe { &*face }.GetScaledFont();
-        !font.is_null() && unsafe { hb::hb_ot_math_has_data(hb::hb_font_get_face(font)) != 0 }
+        MathTable(unsafe { &*face }).is_some()
     }
 
     // cpp: font_engine/fonts/opentype/open_type_math_support.cc:42-59
@@ -83,14 +92,16 @@ impl OpenTypeMathSupport {
         if !Self::HasMathData(face) {
             return None;
         }
-        let font = unsafe { &*face }.GetScaledFont();
-        let value = unsafe { hb::hb_ot_math_get_constant(font, constant as i32) };
-        Some(match constant {
-            MathConstants::kScriptPercentScaleDown
-            | MathConstants::kScriptScriptPercentScaleDown
-            | MathConstants::kRadicalDegreeBottomRaisePercent => value as f32 / 100.0,
-            _ => value as f32 / 65536.0,
-        })
+        let face = unsafe { &*face };
+        let (design, is_percent) = opentype_layout::MathConstant(MathTable(face)?, constant as u32)?;
+        if is_percent {
+            return Some(design as f32 / 100.0);
+        }
+        // hb_font_t::em_scale_y on the scaled font of HarfBuzzFace::GetScaledFont.
+        let upem = i64::from(face.Font().UnitsPerEm().max(1));
+        let multiplier = (i64::from(face.ScaledFontScale()) << 16) / upem;
+        let value = (i64::from(design) * multiplier + 32768) >> 16;
+        Some(value as f32 / 65536.0)
     }
 }
 

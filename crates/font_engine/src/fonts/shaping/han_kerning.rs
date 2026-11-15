@@ -7,26 +7,13 @@ use super::harfbuzz_shaper::{GlyphData, GlyphDataList, HarfBuzzShaper};
 use crate::fonts::glyph::Glyph;
 use crate::fonts::simple_font_data::SimpleFontData;
 use crate::text::implementation::character::Character;
-use crate::text::implementation::harfbuzz as hb;
+use crate::text::implementation::opentype_layout;
+use read_fonts::TableProvider;
 use crate::text::implementation::layout_locale::LayoutLocale;
 use foundation::gfx::RectF;
 use foundation::{HanKerningCharType as CharType, String, TextDirection};
 
 const USCRIPT_HAN: i32 = 17;
-const HB_OT_TAG_GPOS: u32 = u32::from_be_bytes(*b"GPOS");
-
-// HarfBuzz is a source package dependency. These are ABI declarations, not
-// substituted implementations of its feature table query.
-unsafe extern "C" {
-    fn hb_ot_layout_table_get_feature_tags(
-        face: *mut hb::HbFace,
-        table_tag: u32,
-        start_offset: u32,
-        feature_count: *mut u32,
-        feature_tags: *mut u32,
-    ) -> u32;
-}
-
 // cpp: font_engine/fonts/shaping/han_kerning.h:50-55
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
@@ -130,33 +117,11 @@ impl Default for FontData {
 
 // cpp: font_engine/fonts/shaping/han_kerning_font_data.cc:20-40
 fn HasOpenTypeFeature(font: &SimpleFontData, tag: u32) -> bool {
-    let hb_font = font.PlatformData().RawFont().BorrowHarfBuzzFont();
-    assert!(!hb_font.is_null());
-    let face = unsafe { hb::hb_font_get_face(hb_font) };
-    assert!(!face.is_null());
-    let mut offset = 0u32;
-    let mut tags = [0u32; 64];
-    loop {
-        let mut count = tags.len() as u32;
-        let total = unsafe {
-            hb_ot_layout_table_get_feature_tags(
-                face,
-                HB_OT_TAG_GPOS,
-                offset,
-                &mut count,
-                tags.as_mut_ptr(),
-            )
-        };
-        if tags[..count as usize].contains(&tag) {
-            return true;
-        }
-        offset += count;
-        if count == 0 || offset >= total {
-            return false;
-        }
-    }
+    let tables = font.PlatformData().RawFont().HarfRustFont().tables();
+    tables
+        .data_for_tag(harfrust::Tag::new(b"GPOS"))
+        .is_some_and(|gpos| opentype_layout::FeatureTags(gpos.as_bytes()).contains(&tag))
 }
-
 // cpp: font_engine/fonts/shaping/han_kerning_font_data.cc:42-44
 fn Advance(glyph: &GlyphData, is_horizontal: bool) -> f32 {
     if is_horizontal {
@@ -285,9 +250,9 @@ impl FontData {
     pub fn new(font: &SimpleFontData, locale: &LayoutLocale, is_horizontal: bool) -> Self {
         let mut data = Self::default();
         let alternate_tag = if is_horizontal {
-            hb::tag(*b"halt")
+            u32::from_be_bytes(*b"halt")
         } else {
-            hb::tag(*b"vhal")
+            u32::from_be_bytes(*b"vhal")
         };
         data.has_alternate_spacing = HasOpenTypeFeature(font, alternate_tag);
         if !data.has_alternate_spacing {
@@ -295,9 +260,9 @@ impl FontData {
         }
 
         let contextual_tag = if is_horizontal {
-            hb::tag(*b"chws")
+            u32::from_be_bytes(*b"chws")
         } else {
-            hb::tag(*b"vchw")
+            u32::from_be_bytes(*b"vchw")
         };
         data.has_contextual_spacing = HasOpenTypeFeature(font, contextual_tag);
 

@@ -6,7 +6,11 @@ edition = "2021"
 [dependencies]
 foundation = { package = "layoutng_foundation", path = "../layoutng/layoutng_foundation" }
 icu_bidi = { path = "../icu_bidi" }
-rustybuzz = "0.20.1"
+# HarfRust is the HarfBuzz project's Rust port; read-fonts is the exact
+# version it shapes with, used here for face, metric and OpenType table data.
+harfrust = "0.16.0"
+read-fonts = { version = "0.47.0", default-features = false, features = ["std"] }
+icu_properties = "2.3"
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "variable-fonts", "gvar-alloc"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -19,6 +23,5 @@ path = "src/lib.rs"
 # C++ EXPENSIVE_DCHECKS_ARE_ON() is an opt-in build setting.
 expensive_dchecks = []
 
-# The remaining //src/font_engine targets still require HarfBuzz, ICU bidi,
-# graphics and the rest of foundation. This crate currently connects only the
+# The remaining //src/font_engine targets still require ICU bidi, graphics and the rest of foundation. This crate currently connects only the
 # complete source units listed in src/lib.rs and src/fonts/mod.rs.

@@ -1,24 +1,9 @@
 // C++: font_engine/fonts/shaping/harfbuzz_face.h.
 use super::super::font_platform_data::FontPlatformData;
-use crate::text::implementation::harfbuzz as hb;
-use crate::text::implementation::opentype_font::HarfBuzzFont;
+use crate::text::implementation::opentype_layout;
 use foundation::{Member, Traceable, Visitor};
-use std::ffi::c_void;
-
-struct BackendScaledFont {
-    font: *mut HarfBuzzFont,
-    funcs: *mut hb::HbFontFuncs,
-}
-
-impl Drop for BackendScaledFont {
-    fn drop(&mut self) {
-        unsafe {
-            // hb_font_t retains its function table, so release it first.
-            hb::hb_font_destroy(self.font);
-            hb::hb_font_funcs_destroy(self.funcs);
-        }
-    }
-}
+use harfrust::{Advances, FontFuncs, GlyphId, ShaperFont, Tag};
+use read_fonts::TableProvider;
 
 fn SkiaScalarToHarfBuzzPosition(value: f32) -> i32 {
     // cpp: skia/skia_text_metrics.cc:207-210. Rust's saturated float-to-int
@@ -26,86 +11,63 @@ fn SkiaScalarToHarfBuzzPosition(value: f32) -> i32 {
     (value * 65536.0) as i32
 }
 
-unsafe fn BackendGlyphAdvance(font_data: *mut c_void, glyph: u32) -> i32 {
-    let Ok(glyph) = u16::try_from(glyph) else {
-        // kUnmatchedVSGlyphId is intentionally measured on the second pass.
-        return 0;
-    };
-    let platform = unsafe { &*font_data.cast::<FontPlatformData>() };
-    let Some(backend) = platform.Backend() else {
-        return 0;
-    };
-    SkiaScalarToHarfBuzzPosition(backend.GlyphAdvanceForShaping(
-        glyph,
-        platform.size(),
-        platform.SyntheticBold(),
-        platform.SyntheticItalic(),
-    ))
+/// Blink's HarfBuzzFace sub-font: horizontal advances come from the platform
+/// strike, every other font function from the OpenType parent.
+/// cpp: font_engine/fonts/shaping/harfbuzz_face.cc HarfBuzzGetGlyphHorizontalAdvance(s).
+struct BackendAdvances {
+    platform_data: *const FontPlatformData,
 }
 
-unsafe extern "C" fn HarfBuzzGetGlyphHorizontalAdvance(
-    _font: *mut HarfBuzzFont,
-    font_data: *mut c_void,
-    glyph: u32,
-    _user_data: *mut c_void,
-) -> i32 {
-    if font_data.is_null() {
-        return 0;
+impl BackendAdvances {
+    fn platform(&self) -> &FontPlatformData {
+        // The HarfBuzzFace that owns these callbacks is owned by, and never
+        // outlives, its FontPlatformData.
+        unsafe { &*self.platform_data }
     }
-    unsafe { BackendGlyphAdvance(font_data, glyph) }
 }
 
-unsafe extern "C" fn HarfBuzzGetGlyphHorizontalAdvances(
-    _font: *mut HarfBuzzFont,
-    font_data: *mut c_void,
-    count: u32,
-    first_glyph: *const u32,
-    glyph_stride: u32,
-    first_advance: *mut i32,
-    advance_stride: u32,
-    _user_data: *mut c_void,
-) {
-    if font_data.is_null() || first_glyph.is_null() || first_advance.is_null() {
-        return;
+impl FontFuncs for BackendAdvances {
+    fn glyph_h_advance(&self, _font: &ShaperFont, glyph: GlyphId) -> i32 {
+        let Ok(glyph) = u16::try_from(glyph.to_u32()) else {
+            // kUnmatchedVSGlyphId is intentionally measured on the second pass.
+            return 0;
+        };
+        let platform = self.platform();
+        let Some(backend) = platform.Backend() else {
+            return 0;
+        };
+        SkiaScalarToHarfBuzzPosition(backend.GlyphAdvanceForShaping(
+            glyph,
+            platform.size(),
+            platform.SyntheticBold(),
+            platform.SyntheticItalic(),
+        ))
     }
-    let platform = unsafe { &*font_data.cast::<FontPlatformData>() };
-    let Some(backend) = platform.Backend() else {
-        for index in 0..count as usize {
-            unsafe {
-                first_advance
-                    .cast::<u8>()
-                    .add(index * advance_stride as usize)
-                    .cast::<i32>()
-                    .write_unaligned(0);
+
+    fn glyph_h_advances(&self, _font: &ShaperFont, advances: Advances<'_>) {
+        let platform = self.platform();
+        let Some(backend) = platform.Backend() else {
+            for (_, advance) in advances {
+                *advance = 0;
             }
+            return;
+        };
+        let mut glyphs = Vec::with_capacity(advances.len());
+        let mut outputs = Vec::with_capacity(advances.len());
+        for (glyph, advance) in advances {
+            glyphs.push(u16::try_from(glyph.to_u32()).unwrap_or(0));
+            outputs.push(advance);
         }
-        return;
-    };
-    let glyphs: Vec<u16> = (0..count as usize)
-        .map(|index| unsafe {
-            first_glyph
-                .cast::<u8>()
-                .add(index * glyph_stride as usize)
-                .cast::<u32>()
-                .read_unaligned()
-        })
-        .map(|glyph| u16::try_from(glyph).unwrap_or(0))
-        .collect();
-    let mut advances = vec![0.0; glyphs.len()];
-    backend.GlyphAdvancesForShaping(
-        &glyphs,
-        platform.size(),
-        platform.SyntheticBold(),
-        platform.SyntheticItalic(),
-        &mut advances,
-    );
-    for (index, advance) in advances.into_iter().enumerate() {
-        unsafe {
-            first_advance
-                .cast::<u8>()
-                .add(index * advance_stride as usize)
-                .cast::<i32>()
-                .write_unaligned(SkiaScalarToHarfBuzzPosition(advance));
+        let mut values = vec![0.0; glyphs.len()];
+        backend.GlyphAdvancesForShaping(
+            &glyphs,
+            platform.size(),
+            platform.SyntheticBold(),
+            platform.SyntheticItalic(),
+            &mut values,
+        );
+        for (output, value) in outputs.into_iter().zip(values) {
+            *output = SkiaScalarToHarfBuzzPosition(value);
         }
     }
 }
@@ -113,7 +75,7 @@ unsafe extern "C" fn HarfBuzzGetGlyphHorizontalAdvances(
 // cpp: font_engine/fonts/shaping/harfbuzz_face.h:16-29
 pub struct HarfBuzzFace {
     platform_data_: Member<FontPlatformData>,
-    backend_scaled_font_: Option<BackendScaledFont>,
+    backend_advances_: Option<BackendAdvances>,
     space_in_gpos_: std::cell::Cell<Option<bool>>,
     space_in_gsub_: std::cell::Cell<Option<bool>>,
 }
@@ -132,125 +94,75 @@ impl HarfBuzzFace {
                 true
             }
         };
-        let backend_scaled_font_ = uses_backend_advances.then(|| unsafe {
-            let font = hb::hb_font_create_sub_font(platform_data.RawFont().BorrowHarfBuzzFont());
-            assert!(!font.is_null(), "HarfBuzz sub-font allocation failed");
-            let funcs = hb::hb_font_funcs_create();
-            assert!(
-                !funcs.is_null(),
-                "HarfBuzz font-functions allocation failed"
-            );
-            hb::hb_font_funcs_set_glyph_h_advance_func(
-                funcs,
-                Some(HarfBuzzGetGlyphHorizontalAdvance),
-                std::ptr::null_mut(),
-                None,
-            );
-            hb::hb_font_funcs_set_glyph_h_advances_func(
-                funcs,
-                Some(HarfBuzzGetGlyphHorizontalAdvances),
-                std::ptr::null_mut(),
-                None,
-            );
-            hb::hb_font_funcs_make_immutable(funcs);
-            hb::hb_font_set_funcs(
-                font,
-                funcs,
-                (platform_data as *const FontPlatformData).cast_mut().cast(),
-                None,
-            );
-            BackendScaledFont { font, funcs }
-        });
         Self {
             platform_data_: Member::from_ptr(
                 platform_data as *const FontPlatformData as *mut FontPlatformData,
             ),
-            backend_scaled_font_,
+            backend_advances_: uses_backend_advances.then_some(BackendAdvances {
+                platform_data: platform_data as *const FontPlatformData,
+            }),
             space_in_gpos_: std::cell::Cell::new(None),
             space_in_gsub_: std::cell::Cell::new(None),
         }
     }
 
-    /// harfbuzz_face.cc:321-389. Cache on the same retained face/font data.
-    pub fn HasSpaceInLigaturesOrKerning(&self, features: u32) -> bool {
-        use crate::fonts::typesetting_features::{kKerning, kLigatures};
-        unsafe {
-            let font = (&*self.platform_data_.Get()).RawFont().BorrowHarfBuzzFont();
-            let mut space = u32::MAX;
-            let glyphs = hb::hb_set_create();
-            assert!(!glyphs.is_null(), "HarfBuzz set allocation");
-            struct Set(*mut c_void);
-            impl Drop for Set {
-                fn drop(&mut self) {
-                    unsafe { hb::hb_set_destroy(self.0) }
-                }
-            }
-            let _set = Set(glyphs);
-            let mut table_has_space = |tag: u32, has: bool| {
-                if space == u32::MAX && hb::hb_font_get_nominal_glyph(font, 0x20, &mut space) == 0 {
-                    return None;
-                }
-                if !has {
-                    return Some(false);
-                }
-                let face = hb::hb_font_get_face(font);
-                for i in 0..hb::hb_ot_layout_table_get_lookup_count(face, tag) {
-                    hb::hb_ot_layout_lookup_collect_glyphs(
-                        face,
-                        tag,
-                        i,
-                        glyphs,
-                        glyphs,
-                        glyphs,
-                        std::ptr::null_mut(),
-                    );
-                    if hb::hb_set_has(glyphs, space) != 0 {
-                        return Some(true);
-                    }
-                }
-                Some(false)
-            };
-            let face = hb::hb_font_get_face(font);
-            if features & kKerning != 0 && self.space_in_gpos_.get().is_none() {
-                let Some(value) = table_has_space(
-                    u32::from_be_bytes(*b"GPOS"),
-                    hb::hb_ot_layout_has_positioning(face) != 0,
-                ) else {
-                    return false;
-                };
-                self.space_in_gpos_.set(Some(value));
-            }
-            hb::hb_set_clear(glyphs);
-            if features & kLigatures != 0 && self.space_in_gsub_.get().is_none() {
-                let Some(value) = table_has_space(
-                    u32::from_be_bytes(*b"GSUB"),
-                    hb::hb_ot_layout_has_substitution(face) != 0,
-                ) else {
-                    return false;
-                };
-                self.space_in_gsub_.set(Some(value));
-            }
-            (features & kKerning != 0 && self.space_in_gpos_.get() == Some(true))
-                || (features & kLigatures != 0 && self.space_in_gsub_.get() == Some(true))
-        }
-    }
-    pub fn GetScaledFont(&self) -> *mut HarfBuzzFont {
+    fn platform_data(&self) -> &FontPlatformData {
         let platform_data = self.platform_data_.Get();
         assert!(
             !platform_data.is_null(),
             "HarfBuzzFace has no platform data"
         );
-        let platform_data = unsafe { &*platform_data };
-        if let Some(font) = &self.backend_scaled_font_ {
-            let scale = SkiaScalarToHarfBuzzPosition(platform_data.size());
-            unsafe {
-                hb::hb_font_set_scale(font.font, scale, scale);
-                hb::hb_font_set_ptem(font.font, platform_data.RawFont().SpecifiedSize() as f32);
-            }
-            font.font
-        } else {
-            platform_data.RawFont().BorrowHarfBuzzFont()
+        unsafe { &*platform_data }
+    }
+
+    /// The OpenType font this face scales.
+    pub(crate) fn Font(&self) -> &crate::text::implementation::opentype_font::OpenTypeFont {
+        self.platform_data().RawFont()
+    }
+
+    /// harfbuzz_face.cc:321-389. Cache on the same retained face/font data.
+    pub fn HasSpaceInLigaturesOrKerning(&self, features: u32) -> bool {
+        use crate::fonts::typesetting_features::{kKerning, kLigatures};
+        let font = self.platform_data().RawFont();
+        let Some(space) = font.GlyphForCharacter(0x20) else {
+            return false;
+        };
+        let Ok(space) = u16::try_from(space) else {
+            return false;
+        };
+        let tables = font.HarfRustFont().tables();
+        let table_has_space = |tag: &[u8; 4]| {
+            let data = tables.data_for_tag(Tag::new(tag));
+            data.is_some_and(|data| {
+                opentype_layout::LookupsReferenceGlyph(data.as_bytes(), tag == b"GPOS", space)
+            })
+        };
+        if features & kKerning != 0 && self.space_in_gpos_.get().is_none() {
+            self.space_in_gpos_.set(Some(table_has_space(b"GPOS")));
         }
+        if features & kLigatures != 0 && self.space_in_gsub_.get().is_none() {
+            self.space_in_gsub_.set(Some(table_has_space(b"GSUB")));
+        }
+        (features & kKerning != 0 && self.space_in_gpos_.get() == Some(true))
+            || (features & kLigatures != 0 && self.space_in_gsub_.get() == Some(true))
+    }
+
+    /// The 16.16 scale of `GetScaledFont` (harfbuzz_face.cc): the platform
+    /// strike size when its advances are used, otherwise the font's own.
+    pub fn ScaledFontScale(&self) -> i32 {
+        let platform_data = self.platform_data();
+        if self.backend_advances_.is_some() {
+            SkiaScalarToHarfBuzzPosition(platform_data.size())
+        } else {
+            platform_data.RawFont().Scale()
+        }
+    }
+
+    /// The font-functions override of `GetScaledFont`, if any.
+    pub fn ScaledFontFuncs(&self) -> Option<&dyn FontFuncs> {
+        self.backend_advances_
+            .as_ref()
+            .map(|funcs| funcs as &dyn FontFuncs)
     }
 }
 

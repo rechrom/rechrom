@@ -28,12 +28,8 @@ use crate::fonts::script_run_iterator::ScriptShortName;
 use crate::fonts::simple_font_data::SimpleFontData;
 use crate::text::implementation::character::Character;
 use crate::text::implementation::character_break_iterator::CharacterBreakIterator;
-use crate::text::implementation::harfbuzz as hb;
+use crate::text::implementation::harfrust_shaper::{shape_utf16, Utf16Run};
 use crate::text::implementation::layout_locale::LayoutLocale;
-use crate::text::implementation::rustybuzz_shaper::{
-    shape_utf16_with_specified_size, shape_utf16_with_specified_size_and_features, Utf16Glyph,
-    Utf16Run,
-};
 use crate::text_shaper::TextDirection as ShapingDirection;
 
 const HB_DIRECTION_LTR: i32 = 4;
@@ -44,11 +40,9 @@ const USCRIPT_TRADITIONAL_HAN: i32 = 74;
 
 /// Source: harfbuzz_shaper.cc ShapeRange / HarfBuzzFace::GetScaledFont.
 ///
-/// Chromium shapes the final UTF-16 range with HarfBuzz itself.  Keep the
-/// pure-Rust shaper for isolated parity tests and the not-yet-connected
-/// variation-selector callback path, but use the source engine for ordinary
-/// browser text: variable-font interpolation can differ by fractional 16.16
-/// advances before LayoutUnit rounding.
+/// Shapes the final UTF-16 range with the face's scaled font: the platform
+/// strike's advances when HarfBuzzFace installs them, the ptem of the
+/// specified CSS size, and the resolved feature list.
 fn ShapeUtf16WithHarfBuzz(
     data: &SimpleFontData,
     units: &[u16],
@@ -59,93 +53,21 @@ fn ShapeUtf16WithHarfBuzz(
     script: Option<&str>,
     features: &[FontFeatureRange],
 ) -> Utf16Run {
-    assert!(start <= end && end as usize <= units.len());
-    assert!(units.len() <= i32::MAX as usize);
-    let buffer = unsafe { hb::hb_buffer_create() };
-    assert!(!buffer.is_null(), "HarfBuzz buffer allocation failed");
-    struct Buffer(*mut hb::HbBuffer);
-    impl Drop for Buffer {
-        fn drop(&mut self) {
-            unsafe { hb::hb_buffer_destroy(self.0) }
-        }
-    }
-    let buffer = Buffer(buffer);
-    let direction = direction as i32 + hb::DIRECTION_LTR;
-    unsafe {
-        hb::hb_buffer_set_direction(buffer.0, direction);
-        // HB_BUFFER_CLUSTER_LEVEL_MONOTONE_CHARACTERS, matching Chromium.
-        hb::hb_buffer_set_cluster_level(buffer.0, 1);
-        if let Some(language) = language.filter(|value| !value.is_empty()) {
-            assert!(language.len() <= i32::MAX as usize);
-            hb::hb_buffer_set_language(
-                buffer.0,
-                hb::hb_language_from_string(language.as_ptr().cast(), language.len() as i32),
-            );
-        }
-        if let Some(script) = script.filter(|value| !value.is_empty()) {
-            assert!(script.len() <= i32::MAX as usize);
-            hb::hb_buffer_set_script(
-                buffer.0,
-                hb::hb_script_from_string(script.as_ptr().cast(), script.len() as i32),
-            );
-        }
-        hb::hb_buffer_add_utf16(
-            buffer.0,
-            units.as_ptr(),
-            units.len() as i32,
-            start,
-            (end - start) as i32,
-        );
-        hb::hb_buffer_guess_segment_properties(buffer.0);
-    }
     let face = data.PlatformData().GetHarfBuzzFace();
     assert!(!face.is_null(), "HarfBuzz face allocation failed");
-    let font = unsafe { &*face }.GetScaledFont();
-    let shaped = unsafe {
-        hb::hb_buffer_allocation_successful(buffer.0) != 0
-            && hb::hb_shape_full(
-                font,
-                buffer.0,
-                if features.is_empty() {
-                    std::ptr::null()
-                } else {
-                    FontFeatureRange::ToHarfBuzzData(features.as_ptr()).cast()
-                },
-                features.len() as u32,
-                std::ptr::null(),
-            ) != 0
-    };
-    assert!(shaped, "HarfBuzz shaping failed");
-    let mut count = 0;
-    let infos = unsafe { hb::hb_buffer_get_glyph_infos(buffer.0, &mut count) };
-    let positions = unsafe { hb::hb_buffer_get_glyph_positions(buffer.0, std::ptr::null_mut()) };
-    if count == 0 {
-        return Utf16Run {
-            glyphs: Vec::new(),
-            direction: unsafe { hb::hb_buffer_get_direction(buffer.0) as u32 },
-            script: unsafe { hb::hb_buffer_get_script(buffer.0) },
-        };
-    }
-    assert!(!infos.is_null() && !positions.is_null());
-    let infos = unsafe { std::slice::from_raw_parts(infos, count as usize) };
-    let positions = unsafe { std::slice::from_raw_parts(positions, count as usize) };
-    Utf16Run {
-        glyphs: infos
-            .iter()
-            .zip(positions)
-            .map(|(info, position)| Utf16Glyph {
-                id: info.codepoint,
-                cluster: info.cluster,
-                unsafe_to_break: info.mask & 1 != 0,
-                x_advance: position.x_advance,
-                y_advance: position.y_advance,
-                x_offset: position.x_offset,
-                y_offset: position.y_offset,
-            })
-            .collect(),
-        direction: unsafe { hb::hb_buffer_get_direction(buffer.0) as u32 },
-        script: unsafe { hb::hb_buffer_get_script(buffer.0) },
-    }
+    let face = unsafe { &*face };
+    shape_utf16(
+        data.PlatformData().RawFont(),
+        face.ScaledFontScale(),
+        face.ScaledFontFuncs(),
+        units,
+        start,
+        end,
+        direction,
+        language,
+        script,
+        features,
+    )
 }
 
 // cpp: font_engine/fonts/shaping/harfbuzz_shaper.cc:185-201
@@ -556,18 +478,17 @@ impl HarfBuzzShaper {
             range_end
         };
         // Chromium's HarfBuzzFace installs a variation-selector cmap callback.
-        // Keep the translated callback behavior until that font-func hook is
-        // connected to the C font; ordinary ranges use HarfBuzz directly.
+        // Until that callback is a FontFuncs override, ranges with selectors
+        // shape with the OpenType font functions and the translated
+        // unmatched-selector handling below.
         let has_variation_selector = shaping_text[shaping_start as usize..shaping_end as usize]
             .iter()
             .any(|unit| matches!(*unit, 0x180b..=0x180d | 0xfe00..=0xfe0f | 0xdb40));
         let mut result = if has_variation_selector {
-            shape_utf16_with_specified_size_and_features(
-                font.SourceBytes(),
-                font.FaceIndex(),
-                font.Size(),
-                font.SpecifiedSize(),
-                &font.Variations(),
+            shape_utf16(
+                font,
+                font.Scale(),
+                None,
                 shaping_text,
                 shaping_start,
                 shaping_end,
@@ -1010,12 +931,10 @@ impl HarfBuzzShaper {
         let units = text.Span16().expect("non-null shape text");
         let font = data.PlatformData().RawFont();
         let language = locale.Ascii();
-        let buffer = shape_utf16_with_specified_size(
-            font.SourceBytes(),
-            font.FaceIndex(),
-            font.Size(),
-            font.SpecifiedSize(),
-            &font.Variations(),
+        let buffer = shape_utf16(
+            font,
+            font.Scale(),
+            None,
             units,
             0,
             units.len() as u32,
@@ -1037,6 +956,7 @@ impl HarfBuzzShaper {
             } else {
                 None
             },
+            &[],
         );
         for info in &buffer.glyphs {
             glyphs.push(GlyphData {
@@ -1068,7 +988,7 @@ mod tests {
     use crate::fonts::text_rendering_mode::TextRenderingMode;
     use crate::minimal_font::Build;
     use crate::text::implementation::opentype_font::OpenTypeFont;
-    use crate::text::implementation::rustybuzz_shaper::Utf16Glyph;
+    use crate::text::implementation::harfrust_shaper::Utf16Glyph;
     use foundation::LayoutHeapScope;
     use std::cell::RefCell;
     use std::rc::Rc;

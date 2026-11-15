@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
-use super::rustybuzz_shaper::shape_run;
+use super::harfrust_shaper::shape_run;
+use super::opentype_font::OpenTypeFont;
 use crate::text_shaper::{ShapeRequest, ShapedRun, TextShaper};
 
 // The C++ class is local to this implementation file and implements the
@@ -22,16 +23,8 @@ impl TextShaper for HarfBuzzShaper {
                 && input.font_size <= 16_000_000.0,
             "invalid font or text shaping request"
         );
-        shape_run(
-            input.font_bytes,
-            input.face_index,
-            input.font_size,
-            &[],
-            input.utf8,
-            input.direction,
-            input.language,
-            input.script,
-        )
+        let font = OpenTypeFont::new(input.font_bytes, input.face_index, input.font_size, &[]);
+        shape_run(&font, input.utf8, input.direction, input.language, input.script)
     }
 }
 
