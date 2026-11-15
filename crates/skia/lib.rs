@@ -213,6 +213,8 @@ pub mod src {
         pub mod SkOSFile_stdio;
         #[cfg(windows)]
         pub mod SkOSFile_win;
+        pub mod fontations;
+        pub mod SkTypeface_fontations;
         #[cfg(target_vendor = "apple")]
         pub mod SkScalerContext_mac_ct;
         #[cfg(target_vendor = "apple")]

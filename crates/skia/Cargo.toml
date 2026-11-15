@@ -27,6 +27,9 @@ sk_yuv_color_space_high_precision = []
 [dependencies]
 browser_tracing = { path = "../tracing" }
 libc = "0.2.189"
+# Fontations (src/ports/fontations): skrifa as pinned by Chromium 6c1d401f
+# (third_party/rust/chromium_crates_io), whose read-fonts it re-exports.
+skrifa = "=0.46.2"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2 = { version = "0.5.2", optional = true }
