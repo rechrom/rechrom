@@ -1,10 +1,10 @@
 // These are rendering-path checks, not a Chromium pixel-parity oracle.
 #[test]
-fn default_font_metrics_use_the_translated_skia_backend_on_apple() {
+fn default_font_metrics_use_the_translated_skia_backend_on_apple_and_windows() {
     let constraints = browser::CreateBrowserConstraints(320, 200);
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_vendor = "apple", windows))]
     assert!(constraints.font_backend_factory.is_some());
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     assert!(constraints.font_backend_factory.is_none());
     assert!(constraints.fonts.iter().any(|font| !font.bytes.is_empty()));
 }

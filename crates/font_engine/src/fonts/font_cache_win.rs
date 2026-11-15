@@ -37,10 +37,12 @@ static METRICS: RwLock<SystemFontMetrics> = RwLock::new(SystemFontMetrics {
     },
 });
 
-#[cfg(target_os = "windows")]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GetACP() -> u32;
+/// The process ANSI code page (Win32 GetACP), supplied by the embedding before
+/// it sets the system font metrics: this package performs no platform query.
+static ANSI_CODE_PAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn SetAnsiCodePage(code_page: u32) {
+    ANSI_CODE_PAGE.store(code_page, std::sync::atomic::Ordering::Relaxed);
 }
 
 // Source: win/font_cache_skia_win.cc:76-81
@@ -48,10 +50,7 @@ fn EnsureMinimumFontHeightIfNeeded(font_height: i32) -> i32 {
     // Adjustment for codepage 936 to make the fonts more legible in Simplified
     // Chinese.  Please refer to LayoutThemeFontProviderWin.cpp for more
     // information.
-    #[cfg(target_os = "windows")]
-    let code_page = unsafe { GetACP() };
-    #[cfg(not(target_os = "windows"))]
-    let code_page = 0;
+    let code_page = ANSI_CODE_PAGE.load(std::sync::atomic::Ordering::Relaxed);
     if (font_height as f32) < 12.0 && code_page == 936 {
         12
     } else {
@@ -119,4 +118,25 @@ pub fn StatusFontFamily() -> String {
 // Source: win/font_cache_skia_win.cc:129-132
 pub fn SystemFontFamily() -> String {
     MenuFontFamily()
+}
+
+// Source: font_cache.h:176-181 and :315-316. Written by the embedding from
+// its renderer preferences (WebViewImpl::SetRendererPreferences calls
+// WebFontRendering::SetAntialiasedTextEnabled/SetLCDTextEnabled) and read by
+// FontPlatformData::QuerySystemForRenderStyle.
+static ANTIALIASED_TEXT_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static LCD_TEXT_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn AntialiasedTextEnabled() -> bool {
+    ANTIALIASED_TEXT_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn LcdTextEnabled() -> bool {
+    LCD_TEXT_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn SetAntialiasedTextEnabled(enabled: bool) {
+    ANTIALIASED_TEXT_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn SetLCDTextEnabled(enabled: bool) {
+    LCD_TEXT_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }

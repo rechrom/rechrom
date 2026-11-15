@@ -200,13 +200,13 @@ pub fn CreateSVGImageDecoderWithConstraints(
 pub type BrowserFontBackendFactory = Option<std::sync::Arc<dyn font_engine::FontBackendFactory>>;
 
 pub fn CreateBrowserFontBackendFactory() -> BrowserFontBackendFactory {
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_vendor = "apple", windows))]
     {
         Some(std::sync::Arc::new(
             raster::SkiaFontBackendFactory::default(),
         ))
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     {
         None
     }

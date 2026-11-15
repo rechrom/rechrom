@@ -910,6 +910,11 @@ unsafe extern "system" {
     fn ReleaseDC(window: *mut c_void, dc: *mut c_void) -> i32;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetACP() -> u32;
+}
+
 #[link(name = "gdi32")]
 unsafe extern "system" {
     fn GetDeviceCaps(dc: *mut c_void, index: i32) -> i32;
@@ -1004,13 +1009,82 @@ pub(super) fn InitializeSystemFontMetrics() {
             GetFontFromLOGFONT(&logfont)
         };
         use font_engine::fonts::font_cache_win as font_cache;
+        font_cache::SetAnsiCodePage(GetACP());
         let (family, height) = font(&metrics.lfMenuFont);
         font_cache::SetMenuFontMetrics(&family, height);
         let (family, height) = font(&metrics.lfSmCaptionFont);
         font_cache::SetSmallCaptionFontMetrics(&family, height);
         let (family, height) = font(&metrics.lfStatusFont);
         font_cache::SetStatusFontMetrics(&family, height);
+
+        // Renderer preferences should_antialias_text and subpixel_rendering
+        // from gfx::GetFontRenderParams, applied by WebViewImpl.
+        let params = QueryFontRenderParams();
+        font_cache::SetAntialiasedTextEnabled(params.antialiasing);
+        font_cache::SetLCDTextEnabled(params.subpixel_rendering);
     });
+}
+
+// --- ui/gfx/font_render_params_win.cc ---------------------------------------
+
+const SPI_GETFONTSMOOTHING: u32 = 0x004a;
+const SPI_GETFONTSMOOTHINGTYPE: u32 = 0x200a;
+const SPI_GETFONTSMOOTHINGORIENTATION: u32 = 0x2012;
+const FE_FONTSMOOTHINGCLEARTYPE: u32 = 0x0002;
+const FE_FONTSMOOTHINGORIENTATIONBGR: u32 = 0x0000;
+const FE_FONTSMOOTHINGORIENTATIONRGB: u32 = 0x0001;
+
+struct FontRenderParams {
+    antialiasing: bool,
+    /// subpixel_rendering != SUBPIXEL_RENDERING_NONE.
+    subpixel_rendering: bool,
+}
+
+// Source: font_render_params_win.cc:31-61 (GetSubpixelRenderingGeometry).
+// The per-display Avalon.Graphics PixelStructure registry override that
+// precedes the system orientation is not read.
+unsafe fn GetSubpixelRenderingGeometry() -> bool {
+    let mut structure = 0u32;
+    unsafe {
+        if SystemParametersInfoW(
+            SPI_GETFONTSMOOTHINGORIENTATION,
+            0,
+            (&mut structure as *mut u32).cast(),
+            0,
+        ) != 0
+        {
+            return matches!(
+                structure,
+                FE_FONTSMOOTHINGORIENTATIONRGB | FE_FONTSMOOTHINGORIENTATIONBGR
+            );
+        }
+    }
+    // No explicit ClearType settings, default to none.
+    false
+}
+
+// Source: font_render_params_win.cc:74-97 (CachedFontRenderParams::GetParams).
+unsafe fn QueryFontRenderParams() -> FontRenderParams {
+    let mut params = FontRenderParams {
+        antialiasing: false,
+        subpixel_rendering: false,
+    };
+    unsafe {
+        let mut enabled: BOOL = 0;
+        if SystemParametersInfoW(SPI_GETFONTSMOOTHING, 0, (&mut enabled as *mut BOOL).cast(), 0) != 0
+            && enabled != 0
+        {
+            params.antialiasing = true;
+            let mut kind = 0u32;
+            if SystemParametersInfoW(SPI_GETFONTSMOOTHINGTYPE, 0, (&mut kind as *mut u32).cast(), 0)
+                != 0
+                && kind == FE_FONTSMOOTHINGCLEARTYPE
+            {
+                params.subpixel_rendering = GetSubpixelRenderingGeometry();
+            }
+        }
+    }
+    params
 }
 
 #[cfg(test)]

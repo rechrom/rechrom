@@ -5,7 +5,7 @@
 mod backend;
 mod image_operations;
 mod translated;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub use translated::SkiaFontBackendFactory;
 pub use translated::{
     BuildTranslatedFilterOperations, Canvas2DRasterBackendFactory,

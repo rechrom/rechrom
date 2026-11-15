@@ -867,6 +867,31 @@ fn ConfigureAppleFont(font: &mut SkFont, smoothing: FontSmoothing) {
     }
 }
 
+/// Source: third_party/blink/renderer/platform/fonts/win/font_platform_data_win.cc
+/// `FontPlatformData::CreateSkFont` with the `QuerySystemForRenderStyle`
+/// style. Windows ignores `-webkit-font-smoothing`: edging follows the system
+/// antialiasing and ClearType settings carried in FontCache.
+#[cfg(windows)]
+fn ConfigureWindowsFont(font: &mut SkFont) {
+    use font_engine::fonts::font_cache_win as font_cache;
+    let use_anti_alias = font_cache::AntialiasedTextEnabled();
+    let use_subpixel_rendering = use_anti_alias && font_cache::LcdTextEnabled();
+    font.setEdging(if use_subpixel_rendering {
+        Edging::kSubpixelAntiAlias
+    } else if use_anti_alias {
+        Edging::kAntiAlias
+    } else {
+        Edging::kAlias
+    });
+    // Only use sub-pixel positioning if anti aliasing is enabled; without
+    // font smoothing it would clamp glyphs unevenly to pixel positions.
+    if use_anti_alias {
+        font.setSubpixel(true);
+    }
+    // !avoid_embedded_bitmaps_ for every face this host selects.
+    font.setEmbeddedBitmaps(true);
+}
+
 /// Source: third_party/blink/renderer/platform/fonts/simple_font_data.cc and
 /// third_party/blink/renderer/platform/fonts/skia/skia_text_metrics.cc.
 ///
@@ -874,7 +899,7 @@ fn ConfigureAppleFont(font: &mut SkFont, smoothing: FontSmoothing) {
 /// SkFont strike that later rasterizes it.  The immutable font-engine package
 /// keeps this host implementation behind FontBackendFactory so Layout does not
 /// acquire a dependency on Raster or Skia.
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 #[derive(Default)]
 pub struct SkiaFontBackendFactory {
     // FontEngine is Document-scoped, while Chromium's FontPlatformData cache
@@ -886,7 +911,7 @@ pub struct SkiaFontBackendFactory {
     backends: std::sync::Mutex<std::collections::VecDeque<Arc<SkiaFontBackend>>>,
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 struct SkiaFontBackend {
     bytes: font_engine::SharedFontBytes,
     face_index: u32,
@@ -897,7 +922,7 @@ struct SkiaFontBackend {
         Arc<std::sync::Mutex<Vec<(u32, skia::src::core::SkTypeface::SkTypefaceRef)>>>,
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 impl SkiaFontBackend {
     fn CreateTypeface(
         bytes: &[u8],
@@ -980,12 +1005,15 @@ impl SkiaFontBackend {
         let mut font = SkFont::with_size(Some(self.Typeface(size)), size);
         font.setEmbolden(synthetic_bold);
         font.setSkewX(if synthetic_italic { -0.25 } else { 0.0 });
+        #[cfg(target_vendor = "apple")]
         ConfigureAppleFont(&mut font, FontSmoothing::kAuto);
+        #[cfg(windows)]
+        ConfigureWindowsFont(&mut font);
         font
     }
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 impl font_engine::FontBackendFactory for SkiaFontBackendFactory {
     fn Create(
         &self,
@@ -1023,7 +1051,7 @@ impl font_engine::FontBackendFactory for SkiaFontBackendFactory {
     }
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 impl font_engine::FontBackend for SkiaFontBackend {
     fn Metrics(
         &self,
@@ -5823,7 +5851,9 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
             font.setSkewX(if run.synthetic_italic { -0.25 } else { 0.0 });
             #[cfg(target_vendor = "apple")]
             ConfigureAppleFont(&mut font, FontSmoothing::kAuto);
-            #[cfg(not(target_vendor = "apple"))]
+            #[cfg(windows)]
+            ConfigureWindowsFont(&mut font);
+            #[cfg(not(any(target_vendor = "apple", windows)))]
             {
                 font.setSubpixel(true);
                 font.setEdging(Edging::kAntiAlias);
@@ -6166,7 +6196,9 @@ impl<'target, 'pixels> TranslatedCanvas<'target, 'pixels> {
                 font.setSkewX(if item.synthetic_italic { -0.25 } else { 0.0 });
                 #[cfg(target_vendor = "apple")]
                 ConfigureAppleFont(&mut font, item.font_smoothing);
-                #[cfg(not(target_vendor = "apple"))]
+                #[cfg(windows)]
+                ConfigureWindowsFont(&mut font);
+                #[cfg(not(any(target_vendor = "apple", windows)))]
                 {
                     font.setSubpixel(item.font_smoothing == FontSmoothing::kSubpixelAntialiased);
                     font.setEdging(match item.font_smoothing {

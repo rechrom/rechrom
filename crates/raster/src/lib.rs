@@ -18,7 +18,7 @@ pub use png::EncodeRgbaPng;
 pub use reflection_mask::CompileReflectionMaskLayers;
 
 pub mod execution;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub use execution::SkiaFontBackendFactory;
 pub use execution::{
     Canvas2DRasterBackendFactory, ImageBitmapRespectingOrientation, MapResourceForRead,
