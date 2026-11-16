@@ -388,6 +388,15 @@ fn WalkPrePaint(
         );
         trace.set("skipped_subtrees", stats.skipped_subtrees as f64);
         trace.set("post_walk", stats.post_walk as u8 as f64);
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.Rebind",
+            &[
+                ("rebind_walk", stats.rebind_walk as u8 as f64),
+                ("rebound_nodes", stats.rebound_nodes as f64),
+                ("post_walk", stats.post_walk as u8 as f64),
+            ],
+        );
         tree
     }
 }

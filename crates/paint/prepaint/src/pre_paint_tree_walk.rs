@@ -5068,7 +5068,18 @@ impl PrePaintTreeWalk {
             self.stats.skipped_subtrees += 1;
             return node;
         }
-        let self_clean = (same_context || retained_geometry_covered) && self_revision_matches;
+        // A replacement LayoutResult republishes every fragment-local sidecar
+        // at a new address, but Layout's revisions are keyed by the stable
+        // FragmentData identity. An unchanged revision therefore proves the
+        // same inputs Chromium would find on its retained FragmentData; only
+        // the borrowed sidecar pointer has to move to the new owner.
+        let self_clean = (same_context || retained_geometry_covered)
+            && self_revision_matches
+            && (!self.source_owner_changed
+                || previous.as_ref().is_some_and(|node| {
+                    let old = node.fragment.as_deref().unwrap();
+                    SameSourceIdentity(old, &fragment) && SameClientDirectory(old, &fragment)
+                }));
         let invalidation_only = same_context
             && previous.as_ref().is_some_and(|node| {
                 let old = node.fragment.as_deref().unwrap();
@@ -5077,7 +5088,12 @@ impl PrePaintTreeWalk {
             });
         let mut node = if self_clean {
             self.stats.reused_nodes += 1;
-            previous.take().unwrap()
+            let mut node = previous.take().unwrap();
+            if self.source_owner_changed {
+                self.stats.rebound_nodes += 1;
+                node.fragment = Some(ResidentFragment::FromSource(&fragment));
+            }
+            node
         } else if invalidation_only {
             // Blink visited this object to run paint invalidation, while
             // retaining its FragmentData property slots. Refresh our shallow
@@ -5988,6 +6004,19 @@ impl PrePaintTreeWalk {
                 .extend(cache.subtree_keys.iter().copied());
             return tree;
         }
+        // Chromium's FragmentData outlives a relayout, so PrePaint visits only
+        // dirty objects. When the sole reason for the forced walk is a
+        // replacement sidecar owner, keep the per-node revision proofs and
+        // rebind clean nodes in one linear walk instead of rebuilding every
+        // property node; subtree skipping stays disabled so no node keeps a
+        // pointer into the released owner.
+        let rebind = force
+            && source_owner_changed
+            && self.retained_tree_valid
+            && root.pre_paint_revision != 0
+            && previous.is_some();
+        self.stats.rebind_walk = rebind;
+        let force = force && !rebind;
         self.needs_post_update = force || previous.is_none() || self.logical_tree_changed;
         if self.logical_tree_changed {
             if let Some(tree) = &mut previous {

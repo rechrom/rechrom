@@ -59,4 +59,6 @@ pub struct PrePaintUpdateStats {
     pub source_tree_compatible_nodes: usize,
     pub invalidation_nodes: usize,
     pub post_walk: bool,
+    pub rebound_nodes: usize,
+    pub rebind_walk: bool,
 }
