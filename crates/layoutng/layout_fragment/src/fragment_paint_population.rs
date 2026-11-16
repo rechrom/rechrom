@@ -40,6 +40,7 @@ fn RetainedResourcesAreCompatible(
 fn RetainedPaintProperties(
     object: *const LayoutObject,
     purpose: LayoutUpdateKind,
+    effective_style: *const StyleComputedStyle,
     instance: u64,
     resources: &Arc<PaintResources>,
     paint_state: &crate::layout_engine::LayoutPaintState,
@@ -47,6 +48,25 @@ fn RetainedPaintProperties(
 ) -> Option<PrePaintInvalidation> {
     if purpose != LayoutUpdateKind::Paint {
         return None;
+    }
+    // Dirty bits prove the paint inputs unchanged only while the object still
+    // owns the ComputedStyle the projection was exported from. A tree-builder
+    // transaction can install a replacement style on a reused LayoutObject;
+    // Chromium's FragmentData has no copied style to go stale, so re-export
+    // whenever the owner's current style differs.
+    if !object.is_null() {
+        let expected = if effective_style.is_null() {
+            unsafe { &*object }.StyleRef() as *const StyleComputedStyle
+        } else {
+            effective_style
+        };
+        let paint = paint_state.ResidentPaintProperties(instance)?;
+        let exported_from_expected = paint.style.IsExportedFrom(expected)
+            || (paint.style.IsExportedFrom(std::ptr::null())
+                && !foundation::IsManagedLayoutAddress(expected));
+        if !exported_from_expected {
+            return None;
+        }
     }
     let invalidation = if object.is_null() {
         PrePaintInvalidation::default()
@@ -243,6 +263,7 @@ fn PopulateInlineItemLocalPaintData(
     let retained_invalidation = RetainedPaintProperties(
         object,
         purpose,
+        effective_style,
         fragment_instance_id,
         resources,
         paint_state,
@@ -694,6 +715,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let retained_invalidation = RetainedPaintProperties(
         object,
         purpose,
+        effective_style,
         fragment_instance_id,
         resources,
         paint_state,

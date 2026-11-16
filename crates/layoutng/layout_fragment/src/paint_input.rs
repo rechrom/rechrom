@@ -2014,6 +2014,16 @@ impl PaintStyle {
         }
     }
 
+    /// Whether this projection was exported from exactly `source`. A retained
+    /// projection whose owner has since received a different ComputedStyle
+    /// must be re-exported; its old source address may already be reused.
+    pub fn IsExportedFrom(
+        &self,
+        source: *const layoutng_style::style::computed_style::ComputedStyle,
+    ) -> bool {
+        self.source_address == source as usize
+    }
+
     pub fn Source(&self) -> Option<&layoutng_style::style::computed_style::ComputedStyle> {
         unsafe { self.SourcePtr().as_ref() }
     }
