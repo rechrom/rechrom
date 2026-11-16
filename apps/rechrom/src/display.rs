@@ -989,6 +989,7 @@ impl Display {
         // The callback only posts its token; the Display owner consumes it.
         self.pending_swap = Some(sequence);
         post_swap_started();
+        let present_trace = browser_tracing::span("present", "Display.PresentPrepared");
         let presented = self.target.present_prepared(
             output,
             sequence,
@@ -1029,12 +1030,20 @@ impl Display {
                 }
             }),
         );
+        drop(present_trace);
         if let Err(error) = presented {
             self.pending_swap = None;
             return Err(error);
         }
         self.last_presented_frame = Some((viewport, provenance));
-        self.FulfillCopyOutputs(viewport, provenance);
+        {
+            let _trace = browser_tracing::span("present", "Display.FulfillCopyOutputs");
+            self.FulfillCopyOutputs(viewport, provenance);
+        }
+        {
+            let _trace = browser_tracing::span("present", "Display.Screencast");
+            self.target.screencast(viewport, sequence);
+        }
         if !presentation && !self.offscreen_frame_ready_notified {
             self.offscreen_frame_ready_notified = true;
             (self.notify)(UserEvent::FrameReady);

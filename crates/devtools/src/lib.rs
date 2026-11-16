@@ -29,6 +29,27 @@ pub fn set_reload_handler(handler: ReloadHandler) {
     *reload_handler().lock().unwrap() = Some(handler);
 }
 
+/// `Page.startScreencast` parameters. `path` is a Rechrom extension: the HTTP
+/// transport has no `Page.screencastFrame` events, so the host streams the
+/// frames to this file instead.
+pub struct ScreencastOptions {
+    pub path: String,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
+    pub every_nth_frame: Option<u32>,
+}
+/// `Some` starts a screencast, `None` stops it and returns its summary.
+pub type ScreencastHandler =
+    Arc<dyn Fn(Option<ScreencastOptions>) -> Result<Value, String> + Send + Sync>;
+fn screencast_handler() -> &'static std::sync::Mutex<Option<ScreencastHandler>> {
+    static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<ScreencastHandler>>> =
+        std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| std::sync::Mutex::new(None))
+}
+pub fn set_screencast_handler(handler: ScreencastHandler) {
+    *screencast_handler().lock().unwrap() = Some(handler);
+}
+
 pub type NavigateHandler = Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>;
 fn navigate_handler() -> &'static std::sync::Mutex<Option<NavigateHandler>> {
     static HANDLER: std::sync::OnceLock<std::sync::Mutex<Option<NavigateHandler>>> =
@@ -387,6 +408,101 @@ impl WheelInjection {
     }
 }
 
+/// CDP `Input.synthesizeScrollGesture`, generated in-process like Chromium's
+/// SyntheticGestureController / SyntheticSmoothMoveGesture
+/// (content/common/input/synthetic_gesture_controller.cc,
+/// synthetic_smooth_move_gesture.cc). A repeating timer at
+/// `kFlushInputRateInMs` emits the precise wheel delta accumulated since the
+/// gesture began, so pacing does not depend on the protocol client.
+struct ScrollGesture {
+    x: f64,
+    y: f64,
+    distance_x: f64,
+    distance_y: f64,
+    speed: f64,
+}
+
+impl ScrollGesture {
+    // Source: content/common/input/synthetic_gesture_controller.cc
+    const FLUSH_INPUT_RATE: std::time::Duration = std::time::Duration::from_millis(16);
+
+    fn from_params(params: &Value) -> Result<Self, String> {
+        let number = |name: &str, default: Option<f64>| -> Result<f64, String> {
+            match params.get(name) {
+                None => default.ok_or_else(|| format!("{name} is required")),
+                Some(value) => value
+                    .as_f64()
+                    .filter(|value| value.is_finite() && value.abs() <= 1_000_000.0)
+                    .ok_or_else(|| format!("{name} must be finite and within 1000000")),
+            }
+        };
+        // Source: protocol Input.synthesizeScrollGesture; speed defaults to 800.
+        let speed = number("speed", Some(800.0))?;
+        if speed <= 0.0 {
+            return Err("speed must be positive".into());
+        }
+        Ok(Self {
+            x: number("x", None)?,
+            y: number("y", None)?,
+            distance_x: number("xDistance", Some(0.0))?,
+            distance_y: number("yDistance", Some(0.0))?,
+            speed,
+        })
+    }
+
+    fn event(&self, delta_x: f64, delta_y: f64, phase: &str) -> WheelInjection {
+        WheelInjection {
+            x: self.x,
+            y: self.y,
+            delta_x,
+            delta_y,
+            phase: phase.into(),
+            precise: true,
+            timestamp_seconds: None,
+            platform_phase: None,
+            momentum_phase: None,
+            scale_factor: None,
+        }
+    }
+
+    fn run(&self, wheel: &WheelHandler) -> Result<(), String> {
+        let total = self.distance_x.hypot(self.distance_y);
+        let duration = std::time::Duration::from_secs_f64(total / self.speed);
+        // CDP distances are content movement: positive yDistance scrolls up,
+        // which is a negative wheel scroll delta.
+        let (unit_x, unit_y) = if total > 0.0 {
+            (-self.distance_x / total, -self.distance_y / total)
+        } else {
+            (0.0, 0.0)
+        };
+        wheel(self.event(0.0, 0.0, "began"))?;
+        let start = std::time::Instant::now();
+        let mut sent = 0.0;
+        let mut tick = 1u32;
+        while sent < total {
+            let due = start + Self::FLUSH_INPUT_RATE * tick;
+            let now = std::time::Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+            tick += 1;
+            // SyntheticSmoothMoveGesture::GetPositionDeltaAtTime.
+            let elapsed = start.elapsed();
+            let progress = if elapsed >= duration || duration.is_zero() {
+                total
+            } else {
+                total * elapsed.as_secs_f64() / duration.as_secs_f64()
+            };
+            let delta = progress - sent;
+            if delta > 0.0 {
+                wheel(self.event(unit_x * delta, unit_y * delta, "changed"))?;
+                sent = progress;
+            }
+        }
+        wheel(self.event(0.0, 0.0, "ended"))
+    }
+}
+
 impl MouseInjection {
     fn from_params(params: &Value) -> Result<Self, String> {
         let target_id = params
@@ -730,6 +846,17 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
             // This acknowledges queueing, not completion or presentation.
             Ok(json!({}))
         }
+        "Input.synthesizeScrollGesture" => {
+            let gesture = ScrollGesture::from_params(&params)?;
+            let wheel = wheel_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("No browser target")?;
+            // Like CDP, respond once every event of the gesture has been queued.
+            gesture.run(&wheel)?;
+            Ok(json!({}))
+        }
         "Input.dispatchMouseEvent" => {
             let input = MouseInjection::from_params(&params)?;
             let mouse = mouse_handler()
@@ -855,6 +982,41 @@ fn dispatch(request: Value) -> Result<ApiResult, String> {
                 .ok_or("No browser target")?;
             let png = capture(target_id)?;
             Ok(json!({"data":base64::engine::general_purpose::STANDARD.encode(png)}))
+        }
+        "Page.startScreencast" | "Page.stopScreencast" => {
+            let screencast = screencast_handler()
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or("Screencast requires the displayless host")?;
+            if method == "Page.stopScreencast" {
+                screencast(None)
+            } else {
+                let size = |name: &str| -> Result<Option<u32>, String> {
+                    params
+                        .get(name)
+                        .map(|value| {
+                            value
+                                .as_u64()
+                                .and_then(|value| u32::try_from(value).ok())
+                                .filter(|value| *value > 0)
+                                .ok_or_else(|| format!("{name} must be a positive integer"))
+                        })
+                        .transpose()
+                };
+                let path = params
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.is_empty())
+                    .ok_or("path must be a non-empty string")?
+                    .to_owned();
+                screencast(Some(ScreencastOptions {
+                    path,
+                    max_width: size("maxWidth")?,
+                    max_height: size("maxHeight")?,
+                    every_nth_frame: size("everyNthFrame")?,
+                }))
+            }
         }
         "Emulation.setDeviceMetricsOverride" => {
             let width = params

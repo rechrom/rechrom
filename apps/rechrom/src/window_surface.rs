@@ -128,6 +128,24 @@ impl DisplayTarget {
         }
     }
 
+    /// Sample the completed memory target's page region for an active
+    /// DevTools screencast.
+    pub(crate) fn screencast(&self, viewport: crate::engine::Viewport, sequence: u64) {
+        if let Self::Offscreen { pixels } = self {
+            let toolbar_height = viewport.toolbar_pixels();
+            if pixels.len() >= viewport.width as usize * viewport.height as usize {
+                crate::screencast::capture(
+                    sequence,
+                    pixels,
+                    viewport.width as usize,
+                    viewport.width,
+                    toolbar_height,
+                    viewport.height.saturating_sub(toolbar_height),
+                );
+            }
+        }
+    }
+
     /// Read the last completed memory target for a Viz CopyOutput request.
     /// Native targets continue to use their pre-presentation diagnostic copy:
     /// after handing a prepared buffer to the platform it is no longer owned

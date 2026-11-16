@@ -32,6 +32,7 @@ mod page_presentation;
 mod page_runtime;
 mod presentation_runtime;
 mod primary_clipboard;
+mod screencast;
 mod scrollbar_theme_settings;
 mod tabs;
 mod temporal_input_locale;

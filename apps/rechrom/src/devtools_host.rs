@@ -83,6 +83,7 @@ fn attach_offscreen_screenshots(
 pub(crate) fn attach_offscreen(commands: &mpsc::Sender<Command>, initial_viewport: Viewport) {
     let expected_viewport = Arc::new(Mutex::new(initial_viewport));
     attach_offscreen_screenshots(commands, expected_viewport.clone());
+    crate::screencast::attach();
     attach_commands_with_expected_viewport(commands, Some(expected_viewport));
 }
 
