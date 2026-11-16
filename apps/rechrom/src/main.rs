@@ -16,6 +16,7 @@ mod devtools_window;
 mod display;
 mod engine;
 mod headless;
+mod high_resolution_timer;
 mod input;
 mod input_surface_routing;
 mod interaction_text_settings;
@@ -37,6 +38,7 @@ mod temporal_input_locale;
 mod window_runtime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _high_resolution_timer = high_resolution_timer::HighResolutionTimer::activate();
     interaction_text_settings::initialize()?;
     scrollbar_theme_settings::initialize()?;
     memory_diagnostics::start_sampler();
