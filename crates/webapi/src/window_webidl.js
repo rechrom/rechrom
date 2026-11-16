@@ -895,6 +895,9 @@ globalThis.getSelection = () => documentSelection;
 // DOM owns definitions, element states and reaction queues. This realm retains
 // only the JavaScript constructor/callback handles and whenDefined promises.
 const ceInvoke = __domInvoke, ceApply = Reflect.apply, ceConstruct = Reflect.construct;
+// Node.ownerDocument is a native attribute getter, not a host method. Keep the
+// original brand-checked getter so page overrides cannot redirect upgrade().
+const ceOwnerDocument = Object.getOwnPropertyDescriptor(Node.prototype, 'ownerDocument').get;
 const ceProxy = Proxy, ceString = String, ceArrayIsArray = Array.isArray;
 const ceDefinitions = new Map(), ceConstructors = new WeakMap(), ceWaiters = new Map();
 const ceRegistryToken = {}, ceRegistryBrands = new WeakSet();
@@ -1080,7 +1083,10 @@ class CustomElementRegistry {
   upgrade(root) {
     ceBrand(this);
     if (!arguments.length) throw new TypeError('upgrade requires a Node');
-    ceWithReactions(() => ceInvoke(root, '__ceUpgrade'), ceInvoke(root, 'ownerDocument') || root);
+    // https://html.spec.whatwg.org/#dom-customelementregistry-upgrade: root is
+    // a Node (the brand-checked getter throws TypeError otherwise); a Document
+    // root has a null ownerDocument and supplies its own reaction scope.
+    ceWithReactions(() => ceInvoke(root, '__ceUpgrade'), ceApply(ceOwnerDocument, root, []) || root);
   }
 }
 for (const member of ['define', 'get', 'getName', 'whenDefined', 'upgrade']) {
