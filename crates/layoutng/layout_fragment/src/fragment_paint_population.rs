@@ -64,6 +64,27 @@ fn RetainedPaintProperties(
     RetainedResourcesAreCompatible(paint, resources, owners).then_some(invalidation)
 }
 
+// Chromium reads tree order directly from its resident LayoutObject graph.
+// The exported projection is a dense document-order index, so an insertion
+// shifts it for every later object even though that object's own paint inputs
+// (and its source dirty bits) are unchanged. A retained FragmentData keeps its
+// properties; only this position projection is re-read from the current
+// document-order index.
+fn RefreshRetainedTreeOrder(
+    object: *const LayoutObject,
+    sources: &SourceMap,
+    output: &mut FragmentPaintData,
+) {
+    if object.is_null() {
+        return;
+    }
+    if let Some(entry) = sources.get(&object) {
+        if output.paint.logical_tree_order != entry.logical_tree_order {
+            output.paint.logical_tree_order = entry.logical_tree_order;
+        }
+    }
+}
+
 // Chromium: core/paint/box_fragment_painter.cc:102-127.  Line truncation
 // marks the FragmentItem in the inline formatting context, while a
 // self-painting atomic inline is later entered through its stored physical
@@ -245,6 +266,7 @@ fn PopulateInlineItemLocalPaintData(
         output.prepare_for_publication();
         output.paint.pre_paint_invalidation = invalidation;
         output.paint.resources = Some(Arc::clone(resources));
+        RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
         let properties = ExportProperties(
@@ -694,6 +716,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.prepare_for_publication();
         output.paint.pre_paint_invalidation = invalidation;
         output.paint.resources = Some(Arc::clone(resources));
+        RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
         let properties = ExportProperties(

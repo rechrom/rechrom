@@ -226,7 +226,7 @@ impl EngineMutation for LayoutEngine {
                 trace.set("updated", stats.updated as f64);
                 trace.set("removed", stats.removed as f64);
                 trace.set("moved", stats.moved as f64);
-                self.boundary_cache_.Clear();
+                self.boundary_cache_.ClearTopology();
                 self.tree_facts_ = None;
                 self.tree_relations_dirty_ = true;
                 self.targeted_font_objects_ = None;
@@ -279,7 +279,7 @@ impl EngineMutation for LayoutEngine {
                 {
                     return false;
                 }
-                self.boundary_cache_.Clear();
+                self.boundary_cache_.ClearTopology();
                 self.tree_facts_ = None;
                 self.tree_relations_dirty_ = true;
                 self.targeted_font_objects_ = None;
@@ -331,7 +331,7 @@ impl EngineMutation for LayoutEngine {
                         || stats.moved != 0
                     {
                         retain_invalidated_layout_result(self);
-                        self.boundary_cache_.Clear();
+                        self.boundary_cache_.ClearTopology();
                         self.tree_facts_ = None;
                         self.tree_relations_dirty_ = true;
                         self.targeted_font_objects_ = None;

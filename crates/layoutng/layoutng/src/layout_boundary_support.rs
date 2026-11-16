@@ -81,6 +81,29 @@ pub struct LayoutBoundaryCache {
 }
 
 impl LayoutBoundaryCache {
+    /// A LayoutTreeBuilder transaction (insert, remove, reattach) changes the
+    /// document-order object graph, so every index keyed by LayoutObject or
+    /// ComputedStyle address is dropped. Chromium does not discard the
+    /// FragmentData of objects the transaction left in place: their
+    /// PaintProperties, cached display items and PrePaint state survive and
+    /// are revisited only through their own dirty bits. Keep the matching
+    /// resident state here. Its keys are process-unique FragmentData /
+    /// DisplayItemClient ids, never addresses, so a removed object's entry is
+    /// simply not found again and is dropped at the next publication.
+    ///
+    /// Source: core/layout/layout_object.cc (AddChild/RemoveChild mark only
+    /// the affected object and its container chain);
+    ///         core/paint/fragment_data.h (FragmentData lives on its object).
+    pub fn ClearTopology(&mut self) {
+        self.styles.clear();
+        self.debug_names.clear();
+        self.objects.clear();
+        self.source_objects = Arc::default();
+        self.sticky_objects = Arc::default();
+        self.sources.clear();
+        self.style_sources.clear();
+    }
+
     pub fn Clear(&mut self) {
         self.styles.clear();
         self.debug_names.clear();

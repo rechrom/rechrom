@@ -28,7 +28,13 @@ pub(super) fn populate_layout_result_paint_data(
     // handle's owner map before the replacement was committed.
     let retained_paint_state = !result_changed && cache.fragment_paint_state.is_some();
     let paint_state = if result_changed {
-        crate::layout_engine::LayoutPaintState::New()
+        let state = crate::layout_engine::LayoutPaintState::New();
+        if purpose == LayoutUpdateKind::Paint {
+            if let Some(previous) = &cache.fragment_paint_state {
+                state.SeedFrom(previous);
+            }
+        }
+        state
     } else {
         cache
             .fragment_paint_state

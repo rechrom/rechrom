@@ -243,6 +243,27 @@ impl LayoutPaintState {
         })
     }
 
+    /// Seed a replacement LayoutResult's state with the previous result's
+    /// resident slots. Chromium keeps FragmentData/ObjectPaintProperties on
+    /// the persistent LayoutObject across relayout, so a clean object keeps its
+    /// paint properties when the root LayoutResult is replaced. The previous
+    /// handle keeps its own slots; the shared paint payload is copy-on-write,
+    /// and slots not bound by the new publication are dropped at commit.
+    pub(crate) fn SeedFrom(&self, previous: &Self) {
+        let previous = unsafe { &*previous.inputs.get() };
+        let inputs = unsafe { &mut *self.inputs.get() };
+        inputs.reserve(previous.len());
+        for (&instance, slot) in previous {
+            inputs.insert(
+                instance,
+                PaintFragmentSlot {
+                    data: Box::new((*slot.data).clone()),
+                    publication: 0,
+                },
+            );
+        }
+    }
+
     pub(crate) fn BeginPublication(&self) {
         unsafe { &mut *self.owners.get() }.clear();
         self.publication.set(
