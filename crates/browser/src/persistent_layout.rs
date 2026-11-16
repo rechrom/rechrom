@@ -17,6 +17,13 @@ pub(crate) fn SynchronizeLayoutTreeWithEngine(
     constraints: &ConstraintSpace,
 ) {
     let _trace = browser_tracing::span("layout", "Page.SynchronizeLayoutTree");
+    // Attachment is part of the synchronous style/layout lifecycle, including
+    // forced layout from script. Its per-node LayoutHeapScopes must not run a
+    // stop-the-world collection at each exit: allocation pressure requests
+    // collection and the owner services it from a low-priority turn, matching
+    // cppgc's scheduled-GC boundary (see LayoutDocumentWithEngineAtStage).
+    let mut heap_scope = foundation::LayoutHeapScope::new();
+    heap_scope.DeferCollection();
     owner.EmitConstraints(constraints, |mutation| {
         engine.ApplyMutation(mutation);
     });

@@ -679,7 +679,11 @@ impl HeapState {
         if self.objects[index].as_ref()?.address.as_ptr() as usize != start {
             return None;
         }
-        self.objects[index].take()
+        let object = self.objects[index].take();
+        if object.is_some() {
+            RECLAIM_EPOCH.with(|epoch| epoch.set(epoch.get() + 1));
+        }
+        object
     }
 
     fn prepare_pointer_queries(&mut self) {
@@ -1009,6 +1013,20 @@ impl HeapState {
 thread_local! {
     static HEAP: RefCell<HeapState> = RefCell::new(HeapState::new());
     static SWEEPING: Cell<bool> = const { Cell::new(false) };
+    // Incremented whenever an object leaves the heap. An address confirmed
+    // live in the current epoch stays live until the next reclaim, so
+    // IsManagedLayoutAddress can answer repeated queries for the same object
+    // without searching the allocation index.
+    static RECLAIM_EPOCH: Cell<u64> = const { Cell::new(0) };
+    static LIVE_ADDRESS_CACHE: RefCell<[(usize, u64); LIVE_ADDRESS_CACHE_SIZE]> =
+        const { RefCell::new([(0, u64::MAX); LIVE_ADDRESS_CACHE_SIZE]) };
+}
+
+const LIVE_ADDRESS_CACHE_SIZE: usize = 1024;
+
+#[inline]
+fn live_address_cache_slot(address: usize) -> usize {
+    ((address >> 4) ^ (address >> 14)) & (LIVE_ADDRESS_CACHE_SIZE - 1)
 }
 
 // cppgc supports atomic marking with incremental sweeping. No mutation may
@@ -1546,7 +1564,17 @@ pub fn IsLayoutHeapSweepingOnOwningThread() -> bool {
     SWEEPING.get()
 }
 pub fn IsManagedLayoutAddress<T: ?Sized>(pointer: *const T) -> bool {
-    HEAP.with(|heap| heap.borrow().find(pointer as *const u8).is_some())
+    let address = pointer as *const u8 as usize;
+    let epoch = RECLAIM_EPOCH.get();
+    let slot = live_address_cache_slot(address);
+    if LIVE_ADDRESS_CACHE.with(|cache| cache.borrow()[slot] == (address, epoch)) {
+        return true;
+    }
+    let live = HEAP.with(|heap| heap.borrow().find(address as *const u8).is_some());
+    if live {
+        LIVE_ADDRESS_CACHE.with(|cache| cache.borrow_mut()[slot] = (address, epoch));
+    }
+    live
 }
 
 /// Publish allocations made so far to the immutable pointer-query index by
