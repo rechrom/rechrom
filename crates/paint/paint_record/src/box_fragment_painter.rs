@@ -994,6 +994,25 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         .effect
                         .lifecycle
                         .same_node(&self.node.contents_properties.nodes.effect.lifecycle);
+                    if browser_tracing::enabled() {
+                        let contents = &self.node.contents_properties.nodes;
+                        browser_tracing::instant(
+                            "paint_record",
+                            "Paint.RootBackgroundState",
+                            &[
+                                ("separate_backdrop", paints_separate_backdrop as u8 as f64),
+                                ("separate_effect", paints_separate_effect as u8 as f64),
+                                (
+                                    "same_transform",
+                                    background_state
+                                        .transform
+                                        .lifecycle
+                                        .same_node(&contents.transform.lifecycle)
+                                        as u8 as f64,
+                                ),
+                            ],
+                        );
+                    }
                     if paints_separate_backdrop {
                         self.PaintRootGroup(phase);
                     }
@@ -6719,7 +6738,16 @@ fn CanvasBackgroundPaintState(node: &PaintTreeNode<'_>) -> PropertyTreeState {
         .as_deref()
         .and_then(|fragment| fragment.paint.canvas_background.as_ref())
         .map_or(0, |canvas| canvas.document_element_node_id);
-    let Some(document_element) = FindPaintNodeById(node, document_element_node_id) else {
+    // Source: view_painter.cc:166-188 uses document.documentElement()'s
+    // LayoutObject, which is always a descendant of the LayoutView. The
+    // LayoutView fragment carries the same DOM input identity (its node is the
+    // document), so search below it; matching the LayoutView itself would
+    // substitute its border-box (non-scrolling) state for the root element's.
+    let Some(document_element) = node
+        .children
+        .iter()
+        .find_map(|child| FindPaintNodeById(child, document_element_node_id))
+    else {
         return node.contents_properties.nodes.clone();
     };
     let mut state = document_element.properties.nodes.clone();

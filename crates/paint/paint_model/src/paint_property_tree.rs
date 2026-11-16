@@ -3903,6 +3903,15 @@ impl PropertyNodeUpdater<'_> {
         state.clip = self.clip(&state.clip);
         state.effect = self.effect(&state.effect);
     }
+    /// Bind one raw transform reference (for example FragmentData's
+    /// PreTransform) to its canonical persisted node, as `state` does for a
+    /// complete PropertyTreeState.
+    pub fn persisted_transform(
+        &mut self,
+        input: &Arc<TransformPaintPropertyNode>,
+    ) -> Arc<TransformPaintPropertyNode> {
+        self.transform(input)
+    }
     fn transform(
         &mut self,
         input: &Arc<TransformPaintPropertyNode>,

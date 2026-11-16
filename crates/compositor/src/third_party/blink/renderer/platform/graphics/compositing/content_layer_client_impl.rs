@@ -311,6 +311,26 @@ impl<B: ContentLayerClientTypes> ContentLayerClientImpl<B> {
                     bounds.height() as f32,
                 ),
             );
+        if browser_tracing::enabled() {
+            let opaque = *pending.RectKnownToBeOpaque();
+            let background = self.cc_picture_layer_.LayerRef().background_color(c);
+            browser_tracing::instant(
+                "compositor.layerize",
+                "Layerize.ContentsOpaque",
+                &[
+                    ("contents_opaque", contents_opaque as u8 as f64),
+                    ("background_alpha", f64::from(background.alpha)),
+                    ("bounds_width", f64::from(bounds.width())),
+                    ("bounds_height", f64::from(bounds.height())),
+                    ("offset_x", f64::from(offset.x())),
+                    ("offset_y", f64::from(offset.y())),
+                    ("opaque_x", f64::from(opaque.x())),
+                    ("opaque_y", f64::from(opaque.y())),
+                    ("opaque_width", f64::from(opaque.width())),
+                    ("opaque_height", f64::from(opaque.height())),
+                ],
+            );
+        }
         self.cc_picture_layer_
             .LayerRef()
             .SetContentsOpaque(contents_opaque, c);

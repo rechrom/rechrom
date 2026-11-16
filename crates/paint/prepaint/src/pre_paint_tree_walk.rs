@@ -4251,6 +4251,12 @@ fn PersistPropertyStates(node: &mut PaintTreeNode<'_>, updater: &mut PropertyNod
         state.effect_id = state.nodes.effect.id;
         state.scroll_id = state.nodes.nearest_scroll().map_or(0, |s| s.id);
     }
+    // Source: FragmentData::PreTransform() names a node in the same persistent
+    // property tree as LocalBorderBoxProperties(). ViewPainter compares the
+    // root element's PreTransform-based state with the LayoutView's
+    // ContentsProperties(); a raw per-walk node never compares equal, which
+    // splits the root background into a separate non-scrolling chunk.
+    node.pre_transform = updater.persisted_transform(&node.pre_transform);
     if let Some(fixed) = &mut node.fixed_background_properties {
         updater.state(fixed);
     }

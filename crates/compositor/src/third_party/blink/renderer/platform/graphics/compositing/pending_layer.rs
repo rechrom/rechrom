@@ -750,6 +750,20 @@ impl<B: PendingLayerTypes> PendingLayer<B> {
             self.cc_layer_ = Some(services.CreateSolidColorLayer(c.Services()));
         }
         let (layer_offset, layer_bounds) = self.Bounds();
+        if browser_tracing::enabled() {
+            browser_tracing::instant(
+                "compositor.layerize",
+                "Layerize.SolidColorLayer",
+                &[
+                    ("alpha", f64::from(self.GetSolidColor().alpha)),
+                    ("bounds_width", f64::from(layer_bounds.width())),
+                    ("bounds_height", f64::from(layer_bounds.height())),
+                    ("offset_x", f64::from(layer_offset.x())),
+                    ("offset_y", f64::from(layer_offset.y())),
+                    ("chunks", self.chunks_.len() as f64),
+                ],
+            );
+        }
         let layer = self.cc_layer_.as_ref().unwrap();
         layer.SetOffsetToTransformParent(layer_offset, c);
         layer.SetBounds(layer_bounds, c);
