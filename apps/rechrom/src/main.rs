@@ -21,6 +21,7 @@ mod input;
 mod input_surface_routing;
 mod interaction_text_settings;
 mod memory_diagnostics;
+mod native_crash_report;
 mod native_drag;
 mod native_keyboard_modifiers;
 mod native_kill_ring;
@@ -39,6 +40,7 @@ mod temporal_input_locale;
 mod window_runtime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    native_crash_report::install();
     let _high_resolution_timer = high_resolution_timer::HighResolutionTimer::activate();
     interaction_text_settings::initialize()?;
     scrollbar_theme_settings::initialize()?;
