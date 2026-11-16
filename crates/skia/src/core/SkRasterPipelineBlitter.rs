@@ -513,33 +513,15 @@ impl<'arena> SkRasterPipelineBlitter<'arena> {
                 }),
                 1 => Some(|dst, x, y, w, h, c| {
                     let dst = &mut *dst;
-                    crate::src::opts::SkMemset_opts::rect_memsetT_raw(
-                        dst.writable_addr16(x, y),
-                        c as u16,
-                        w as usize,
-                        dst.rowBytes(),
-                        h as usize,
-                    );
+                    crate::src::core::SkMemset_opts::rect_memset16(dst.writable_addr16(x, y), c as u16, w, dst.rowBytes(), h);
                 }),
                 2 => Some(|dst, x, y, w, h, c| {
                     let dst = &mut *dst;
-                    crate::src::opts::SkMemset_opts::rect_memset32_raw(
-                        dst.writable_addr32(x, y),
-                        c as u32,
-                        w as usize,
-                        dst.rowBytes(),
-                        h as usize,
-                    );
+                    crate::src::core::SkMemset_opts::rect_memset32(dst.writable_addr32(x, y), c as u32, w, dst.rowBytes(), h);
                 }),
                 3 => Some(|dst, x, y, w, h, c| {
                     let dst = &mut *dst;
-                    crate::src::opts::SkMemset_opts::rect_memsetT_raw(
-                        dst.writable_addr64(x, y),
-                        c,
-                        w as usize,
-                        dst.rowBytes(),
-                        h as usize,
-                    );
+                    crate::src::core::SkMemset_opts::rect_memset64(dst.writable_addr64(x, y), c, w, dst.rowBytes(), h);
                 }),
                 _ => None,
             };

@@ -908,11 +908,7 @@ impl crate::src::core::SkCoreBlitters::SkARGB32_Opaque_Blitter {
             let aa = antialias[offset];
             unsafe {
                 if aa == 255 {
-                    crate::src::opts::SkMemset_opts::memset32(
-                        core::slice::from_raw_parts_mut(device, count as usize),
-                        this.argb.fPMColor,
-                        count as usize,
-                    );
+                    crate::src::core::SkMemset_opts::memset32(device, this.argb.fPMColor, i32::from(count));
                 } else if aa > 0 {
                     let sc = SkAlphaMulQ(this.argb.fPMColor, SkAlpha255To256(aa as u32));
                     crate::src::core::SkBlitRow::SkBlitRow::Color32(
@@ -1036,13 +1032,7 @@ impl crate::src::core::SkCoreBlitters::SkARGB32_Blitter {
         let rowBytes = d.rowBytes();
         unsafe {
             if SkGetPackedA32(this.fPMColor) == 255 {
-                crate::src::opts::SkMemset_opts::rect_memset32_raw(
-                    device,
-                    this.fPMColor,
-                    width as usize,
-                    rowBytes,
-                    height as usize,
-                );
+                crate::src::core::SkMemset_opts::rect_memset32(device, this.fPMColor, width, rowBytes, height);
             } else {
                 loop {
                     let old = height;
@@ -1088,11 +1078,7 @@ impl crate::src::core::SkCoreBlitters::SkARGB32_Black_Blitter {
             unsafe {
                 if aa != 0 {
                     if aa == 255 {
-                        crate::src::opts::SkMemset_opts::memset32(
-                            core::slice::from_raw_parts_mut(device, count as usize),
-                            kBlack,
-                            count as usize,
-                        );
+                        crate::src::core::SkMemset_opts::memset32(device, kBlack, i32::from(count));
                     } else {
                         let src = aa << SK_BGRA_A32_SHIFT;
                         let dst_scale = SkAlpha255To256(255 - aa);
