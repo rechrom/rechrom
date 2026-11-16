@@ -10900,10 +10900,10 @@ pub mod neon_lowp_select {
         v::if_then_else(c, t, e)
     }
     pub fn if_then_else_u16(c: I16, t: U16, e: U16) -> U16 {
-        v::if_then_else(core::mem::transmute(c), t, e)
+        v::if_then_else(unsafe { core::mem::transmute(c) }, t, e)
     }
     pub fn if_then_else_u32(c: I32, t: U32, e: U32) -> U32 {
-        v::if_then_else(core::mem::transmute(c), t, e)
+        v::if_then_else(unsafe { core::mem::transmute(c) }, t, e)
     }
     // Source: src/opts/SkRasterPipeline_opts.h:5771-5778
     pub fn max_f32(x: F, y: F) -> F {
@@ -10919,10 +10919,10 @@ pub mod neon_lowp_select {
         if_then_else_i32(v::cmp_lt(&x, &y), x, y)
     }
     pub fn max_u16(x: U16, y: U16) -> U16 {
-        if_then_else_u16(core::mem::transmute(v::cmp_lt(&x, &y)), y, x)
+        if_then_else_u16(unsafe { core::mem::transmute(v::cmp_lt(&x, &y)) }, y, x)
     }
     pub fn min_u16(x: U16, y: U16) -> U16 {
-        if_then_else_u16(core::mem::transmute(v::cmp_lt(&x, &y)), x, y)
+        if_then_else_u16(unsafe { core::mem::transmute(v::cmp_lt(&x, &y)) }, x, y)
     }
     // Source: src/opts/SkRasterPipeline_opts.h:5793-5806
     pub fn max_f32_vs(a: F, b: f32) -> F {
@@ -11092,7 +11092,7 @@ pub mod neon_lowp_math {
             let ib = b[i] as i32;
             crate::SkASSERT!(@source b"src/opts/SkRasterPipeline_opts.h\0".as_ptr(),6077; @condition b"-ib <= ia && ia <= 65535 - ib\0".as_ptr(); -ib<=ia&&ia<=65535-ib);
         }
-        v::add(&b, &core::mem::transmute(a))
+        v::add(&b, &unsafe { core::mem::transmute(a) })
     }
     // Source: src/opts/SkRasterPipeline_opts.h:6083-6083
     pub fn fract(x: F) -> F {
