@@ -42,6 +42,10 @@ mod window_runtime;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     native_crash_report::install();
     let _high_resolution_timer = high_resolution_timer::HighResolutionTimer::activate();
+    // BrowserMainLoop::PreEarlyInitialization sets the UI thread's default
+    // type to kPresentation (content/browser/browser_main_loop.cc:579). This
+    // thread receives native resize/input before the frame threads it feeds.
+    engine::set_presentation_thread_priority();
     interaction_text_settings::initialize()?;
     scrollbar_theme_settings::initialize()?;
     memory_diagnostics::start_sampler();

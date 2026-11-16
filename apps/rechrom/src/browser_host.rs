@@ -417,6 +417,10 @@ pub(crate) fn spawn(
     std::thread::Builder::new()
         .name("browser-host-input".into())
         .spawn(move || {
+            // Browser IO-thread role: Chromium starts it as kPresentation
+            // because its IPCs gate display work
+            // (content/browser/scheduler/browser_task_executor.cc:300-303).
+            crate::engine::set_presentation_thread_priority();
             while let Ok(command) = receiver.recv() {
                 let stop = matches!(command, Command::Stop);
                 if messages.send(Message::Host(command)).is_err() || stop {
@@ -471,6 +475,7 @@ pub(crate) fn spawn(
     std::thread::Builder::new()
         .name("browser-host".into())
         .spawn(move || {
+            crate::engine::set_presentation_thread_priority();
             let _trace_scope = browser_tracing::scope(browser_tracing::Context {
                 target_id: 1,
                 ..Default::default()
