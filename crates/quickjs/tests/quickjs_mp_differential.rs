@@ -19,7 +19,7 @@ fn dump(out: &mut Vec<u8>, r: js_limb_t, p: &[js_limb_t]) {
 #[test]
 fn official_c_bigint_limb_arithmetic_matches() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = source::source_prefix(&c);
     let begin = c.find("#define ADDC(").unwrap();

@@ -499,7 +499,7 @@ mod intrinsic_runtime {
     #[test]
     fn official_c_native_constructors_function_lists_and_autoinit_match() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let upstream = root.join("../../vendor/quickjs-2026-06-04");
+        let upstream = include!("quickjs_upstream_source.rs");
         let dir = std::env::temp_dir().join(format!(
             "quickjs-runtime-init-oracle-{}",
             std::process::id()

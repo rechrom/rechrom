@@ -137,7 +137,7 @@ mod context_strings {
     #[test]
     fn official_c_staged_strings_atoms_shapes_and_object_construction_match() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let upstream = root.join("../../vendor/quickjs-2026-06-04");
+        let upstream = include!("quickjs_upstream_source.rs");
         let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
         let mut oracle = weak_source(&c);
         oracle.push_str("#include \"dtoa.h\"\n#define JS_STRING_LEN_MAX ((1 << 30) - 1)\n#define ATOM_GET_STR_BUF_SIZE 64\n");

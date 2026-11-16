@@ -47,7 +47,7 @@ fn official_c_jsvalue_layout_bits_constructors_and_refcounts_match() {
     let file = std::env::temp_dir().join(format!("quickjs-value-oracle-{}", std::process::id()));
     let result = include!("quickjs_oracle_config.rs")
         .args(["-std=c11", "-O2", "-I"])
-        .arg(root.join("../../vendor/quickjs-2026-06-04"))
+        .arg(include!("quickjs_upstream_source.rs"))
         .arg(root.join("tests/quickjs_value_oracle.c"))
         .arg("-o")
         .arg(&file)

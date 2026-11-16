@@ -19,8 +19,7 @@
     // Only select the original allocation policy; this gate does not enable
     // compiler sanitizer instrumentation on either implementation.
     compiler.arg(if large {"-D__SANITIZE_ADDRESS__=1"} else {"-U__SANITIZE_ADDRESS__"});
-    let upstream = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let directory = std::env::temp_dir().join(format!(
         "quickjs-oracle-feature-{}-{}{}{}{}{}{}", std::process::id(), short as u8,
         atomics as u8, iter as u8, dump as u8, force_gc as u8, large as u8));

@@ -286,7 +286,7 @@ fn entire_cutils_algorithm_matches_official_c() {
     let file = std::env::temp_dir().join(format!("quickjs-cutils-oracle-{}", std::process::id()));
     let result = include!("quickjs_oracle_config.rs")
         .args(["-std=c11", "-O2", "-I"])
-        .arg(root.join("../../vendor/quickjs-2026-06-04"))
+        .arg(include!("quickjs_upstream_source.rs"))
         .arg(root.join("tests/cutils_oracle.c"))
         .args(["-lm", "-o"])
         .arg(&file)

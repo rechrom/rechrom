@@ -13,7 +13,7 @@ const CONVERSION_FUNCTIONS: &[&str] = &[
 #[test]
 fn official_c_truth_conversion_space_scanning_and_buffer_policy_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = gc_source(&c);
     oracle.push_str("#include \"libunicode.h\"\n");

@@ -10,6 +10,10 @@ description = "File-by-file Rust translation of official Bellard QuickJS 2026-06
 [dependencies]
 browser_tracing = { path = "../tracing" }
 
+[dev-dependencies]
+# Verifies the downloaded QuickJS oracle release (tests/quickjs_upstream_source.rs).
+sha2 = "0.10"
+
 [features]
 default = ["short-opcodes", "atomics"]
 short-opcodes = []

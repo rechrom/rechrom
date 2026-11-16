@@ -10,7 +10,7 @@ const DEBUG_FUNCTIONS: &[&str] = &[
 #[test]
 fn official_c_varints_source_locations_and_descriptor_flags_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = gc_source(&c);
     source::append_functions(&mut oracle, &c, DEBUG_FUNCTIONS);

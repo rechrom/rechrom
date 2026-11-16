@@ -4,7 +4,7 @@ use std::{path::PathBuf, process::Command};
 mod unicode;
 fn oracle(file: &str, extra: &[&str]) -> Vec<u8> {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = crate_root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let directory = std::env::temp_dir().join(format!("quickjs-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let output = directory.join(file);

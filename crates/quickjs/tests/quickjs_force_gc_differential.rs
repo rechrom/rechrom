@@ -8,7 +8,7 @@ unsafe fn probe_finalized(rt: *mut JSRuntime, _: JSValue) {
 #[test]
 fn allocation_gc_preserves_live_roots_and_collects_unreachable_cycles_like_c() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source = root.join("../../vendor/quickjs-2026-06-04");
+    let source = include!("quickjs_upstream_source.rs");
     let folder = std::env::temp_dir().join(format!("quickjs-force-gc-{}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
     let executable = folder.join("c");

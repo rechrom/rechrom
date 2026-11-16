@@ -912,7 +912,7 @@ unsafe fn js_instantiate_prototype(
     #[test]
     fn official_c_math_algorithms_match() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let upstream = root.join("../../vendor/quickjs-2026-06-04");
+        let upstream = include!("quickjs_upstream_source.rs");
         let dir = std::env::temp_dir().join(format!("quickjs-runtime-init-oracle-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut oracle = String::from("#include \"quickjs.c\"\n#undef malloc\n#undef free\n#undef realloc\n");

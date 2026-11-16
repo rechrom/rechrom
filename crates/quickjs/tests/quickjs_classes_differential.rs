@@ -63,7 +63,7 @@ unsafe fn test_mark(rt: *mut JSRuntime, p: *mut JSGCObjectHeader) {
 #[test]
 fn official_c_class_registration_oom_and_gc_helpers_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = source::source_prefix(&c);
     source::append_functions(&mut oracle, &c, ATOM_FUNCTIONS);

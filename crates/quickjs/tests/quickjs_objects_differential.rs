@@ -17,7 +17,7 @@ unsafe fn object_fn_b(
 #[test]
 fn official_c_object_execution_layouts_flags_and_property_lookup_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = source::source_prefix(&c);
     let a = c.find("typedef enum {\n    JS_CLOSURE_LOCAL").unwrap();

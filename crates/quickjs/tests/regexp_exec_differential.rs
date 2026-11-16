@@ -43,10 +43,10 @@ fn official_c_bytecode_executes_identically_in_rust() {
     let file = std::env::temp_dir().join(format!("quickjs-regexp-oracle-{}", std::process::id()));
     let result = include!("quickjs_oracle_config.rs")
         .args(["-std=c11", "-O2", "-I"])
-        .arg(root.join("../../vendor/quickjs-2026-06-04"))
+        .arg(include!("quickjs_upstream_source.rs"))
         .arg(root.join("tests/regexp_exec_oracle.c"))
-        .arg(root.join("../../vendor/quickjs-2026-06-04/cutils.c"))
-        .arg(root.join("../../vendor/quickjs-2026-06-04/libunicode.c"))
+        .arg(include!("quickjs_upstream_source.rs").join("cutils.c"))
+        .arg(include!("quickjs_upstream_source.rs").join("libunicode.c"))
         .arg("-o")
         .arg(&file)
         .output()

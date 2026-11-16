@@ -35,7 +35,7 @@ fn full_standard_context_executes_official_c_programs() {
         JS_FreeRuntime(rt);
     }
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source = root.join("../../vendor/quickjs-2026-06-04");
+    let source = include!("quickjs_upstream_source.rs");
     let out = std::env::temp_dir().join(format!("quickjs-full-context-{}", std::process::id()));
     std::fs::create_dir_all(&out).unwrap();
     let executable = out.join("official-c");

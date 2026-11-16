@@ -795,7 +795,7 @@ mod property_runtime {
     #[test]
     fn official_full_c_property_arrays_scalars_and_real_oom_exceptions_match() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let upstream = root.join("../../vendor/quickjs-2026-06-04");
+        let upstream = include!("quickjs_upstream_source.rs");
         let directory =
             std::env::temp_dir().join(format!("quickjs-properties-oracle-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();

@@ -140,7 +140,7 @@ unsafe fn collect(out: *mut Vec<u8>, rt: *mut JSRuntime, h: *const Host, log: *c
 #[test]
 fn official_c_reference_release_cycle_collection_and_zombies_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let c = std::fs::read_to_string(upstream.join("quickjs.c")).unwrap();
     let mut oracle = gc_source(&c);
     oracle.push_str(

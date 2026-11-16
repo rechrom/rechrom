@@ -1,7 +1,7 @@
 #[test]
 fn official_c_runtime_job_context_cycle_and_allocator_shutdown_match() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let upstream = root.join("../../vendor/quickjs-2026-06-04");
+    let upstream = include!("quickjs_upstream_source.rs");
     let mut oracle =
         String::from("#include \"quickjs.c\"\n#undef malloc\n#undef free\n#undef realloc\n");
     oracle.push_str(
