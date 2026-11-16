@@ -330,7 +330,34 @@ impl Output {
 // MainThreadSchedulerImpl keeps a presentation ThreadType lease on its page
 // thread. PlatformThreadApple maps that type to USER_INTERACTIVE; an ordinary
 // std::thread otherwise inherits default QoS, even while composing a window.
+// Windows and Linux map ThreadType::kPresentation as well:
+// base/threading/platform_thread_win.cc:386-387 (THREAD_PRIORITY_ABOVE_NORMAL)
+// and platform_thread_linux.cc:296-298 (nice -8, which an unprivileged
+// process may be refused; Chromium only logs that failure).
 pub(crate) fn set_presentation_thread_priority() {
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+        }
+        const THREAD_PRIORITY_ABOVE_NORMAL: i32 = 1;
+        if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) } == 0 {
+            eprintln!("page-thread-priority: {}", io::Error::last_os_error());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        unsafe extern "C" {
+            fn setpriority(which: i32, who: u32, prio: i32) -> i32;
+        }
+        const PRIO_PROCESS: i32 = 0;
+        const PRESENTATION_NICE_VALUE: i32 = -8;
+        // `who == 0` names the calling thread: the nice value is per-thread
+        // under NPTL. Lacking CAP_SYS_NICE is expected and left at default.
+        let _ = unsafe { setpriority(PRIO_PROCESS, 0, PRESENTATION_NICE_VALUE) };
+    }
     #[cfg(target_os = "macos")]
     {
         unsafe extern "C" {
