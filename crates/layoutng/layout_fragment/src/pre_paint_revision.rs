@@ -459,14 +459,33 @@ impl PrePaintRevisionTracker {
             stats.paint_changes += (!same_paint) as usize;
             stats.resource_changes += (!same_resources) as usize;
         }
+        // MarkScrollPropertyChange versions a resident fragment in place when
+        // a scroll offset reaches its ScrollableArea (Chromium
+        // PaintLayerScrollableArea::UpdateScrollOffset sets
+        // NeedsPaintPropertyUpdate on the scroller and its ancestor path).
+        // Source LayoutObject dirty bits do not record that update, so a newer
+        // revision on the node itself must survive this observation until
+        // PrePaint consumes it; otherwise PrePaint reuses the old
+        // ScrollTranslation and the next commit rewinds the compositor.
+        let marked_self = old.as_ref().is_some_and(|old| {
+            node.pre_paint_revision != 0 && node.pre_paint_revision != old.revision
+        });
+        let marked_subtree = old.as_ref().is_some_and(|old| {
+            node.pre_paint_subtree_revision != 0
+                && node.pre_paint_subtree_revision != old.subtree_revision
+        });
         let self_same = old.is_some()
+            && !marked_self
             && (!just_created(&node.paint) || node.pre_paint_owner_retained)
             && same_identity
             && same_geometry
             && same_paint
             && same_resources;
         let children_same = if trust_source_dirty_bits {
-            old.is_some() && !invalidation.descendants() && !production_descendant_changed
+            old.is_some()
+                && !marked_subtree
+                && !invalidation.descendants()
+                && !production_descendant_changed
         } else {
             old.as_ref()
                 .is_some_and(|old| old.children.as_slice() == child_revisions)
