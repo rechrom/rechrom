@@ -180,12 +180,15 @@ pub mod scalar_native {
         p.add(3).write(a);
     }
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553
+    #[inline]
     pub const fn F_(x: f32) -> F {
         x
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         x
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         x
     }
@@ -10829,15 +10832,19 @@ pub mod neon_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
@@ -55949,12 +55956,15 @@ pub mod x86_sse {
     pub type U16 = [u16; 4];
     pub type U8 = [u8; 4];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553,1561-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 4]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 4]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 4]
     }
@@ -94871,12 +94881,15 @@ pub mod x86_avx2 {
     pub type U16 = [u16; 8];
     pub type U8 = [u8; 8];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553,1561-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
@@ -135242,12 +135255,15 @@ pub mod x86_ml4 {
     pub type U16 = [u16; 16];
     pub type U8 = [u8; 16];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553,1561-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 16]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 16]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 16]
     }
@@ -175711,15 +175727,19 @@ pub mod x86_sse_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
@@ -185120,15 +185140,19 @@ pub mod x86_avx2_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 16]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 16]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 16]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 16]
     }
@@ -194928,15 +194952,19 @@ pub mod x86_ml4_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 16]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 16]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 16]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 16]
     }
@@ -204312,12 +204340,15 @@ pub mod x86_sse41 {
     pub type U16 = [u16; 4];
     pub type U8 = [u8; 4];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553,1561-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 4]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 4]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 4]
     }
@@ -230010,15 +230041,19 @@ pub mod x86_sse41_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
@@ -239398,12 +239433,15 @@ pub mod x86_avx {
     pub type U16 = [u16; 4];
     pub type U8 = [u8; 4];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1553,1561-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 4]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 4]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 4]
     }
@@ -279920,15 +279958,19 @@ pub mod x86_avx_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
@@ -291065,12 +291107,15 @@ pub mod lasx_pipe {
     pub type U16 = [u16; 8];
     pub type U8 = [u8; 8];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
@@ -330045,15 +330090,19 @@ pub mod lasx_pipe_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 16]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 16]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 16]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 16]
     }
@@ -339258,12 +339307,15 @@ pub mod lsx_pipe {
     pub type U16 = [u16; 4];
     pub type U8 = [u8; 4];
     // Source: src/opts/SkRasterPipeline_opts.h:1551-1562
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 4]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 4]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 4]
     }
@@ -383447,15 +383499,19 @@ pub mod lsx_pipe_lowp {
     // Source: src/opts/SkRasterPipeline_opts.h:5499-5499
     pub const N: usize = core::mem::size_of::<U16>() / core::mem::size_of::<u16>();
     // Source: src/opts/SkRasterPipeline_opts.h:5503-5506
+    #[inline]
     pub const fn U16_(x: u16) -> U16 {
         [x; 8]
     }
+    #[inline]
     pub const fn I32_(x: i32) -> I32 {
         [x; 8]
     }
+    #[inline]
     pub const fn U32_(x: u32) -> U32 {
         [x; 8]
     }
+    #[inline]
     pub const fn F_(x: f32) -> F {
         [x; 8]
     }
