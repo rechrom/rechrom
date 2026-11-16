@@ -867,6 +867,46 @@ impl<R: CpuSkiaBackend> CpuPaintServices<R> {
                 services: self,
                 property_tree_sequence_number: sequence,
             };
+        if previous_artifact.is_some() {
+            // PaintPropertyTreeBuilder::UpdateScrollAndScrollTranslation pushes
+            // a composited scroll offset straight into the resident cc
+            // transform node during PrePaint and, when PAC accepts it,
+            // downgrades the node's marker to kChangedOnlyCompositedValues.
+            // A scroll step therefore never reaches PAC as a property-tree
+            // change, and LocalFrameView requests only the repaint update.
+            // Paint's immutable artifact reaches this boundary after PrePaint,
+            // so perform that same direct update here, before the full/repaint
+            // classification below reads the markers.
+            //
+            // Source: paint_property_tree_builder.cc:3801-3836;
+            //         paint_property_node.h:82-85;
+            //         paint_artifact_compositor.cc:1470-1478.
+            let mut direct_scroll_updates = 0usize;
+            for node in &input
+                .artifact()
+                .compositor_viewport
+                .as_ref()
+                .expect("validated native viewport")
+                .scroll_translation_nodes
+            {
+                if node.lifecycle.node_changed()
+                    != ::paint::paint_property_tree::PaintPropertyChangeType::ChangedOnlySimpleValues
+                    || !node.HasDirectCompositingReasons()
+                {
+                    continue;
+                }
+                let transform = paint::TransformNode::<R>::from_arc(node.clone());
+                if pac.DirectlyUpdateScrollOffsetTransform(&transform, context.layer) {
+                    node.lifecycle.CompositorSimpleValuesUpdated();
+                    direct_scroll_updates += 1;
+                }
+            }
+            browser_tracing::instant(
+                "compositor.layerize",
+                "Layerize.DirectScrollOffsetUpdate",
+                &[("updated", direct_scroll_updates as f64)],
+            );
+        }
         if let Some(previous) = previous_artifact {
             // Chromium's ScrollbarDisplayItem retains a live cc::Scrollbar
             // adapter. PaintedScrollbarLayer can therefore reuse its layer on
