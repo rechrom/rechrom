@@ -5080,7 +5080,13 @@ impl PrePaintTreeWalk {
                     let old = node.fragment.as_deref().unwrap();
                     SameSourceIdentity(old, &fragment) && SameClientDirectory(old, &fragment)
                 }));
+        // Both the invalidation-only and same-geometry proofs compare the old
+        // sidecar's style projection with the new one. After a replacement
+        // LayoutResult the old projection may reference a ComputedStyle that
+        // has since been released and its address reused, so only the
+        // identity-based rebind above may cross owners.
         let invalidation_only = same_context
+            && !self.source_owner_changed
             && previous.as_ref().is_some_and(|node| {
                 let old = node.fragment.as_deref().unwrap();
                 SameClientDirectory(old, &fragment)
@@ -5150,7 +5156,8 @@ impl PrePaintTreeWalk {
             }
             built.previous_paint_result.set(old_previous_paint_result);
             if let Some(mut old) = previous.take() {
-                let same_geometry = !force && self.SameGeometry(&old, &built);
+                let same_geometry =
+                    !force && !self.source_owner_changed && self.SameGeometry(&old, &built);
                 if same_geometry {
                     self.stats.same_geometry_rebuilds += 1;
                     let focused_image_map_phase_changed =
