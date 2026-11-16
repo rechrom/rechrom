@@ -5785,7 +5785,12 @@ impl PageState {
                 }
             }
             trace.set("mixed_scrolls_applied", applied_scrolls as f64);
-            self.document.borrow_mut().InvalidateLayout();
+            // The scroll offsets above reached their resident ScrollableAreas
+            // (an unapplied one stays queued as a per-node geometry input),
+            // and the mutation that rejected the retained path carries its
+            // own invalidation. Chromium runs layout over the same
+            // LayoutObject tree here; it does not rebuild the tree.
+            self.document.borrow_mut().InvalidateLayoutGeometry();
         }
         updates.clear();
         drop(updates);
