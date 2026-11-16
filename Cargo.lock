@@ -1837,6 +1837,8 @@ dependencies = [
 [[package]]
 name = "icu_locale_data"
 version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d37d91460e362a5cf58907cd7ce871411775ee6294e49a5cc8e6cec16dfa75ea"
 
 [[package]]
 name = "icu_locale_fallback"
@@ -3589,6 +3591,7 @@ name = "quickjs"
 version = "2026.6.4"
 dependencies = [
  "browser_tracing",
+ "sha2",
 ]
 
 [[package]]
