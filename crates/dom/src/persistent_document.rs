@@ -2295,11 +2295,33 @@ impl PersistentDocument {
         }
         let inputs_changed = self.svg_clip_resource_inputs != self.SVGResourceInputKey();
         self.svg_clip_resource_inputs = self.SVGResourceInputKey();
-        if !inputs_changed
-            && self
-                .svg_clip_resources
-                .as_ref()
-                .is_some_and(|old| old.entries == snapshot.entries)
+        browser_tracing::instant(
+            "layout",
+            "DOM.PublishSVGResources",
+            &[
+                ("filters_changed", filters_changed as u8 as f64),
+                ("filters", self.svg_filter_graphs.len() as f64),
+                ("inputs_changed", inputs_changed as u8 as f64),
+                (
+                    "old_entries",
+                    self.svg_clip_resources
+                        .as_ref()
+                        .map_or(-1.0, |old| old.entries.len() as f64),
+                ),
+                ("new_entries", snapshot.entries.len() as f64),
+            ],
+        );
+        // A DOM revision only says the catalog must be re-derived. Entries
+        // carry each resource's resolved clip geometry and mask paint
+        // commands, so an equal catalog has no client to invalidate:
+        // Chromium's SVGResourceClient fan-out runs per changed resource, and
+        // an unrelated insertion must not become a whole-document layout-tree
+        // rebuild. Style changes inside a resource element take their own
+        // AffectsSVGResourceClients path.
+        if self
+            .svg_clip_resources
+            .as_ref()
+            .is_some_and(|old| old.entries == snapshot.entries)
         {
             return filters_changed;
         }
@@ -2858,7 +2880,7 @@ impl PersistentDocument {
         self.InvalidateNodeStyle(index);
         self.MarkStyleElementTextDirty(index);
         if self.IsConnectedToDocument(index) {
-            self.style_state.layout_inputs_require_tree = true;
+            self.RequireLayoutTree("NodeMut");
             self.style_state
                 .impact
                 .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -5174,7 +5196,7 @@ impl PersistentDocument {
             .layout_tree_roots
             .insert(self.arena[node].id);
         if self.AffectsSVGResourceClients(node) {
-            self.style_state.layout_inputs_require_tree = true;
+            self.RequireLayoutTree("RecordLayoutGeometryChange");
         }
         self.style_state
             .impact
@@ -6744,7 +6766,7 @@ impl PersistentDocument {
                 .layout_tree_roots
                 .insert(self.arena[element].id);
             if self.AffectsSVGResourceClients(element) {
-                self.style_state.layout_inputs_require_tree = true;
+                self.RequireLayoutTree("SetAttribute");
             }
             self.style_state
                 .impact
@@ -7189,7 +7211,7 @@ impl PersistentDocument {
                 .layout_tree_roots
                 .insert(self.arena[element].id);
             if self.AffectsSVGResourceClients(element) {
-                self.style_state.layout_inputs_require_tree = true;
+                self.RequireLayoutTree("RemoveAttribute");
             }
             self.style_state
                 .impact
@@ -7768,7 +7790,7 @@ impl PersistentDocument {
             // Element::SetIsInTopLayer forces reattachment even if removing
             // and re-adding left computed overlay style unchanged. Top-layer
             // ordering belongs to the LayoutView, not a DOM-local subtree.
-            self.style_state.layout_inputs_require_tree = true;
+            self.RequireLayoutTree("AddToTopLayer");
             self.style_state.measurement_geometry_revision = self
                 .style_state
                 .measurement_geometry_revision
@@ -7790,7 +7812,7 @@ impl PersistentDocument {
             self.top_layer_elements.retain(|candidate| *candidate != id);
             if self.top_layer_elements.len() != previous {
                 self.ScheduleDisplayLockTopLayerCheck(element);
-                self.style_state.layout_inputs_require_tree = true;
+                self.RequireLayoutTree("RemoveFromTopLayer");
                 self.style_state.measurement_geometry_revision = self
                     .style_state
                     .measurement_geometry_revision
@@ -7914,7 +7936,7 @@ impl PersistentDocument {
         }
         self.svg_image_view_root = Some(root_id);
         self.svg_image_view_spec = view_spec;
-        self.style_state.layout_inputs_require_tree = true;
+        self.RequireLayoutTree("SetSVGImageViewInfo");
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -8348,7 +8370,7 @@ impl PersistentDocument {
             self.control_value_state.remove(&self.arena[select].id);
             self.InvalidateNodeStyle(select);
         }
-        self.style_state.layout_inputs_require_tree = true;
+        self.RequireLayoutTree("SetOptionSelectedState");
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -8421,7 +8443,7 @@ impl PersistentDocument {
         // SelectType::DidSelectOption invalidates the same ListedElement cache.
         self.SetControlNeedsValidityCheck(select);
         self.InvalidateNodeStyle(select);
-        self.style_state.layout_inputs_require_tree = true;
+        self.RequireLayoutTree("SelectOptionInternal");
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -10407,7 +10429,7 @@ impl PersistentDocument {
         self.style_state.child_change_boundaries.clear();
         self.style_state.inserted_style_subtrees.clear();
         self.style_state.append_affected_subtrees.clear();
-        self.style_state.layout_inputs_require_tree = true;
+        self.RequireLayoutTree("InvalidateAllStyles");
         self.style_state
             .impact
             .Merge(crate::style_state::StyleUpdateImpact::LAYOUT);
@@ -10910,6 +10932,14 @@ impl PersistentDocument {
     // These are the seven LayoutSVGResourceType owners. Ordinary SVG nodes
     // still invalidate the resource catalog above (e.g. external clipPath use
     // targets), but only resource owners require cross-branch client updates.
+    /// Request a whole-document LayoutTreeBuilder transaction instead of the
+    /// per-root subtree attachment. The `DOM.RequireLayoutTree` trace names
+    /// the requesting site so full rebuilds remain attributable.
+    pub(crate) fn RequireLayoutTree(&mut self, site: &'static str) {
+        browser_tracing::instant_with_text("layout", "DOM.RequireLayoutTree", site, &[]);
+        self.style_state.layout_inputs_require_tree = true;
+    }
+
     fn AffectsSVGResourceClients(&self, node: usize) -> bool {
         let mut current = Some(node);
         while let Some(index) = current {
@@ -11010,7 +11040,7 @@ impl PersistentDocument {
         }
         self.style_state.paint_style_requires_export |= needs_visual_update && requires_export;
         if needs_visual_update && self.AffectsSVGResourceClients(node) {
-            self.style_state.layout_inputs_require_tree = true;
+            self.RequireLayoutTree("SetResolvedStyle");
         }
         self.resolved_style_revision = self.resolved_style_revision.saturating_add(1);
         if self.IsSVGResourceStyleNode(node) {
@@ -11117,7 +11147,7 @@ impl PersistentDocument {
                 .insert(self.arena[node].id);
         }
         if self.AffectsSVGResourceClients(node) {
-            self.style_state.layout_inputs_require_tree = true;
+            self.RequireLayoutTree("ClearResolvedStyle");
         }
         self.style_state.paint_style_requires_export = true;
         self.RemoveResolvedStyle(node);

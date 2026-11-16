@@ -24,9 +24,7 @@ impl DOM {
         let filters = super::svg_filter_graph::build_persistent(self.GetDocument());
         let changed = self.GetDocumentMut().PublishSVGResources(snapshot, filters);
         if changed {
-            self.GetDocumentMut()
-                .StyleStateMut()
-                .layout_inputs_require_tree = true;
+            self.GetDocumentMut().RequireLayoutTree("UpdateSVGResources");
             // Resource clients can lie outside the local changed-style batch.
             // Refresh their bindings through the ordinary export lifecycle;
             // an unrelated element's empty binding cannot certify them.

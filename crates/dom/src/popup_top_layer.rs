@@ -218,7 +218,7 @@ impl PersistentDocument {
                 data.implicit_anchor = None;
             }
         }
-        self.style_state.layout_inputs_require_tree = true;
+        self.RequireLayoutTree("PopupTopLayer");
         self.style_state.measurement_geometry_revision = self
             .style_state
             .measurement_geometry_revision

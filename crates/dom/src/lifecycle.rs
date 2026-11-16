@@ -18,9 +18,7 @@ impl DOM {
     }
 
     pub fn InvalidateLayout(&mut self) {
-        self.GetDocumentMut()
-            .StyleStateMut()
-            .layout_inputs_require_tree = true;
+        self.GetDocumentMut().RequireLayoutTree("InvalidateLayout");
         self.InvalidateLayoutGeometry();
     }
 
