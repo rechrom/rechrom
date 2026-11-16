@@ -51,11 +51,6 @@ parsed-types = ["dep:indexmap"]
 name = "sfv"
 path = "src/lib.rs"
 
-[[example]]
-name = "priority"
-path = "examples/priority.rs"
-required-features = ["parsed-types"]
-
 [dependencies.arbitrary]
 version = "1.4.1"
 features = ["derive"]

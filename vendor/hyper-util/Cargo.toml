@@ -122,45 +122,6 @@ tracing = ["dep:tracing"]
 name = "hyper_util"
 path = "src/lib.rs"
 
-[[example]]
-name = "client"
-path = "examples/client.rs"
-required-features = [
-    "client-legacy",
-    "http1",
-    "tokio",
-]
-
-[[example]]
-name = "client_tracing"
-path = "examples/client_tracing.rs"
-
-[[example]]
-name = "server"
-path = "examples/server.rs"
-required-features = [
-    "server",
-    "http1",
-    "tokio",
-]
-
-[[example]]
-name = "server_graceful"
-path = "examples/server_graceful.rs"
-required-features = [
-    "tokio",
-    "server-graceful",
-    "server-auto",
-]
-
-[[test]]
-name = "legacy_client"
-path = "tests/legacy_client.rs"
-
-[[test]]
-name = "proxy"
-path = "tests/proxy.rs"
-
 [dependencies.base64]
 version = "0.23"
 optional = true

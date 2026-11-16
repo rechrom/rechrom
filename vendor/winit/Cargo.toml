@@ -127,43 +127,6 @@ x11 = [
 name = "winit"
 path = "src/lib.rs"
 
-[[example]]
-name = "child_window"
-path = "examples/child_window.rs"
-
-[[example]]
-name = "control_flow"
-path = "examples/control_flow.rs"
-
-[[example]]
-name = "pump_events"
-path = "examples/pump_events.rs"
-
-[[example]]
-name = "run_on_demand"
-path = "examples/run_on_demand.rs"
-
-[[example]]
-name = "window"
-path = "examples/window.rs"
-doc-scrape-examples = true
-
-[[example]]
-name = "x11_embed"
-path = "examples/x11_embed.rs"
-
-[[test]]
-name = "send_objects"
-path = "tests/send_objects.rs"
-
-[[test]]
-name = "serde_objects"
-path = "tests/serde_objects.rs"
-
-[[test]]
-name = "sync_object"
-path = "tests/sync_object.rs"
-
 [dependencies.bitflags]
 version = "2"
 
