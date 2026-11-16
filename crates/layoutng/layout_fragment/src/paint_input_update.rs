@@ -228,16 +228,34 @@ pub(super) fn paint_input_plan(
         if inline_topology_changed {
             return None;
         }
+        // Source: ComputedStyle::VisualInvalidationDiff (computed_style.cc
+        // transform branch) and LayoutBox::StyleDidChange. A transform value
+        // change is a paint-property update: it never requests layout unless
+        // TransformsChangeMayRequireLayout(), which SetStyle marks on the
+        // source object and RefreshTargetedPaintInputs then rejects. Toggling
+        // HasTransform() changes PaintLayer requirements and the stacking
+        // context, which Chromium answers with a full layout; keep those, and
+        // transform-origin/box/style/perspective changes, on the layout path.
+        let transform_fields =
+            (F::kHasTransform | F::kTransformData | F::kTransformProperty).bits();
+        let transform_topology_changed = fields & transform_fields != 0
+            && (old.HasTransform() != new.HasTransform()
+                || old.HasTransformRelatedProperty() != new.HasTransformRelatedProperty()
+                || old.IsStackingContextWithoutContainment()
+                    != new.IsStackingContextWithoutContainment());
         let geometry = (F::kLayout
             | F::kReshape
-            | F::kHasTransform
-            | F::kTransformData
             | F::kTransformOther
             | F::kFilterData
             | F::kMask
             | F::kStroke
             | F::kBorderShape)
-            .bits();
+            .bits()
+            | if transform_topology_changed {
+                transform_fields
+            } else {
+                0
+            };
         trace.set("field_difference", fields as f64);
         trace.set("needs_layout", object.NeedsLayout() as u8 as f64);
         trace.set(
