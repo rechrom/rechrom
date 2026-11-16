@@ -328,6 +328,10 @@ pub(crate) fn RefreshCompatibleNodeInputCache(
 pub(crate) fn RefreshCompatiblePaintCache(cache: &mut LayoutBoundaryCache) {
     layout_fragment_paint_cache_refresh::refresh_compatible_paint_cache(cache)
 }
+
+pub(crate) fn EnsureBoundaryStyleIndices(cache: &mut LayoutBoundaryCache) {
+    layout_fragment_paint_cache_refresh::ensure_style_indices(cache)
+}
 /// Rebuild the stable document-order indices which Chromium gets directly
 /// from its resident LayoutObject graph. After a topology mutation this
 /// restores the document-wide boundary indices before a later scroll cull

@@ -24,21 +24,34 @@ pub(super) fn refresh_compatible_node_input_cache(
 }
 
 /// A paint-only SetStyle keeps LayoutObject and Node identities resident.
-/// Discard values keyed by the old style pointers, then rebuild the small
-/// style-derived indices without throwing away the document-order object
-/// index used by scroll paint-property and cull-rect updates.
+/// Discard values keyed by the old style pointers and mark the small
+/// style-derived indices stale, without throwing away the document-order
+/// object index used by scroll paint-property and cull-rect updates. Style
+/// recalc delivers one NodeInput per changed element; rebuilding the indices
+/// on each of them scanned every source object once per element (quadratic
+/// on a breakpoint restyle). They are rebuilt once, on their next read.
 #[inline(never)]
 pub(super) fn refresh_compatible_paint_cache(cache: &mut LayoutBoundaryCache) {
+    if cache.objects.is_empty() {
+        return;
+    }
+    cache.styles.clear();
+    cache.style_indices_stale = true;
+}
+
+/// Rebuild the style-source and sticky indices after compatible style
+/// replacements, before anything reads them.
+#[inline(never)]
+pub(super) fn ensure_style_indices(cache: &mut LayoutBoundaryCache) {
+    if !cache.style_indices_stale {
+        return;
+    }
+    cache.style_indices_stale = false;
     let mut trace = layout_fragment_boundary::trace::span(
         layout_fragment_boundary::trace::TracePhase::RefreshBoundaryCache,
     );
     trace.set("objects", cache.objects.len() as f64);
     trace.set("sources", cache.source_objects.len() as f64);
-    if cache.objects.is_empty() {
-        return;
-    }
-
-    cache.styles.clear();
 
     // A source ComputedStyle can be shared by several source nodes. Rebuild
     // this small pointer index in document order so removing one changed source

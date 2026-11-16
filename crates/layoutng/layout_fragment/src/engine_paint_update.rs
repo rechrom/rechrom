@@ -55,14 +55,10 @@ impl EnginePaintUpdate for LayoutEngine {
             .scroll_paint_index_
             .take()
             .or(self.scroll_paint_index_spare_.take());
+        let cached_objects = self.CachedScrollIndexObjects();
         self.scroll_paint_index_ = Some({
             let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            ScrollPaintPropertyIndex::new(
-                unsafe { &mut *root },
-                &fragments,
-                self.CachedScrollIndexObjects(),
-                reuse,
-            )
+            ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments, cached_objects, reuse)
         });
         self.pending_scroll_ids_.clear();
         self.fragments = Some(fragments);

@@ -108,15 +108,11 @@ pub(super) fn publish_layout_output(
             let _trace = layout_fragment_boundary::trace::span(
                 layout_fragment_boundary::trace::TracePhase::BuildScrollIndex,
             );
+            let cached_objects = engine.CachedScrollIndexObjects();
             // RunLayout's temporary pass has ended. Walking source SVG
             // children still needs this engine's real virtual factories.
             let _pass = LayoutPassScope::new(&engine.algorithms_, &engine.objects_);
-            ScrollPaintPropertyIndex::new(
-                unsafe { &mut *root },
-                &fragments,
-                engine.CachedScrollIndexObjects(),
-                reuse,
-            )
+            ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments, cached_objects, reuse)
         });
     }
     engine.fragments = Some(fragments);

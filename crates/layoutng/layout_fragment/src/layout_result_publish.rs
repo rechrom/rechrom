@@ -54,6 +54,7 @@ pub(super) fn populate_layout_result_paint_data(
         );
         EnsureLayoutBoundaryObjectIndex(root, cache);
     }
+    EnsureBoundaryStyleIndices(cache);
     let objects = &cache.objects;
     let sources = &cache.sources;
     let style_sources = &cache.style_sources;

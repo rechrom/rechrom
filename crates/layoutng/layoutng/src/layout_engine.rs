@@ -15,7 +15,7 @@ use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 
 use crate::internal::block_node::BlockNode;
 use crate::internal::boundary::layout_boundary::{
-    RefreshCompatibleNodeInputCache, RefreshCompatiblePaintCache, ScrollPaintPropertyIndex,
+    EnsureBoundaryStyleIndices, RefreshCompatibleNodeInputCache, RefreshCompatiblePaintCache, ScrollPaintPropertyIndex,
 };
 use crate::internal::layout_algorithm_set::LayoutAlgorithmSet;
 use crate::internal::layout_block_flow::LayoutBlockFlow;
@@ -338,8 +338,9 @@ impl LayoutEngine {
     }
 
     fn CachedScrollIndexObjects(
-        &self,
+        &mut self,
     ) -> Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)> {
+        EnsureBoundaryStyleIndices(&mut self.boundary_cache_);
         (!self.boundary_cache_.source_objects.is_empty()).then(|| {
             (
                 Arc::clone(&self.boundary_cache_.source_objects),

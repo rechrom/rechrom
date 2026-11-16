@@ -78,6 +78,9 @@ pub struct LayoutBoundaryCache {
     pub(crate) fragment_paint_state: Option<Arc<crate::layout_engine::LayoutPaintState>>,
     pub(crate) fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
     pub(crate) next_fragment_instance_id: u64,
+    /// `style_sources` / `sticky_objects` predate a compatible style
+    /// replacement and must be rebuilt before their next read.
+    pub(crate) style_indices_stale: bool,
 }
 
 impl LayoutBoundaryCache {
@@ -102,6 +105,7 @@ impl LayoutBoundaryCache {
         self.sticky_objects = Arc::default();
         self.sources.clear();
         self.style_sources.clear();
+        self.style_indices_stale = false;
     }
 
     pub fn Clear(&mut self) {
@@ -112,6 +116,7 @@ impl LayoutBoundaryCache {
         self.sticky_objects = Arc::default();
         self.sources.clear();
         self.style_sources.clear();
+        self.style_indices_stale = false;
         self.fragment_identity_result = 0;
         self.fragment_paint_state = None;
         self.fragment_instance_ids.clear();
