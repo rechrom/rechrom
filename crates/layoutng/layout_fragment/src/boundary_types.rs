@@ -490,8 +490,27 @@ impl<Paint> Deref for PaintPropertiesHandle<Paint> {
     }
 }
 
+/// Deep copies made by [`PaintPropertiesHandle`]'s copy-on-write, so traces
+/// can attribute payload clones to the phase that wrote a shared payload.
+pub static PAINT_PAYLOAD_COPIES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub static PAINT_PAYLOAD_COPY_NS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
+        if Arc::get_mut(&mut self.0).is_none() {
+            PAINT_PAYLOAD_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if browser_tracing::enabled() {
+                let started = std::time::Instant::now();
+                Arc::make_mut(&mut self.0);
+                PAINT_PAYLOAD_COPY_NS.fetch_add(
+                    started.elapsed().as_nanos() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+        }
         Arc::make_mut(&mut self.0)
     }
 }

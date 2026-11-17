@@ -18,6 +18,9 @@ pub(super) fn populate_layout_result_paint_data(
         layout_fragment_boundary::trace::TracePhase::PopulateLayoutResultPaintData,
     );
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
+    let copy_ns_at_start = layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPY_NS
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let copies_at_start =layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
     let result_identity = result as *const LayoutResult as usize;
     let result_changed = cache.fragment_identity_result != result_identity;
     // A retained update of the same LayoutResult mutates Chromium's canonical
@@ -31,6 +34,7 @@ pub(super) fn populate_layout_result_paint_data(
         let state = crate::layout_engine::LayoutPaintState::New();
         if purpose == LayoutUpdateKind::Paint {
             if let Some(previous) = &cache.fragment_paint_state {
+                trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
                 state.SeedFrom(previous);
             }
         }
@@ -144,6 +148,19 @@ pub(super) fn populate_layout_result_paint_data(
             &mut next_fragmentainer_instance_id,
         )
     }
+    let copies_after_population =
+        layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
+    trace.set(
+        "payload_copies_population",
+        (copies_after_population - copies_at_start) as f64,
+    );
+    trace.set(
+        "payload_copy_ms",
+        (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPY_NS
+            .load(std::sync::atomic::Ordering::Relaxed)
+            - copy_ns_at_start) as f64
+            / 1e6,
+    );
     trace.set(
         "paint_property_export_ms",
         paint_state_owners.population_stats.property_export_ns as f64 / 1_000_000.0,
@@ -172,6 +189,12 @@ pub(super) fn populate_layout_result_paint_data(
         );
         ResolveLogicalParentOccurrences(source);
     }
+    let copies_after_parents =
+        layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
+    trace.set(
+        "payload_copies_logical_parents",
+        (copies_after_parents - copies_after_population) as f64,
+    );
     if purpose == LayoutUpdateKind::Paint {
         let _phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::PopulateGlobalPaintData,
@@ -185,6 +208,10 @@ pub(super) fn populate_layout_result_paint_data(
         ExportGlobalMainThreadScrollFacts(root, objects, source);
         PopulateInlineStitchedDecorations(source);
     }
+    trace.set(
+        "payload_copies_global",
+        (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed) - copies_after_parents) as f64,
+    );
     cache.styles = paint_state_owners.exported_styles;
     cache.debug_names = paint_state_owners.debug_names;
     cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
