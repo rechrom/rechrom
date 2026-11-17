@@ -421,7 +421,31 @@ fn thread_cpu_time() -> Option<u64> {
                 .saturating_add(time.tv_nsec as u64),
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    {
+        // base::ThreadTicks::Now on Windows (base/time/time_win.cc): the
+        // thread's consumed TSC cycles, converted with the measured TSC rate.
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn QueryThreadCycleTime(thread: *mut std::ffi::c_void, cycles: *mut u64) -> i32;
+        }
+        static TSC_TICKS_PER_NS: OnceLock<f64> = OnceLock::new();
+        let ticks_per_ns = *TSC_TICKS_PER_NS.get_or_init(|| {
+            let start = Instant::now();
+            let tsc_start = unsafe { core::arch::x86_64::_rdtsc() };
+            while start.elapsed() < std::time::Duration::from_millis(10) {}
+            let tsc_end = unsafe { core::arch::x86_64::_rdtsc() };
+            (tsc_end - tsc_start) as f64 / start.elapsed().as_nanos() as f64
+        });
+        let mut cycles = 0u64;
+        if unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) } == 0 || ticks_per_ns <= 0.0
+        {
+            return None;
+        }
+        Some((cycles as f64 / ticks_per_ns) as u64)
+    }
+    #[cfg(not(any(unix, all(windows, target_arch = "x86_64"))))]
     None
 }
 pub fn instant(category: &'static str, name: &'static str, fields: &[(&'static str, f64)]) {
