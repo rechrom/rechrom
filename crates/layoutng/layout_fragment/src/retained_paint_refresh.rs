@@ -141,7 +141,7 @@ pub(super) fn refresh_retained_paint_inputs(
         }
         if let Some(&object) = clients.get(&node.paint.display_item_client_id) {
             let resources = node
-                .paint
+                
                 .resources
                 .as_ref()
                 .expect("completed fragment has resources");
@@ -158,9 +158,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.tracked_element_sub_rects = current.tracked_element_sub_rects;
             node.paint.style = current.style;
             node.paint.form_control = current.form_control;
-            node.paint.display_item_client_is_cacheable = current.display_item_client_is_cacheable;
-            node.paint.display_item_client_invalidation_reason =
-                current.display_item_client_invalidation_reason;
             // FragmentData identity is owned by this retained physical
             // fragment. ExportPaintProperties has no physical-fragment
             // context and therefore reports the LayoutObject's first
@@ -173,16 +170,7 @@ pub(super) fn refresh_retained_paint_inputs(
                 current.display_item_client_debug_name.clone();
             node.paint.display_item_client_owner_node_id =
                 current.display_item_client_owner_node_id;
-            node.paint
-                .display_item_client_is_just_created
-                .set(current.display_item_client_is_just_created.get());
             node.paint.selection_client_id = current.selection_client_id;
-            node.paint.selection_client_invalidation_reason =
-                current.selection_client_invalidation_reason;
-            node.paint.selection_client_is_cacheable = current.selection_client_is_cacheable;
-            node.paint
-                .selection_client_is_just_created
-                .set(current.selection_client_is_just_created.get());
             node.paint.is_selected = current.is_selected;
             node.paint.replaced_selection_state = current.replaced_selection_state;
             node.paint.replaced_local_selection_visual_rect =
@@ -190,12 +178,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.display_item_raster_effect_outset =
                 current.display_item_raster_effect_outset;
             node.paint.paint_layer_client_id = current.paint_layer_client_id;
-            node.paint.paint_layer_client_invalidation_reason =
-                current.paint_layer_client_invalidation_reason;
-            node.paint.paint_layer_client_is_cacheable = current.paint_layer_client_is_cacheable;
-            node.paint
-                .paint_layer_client_is_just_created
-                .set(current.paint_layer_client_is_just_created.get());
             node.paint.paint_layer_first_fragment_visual_rect =
                 current.paint_layer_first_fragment_visual_rect;
             node.paint.paint_layer_contents_visual_rect = current.paint_layer_contents_visual_rect;

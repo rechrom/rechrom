@@ -480,7 +480,7 @@ fn BuildShapeItems(
             );
             item.paint_shader = ResolveShapePaintServer(
                 fill_server,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 origin,
                 reference_origin,
                 reference_size,
@@ -543,7 +543,7 @@ fn BuildShapeItems(
             );
             item.paint_shader = ResolveShapePaintServer(
                 stroke_server,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 origin,
                 reference_origin,
                 reference_size,

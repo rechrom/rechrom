@@ -75,15 +75,26 @@ impl ObjectPaintInvalidator {
             }
             reason = PaintInvalidationReason::kSelection;
             if fragment.paint.selection_client_id != 0 {
-                let current = fragment
-                    .paint
-                    .selection_client_invalidation_reason
-                    .unwrap_or(PaintInvalidationReason::kNone);
-                if reason > current {
-                    fragment.paint.selection_client_invalidation_reason = Some(reason);
-                }
+                Self::InvalidateSelectionClient(fragment, reason);
                 return;
             }
+        }
+        Self::InvalidateDisplayItemClient(fragment, reason);
+        // LayoutText::InvalidateDisplayItemClients invalidates both its base
+        // client and the independent selection client for ordinary reasons.
+        if fragment.paint.selection_client_id != 0 {
+            Self::InvalidateSelectionClient(fragment, reason);
+        }
+    }
+
+    /// DisplayItemClient::Invalidate on the source LayoutObject; a detached
+    /// payload without a live client keeps the same monotonic rule locally.
+    pub fn InvalidateDisplayItemClient(
+        fragment: &mut FragmentPaintData,
+        reason: PaintInvalidationReason,
+    ) {
+        if fragment.paint.InvalidateLiveDisplayItemClient(reason) {
+            return;
         }
         let current = fragment
             .paint
@@ -92,16 +103,37 @@ impl ObjectPaintInvalidator {
         if reason > current {
             fragment.paint.display_item_client_invalidation_reason = Some(reason);
         }
-        // LayoutText::InvalidateDisplayItemClients invalidates both its base
-        // client and the independent selection client for ordinary reasons.
-        if fragment.paint.selection_client_id != 0 {
-            let current = fragment
-                .paint
-                .selection_client_invalidation_reason
-                .unwrap_or(PaintInvalidationReason::kNone);
-            if reason > current {
-                fragment.paint.selection_client_invalidation_reason = Some(reason);
-            }
+    }
+
+    pub fn InvalidateSelectionClient(
+        fragment: &mut FragmentPaintData,
+        reason: PaintInvalidationReason,
+    ) {
+        if fragment.paint.InvalidateLiveSelectionClient(reason) {
+            return;
+        }
+        let current = fragment
+            .paint
+            .selection_client_invalidation_reason
+            .unwrap_or(PaintInvalidationReason::kNone);
+        if reason > current {
+            fragment.paint.selection_client_invalidation_reason = Some(reason);
+        }
+    }
+
+    pub fn InvalidatePaintLayerClient(
+        fragment: &mut FragmentPaintData,
+        reason: PaintInvalidationReason,
+    ) {
+        if fragment.paint.InvalidateLivePaintLayerClient(reason) {
+            return;
+        }
+        let current = fragment
+            .paint
+            .paint_layer_client_invalidation_reason
+            .unwrap_or(PaintInvalidationReason::kNone);
+        if reason > current {
+            fragment.paint.paint_layer_client_invalidation_reason = Some(reason);
         }
     }
 

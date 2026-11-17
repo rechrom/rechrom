@@ -113,7 +113,8 @@ impl PaintInvalidator {
         let invalidation = fragment.paint.pre_paint_invalidation;
         let reason = fragment
             .paint
-            .display_item_client_invalidation_reason
+            .DisplayItemClientState()
+            .invalidation_reason
             .unwrap_or(PaintInvalidationReason::kNone);
         if invalidation.should_delay_full_paint_invalidation
             && (!IsFullPaintInvalidationReason(reason)

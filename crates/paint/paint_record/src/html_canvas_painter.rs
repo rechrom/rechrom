@@ -46,7 +46,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
             .as_ref()
             .expect("LayoutHTMLCanvas must publish replaced-content geometry");
         debug_assert!(replaced.is_canvas);
-        let resource = fragment.paint.resources.as_deref().and_then(|resources| {
+        let resource = fragment.resources.as_deref().and_then(|resources| {
             resources
                 .canvases
                 .iter()
@@ -272,7 +272,7 @@ mod tests {
             is_canvas: true,
             ..Default::default()
         });
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             canvases: vec![CanvasPaintResource {
                 dom_node_id: 42,
                 resource_id: 1 << 63,
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn clear_canvas_does_not_mark_first_contentful_paint() {
         let mut fragment = fragment(true);
-        Arc::make_mut(fragment.paint.resources.as_mut().unwrap()).canvases[0].is_clear = true;
+        Arc::make_mut(fragment.resources.as_mut().unwrap()).canvases[0].is_clear = true;
         let mut node = PaintTreeNode::default();
         node.SetOwnedFragmentForTesting(&fragment);
         let mut recording = PaintRecording::default();

@@ -26,6 +26,18 @@ use layoutng::internal::layout_input::{
 };
 use layoutng::internal::layout_object::LayoutObject;
 use layoutng::internal::paint_layer::PaintLayer;
+use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
+use foundation::PaintInvalidationReason;
+use layoutng::internal::layout_text::LayoutText;
+
+/// A DisplayItemClient's PaintController-visible state, read from the live
+/// source client (or from a detached payload's stored state).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintClientState {
+    pub invalidation_reason: Option<PaintInvalidationReason>,
+    pub is_cacheable: bool,
+    pub is_just_created: bool,
+}
 use layoutng::internal::selection_state::SelectionState;
 
 // The C++ definitions are public API; all layoutng::* names above retain their
@@ -489,7 +501,6 @@ pub struct PaintProperties {
     /// LayoutTextCombine::AdjustTextLeftForPaint, quantized as LayoutUnit.
     pub text_combine_inline_offset: f64,
     pub replaced_content: Option<ReplacedContentPaintData>,
-    pub resources: Option<Arc<PaintResources>>,
     pub glyph_runs: Arc<Vec<PaintGlyphRun>>,
     pub text_control_host: Option<u64>,
     pub list_marker_symbol: Option<ListStyleType>,
@@ -703,7 +714,6 @@ impl Default for PaintProperties {
             text_combine: None,
             text_combine_inline_offset: 0.0,
             replaced_content: None,
-            resources: None,
             glyph_runs: Arc::clone(EMPTY_GLYPH_RUNS.get_or_init(|| Arc::new(Vec::new()))),
             text_control_host: None,
             list_marker_symbol: None,
@@ -787,6 +797,174 @@ impl PaintProperties {
 
     pub fn HasSource(&self) -> bool {
         self.SourceObject().is_some() || self.has_source
+    }
+
+    // Source: platform/graphics/paint/display_item_client.h:58-88 and
+    // core/paint/object_paint_invalidator.cc:30-46. Chromium's PrePaint and
+    // PaintController read and invalidate the LayoutObject / LayoutText
+    // selection / PaintLayer DisplayItemClient itself. Resolve the live client
+    // whose identity this payload exported; the stored *_invalidation_reason,
+    // *_is_cacheable and *_is_just_created fields are only the detached
+    // payload's state (fixtures and payloads without a managed source).
+    fn LiveDisplayItemClient(&self) -> Option<&DisplayItemClient> {
+        if self.display_item_client_id == 0 {
+            return None;
+        }
+        let object = self.SourceObject()?;
+        let client = unsafe { &*(object as *const LayoutObject).cast::<DisplayItemClient>() };
+        (client.Id() as u64 == self.display_item_client_id).then_some(client)
+    }
+
+    fn LiveSelectionClient(&self) -> Option<&DisplayItemClient> {
+        if self.selection_client_id == 0 {
+            return None;
+        }
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return None;
+        }
+        let text = foundation::DynamicTo::<LayoutText>(object);
+        let client = unsafe { text.as_ref()?.GetSelectionDisplayItemClient().as_ref()? };
+        (client.Id() as u64 == self.selection_client_id).then_some(client)
+    }
+
+    fn LivePaintLayerClient(&self) -> Option<&DisplayItemClient> {
+        if self.paint_layer_client_id == 0 {
+            return None;
+        }
+        let layer = self.SourcePaintLayer()?;
+        (layer.Id() == self.paint_layer_client_id).then(|| layer.DisplayItemClient())
+    }
+
+    fn ClientState(
+        live: Option<&DisplayItemClient>,
+        reason: Option<PaintInvalidationReason>,
+        cacheable: bool,
+        just_created: bool,
+    ) -> PaintClientState {
+        live.map_or(
+            PaintClientState {
+                invalidation_reason: reason,
+                is_cacheable: cacheable,
+                is_just_created: just_created,
+            },
+            |client| PaintClientState {
+                invalidation_reason: Some(client.GetPaintInvalidationReason()),
+                is_cacheable: client.IsCacheable(),
+                is_just_created: client.IsJustCreated(),
+            },
+        )
+    }
+
+    pub fn DisplayItemClientState(&self) -> PaintClientState {
+        Self::ClientState(
+            self.LiveDisplayItemClient(),
+            self.display_item_client_invalidation_reason,
+            self.display_item_client_is_cacheable,
+            self.display_item_client_is_just_created.get(),
+        )
+    }
+
+    pub fn SelectionClientState(&self) -> PaintClientState {
+        Self::ClientState(
+            self.LiveSelectionClient(),
+            self.selection_client_invalidation_reason,
+            self.selection_client_is_cacheable,
+            self.selection_client_is_just_created.get(),
+        )
+    }
+
+    pub fn PaintLayerClientState(&self) -> PaintClientState {
+        Self::ClientState(
+            self.LivePaintLayerClient(),
+            self.paint_layer_client_invalidation_reason,
+            self.paint_layer_client_is_cacheable,
+            self.paint_layer_client_is_just_created.get(),
+        )
+    }
+
+    /// The live scrollbar, scroll-corner or scrolling-background client of
+    /// this payload's source PaintLayerScrollableArea with exported identity
+    /// `id` (core/paint/paint_layer_scrollable_area.h).
+    fn LiveScrollClient(&self, id: u64) -> Option<&DisplayItemClient> {
+        if id == 0 {
+            return None;
+        }
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return None;
+        }
+        let box_model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
+        let area = unsafe { box_model.as_ref()?.GetScrollableArea().as_ref()? };
+        let matches = |client: &DisplayItemClient| client.Id() as u64 == id;
+        for scrollbar in [area.HorizontalScrollbar(), area.VerticalScrollbar()] {
+            if let Some(scrollbar) = unsafe { scrollbar.as_ref() } {
+                let client = scrollbar.DisplayItemClient();
+                if matches(client) {
+                    return Some(unsafe { &*(client as *const DisplayItemClient) });
+                }
+            }
+        }
+        if let Some(client) = area.ScrollCornerDisplayItemClient() {
+            if matches(client) {
+                return Some(unsafe { &*(client as *const DisplayItemClient) });
+            }
+        }
+        let client = area.GetScrollingBackgroundDisplayItemClient();
+        matches(client).then(|| unsafe { &*(client as *const DisplayItemClient) })
+    }
+
+    /// State of a scroll-owned client record (`id` and its detached mirror).
+    pub fn ScrollClientState(
+        &self,
+        id: u64,
+        reason: Option<PaintInvalidationReason>,
+        cacheable: bool,
+        just_created: bool,
+    ) -> PaintClientState {
+        Self::ClientState(self.LiveScrollClient(id), reason, cacheable, just_created)
+    }
+
+    pub fn HasLiveScrollClient(&self, id: u64) -> bool {
+        self.LiveScrollClient(id).is_some()
+    }
+
+    pub fn InvalidateLiveScrollClient(&self, id: u64, reason: PaintInvalidationReason) -> bool {
+        self.LiveScrollClient(id)
+            .map(|client| client.Invalidate(reason))
+            .is_some()
+    }
+
+    pub fn HasLiveDisplayItemClient(&self) -> bool {
+        self.LiveDisplayItemClient().is_some()
+    }
+
+    pub fn HasLiveSelectionClient(&self) -> bool {
+        self.LiveSelectionClient().is_some()
+    }
+
+    pub fn HasLivePaintLayerClient(&self) -> bool {
+        self.LivePaintLayerClient().is_some()
+    }
+
+    /// DisplayItemClient::Invalidate on the live client. Returns false when
+    /// this payload has no live client and the caller owns detached state.
+    pub fn InvalidateLiveDisplayItemClient(&self, reason: PaintInvalidationReason) -> bool {
+        self.LiveDisplayItemClient()
+            .map(|client| client.Invalidate(reason))
+            .is_some()
+    }
+
+    pub fn InvalidateLiveSelectionClient(&self, reason: PaintInvalidationReason) -> bool {
+        self.LiveSelectionClient()
+            .map(|client| client.Invalidate(reason))
+            .is_some()
+    }
+
+    pub fn InvalidateLivePaintLayerClient(&self, reason: PaintInvalidationReason) -> bool {
+        self.LivePaintLayerClient()
+            .map(|client| client.Invalidate(reason))
+            .is_some()
     }
     pub fn UpdateInsideBlockingWheelEventHandler(&mut self, inside: bool) -> bool {
         let changed = self.inside_blocking_wheel_event_handler != inside;

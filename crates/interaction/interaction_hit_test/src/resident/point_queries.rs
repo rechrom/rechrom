@@ -74,7 +74,7 @@ impl std::ops::Deref for ResidentFragmentSource<'_> {
 // LocalFrameView::ViewportToFrame conversion before hit testing.
 fn LayoutPoint(fragments: ResidentFragmentSource<'_>, point: Offset) -> Offset {
     let zoom = fragments
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.layout_zoom_factor)

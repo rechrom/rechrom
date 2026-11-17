@@ -144,7 +144,7 @@ fn HitTestAtResidentWithFlags<'a>(
         return Err(ResidentCursorError::LayerIdentityMismatch);
     }
     let zoom = fragments
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.layout_zoom_factor)
@@ -177,7 +177,7 @@ pub fn CursorAtResident<'a>(
 ) -> Result<Option<crate::cursor::Cursor>, ResidentCursorError> {
     let result = HitTestAtResident(document, point, paint_engine, fragments, resolver)?;
     let zoom = fragments
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.layout_zoom_factor)
@@ -1754,7 +1754,7 @@ fn QueryPreparedResident(
         let result = nodes.CursorResult(&result)?;
         let zoom = query
             .fragments
-            .paint
+            
             .resources
             .as_ref()
             .map_or(1.0, |resources| resources.layout_zoom_factor)

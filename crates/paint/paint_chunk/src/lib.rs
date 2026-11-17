@@ -39,36 +39,53 @@ pub struct DisplayItemClientInfo {
 }
 
 impl DisplayItemClientInfo {
+    // Source: platform/graphics/paint/paint_controller.cc reads the live
+    // DisplayItemClient; the payload resolves that same client.
     pub fn from_fragment(fragment: &FragmentPaintData) -> Self {
+        let state = fragment.paint.DisplayItemClientState();
         Self {
-            invalidation_reason: fragment.paint.display_item_client_invalidation_reason,
-            is_cacheable: fragment.paint.display_item_client_is_cacheable,
-            is_just_created: fragment.paint.display_item_client_is_just_created.get(),
+            invalidation_reason: state.invalidation_reason,
+            is_cacheable: state.is_cacheable,
+            is_just_created: state.is_just_created,
         }
     }
 
     pub fn from_paint_layer(fragment: &FragmentPaintData) -> Option<Self> {
-        (fragment.paint.paint_layer_client_id != 0).then(|| Self {
-            invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
-            is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
-            is_just_created: fragment.paint.paint_layer_client_is_just_created.get(),
+        (fragment.paint.paint_layer_client_id != 0).then(|| {
+            let state = fragment.paint.PaintLayerClientState();
+            Self {
+                invalidation_reason: state.invalidation_reason,
+                is_cacheable: state.is_cacheable,
+                is_just_created: state.is_just_created,
+            }
         })
     }
 
     pub fn from_scrolling_background(fragment: &FragmentPaintData) -> Option<Self> {
         let scroll = fragment.paint.scroll_container.as_ref()?;
-        (scroll.scrolling_background_client_id != 0).then(|| Self {
-            invalidation_reason: scroll.scrolling_background_client_invalidation_reason,
-            is_cacheable: scroll.scrolling_background_client_is_cacheable,
-            is_just_created: scroll.scrolling_background_client_is_just_created.get(),
+        (scroll.scrolling_background_client_id != 0).then(|| {
+            let state = fragment.paint.ScrollClientState(
+                scroll.scrolling_background_client_id,
+                scroll.scrolling_background_client_invalidation_reason,
+                scroll.scrolling_background_client_is_cacheable,
+                scroll.scrolling_background_client_is_just_created.get(),
+            );
+            Self {
+                invalidation_reason: state.invalidation_reason,
+                is_cacheable: state.is_cacheable,
+                is_just_created: state.is_just_created,
+            }
         })
     }
 
     pub fn from_selection(fragment: &FragmentPaintData) -> Option<Self> {
-        (fragment.paint.selection_client_id != 0).then(|| Self {
-            invalidation_reason: fragment.paint.selection_client_invalidation_reason,
-            is_cacheable: fragment.paint.selection_client_is_cacheable,
-            is_just_created: fragment.paint.selection_client_is_just_created.get(),
+        (fragment.paint.selection_client_id != 0).then(|| {
+            let state = fragment.paint.SelectionClientState();
+            Self {
+                invalidation_reason: state.invalidation_reason,
+                is_cacheable: state.is_cacheable,
+                is_just_created: state.is_just_created,
+            }
         })
     }
 }

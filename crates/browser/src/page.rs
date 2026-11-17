@@ -7032,7 +7032,7 @@ impl Page {
             // Fragment-local paint inputs share one immutable catalog. Compare
             // each distinct prior catalog once, preserving resource identity
             // when it is current, as ImageResourceContent/Font retain theirs.
-            let changed = node.paint.resources.as_ref().is_none_or(|previous| {
+            let changed = node.resources.as_ref().is_none_or(|previous| {
                 if Arc::ptr_eq(previous, resources) {
                     return false;
                 }
@@ -7041,7 +7041,7 @@ impl Page {
                     .or_insert_with(|| previous.as_ref() != resources.as_ref())
             });
             if changed {
-                node.paint.resources = Some(resources.clone());
+                node.resources = Some(resources.clone());
             }
             changed
         }
@@ -7185,8 +7185,8 @@ impl Page {
             viewport: constraints.viewport,
         });
         fn install(node: &mut FragmentPaintData, resources: &Arc<PaintResources>) -> bool {
-            let rebound = node.paint.resources.as_deref() != Some(resources.as_ref());
-            node.paint.resources = Some(resources.clone());
+            let rebound = node.resources.as_deref() != Some(resources.as_ref());
+            node.resources = Some(resources.clone());
             rebound
         }
         // Retained fragment-local Paint data can still point at the catalog

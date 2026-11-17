@@ -1903,10 +1903,13 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                     r#type: item_type,
                     fragment: fragment.paint.display_item_fragment,
                 },
-                DisplayItemClientInfo {
-                    is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
-                    invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
-                    is_just_created: fragment.paint.paint_layer_client_is_just_created.get(),
+                {
+                        let state = fragment.paint.PaintLayerClientState();
+                    DisplayItemClientInfo {
+                        is_cacheable: state.is_cacheable,
+                        invalidation_reason: state.invalidation_reason,
+                        is_just_created: state.is_just_created,
+                    }
                 },
                 node.properties.nodes.clone(),
             );
@@ -1944,10 +1947,13 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let (client_id, client) = if layer_client != 0 {
             (
                 layer_client,
-                DisplayItemClientInfo {
-                    is_cacheable: fragment.paint.paint_layer_client_is_cacheable,
-                    invalidation_reason: fragment.paint.paint_layer_client_invalidation_reason,
-                    is_just_created: fragment.paint.paint_layer_client_is_just_created.get(),
+                {
+                        let state = fragment.paint.PaintLayerClientState();
+                    DisplayItemClientInfo {
+                        is_cacheable: state.is_cacheable,
+                        invalidation_reason: state.invalidation_reason,
+                        is_just_created: state.is_just_created,
+                    }
                 },
             )
         } else {

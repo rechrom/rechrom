@@ -453,7 +453,7 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage>
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let resources = fragment.paint.resources.as_ref()?;
+    let resources = fragment.resources.as_ref()?;
     let found = resources.images.iter().find(|image| image.id == id)?;
     if found.width == 0
         || found.height == 0
@@ -594,7 +594,7 @@ fn PaintColumnStyle(
                     height: tile.height,
                 },
                 f64::from(table_fragment.paint.effective_zoom),
-                table_fragment.paint.resources.as_deref(),
+                table_fragment.resources.as_deref(),
                 (!style.color_scheme_flags_is_normal())
                     .then_some(u8::from(style.used_dark_color_scheme())),
             )
@@ -629,7 +629,7 @@ fn PaintColumnStyle(
                     .fragment
                     .as_deref()
                     .expect("table node has a fragment")
-                    .paint
+                    
                     .resources
                     .as_deref(),
                 Offset {
@@ -655,7 +655,7 @@ fn PaintColumnStyle(
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 style,
                 table_fragment
-                    .paint
+                    
                     .resources
                     .as_deref()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),
@@ -701,7 +701,7 @@ fn PaintColumnStyle(
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 style,
                 table_fragment
-                    .paint
+                    
                     .resources
                     .as_deref()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),

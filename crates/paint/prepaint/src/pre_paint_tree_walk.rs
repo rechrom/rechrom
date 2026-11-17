@@ -571,17 +571,12 @@ fn CullRectChangeNeedsRepaint(
 // invalidates its display-item client.  Rechrom has separate projected client
 // records, so raise each client owned by this fragment at the same boundary.
 fn InvalidateClientsForCullRectChange(fragment: &mut FragmentPaintData) {
-    fn raise(reason: &mut Option<PaintInvalidationReason>) {
-        let replacement = PaintInvalidationReason::kLayout;
-        if reason.is_none_or(|current| replacement > current) {
-            *reason = Some(replacement);
-        }
-    }
-
-    raise(&mut fragment.paint.display_item_client_invalidation_reason);
-    raise(&mut fragment.paint.paint_layer_client_invalidation_reason);
+    use crate::object_paint_invalidator::ObjectPaintInvalidator;
+    let reason = PaintInvalidationReason::kLayout;
+    ObjectPaintInvalidator::InvalidateDisplayItemClient(fragment, reason);
+    ObjectPaintInvalidator::InvalidatePaintLayerClient(fragment, reason);
     if fragment.paint.selection_client_id != 0 {
-        raise(&mut fragment.paint.selection_client_invalidation_reason);
+        ObjectPaintInvalidator::InvalidateSelectionClient(fragment, reason);
     }
 }
 
@@ -1920,7 +1915,7 @@ fn ResolveFilterImages(
                 continue;
             };
             let Some(id) = *resource_id else { continue };
-            let Some(resources) = fragment.paint.resources.as_ref() else {
+            let Some(resources) = fragment.resources.as_ref() else {
                 graph
                     .unsupported
                     .get_or_insert("feImage bitmap has no PaintResources".into());
@@ -3442,7 +3437,7 @@ fn UsedMaskGeometryBox(box_type: BackgroundBox) -> BackgroundBox {
 }
 
 fn FindMaskImage(fragment: &FragmentPaintData, id: u64) -> &PaintImage {
-    let Some(resources) = fragment.paint.resources.as_ref() else {
+    let Some(resources) = fragment.resources.as_ref() else {
         panic!("mask paint has no PaintResources");
     };
     let images = &resources.images;
@@ -3517,7 +3512,7 @@ fn ResolveMaskLayers(
                             absolute_offset,
                             zoom,
                             viewport,
-                            fragment.paint.resources.as_deref(),
+                            fragment.resources.as_deref(),
                         );
                         resolved.clip_rect = region;
                         resolved.tile_rect = region;
@@ -3651,7 +3646,7 @@ fn ResolveMaskLayers(
                         height: tile.height,
                     },
                     f64::from(fragment.paint.effective_zoom),
-                    fragment.paint.resources.as_deref(),
+                    fragment.resources.as_deref(),
                     (!fragment.paint.style.color_scheme_flags_is_normal())
                         .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
                 )
@@ -3703,7 +3698,7 @@ fn ResolveMaskLayers(
         if let Some(shader) = layer.image.shader.as_deref() {
             resolved.paint_shader = Some(ResolvePaintShader(
                 shader,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 Offset {
                     x: tile.x,
                     y: tile.y,
@@ -4103,7 +4098,7 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
                 height: fragment.size.height,
             });
             let layout_zoom = fragment
-                .paint
+                
                 .resources
                 .as_deref()
                 .map_or(1.0, |resources| resources.layout_zoom_factor)
@@ -4419,9 +4414,9 @@ fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
 fn PropagateSubsequenceRepaint(node: &mut PaintTreeNode<'_>) -> bool {
     let client_needs_repaint = node.fragment.as_deref().is_some_and(|fragment| {
         [
-            fragment.paint.display_item_client_invalidation_reason,
-            fragment.paint.selection_client_invalidation_reason,
-            fragment.paint.paint_layer_client_invalidation_reason,
+            fragment.paint.DisplayItemClientState().invalidation_reason,
+            fragment.paint.SelectionClientState().invalidation_reason,
+            fragment.paint.PaintLayerClientState().invalidation_reason,
         ]
         .into_iter()
         .flatten()
@@ -4515,40 +4510,66 @@ fn SamePhaseInputs(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 fn SameClientDirectory(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     let x = &a.paint;
     let y = &b.paint;
+    let (x_item, x_layer) = (x.DisplayItemClientState(), x.PaintLayerClientState());
+    let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
     if (
         x.display_item_client_id,
-        x.display_item_client_is_cacheable,
+        x_item.is_cacheable,
         x.paint_layer_client_id,
-        x.paint_layer_client_is_cacheable,
+        x_layer.is_cacheable,
     ) != (
         y.display_item_client_id,
-        y.display_item_client_is_cacheable,
+        y_item.is_cacheable,
         y.paint_layer_client_id,
-        y.paint_layer_client_is_cacheable,
+        y_layer.is_cacheable,
     ) {
         return false;
     }
-    let mut created =
-        y.display_item_client_is_just_created.get() || y.paint_layer_client_is_just_created.get();
+    let mut created = y_item.is_just_created || y_layer.is_just_created;
+    let (x_paint, y_paint) = (x, y);
     match (&x.scrollbars, &y.scrollbars) {
         (None, None) => {}
         (Some(x), Some(y)) => {
-            if (x.corner_client_id, x.corner_client_is_cacheable)
-                != (y.corner_client_id, y.corner_client_is_cacheable)
+            let x_corner = x_paint.ScrollClientState(
+                x.corner_client_id,
+                x.corner_client_invalidation_reason,
+                x.corner_client_is_cacheable,
+                x.corner_client_is_just_created.get(),
+            );
+            let y_corner = y_paint.ScrollClientState(
+                y.corner_client_id,
+                y.corner_client_invalidation_reason,
+                y.corner_client_is_cacheable,
+                y.corner_client_is_just_created.get(),
+            );
+            if (x.corner_client_id, x_corner.is_cacheable)
+                != (y.corner_client_id, y_corner.is_cacheable)
             {
                 return false;
             }
-            created |= y.corner_client_is_just_created.get();
+            created |= y_corner.is_just_created;
             for (x, y) in [(&x.horizontal, &y.horizontal), (&x.vertical, &y.vertical)] {
                 match (x, y) {
                     (None, None) => {}
                     (Some(x), Some(y)) => {
-                        if (x.display_item_client_id, x.display_item_client_is_cacheable)
-                            != (y.display_item_client_id, y.display_item_client_is_cacheable)
+                        let x_state = x_paint.ScrollClientState(
+                            x.display_item_client_id,
+                            x.display_item_client_invalidation_reason,
+                            x.display_item_client_is_cacheable,
+                            x.display_item_client_is_just_created.get(),
+                        );
+                        let y_state = y_paint.ScrollClientState(
+                            y.display_item_client_id,
+                            y.display_item_client_invalidation_reason,
+                            y.display_item_client_is_cacheable,
+                            y.display_item_client_is_just_created.get(),
+                        );
+                        if (x.display_item_client_id, x_state.is_cacheable)
+                            != (y.display_item_client_id, y_state.is_cacheable)
                         {
                             return false;
                         }
-                        created |= y.display_item_client_is_just_created.get();
+                        created |= y_state.is_just_created;
                     }
                     _ => return false,
                 }
@@ -4597,7 +4618,7 @@ fn CanRefreshInvalidationOnlySource(old: &FragmentPaintData, new: &FragmentPaint
 // Keeping the conversion at the PrePaint boundary also lets CSSOM and media
 // queries continue to consume the unscaled host viewport.
 fn ArtifactViewport(root: &FragmentPaintData) -> Option<PaintRect> {
-    root.paint.resources.as_ref().and_then(|resources| {
+    root.resources.as_ref().and_then(|resources| {
         let viewport = resources.viewport?;
         let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
         Some(PaintRect {
@@ -4824,7 +4845,7 @@ impl PrePaintTreeWalk {
         let new = b.cache.as_ref().expect("new geometry");
         let af = a.fragment.as_deref().unwrap();
         let bf = b.fragment.as_deref().unwrap();
-        if (bf.paint.display_item_client_is_just_created.get() && !bf.pre_paint_owner_retained)
+        if (bf.paint.DisplayItemClientState().is_just_created && !bf.pre_paint_owner_retained)
             || !SameSourceIdentity(af, bf)
             || !SamePhaseInputs(af, bf)
             || af.paint.position != bf.paint.position
@@ -4984,7 +5005,11 @@ impl PrePaintTreeWalk {
                 fragment.paint.inside_blocking_wheel_event_handler
             };
         let mut resident = ResidentFragment::FromSource(&fragment);
-        let blocking_wheel_changed = resident.paint.UpdateInsideBlockingWheelEventHandler(inside);
+        // The payload is shared copy-on-write with the previous publication.
+        // Its stored bit and the LayoutObject's are written together (and an
+        // export copies the object's), so an equal bit needs no update.
+        let blocking_wheel_changed = resident.paint.inside_blocking_wheel_event_handler != inside
+            && resident.paint.UpdateInsideBlockingWheelEventHandler(inside);
         if inherited.blocking_wheel_event_handler_changed || blocking_wheel_changed {
             resident.paint.InvalidatePaintForHitTest();
         }
@@ -5364,7 +5389,8 @@ impl PrePaintTreeWalk {
             let invalidation = resident_fragment.paint.pre_paint_invalidation;
             let client_reason = resident_fragment
                 .paint
-                .display_item_client_invalidation_reason
+                .DisplayItemClientState()
+                .invalidation_reason
                 .unwrap_or(foundation::PaintInvalidationReason::kNone);
             // PrePaintTreeWalk.cc:123-132: any actual paint invalidation
             // requires the next scroll/visibility observation, even when the
@@ -5859,7 +5885,7 @@ impl PrePaintTreeWalk {
         // address reuse. Never infer identity from a recycled pointer alone.
         if !self.retained_owner_lifetimes
             && !fragment.pre_paint_owner_retained
-            && fragment.paint.display_item_client_is_just_created.get()
+            && fragment.paint.DisplayItemClientState().is_just_created
             && self.reset_owners.insert(owner)
         {
             self.property_node_store.clear_owner(owner);
@@ -6615,26 +6641,45 @@ impl PrePaintTreeWalk {
                 // are added/removed. Box addresses survive local updates.
                 let node = unsafe { &mut *pointer };
                 let f = node.fragment.as_deref_mut().unwrap();
-                if f.paint.display_item_client_id == id && f.paint.display_item_client_is_cacheable
+                // Live source clients were validated by the Layout commit's
+                // PaintController cycle; only detached payload state is local.
+                if f.paint.display_item_client_id == id
+                    && f.paint.display_item_client_is_cacheable
+                    && !f.paint.HasLiveDisplayItemClient()
                 {
                     f.paint
                         .display_item_client_invalidation_reason
                         .replace(PaintInvalidationReason::kNone);
                     f.paint.display_item_client_is_just_created.set(false);
                 }
-                if f.paint.selection_client_id == id && f.paint.selection_client_is_cacheable {
+                if f.paint.selection_client_id == id
+                    && f.paint.selection_client_is_cacheable
+                    && !f.paint.HasLiveSelectionClient()
+                {
                     f.paint
                         .selection_client_invalidation_reason
                         .replace(PaintInvalidationReason::kNone);
                     f.paint.selection_client_is_just_created.set(false);
                 }
-                if f.paint.paint_layer_client_id == id && f.paint.paint_layer_client_is_cacheable {
+                if f.paint.paint_layer_client_id == id
+                    && f.paint.paint_layer_client_is_cacheable
+                    && !f.paint.HasLivePaintLayerClient()
+                {
                     f.paint
                         .paint_layer_client_invalidation_reason
                         .replace(PaintInvalidationReason::kNone);
                     f.paint.paint_layer_client_is_just_created.set(false);
                 }
-                if let Some(scroll) = &mut f.paint.scroll_container {
+                let live_scroll_client = f.paint.HasLiveScrollClient(id);
+                let scroll_matches = !live_scroll_client
+                    && f.paint.scroll_container.as_ref().is_some_and(|scroll| {
+                        scroll.scrolling_background_client_id == id
+                            && scroll.scrolling_background_client_is_cacheable
+                    });
+                if let Some(scroll) = scroll_matches
+                    .then(|| f.paint.scroll_container.as_mut())
+                    .flatten()
+                {
                     if scroll.scrolling_background_client_id == id
                         && scroll.scrolling_background_client_is_cacheable
                     {
@@ -6646,7 +6691,17 @@ impl PrePaintTreeWalk {
                             .set(false);
                     }
                 }
-                if let Some(bars) = &mut f.paint.scrollbars {
+                let bars_match = !live_scroll_client && f.paint.scrollbars.as_ref().is_some_and(|bars| {
+                    (bars.corner_client_id == id && bars.corner_client_is_cacheable)
+                        || [&bars.horizontal, &bars.vertical]
+                            .into_iter()
+                            .flatten()
+                            .any(|axis| {
+                                axis.display_item_client_id == id
+                                    && axis.display_item_client_is_cacheable
+                            })
+                });
+                if let Some(bars) = bars_match.then(|| f.paint.scrollbars.as_mut()).flatten() {
                     let changes = (bars.corner_client_id == id && bars.corner_client_is_cacheable)
                         || [&bars.horizontal, &bars.vertical]
                             .into_iter()
@@ -7215,7 +7270,7 @@ mod tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.is_box_model_object = true;
         fragment.paint.is_layout_view = true;
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             device_pixel_ratio: 2.0,
             ..Default::default()
         }));
@@ -8790,7 +8845,7 @@ mod tests {
             },
         });
         fragment.paint.style.respect_image_orientation = true;
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             fonts: Default::default(),
             images: vec![image_resource::PaintImage {
                 id: 9,

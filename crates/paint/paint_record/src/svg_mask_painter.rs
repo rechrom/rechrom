@@ -44,7 +44,7 @@ impl SVGMaskPainter {
         ApplyMaskLayerImageAutoDarkMode(
             &fragment.paint.style,
             fragment
-                .paint
+                
                 .resources
                 .as_deref()
                 .map_or(1.0, |resources| resources.layout_zoom_factor),

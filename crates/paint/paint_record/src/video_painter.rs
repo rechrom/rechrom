@@ -120,7 +120,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
             return;
         };
         let Some(frame) = fragment
-            .paint
+            
             .resources
             .as_deref()
             .and_then(|resources| {
@@ -262,7 +262,7 @@ mod tests {
             is_video: true,
             ..Default::default()
         });
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             images: vec![PaintImage {
                 id: 73,
                 width: 2,

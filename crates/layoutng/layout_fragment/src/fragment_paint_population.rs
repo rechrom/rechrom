@@ -8,12 +8,36 @@
 use super::*;
 use crate::inline_cursor::InlineCursor;
 
+/// Store a payload field only when its value changes. The payload is shared
+/// copy-on-write with the previous publication, so an identical store would
+/// still deep-copy the whole PaintProperties.
+macro_rules! update_paint {
+    ($paint:expr, $field:ident, $value:expr) => {{
+        let value = $value;
+        if $paint.$field != value {
+            $paint.$field = value;
+        }
+    }};
+}
+
+/// Store a payload field only when its value changes. The payload is shared
+/// copy-on-write with the previous publication, so an identical store would
+/// still deep-copy the whole PaintProperties.
+macro_rules! update_paint {
+    ($paint:expr, $field:ident, $value:expr) => {{
+        let value = $value;
+        if $paint.$field != value {
+            $paint.$field = value;
+        }
+    }};
+}
+
 fn RetainedResourcesAreCompatible(
-    paint: &PaintPropertiesHandle,
+    previous: Option<&Arc<PaintResources>>,
     resources: &Arc<PaintResources>,
     owners: &mut FragmentOwners,
 ) -> bool {
-    let Some(previous) = paint.resources.as_ref() else {
+    let Some(previous) = previous else {
         return false;
     };
     if Arc::ptr_eq(previous, resources) {
@@ -80,8 +104,8 @@ fn RetainedPaintProperties(
         }
         invalidation
     };
-    let paint = paint_state.ResidentPaintProperties(instance)?;
-    RetainedResourcesAreCompatible(paint, resources, owners).then_some(invalidation)
+    let previous = paint_state.ResidentFragment(instance)?.resources.as_ref();
+    RetainedResourcesAreCompatible(previous, resources, owners).then_some(invalidation)
 }
 
 // Chromium reads tree order directly from its resident LayoutObject graph.
@@ -288,14 +312,32 @@ fn PopulateInlineItemLocalPaintData(
             .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
     let output = unsafe { &mut *output };
+    // Same (FragmentItems, index) owner: the immutable item, its line and its
+    // container-relative offsets are those last published. Atomic inline
+    // boxes keep the full path because they recurse into and register their
+    // own box fragment.
+    let reused_item = (retained_invalidation.is_some()
+        && binding.same_owner
+        && item.Type() != ItemType::kBox)
+        .then(|| {
+            (
+                output.kind,
+                output.offset,
+                output.size,
+                output.content_size,
+                output.text_start,
+                output.text_end,
+                output.text_paint_timing_non_whitespace,
+            )
+        });
     if let Some(invalidation) = retained_invalidation {
         assert!(
             slot_retained,
             "retained paint properties have no resident slot"
         );
         output.prepare_for_publication();
-        output.paint.pre_paint_invalidation = invalidation;
-        output.paint.resources = Some(Arc::clone(resources));
+        update_paint!(output.paint, pre_paint_invalidation, invalidation);
+        output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
@@ -318,6 +360,7 @@ fn PopulateInlineItemLocalPaintData(
                 .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
         *output = FragmentPaintData::new(properties);
+        output.resources = Some(Arc::clone(resources));
     }
     paint_state_owners.population_stats.inline_items += 1;
     output.fragment_instance_id = fragment_instance_id;
@@ -325,10 +368,49 @@ fn PopulateInlineItemLocalPaintData(
     output.node_id = InputId(object);
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
-    output.paint.display_item_fragment = item.FragmentId();
-    output.paint.is_line_break = item.IsText() && item.IsLineBreak();
-    output.paint.hidden =
-        item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled);
+    update_paint!(output.paint, display_item_fragment, item.FragmentId());
+    update_paint!(output.paint, is_line_break, item.IsText() && item.IsLineBreak());
+    update_paint!(
+        output.paint,
+        hidden,
+        item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled)
+    );
+    if let Some((
+        kind,
+        offset,
+        size,
+        content_size,
+        text_start,
+        text_end,
+        text_paint_timing_non_whitespace,
+    )) = reused_item
+    {
+        output.kind = kind;
+        output.offset = offset;
+        output.size = size;
+        output.content_size = content_size;
+        output.text_start = text_start;
+        output.text_end = text_end;
+        output.text_paint_timing_non_whitespace = text_paint_timing_non_whitespace;
+        if kind == FragmentKind::kLine {
+            output.node_id = 0;
+        }
+        // Source: core/paint/text_fragment_painter.cc:69-103. The line-top
+        // snap depends on the container's current paint offset, which an
+        // ancestor move changes without touching this immutable item.
+        if item.IsText() || item.Type() == ItemType::kGeneratedText {
+            if let Some(line_offset) = containing_line_offset {
+                let line_top = container_paint_offset.top + line_offset.top;
+                update_paint!(
+                    output.paint,
+                    text_line_snap_delta,
+                    Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top))
+                );
+            }
+        }
+        paint_state_owners.population_stats.RecordLocal(local_timing);
+        return;
+    }
     let rect = *item.RectInContainerFragment();
     output.offset = Offset {
         x: Number(rect.offset.left - parent_offset.left),
@@ -767,8 +849,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             retained_content_size = Some(output.content_size);
         }
         output.prepare_for_publication();
-        output.paint.pre_paint_invalidation = invalidation;
-        output.paint.resources = Some(Arc::clone(resources));
+        update_paint!(output.paint, pre_paint_invalidation, invalidation);
+        output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
@@ -791,13 +873,18 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
         *output = FragmentPaintData::new(properties);
+        output.resources = Some(Arc::clone(resources));
     }
     output.fragment_instance_id = fragment_instance_id;
     paint_state_owners.population_stats.physical_fragments += 1;
     output.node_id = InputId(object);
-    output.paint.display_item_fragment = display_item_fragment;
-    output.paint.hidden = IsHiddenForPaintIncludingInlineItem(fragment)
-        || output.paint.svg_viewport.is_some_and(|v| v.disabled);
+    update_paint!(output.paint, display_item_fragment, display_item_fragment);
+    update_paint!(
+        output.paint,
+        hidden,
+        IsHiddenForPaintIncludingInlineItem(fragment)
+            || output.paint.svg_viewport.is_some_and(|v| v.disabled)
+    );
     output.kind = kind;
     output.offset = Offset {
         x: Number(offset.left),
@@ -925,7 +1012,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             fragments.Advance();
         }
     }
-    output.paint.display_item_fragment = display_item_fragment;
+    update_paint!(output.paint, display_item_fragment, display_item_fragment);
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     if !reuse_fragment_geometry {
         ExportBoxPaintGeometry(box_fragment, &mut output.paint);
@@ -949,14 +1036,19 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         ExportTablePaintData(box_fragment, sources, &mut output.paint);
     }
     if box_fragment.IsTableCell() {
-        output.paint.table_cell_column = Some(box_fragment.TableCellColumnIndex() as usize);
+        update_paint!(
+            output.paint,
+            table_cell_column,
+            Some(box_fragment.TableCellColumnIndex() as usize)
+        );
     }
-    output.paint.painted_atomically = fragment.IsPaintedAtomically();
-    output.paint.has_collapsed_borders = fragment.HasCollapsedBorders();
-    output.paint.establishes_paint_state = paint_state_owners.insert(
+    update_paint!(output.paint, painted_atomically, fragment.IsPaintedAtomically());
+    update_paint!(output.paint, has_collapsed_borders, fragment.HasCollapsedBorders());
+    let establishes_paint_state = paint_state_owners.insert(
         box_fragment as *const PhysicalBoxFragment,
         output.fragment_instance_id,
     );
+    update_paint!(output.paint, establishes_paint_state, establishes_paint_state);
     output.content_size = match retained_content_size {
         Some(size) if reuse_fragment_geometry => size,
         _ => ExportContentSize(box_fragment),

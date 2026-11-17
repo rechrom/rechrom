@@ -256,7 +256,7 @@ fn ShouldCreateSubsequence(
         if let (Some(last_bounds), Some(visual_rect), Some(resources)) = (
             context.borrow().LastChunkBounds(),
             fragment.paint.paint_layer_first_fragment_visual_rect,
-            fragment.paint.resources.as_deref(),
+            fragment.resources.as_deref(),
         ) {
             let visual_rect = PaintRect {
                 x: visual_rect.offset.x,
@@ -1447,7 +1447,7 @@ mod tests {
     fn subsequence_admission_separates_sparse_merged_bounds() {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.style.SetPointerEventsNoneForTesting(true);
-        fragment.paint.resources = Some(std::sync::Arc::new(PaintResources::default()));
+        fragment.resources = Some(std::sync::Arc::new(PaintResources::default()));
         let mut sparse_visual_rect = FragmentPaintRect::default();
         sparse_visual_rect.offset.x = 20.0;
         sparse_visual_rect.size.width = 10.0;

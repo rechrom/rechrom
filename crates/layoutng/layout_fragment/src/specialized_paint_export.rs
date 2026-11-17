@@ -53,7 +53,7 @@ fn ComputeTableColumnsRect(fragment: &PhysicalBoxFragment) -> PhysicalRect {
 pub(super) fn ExportTablePaintData(
     box_fragment: &PhysicalBoxFragment,
     sources: &SourceMap,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     if !box_fragment.IsTable() {
         return;
@@ -111,10 +111,13 @@ pub(super) fn ExportTablePaintData(
 
 pub(super) fn ExportMathMLPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     if let Some(baseline) = box_fragment.FirstBaseline() {
-        paint.first_baseline = Some(Number(baseline));
+        let baseline = Some(Number(baseline));
+        if paint.first_baseline != baseline {
+            paint.first_baseline = baseline;
+        }
     }
     if !box_fragment.HasExtraMathMLPainting() {
         return;
@@ -193,7 +196,7 @@ pub(super) fn ExportMathMLPaintData(
 
 pub(super) fn ExportFrameSetPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     if paint.source_kind != NodeKind::kFrameSet {
         return;
@@ -223,7 +226,7 @@ pub(super) fn ExportFrameSetPaintData(
 
 pub(super) fn ExportFieldsetPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     if paint.source_kind != NodeKind::kFieldset {
         return;
@@ -318,7 +321,7 @@ pub(super) fn ExportFieldsetPaintData(
 #[inline(never)]
 pub(super) fn ExportColumnRulePaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     let geometry = box_fragment.GetGapGeometry();
     if geometry.is_null() || unsafe { &*geometry }.GetContainerType() != ContainerType::kMultiColumn
@@ -868,7 +871,7 @@ fn ExportGapRuleDirection(
 #[inline(never)]
 pub(super) fn ExportGapRulePaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     let geometry = box_fragment.GetGapGeometry();
     if geometry.is_null() || !box_fragment.Style().HasGapRule() {

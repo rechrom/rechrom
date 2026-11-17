@@ -16,7 +16,7 @@ use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 #[inline(never)]
 pub(super) fn ExportScrollbarPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
     if layout_box.is_null() {

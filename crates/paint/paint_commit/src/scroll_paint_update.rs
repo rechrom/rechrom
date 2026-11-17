@@ -983,7 +983,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         })?;
     drop(property_trace);
     let artifact_to_device_scale = fragments
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.ArtifactToDeviceScale());

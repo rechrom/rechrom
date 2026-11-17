@@ -4276,7 +4276,7 @@ mod package_contract_tests {
             owner.contains("#[inline(never)]")
                 && owner.contains("pub fn commit_paint_client_state")
                 && owner.contains("while !object.is_null()")
-                && owner.contains("unsafe fn refresh_clients"),
+                && !owner.contains("unsafe fn refresh_clients"),
             "source client traversals must stay out of line in layout_commit"
         );
 

@@ -233,7 +233,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             fonts: &mut Vec<SharedFontBytes>,
         ) {
             for run in &node.paint.glyph_runs {
-                if let Some(resources) = &node.paint.resources {
+                if let Some(resources) = &node.resources {
                     if let Some(face) = resources.fonts.get(run.font_face_index as usize) {
                         fonts.push(face.bytes.clone());
                     }

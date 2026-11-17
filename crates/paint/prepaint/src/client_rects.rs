@@ -506,7 +506,7 @@ fn CollectFragmentClientRectsFromSource(
     // `zoom` remains represented by the geometry itself; only the frame-level
     // absolute layout zoom is removed here.
     let layout_zoom = root
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.layout_zoom_factor)

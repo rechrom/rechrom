@@ -154,7 +154,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.directly_composited_container_paint_offset_subpixel_delta =
             geometry.directly_composited_container_paint_offset_subpixel_delta;
         node.pixel_snap_scale = fragment
-            .paint
+            
             .resources
             .as_ref()
             .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
@@ -606,7 +606,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             svg_effect_child,
                             clip_path.reference_viewport,
                             fragment
-                                .paint
+                                
                                 .resources
                                 .as_ref()
                                 .map_or(&[], |resources| resources.fonts.as_slice()),

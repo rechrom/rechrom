@@ -114,7 +114,12 @@ impl BoxPaintInvalidator {
     ) -> PaintInvalidationReason {
         let paints_contents = BackgroundPaintsInContentsSpace(fragment);
         let paints_border_box = BackgroundPaintsInBorderBoxSpace(fragment);
-        if let Some(scroll) = &mut fragment.paint.scroll_container {
+        let scrolling_background_client = fragment
+            .paint
+            .scroll_container
+            .as_ref()
+            .map(|scroll| scroll.scrolling_background_client_id);
+        if let Some(client_id) = scrolling_background_client {
             if invalidation.invalidate_both_spaces
                 || (paints_contents && invalidation.kind != BackgroundInvalidationType::None)
             {
@@ -123,11 +128,20 @@ impl BoxPaintInvalidator {
                 } else {
                     PaintInvalidationReason::kIncremental
                 };
-                let current = scroll
-                    .scrolling_background_client_invalidation_reason
-                    .unwrap_or(PaintInvalidationReason::kNone);
-                if reason > current {
-                    scroll.scrolling_background_client_invalidation_reason = Some(reason);
+                // DisplayItemClient::Invalidate on the live scrolling-background
+                // client; a detached payload keeps the monotonic rule locally.
+                if !fragment.paint.InvalidateLiveScrollClient(client_id, reason) {
+                    let current = fragment
+                        .paint
+                        .scroll_container
+                        .as_ref()
+                        .and_then(|scroll| scroll.scrolling_background_client_invalidation_reason)
+                        .unwrap_or(PaintInvalidationReason::kNone);
+                    if reason > current {
+                        if let Some(scroll) = fragment.paint.scroll_container.as_mut() {
+                            scroll.scrolling_background_client_invalidation_reason = Some(reason);
+                        }
+                    }
                 }
             }
         }

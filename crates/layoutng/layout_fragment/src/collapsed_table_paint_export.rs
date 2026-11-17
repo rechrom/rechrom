@@ -46,7 +46,7 @@ fn IsEndTableRowFragmented(section: &PhysicalBoxFragment) -> bool {
 pub(super) fn ExportCollapsedTablePaintData(
     box_fragment: &PhysicalBoxFragment,
     _style_sources: &StyleSourceMap,
-    paint: &mut PaintProperties,
+    paint: &mut PaintPropertiesHandle,
 ) {
     if !box_fragment.IsTable() {
         return;

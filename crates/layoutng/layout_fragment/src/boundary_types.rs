@@ -537,6 +537,11 @@ pub struct FragmentPaintData<Paint> {
     /// Exact TextPainter paint-timing admission for this source substring.
     /// Glyph ids cannot reconstruct CSS text whitespace after shaping.
     pub text_paint_timing_non_whitespace: bool,
+    /// Document paint resources of the publication that wrote this slot.
+    /// Kept beside the per-publication geometry, outside the shared
+    /// copy-on-write payload: a replacement viewport or resource set must
+    /// not deep-copy every retained PaintProperties.
+    pub resources: Option<Arc<PaintResources>>,
     pub paint: PaintPropertiesHandle<Paint>,
 }
 
@@ -562,6 +567,7 @@ impl<Paint> FragmentPaintData<Paint> {
             text_start: None,
             text_end: None,
             text_paint_timing_non_whitespace: false,
+            resources: None,
             paint,
         }
     }

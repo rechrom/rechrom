@@ -446,7 +446,7 @@ impl PrePaintRevisionTracker {
                 };
                 let resources = resources_equal(
                     &old.resources,
-                    &node.paint.resources,
+                    &node.resources,
                     resource_matches,
                     old.resource_usage | paint_resource_usage(&node.paint),
                 );
@@ -528,13 +528,11 @@ impl PrePaintRevisionTracker {
 impl Input {
     fn from_fragment(node: &FragmentPaintData) -> Self {
         let fallback_paint = if node.fragment_instance_id == 0 {
-            let mut paint = (*node.paint).clone();
-            paint.resources = None;
-            Some(paint)
+            Some((*node.paint).clone())
         } else {
             None
         };
-        let resources = node.paint.resources.clone();
+        let resources = node.resources.clone();
         let resource_usage = paint_resource_usage(&node.paint);
         // Exhaustive pattern: a new fragment self field cannot accidentally be
         // omitted from this compact observer without a compiler error here.
@@ -557,6 +555,8 @@ impl Input {
             text_start,
             text_end,
             text_paint_timing_non_whitespace,
+            // Compared separately by resources_equal with usage masks.
+            resources: _,
             paint: _,
         } = node;
         Self {
@@ -611,8 +611,8 @@ pub fn SamePrePaintInput(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     (!just_created(&b.paint) || (b.pre_paint_revision != 0 && b.pre_paint_owner_retained))
         && self_equal(a, b)
         && resources_equal(
-            &a.paint.resources,
-            &b.paint.resources,
+            &a.resources,
+            &b.resources,
             &mut HashMap::default(),
             paint_resource_usage(&a.paint) | paint_resource_usage(&b.paint),
         )
@@ -879,7 +879,6 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         text_combine,
         text_combine_inline_offset,
         replaced_content,
-        resources: _,
         glyph_runs,
         text_control_host,
         list_marker_symbol,
@@ -1147,23 +1146,41 @@ fn geometry_equal(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 }
 
 fn just_created(paint: &PaintProperties) -> bool {
-    paint.display_item_client_is_just_created.get()
-        || paint.selection_client_is_just_created.get()
-        || paint.paint_layer_client_is_just_created.get()
-        || paint
-            .scroll_container
-            .as_ref()
-            .is_some_and(|scroll| scroll.scrolling_background_client_is_just_created.get())
+    paint.DisplayItemClientState().is_just_created
+        || paint.SelectionClientState().is_just_created
+        || paint.PaintLayerClientState().is_just_created
+        || paint.scroll_container.as_ref().is_some_and(|scroll| {
+            paint
+                .ScrollClientState(
+                    scroll.scrolling_background_client_id,
+                    scroll.scrolling_background_client_invalidation_reason,
+                    scroll.scrolling_background_client_is_cacheable,
+                    scroll.scrolling_background_client_is_just_created.get(),
+                )
+                .is_just_created
+        })
         || paint.scrollbars.as_ref().is_some_and(|bars| {
-            bars.corner_client_is_just_created.get()
-                || bars
-                    .horizontal
-                    .as_ref()
-                    .is_some_and(|axis| axis.display_item_client_is_just_created.get())
-                || bars
-                    .vertical
-                    .as_ref()
-                    .is_some_and(|axis| axis.display_item_client_is_just_created.get())
+            paint
+                .ScrollClientState(
+                    bars.corner_client_id,
+                    bars.corner_client_invalidation_reason,
+                    bars.corner_client_is_cacheable,
+                    bars.corner_client_is_just_created.get(),
+                )
+                .is_just_created
+                || [&bars.horizontal, &bars.vertical]
+                    .into_iter()
+                    .flatten()
+                    .any(|axis| {
+                        paint
+                            .ScrollClientState(
+                                axis.display_item_client_id,
+                                axis.display_item_client_invalidation_reason,
+                                axis.display_item_client_is_cacheable,
+                                axis.display_item_client_is_just_created.get(),
+                            )
+                            .is_just_created
+                    })
         })
 }
 

@@ -162,7 +162,7 @@ fn ShouldForceWhiteBackgroundForPrintEconomy(fragment: &FragmentPaintData) -> bo
 }
 
 fn BaseBackgroundColor(fragment: &FragmentPaintData) -> Option<Color> {
-    let resources = fragment.paint.resources.as_deref()?;
+    let resources = fragment.resources.as_deref()?;
     if !resources.paints_opaque_base_background {
         return None;
     }
@@ -201,7 +201,7 @@ fn CompositeColor(background: Color, foreground: Color) -> Color {
 }
 
 fn CanvasBackgroundMarksFirstPaint(fragment: &FragmentPaintData, root_color: Color) -> bool {
-    let Some(resources) = fragment.paint.resources.as_deref() else {
+    let Some(resources) = fragment.resources.as_deref() else {
         return false;
     };
     let painted_base = BaseBackgroundColor(fragment).unwrap_or_default();
@@ -1370,7 +1370,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         ApplyMaskLayerImageAutoDarkMode(
             &fragment.paint.style,
             fragment
-                .paint
+                
                 .resources
                 .as_deref()
                 .map_or(1.0, |resources| resources.layout_zoom_factor),
@@ -2382,7 +2382,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .expect("composited fixed background properties")
             .clone();
         let resources = fragment
-            .paint
+            
             .resources
             .as_ref()
             .expect("fixed background resources");
@@ -2523,7 +2523,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 rect,
                 color,
                 source_overwrite: fragment
-                    .paint
+                    
                     .resources
                     .as_deref()
                     .is_some_and(|resources| resources.should_clear_document_background),
@@ -2596,7 +2596,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         ElementRole::kBackground,
                     ),
                     source_overwrite: fragment
-                        .paint
+                        
                         .resources
                         .as_deref()
                         .is_some_and(|resources| resources.should_clear_document_background),
@@ -2826,7 +2826,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         color: canvas_color,
                         source_overwrite: !paints_separate_backdrop
                             && fragment
-                                .paint
+                                
                                 .resources
                                 .as_deref()
                                 .is_some_and(|resources| {
@@ -3249,7 +3249,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     color: canvas_color,
                     source_overwrite: !paints_separate_backdrop
                         && fragment
-                            .paint
+                            
                             .resources
                             .as_deref()
                             .is_some_and(|resources| resources.should_clear_document_background),
@@ -3761,7 +3761,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     height: tile.height,
                 },
                 f64::from(effective_zoom),
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 (!paint_style.color_scheme_flags_is_normal())
                     .then_some(u8::from(paint_style.used_dark_color_scheme())),
             )
@@ -3895,7 +3895,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             };
             item.paint_shader = Some(ResolvePaintShader(
                 shader,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 Offset {
                     x: gradient_tile.x,
                     y: gradient_tile.y,
@@ -3919,7 +3919,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 paint_style,
                 fragment
-                    .paint
+                    
                     .resources
                     .as_deref()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),
@@ -3981,7 +3981,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 paint_style,
                 fragment
-                    .paint
+                    
                     .resources
                     .as_deref()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),
@@ -4162,7 +4162,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // layer edge. Our retained layers can be content-tight, so carry
             // the same one-device-pixel raster fringe into their bounds.
             let scale = fragment
-                .paint
+                
                 .resources
                 .as_ref()
                 .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
@@ -4808,14 +4808,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                                 let shader = if let Some(context) = &svg_fill_context {
                                     crate::svg_context_paints::ResolveShader(
                                         context,
-                                        fragment.paint.resources.as_deref(),
+                                        fragment.resources.as_deref(),
                                         privacy_preserving,
                                     )
                                     .expect("admitted context paint server")
                                 } else {
                                     ResolvePaintShader(
                                         server,
-                                        fragment.paint.resources.as_deref(),
+                                        fragment.resources.as_deref(),
                                         Offset {
                                             x: item.rect.x,
                                             y: item.rect.y,
@@ -4855,14 +4855,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                                 let shader = if let Some(context) = &svg_stroke_context {
                                     crate::svg_context_paints::ResolveShader(
                                         context,
-                                        fragment.paint.resources.as_deref(),
+                                        fragment.resources.as_deref(),
                                         privacy_preserving,
                                     )
                                     .expect("admitted context paint server")
                                 } else {
                                     ResolvePaintShader(
                                         server,
-                                        fragment.paint.resources.as_deref(),
+                                        fragment.resources.as_deref(),
                                         Offset {
                                             x: item.rect.x,
                                             y: item.rect.y,
@@ -5664,7 +5664,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     tile_rect: destination,
                     paint_shader: Some(ResolvePaintShader(
                         shader,
-                        fragment.paint.resources.as_deref(),
+                        fragment.resources.as_deref(),
                         Offset {
                             x: destination.x,
                             y: destination.y,
@@ -5794,7 +5794,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 height: destination.height,
             },
             f64::from(style.effective_zoom),
-            fragment.paint.resources.as_deref(),
+            fragment.resources.as_deref(),
             (!style.style.color_scheme_flags_is_normal())
                 .then_some(u8::from(style.style.used_dark_color_scheme())),
         );
@@ -5888,7 +5888,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let use_dark_mode_for_image = GetImageAutoDarkMode(
             &style.style,
             fragment
-                .paint
+                
                 .resources
                 .as_deref()
                 .map_or(1.0, |resources| resources.layout_zoom_factor),
@@ -6866,7 +6866,7 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
         );
     }
     let viewport = fragment
-        .paint
+        
         .resources
         .as_deref()
         .and_then(|resources| {
@@ -7460,7 +7460,7 @@ fn EffectiveBackgroundAttachment(
 
 fn FixedBackgroundPositioningArea(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
-    let resources = fragment.paint.resources.as_ref()?;
+    let resources = fragment.resources.as_ref()?;
     let viewport = resources.viewport?;
     let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
     // GeometryMapper maps the viewport origin into the current transform
@@ -7730,7 +7730,7 @@ fn FindAvailableImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a Pa
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let Some(resources) = fragment.paint.resources.as_ref() else {
+    let Some(resources) = fragment.resources.as_ref() else {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!("paint-image-profile id={id} resources=none");
         }
@@ -8184,10 +8184,10 @@ mod background_attachment_tests {
     fn printing_suppresses_only_the_white_base_background() {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.is_printing = true;
-        fragment.paint.resources = Some(Arc::new(PaintResources::default()));
+        fragment.resources = Some(Arc::new(PaintResources::default()));
         assert_eq!(BaseBackgroundColor(&fragment), None);
 
-        Arc::make_mut(fragment.paint.resources.as_mut().unwrap()).base_background_color = Color {
+        Arc::make_mut(fragment.resources.as_mut().unwrap()).base_background_color = Color {
             red: 0.25,
             green: 0.5,
             blue: 0.75,
@@ -8203,7 +8203,7 @@ mod background_attachment_tests {
             })
         );
 
-        Arc::make_mut(fragment.paint.resources.as_mut().unwrap())
+        Arc::make_mut(fragment.resources.as_mut().unwrap())
             .base_background_color
             .alpha = 0.0;
         assert_eq!(BaseBackgroundColor(&fragment), None);
@@ -8490,7 +8490,7 @@ mod background_attachment_tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.is_page_container = true;
         fragment.paint.style.background_color = page_color;
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: false,
             ..PaintResources::default()
         }));
@@ -8578,7 +8578,7 @@ mod background_attachment_tests {
             .as_mut()
             .unwrap()
             .positioning_size = Size::default();
-        node.fragment.as_mut().unwrap().paint.resources = Some(Arc::new(PaintResources::default()));
+        node.fragment.as_mut().unwrap().resources = Some(Arc::new(PaintResources::default()));
         let mut fallback_recording = PaintRecording::default();
         {
             let context = RefCell::new(PaintContext::new(&mut fallback_recording));
@@ -8618,7 +8618,7 @@ mod background_attachment_tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.is_layout_view = true;
         fragment.paint.is_paginated_root = true;
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: true,
             ..PaintResources::default()
         }));
@@ -8738,7 +8738,7 @@ mod background_attachment_tests {
         use paint_model::paint_flags::PaintFlag;
 
         let mut fragment = FragmentPaintData::default();
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             images: vec![PaintImage {
                 id: 7,
                 width: 1,
@@ -9672,7 +9672,7 @@ mod background_attachment_tests {
             size: fragment.size,
             ..FragmentPaintRect::default()
         });
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: true,
             ..PaintResources::default()
         }));
@@ -9773,7 +9773,7 @@ mod background_attachment_tests {
                 height: 120.0,
             },
         });
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: false,
             ..PaintResources::default()
         }));
@@ -10040,7 +10040,7 @@ mod background_attachment_tests {
         });
         fragment.paint.style.image_resource_id = Some(7);
         fragment.paint.style.force_dark = true;
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             images: vec![PaintImage {
                 id: 7,
                 width: 100,
@@ -10118,7 +10118,7 @@ mod background_attachment_tests {
             ..Default::default()
         });
         fragment.paint.style.image_resource_id = Some(7);
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             fonts: Default::default(),
             images: vec![PaintImage {
                 id: 7,
@@ -10212,7 +10212,7 @@ mod background_attachment_tests {
                 ..Default::default()
             });
             fragment.paint.style.image_resource_id = Some(7);
-            fragment.paint.resources = Some(Arc::new(PaintResources {
+            fragment.resources = Some(Arc::new(PaintResources {
                 fonts: Default::default(),
                 images: vec![PaintImage {
                     id: 7,
@@ -10322,7 +10322,7 @@ mod background_attachment_tests {
                 ..Default::default()
             });
             fragment.paint.style.image_resource_id = Some(7);
-            fragment.paint.resources = Some(Arc::new(PaintResources {
+            fragment.resources = Some(Arc::new(PaintResources {
                 fonts: Default::default(),
                 images: vec![PaintImage {
                     id: 7,
@@ -10401,7 +10401,7 @@ mod background_attachment_tests {
                 ..Default::default()
             });
             fragment.paint.style.image_resource_id = Some(7);
-            fragment.paint.resources = Some(Arc::new(PaintResources {
+            fragment.resources = Some(Arc::new(PaintResources {
                 fonts: Default::default(),
                 images: vec![PaintImage {
                     id: 7,
@@ -10911,7 +10911,7 @@ mod background_attachment_tests {
     #[test]
     fn fixed_and_local_backgrounds_use_viewport_zoom_and_scroll_geometry() {
         let mut fixed_fragment = FragmentPaintData::default();
-        fixed_fragment.paint.resources = Some(Arc::new(PaintResources {
+        fixed_fragment.resources = Some(Arc::new(PaintResources {
             layout_zoom_factor: 1.5,
             viewport: Some(ViewportGeometry {
                 size: IntSize {
@@ -11006,7 +11006,7 @@ mod background_attachment_tests {
             width: 100.0,
             height: 80.0,
         };
-        fragment.paint.resources = Some(Arc::new(PaintResources {
+        fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: true,
             ..PaintResources::default()
         }));
@@ -11122,7 +11122,7 @@ mod background_attachment_tests {
             size: root_fragment.size,
             ..FragmentPaintRect::default()
         });
-        root_fragment.paint.resources = Some(Arc::new(PaintResources {
+        root_fragment.resources = Some(Arc::new(PaintResources {
             paints_opaque_base_background: true,
             ..PaintResources::default()
         }));

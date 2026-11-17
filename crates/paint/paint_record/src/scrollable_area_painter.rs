@@ -221,10 +221,18 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     },
                     fragment: fragment.paint.display_item_fragment,
                 },
-                DisplayItemClientInfo {
-                    is_cacheable: axis.display_item_client_is_cacheable,
-                    invalidation_reason: axis.display_item_client_invalidation_reason,
-                    is_just_created: axis.display_item_client_is_just_created.get(),
+                {
+                    let state = fragment.paint.ScrollClientState(
+                        axis.display_item_client_id,
+                        axis.display_item_client_invalidation_reason,
+                        axis.display_item_client_is_cacheable,
+                        axis.display_item_client_is_just_created.get(),
+                    );
+                    DisplayItemClientInfo {
+                        is_cacheable: state.is_cacheable,
+                        invalidation_reason: state.invalidation_reason,
+                        is_just_created: state.is_just_created,
+                    }
                 },
                 visual_rect,
                 Some(self.node.contents_properties.nodes.transform.clone()),
@@ -359,10 +367,18 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     r#type: DisplayItemIdType::kScrollCorner,
                     fragment: fragment.paint.display_item_fragment,
                 },
-                DisplayItemClientInfo {
-                    is_cacheable: data.corner_client_is_cacheable,
-                    invalidation_reason: data.corner_client_invalidation_reason,
-                    is_just_created: data.corner_client_is_just_created.get(),
+                {
+                    let state = fragment.paint.ScrollClientState(
+                        data.corner_client_id,
+                        data.corner_client_invalidation_reason,
+                        data.corner_client_is_cacheable,
+                        data.corner_client_is_just_created.get(),
+                    );
+                    DisplayItemClientInfo {
+                        is_cacheable: state.is_cacheable,
+                        invalidation_reason: state.invalidation_reason,
+                        is_just_created: state.is_just_created,
+                    }
                 },
                 corner_rect,
             );
@@ -409,10 +425,18 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             r#type: DisplayItemIdType::kResizer,
             fragment: fragment.paint.display_item_fragment,
         };
-        let client = DisplayItemClientInfo {
-            is_cacheable: data.corner_client_is_cacheable,
-            invalidation_reason: data.corner_client_invalidation_reason,
-            is_just_created: data.corner_client_is_just_created.get(),
+        let client = {
+            let state = fragment.paint.ScrollClientState(
+                data.corner_client_id,
+                data.corner_client_invalidation_reason,
+                data.corner_client_is_cacheable,
+                data.corner_client_is_just_created.get(),
+            );
+            DisplayItemClientInfo {
+                is_cacheable: state.is_cacheable,
+                invalidation_reason: state.invalidation_reason,
+                is_just_created: state.is_just_created,
+            }
         };
         if self
             .context
@@ -526,10 +550,18 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         self.context.borrow_mut().RecordResizerScrollHitTestData(
             self.node,
             data.corner_client_id,
-            DisplayItemClientInfo {
-                is_cacheable: data.corner_client_is_cacheable,
-                invalidation_reason: data.corner_client_invalidation_reason,
-                is_just_created: data.corner_client_is_just_created.get(),
+            {
+                let state = fragment.paint.ScrollClientState(
+                    data.corner_client_id,
+                    data.corner_client_invalidation_reason,
+                    data.corner_client_is_cacheable,
+                    data.corner_client_is_just_created.get(),
+                );
+                DisplayItemClientInfo {
+                    is_cacheable: state.is_cacheable,
+                    invalidation_reason: state.invalidation_reason,
+                    is_just_created: state.is_just_created,
+                }
             },
             AbsoluteRoundedRect(
                 self.node,

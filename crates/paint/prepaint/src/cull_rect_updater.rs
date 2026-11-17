@@ -24,7 +24,7 @@ use paint_model::{CullRect, PaintRect, PaintResult};
 #[inline]
 pub fn ExpansionRatio(fragment: &FragmentPaintData) -> f64 {
     fragment
-        .paint
+        
         .resources
         .as_ref()
         .map_or(1.0, |resources| resources.device_pixel_ratio)

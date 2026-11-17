@@ -82,7 +82,7 @@ fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage>
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let Some(resources) = fragment.paint.resources.as_ref() else {
+    let Some(resources) = fragment.resources.as_ref() else {
         return None;
     };
     let found = resources.images.iter().find(|image| image.id == id)?;
@@ -463,7 +463,7 @@ impl NinePieceImagePainter {
                     height: source_size.height / image_resolution_scale * effective_zoom,
                 },
                 effective_zoom,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 (!fragment.paint.style.color_scheme_flags_is_normal())
                     .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
             )
@@ -471,7 +471,7 @@ impl NinePieceImagePainter {
         let generated_shader = border_image.shader.as_ref().map(|shader| {
             ResolvePaintShader(
                 shader,
-                fragment.paint.resources.as_deref(),
+                fragment.resources.as_deref(),
                 Offset::default(),
                 Some(source_size),
             )

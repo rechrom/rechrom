@@ -139,7 +139,6 @@ pub(super) fn ExportProperties(
     mut debug_names: Option<&mut DebugNameCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
-    output.resources = Some(Arc::clone(resources));
     if object.is_null() {
         return output;
     }
@@ -179,7 +178,6 @@ pub(super) fn ExportProperties(
         output.property_fragment_unique_id = PropertyFragmentUniqueId(object, fragment_data);
         output.display_item_client_id = client.Id() as u64;
         output.display_item_client_owner_node_id = unsafe { &*object }.OwnerNodeIdDefault();
-        output.display_item_client_invalidation_reason = Some(client.GetPaintInvalidationReason());
         output.display_item_client_debug_name = if let Some(cache) = debug_names.as_deref_mut() {
             Arc::clone(
                 cache
@@ -189,10 +187,6 @@ pub(super) fn ExportProperties(
         } else {
             Arc::from(unsafe { &*object }.DebugName().Utf8())
         };
-        output.display_item_client_is_cacheable = client.IsCacheable();
-        output
-            .display_item_client_is_just_created
-            .set(client.IsJustCreated());
         let layout_text = DynamicTo::<LayoutText>(object);
         let selection_client = if layout_text.is_null() {
             std::ptr::null()
@@ -201,12 +195,6 @@ pub(super) fn ExportProperties(
         };
         if let Some(selection_client) = unsafe { selection_client.as_ref() } {
             output.selection_client_id = selection_client.Id() as u64;
-            output.selection_client_invalidation_reason =
-                Some(selection_client.GetPaintInvalidationReason());
-            output.selection_client_is_cacheable = selection_client.IsCacheable();
-            output
-                .selection_client_is_just_created
-                .set(selection_client.IsJustCreated());
         }
         output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
     }
@@ -381,12 +369,6 @@ pub(super) fn ExportProperties(
             if !layer.is_null() {
                 let layer = unsafe { &*layer };
                 output.paint_layer_client_id = layer.Id();
-                output.paint_layer_client_invalidation_reason =
-                    Some(layer.DisplayItemClient().GetPaintInvalidationReason());
-                output.paint_layer_client_is_cacheable = layer.IsCacheable();
-                output
-                    .paint_layer_client_is_just_created
-                    .set(layer.IsJustCreated());
                 // Source: core/paint/paint_layer_painter.cc:304-318,361-368,
                 // 612-623. Export PaintLayer's already-maintained aggregates;
                 // Paint must not approximate them from flattened fragments.

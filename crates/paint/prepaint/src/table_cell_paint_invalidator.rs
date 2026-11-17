@@ -31,11 +31,14 @@ impl TableCellPaintInvalidator {
     pub fn InvalidateContainerForCellGeometryChange(container: &mut FragmentPaintData) {
         let current = container
             .paint
-            .display_item_client_invalidation_reason
+            .DisplayItemClientState()
+            .invalidation_reason
             .unwrap_or(PaintInvalidationReason::kNone);
         if !IsFullPaintInvalidationReason(current) && PaintInvalidationReason::kLayout > current {
-            container.paint.display_item_client_invalidation_reason =
-                Some(PaintInvalidationReason::kLayout);
+            crate::object_paint_invalidator::ObjectPaintInvalidator::InvalidateDisplayItemClient(
+                container,
+                PaintInvalidationReason::kLayout,
+            );
         }
     }
 

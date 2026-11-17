@@ -302,9 +302,13 @@ impl LayoutPaintState {
     }
 
     pub(crate) fn ResidentPaintProperties(&self, instance: u64) -> Option<&PaintPropertiesHandle> {
+        self.ResidentFragment(instance).map(|data| &data.paint)
+    }
+
+    pub(crate) fn ResidentFragment(&self, instance: u64) -> Option<&FragmentPaintData> {
         unsafe { &*self.inputs.get() }
             .get(&instance)
-            .map(|slot| &slot.data.paint)
+            .map(|slot| slot.data.as_ref())
     }
 
     fn Bind(&self, owner: PaintFragmentOwner, instance: u64) -> PaintSlotBinding {

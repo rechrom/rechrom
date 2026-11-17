@@ -46,8 +46,12 @@ pub(super) fn ResolveLogicalParentOccurrences(root: crate::layout_engine::PaintF
     collect(root, None, &mut all, &mut by_node_id);
     for current_index in 0..all.len() {
         let input = unsafe { &mut *all[current_index].input };
-        input.paint.logical_parent_fragment_instance_id = None;
+        // The payload is shared copy-on-write with the previous publication;
+        // store the resolved occurrence only when it changes.
         let Some(parent_node_id) = input.paint.logical_parent_node_id else {
+            if input.paint.logical_parent_fragment_instance_id.is_some() {
+                input.paint.logical_parent_fragment_instance_id = None;
+            }
             continue;
         };
         let mut ancestor = all[current_index].parent;
@@ -79,8 +83,9 @@ pub(super) fn ResolveLogicalParentOccurrences(root: crate::layout_engine::PaintF
                 resolved = unique(true).or_else(|| unique(false));
             }
         }
-        if let Some(index) = resolved {
-            input.paint.logical_parent_fragment_instance_id = Some(all[index].fragment_instance_id);
+        let resolved = resolved.map(|index| all[index].fragment_instance_id);
+        if input.paint.logical_parent_fragment_instance_id != resolved {
+            input.paint.logical_parent_fragment_instance_id = resolved;
         }
     }
 }
