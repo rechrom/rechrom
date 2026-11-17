@@ -130,7 +130,7 @@ pub(super) fn populate_layout_result_paint_data(
         }
     }
     {
-        let _phase = layout_fragment_boundary::trace::span(
+        let mut phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::PopulateFragmentPaintData,
         );
         PopulatePhysicalFragmentPaintData(
@@ -146,7 +146,27 @@ pub(super) fn populate_layout_result_paint_data(
             0,
             &mut next_fragment_instance_id,
             &mut next_fragmentainer_instance_id,
-        )
+        );
+        // The enclosing span's bounded field slots are full; LayoutNG cache
+        // reuse accounting belongs to this population phase.
+        let stats = &paint_state_owners.population_stats;
+        phase.set("physical_fragments", stats.physical_fragments as f64);
+        phase.set("inline_items", stats.inline_items as f64);
+        phase.set("retained_physical", stats.retained_physical as f64);
+        phase.set(
+            "retained_physical_same_owner",
+            stats.retained_physical_same_owner as f64,
+        );
+        phase.set("retained_inline_same_owner", stats.retained_inline_same_owner as f64);
+        phase.set(
+            "retained_same_owner_local_ms",
+            stats.retained_same_owner_local_ns as f64 / 1e6,
+        );
+        phase.set(
+            "retained_other_owner_local_ms",
+            stats.retained_other_owner_local_ns as f64 / 1e6,
+        );
+        phase.set("exported_local_ms", stats.exported_local_ns as f64 / 1e6);
     }
     let copies_after_population =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
@@ -168,14 +188,6 @@ pub(super) fn populate_layout_result_paint_data(
     trace.set(
         "sidecar_store_ms",
         paint_state_owners.population_stats.sidecar_store_ns as f64 / 1_000_000.0,
-    );
-    trace.set(
-        "physical_fragments",
-        paint_state_owners.population_stats.physical_fragments as f64,
-    );
-    trace.set(
-        "inline_items",
-        paint_state_owners.population_stats.inline_items as f64,
     );
     let topology_retained = retained_paint_state
         && paint_state_owners.new_fragment_instances == 0

@@ -13,6 +13,44 @@ pub(super) struct PaintPopulationStats {
     pub(super) sidecar_store_ns: u64,
     pub(super) physical_fragments: usize,
     pub(super) inline_items: usize,
+    /// Retained-slot bindings, split by whether the slot was last published
+    /// from this exact immutable fragment owner (a LayoutNG cache hit).
+    pub(super) retained_physical: usize,
+    pub(super) retained_physical_same_owner: usize,
+    pub(super) retained_inline: usize,
+    pub(super) retained_inline_same_owner: usize,
+    /// Local (non-recursive) export time per binding class.
+    pub(super) retained_same_owner_local_ns: u64,
+    pub(super) retained_other_owner_local_ns: u64,
+    pub(super) exported_local_ns: u64,
+}
+
+impl PaintPopulationStats {
+    pub(super) fn CountBinding(&mut self, retained: bool, same_owner: bool, physical: bool) {
+        if !retained {
+            return;
+        }
+        if physical {
+            self.retained_physical += 1;
+            self.retained_physical_same_owner += same_owner as usize;
+        } else {
+            self.retained_inline += 1;
+            self.retained_inline_same_owner += same_owner as usize;
+        }
+    }
+
+    pub(super) fn RecordLocal(&mut self, timing: (Option<std::time::Instant>, bool, bool)) {
+        let (Some(started), retained, same_owner) = timing else {
+            return;
+        };
+        let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let total = match (retained, same_owner) {
+            (true, true) => &mut self.retained_same_owner_local_ns,
+            (true, false) => &mut self.retained_other_owner_local_ns,
+            (false, _) => &mut self.exported_local_ns,
+        };
+        *total = total.saturating_add(elapsed);
+    }
 }
 
 #[derive(Default)]

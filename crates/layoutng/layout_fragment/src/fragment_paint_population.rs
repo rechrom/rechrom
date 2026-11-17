@@ -270,8 +270,17 @@ fn PopulateInlineItemLocalPaintData(
         paint_state_owners,
     );
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
-    let (output, slot_retained) =
+    let binding =
         paint_state.BindInline(fragment_items, item_index as usize, fragment_instance_id);
+    let (output, slot_retained) = (binding.data, binding.retained);
+    paint_state_owners
+        .population_stats
+        .CountBinding(retained_invalidation.is_some(), binding.same_owner, false);
+    let local_timing = (
+        store_started,
+        retained_invalidation.is_some(),
+        binding.same_owner,
+    );
     if let Some(started) = store_started {
         paint_state_owners.population_stats.sidecar_store_ns = paint_state_owners
             .population_stats
@@ -582,6 +591,7 @@ fn PopulateInlineItemLocalPaintData(
         }
         ItemType::kInvalid => unreachable!("invalid inline item"),
     }
+    paint_state_owners.population_stats.RecordLocal(local_timing);
 }
 
 #[inline(never)]
@@ -722,7 +732,16 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         paint_state_owners,
     );
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
-    let (output, slot_retained) = paint_state.BindPhysical(fragment, fragment_instance_id);
+    let binding = paint_state.BindPhysical(fragment, fragment_instance_id);
+    let (output, slot_retained) = (binding.data, binding.retained);
+    paint_state_owners
+        .population_stats
+        .CountBinding(retained_invalidation.is_some(), binding.same_owner, true);
+    let local_timing = (
+        store_started,
+        retained_invalidation.is_some(),
+        binding.same_owner,
+    );
     if let Some(started) = store_started {
         paint_state_owners.population_stats.sidecar_store_ns = paint_state_owners
             .population_stats
@@ -730,11 +749,23 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
     let output = unsafe { &mut *output };
+    // A LayoutNG cache hit hands the replacement LayoutResult the same
+    // immutable PhysicalFragment the slot was last published from. When the
+    // owner also carries no PrePaint dirty bits, Chromium's PrePaintTreeWalk
+    // does no work for it and Paint reads the unchanged fragment directly.
+    // Geometry projected solely from that fragment (and the unchanged style
+    // and resources proven by RetainedPaintProperties) is therefore still
+    // current; publication-relative and source-object facts are re-derived.
+    let reuse_fragment_geometry = retained_invalidation.is_some() && binding.same_owner;
+    let mut retained_content_size = None;
     if let Some(invalidation) = retained_invalidation {
         assert!(
             slot_retained,
             "retained paint properties have no resident slot"
         );
+        if reuse_fragment_geometry {
+            retained_content_size = Some(output.content_size);
+        }
         output.prepare_for_publication();
         output.paint.pre_paint_invalidation = invalidation;
         output.paint.resources = Some(Arc::clone(resources));
@@ -783,83 +814,90 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.fragmentainer_instance_id = fragmentainer_instance_id;
     }
     if !fragment.IsBox() {
+        paint_state_owners.population_stats.RecordLocal(local_timing);
         return;
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
-    output.paint.is_page_container =
-        box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageContainer;
-    if output.paint.is_page_container {
-        let page_border_link = box_fragment
-            .Children()
-            .iter()
-            .find(|child| child.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox)
-            .expect("page container must contain its page border box");
-        let page_border = page_border_link.get();
-        assert!(!page_border.is_null());
-        let page_border = unsafe { &*page_border.cast::<PhysicalBoxFragment>() };
-        let border = page_border.Borders();
-        let padding = page_border.Padding();
-        output.paint.page_container_background_geometry =
-            Some(crate::fragment_tree::PageContainerBackgroundPaintData {
-                positioning_box_offset: Offset {
-                    x: Number(page_border_link.offset.left),
-                    y: Number(page_border_link.offset.top),
-                },
-                border: Edges {
-                    top: Number(border.top),
-                    right: Number(border.right),
-                    bottom: Number(border.bottom),
-                    left: Number(border.left),
-                },
-                padding: Edges {
-                    top: Number(padding.top),
-                    right: Number(padding.right),
-                    bottom: Number(padding.bottom),
-                    left: Number(padding.left),
-                },
-                ..crate::fragment_tree::PageContainerBackgroundPaintData::default()
-            });
-    }
-    output.paint.is_page_border_box =
-        box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox;
-    if output.paint.is_page_border_box {
-        let page_area = box_fragment
-            .Children()
-            .first()
-            .expect("page border box must contain its page area")
-            .get();
-        assert!(!page_area.is_null());
-        let page_area = unsafe { &*page_area.cast::<PhysicalBoxFragment>() };
-        debug_assert_eq!(
-            page_area.GetBoxType(),
-            crate::physical_fragment::BoxType::kPageArea
-        );
-        let offset = page_area.OffsetFromRootFragmentationContext();
-        output.paint.page_document_background_geometry =
-            Some(crate::fragment_tree::PageBackgroundPaintData {
-                positioning_area_offset: Offset {
-                    x: Number(offset.left),
-                    y: Number(offset.top),
-                },
-                ..crate::fragment_tree::PageBackgroundPaintData::default()
-            });
-    }
-    output.paint.is_paginated_root = box_fragment.IsPaginatedRoot();
-    output.paint.is_inline_formatting_context = box_fragment.IsInlineFormattingContext();
-    output.paint.is_first_for_node = box_fragment.IsFirstForNode();
-    output.paint.can_paint_multiple_fragments =
-        crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(box_fragment);
-    if purpose == LayoutUpdateKind::Paint && !object.is_null() {
-        let style = if effective_style.is_null() {
-            unsafe { &*object }.StyleRef()
-        } else {
-            unsafe { &*effective_style }
-        };
-        ExportNinePieceImages(style, output.size, resources, &mut output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        ExportBoxInkOverflow(box_fragment, &mut output.paint);
+    if !reuse_fragment_geometry {
+        output.paint.is_page_container =
+            box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageContainer;
+        if output.paint.is_page_container {
+            let page_border_link = box_fragment
+                .Children()
+                .iter()
+                .find(|child| {
+                    child.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox
+                })
+                .expect("page container must contain its page border box");
+            let page_border = page_border_link.get();
+            assert!(!page_border.is_null());
+            let page_border = unsafe { &*page_border.cast::<PhysicalBoxFragment>() };
+            let border = page_border.Borders();
+            let padding = page_border.Padding();
+            output.paint.page_container_background_geometry =
+                Some(crate::fragment_tree::PageContainerBackgroundPaintData {
+                    positioning_box_offset: Offset {
+                        x: Number(page_border_link.offset.left),
+                        y: Number(page_border_link.offset.top),
+                    },
+                    border: Edges {
+                        top: Number(border.top),
+                        right: Number(border.right),
+                        bottom: Number(border.bottom),
+                        left: Number(border.left),
+                    },
+                    padding: Edges {
+                        top: Number(padding.top),
+                        right: Number(padding.right),
+                        bottom: Number(padding.bottom),
+                        left: Number(padding.left),
+                    },
+                    ..crate::fragment_tree::PageContainerBackgroundPaintData::default()
+                });
+        }
+        output.paint.is_page_border_box =
+            box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox;
+        if output.paint.is_page_border_box {
+            let page_area = box_fragment
+                .Children()
+                .first()
+                .expect("page border box must contain its page area")
+                .get();
+            assert!(!page_area.is_null());
+            let page_area = unsafe { &*page_area.cast::<PhysicalBoxFragment>() };
+            debug_assert_eq!(
+                page_area.GetBoxType(),
+                crate::physical_fragment::BoxType::kPageArea
+            );
+            let offset = page_area.OffsetFromRootFragmentationContext();
+            output.paint.page_document_background_geometry =
+                Some(crate::fragment_tree::PageBackgroundPaintData {
+                    positioning_area_offset: Offset {
+                        x: Number(offset.left),
+                        y: Number(offset.top),
+                    },
+                    ..crate::fragment_tree::PageBackgroundPaintData::default()
+                });
+        }
+        output.paint.is_paginated_root = box_fragment.IsPaginatedRoot();
+        output.paint.is_inline_formatting_context = box_fragment.IsInlineFormattingContext();
+        output.paint.is_first_for_node = box_fragment.IsFirstForNode();
+        output.paint.can_paint_multiple_fragments =
+            crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
+                box_fragment,
+            );
+        if purpose == LayoutUpdateKind::Paint && !object.is_null() {
+            let style = if effective_style.is_null() {
+                unsafe { &*object }.StyleRef()
+            } else {
+                unsafe { &*effective_style }
+            };
+            ExportNinePieceImages(style, output.size, resources, &mut output.paint);
+        }
+        if purpose == LayoutUpdateKind::Paint {
+            ExportBoxInkOverflow(box_fragment, &mut output.paint);
+        }
     }
     if box_fragment.IsFragmentainerBox() {
         fragmentainer_instance_id = *next_fragmentainer_instance_id;
@@ -889,22 +927,20 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     }
     output.paint.display_item_fragment = display_item_fragment;
     output.fragmentainer_instance_id = fragmentainer_instance_id;
-    {
+    if !reuse_fragment_geometry {
         ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        let outline_style = if effective_style.is_null() {
-            box_fragment.Style()
-        } else {
-            unsafe { &*effective_style }
-        };
-        ExportSelfOutlineGeometry(box_fragment, outline_style, &mut output.paint);
+        if purpose == LayoutUpdateKind::Paint {
+            let outline_style = if effective_style.is_null() {
+                box_fragment.Style()
+            } else {
+                unsafe { &*effective_style }
+            };
+            ExportSelfOutlineGeometry(box_fragment, outline_style, &mut output.paint);
+            ExportOverflowClipMargin(box_fragment, &mut output.paint);
+        }
     }
     if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {
         output.paint_cull_scroll_offset = Some(output.paint.scroll_offset);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        ExportOverflowClipMargin(box_fragment, &mut output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportScrollbarPaintData(box_fragment, &mut output.paint);
@@ -921,9 +957,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         box_fragment as *const PhysicalBoxFragment,
         output.fragment_instance_id,
     );
-    {
-        output.content_size = ExportContentSize(box_fragment);
-    }
+    output.content_size = match retained_content_size {
+        Some(size) if reuse_fragment_geometry => size,
+        _ => ExportContentSize(box_fragment),
+    };
     if purpose == LayoutUpdateKind::Paint {
         ExportMathMLPaintData(box_fragment, &mut output.paint);
     }
@@ -942,6 +979,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     if purpose == LayoutUpdateKind::Paint {
         ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
     }
+    paint_state_owners.population_stats.RecordLocal(local_timing);
     let items = box_fragment.Items();
     for child in box_fragment.Children() {
         if !child.is_present() || (!items.is_null() && child.IsLineBox()) {

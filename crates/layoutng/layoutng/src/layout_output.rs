@@ -231,6 +231,16 @@ pub(crate) struct LayoutPaintState {
 struct PaintFragmentSlot {
     data: Box<FragmentPaintData>,
     publication: u64,
+    /// Source owner bound by the publication that last wrote this slot.
+    owner: Option<PaintFragmentOwner>,
+}
+
+/// Result of binding a fragment owner to its stable Paint slot.
+pub(crate) struct PaintSlotBinding {
+    pub(crate) data: *mut FragmentPaintData,
+    pub(crate) retained: bool,
+    /// The slot was last published from this exact immutable fragment owner.
+    pub(crate) same_owner: bool,
 }
 
 impl LayoutPaintState {
@@ -259,6 +269,7 @@ impl LayoutPaintState {
                 PaintFragmentSlot {
                     data: Box::new((*slot.data).clone()),
                     publication: 0,
+                    owner: slot.owner,
                 },
             );
         }
@@ -296,31 +307,38 @@ impl LayoutPaintState {
             .map(|slot| &slot.data.paint)
     }
 
-    fn Bind(&self, owner: PaintFragmentOwner, instance: u64) -> (*mut FragmentPaintData, bool) {
+    fn Bind(&self, owner: PaintFragmentOwner, instance: u64) -> PaintSlotBinding {
         assert_ne!(instance, 0, "paint fragment has no stable identity");
         let publication = self.publication.get();
         let inputs = unsafe { &mut *self.inputs.get() };
-        let (pointer, retained) = if let Some(current) = inputs.get_mut(&instance) {
+        let binding = if let Some(current) = inputs.get_mut(&instance) {
             current.publication = publication;
-            (current.data.as_mut() as *mut FragmentPaintData, true)
+            let same_owner = current.owner == Some(owner);
+            current.owner = Some(owner);
+            PaintSlotBinding {
+                data: current.data.as_mut() as *mut FragmentPaintData,
+                retained: true,
+                same_owner,
+            }
         } else {
             let mut slot = PaintFragmentSlot {
                 data: Box::new(FragmentPaintData::default()),
                 publication,
+                owner: Some(owner),
             };
             let pointer = slot.data.as_mut() as *mut FragmentPaintData;
             inputs.insert(instance, slot);
-            (pointer, false)
+            PaintSlotBinding {
+                data: pointer,
+                retained: false,
+                same_owner: false,
+            }
         };
-        unsafe { &mut *self.owners.get() }.insert(owner, pointer);
-        (pointer, retained)
+        unsafe { &mut *self.owners.get() }.insert(owner, binding.data);
+        binding
     }
 
-    pub(crate) fn BindPhysical(
-        &self,
-        fragment: &PhysicalFragment,
-        instance: u64,
-    ) -> (*mut FragmentPaintData, bool) {
+    pub(crate) fn BindPhysical(&self, fragment: &PhysicalFragment, instance: u64) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Physical(fragment as *const PhysicalFragment);
         self.Bind(owner, instance)
     }
@@ -330,7 +348,7 @@ impl LayoutPaintState {
         items: &layout_fragment::fragment_items::FragmentItems,
         index: usize,
         instance: u64,
-    ) -> (*mut FragmentPaintData, bool) {
+    ) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Inline(items as *const _, index);
         self.Bind(owner, instance)
     }
