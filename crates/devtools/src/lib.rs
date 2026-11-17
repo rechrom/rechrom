@@ -565,12 +565,21 @@ impl MouseInjection {
 
 /// Start a detached server on IPv4 localhost. Port zero chooses a free port.
 pub fn serve(port: u16) -> io::Result<String> {
+    serve_with_thread_start(port, || {})
+}
+
+/// Like [`serve`], running `thread_start` first on every server thread.
+/// Chromium dispatches DevTools input (InputHandler) on the browser UI thread,
+/// a kPresentation thread; the embedding passes its platform thread-type hook
+/// so injected input is not starved behind the page it drives.
+pub fn serve_with_thread_start(port: u16, thread_start: fn()) -> io::Result<String> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let port = listener.local_addr()?.port();
     let clients = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new()
         .name("devtools-http".into())
         .spawn(move || {
+            thread_start();
             for connection in listener.incoming() {
                 let Ok(mut stream) = connection else {
                     continue;
@@ -591,6 +600,7 @@ pub fn serve(port: u16) -> io::Result<String> {
                 let _ = std::thread::Builder::new()
                     .name("devtools-request".into())
                     .spawn(move || {
+                        thread_start();
                         let _guard = guard;
                         handle_connection(&mut stream, port);
                     });

@@ -12,9 +12,10 @@ use std::{
 pub(crate) fn serve(port: u16, address: &str) -> io::Result<String> {
     browser_tracing::register_target(1, "Page", address);
     browser_tracing::register_target(2, "Browser toolbar", "browser://toolbar");
-    let url = devtools::serve(port).or_else(|error| {
+    let thread_start = crate::engine::set_presentation_thread_priority;
+    let url = devtools::serve_with_thread_start(port, thread_start).or_else(|error| {
         if error.kind() == io::ErrorKind::AddrInUse {
-            devtools::serve(0)
+            devtools::serve_with_thread_start(0, thread_start)
         } else {
             Err(error)
         }
