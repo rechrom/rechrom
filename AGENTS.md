@@ -388,11 +388,12 @@ When a translated mechanism exists but Rechrom still differs from Chromium:
   the compiler or an existing test already proves. Documentation-only changes
   need only a text or diff check unless they change executable examples or
   generated files.
-- Do not build frequently. A link takes minutes and a fat-LTO Release takes
-  hours on small machines. Write the whole refactor first, using only
-  `cargo check` while editing, and build once for the final verification of
-  the finished work. Never build just to look at an intermediate step, and
-  never rebuild only to add a log line.
+- Do not build or check frequently. A `cargo check` takes minutes, a link
+  longer, and a fat-LTO Release takes hours on small machines. Write the whole
+  refactor first, then run one `cargo check` and fix what it reports, then
+  build once for the final verification of the finished work. Never check or
+  build just to look at an intermediate step, and never rebuild only to add a
+  log line.
 - When disk usage is high, stale `target/` caches may be evicted, but never
   artifacts used by an active build.
 
@@ -402,9 +403,9 @@ When a translated mechanism exists but Rechrom still differs from Chromium:
 
 ### 3.1 Check tiers
 
-1. While editing: `cargo check` the owning crate. Some crates only type-check
-   correctly through the app because of feature unification (for example
-   `raster` via `-p rechrom_app`).
+1. When the edit is complete (not after each file): `cargo check` once. Some
+   crates only type-check correctly through the app because of feature
+   unification (for example `raster` via `-p rechrom_app`).
 2. When the whole change is finished (not after each intermediate step):
    build `rechrom_app` once with `--profile iteration` and reuse the same
    `target/iteration/rechrom` headless process for the full DevTools
