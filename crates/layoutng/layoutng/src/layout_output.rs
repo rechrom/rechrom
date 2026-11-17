@@ -222,8 +222,8 @@ enum PaintFragmentOwner {
 /// geometry and child topology remain canonical and are always read through
 /// `FragmentCursor`.
 pub(crate) struct LayoutPaintState {
-    inputs: UnsafeCell<HashMap<u64, PaintFragmentSlot>>,
-    owners: UnsafeCell<HashMap<PaintFragmentOwner, *mut FragmentPaintData>>,
+    inputs: UnsafeCell<foundation::TrustedIdentityHashMap<u64, PaintFragmentSlot>>,
+    owners: UnsafeCell<foundation::TrustedIdentityHashMap<PaintFragmentOwner, *mut FragmentPaintData>>,
     publication: Cell<u64>,
     generation: Cell<u64>,
 }
@@ -236,8 +236,8 @@ struct PaintFragmentSlot {
 impl LayoutPaintState {
     pub(crate) fn New() -> Arc<Self> {
         Arc::new(Self {
-            inputs: UnsafeCell::new(HashMap::new()),
-            owners: UnsafeCell::new(HashMap::new()),
+            inputs: UnsafeCell::new(Default::default()),
+            owners: UnsafeCell::new(Default::default()),
             publication: Cell::new(0),
             generation: Cell::new(1),
         })
