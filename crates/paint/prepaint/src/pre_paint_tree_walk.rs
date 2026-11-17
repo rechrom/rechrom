@@ -4115,14 +4115,30 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
         }
     };
     {
+        // The style payloads are shared copy-on-write owners: assign only on
+        // change, or every walk deep-copies each node's PaintProperties and
+        // PaintStyleData to store the same value.
         let fragment = node
             .fragment
             .as_deref_mut()
             .expect("PrePaint node must own a fragment");
-        fragment.paint.style.auto_dark_mode_paused = inherited_paused;
-        fragment.paint.selection_style.auto_dark_mode_paused = inherited_paused;
-        if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
-            style.auto_dark_mode_paused = inherited_paused;
+        let paint = &fragment.paint;
+        let style_changed = paint.style.auto_dark_mode_paused != inherited_paused;
+        let selection_changed = paint.selection_style.auto_dark_mode_paused != inherited_paused;
+        let decoration_changed = paint
+            .svg_text_decoration_style
+            .as_ref()
+            .is_some_and(|style| style.auto_dark_mode_paused != inherited_paused);
+        if style_changed {
+            fragment.paint.style.auto_dark_mode_paused = inherited_paused;
+        }
+        if selection_changed {
+            fragment.paint.selection_style.auto_dark_mode_paused = inherited_paused;
+        }
+        if decoration_changed {
+            if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
+                style.auto_dark_mode_paused = inherited_paused;
+            }
         }
     }
     for child in &mut node.children {
