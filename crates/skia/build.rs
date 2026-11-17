@@ -160,7 +160,14 @@ fn bind_loaded_user_configuration(native: &Bindings) -> LoadedUserConfiguration 
     let dcheck = flag(post, "DCHECK_ALWAYS_ON", complete, false);
     let supplied_debug = flag(post, "SK_DEBUG", complete, false);
     let supplied_release = flag(post, "SK_RELEASE", complete, false);
-    let ndebug = flag(post, "NDEBUG", complete, false);
+    // Source: build/config/BUILD.gn:129-130 (`config("release") { defines =
+    // [ "NDEBUG" ]`), applied to every !is_debug target. Chromium's non-debug
+    // builds reach SkLoadUserConfig.h with NDEBUG defined and therefore
+    // select SK_RELEASE. Cargo's
+    // debug-assertions setting is this workspace's is_debug; an explicitly
+    // supplied NDEBUG input still takes precedence.
+    let is_debug = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
+    let ndebug = flag(post, "NDEBUG", complete, !is_debug);
     let force_debug = !loaded && chromium && dcheck;
     let user_debug = force_debug || supplied_debug;
     let user_release = !force_debug && supplied_release;
