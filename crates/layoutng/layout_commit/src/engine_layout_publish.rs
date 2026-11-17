@@ -115,6 +115,7 @@ pub(super) fn publish_layout_output(
             ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments, cached_objects, reuse)
         });
     }
+    engine.published_result_stale_ = false;
     engine.fragments = Some(fragments);
     engine.pre_paint_inputs_ = inputs;
     // FrameSelection::DidLayout -> UpdateAppearance (frame_selection.cc:

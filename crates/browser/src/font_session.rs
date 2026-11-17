@@ -323,7 +323,17 @@ fn LayoutWithSystemFontsAtStageImpl(
             // Export and certify the existing owner directly. Keep the normal
             // layout entry as a defensive fallback if the resident result was
             // invalidated by an unexpected host mutation.
-            if layout.PopulatePaintData() {
+            // A measurement request (Document::UpdateStyleAndLayoutForNode)
+            // ends at LayoutClean; only the paint lifecycle exports
+            // fragment-local Paint data, once per frame.
+            let finished = if purpose
+                == layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout
+            {
+                layout.FinishLayoutWithoutPaintPublication()
+            } else {
+                layout.PopulatePaintData()
+            };
+            if finished {
                 updated = true;
             } else {
                 updated |= super::persistent_layout::LayoutDocumentWithEngineAtStage(

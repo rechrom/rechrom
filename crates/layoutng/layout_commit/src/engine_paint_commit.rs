@@ -62,6 +62,7 @@ impl layout_commit::PaintCommitBackend for PaintCommit<'_, '_> {
     fn PublishLayout(&mut self, layout: LayoutPaintOutput) -> LayoutResultHandle {
         self.engine.output_kind = LayoutUpdateKind::Paint;
         self.engine.invalidated_fragments_ = None;
+        self.engine.published_result_stale_ = false;
         self.engine.fragments = Some(layout.fragments.clone());
         layout.fragments
     }

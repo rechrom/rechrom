@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn has_current_output(engine: &LayoutEngine, purpose: LayoutUpdateKind) -> bool {
     engine.fragments.is_some()
         && engine.invalidated_fragments_.is_none()
+        && !engine.published_result_stale_
         && engine.pending_scroll_ids_.is_empty()
         && engine.pending_paint_ids_.is_empty()
         && engine.pending_inline_ink_ids_.is_empty()

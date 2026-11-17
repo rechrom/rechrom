@@ -61,6 +61,7 @@ impl EnginePaintUpdate for LayoutEngine {
             ScrollPaintPropertyIndex::new(unsafe { &mut *root }, &fragments, cached_objects, reuse)
         });
         self.pending_scroll_ids_.clear();
+        self.published_result_stale_ = false;
         self.fragments = Some(fragments);
         self.output_kind = LayoutUpdateKind::Paint;
         self.pre_paint_inputs_ = inputs;

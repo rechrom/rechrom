@@ -282,6 +282,10 @@ pub struct LayoutEngine {
     /// the owner alive while LayoutNG may reuse child PhysicalFragments.
     /// This is never exposed as current output or used as paint geometry.
     invalidated_fragments_: Option<LayoutResultHandle>,
+    /// A measurement-only layout replaced the root LayoutResult after the
+    /// last publication. No published handle (resident or Page-owned) may be
+    /// adopted as current until the next paint lifecycle publishes again.
+    published_result_stale_: bool,
     output_kind: LayoutUpdateKind,
     tree_: Option<LayoutObjectTree>,
     detached_document_elements_: Vec<u64>,
@@ -355,6 +359,7 @@ impl LayoutEngine {
         Self {
             fragments: None,
             invalidated_fragments_: None,
+            published_result_stale_: false,
             output_kind: LayoutUpdateKind::Paint,
             tree_: None,
             detached_document_elements_: Vec::new(),
@@ -391,6 +396,11 @@ impl LayoutEngine {
     /// case the still-presented Page frame is stale and must not replace the
     /// newer resident result.
     pub fn AdoptPublishedLayoutResult(&mut self, fragments: LayoutResultHandle) {
+        if self.published_result_stale_ {
+            // A measurement layout already replaced the result this handle
+            // was published from; the next paint lifecycle republishes.
+            return;
+        }
         if let Some(resident) = self.fragments.take() {
             self.fragments = Some(if resident.PtrEq(&fragments) {
                 fragments
@@ -404,6 +414,7 @@ impl LayoutEngine {
                 return;
             }
         }
+        self.published_result_stale_ = false;
         self.fragments = Some(fragments);
     }
 
@@ -887,6 +898,38 @@ impl LayoutEngine {
     /// The DOM adapter may conservatively classify an update as paint-only.
     /// The source tree is the final guard: if synchronization marked any
     /// layout object dirty, reject this path and let the caller run Layout().
+    /// Finish a measurement-only update on a settled LayoutResult without
+    /// exporting fragment-local Paint data. Document::UpdateStyleAndLayoutFor
+    /// Node stops at LayoutClean: geometry queries read the resident
+    /// LayoutObjects, and FragmentData is only brought up to date by the next
+    /// PrePaint. If layout replaced the published result, retire that
+    /// publication so the paint lifecycle republishes from the current one.
+    /// Returns false when the root has no settled result.
+    pub fn FinishLayoutWithoutPaintPublication(&mut self) -> bool {
+        let Some(tree) = self.tree_.as_ref() else {
+            return false;
+        };
+        let root = tree.Root();
+        let root_box = DynamicTo::<LayoutBox>(root as *const LayoutObject);
+        if root_box.is_null() || root.NeedsLayout() {
+            return false;
+        }
+        let root_box = unsafe { &*root_box };
+        if root_box.GetLayoutResults().is_empty() || root_box.GetLayoutResult(0).is_null() {
+            return false;
+        }
+        let current = root_box.GetLayoutResult(0) as usize;
+        if self.boundary_cache_.fragment_identity_result != current {
+            // Keep the superseded owner alive like any invalidated result,
+            // but never expose it, or a Page-held copy, as current output.
+            if let Some(published) = self.fragments.take() {
+                self.invalidated_fragments_ = Some(published);
+            }
+            self.published_result_stale_ = true;
+        }
+        true
+    }
+
     pub fn PopulatePaintData(&mut self) -> bool {
         EnginePaintUpdate::populate_paint_data(self)
     }
@@ -964,6 +1007,7 @@ impl LayoutEngine {
     /// lifecycle. This is not a Paint commit and grants no retained-artifact proof.
     pub fn ReturnPrePaintOutput(&mut self, layout: LayoutPaintOutput) {
         assert!(self.fragments.is_none(), "exclusive PrePaint output");
+        self.published_result_stale_ = false;
         self.fragments = Some(layout.fragments);
     }
 
@@ -1004,6 +1048,7 @@ impl LayoutEngine {
     pub fn CommitRetainedPaint(&mut self, layout: LayoutPaintOutput) -> LayoutResultHandle {
         self.output_kind = LayoutUpdateKind::Paint;
         self.invalidated_fragments_ = None;
+        self.published_result_stale_ = false;
         self.fragments = Some(layout.fragments.clone());
         layout.fragments
     }
@@ -1019,6 +1064,7 @@ impl LayoutEngine {
     pub fn PublishLayoutResult(&mut self, fragments: LayoutResultHandle) {
         self.output_kind = LayoutUpdateKind::Paint;
         self.invalidated_fragments_ = None;
+        self.published_result_stale_ = false;
         self.fragments = Some(fragments);
     }
 
