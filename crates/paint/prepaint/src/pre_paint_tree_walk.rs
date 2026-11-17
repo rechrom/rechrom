@@ -4361,24 +4361,35 @@ fn RestoreBuilderStates(node: &mut PaintTreeNode<'_>, current_pass: u64) -> usiz
 }
 
 fn GatherRetainedRawPropertyIds(node: &PaintTreeNode<'_>, ids: &mut BTreeSet<u64>) {
-    let cache = node
-        .cache
-        .as_ref()
-        .expect("resident node has builder state");
-    let mut states: Vec<&paint_model::paint_property_tree::PropertyTreeState> =
-        vec![&cache.raw_properties.nodes, &cache.raw_contents.nodes];
-    states.extend(cache.raw_fixed_background.iter());
-    states.extend(cache.raw_horizontal_scrollbar.iter());
-    states.extend(cache.raw_vertical_scrollbar.iter());
-    states.extend(cache.raw_mask.iter());
+    // Collect every retained raw state first and walk the property graphs
+    // once: building a separate PaintPropertyTrees per node re-walked shared
+    // ancestors (root, viewport, scroll translations) for every node. The
+    // union of reachable node ids is the same.
+    fn collect<'a>(
+        node: &'a PaintTreeNode<'_>,
+        states: &mut Vec<&'a paint_model::paint_property_tree::PropertyTreeState>,
+    ) {
+        let cache = node
+            .cache
+            .as_ref()
+            .expect("resident node has builder state");
+        states.push(&cache.raw_properties.nodes);
+        states.push(&cache.raw_contents.nodes);
+        states.extend(cache.raw_fixed_background.iter());
+        states.extend(cache.raw_horizontal_scrollbar.iter());
+        states.extend(cache.raw_vertical_scrollbar.iter());
+        states.extend(cache.raw_mask.iter());
+        for child in &node.children {
+            collect(child, states);
+        }
+    }
+    let mut states = Vec::new();
+    collect(node, &mut states);
     let trees = paint_model::paint_property_tree::PaintPropertyTrees::from_states(states);
     ids.extend(trees.transforms.keys().copied().filter(|id| *id != 0));
     ids.extend(trees.clips.keys().copied().filter(|id| *id != 0));
     ids.extend(trees.effects.keys().copied().filter(|id| *id != 0));
     ids.extend(trees.scrolls.keys().copied().filter(|id| *id != 0));
-    for child in &node.children {
-        GatherRetainedRawPropertyIds(child, ids);
-    }
 }
 
 fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
@@ -6121,11 +6132,20 @@ impl PrePaintTreeWalk {
         }
         PropagateAutoDarkModeState(&mut tree, false);
         PropagateSubsequenceRepaint(&mut tree);
-        let mut retained_raw_ids = BTreeSet::new();
-        GatherRetainedRawPropertyIds(&tree, &mut retained_raw_ids);
-        retained_raw_ids.extend(self.property_keys.keys().copied());
-        self.prior_property_keys
-            .retain(|id, _| retained_raw_ids.contains(id));
+        // Current keys are always retained; only a prior id that is not a
+        // current key can be dropped, so the raw-state gather is needed only
+        // when such an id exists.
+        if self
+            .prior_property_keys
+            .keys()
+            .any(|id| !self.property_keys.contains_key(id))
+        {
+            let mut retained_raw_ids = BTreeSet::new();
+            GatherRetainedRawPropertyIds(&tree, &mut retained_raw_ids);
+            retained_raw_ids.extend(self.property_keys.keys().copied());
+            self.prior_property_keys
+                .retain(|id, _| retained_raw_ids.contains(id));
+        }
         tree
     }
 
