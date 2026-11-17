@@ -474,13 +474,15 @@ impl PrePaintRevisionTracker {
             node.pre_paint_subtree_revision != 0
                 && node.pre_paint_subtree_revision != old.subtree_revision
         });
+        // The live client-lifetime query is the costliest proof; evaluate it
+        // only when every stored comparison already admits retention.
         let self_same = old.is_some()
             && !marked_self
-            && (!just_created(&node.paint) || node.pre_paint_owner_retained)
             && same_identity
             && same_geometry
             && same_paint
-            && same_resources;
+            && same_resources
+            && (node.pre_paint_owner_retained || !just_created(&node.paint));
         let children_same = if trust_source_dirty_bits {
             old.is_some()
                 && !marked_subtree

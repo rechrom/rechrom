@@ -143,17 +143,22 @@ pub(super) fn ExportCanvasBackground(
             y: Number(offset.top),
         }
     };
-    unsafe {
-        publish_page_document_style(
-            output,
-            &root_geometry.style,
-            root_geometry.document_element_size,
-            root_element_paint_offset,
-            root_paint.border,
-            root_paint.padding,
-            root_paint.is_background_attachment_fixed_object,
-        )
-    };
+    // kPageContainer / kPageBorderBox fragments exist only below a paginated
+    // root (PhysicalBoxFragment::IsPaginatedRoot); an ordinary screen layout
+    // has none, so do not walk every fragment looking for them.
+    if root_paint.is_paginated_root {
+        unsafe {
+            publish_page_document_style(
+                output,
+                &root_geometry.style,
+                root_geometry.document_element_size,
+                root_element_paint_offset,
+                root_paint.border,
+                root_paint.padding,
+                root_paint.is_background_attachment_fixed_object,
+            )
+        };
+    }
     if !should_apply_root_background_behavior {
         return;
     }
