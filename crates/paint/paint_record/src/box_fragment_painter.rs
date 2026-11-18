@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -1923,11 +1924,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // makes the shadow cover the border and leaves the real inner edge
         // unshadowed (most visible for `inset 0 1px 0 ...`).
         let border_inset = inset
-            .then(|| crate::contoured_border_geometry::IncludedBorderEdges(&fragment.paint))
+            .then(|| crate::contoured_border_geometry::IncludedBorderEdges(fragment))
             .unwrap_or_default();
         let radii = ResolveCornerRadii(
             style,
-            &fragment.paint.border_sides,
+            &fragment.BorderSides(),
             outer_size,
             border_inset,
         );
@@ -1972,7 +1973,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     height: box_rect.height + 2.0 * outset,
                 };
             } else {
-                let sides = &fragment.paint.border_sides;
+                let sides = &fragment.BorderSides();
                 if !sides.left {
                     let amount = shadow.offset.x.max(0.0) + shadow.blur_radius;
                     box_rect.x -= amount;
@@ -1994,10 +1995,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             if !IsVisible(self.node, &bounds) {
                 continue;
             }
-            let clips_fragment_sides = !inset && !fragment.paint.border_sides.HasAllSides();
+            let clips_fragment_sides = !inset && !fragment.BorderSides().HasAllSides();
             if clips_fragment_sides {
                 let blur_and_spread = (1.5 * shadow.blur_radius).ceil() + shadow.spread;
-                let sides = &fragment.paint.border_sides;
+                let sides = &fragment.BorderSides();
                 let left = if sides.left {
                     blur_and_spread - shadow.offset.x
                 } else {
@@ -2199,7 +2200,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let radii = if shrink_for_border {
                 ResolveCornerRadii(
                     style,
-                    &fragment.paint.border_sides,
+                    &fragment.BorderSides(),
                     Size {
                         width: border_box.width,
                         height: border_box.height,
@@ -2236,7 +2237,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         clip_rect.height = (clip_rect.height - inset.top - inset.bottom).max(0.0);
                         clip_radii = ResolveCornerRadii(
                             style,
-                            &fragment.paint.border_sides,
+                            &fragment.BorderSides(),
                             Size {
                                 width: border_box.width,
                                 height: border_box.height,
@@ -3670,14 +3671,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let border_box = BackgroundBoxRect(self.node, BackgroundBox::kBorderBox);
                 radii = ResolveCornerRadii(
                     paint_style,
-                    &fragment.paint.border_sides,
+                    &fragment.BorderSides(),
                     Size {
                         width: border_box.width,
                         height: border_box.height,
                     },
                     bleed_inset,
                 );
-                let border = IncludedBorderEdges(&fragment.paint);
+                let border = IncludedBorderEdges(fragment);
                 image_paint_rect.x += border.left;
                 image_paint_rect.y += border.top;
                 image_paint_rect.width =
@@ -4030,28 +4031,28 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/box_painter_base.cc:1745-1775
     // Chromium coordination: box_fragment_painter.cc:1721-1737.
     pub(crate) fn PaintBorder(&self, phase: PaintPhase, bleed_avoidance: BackgroundBleedAvoidance) {
-        let paint = &self
+        let fragment = self
             .node
             .fragment
             .as_deref()
-            .expect("paint tree node has a fragment")
-            .paint;
+            .expect("paint tree node has a fragment");
+        let paint = &fragment.paint;
         if paint.has_collapsed_borders {
             return;
         }
         if NinePieceImagePainter::Paint(self.node, self.context, phase) {
             return;
         }
-        let sides = &paint.border_sides;
+        let sides = &fragment.BorderSides();
         let widths = [
-            if sides.top { paint.border.top } else { 0.0 },
-            if sides.right { paint.border.right } else { 0.0 },
+            if sides.top { fragment.Borders().top } else { 0.0 },
+            if sides.right { fragment.Borders().right } else { 0.0 },
             if sides.bottom {
-                paint.border.bottom
+                fragment.Borders().bottom
             } else {
                 0.0
             },
-            if sides.left { paint.border.left } else { 0.0 },
+            if sides.left { fragment.Borders().left } else { 0.0 },
         ];
         let mut has_paintable_border = false;
         for (edge, width) in widths.into_iter().enumerate() {
@@ -5417,8 +5418,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let content_box = self.node.PixelSnappedRect(&PaintRect {
-            x: self.node.paint_offset.x + fragment.paint.border.left + fragment.paint.padding.left,
-            y: self.node.paint_offset.y + fragment.paint.border.top + fragment.paint.padding.top,
+            x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
+            y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         });
@@ -5580,8 +5581,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         let style = &fragment.paint;
         let content_box = PaintRect {
-            x: self.node.paint_offset.x + style.border.left + style.padding.left,
-            y: self.node.paint_offset.y + style.border.top + style.padding.top,
+            x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
+            y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         };
@@ -6102,7 +6103,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         let border_radii = ResolveCornerRadii(
             style,
-            &fragment.paint.border_sides,
+            &fragment.BorderSides(),
             Size {
                 width: source_box.width,
                 height: source_box.height,
@@ -6206,7 +6207,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let snapped_border = self.node.PixelSnappedRect(&source_box);
             let snapped_border_radii = ResolveCornerRadii(
                 style,
-                &fragment.paint.border_sides,
+                &fragment.BorderSides(),
                 Size {
                     width: snapped_border.width,
                     height: snapped_border.height,
@@ -7261,10 +7262,10 @@ fn ResolveBackgroundDestinationRects(
         return result;
     }
 
-    let border = IncludedBorderEdges(paint);
+    let border = IncludedBorderEdges(fragment);
     let inner = ContractPaintRect(paint_rect, border);
     let snapped_inner = node.PixelSnappedRect(&inner);
-    let sides = &paint.border_sides;
+    let sides = &fragment.BorderSides();
     let colors = paint.style.border_colors();
     let obscures = [
         BorderEdgeObscuresBackground(sides.top, border.top, colors[0], paint.border_styles[0]),
@@ -7372,7 +7373,7 @@ fn BackgroundBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Paint
     if box_type == BackgroundBox::kBorderBox {
         return decoration;
     }
-    let border = IncludedBorderEdges(style);
+    let border = IncludedBorderEdges(fragment);
     if box_type == BackgroundBox::kPaddingBox {
         return PaintRect {
             x: x + border.left,
@@ -7382,8 +7383,8 @@ fn BackgroundBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Paint
         };
     }
     PaintRect {
-        x: x + border.left + style.padding.left,
-        y: y + border.top + style.padding.top,
+        x: x + border.left + fragment.Padding().left,
+        y: y + border.top + fragment.Padding().top,
         width: fragment.content_size.width,
         height: fragment.content_size.height,
     }
@@ -7398,12 +7399,12 @@ fn BackgroundBoxRectWithin(
     if box_type == BackgroundBox::kBorderBox {
         return rect;
     }
-    let paint = &node
+    let fragment = node
         .fragment
         .as_deref()
-        .expect("paint tree node has a fragment")
-        .paint;
-    let border = IncludedBorderEdges(paint);
+        .expect("paint tree node has a fragment");
+    let paint = &fragment.paint;
+    let border = IncludedBorderEdges(fragment);
     rect.x += border.left;
     rect.y += border.top;
     rect.width = (rect.width - border.left - border.right).max(0.0);
@@ -7411,10 +7412,10 @@ fn BackgroundBoxRectWithin(
     if box_type == BackgroundBox::kPaddingBox {
         return rect;
     }
-    rect.x += paint.padding.left;
-    rect.y += paint.padding.top;
-    rect.width = (rect.width - paint.padding.left - paint.padding.right).max(0.0);
-    rect.height = (rect.height - paint.padding.top - paint.padding.bottom).max(0.0);
+    rect.x += fragment.Padding().left;
+    rect.y += fragment.Padding().top;
+    rect.width = (rect.width - fragment.Padding().left - fragment.Padding().right).max(0.0);
+    rect.height = (rect.height - fragment.Padding().top - fragment.Padding().bottom).max(0.0);
     rect
 }
 
@@ -7489,7 +7490,7 @@ fn ContentsBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let border = IncludedBorderEdges(&fragment.paint);
+    let border = IncludedBorderEdges(fragment);
     let mut rect = BackgroundPositioningBoxRect(node, BackgroundBox::kBorderBox);
     // LayoutBox::ScrollWidth/Height describe the scrolling padding area. The
     // background painter adds the border widths while recording the local
@@ -7536,11 +7537,11 @@ fn LocalBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
 }
 
 fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> PaintRect {
-    let paint = &node
+    let fragment = node
         .fragment
         .as_deref()
-        .expect("paint tree node has a fragment")
-        .paint;
+        .expect("paint tree node has a fragment");
+    let paint = &fragment.paint;
     let box_type = UsedBackgroundGeometryBox(box_type);
     if let Some(page) = paint
         .is_page_container
@@ -7595,38 +7596,38 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
         return rect;
     }
     rect = PaintRect {
-        x: rect.x + paint.border.left,
-        y: rect.y + paint.border.top,
-        width: (rect.width - paint.border.left - paint.border.right).max(0.0),
-        height: (rect.height - paint.border.top - paint.border.bottom).max(0.0),
+        x: rect.x + fragment.Borders().left,
+        y: rect.y + fragment.Borders().top,
+        width: (rect.width - fragment.Borders().left - fragment.Borders().right).max(0.0),
+        height: (rect.height - fragment.Borders().top - fragment.Borders().bottom).max(0.0),
     };
     if box_type == BackgroundBox::kPaddingBox {
         return rect;
     }
     PaintRect {
-        x: rect.x + paint.padding.left,
-        y: rect.y + paint.padding.top,
-        width: (rect.width - paint.padding.left - paint.padding.right).max(0.0),
-        height: (rect.height - paint.padding.top - paint.padding.bottom).max(0.0),
+        x: rect.x + fragment.Padding().left,
+        y: rect.y + fragment.Padding().top,
+        width: (rect.width - fragment.Padding().left - fragment.Padding().right).max(0.0),
+        height: (rect.height - fragment.Padding().top - fragment.Padding().bottom).max(0.0),
     }
 }
 
 fn BackgroundInsets(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Edges {
-    let style = &node
+    let fragment = node
         .fragment
         .as_deref()
-        .expect("paint tree node has a fragment")
-        .paint;
+        .expect("paint tree node has a fragment");
+    let style = &fragment.paint;
     let box_type = UsedBackgroundGeometryBox(box_type);
     if box_type == BackgroundBox::kBorderBox {
         return Edges::default();
     }
-    let mut inset = IncludedBorderEdges(style);
+    let mut inset = IncludedBorderEdges(fragment);
     if box_type == BackgroundBox::kContentBox {
-        inset.top += style.padding.top;
-        inset.right += style.padding.right;
-        inset.bottom += style.padding.bottom;
-        inset.left += style.padding.left;
+        inset.top += fragment.Padding().top;
+        inset.right += fragment.Padding().right;
+        inset.bottom += fragment.Padding().bottom;
+        inset.left += fragment.Padding().left;
     }
     inset
 }
@@ -7642,7 +7643,7 @@ pub(crate) fn BackgroundRadii(
         .expect("paint tree node has a fragment");
     ResolveCornerRadii(
         &fragment.paint.style,
-        &fragment.paint.border_sides,
+        &fragment.BorderSides(),
         Size {
             width: decoration.width,
             height: decoration.height,
@@ -7662,7 +7663,7 @@ fn BackgroundRadiiForRect(
         .expect("paint tree node has a fragment");
     ResolveCornerRadii(
         &fragment.paint.style,
-        &fragment.paint.border_sides,
+        &fragment.BorderSides(),
         Size {
             width: rect.width
                 + BackgroundInsets(node, box_type).left
@@ -7686,7 +7687,7 @@ fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
     {
         return None;
     }
-    let border = IncludedBorderEdges(&fragment.paint);
+    let border = IncludedBorderEdges(fragment);
     let widths = [border.top, border.right, border.bottom, border.left];
     let mut fraction = 0.5;
     for (edge, width) in widths.into_iter().enumerate() {

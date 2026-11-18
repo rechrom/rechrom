@@ -1,6 +1,7 @@
 //! Blink paints block carets before editor text and bar/underscore carets
 //! after it, under the normal clip/transform/effect state
 //! (BoxFragmentPainter::PaintCaretsIfNeeded).
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_chunker::DisplayItemClientInfo;
@@ -80,8 +81,8 @@ fn PaintCaretWithState(
         width: local.size.width,
         height: local.size.height.round().max(1.0),
     };
-    let border = fragment.paint.border;
-    let padding = fragment.paint.padding;
+    let border = fragment.Borders();
+    let padding = fragment.Padding();
     let content = PaintRect {
         x: node.paint_offset.x + border.left + padding.left,
         y: node.paint_offset.y + border.top + padding.top,

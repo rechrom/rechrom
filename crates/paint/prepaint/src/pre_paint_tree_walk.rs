@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -1490,8 +1491,8 @@ pub fn ResolveFragmentGeometry(
             let reference_rect = ResolveTransformReferenceRect(
                 style.transform_reference_box(),
                 fragment.size,
-                fragment.paint.border,
-                fragment.paint.padding,
+                fragment.Borders(),
+                fragment.Padding(),
             );
             let transform_origin = style.transform_origin();
             for role in TransformPropertyRoles(fragment, style) {
@@ -3143,7 +3144,7 @@ fn ClipPathReferenceRect(
         };
     }
 
-    let border = IncludedBorderEdges(paint);
+    let border = IncludedBorderEdges(fragment);
     let border_box = PaintRect {
         x: paint_offset.x,
         y: paint_offset.y,
@@ -3158,8 +3159,8 @@ fn ClipPathReferenceRect(
             height: (border_box.height - border.top - border.bottom).max(0.0),
         },
         ClipPathReferenceBox::kContentBox | ClipPathReferenceBox::kFillBox => PaintRect {
-            x: border_box.x + border.left + paint.padding.left,
-            y: border_box.y + border.top + paint.padding.top,
+            x: border_box.x + border.left + fragment.Padding().left,
+            y: border_box.y + border.top + fragment.Padding().top,
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         },
@@ -3202,14 +3203,14 @@ fn GeometryBoxClipPathRadii(
     {
         return Err("clip-path geometry-box with non-round corner-shape");
     }
-    let border = IncludedBorderEdges(&fragment.paint);
+    let border = IncludedBorderEdges(fragment);
     let inset = match reference_box {
         ClipPathReferenceBox::kPaddingBox => border,
         ClipPathReferenceBox::kContentBox | ClipPathReferenceBox::kFillBox => Edges {
-            top: border.top + fragment.paint.padding.top,
-            right: border.right + fragment.paint.padding.right,
-            bottom: border.bottom + fragment.paint.padding.bottom,
-            left: border.left + fragment.paint.padding.left,
+            top: border.top + fragment.Padding().top,
+            right: border.right + fragment.Padding().right,
+            bottom: border.bottom + fragment.Padding().bottom,
+            left: border.left + fragment.Padding().left,
         },
         ClipPathReferenceBox::kHalfBorderBox => Edges {
             top: border.top * 0.5,
@@ -3219,7 +3220,7 @@ fn GeometryBoxClipPathRadii(
         },
         _ => Edges::default(),
     };
-    let radii = ResolveCornerRadii(style, &fragment.paint.border_sides, fragment.size, inset);
+    let radii = ResolveCornerRadii(style, &fragment.BorderSides(), fragment.size, inset);
     if reference_box == ClipPathReferenceBox::kMarginBox {
         return Ok(OutsetCornerRadiiWithCorrection(
             radii,
@@ -3265,7 +3266,7 @@ fn MaskBox(
     if box_type == BackgroundBox::kBorderBox {
         return rect;
     }
-    let border = IncludedBorderEdges(paint);
+    let border = IncludedBorderEdges(fragment);
     rect = PaintRect {
         x: rect.x + border.left,
         y: rect.y + border.top,
@@ -3276,8 +3277,8 @@ fn MaskBox(
         return rect;
     }
     PaintRect {
-        x: rect.x + paint.padding.left,
-        y: rect.y + paint.padding.top,
+        x: rect.x + fragment.Padding().left,
+        y: rect.y + fragment.Padding().top,
         width: fragment.content_size.width,
         height: fragment.content_size.height,
     }
@@ -3303,19 +3304,19 @@ fn MaskPositioningBox(
         return rect;
     }
     rect = PaintRect {
-        x: rect.x + paint.border.left,
-        y: rect.y + paint.border.top,
-        width: (rect.width - paint.border.left - paint.border.right).max(0.0),
-        height: (rect.height - paint.border.top - paint.border.bottom).max(0.0),
+        x: rect.x + fragment.Borders().left,
+        y: rect.y + fragment.Borders().top,
+        width: (rect.width - fragment.Borders().left - fragment.Borders().right).max(0.0),
+        height: (rect.height - fragment.Borders().top - fragment.Borders().bottom).max(0.0),
     };
     if box_type == BackgroundBox::kPaddingBox {
         return rect;
     }
     PaintRect {
-        x: rect.x + paint.padding.left,
-        y: rect.y + paint.padding.top,
-        width: (rect.width - paint.padding.left - paint.padding.right).max(0.0),
-        height: (rect.height - paint.padding.top - paint.padding.bottom).max(0.0),
+        x: rect.x + fragment.Padding().left,
+        y: rect.y + fragment.Padding().top,
+        width: (rect.width - fragment.Padding().left - fragment.Padding().right).max(0.0),
+        height: (rect.height - fragment.Padding().top - fragment.Padding().bottom).max(0.0),
     }
 }
 
@@ -3402,13 +3403,13 @@ fn MaskClipRadii(fragment: &FragmentPaintData, box_type: BackgroundBox) -> Paint
     let paint = &fragment.paint;
     let mut inset = Edges::default();
     if box_type != BackgroundBox::kBorderBox {
-        inset = IncludedBorderEdges(paint);
+        inset = IncludedBorderEdges(fragment);
     }
     if box_type == BackgroundBox::kContentBox {
-        inset.top += paint.padding.top;
-        inset.right += paint.padding.right;
-        inset.bottom += paint.padding.bottom;
-        inset.left += paint.padding.left;
+        inset.top += fragment.Padding().top;
+        inset.right += fragment.Padding().right;
+        inset.bottom += fragment.Padding().bottom;
+        inset.left += fragment.Padding().left;
     }
     let outer_size = paint.table.as_ref().map_or_else(
         || {
@@ -3428,7 +3429,7 @@ fn MaskClipRadii(fragment: &FragmentPaintData, box_type: BackgroundBox) -> Paint
         },
         |table| table.grid_size,
     );
-    ResolveCornerRadii(&paint.style, &paint.border_sides, outer_size, inset)
+    ResolveCornerRadii(&paint.style, &fragment.BorderSides(), outer_size, inset)
 }
 
 fn UsedMaskGeometryBox(box_type: BackgroundBox) -> BackgroundBox {
@@ -6314,8 +6315,8 @@ impl PrePaintTreeWalk {
             let reference_rect = ResolveTransformReferenceRect(
                 style.transform_reference_box(),
                 fragment.size,
-                fragment.paint.border,
-                fragment.paint.padding,
+                fragment.Borders(),
+                fragment.Padding(),
             );
             let transform_origin = style.transform_origin();
             for (role, is_active) in active_transform_roles {

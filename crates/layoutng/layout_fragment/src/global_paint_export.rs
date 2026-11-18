@@ -7,6 +7,7 @@
 #![allow(non_snake_case)]
 
 use super::*;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 #[inline(never)]
 pub(super) fn ExportCanvasBackground(
@@ -71,12 +72,12 @@ pub(super) fn ExportCanvasBackground(
                 previous_document_element_geometry: cursor.paint.previous_box_geometry,
                 document_element_paint_offset: Offset::default(),
                 document_element_size: size,
-                document_element_border: cursor.paint.border,
-                document_element_padding: cursor.paint.padding,
+                document_element_border: cursor.Borders(),
+                document_element_padding: cursor.Padding(),
                 document_element_content_box: FragmentPaintRect {
                     offset: Offset {
-                        x: cursor.paint.border.left + cursor.paint.padding.left,
-                        y: cursor.paint.border.top + cursor.paint.padding.top,
+                        x: cursor.Borders().left + cursor.Padding().left,
+                        y: cursor.Borders().top + cursor.Padding().top,
                     },
                     size: cursor.content_size,
                 },
@@ -183,8 +184,8 @@ pub(super) fn ExportCanvasBackground(
                 &root_geometry.style,
                 root_geometry.document_element_size,
                 root_element_paint_offset,
-                root_paint.border,
-                root_paint.padding,
+                output.Borders(),
+                output.Padding(),
                 root_paint.is_background_attachment_fixed_object,
             )
         };

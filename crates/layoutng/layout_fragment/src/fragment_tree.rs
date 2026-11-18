@@ -737,6 +737,86 @@ impl Default for PaintProperties {
 }
 
 #[allow(non_snake_case)]
+/// Box geometry read from the slot's resident fragment, as Chromium's box
+/// painters read PhysicalBoxFragment::Borders(), Padding() and
+/// SidesToInclude() from the fragment being painted. Slots without a resident
+/// box fragment (text and line items, hand-built fixtures) keep the values
+/// exported from style.
+pub trait ResidentBoxGeometry {
+    fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment>;
+    fn Borders(&self) -> Edges;
+    fn Padding(&self) -> Edges;
+    fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
+}
+
+impl ResidentBoxGeometry for FragmentPaintData {
+    fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment> {
+        use crate::physical_box_fragment::PhysicalBoxFragment;
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        // The owner was bound by the publication that this slot belongs to;
+        // the LayoutResult lease held by Paint keeps it resident.
+        match self.resident_owner {
+            ResidentFragmentOwner::None => None,
+            ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                fragment
+                    .IsBox()
+                    .then(|| unsafe { &*foundation::To::<PhysicalBoxFragment>(fragment as *const _) })
+            }
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                unsafe { items.Items().get(index)?.BoxFragment().as_ref() }
+            }
+        }
+    }
+
+    fn Borders(&self) -> Edges {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => {
+                let borders = fragment.Borders();
+                Edges {
+                    top: borders.top.ToDouble(),
+                    right: borders.right.ToDouble(),
+                    bottom: borders.bottom.ToDouble(),
+                    left: borders.left.ToDouble(),
+                }
+            }
+            None => self.paint.border,
+        }
+    }
+
+    fn Padding(&self) -> Edges {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => {
+                let padding = fragment.Padding();
+                Edges {
+                    top: padding.top.ToDouble(),
+                    right: padding.right.ToDouble(),
+                    bottom: padding.bottom.ToDouble(),
+                    left: padding.left.ToDouble(),
+                }
+            }
+            None => self.paint.padding,
+        }
+    }
+
+    fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => {
+                let sides = fragment.SidesToInclude();
+                layout_fragment_boundary::FragmentBoxSides {
+                    top: sides.top,
+                    right: sides.right,
+                    bottom: sides.bottom,
+                    left: sides.left,
+                }
+            }
+            None => self.paint.border_sides,
+        }
+    }
+}
+
 impl PaintProperties {
     pub fn LayoutObjectIdentity(
         &self,

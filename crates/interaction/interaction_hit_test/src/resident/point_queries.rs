@@ -14,6 +14,7 @@
 //! The legacy nearest-text query below also preserves its existing contract;
 //! replacing it with complete native PositionForPoint is separate work.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use super::{ResidentCursorGeometry, ResidentCursorGeometryError};
 use crate::core::layout::hit_test_location::HitTestLocation;
 use foundation::{gfx, DynamicTo, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize};
@@ -114,8 +115,8 @@ fn LocalPoint(
         let reference_rect = paint::geometry_mapper::ResolveTransformReferenceRect(
             fragment.paint.style.transform_reference_box,
             fragment.size,
-            fragment.paint.border,
-            fragment.paint.padding,
+            fragment.Borders(),
+            fragment.Padding(),
         );
         let matrix = paint::geometry_mapper::ResolveTransformAroundReferenceBox(
             transform,

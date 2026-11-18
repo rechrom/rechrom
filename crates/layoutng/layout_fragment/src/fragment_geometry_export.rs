@@ -422,27 +422,9 @@ pub(super) fn ExportBoxPaintGeometry(
             paint.replaced_content = Some(ExportReplacedContentPaintData(replaced));
         }
     }
-    let borders = box_fragment.Borders();
-    paint.border = Edges {
-        top: Number(borders.top),
-        right: Number(borders.right),
-        bottom: Number(borders.bottom),
-        left: Number(borders.left),
-    };
-    let sides = box_fragment.SidesToInclude();
-    paint.border_sides = FragmentBoxSides {
-        top: sides.top,
-        right: sides.right,
-        bottom: sides.bottom,
-        left: sides.left,
-    };
-    let padding = box_fragment.Padding();
-    paint.padding = Edges {
-        top: Number(padding.top),
-        right: Number(padding.right),
-        bottom: Number(padding.bottom),
-        left: Number(padding.left),
-    };
+    // Borders, padding and included sides are read from this resident
+    // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
+    // read PhysicalBoxFragment directly; they are not copied here.
     paint.box_decoration_break =
         if box_fragment.Style().BoxDecorationBreak() == EBoxDecorationBreak::kClone {
             BoxDecorationBreak::kClone

@@ -547,7 +547,26 @@ pub struct FragmentPaintData<Paint> {
     /// per-publication geometry so PrePaint can raise it without copying the
     /// shared PaintProperties payload.
     pub pre_paint_invalidation: PrePaintInvalidation,
+    /// The resident source fragment this slot was last bound to by
+    /// LayoutPaintState::Bind (`None` for hand-built fixtures). Chromium
+    /// painters read box geometry from the fragment they paint
+    /// (BoxFragmentPainter's PhysicalBoxFragment), so exported copies of its
+    /// values migrate to getters over this owner. Lifecycle state beside the
+    /// per-publication geometry, never part of the shared payload.
+    pub resident_owner: ResidentFragmentOwner,
     pub paint: PaintPropertiesHandle<Paint>,
+}
+
+/// Addresses of a slot's resident source owner, valid for the LayoutResult
+/// lease that published the slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResidentFragmentOwner {
+    #[default]
+    None,
+    /// A PhysicalFragment (box or line box).
+    Physical(usize),
+    /// FragmentItems container address and the item index within it.
+    InlineItem { items: usize, index: usize },
 }
 
 impl<Paint> FragmentPaintData<Paint> {
@@ -574,6 +593,7 @@ impl<Paint> FragmentPaintData<Paint> {
             text_paint_timing_non_whitespace: false,
             resources: None,
             pre_paint_invalidation: PrePaintInvalidation::default(),
+            resident_owner: ResidentFragmentOwner::None,
             paint,
         }
     }

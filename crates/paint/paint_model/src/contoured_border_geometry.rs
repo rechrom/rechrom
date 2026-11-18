@@ -6,7 +6,9 @@
 //! `BorderShapeUtils`/`BorderShapePainter` subsystem and is never substituted
 //! by this module.
 
-use layoutng_assembly::fragment_tree::{FragmentBoxSides, PaintProperties};
+use layoutng_assembly::fragment_tree::{
+    FragmentBoxSides, FragmentPaintData, PaintProperties, ResidentBoxGeometry,
+};
 use layoutng_assembly::internal::layout_input::{
     Edges, Offset, PaintPathCommand, PaintPathVerb, Size,
 };
@@ -77,29 +79,16 @@ pub fn UniformCornerRadii(radius: f64) -> PaintCornerRadii {
     }
 }
 
-// Source: ContouredBorderGeometry included-edge selection
-pub fn IncludedBorderEdges(paint: &PaintProperties) -> Edges {
+// Source: ContouredBorderGeometry included-edge selection. Border widths and
+// included sides come from the painted PhysicalBoxFragment.
+pub fn IncludedBorderEdges(fragment: &FragmentPaintData) -> Edges {
+    let border = fragment.Borders();
+    let sides = fragment.BorderSides();
     Edges {
-        top: if paint.border_sides.top {
-            paint.border.top
-        } else {
-            0.0
-        },
-        right: if paint.border_sides.right {
-            paint.border.right
-        } else {
-            0.0
-        },
-        bottom: if paint.border_sides.bottom {
-            paint.border.bottom
-        } else {
-            0.0
-        },
-        left: if paint.border_sides.left {
-            paint.border.left
-        } else {
-            0.0
-        },
+        top: if sides.top { border.top } else { 0.0 },
+        right: if sides.right { border.right } else { 0.0 },
+        bottom: if sides.bottom { border.bottom } else { 0.0 },
+        left: if sides.left { border.left } else { 0.0 },
     }
 }
 

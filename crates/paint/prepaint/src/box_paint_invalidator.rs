@@ -3,6 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/box_paint_invalidator.{h,cc}`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::{
     AppearanceValue, BorderLineStyle, IsFullPaintInvalidationReason,
     IsLayoutFullPaintInvalidationReason, PaintInvalidationReason,
@@ -230,7 +231,7 @@ impl BoxPaintInvalidator {
             return PaintInvalidationReason::kLayout;
         }
 
-        if fragment.paint.border.right != 0.0 || fragment.paint.border.bottom != 0.0 {
+        if fragment.Borders().right != 0.0 || fragment.Borders().bottom != 0.0 {
             return PaintInvalidationReason::kLayout;
         }
 
@@ -559,8 +560,8 @@ fn MaskUsesContentBox(fragment: &FragmentPaintData) -> bool {
 fn PhysicalContentBoxSignature(fragment: &FragmentPaintData) -> (Offset, Size) {
     (
         Offset {
-            x: fragment.paint.border.left + fragment.paint.padding.left,
-            y: fragment.paint.border.top + fragment.paint.padding.top,
+            x: fragment.Borders().left + fragment.Padding().left,
+            y: fragment.Borders().top + fragment.Padding().top,
         },
         fragment.content_size,
     )

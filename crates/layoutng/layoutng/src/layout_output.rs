@@ -344,7 +344,12 @@ impl LayoutPaintState {
 
     pub(crate) fn BindPhysical(&self, fragment: &PhysicalFragment, instance: u64) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Physical(fragment as *const PhysicalFragment);
-        self.Bind(owner, instance)
+        let binding = self.Bind(owner, instance);
+        unsafe { &mut *binding.data }.resident_owner =
+            layout_fragment_boundary::ResidentFragmentOwner::Physical(
+                fragment as *const PhysicalFragment as usize,
+            );
+        binding
     }
 
     pub(crate) fn BindInline(
@@ -354,7 +359,13 @@ impl LayoutPaintState {
         instance: u64,
     ) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Inline(items as *const _, index);
-        self.Bind(owner, instance)
+        let binding = self.Bind(owner, instance);
+        unsafe { &mut *binding.data }.resident_owner =
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
+                items: items as *const _ as usize,
+                index,
+            };
+        binding
     }
 
     fn Get(&self, owner: PaintFragmentOwner) -> Option<&FragmentPaintData> {

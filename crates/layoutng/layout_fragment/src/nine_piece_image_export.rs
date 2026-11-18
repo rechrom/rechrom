@@ -12,9 +12,10 @@ pub(super) fn ExportNinePieceImages(
     style: &StyleComputedStyle,
     size: Size,
     resources: &PaintResources,
+    // The painted fragment's border widths (ResidentBoxGeometry::Borders).
+    borders: Edges,
     paint: &mut PaintProperties,
 ) {
-    let borders = paint.border;
     let export = |source: &layoutng_style::style::nine_piece_image::NinePieceImage,
                   image_area_size: Size| {
         let resource_id = unsafe { source.GetImage().as_ref() }.and_then(

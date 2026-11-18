@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::fragment_tree::GapRuleSide;
@@ -373,16 +374,16 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         };
         let border_has_alpha =
             |edge: usize| alpha_mask || style.style.border_colors()[edge].alpha > 0.0;
-        let sides = &style.border_sides;
+        let sides = &fragment.BorderSides();
         let widths = [
-            if sides.top { style.border.top } else { 0.0 },
-            if sides.right { style.border.right } else { 0.0 },
+            if sides.top { fragment.Borders().top } else { 0.0 },
+            if sides.right { fragment.Borders().right } else { 0.0 },
             if sides.bottom {
-                style.border.bottom
+                fragment.Borders().bottom
             } else {
                 0.0
             },
-            if sides.left { style.border.left } else { 0.0 },
+            if sides.left { fragment.Borders().left } else { 0.0 },
         ];
         let decoration = self.node.PixelSnappedRect(&self.border_rect);
         let x = decoration.x;

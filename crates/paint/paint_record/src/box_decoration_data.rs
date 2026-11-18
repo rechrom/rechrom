@@ -46,7 +46,7 @@ impl BoxDecorationData {
         let should_paint_background = has_background
             && !fragment.paint.background_transfers_to_view
             && !paint_info.ShouldSkipBackground();
-        let border = IncludedBorderEdges(&fragment.paint);
+        let border = IncludedBorderEdges(fragment);
         let widths = [border.top, border.right, border.bottom, border.left];
         let has_non_collapsed_border_decoration = !fragment.paint.has_collapsed_borders
             && (style.border_image.is_some()
@@ -154,7 +154,7 @@ impl BoxDecorationData {
             .as_deref()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
-        let border = IncludedBorderEdges(&fragment.paint);
+        let border = IncludedBorderEdges(fragment);
         let widths = [border.top, border.right, border.bottom, border.left];
         widths.iter().enumerate().all(|(edge, width)| {
             *width > 0.0

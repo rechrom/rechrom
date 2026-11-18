@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::{
@@ -491,7 +492,7 @@ impl NinePieceImagePainter {
         let sides_to_include = if sliced_inline_strip {
             Default::default()
         } else {
-            fragment.paint.border_sides
+            fragment.BorderSides()
         };
         let grid = NinePieceImageGrid::new(
             border_image,
@@ -502,7 +503,7 @@ impl NinePieceImagePainter {
             node.pixel_snap_scale,
         );
         if sliced_inline_strip {
-            let sides = &fragment.paint.border_sides;
+            let sides = &fragment.BorderSides();
             let clip = PaintRect {
                 x: node.paint_offset.x - if sides.left { outsets.left } else { 0.0 },
                 y: node.paint_offset.y - if sides.top { outsets.top } else { 0.0 },

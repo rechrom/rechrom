@@ -547,6 +547,9 @@ impl Input {
             pre_paint_revision: _,
             pre_paint_subtree_revision: _,
             pre_paint_owner_retained: _,
+            // The bound owner address is lifecycle identity, not paint input;
+            // the fragment's own values are compared through its fields.
+            resident_owner: _,
             fragment_instance_id,
             fragmentainer_instance_id,
             node_id,

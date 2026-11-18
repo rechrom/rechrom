@@ -3,6 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/paint_property_tree_builder.{h,cc}`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use super::*;
 use crate::compositing_reason_finder::CompositingReasonFinder;
 
@@ -729,7 +730,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         )),
                         radii: ResolveCornerRadii(
                             style,
-                            &fragment.paint.border_sides,
+                            &fragment.BorderSides(),
                             fragment.size,
                             Edges::default(),
                         ),
@@ -1182,7 +1183,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let layer = background_images
                 .first()
                 .expect("composited fixed background requires one image layer");
-            let border = IncludedBorderEdges(&fragment.paint);
+            let border = IncludedBorderEdges(fragment);
             let mut local = PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
@@ -1199,13 +1200,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 local.height = (local.height - border.top - border.bottom).max(0.0);
             }
             if layer.clip == BackgroundBox::kContentBox {
-                local.x += fragment.paint.padding.left;
-                local.y += fragment.paint.padding.top;
+                local.x += fragment.Padding().left;
+                local.y += fragment.Padding().top;
                 local.width =
-                    (local.width - fragment.paint.padding.left - fragment.paint.padding.right)
+                    (local.width - fragment.Padding().left - fragment.Padding().right)
                         .max(0.0);
                 local.height =
-                    (local.height - fragment.paint.padding.top - fragment.paint.padding.bottom)
+                    (local.height - fragment.Padding().top - fragment.Padding().bottom)
                         .max(0.0);
             }
             let id = self.walk.next_property_id;
@@ -1340,13 +1341,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let border_box_properties = node.properties.clone();
         let mut scroll_node = None;
         if ClipsOverflow(fragment) || NeedsScrollAndScrollTranslation(fragment) {
-            let mut clip_inset = IncludedBorderEdges(&fragment.paint);
+            let mut clip_inset = IncludedBorderEdges(fragment);
             let replaced_always_clips = ReplacedElementAlwaysClipsToContentBox(fragment);
             if replaced_always_clips {
-                clip_inset.top += fragment.paint.padding.top;
-                clip_inset.right += fragment.paint.padding.right;
-                clip_inset.bottom += fragment.paint.padding.bottom;
-                clip_inset.left += fragment.paint.padding.left;
+                clip_inset.top += fragment.Padding().top;
+                clip_inset.right += fragment.Padding().right;
+                clip_inset.bottom += fragment.Padding().bottom;
+                clip_inset.left += fragment.Padding().left;
             } else if let Some(outsets) = fragment.paint.overflow_clip_margin_outsets {
                 clip_inset = Edges {
                     top: -outsets.top,
@@ -1431,7 +1432,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     resolved_clip_radii = ExpandCornerRadiiEdges(
                         ResolveCornerRadii(
                             style,
-                            &fragment.paint.border_sides,
+                            &fragment.BorderSides(),
                             fragment.size,
                             Edges::default(),
                         ),
@@ -1444,7 +1445,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 } else {
                     resolved_clip_radii = ResolveCornerRadii(
                         style,
-                        &fragment.paint.border_sides,
+                        &fragment.BorderSides(),
                         fragment.size,
                         clip_inset,
                     );

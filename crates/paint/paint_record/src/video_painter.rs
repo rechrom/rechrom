@@ -6,6 +6,7 @@
 
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::display_item_id::DisplayItemIdType;
@@ -149,8 +150,8 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         // the replaced-content rect, while the recorder bounds follow the
         // content box when LayoutReplaced clips there.
         let content_box_rect = PaintRect {
-            x: self.node.paint_offset.x + fragment.paint.border.left + fragment.paint.padding.left,
-            y: self.node.paint_offset.y + fragment.paint.border.top + fragment.paint.padding.top,
+            x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
+            y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         };

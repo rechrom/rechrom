@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::inline_cursor::InlineCursor;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 /// Store a payload field only when its value changes. The payload is shared
 /// copy-on-write with the previous publication, so an identical store would
@@ -359,7 +360,10 @@ fn PopulateInlineItemLocalPaintData(
                 .property_export_ns
                 .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
+        // The binding recorded this slot's resident owner; a fresh payload keeps it.
+        let resident_owner = output.resident_owner;
         *output = FragmentPaintData::new(properties);
+        output.resident_owner = resident_owner;
         output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
@@ -462,7 +466,8 @@ fn PopulateInlineItemLocalPaintData(
         } else {
             unsafe { &*effective_style }
         };
-        ExportNinePieceImages(style, output.size, resources, &mut output.paint);
+        let borders = output.Borders();
+        ExportNinePieceImages(style, output.size, resources, borders, &mut output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportInlineInkOverflow(item, &mut output.paint);
@@ -876,7 +881,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 .property_export_ns
                 .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
+        // The binding recorded this slot's resident owner; a fresh payload keeps it.
+        let resident_owner = output.resident_owner;
         *output = FragmentPaintData::new(properties);
+        output.resident_owner = resident_owner;
         output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
@@ -988,7 +996,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             } else {
                 unsafe { &*effective_style }
             };
-            ExportNinePieceImages(style, output.size, resources, &mut output.paint);
+            let borders = output.Borders();
+            ExportNinePieceImages(style, output.size, resources, borders, &mut output.paint);
         }
         if purpose == LayoutUpdateKind::Paint {
             ExportBoxInkOverflow(box_fragment, &mut output.paint);

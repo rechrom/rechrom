@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::fragment_tree::MathMLPaintKind;
@@ -145,14 +146,14 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let width = fragment.size.width
-            - paint.border.left
-            - paint.border.right
-            - paint.padding.left
-            - paint.padding.right;
+            - fragment.Borders().left
+            - fragment.Borders().right
+            - fragment.Padding().left
+            - fragment.Padding().right;
         self.PaintBar(
             info,
             PaintRect {
-                x: self.node.paint_offset.x + paint.border.left + paint.padding.left,
+                x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
                 y: self.node.paint_offset.y + first_baseline - math.axis_height,
                 width,
                 height: math.rule_thickness,
@@ -241,20 +242,20 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .as_ref()
             .expect("operator requires MathML paint data");
         let content_width = fragment.size.width
-            - paint.border.left
-            - paint.border.right
-            - paint.padding.left
-            - paint.padding.right;
+            - fragment.Borders().left
+            - fragment.Borders().right
+            - fragment.Padding().left
+            - fragment.Padding().right;
         let ltr = paint.direction == TextDirection::kLtr;
         let mut x = self.LogicalToPhysicalX(0.0, math.operator_inline_size)
-            + paint.border.left
-            + paint.padding.left;
+            + fragment.Borders().left
+            + fragment.Padding().left;
         x += (content_width - math.operator_inline_size) / 2.0 * if ltr { 1.0 } else { -1.0 };
         self.PaintOperatorGlyphs(
             info,
             Offset {
                 x,
-                y: paint.border.top + paint.padding.top + math.operator_ascent,
+                y: fragment.Borders().top + fragment.Padding().top + math.operator_ascent,
             },
         );
     }
@@ -286,7 +287,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         let block_offset =
             baseline - math.vertical_gap - (base_ascent + math.radical_margin_inline_start);
         let inline_offset =
-            paint.border.left + paint.padding.left + math.radical_operator_inline_offset;
+            fragment.Borders().left + fragment.Padding().left + math.radical_operator_inline_offset;
         let symbol_x = self.LogicalToPhysicalX(inline_offset, math.operator_inline_size);
         self.PaintOperatorGlyphs(
             info,
