@@ -95,6 +95,19 @@ pub unsafe fn make_hinting_instance<'a>(
                     Engine::Auto(glyph_styles.cloned())
                 }
                 (AutoHintingControl::ForceOff, _) => Engine::Interpreter,
+                // Rechrom deviation, same output: skrifa resolves AutoFallback
+                // to Engine::Auto(None) when !prefer_interpreter()
+                // (skrifa-0.46.2 outline/hint.rs:66-78), and Auto(None)
+                // rebuilds GlyphStyles::new(outlines) for every instance, i.e.
+                // every strike size. That map depends only on the outlines,
+                // so reuse this typeface's lazily computed copy, exactly as
+                // the forced-autohint arm above already does.
+                _ if !outlines.prefer_interpreter() => Engine::Auto(Some(
+                    bridge_glyph_styles
+                        .glyph_styles
+                        .get_or_init(|| GlyphStyles::new(outlines))
+                        .clone(),
+                )),
                 _ => Engine::AutoFallback,
             };
 
