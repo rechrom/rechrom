@@ -244,8 +244,27 @@ pub struct PaintMutationResult {
     pub damaged_records: Vec<ImagePaintDependency>,
 }
 
+/// Source: local_frame_view.cc:5281-5297 (UpdatePaintDebugInfoEnabled) and
+/// local_frame_view.h:1303. PaintController records per-client debug names
+/// and owner node ids only when paint debug info is enabled
+/// (paint_controller.cc:609-611): DCHECK builds, or a release build running
+/// paint under-invalidation checking.
+#[derive(Clone, Copy, Debug)]
+pub struct PaintDebugInfoEnabled(pub bool);
+
+impl Default for PaintDebugInfoEnabled {
+    fn default() -> Self {
+        Self(
+            cfg!(debug_assertions)
+                || foundation::RuntimeEnabledFeatures::PaintUnderInvalidationCheckingEnabled(),
+        )
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct PaintRecording {
+    /// Whether RecordDebugInfo stores client debug information.
+    pub debug_info_enabled: PaintDebugInfoEnabled,
     /// Canvas's node IDs retain their canonical document domain across the
     /// immutable Paint -> Compositor publication. Standalone Paint has no DOM.
     pub canvas_document: Option<canvas::CanvasDocumentIdentity>,
@@ -391,6 +410,9 @@ impl PaintRecording {
 
     // Source: paint_artifact.h:62; paint_artifact.cc:31-35.
     pub fn RecordDebugInfo(&mut self, client_id: usize, name: Arc<str>, owner_node_id: i32) {
+        if !self.debug_info_enabled.0 {
+            return;
+        }
         self.client_debug_names.insert(client_id, name);
         self.client_owner_node_ids.insert(client_id, owner_node_id);
     }

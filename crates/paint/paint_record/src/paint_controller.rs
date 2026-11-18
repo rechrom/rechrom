@@ -454,6 +454,41 @@ impl PaintController {
         client: DisplayItemClientInfo,
         check_under_invalidation: bool,
     ) -> Option<CachedDrawing> {
+        let mut record = Vec::new();
+        let item =
+            self.TakeCachedDrawingInto(id, client, check_under_invalidation, &mut record)?;
+        Some(CachedDrawing { item, record })
+    }
+
+    /// TakeCachedDrawing, appending the cached record items straight to
+    /// `record` (the new artifact's item list) instead of through an
+    /// intermediate Vec. Source: paint_controller.cc:283-286 moves the item
+    /// from the old list into the new one.
+    pub(crate) fn TakeCachedDrawingInto(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        check_under_invalidation: bool,
+        record: &mut Vec<DisplayItem>,
+    ) -> Option<RecordedDisplayItem> {
+        let index = self.TakeCachedDrawingIndex(id, client, check_under_invalidation)?;
+        // Source: paint_controller.cc:283-286. The controller's private old
+        // artifact is made unique before leaving the real tombstone. Other
+        // immutable frame snapshots keep their Arc-owned value unchanged.
+        let previous = Arc::make_mut(self.previous.as_mut().unwrap());
+        let old = &previous.display_items[index];
+        record.extend_from_slice(&previous.items[old.record_begin..old.record_end]);
+        let item = old.clone();
+        previous.display_items[index].CreateTombstone();
+        Some(item)
+    }
+
+    fn TakeCachedDrawingIndex(
+        &mut self,
+        id: DisplayItemId,
+        client: DisplayItemClientInfo,
+        check_under_invalidation: bool,
+    ) -> Option<usize> {
         self.metrics.attempts += 1;
         if self.previous.is_none() {
             self.metrics.rejected_missing_previous += 1;
@@ -496,16 +531,7 @@ impl PaintController {
             self.under_invalidation_checker.WouldUseCachedItem(index);
             return None;
         }
-
-        // Source: paint_controller.cc:283-286. The controller's private old
-        // artifact is made unique before leaving the real tombstone. Other
-        // immutable frame snapshots keep their Arc-owned value unchanged.
-        let previous = Arc::make_mut(self.previous.as_mut().unwrap());
-        let old = &previous.display_items[index];
-        let record = previous.items[old.record_begin..old.record_end].to_vec();
-        let item = old.clone();
-        previous.display_items[index].CreateTombstone();
-        Some(CachedDrawing { item, record })
+        Some(index)
     }
 
     /// Source: `paint_controller.cc:337-409`.

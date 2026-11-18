@@ -2853,15 +2853,19 @@ impl PaintStyle {
     pub fn active_opacity_animation(&self) -> bool {
         self.Source()
             .map_or(self.data.active_opacity_animation, |style| {
+                // The animation bit is almost always clear; consult the base
+                // !important set only for an animating style.
+                if !style.HasCurrentOpacityAnimation() {
+                    return false;
+                }
                 let base_data = style.BaseData();
                 let important = if base_data.is_null() {
                     std::ptr::null()
                 } else {
                     unsafe { &*base_data }.GetBaseImportantSet()
                 };
-                style.HasCurrentOpacityAnimation()
-                    && (important.is_null()
-                        || !unsafe { &*important }.Has(foundation::CSSPropertyID::kOpacity))
+                important.is_null()
+                    || !unsafe { &*important }.Has(foundation::CSSPropertyID::kOpacity)
             })
     }
 

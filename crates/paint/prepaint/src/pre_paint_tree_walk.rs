@@ -3827,6 +3827,10 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
 // is terminal and contributes transparent black through its retained mask layer.
 pub fn MaskAdjustedOpacity(style: &PaintStyle) -> f32 {
     let mask_images = style.mask_images();
+    // Without mask layers neither suppression condition can hold.
+    if mask_images.is_empty() {
+        return style.opacity();
+    }
     let any_loading = mask_images
         .iter()
         .any(|layer| layer.image_state == PaintMaskImageState::kLoading);

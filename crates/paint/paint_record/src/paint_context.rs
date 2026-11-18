@@ -516,16 +516,16 @@ impl<'o> PaintContext<'o> {
         client: DisplayItemClientInfo,
         debug: Option<(i32, Arc<str>)>,
     ) -> bool {
-        let Some(cached) = self.paint_controller.TakeCachedDrawing(
+        let record_begin = self.output.items.len();
+        let Some(cached_item) = self.paint_controller.TakeCachedDrawingInto(
             id,
             client,
             self.paint_under_invalidation_checking,
+            Arc::make_mut(&mut self.output.items),
         ) else {
             return false;
         };
-        let old = &cached.item;
-        let record_begin = self.output.items.len();
-        Arc::make_mut(&mut self.output.items).extend_from_slice(&cached.record);
+        let old = &cached_item;
         let record_end = self.output.items.len();
         if let Some((owner, name)) = debug {
             self.output
