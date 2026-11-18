@@ -44,6 +44,20 @@ pub trait FontBackend: Send + Sync {
         synthetic_bold: bool,
         synthetic_italic: bool,
     ) -> FontBackendGlyphMetrics;
+    /// Source: skia/skia_text_metrics.cc:198-205 SkFontGetWidthForGlyph.
+    ///
+    /// A glyph's advance for SimpleFontData::WidthForGlyph, without the ink
+    /// bounds GlyphMetrics also computes. Skia backends override this.
+    fn GlyphWidth(
+        &self,
+        glyph: u16,
+        size: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+    ) -> f32 {
+        self.GlyphMetrics(glyph, size, synthetic_bold, synthetic_italic)
+            .advance
+    }
     /// Source: skia/skia_text_metrics.cc SkFontGetGlyphWidthForHarfBuzz.
     ///
     /// Shaping asks the selected platform strike for advances before GPOS is

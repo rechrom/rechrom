@@ -1104,6 +1104,24 @@ impl font_engine::FontBackend for SkiaFontBackend {
         }
     }
 
+    fn GlyphWidth(
+        &self,
+        glyph: u16,
+        size: f32,
+        synthetic_bold: bool,
+        synthetic_italic: bool,
+    ) -> f32 {
+        // Source: skia_text_metrics.cc:198-205 SkFontGetWidthForGlyph. Only the
+        // advance; no outline is drawn for ink bounds.
+        let font = self.Font(size, synthetic_bold, synthetic_italic);
+        let width = unsafe { font.getWidth(glyph) }.expect("Skia glyph width must be available");
+        if font.isSubpixel() {
+            width
+        } else {
+            width.round()
+        }
+    }
+
     fn GlyphAdvanceForShaping(
         &self,
         glyph: u16,

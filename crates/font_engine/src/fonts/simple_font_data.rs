@@ -274,7 +274,11 @@ impl SimpleFontData {
                 || PositiveMetric(raw, FontMetric::kXHeight, ascent * to_css * 0.56) * device_scale,
                 |metrics| metrics.x_height,
             );
-        if backend_metrics.is_some() {
+        // cpp: simple_font_data.cc:146-161. Only Apple replaces a reported
+        // x-height with the 'x' glyph's ink top (CTFontGetXHeight reports the
+        // whole bounding box); other platforms use the font's value as is.
+        #[cfg(target_vendor = "apple")]
+        if backend_metrics.is_some_and(|metrics| metrics.x_height != 0.0) {
             let x_glyph = self.GlyphForCharacter('x' as u32);
             if x_glyph != 0 {
                 x_height = platform.Backend().map_or(x_height, |backend| {
@@ -550,16 +554,18 @@ impl SimpleFontData {
             bounds[index] = self.PlatformBoundsForGlyph(*glyph);
         }
     }
+    // cpp: simple_font_data.cc:549-557
     pub fn WidthForGlyph(&self, glyph: Glyph) -> f32 {
         if let Some(backend) = self.PlatformData().Backend() {
-            return backend
-                .GlyphMetrics(
-                    glyph,
-                    self.PlatformData().size(),
-                    self.PlatformData().SyntheticBold(),
-                    self.PlatformData().SyntheticItalic(),
-                )
-                .advance;
+            if self.PlatformData().size() == 0.0 {
+                return 0.0;
+            }
+            return backend.GlyphWidth(
+                glyph,
+                self.PlatformData().size(),
+                self.PlatformData().SyntheticBold(),
+                self.PlatformData().SyntheticItalic(),
+            );
         }
         self.PlatformData()
             .RawFont()
