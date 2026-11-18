@@ -485,6 +485,10 @@ impl ResolvedFontSource {
 pub struct FontResolver {
     catalog: Rc<FontCatalog>,
     fonts_: Vec<InputFontEntry>,
+    /// Hash of each entry's request key to its positions in `fonts_`, so a
+    /// lookup compares full descriptions only within one bucket (Blink's
+    /// FontCache is a hash map keyed by the font description).
+    fonts_index: std::collections::HashMap<u64, Vec<usize>>,
     sources: Vec<Rc<ResolvedFontSource>>,
     queries: Rc<RefCell<Option<FontQueryCollector>>>,
     device_scale_factor: f32,
@@ -566,6 +570,7 @@ impl FontResolver {
                 backend_factory,
             }),
             fonts_: Vec::new(),
+            fonts_index: std::collections::HashMap::new(),
             sources: Vec::new(),
             queries: Rc::new(RefCell::new(None)),
             device_scale_factor,
@@ -587,7 +592,8 @@ impl FontResolver {
         if !request.weight.is_finite() || request.weight < 1.0 || request.weight > 1000.0 {
             panic!("font request weight must be within 1..1000");
         }
-        let entry = self.fonts_.iter().find(|entry| {
+        let positions = self.fonts_index.get(&FontRequestKey(request))?;
+        let entry = positions.iter().map(|&index| &self.fonts_[index]).find(|entry| {
             entry.description == *description
                 && entry.size == request.size
                 && entry.specified_size == request.specified_size
@@ -782,6 +788,10 @@ impl FontResolver {
             &fallback_metadata,
             order.font_group_length,
         ));
+        self.fonts_index
+            .entry(FontRequestKey(request))
+            .or_default()
+            .push(self.fonts_.len());
         self.fonts_.push(InputFontEntry {
             description: cache_description,
             size: request.size,
@@ -2078,4 +2088,20 @@ mod tests {
         });
         assert!(all_glyphs_present(unsafe { &*settled }));
     }
+}
+
+/// Hash of the scalar request fields that CachedFont compares. Equal requests
+/// always hash equally; the full description comparison stays in CachedFont.
+fn FontRequestKey(request: &FontRequest<'_>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    request.size.to_bits().hash(&mut hasher);
+    request.specified_size.to_bits().hash(&mut hasher);
+    request.letter_spacing.to_bits().hash(&mut hasher);
+    request.word_spacing.to_bits().hash(&mut hasher);
+    request.weight.to_bits().hash(&mut hasher);
+    request.italic.hash(&mut hasher);
+    request.language.hash(&mut hasher);
+    request.families.hash(&mut hasher);
+    hasher.finish()
 }
