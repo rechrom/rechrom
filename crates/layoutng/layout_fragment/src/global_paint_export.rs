@@ -18,19 +18,45 @@ pub(super) fn ExportCanvasBackground(
     if !root_object.IsDocumentElement() {
         return;
     }
-    unsafe fn mark(cursor: crate::layout_engine::PaintFragmentCursor<'_>, node_id: u64) {
+    // The root and body are the only objects whose fragments take part in
+    // canvas-background transfer (layout_box_model_object.cc:1123-1151).
+    // Outside pagination every fragment of an object lies below fragments of
+    // its layout ancestors, so the search only descends through fragments
+    // whose node is on the target's ancestor chain. Anonymous fragments
+    // (node id 0) are always entered. Page fragments of a paginated root have
+    // no such ancestry, so that case keeps the complete walk (`None`).
+    fn descends(chain: Option<&[u64]>, node_id: u64) -> bool {
+        chain.is_none_or(|chain| node_id == 0 || chain.contains(&node_id))
+    }
+    fn ancestor_chain(object: *const LayoutObject) -> Vec<u64> {
+        let mut chain = Vec::new();
+        let mut current = object;
+        while !current.is_null() {
+            chain.push(InputId(current));
+            current = unsafe { &*current }.Parent();
+        }
+        chain
+    }
+    unsafe fn mark(
+        cursor: crate::layout_engine::PaintFragmentCursor<'_>,
+        node_id: u64,
+        chain: Option<&[u64]>,
+    ) {
         let children = cursor.Children();
         let input = unsafe { cursor.PaintDataMut() };
         if input.node_id == node_id && input.paint.HasSource() {
             input.paint.background_transfers_to_view = true;
         }
         for child in children {
-            unsafe { mark(child, node_id) };
+            if descends(chain, child.node_id) {
+                unsafe { mark(child, node_id, chain) };
+            }
         }
     }
     fn source(
         cursor: crate::layout_engine::PaintFragmentCursor<'_>,
         node_id: u64,
+        chain: Option<&[u64]>,
     ) -> Option<CanvasBackgroundPaintData> {
         if cursor.node_id == node_id && cursor.paint.HasSource() {
             let size = cursor
@@ -68,10 +94,14 @@ pub(super) fn ExportCanvasBackground(
         cursor
             .Children()
             .into_iter()
-            .find_map(|child| source(child, node_id))
+            .filter(|child| descends(chain, child.node_id))
+            .find_map(|child| source(child, node_id, chain))
     }
     let root_id = InputId(root_object);
-    let Some(root_geometry) = source(output, root_id) else {
+    let paginated = output.paint.is_paginated_root;
+    let root_chain = ancestor_chain(root_object);
+    let root_chain = (!paginated).then_some(root_chain.as_slice());
+    let Some(root_geometry) = source(output, root_id, root_chain) else {
         return;
     };
     unsafe fn publish_page_document_style(
@@ -162,7 +192,7 @@ pub(super) fn ExportCanvasBackground(
     if !should_apply_root_background_behavior {
         return;
     }
-    unsafe { mark(output, root_id) };
+    unsafe { mark(output, root_id, root_chain) };
     let body = objects
         .iter()
         .copied()
@@ -172,14 +202,18 @@ pub(super) fn ExportCanvasBackground(
             && !root_object.ShouldApplyAnyContainment()
             && !unsafe { &*body }.ShouldApplyAnyContainment()
     });
-    let source_id = if body_transfers {
+    let body_chain = body
+        .filter(|_| body_transfers && !paginated)
+        .map(|body| ancestor_chain(body));
+    let (source_id, source_chain) = if body_transfers {
         let body_id = InputId(body.expect("transferred body exists"));
-        unsafe { mark(output, body_id) };
-        body_id
+        let chain = if paginated { None } else { body_chain.as_deref() };
+        unsafe { mark(output, body_id, chain) };
+        (body_id, chain)
     } else {
-        root_id
+        (root_id, root_chain)
     };
-    let Some(mut canvas) = source(output, source_id) else {
+    let Some(mut canvas) = source(output, source_id, source_chain) else {
         return;
     };
     canvas.document_element_node_id = root_id;
