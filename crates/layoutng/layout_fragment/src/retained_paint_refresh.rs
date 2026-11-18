@@ -148,7 +148,8 @@ pub(super) fn refresh_retained_paint_inputs(
             let current =
                 ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
             node.paint.BindSourceObject(object);
-            node.paint.pre_paint_invalidation = current.pre_paint_invalidation;
+            // ExportPaintProperties has made the object ready for invalidation.
+            node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
             node.paint.is_printing = current.is_printing;
             node.paint.should_print_backgrounds = current.should_print_backgrounds;
             node.paint.effective_allowed_touch_action = current.effective_allowed_touch_action;

@@ -7,6 +7,31 @@ use foundation::{CompositingReason, CompositingReasonCombos, CompositingReasons}
 use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
 use layoutng_assembly::internal::layout_input::{NodeKind, PaintStyle};
 use paint_model::paint_property_tree::PaintPropertyRole;
+use std::cell::Cell;
+
+struct DirectReasonsMemo {
+    active: Cell<bool>,
+    reasons: Cell<Option<(usize, CompositingReasons)>>,
+}
+
+thread_local! {
+    static DIRECT_REASONS: DirectReasonsMemo = const {
+        DirectReasonsMemo { active: Cell::new(false), reasons: Cell::new(None) }
+    };
+}
+
+/// Guard returned by `CompositingReasonFinder::DirectReasonsScope`; the
+/// memoized reasons never outlive one node's property build.
+pub struct DirectReasonsScope(());
+
+impl Drop for DirectReasonsScope {
+    fn drop(&mut self) {
+        DIRECT_REASONS.with(|memo| {
+            memo.active.set(false);
+            memo.reasons.set(None);
+        });
+    }
+}
 
 pub struct CompositingReasonFinder;
 
@@ -158,6 +183,35 @@ impl CompositingReasonFinder {
     /// and platform overscroll branches remain unsupported at the Layout/Paint
     /// boundary and therefore contribute no guessed reasons.
     pub fn DirectReasonsForPaintProperties(fragment: &FragmentPaintData) -> CompositingReasons {
+        let key = fragment as *const FragmentPaintData as usize;
+        if let Some((cached, reasons)) = DIRECT_REASONS.with(|memo| memo.reasons.get()) {
+            if cached == key {
+                return reasons;
+            }
+        }
+        let reasons = Self::ComputeDirectReasonsForPaintProperties(fragment);
+        DIRECT_REASONS.with(|memo| {
+            if memo.active.get() {
+                memo.reasons.set(Some((key, reasons)));
+            }
+        });
+        reasons
+    }
+
+    /// Source: paint_property_tree_builder.cc stores
+    /// `full_context_.direct_compositing_reasons` once per object before the
+    /// transform/effect/filter updates consume it. While this scope is alive
+    /// (one node's property build), repeated queries for the same fragment
+    /// reuse that single computation.
+    pub fn DirectReasonsScope() -> DirectReasonsScope {
+        DIRECT_REASONS.with(|memo| {
+            memo.active.set(true);
+            memo.reasons.set(None);
+        });
+        DirectReasonsScope(())
+    }
+
+    fn ComputeDirectReasonsForPaintProperties(fragment: &FragmentPaintData) -> CompositingReasons {
         if fragment.paint.IsPrinting() {
             return CompositingReasons::new();
         }
@@ -178,7 +232,8 @@ impl CompositingReasonFinder {
         if style.has_backdrop_filters() {
             reasons.Put(CompositingReason::kBackdropFilter);
         }
-        if std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some()
+        static DIAG_WILL_CHANGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DIAG_WILL_CHANGE.get_or_init(|| std::env::var_os("RECHROM_DIAG_WILL_CHANGE").is_some())
             && (style.will_change_transform()
                 || style.will_change_opacity()
                 || style.will_change_filter())

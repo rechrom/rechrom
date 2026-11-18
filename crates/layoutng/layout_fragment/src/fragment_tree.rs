@@ -112,7 +112,6 @@ pub struct PaintProperties {
     /// PrePaintTreeWalk. They are lifecycle facts, not drawing inputs: the
     /// layout boundary snapshots them before Paint and clears them only after
     /// the corresponding artifact commits.
-    pub pre_paint_invalidation: PrePaintInvalidation,
     pub property_fragment_unique_id: u64,
     /// Chromium PhysicalBoxFragment::IsFirstForNode() and the canonical
     /// CanPaintMultipleFragments() result. Paint consumes these directly
@@ -533,7 +532,6 @@ impl Default for PaintProperties {
         static EMPTY_GLYPH_RUNS: OnceLock<Arc<Vec<PaintGlyphRun>>> = OnceLock::new();
         Self {
             source_object_address: 0,
-            pre_paint_invalidation: PrePaintInvalidation::default(),
             property_fragment_unique_id: 0,
             is_first_for_node: true,
             can_paint_multiple_fragments: true,

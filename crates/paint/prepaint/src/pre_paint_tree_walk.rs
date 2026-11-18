@@ -582,8 +582,18 @@ fn InvalidateClientsForCullRectChange(fragment: &mut FragmentPaintData) {
 
 impl<'a> Default for PaintTreeNode<'a> {
     fn default() -> Self {
-        let properties = PropertyTreeState::default();
+        Self::WithProperties(PropertyTreeState::default())
+    }
+}
+
+impl<'a> PaintTreeNode<'a> {
+    /// A node whose property slots start at `properties`. PrePaint seeds a
+    /// built node with its parent's state instead of referencing the shared
+    /// root sentinels and replacing them moments later, which cost contended
+    /// reference-count traffic on those process-wide nodes for every object.
+    pub(crate) fn WithProperties(properties: PropertyTreeState) -> Self {
         let pre_transform = properties.nodes.transform.clone();
+        let contents_properties = properties.clone();
         Self {
             source_cursor: None,
             svg_resource_nodes: None,
@@ -676,7 +686,7 @@ impl<'a> Default for PaintTreeNode<'a> {
             recording_filters: Vec::new(),
             properties,
             pre_transform,
-            contents_properties: PropertyTreeState::default(),
+            contents_properties,
             fixed_background_properties: None,
             overflow_controls_properties: None,
             horizontal_scrollbar_properties: None,
@@ -4583,7 +4593,7 @@ fn SameClientDirectory(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 /// Source: `pre_paint_tree_walk.cc:430-437`.
 #[allow(non_snake_case)]
 fn ObjectRequiresTreeBuilderContext(object: &FragmentPaintData) -> bool {
-    let invalidation = object.paint.pre_paint_invalidation;
+    let invalidation = object.pre_paint_invalidation;
     invalidation.needs_paint_property_update
         || invalidation.should_check_layout_for_paint_invalidation
         || (!invalidation.child_pre_paint_blocked_by_display_lock
@@ -4599,7 +4609,7 @@ fn ObjectRequiresTreeBuilderContext(object: &FragmentPaintData) -> bool {
 /// unchanged. Any property update or geometry/topology change falls back to
 /// the complete builder comparison.
 fn CanRefreshInvalidationOnlySource(old: &FragmentPaintData, new: &FragmentPaintData) -> bool {
-    let invalidation = new.paint.pre_paint_invalidation;
+    let invalidation = new.pre_paint_invalidation;
     invalidation.own()
         && !ObjectRequiresTreeBuilderContext(new)
         && SameSourceIdentity(old, new)
@@ -4985,7 +4995,7 @@ impl PrePaintTreeWalk {
         // invalidates the affected native subtree; this existing walk updates
         // its resident LayoutObject/FragmentData before paint invalidation.
         inherited.blocking_wheel_event_handler_changed |= fragment
-            .paint
+            
             .pre_paint_invalidation
             .blocking_wheel_event_handler_changed;
         let has_handler = self
@@ -5015,7 +5025,7 @@ impl PrePaintTreeWalk {
         }
         if blocking_wheel_changed {
             resident
-                .paint
+                
                 .pre_paint_invalidation
                 .should_check_for_paint_invalidation = true;
         }
@@ -5093,7 +5103,7 @@ impl PrePaintTreeWalk {
                 .is_none_or(|node| !node.cache.as_ref().unwrap().contains_local_frames)
             && (same_context || retained_geometry_covered)
             && !should_run_invalidation
-            && !fragment.paint.pre_paint_invalidation.descendants()
+            && !fragment.pre_paint_invalidation.descendants()
             && subtree_revision_matches
             && source_tree_compatible;
         if subtree_clean {
@@ -5260,7 +5270,7 @@ impl PrePaintTreeWalk {
                     self.stats.property_geometry_changes_with_own_keys +=
                         (!old.cache.as_ref().unwrap().own_keys.is_empty()) as usize;
                     self.stats.property_geometry_changes_needing_property_update += fragment
-                        .paint
+                        
                         .pre_paint_invalidation
                         .needs_paint_property_update
                         as usize;
@@ -5386,7 +5396,7 @@ impl PrePaintTreeWalk {
                 .TrackPendingDelayedPaintInvalidation(resident_fragment);
             // PaintInvalidator.cc:278-285. Visibility:hidden clients still
             // invalidate observations even when they do not invalidate paint.
-            let invalidation = resident_fragment.paint.pre_paint_invalidation;
+            let invalidation = resident_fragment.pre_paint_invalidation;
             let client_reason = resident_fragment
                 .paint
                 .DisplayItemClientState()
@@ -5439,7 +5449,7 @@ impl PrePaintTreeWalk {
         // it prevents an ancestor clean-subtree fast path from hiding the work
         // after the lock opens.
         let child_pre_paint_blocked_by_display_lock = fragment
-            .paint
+            
             .pre_paint_invalidation
             .child_pre_paint_blocked_by_display_lock;
         if CanRetainDisplayLockedChildren(
@@ -6046,8 +6056,8 @@ impl PrePaintTreeWalk {
         let entirely_clean = self.local_frame_views.is_empty()
             && self.retained_local_frame_leases.is_empty()
             && !force
-            && !root.paint.pre_paint_invalidation.own()
-            && !root.paint.pre_paint_invalidation.descendants()
+            && !root.pre_paint_invalidation.own()
+            && !root.pre_paint_invalidation.descendants()
             && root.pre_paint_subtree_revision != 0
             && previous.as_ref().is_some_and(|node| {
                 node.cache.as_ref().is_some_and(|cache| {
@@ -6885,19 +6895,19 @@ mod tests {
     fn tree_builder_context_respects_descendant_dirty_bits_and_display_lock() {
         let mut fragment = FragmentPaintData::default();
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .descendant_needs_paint_property_update = true;
         assert!(ObjectRequiresTreeBuilderContext(&fragment));
 
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .child_pre_paint_blocked_by_display_lock = true;
         assert!(!ObjectRequiresTreeBuilderContext(&fragment));
 
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_check_layout_for_paint_invalidation = true;
         assert!(ObjectRequiresTreeBuilderContext(&fragment));

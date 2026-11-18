@@ -74,6 +74,10 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         is_flex_or_grid_item: bool,
     ) -> PaintTreeNode<'static> {
         self.walk.stats.computed_nodes += 1;
+        // One direct-compositing-reasons computation per object, reused by
+        // the transform, effect and filter updates of this node.
+        let _direct_reasons =
+            crate::compositing_reason_finder::CompositingReasonFinder::DirectReasonsScope();
         fragment
             .paint
             .UpdateSourcePaintLayerDescendantDependentFlags();
@@ -100,7 +104,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             root: is_root,
             flex_or_grid_item: is_flex_or_grid_item,
         };
-        let mut node = PaintTreeNode::default();
+        let mut node = PaintTreeNode::WithProperties(parent_properties.clone());
         node.SetFragment(fragment);
         node.is_root = is_root;
         let local_establishes_fixed_background_containing_block = !is_root
@@ -147,7 +151,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             node.fragment
                 .as_mut()
                 .expect("property builder must retain its fragment")
-                .paint
+                
                 .pre_paint_invalidation
                 .should_check_for_paint_invalidation = true;
         }
@@ -164,7 +168,6 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.self_cull_rect = parent_cull_rect;
         node.transforms = transforms;
         node.scroll_offset = scroll_offset;
-        node.properties = parent_properties.clone();
         let inherited_tainted_subtree = parent_properties
             .nodes
             .effect

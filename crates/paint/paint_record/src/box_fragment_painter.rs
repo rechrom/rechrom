@@ -541,7 +541,7 @@ fn ShouldRecordHitTestData(display: Display) -> bool {
 // state may change before an ordinary invalidation reaches Paint.
 fn ShouldSkipPaintUnderInvalidationChecking(fragment: &FragmentPaintData) -> bool {
     fragment
-        .paint
+        
         .pre_paint_invalidation
         .should_delay_full_paint_invalidation
         || fragment.paint.form_control.as_ref().is_some_and(|control| {
@@ -5502,7 +5502,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .expect("paint tree node has a fragment");
         if fragment.paint.IsPrinting()
             || fragment.paint.replaced_selection_state == SelectionState::kNone
-            || !fragment.paint.pre_paint_invalidation.can_be_selection_leaf
+            || !fragment.pre_paint_invalidation.can_be_selection_leaf
         {
             return;
         }
@@ -8218,12 +8218,12 @@ mod background_attachment_tests {
         assert!(!ShouldSkipPaintUnderInvalidationChecking(&fragment));
 
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_delay_full_paint_invalidation = true;
         assert!(ShouldSkipPaintUnderInvalidationChecking(&fragment));
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_delay_full_paint_invalidation = false;
 
@@ -8279,7 +8279,7 @@ mod background_attachment_tests {
         fragment.paint.display_item_client_invalidation_reason =
             Some(foundation::PaintInvalidationReason::kNone);
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_delay_full_paint_invalidation = true;
 
@@ -10273,7 +10273,7 @@ mod background_attachment_tests {
                 height: 20.0,
             },
         });
-        fragment.paint.pre_paint_invalidation.can_be_selection_leaf = true;
+        fragment.pre_paint_invalidation.can_be_selection_leaf = true;
         fragment.paint.selection_style.background_color = selection_color;
         let mut node = PaintTreeNode::default();
         node.paint_offset = Offset { x: 5.0, y: 7.0 };

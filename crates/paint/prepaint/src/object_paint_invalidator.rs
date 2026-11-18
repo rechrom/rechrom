@@ -21,7 +21,7 @@ impl ObjectPaintInvalidator {
         new_paint_offset: Offset,
         context: PaintInvalidatorContext,
     ) -> PaintInvalidationReason {
-        let invalidation = fragment.paint.pre_paint_invalidation;
+        let invalidation = fragment.pre_paint_invalidation;
         if invalidation.visual_rect_respects_visibility
             && !invalidation.previous_visibility_visible
             && !fragment.paint.style.visible()
@@ -69,7 +69,7 @@ impl ObjectPaintInvalidator {
         mut reason: PaintInvalidationReason,
     ) {
         if reason == PaintInvalidationReason::kNone {
-            let invalidation = fragment.paint.pre_paint_invalidation;
+            let invalidation = fragment.pre_paint_invalidation;
             if !invalidation.should_invalidate_selection || !invalidation.can_be_selection_leaf {
                 return;
             }
@@ -162,11 +162,11 @@ mod tests {
     fn pending_full_reason_is_applied_in_prepaint_and_keeps_stronger_client_state() {
         let mut fragment = FragmentPaintData::default();
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .full_paint_invalidation_reason = Some(PaintInvalidationReason::kStyle);
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         ObjectPaintInvalidator::InvalidatePaint(
@@ -198,11 +198,11 @@ mod tests {
     fn source_order_prefers_subtree_then_layout_then_full_reason() {
         let mut fragment = FragmentPaintData::default();
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .full_paint_invalidation_reason = Some(PaintInvalidationReason::kStyle);
 
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(layout, PaintInvalidationReason::kLayout);
 
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .subtree_should_do_full_paint_invalidation = true;
         let mut context = PaintInvalidatorContext::default();
@@ -233,7 +233,7 @@ mod tests {
     fn forced_colors_block_flow_uses_backplate_reason() {
         let mut fragment = FragmentPaintData::default();
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         fragment.paint.in_forced_colors_mode = true;
@@ -253,10 +253,10 @@ mod tests {
     fn selection_only_invalidation_targets_the_selection_client() {
         let mut fragment = FragmentPaintData::default();
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_invalidate_selection = true;
-        fragment.paint.pre_paint_invalidation.can_be_selection_leaf = true;
+        fragment.pre_paint_invalidation.can_be_selection_leaf = true;
         fragment.paint.selection_client_id = 42;
 
         ObjectPaintInvalidator::InvalidatePaintWithComputedReason(

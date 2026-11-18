@@ -542,6 +542,11 @@ pub struct FragmentPaintData<Paint> {
     /// copy-on-write payload: a replacement viewport or resource set must
     /// not deep-copy every retained PaintProperties.
     pub resources: Option<Arc<PaintResources>>,
+    /// Chromium LayoutObject dirty bits snapshotted for this publication
+    /// and consumed by PrePaintTreeWalk. Lifecycle state, kept beside the
+    /// per-publication geometry so PrePaint can raise it without copying the
+    /// shared PaintProperties payload.
+    pub pre_paint_invalidation: PrePaintInvalidation,
     pub paint: PaintPropertiesHandle<Paint>,
 }
 
@@ -568,6 +573,7 @@ impl<Paint> FragmentPaintData<Paint> {
             text_end: None,
             text_paint_timing_non_whitespace: false,
             resources: None,
+            pre_paint_invalidation: PrePaintInvalidation::default(),
             paint,
         }
     }

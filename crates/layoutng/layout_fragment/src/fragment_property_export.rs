@@ -169,7 +169,6 @@ pub(super) fn ExportProperties(
         unsafe { &*object }
             .GetMutableForPainting()
             .EnsureIsReadyForPaintInvalidation();
-        output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
         let client = unsafe { &*(object as *const DisplayItemClient) };
         // LayoutObject's base-first representation preserves the source
         // DisplayItemClient subobject, including anonymous layout clients.

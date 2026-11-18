@@ -41,7 +41,7 @@ impl BoxPaintInvalidator {
     ) -> BackgroundInvalidation {
         let mut result = BackgroundInvalidation::default();
         let previous_geometry = PreviousGeometry(fragment, previous);
-        let invalidation = fragment.paint.pre_paint_invalidation;
+        let invalidation = fragment.pre_paint_invalidation;
         if invalidation.background_needs_full_paint_invalidation
             || context.HasSubtreeFullInvalidation()
             || ShouldInvalidateGapDecorations(fragment, previous)
@@ -171,7 +171,7 @@ impl BoxPaintInvalidator {
         }
         if IsFullPaintInvalidationReason(reason)
             && !fragment
-                .paint
+                
                 .pre_paint_invalidation
                 .should_check_layout_for_paint_invalidation
         {
@@ -329,7 +329,7 @@ fn ComputeViewBackgroundInvalidation(
     let size_changed = old_rect.size != new_rect.size;
     if location_changed
         || fragment
-            .paint
+            
             .pre_paint_invalidation
             .background_needs_full_paint_invalidation
         || context.HasSubtreeFullInvalidation()
@@ -612,7 +612,7 @@ mod tests {
         };
         fragment.content_size = fragment.size;
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         fragment

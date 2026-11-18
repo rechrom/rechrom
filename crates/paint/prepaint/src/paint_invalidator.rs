@@ -91,7 +91,7 @@ impl PaintInvalidator {
             return false;
         }
 
-        let invalidation = fragment.paint.pre_paint_invalidation;
+        let invalidation = fragment.pre_paint_invalidation;
         if !invalidation.should_check_for_paint_invalidation && !context.NeedsSubtreeWalk() {
             return false;
         }
@@ -110,7 +110,11 @@ impl PaintInvalidator {
     /// after object invalidation, so use the resident client reason rather
     /// than the locally computed reason.
     pub(crate) fn TrackPendingDelayedPaintInvalidation(&mut self, fragment: &FragmentPaintData) {
-        let invalidation = fragment.paint.pre_paint_invalidation;
+        let invalidation = fragment.pre_paint_invalidation;
+        // The live client query is needed only for a delayed invalidation.
+        if !invalidation.should_delay_full_paint_invalidation {
+            return;
+        }
         let reason = fragment
             .paint
             .DisplayItemClientState()
@@ -140,10 +144,10 @@ mod tests {
     #[test]
     fn subtree_full_invalidation_propagates_to_children() {
         let mut root = FragmentPaintData::default();
-        root.paint
+        root
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
-        root.paint
+        root
             .pre_paint_invalidation
             .subtree_should_do_full_paint_invalidation = true;
         let mut context = PaintInvalidatorContext::default();
@@ -159,7 +163,7 @@ mod tests {
     fn svg_hidden_container_suppresses_its_subtree() {
         let mut root = FragmentPaintData::default();
         root.paint.svg_hidden_container = true;
-        root.paint
+        root
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         let mut context = PaintInvalidatorContext::default();
@@ -167,7 +171,7 @@ mod tests {
 
         let mut child = FragmentPaintData::default();
         child
-            .paint
+            
             .pre_paint_invalidation
             .should_check_for_paint_invalidation = true;
         assert!(!PaintInvalidator::UpdateContext(&child, &mut context));
@@ -178,7 +182,7 @@ mod tests {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.display_item_client_id = 41;
         fragment
-            .paint
+            
             .pre_paint_invalidation
             .should_delay_full_paint_invalidation = true;
         fragment.paint.display_item_client_invalidation_reason =

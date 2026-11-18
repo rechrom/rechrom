@@ -181,7 +181,7 @@ impl PrePaintRevisionTracker {
         else {
             return;
         };
-        if node.paint.pre_paint_invalidation.own() {
+        if node.pre_paint_invalidation.own() {
             node.pre_paint_revision = generation;
             input.revision = generation;
         }
@@ -393,7 +393,7 @@ impl PrePaintRevisionTracker {
             None => (lookup_key, None),
         };
         stats.nodes += 1;
-        let invalidation = node.paint.pre_paint_invalidation;
+        let invalidation = node.pre_paint_invalidation;
         stats.own_invalidations += invalidation.own() as usize;
         stats.descendant_invalidations += invalidation.descendants() as usize;
         stats.needs_paint_property_update += invalidation.needs_paint_property_update as usize;
@@ -559,6 +559,8 @@ impl Input {
             text_paint_timing_non_whitespace,
             // Compared separately by resources_equal with usage masks.
             resources: _,
+            // Chromium lifecycle facts drive traversal; they are not paint input.
+            pre_paint_invalidation: _,
             paint: _,
         } = node;
         Self {
@@ -715,8 +717,6 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
     // Exhaustive field binding prevents a new paint output from being omitted.
     let PaintProperties {
         source_object_address: _,
-        // Chromium lifecycle facts drive traversal; they are not paint input.
-        pre_paint_invalidation: _,
         property_fragment_unique_id,
         is_first_for_node,
         can_paint_multiple_fragments,

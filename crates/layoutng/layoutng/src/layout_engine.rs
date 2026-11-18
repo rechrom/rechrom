@@ -765,7 +765,7 @@ impl LayoutEngine {
                     if !seen_fragments.insert(data.fragment_instance_id){return;}
                     let source=cursor.Cursor().GetLayoutObject();
                     let data=unsafe{cursor.PaintDataMut()};
-                    data.paint.pre_paint_invalidation=crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(source);
+                    data.pre_paint_invalidation=crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(source);
                     self.pre_paint_inputs_.ObserveSelectionInvalidation(data,generation);
                 });
                 current = object.Parent();

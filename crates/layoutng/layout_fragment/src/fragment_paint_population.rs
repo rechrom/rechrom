@@ -336,7 +336,7 @@ fn PopulateInlineItemLocalPaintData(
             "retained paint properties have no resident slot"
         );
         output.prepare_for_publication();
-        update_paint!(output.paint, pre_paint_invalidation, invalidation);
+        output.pre_paint_invalidation = invalidation;
         output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
@@ -361,6 +361,10 @@ fn PopulateInlineItemLocalPaintData(
         }
         *output = FragmentPaintData::new(properties);
         output.resources = Some(Arc::clone(resources));
+        if purpose == LayoutUpdateKind::Paint && !object.is_null() {
+            // ExportProperties has made the object ready for invalidation.
+            output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
+        }
     }
     paint_state_owners.population_stats.inline_items += 1;
     output.fragment_instance_id = fragment_instance_id;
@@ -849,7 +853,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             retained_content_size = Some(output.content_size);
         }
         output.prepare_for_publication();
-        update_paint!(output.paint, pre_paint_invalidation, invalidation);
+        output.pre_paint_invalidation = invalidation;
         output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
@@ -874,6 +878,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         }
         *output = FragmentPaintData::new(properties);
         output.resources = Some(Arc::clone(resources));
+        if purpose == LayoutUpdateKind::Paint && !object.is_null() {
+            // ExportProperties has made the object ready for invalidation.
+            output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
+        }
     }
     output.fragment_instance_id = fragment_instance_id;
     paint_state_owners.population_stats.physical_fragments += 1;
