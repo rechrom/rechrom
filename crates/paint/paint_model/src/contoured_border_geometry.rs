@@ -10,7 +10,7 @@ use layoutng_assembly::fragment_tree::{
     FragmentBoxSides, FragmentPaintData, PaintProperties, ResidentBoxGeometry,
 };
 use layoutng_assembly::internal::layout_input::{
-    Edges, Offset, PaintPathCommand, PaintPathVerb, Size,
+    Edges, Offset, PaintPathCommand, PaintPathVerb, PaintStyle, Size,
 };
 use layoutng_assembly::internal::paint_input::{
     PaintCornerRadii, PaintCornerRadius, PaintStyleData,
@@ -94,15 +94,15 @@ pub fn IncludedBorderEdges(fragment: &FragmentPaintData) -> Edges {
 
 // Source: ContouredBorderGeometry::CalcRadiiFor and ContouredRect::Inset
 pub fn ResolveCornerRadii(
-    style: &PaintStyleData,
+    style: &PaintStyle,
     sides: &FragmentBoxSides,
     outer_size: Size,
     inset: Edges,
 ) -> PaintCornerRadii {
     let mut radii = style
-        .border_radii
+        .border_radii()
         .unwrap_or_else(|| UniformCornerRadii(style.border_radius));
-    let percentages = &style.border_radii_percentages;
+    let percentages = &style.border_radii_percentages();
     radii.top_left.x += percentages.top_left.x * outer_size.width / 100.0;
     radii.top_left.y += percentages.top_left.y * outer_size.height / 100.0;
     radii.top_right.x += percentages.top_right.x * outer_size.width / 100.0;

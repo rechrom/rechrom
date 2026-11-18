@@ -83,7 +83,7 @@ pub fn GetHitTestOpaqueness(fragment: &FragmentPaintData) -> PaintHitTestOpaquen
     if !fragment.paint.visible_to_hit_testing || !style.visible() || style.pointer_events_none() {
         PaintHitTestOpaqueness::Transparent
     } else if style.border_radius > 0.0
-        || style.border_radii.is_some()
+        || style.border_radii().is_some()
         || fragment.paint.is_svg_child
     {
         PaintHitTestOpaqueness::Mixed
@@ -4104,10 +4104,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let svg_stroke_context = crate::svg_context_paints::ResolveFor(style, true, paint_info);
         let svg_fill = svg_fill_context
             .as_ref()
-            .map_or(style.svg_fill, |paint| paint.color);
+            .map_or(style.svg_fill(), |paint| paint.color);
         let svg_stroke = svg_stroke_context
             .as_ref()
-            .map_or(style.svg_stroke, |paint| paint.color);
+            .map_or(style.svg_stroke(), |paint| paint.color);
         let svg_fill_server = svg_fill_context
             .as_ref()
             .map_or(style.svg_fill_server.as_ref(), |paint| {
@@ -4629,12 +4629,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 if stroke_glyphs {
                     if svg.is_some() {
-                        item.stroke_width = style.svg_stroke_width;
-                        item.dash_intervals = style.svg_stroke_dash_array.clone();
-                        item.dash_offset = style.svg_stroke_dash_offset;
-                        item.svg_line_cap = style.svg_stroke_line_cap;
-                        item.svg_line_join = style.svg_stroke_line_join;
-                        item.miter_limit = style.svg_stroke_miter_limit;
+                        item.stroke_width = style.svg_stroke_width();
+                        item.dash_intervals = style.svg_stroke_dash_array().clone();
+                        item.dash_offset = style.svg_stroke_dash_offset();
+                        item.svg_line_cap = style.svg_stroke_line_cap();
+                        item.svg_line_join = style.svg_stroke_line_join();
+                        item.miter_limit = style.svg_stroke_miter_limit();
                     } else {
                         item.stroke_width = style.text_stroke_width();
                     }
@@ -4669,7 +4669,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 // kTextProperOnly: no shadows or decorations, and the same
                 // glyph/ShapeResult owners as ordinary text. A cached whole
                 // fragment blob is legal under the single-cell clip below.
-                for component in style.svg_paint_order {
+                for component in style.svg_paint_order() {
                     if component == SvgPaintComponent::kFill {
                         block_caret_glyphs.push(make_item(
                             color,
@@ -4748,7 +4748,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         false,
                     ));
                     let stroke_width = if svg.is_some() {
-                        style.svg_stroke_width
+                        style.svg_stroke_width()
                     } else {
                         style.text_stroke_width()
                     };
@@ -4766,7 +4766,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     // ComputedStyle paint-order used by SVG text. The normal
                     // value is fill then stroke; do not reverse it merely
                     // because the two modes are separate display items here.
-                    for component in style.svg_paint_order {
+                    for component in style.svg_paint_order() {
                         if component == SvgPaintComponent::kFill && text_fill_color.alpha > 0.0 {
                             glyph_foregrounds.push(make_item(
                                 text_fill_color,
@@ -4789,7 +4789,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         }
                     }
                 } else {
-                    for component in style.svg_paint_order {
+                    for component in style.svg_paint_order() {
                         if component == SvgPaintComponent::kFill
                             && (svg_fill_server.is_some_and(|server| {
                                 !privacy_preserving || server.is_in_canvas_subtree
@@ -4840,7 +4840,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                             && (svg_stroke_server.is_some_and(|server| {
                                 !privacy_preserving || server.is_in_canvas_subtree
                             }) || svg_stroke.is_some_and(|stroke| stroke.alpha > 0.0))
-                            && style.svg_stroke_width > 0.0
+                            && style.svg_stroke_width() > 0.0
                         {
                             let mut item = make_item(
                                 svg_stroke.unwrap_or_default(),
@@ -4915,7 +4915,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     item.glyphs = Arc::clone(&selected_glyphs);
                     selection_glyph_shadows.push(item);
                 }
-                for component in selection_style.svg_paint_order {
+                for component in selection_style.svg_paint_order() {
                     if component == SvgPaintComponent::kFill
                         && selection_style.text_fill_color().alpha > 0.0
                     {

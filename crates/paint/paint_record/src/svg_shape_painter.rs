@@ -3,7 +3,8 @@
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::{
-    BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, Size, SvgShapeData, SvgShapeGeometry,
+    BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, PaintStyle, Size, SvgShapeData,
+    SvgShapeGeometry,
     TransformMatrix,
 };
 use layoutng_assembly::internal::layout_input_types::Color;
@@ -286,25 +287,25 @@ fn StrokeType(geometry: SvgShapeGeometry) -> DisplayItemType {
     }
 }
 
-fn MainStyle(style: &PaintStyleData) -> ShapePaintStyle {
+fn MainStyle(style: &PaintStyle) -> ShapePaintStyle {
     ShapePaintStyle {
-        fill: style.svg_fill,
-        stroke: style.svg_stroke,
+        fill: style.svg_fill(),
+        stroke: style.svg_stroke(),
         fill_server: style.svg_fill_server.clone(),
         stroke_server: style.svg_stroke_server.clone(),
         fill_server_reference_box: None,
         fill_context_transform: None,
         stroke_server_reference_box: None,
         stroke_context_transform: None,
-        stroke_width: style.svg_stroke_width,
-        stroke_dash_array: style.svg_stroke_dash_array.clone(),
-        stroke_dash_offset: style.svg_stroke_dash_offset,
-        stroke_line_cap: style.svg_stroke_line_cap,
-        stroke_line_join: style.svg_stroke_line_join,
-        stroke_miter_limit: style.svg_stroke_miter_limit,
-        fill_even_odd: style.svg_fill_even_odd,
-        non_scaling_stroke: style.svg_non_scaling_stroke,
-        antialias: style.svg_shape_antialias,
+        stroke_width: style.svg_stroke_width(),
+        stroke_dash_array: style.svg_stroke_dash_array().clone(),
+        stroke_dash_offset: style.svg_stroke_dash_offset(),
+        stroke_line_cap: style.svg_stroke_line_cap(),
+        stroke_line_join: style.svg_stroke_line_join(),
+        stroke_miter_limit: style.svg_stroke_miter_limit(),
+        fill_even_odd: style.svg_fill_even_odd(),
+        non_scaling_stroke: style.svg_non_scaling_stroke(),
+        antialias: style.svg_shape_antialias(),
     }
 }
 
@@ -872,7 +873,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
-        let style = &*fragment.paint.style;
+        let style = &fragment.paint.style;
         let mut shape_style = MainStyle(style);
         for stroke in [false, true] {
             if let Some(context) =
@@ -932,7 +933,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
             clip_style.stroke = None;
             clip_style.fill_server = None;
             clip_style.stroke_server = None;
-            clip_style.fill_even_odd = style.svg_clip_even_odd;
+            clip_style.fill_even_odd = style.svg_clip_even_odd();
             AppendItems(
                 self.context,
                 self.node,
@@ -949,7 +950,7 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
                 ),
             );
         } else {
-            for component in style.svg_paint_order {
+            for component in style.svg_paint_order() {
                 match component {
                     SvgPaintComponent::kFill => AppendItems(
                         self.context,

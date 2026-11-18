@@ -129,6 +129,21 @@ fn Corner(value: &foundation::LengthSize) -> (PaintCornerRadius, PaintCornerRadi
 }
 
 fn BorderRadii(style: &ComputedStyle, output: &mut PaintStyleData) {
+    let (radii, percentages, curvatures) = BorderRadiiParts(style);
+    output.border_radii_percentages = percentages;
+    output.border_radii = radii;
+    output.border_corner_curvatures = curvatures;
+}
+
+/// Fixed radii (None without any radius), percentage radii and corner
+/// curvatures of `style`. PaintStyle reads these live from its source.
+pub(crate) fn BorderRadiiParts(
+    style: &ComputedStyle,
+) -> (
+    Option<PaintCornerRadii>,
+    PaintCornerRadii,
+    crate::internal::paint_input::PaintCornerCurvatures,
+) {
     let corners = [
         Corner(style.BorderTopLeftRadius()),
         Corner(style.BorderTopRightRadius()),
@@ -141,20 +156,20 @@ fn BorderRadii(style: &ComputedStyle, output: &mut PaintStyleData) {
         bottom_right: corners[2].0,
         bottom_left: corners[3].0,
     };
-    output.border_radii_percentages = PaintCornerRadii {
+    let percentages = PaintCornerRadii {
         top_left: corners[0].1,
         top_right: corners[1].1,
         bottom_right: corners[2].1,
         bottom_left: corners[3].1,
     };
-    output.border_radii =
-        (fixed.HasRadius() || output.border_radii_percentages.HasRadius()).then_some(fixed);
-    output.border_corner_curvatures = crate::internal::paint_input::PaintCornerCurvatures([
+    let radii = (fixed.HasRadius() || percentages.HasRadius()).then_some(fixed);
+    let curvatures = crate::internal::paint_input::PaintCornerCurvatures([
         style.CornerTopLeftShape().Exponent(),
         style.CornerTopRightShape().Exponent(),
         style.CornerBottomRightShape().Exponent(),
         style.CornerBottomLeftShape().Exponent(),
     ]);
+    (radii, percentages, curvatures)
 }
 
 fn Shadows(
@@ -1236,39 +1251,104 @@ fn PaintOrder(value: EPaintOrder) -> [SvgPaintComponent; 3] {
 }
 
 fn SvgStrokeStyle(style: &ComputedStyle, output: &mut PaintStyleData) {
-    output.svg_stop_color = StyleColor(style, style.StopColor());
-    output.svg_stop_current_color = style.StopColor().IsCurrentColor();
-    output.svg_stop_opacity = style.StopOpacity();
-    output.svg_stroke_width = LengthParts(style.StrokeWidth().length()).0;
-    output.svg_stroke_dash_offset = LengthParts(style.StrokeDashOffset()).0;
+    output.svg_stop_color = SvgStopColor(style);
+    output.svg_stop_current_color = SvgStopCurrentColor(style);
+    output.svg_stop_opacity = SvgStopOpacity(style);
+    output.svg_stroke_width = SvgStrokeWidth(style);
+    output.svg_stroke_dash_offset = SvgStrokeDashOffset(style);
+    output.svg_stroke_dash_array = SvgStrokeDashArray(style);
+    output.svg_stroke_line_cap = SvgStrokeLineCapValue(style);
+    output.svg_stroke_line_join = SvgStrokeLineJoinValue(style);
+    output.svg_stroke_miter_limit = SvgStrokeMiterLimit(style);
+    output.svg_fill_even_odd = SvgFillEvenOdd(style);
+    output.svg_clip_even_odd = SvgClipEvenOdd(style);
+    output.svg_non_scaling_stroke = SvgNonScalingStroke(style);
+    output.svg_shape_antialias = SvgShapeAntialias(style);
+    output.svg_paint_order = SvgPaintOrder(style);
+}
+
+// SVG paint projections of a ComputedStyle. PaintStyle reads these live from
+// its source style, as the SVG painters in Chromium read ComputedStyle;
+// detached projections store them in PaintStyleData.
+pub(crate) fn SvgFill(style: &ComputedStyle) -> Option<Color> {
+    SvgColor(style, style.FillPaint(), style.InternalVisitedFillPaint(), style.FillOpacity())
+}
+pub(crate) fn SvgStroke(style: &ComputedStyle) -> Option<Color> {
+    SvgColor(style, style.StrokePaint(), style.InternalVisitedStrokePaint(), style.StrokeOpacity())
+}
+pub(crate) fn SvgFillReference(style: &ComputedStyle) -> Option<String> {
+    style.FillPaint().HasUrl().then(|| style.FillPaint().GetUrl().Utf8())
+}
+pub(crate) fn SvgStrokeReference(style: &ComputedStyle) -> Option<String> {
+    style.StrokePaint().HasUrl().then(|| style.StrokePaint().GetUrl().Utf8())
+}
+pub(crate) fn SvgFillCurrentColor(style: &ComputedStyle) -> bool {
+    style.FillPaint().HasCurrentColor()
+}
+pub(crate) fn SvgStrokeCurrentColor(style: &ComputedStyle) -> bool {
+    style.StrokePaint().HasCurrentColor()
+}
+pub(crate) fn SvgStopColor(style: &ComputedStyle) -> Color {
+    StyleColor(style, style.StopColor())
+}
+pub(crate) fn SvgStopCurrentColor(style: &ComputedStyle) -> bool {
+    style.StopColor().IsCurrentColor()
+}
+pub(crate) fn SvgStopOpacity(style: &ComputedStyle) -> f32 {
+    style.StopOpacity()
+}
+pub(crate) fn SvgStrokeWidth(style: &ComputedStyle) -> f64 {
+    LengthParts(style.StrokeWidth().length()).0
+}
+pub(crate) fn SvgStrokeDashOffset(style: &ComputedStyle) -> f64 {
+    LengthParts(style.StrokeDashOffset()).0
+}
+pub(crate) fn SvgStrokeDashArray(style: &ComputedStyle) -> Vec<f64> {
     let dash_array = style.StrokeDashArray();
-    if !dash_array.is_null() {
-        output.svg_stroke_dash_array = unsafe { &*dash_array }
-            .iter()
-            .map(|length| LengthParts(length).0)
-            .collect();
+    if dash_array.is_null() {
+        return Vec::new();
     }
-    output.svg_stroke_line_cap = match style.CapStyle() {
+    unsafe { &*dash_array }
+        .iter()
+        .map(|length| LengthParts(length).0)
+        .collect()
+}
+pub(crate) fn SvgStrokeLineCapValue(style: &ComputedStyle) -> SvgStrokeLineCap {
+    match style.CapStyle() {
         LineCap::kButtCap => SvgStrokeLineCap::kButt,
         LineCap::kRoundCap => SvgStrokeLineCap::kRound,
         LineCap::kSquareCap => SvgStrokeLineCap::kSquare,
-    };
-    output.svg_stroke_line_join = match style.JoinStyle() {
+    }
+}
+pub(crate) fn SvgStrokeLineJoinValue(style: &ComputedStyle) -> SvgStrokeLineJoin {
+    match style.JoinStyle() {
         LineJoin::kMiterJoin => SvgStrokeLineJoin::kMiter,
         LineJoin::kRoundJoin => SvgStrokeLineJoin::kRound,
         LineJoin::kBevelJoin => SvgStrokeLineJoin::kBevel,
-    };
-    output.svg_stroke_miter_limit = style.StrokeMiterLimit() as f64;
-    output.svg_fill_even_odd = style.FillRule() == WindRule::RULE_EVENODD;
-    output.svg_clip_even_odd = style.ClipRule() == WindRule::RULE_EVENODD;
-    output.svg_non_scaling_stroke = style.VectorEffect() == EVectorEffect::kNonScalingStroke;
-    // svg_shape_painter.cc:99-102 disables antialiasing for these two
-    // shape-rendering values and enables it for auto/geometricPrecision.
-    output.svg_shape_antialias = !matches!(
+    }
+}
+pub(crate) fn SvgStrokeMiterLimit(style: &ComputedStyle) -> f64 {
+    style.StrokeMiterLimit() as f64
+}
+pub(crate) fn SvgFillEvenOdd(style: &ComputedStyle) -> bool {
+    style.FillRule() == WindRule::RULE_EVENODD
+}
+pub(crate) fn SvgClipEvenOdd(style: &ComputedStyle) -> bool {
+    style.ClipRule() == WindRule::RULE_EVENODD
+}
+pub(crate) fn SvgNonScalingStroke(style: &ComputedStyle) -> bool {
+    style.VectorEffect() == EVectorEffect::kNonScalingStroke
+}
+// svg_shape_painter.cc:99-102 disables antialiasing for these two
+// shape-rendering values and enables it for auto/geometricPrecision.
+pub(crate) fn SvgShapeAntialias(style: &ComputedStyle) -> bool {
+    !matches!(
         style.ShapeRendering(),
         EShapeRendering::kCrispedges | EShapeRendering::kOptimizespeed
-    );
-    output.svg_paint_order = PaintOrder(style.PaintOrder());
+    )
+}
+pub(crate) fn SvgPaintOrder(style: &ComputedStyle) -> [SvgPaintComponent; 3] {
+    PaintOrder(style.PaintOrder())
 }
 
 pub fn SvgColor(
@@ -1484,7 +1564,9 @@ fn ExportForPaint(
         output.box_shadows = Shadows(style, style.BoxShadow());
         output.text_shadows = Shadows(style, style.TextShadow());
     }
-    BorderRadii(style, &mut output);
+    if copy_canonical_values {
+        BorderRadii(style, &mut output);
+    }
     if copy_canonical_values {
         output.border_shape_unsupported = style.HasBorderShape();
         output.border_colors = [
@@ -1536,29 +1618,15 @@ fn ExportForPaint(
     }
     ExportGeometryProperties(style, &mut output, copy_canonical_values);
     output.clip_path = clip_path_export::ExportClipPath(style);
-    output.svg_fill = SvgColor(
-        style,
-        style.FillPaint(),
-        style.InternalVisitedFillPaint(),
-        style.FillOpacity(),
-    );
-    output.svg_stroke = SvgColor(
-        style,
-        style.StrokePaint(),
-        style.InternalVisitedStrokePaint(),
-        style.StrokeOpacity(),
-    );
-    output.svg_fill_reference = style
-        .FillPaint()
-        .HasUrl()
-        .then(|| style.FillPaint().GetUrl().Utf8());
-    output.svg_stroke_reference = style
-        .StrokePaint()
-        .HasUrl()
-        .then(|| style.StrokePaint().GetUrl().Utf8());
-    output.svg_fill_current_color = style.FillPaint().HasCurrentColor();
-    output.svg_stroke_current_color = style.StrokePaint().HasCurrentColor();
-    SvgStrokeStyle(style, &mut output);
+    if copy_canonical_values {
+        output.svg_fill = SvgFill(style);
+        output.svg_stroke = SvgStroke(style);
+        output.svg_fill_reference = SvgFillReference(style);
+        output.svg_stroke_reference = SvgStrokeReference(style);
+        output.svg_fill_current_color = SvgFillCurrentColor(style);
+        output.svg_stroke_current_color = SvgStrokeCurrentColor(style);
+        SvgStrokeStyle(style, &mut output);
+    }
     if copy_canonical_values {
         output.respect_image_orientation = style.ImageOrientation()
             == foundation::RespectImageOrientationEnum::kRespectImageOrientation;

@@ -1760,7 +1760,7 @@ fn NeedsOverflowClipForReplacedContents(node: &FragmentPaintData) -> bool {
     if replaced.is_svg_root {
         return replaced.clips_to_content_box;
     }
-    if node.paint.style.border_radii.is_some() {
+    if node.paint.style.border_radii().is_some() {
         return true;
     }
     if replaced.is_image && !replaced.is_media {
@@ -1802,7 +1802,7 @@ fn NeedsInnerBorderRadiusClip(node: &FragmentPaintData) -> bool {
     if node.paint.replaced_content.is_some() && ReplacedElementAlwaysClipsToContentBox(node) {
         return false;
     }
-    node.paint.style.border_radii.is_some()
+    node.paint.style.border_radii().is_some()
         && node.paint.IsLayoutBox()
         && NeedsOverflowClip(node)
         && node.paint.ShouldClipOverflowAlongBothAxes()
@@ -3195,11 +3195,11 @@ fn GeometryBoxClipPathRadii(
     }
     let style = &fragment.paint.style;
     if style
-        .border_corner_curvatures
+        .border_corner_curvatures()
         .0
         .iter()
         .any(|curvature| *curvature != 2.0)
-        && style.border_radii.is_some()
+        && style.border_radii().is_some()
     {
         return Err("clip-path geometry-box with non-round corner-shape");
     }
@@ -8178,7 +8178,7 @@ mod tests {
             },
             ..Default::default()
         });
-        fragment.paint.style.border_corner_curvatures =
+        fragment.paint.style.border_corner_curvatures() =
             layoutng_assembly::internal::paint_input::PaintCornerCurvatures([4.0, 2.0, 2.0, 2.0]);
         fragment.paint.style.clip_path =
             Some(layoutng_assembly::internal::paint_input::ClipPathPaint {

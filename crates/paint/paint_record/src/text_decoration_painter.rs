@@ -432,12 +432,12 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                         if let Some(svg_style) = svg_paint_style {
                             item.antialias = true;
                             if paint_pass == DecorationPaintPass::SvgStroke {
-                                item.stroke_width = svg_style.svg_stroke_width;
-                                item.dash_intervals = svg_style.svg_stroke_dash_array.clone();
-                                item.dash_offset = svg_style.svg_stroke_dash_offset;
-                                item.svg_line_cap = svg_style.svg_stroke_line_cap;
-                                item.svg_line_join = svg_style.svg_stroke_line_join;
-                                item.miter_limit = svg_style.svg_stroke_miter_limit;
+                                item.stroke_width = svg_style.svg_stroke_width();
+                                item.dash_intervals = svg_style.svg_stroke_dash_array().clone();
+                                item.dash_offset = svg_style.svg_stroke_dash_offset();
+                                item.svg_line_cap = svg_style.svg_stroke_line_cap();
+                                item.svg_line_join = svg_style.svg_stroke_line_join();
+                                item.miter_limit = svg_style.svg_stroke_miter_limit();
                             }
                             let context_paint = self.ResolveSvgContext(
                                 svg_style,
@@ -580,10 +580,10 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                         let stroke_context = self.ResolveSvgContext(svg_style, true);
                         let fill = fill_context
                             .as_ref()
-                            .map_or(svg_style.svg_fill, |paint| paint.color);
+                            .map_or(svg_style.svg_fill(), |paint| paint.color);
                         let stroke = stroke_context
                             .as_ref()
-                            .map_or(svg_style.svg_stroke, |paint| paint.color);
+                            .map_or(svg_style.svg_stroke(), |paint| paint.color);
                         let fill_server = fill_context
                             .as_ref()
                             .map_or(svg_style.svg_fill_server.as_ref(), |paint| {
@@ -594,7 +594,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                             .map_or(svg_style.svg_stroke_server.as_ref(), |paint| {
                                 paint.server.as_ref()
                             });
-                        for component in svg_style.svg_paint_order {
+                        for component in svg_style.svg_paint_order() {
                             if component == SvgPaintComponent::kFill
                                 && (fill_server.is_some()
                                     || fill.is_some_and(|fill| fill.alpha > 0.0))
@@ -608,7 +608,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                                     Some(svg_style),
                                 ));
                             } else if component == SvgPaintComponent::kStroke
-                                && svg_style.svg_stroke_width > 0.0
+                                && svg_style.svg_stroke_width() > 0.0
                                 && (stroke_server.is_some()
                                     || stroke.is_some_and(|stroke| stroke.alpha > 0.0))
                                 && !paint_passes

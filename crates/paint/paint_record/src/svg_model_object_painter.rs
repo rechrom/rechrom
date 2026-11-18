@@ -60,13 +60,13 @@ impl SVGModelObjectPainter {
         if let Some(shape) = fragment.paint.svg_shape.as_deref() {
             let style = &fragment.paint.style;
             let has_stroke = style.svg_stroke_server.is_some()
-                || style.svg_stroke_reference.is_some()
-                || style.svg_stroke.is_some_and(|stroke| stroke.alpha > 0.0);
-            let outset = if has_stroke && style.svg_stroke_width > 0.0 {
+                || style.svg_stroke_reference().is_some()
+                || style.svg_stroke().is_some_and(|stroke| stroke.alpha > 0.0);
+            let outset = if has_stroke && style.svg_stroke_width() > 0.0 {
                 // The exact stroked path remains in the raster record. This
                 // conservative miter extent is only the DrawingRecorder/cull
                 // bound and therefore cannot alter the rendered geometry.
-                style.svg_stroke_width * 0.5 * style.svg_stroke_miter_limit.max(1.0)
+                style.svg_stroke_width() * 0.5 * style.svg_stroke_miter_limit().max(1.0)
             } else {
                 0.0
             };

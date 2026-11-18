@@ -2038,6 +2038,165 @@ impl PaintStyle {
         }
     }
 
+    // Border radii and SVG paint values are read from the source
+    // ComputedStyle, as Chromium's painters read them; detached projections
+    // (no live source) keep the exported PaintStyleData values.
+    pub fn border_radii(&self) -> Option<PaintCornerRadii> {
+        self.Source().map_or(self.data.border_radii, |style| {
+            crate::internal::boundary::paint_style_export::BorderRadiiParts(style).0
+        })
+    }
+
+    pub fn border_radii_percentages(&self) -> PaintCornerRadii {
+        self.Source().map_or(self.data.border_radii_percentages, |style| {
+            crate::internal::boundary::paint_style_export::BorderRadiiParts(style).1
+        })
+    }
+
+    pub fn border_corner_curvatures(&self) -> PaintCornerCurvatures {
+        self.Source().map_or(self.data.border_corner_curvatures, |style| {
+            crate::internal::boundary::paint_style_export::BorderRadiiParts(style).2
+        })
+    }
+
+    pub fn svg_fill(&self) -> Option<Color> {
+        self.Source().map_or(self.data.svg_fill, |style| {
+            crate::internal::boundary::paint_style_export::SvgFill(style)
+        })
+    }
+
+    pub fn svg_stroke(&self) -> Option<Color> {
+        self.Source().map_or(self.data.svg_stroke, |style| {
+            crate::internal::boundary::paint_style_export::SvgStroke(style)
+        })
+    }
+
+    pub fn svg_fill_reference(&self) -> Option<String> {
+        self.Source().map_or_else(
+            || self.data.svg_fill_reference.clone(),
+            crate::internal::boundary::paint_style_export::SvgFillReference,
+        )
+    }
+
+    pub fn svg_stroke_reference(&self) -> Option<String> {
+        self.Source().map_or_else(
+            || self.data.svg_stroke_reference.clone(),
+            crate::internal::boundary::paint_style_export::SvgStrokeReference,
+        )
+    }
+
+    pub fn svg_fill_current_color(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_fill_current_color,
+            crate::internal::boundary::paint_style_export::SvgFillCurrentColor,
+        )
+    }
+
+    pub fn svg_stroke_current_color(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_stroke_current_color,
+            crate::internal::boundary::paint_style_export::SvgStrokeCurrentColor,
+        )
+    }
+
+    pub fn svg_stop_color(&self) -> Color {
+        self.Source().map_or(
+            self.data.svg_stop_color,
+            crate::internal::boundary::paint_style_export::SvgStopColor,
+        )
+    }
+
+    pub fn svg_stop_current_color(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_stop_current_color,
+            crate::internal::boundary::paint_style_export::SvgStopCurrentColor,
+        )
+    }
+
+    pub fn svg_stop_opacity(&self) -> f32 {
+        self.Source().map_or(
+            self.data.svg_stop_opacity,
+            crate::internal::boundary::paint_style_export::SvgStopOpacity,
+        )
+    }
+
+    pub fn svg_stroke_width(&self) -> f64 {
+        self.Source().map_or(
+            self.data.svg_stroke_width,
+            crate::internal::boundary::paint_style_export::SvgStrokeWidth,
+        )
+    }
+
+    pub fn svg_stroke_dash_offset(&self) -> f64 {
+        self.Source().map_or(
+            self.data.svg_stroke_dash_offset,
+            crate::internal::boundary::paint_style_export::SvgStrokeDashOffset,
+        )
+    }
+
+    pub fn svg_stroke_dash_array(&self) -> Vec<f64> {
+        self.Source().map_or_else(
+            || self.data.svg_stroke_dash_array.clone(),
+            crate::internal::boundary::paint_style_export::SvgStrokeDashArray,
+        )
+    }
+
+    pub fn svg_stroke_line_cap(&self) -> SvgStrokeLineCap {
+        self.Source().map_or(
+            self.data.svg_stroke_line_cap,
+            crate::internal::boundary::paint_style_export::SvgStrokeLineCapValue,
+        )
+    }
+
+    pub fn svg_stroke_line_join(&self) -> SvgStrokeLineJoin {
+        self.Source().map_or(
+            self.data.svg_stroke_line_join,
+            crate::internal::boundary::paint_style_export::SvgStrokeLineJoinValue,
+        )
+    }
+
+    pub fn svg_stroke_miter_limit(&self) -> f64 {
+        self.Source().map_or(
+            self.data.svg_stroke_miter_limit,
+            crate::internal::boundary::paint_style_export::SvgStrokeMiterLimit,
+        )
+    }
+
+    pub fn svg_fill_even_odd(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_fill_even_odd,
+            crate::internal::boundary::paint_style_export::SvgFillEvenOdd,
+        )
+    }
+
+    pub fn svg_clip_even_odd(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_clip_even_odd,
+            crate::internal::boundary::paint_style_export::SvgClipEvenOdd,
+        )
+    }
+
+    pub fn svg_non_scaling_stroke(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_non_scaling_stroke,
+            crate::internal::boundary::paint_style_export::SvgNonScalingStroke,
+        )
+    }
+
+    pub fn svg_shape_antialias(&self) -> bool {
+        self.Source().map_or(
+            self.data.svg_shape_antialias,
+            crate::internal::boundary::paint_style_export::SvgShapeAntialias,
+        )
+    }
+
+    pub fn svg_paint_order(&self) -> [SvgPaintComponent; 3] {
+        self.Source().map_or(
+            self.data.svg_paint_order,
+            crate::internal::boundary::paint_style_export::SvgPaintOrder,
+        )
+    }
+
     pub fn color(&self) -> Color {
         self.Source().map_or(self.data.color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(style, style.Color())
@@ -2356,8 +2515,8 @@ impl PaintStyle {
                 .find(|graph| graph.id == id)
             {
                 let mut graph = graph.clone();
-                graph.fill_paint = self.data.svg_fill;
-                graph.stroke_paint = self.data.svg_stroke;
+                graph.fill_paint = self.svg_fill();
+                graph.stroke_paint = self.svg_stroke();
                 filter.reference_error = graph.unsupported.clone();
                 filter.reference_graph = Some(Arc::new(graph));
                 bound += 1;
