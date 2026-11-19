@@ -886,6 +886,8 @@ impl LayoutEngine {
                 fragments,
             );
             trace.set("published", 1.0);
+        } else {
+            layout_commit_engine_layout_publish::abandon_layout_output(self);
         }
         true
     }
@@ -1422,6 +1424,12 @@ impl LayoutEngine {
     ) -> Option<LayoutResultHandle> {
         let mut result = self.RunLayout(root, space, publish, purpose);
         if purpose == LayoutUpdateKind::Paint && UpdateTextOverflowPostLayoutSnapshots(root) {
+            // The first publication already certified against the previous
+            // frame. Certify the replacement from an empty basis rather than
+            // against that superseded pass (rare: an inline scroll toggle).
+            if let Some(tracker) = self.boundary_cache_.pre_paint_certification.as_mut() {
+                tracker.invalidate();
+            }
             result = self.RunLayout(root, space, publish, purpose);
         }
         result

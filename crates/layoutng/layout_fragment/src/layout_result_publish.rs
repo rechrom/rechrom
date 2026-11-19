@@ -129,6 +129,17 @@ pub(super) fn populate_layout_result_paint_data(
             }
         }
     }
+    // A Paint publication certifies PrePaint inputs inside population: each
+    // slot is observed right after its children, from the dirty bits it was
+    // just bound with. Nothing after population reads or writes those inputs.
+    paint_state_owners.certification = if purpose == LayoutUpdateKind::Paint {
+        cache.pre_paint_certification.take()
+    } else {
+        None
+    };
+    if let Some(tracker) = paint_state_owners.certification.as_mut() {
+        tracker.BeginProductionUpdate();
+    }
     {
         let mut phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::PopulateFragmentPaintData,
@@ -167,6 +178,10 @@ pub(super) fn populate_layout_result_paint_data(
             stats.retained_other_owner_local_ns as f64 / 1e6,
         );
         phase.set("exported_local_ms", stats.exported_local_ns as f64 / 1e6);
+    }
+    if let Some(mut tracker) = paint_state_owners.certification.take() {
+        tracker.FinishProductionUpdate();
+        cache.pre_paint_certification = Some(tracker);
     }
     let copies_after_population =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);

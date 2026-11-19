@@ -31,11 +31,24 @@ pub(super) fn begin_layout_output(
         engine.invalidated_fragments_.take()
     };
     engine.output_kind = purpose;
+    let mut inputs = std::mem::take(&mut engine.pre_paint_inputs_);
+    // A Paint layout's publication certifies each fragment as it binds it;
+    // publish_layout_output takes the tracker back, abandon_layout_output
+    // drops it when no result is published.
+    engine.boundary_cache_.pre_paint_certification =
+        (purpose == LayoutUpdateKind::Paint).then(|| std::mem::take(&mut inputs));
     LayoutOutputPreparation {
         root,
-        inputs: std::mem::take(&mut engine.pre_paint_inputs_),
+        inputs,
         targeted_layout: subtree_id.is_some(),
     }
+}
+
+/// Layout produced no result: discard the lent PrePaint basis, as an unwound
+/// pass does, so the next success certifies from fresh revisions.
+#[inline(never)]
+pub(super) fn abandon_layout_output(engine: &mut LayoutEngine) {
+    engine.boundary_cache_.pre_paint_certification = None;
 }
 
 #[inline(never)]
@@ -91,13 +104,12 @@ pub(super) fn publish_layout_output(
     fragments: LayoutResultHandle,
 ) {
     if purpose == LayoutUpdateKind::Paint {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::CertifyPaintInputs,
-        );
-        UpdatePrePaintInputs(&mut inputs, &fragments, &engine.objects_);
-        let stats = inputs.last_stats();
-        trace.set("nodes", stats.nodes as f64);
-        trace.set("new_nodes", stats.new_nodes as f64);
+        // Population already certified every fragment it bound.
+        inputs = engine
+            .boundary_cache_
+            .pre_paint_certification
+            .take()
+            .expect("Paint publication must return its PrePaint certification");
     }
     if purpose == LayoutUpdateKind::Paint {
         let reuse = engine

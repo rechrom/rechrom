@@ -73,8 +73,26 @@ pub(super) struct FragmentOwners {
     /// this publication. Values are only (last native container, entry count),
     /// never a retained fragment list or another layout tree.
     pub(super) inline_fragment_data: LayoutBoundaryHashMap<*const LayoutObject, (u64, u32)>,
+    /// The engine's PrePaint input tracker, lent for a Paint publication.
+    pub(super) certification:
+        Option<layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker>,
 }
 impl FragmentOwners {
+    /// Certify one bound slot after all of its children were populated.
+    /// Returns whether its subtree changed for the parent's observation.
+    pub(super) fn certify(
+        &mut self,
+        output: *mut FragmentPaintData,
+        descendant_changed: bool,
+    ) -> bool {
+        match self.certification.as_mut() {
+            Some(tracker) => {
+                tracker.ObserveProductionNode(unsafe { &mut *output }, descendant_changed)
+            }
+            None => false,
+        }
+    }
+
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
         self.instances.entry(source).or_insert(instance);
         self.paint.insert(source)
@@ -114,20 +132,21 @@ pub(super) fn PopulateSVGChildPaintData(
     display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) {
+) -> bool {
     let Some(owner) = (unsafe { object.as_ref() }) else {
-        return;
+        return false;
     };
     if !(owner.IsSVGRoot() || (owner.IsSVGContainer() && !owner.IsSVGForeignObject())) {
-        return;
+        return false;
     }
+    let mut changed = false;
     let mut child = owner.SlowFirstChild();
     while let Some(layout_child) = unsafe { child.as_ref() } {
         let child_box = DynamicTo::<LayoutBox>(child);
         if let Some(child_box) = unsafe { child_box.as_ref() } {
             let child_offset = child_box.PhysicalLocation();
             for child_fragment in child_box.PhysicalFragments() {
-                PopulatePhysicalFragmentPaintData(
+                changed |= PopulatePhysicalFragmentPaintData(
                     child_fragment,
                     child_offset,
                     sources,
@@ -145,4 +164,5 @@ pub(super) fn PopulateSVGChildPaintData(
         }
         child = layout_child.NextSibling();
     }
+    changed
 }

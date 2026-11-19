@@ -36,21 +36,19 @@ impl EnginePaintUpdate for LayoutEngine {
             boundary: self.boundary_,
             shape_coverage: self.shape_coverage_,
         };
+        // Population certifies each fragment's PrePaint input as it binds it.
+        self.boundary_cache_.pre_paint_certification =
+            Some(std::mem::take(&mut self.pre_paint_inputs_));
         let fragments = assembly.PublishLayoutResult(
             unsafe { &mut *root },
             &self.constraints_,
             &mut self.boundary_cache_,
         );
-        let mut inputs = std::mem::take(&mut self.pre_paint_inputs_);
-        {
-            let mut trace = layout_fragment_boundary::trace::span(
-                layout_fragment_boundary::trace::TracePhase::CertifyPaintInputs,
-            );
-            UpdatePrePaintInputs(&mut inputs, &fragments, &self.objects_);
-            let stats = inputs.last_stats();
-            trace.set("nodes", stats.nodes as f64);
-            trace.set("new_nodes", stats.new_nodes as f64);
-        }
+        let inputs = self
+            .boundary_cache_
+            .pre_paint_certification
+            .take()
+            .expect("Paint publication must return its PrePaint certification");
         let reuse = self
             .scroll_paint_index_
             .take()

@@ -243,7 +243,7 @@ fn PopulateInlineItemLocalPaintData(
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) {
+) -> (*mut FragmentPaintData, bool) {
     let object = item.GetLayoutObject();
     if purpose == LayoutUpdateKind::Paint {
         SynchronizeInlineFragmentData(item, container_fragment_instance_id, paint_state_owners);
@@ -298,6 +298,9 @@ fn PopulateInlineItemLocalPaintData(
     let binding =
         paint_state.BindInline(fragment_items, item_index as usize, fragment_instance_id);
     let (output, slot_retained) = (binding.data, binding.retained);
+    let slot = output;
+    // Atomic inline boxes populate their own box children here.
+    let mut descendant_changed = false;
     paint_state_owners
         .population_stats
         .CountBinding(retained_invalidation.is_some(), binding.same_owner, false);
@@ -419,7 +422,7 @@ fn PopulateInlineItemLocalPaintData(
             }
         }
         paint_state_owners.population_stats.RecordLocal(local_timing);
-        return;
+        return (slot, false);
     }
     let rect = *item.RectInContainerFragment();
     output.offset = Offset {
@@ -629,7 +632,7 @@ fn PopulateInlineItemLocalPaintData(
                         if !child.is_present() || (!nested_items.is_null() && child.IsLineBox()) {
                             continue;
                         }
-                        PopulatePhysicalFragmentPaintData(
+                        descendant_changed |= PopulatePhysicalFragmentPaintData(
                             child,
                             child.Offset(),
                             sources,
@@ -650,7 +653,8 @@ fn PopulateInlineItemLocalPaintData(
                         let span = unsafe { &*nested_items }.Items();
                         let mut index = 0;
                         while index < span.len() {
-                            index = PopulateInlineItemPaintData(
+                            let changed;
+                            (index, changed) = PopulateInlineItemPaintData(
                                 span,
                                 unsafe { &*nested_items },
                                 index,
@@ -670,10 +674,11 @@ fn PopulateInlineItemLocalPaintData(
                                 next_fragment_instance_id,
                                 next_fragmentainer_instance_id,
                             );
+                            descendant_changed |= changed;
                         }
                     }
                 }
-                PopulateSVGChildPaintData(
+                descendant_changed |= PopulateSVGChildPaintData(
                     object,
                     sources,
                     style_sources,
@@ -691,6 +696,7 @@ fn PopulateInlineItemLocalPaintData(
         ItemType::kInvalid => unreachable!("invalid inline item"),
     }
     paint_state_owners.population_stats.RecordLocal(local_timing);
+    (slot, descendant_changed)
 }
 
 #[inline(never)]
@@ -713,7 +719,7 @@ fn PopulateInlineItemPaintData(
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) -> usize {
+) -> (usize, bool) {
     assert!(index < limit);
     let item = &items[index];
     let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
@@ -722,7 +728,7 @@ fn PopulateInlineItemPaintData(
         .or_else(|| (item.Type() == ItemType::kLine).then(|| *item.OffsetInContainerFragment()));
     let line_height = containing_line_height
         .or_else(|| (item.Type() == ItemType::kLine).then(|| item.Size().height));
-    PopulateInlineItemLocalPaintData(
+    let (slot, mut descendant_changed) = PopulateInlineItemLocalPaintData(
         item,
         fragment_items,
         parent_offset,
@@ -742,7 +748,8 @@ fn PopulateInlineItemPaintData(
     );
     let mut child_index = index + 1;
     while child_index < subtree_end {
-        child_index = PopulateInlineItemPaintData(
+        let changed;
+        (child_index, changed) = PopulateInlineItemPaintData(
             items,
             fragment_items,
             child_index,
@@ -762,8 +769,12 @@ fn PopulateInlineItemPaintData(
             next_fragment_instance_id,
             next_fragmentainer_instance_id,
         );
+        descendant_changed |= changed;
     }
-    subtree_end
+    (
+        subtree_end,
+        paint_state_owners.certify(slot, descendant_changed),
+    )
 }
 
 #[inline(never)]
@@ -780,7 +791,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     mut display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) {
+) -> bool {
     SynchronizeBoxFragmentData(fragment);
     let object = fragment.GetLayoutObject();
     let kind = if fragment.IsBox() {
@@ -833,6 +844,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
     let binding = paint_state.BindPhysical(fragment, fragment_instance_id);
     let (output, slot_retained) = (binding.data, binding.retained);
+    let slot = output;
     paint_state_owners
         .population_stats
         .CountBinding(retained_invalidation.is_some(), binding.same_owner, true);
@@ -928,7 +940,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     }
     if !fragment.IsBox() {
         paint_state_owners.population_stats.RecordLocal(local_timing);
-        return;
+        return paint_state_owners.certify(slot, false);
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
@@ -1103,12 +1115,13 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
     }
     paint_state_owners.population_stats.RecordLocal(local_timing);
+    let mut descendant_changed = false;
     let items = box_fragment.Items();
     for child in box_fragment.Children() {
         if !child.is_present() || (!items.is_null() && child.IsLineBox()) {
             continue;
         }
-        PopulatePhysicalFragmentPaintData(
+        descendant_changed |= PopulatePhysicalFragmentPaintData(
             child,
             child.Offset(),
             sources,
@@ -1132,7 +1145,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         let span = unsafe { &*items }.Items();
         let mut index = 0;
         while index < span.len() {
-            index = PopulateInlineItemPaintData(
+            let changed;
+            (index, changed) = PopulateInlineItemPaintData(
                 span,
                 unsafe { &*items },
                 index,
@@ -1152,9 +1166,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 next_fragment_instance_id,
                 next_fragmentainer_instance_id,
             );
+            descendant_changed |= changed;
         }
     }
-    PopulateSVGChildPaintData(
+    descendant_changed |= PopulateSVGChildPaintData(
         object,
         sources,
         style_sources,
@@ -1167,4 +1182,5 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         next_fragment_instance_id,
         next_fragmentainer_instance_id,
     );
+    paint_state_owners.certify(slot, descendant_changed)
 }
