@@ -24,7 +24,7 @@ pub use boundary_types::{
     FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide, InlineGeometry,
     InlineGeometryRect, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
     PaintPropertiesHandle, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
-    ResidentFragmentOwner,
+    CertifiedPrePaintInput, ResidentFragmentOwner,
     ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
     ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
     SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,

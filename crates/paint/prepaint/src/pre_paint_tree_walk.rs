@@ -4618,6 +4618,7 @@ fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
         inline_geometry: Vec::new(),
         resources: f.resources.clone(),
         paint: f.paint.clone(),
+        certified: Default::default(),
         ..*f
     }
 }

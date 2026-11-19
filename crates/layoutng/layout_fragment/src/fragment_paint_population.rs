@@ -362,8 +362,10 @@ fn PopulateInlineItemLocalPaintData(
         }
         // The binding recorded this slot's resident owner; a fresh payload keeps it.
         let resident_owner = output.resident_owner;
+        let certified = std::mem::take(&mut output.certified);
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
+        output.certified = certified;
         output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
@@ -883,8 +885,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         }
         // The binding recorded this slot's resident owner; a fresh payload keeps it.
         let resident_owner = output.resident_owner;
+        let certified = std::mem::take(&mut output.certified);
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
+        output.certified = certified;
         output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.

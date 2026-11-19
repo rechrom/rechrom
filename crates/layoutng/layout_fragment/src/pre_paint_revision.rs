@@ -31,6 +31,8 @@ pub struct PrePaintRevisionTracker {
     spare_owners: HashMap<u64, LiveOwner>,
     last_stats: PrePaintRevisionStats,
     production_update: Option<ProductionUpdate>,
+    /// Advanced by invalidate(); a slot certification of another epoch is stale.
+    epoch: u64,
 }
 
 struct ProductionUpdate {
@@ -114,6 +116,7 @@ impl PrePaintRevisionTracker {
         self.spare_owners.clear();
         self.last_stats = PrePaintRevisionStats::default();
         self.production_update = None;
+        self.epoch += 1;
     }
 
     /// Begin a production source walk. Layout calls ObserveProductionNode
@@ -149,21 +152,96 @@ impl PrePaintRevisionTracker {
             .production_update
             .as_mut()
             .expect("production revision update has not begun");
-        let key = InputKey::Instance(node.fragment_instance_id);
-        Self::observe(
-            node,
-            key,
-            &[],
-            update.generation,
-            &mut update.previous,
-            &mut update.next,
-            &mut update.resource_matches,
-            &mut update.previous_owners,
-            &mut update.next_owners,
-            &mut update.stats,
-            true,
-            descendant_changed,
-        )
+        // Production fragments carry their previous certification on their
+        // persistent slot (Chromium keeps such state on FragmentData), so no
+        // keyed map is moved between passes. This is `observe`'s production
+        // branch: identity is the stable instance, geometry and paint are
+        // proven by the source dirty bits.
+        let epoch = self.epoch + 1;
+        let generation = update.generation;
+        let stats = &mut update.stats;
+        let old = (node.certified.epoch == epoch).then(|| node.certified.clone());
+        stats.nodes += 1;
+        let invalidation = node.pre_paint_invalidation;
+        stats.own_invalidations += invalidation.own() as usize;
+        stats.descendant_invalidations += invalidation.descendants() as usize;
+        stats.needs_paint_property_update += invalidation.needs_paint_property_update as usize;
+        stats.descendant_needs_paint_property_update +=
+            invalidation.descendant_needs_paint_property_update as usize;
+        stats.should_check_for_paint_invalidation +=
+            invalidation.should_check_for_paint_invalidation as usize;
+        stats.should_check_layout_for_paint_invalidation +=
+            invalidation.should_check_layout_for_paint_invalidation as usize;
+        stats.descendant_should_check_layout_for_paint_invalidation +=
+            invalidation.descendant_should_check_layout_for_paint_invalidation as usize;
+        stats.subtree_should_check_for_paint_invalidation +=
+            invalidation.subtree_should_check_for_paint_invalidation as usize;
+        if old.is_none() {
+            stats.new_nodes += 1;
+        }
+        let owners_live =
+            retain_owners(&node.paint, &mut update.previous_owners, &mut update.next_owners);
+        let current_owner_ids = owner_ids(&node.paint);
+        node.pre_paint_owner_retained =
+            owners_live && old.as_ref().is_some_and(|old| old.owner_ids == current_owner_ids);
+        let (same_geometry, same_paint, same_resources) = old
+            .as_ref()
+            .map(|old| {
+                let resources = resources_equal(
+                    &old.resources,
+                    &node.resources,
+                    &mut update.resource_matches,
+                    old.resource_usage | paint_resource_usage(&node.paint),
+                );
+                (!invalidation.own(), !invalidation.own(), resources)
+            })
+            .unwrap_or((false, false, false));
+        if old.is_some() {
+            stats.geometry_changes += (!same_geometry) as usize;
+            stats.paint_changes += (!same_paint) as usize;
+            stats.resource_changes += (!same_resources) as usize;
+        }
+        let marked_self = old.as_ref().is_some_and(|old| {
+            node.pre_paint_revision != 0 && node.pre_paint_revision != old.revision
+        });
+        let marked_subtree = old.as_ref().is_some_and(|old| {
+            node.pre_paint_subtree_revision != 0
+                && node.pre_paint_subtree_revision != old.subtree_revision
+        });
+        let self_same = old.is_some()
+            && !marked_self
+            && same_geometry
+            && same_paint
+            && same_resources
+            && (node.pre_paint_owner_retained || !just_created(&node.paint));
+        let children_same = old.is_some()
+            && !marked_subtree
+            && !invalidation.descendants()
+            && !descendant_changed;
+        stats.child_changes += (!children_same) as usize;
+        node.pre_paint_revision = if self_same {
+            old.as_ref().unwrap().revision
+        } else {
+            generation
+        };
+        node.pre_paint_subtree_revision = if self_same && children_same {
+            old.as_ref().unwrap().subtree_revision
+        } else {
+            generation
+        };
+        let (resources, resource_usage) = match old {
+            Some(old) if self_same => (old.resources, old.resource_usage),
+            _ => (node.resources.clone(), paint_resource_usage(&node.paint)),
+        };
+        node.certified = layout_fragment_boundary::CertifiedPrePaintInput {
+            epoch,
+            revision: node.pre_paint_revision,
+            subtree_revision: node.pre_paint_subtree_revision,
+            owner_ids: current_owner_ids,
+            resources,
+            resource_usage,
+        };
+        !self_same || !children_same
     }
 
     /// A selection commit changes only native invalidation bits. Certify the
@@ -175,18 +253,16 @@ impl PrePaintRevisionTracker {
         generation: u64,
     ) {
         assert!(self.production_update.is_none());
-        let Some(input) = self
-            .inputs
-            .get_mut(&InputKey::Instance(node.fragment_instance_id))
-        else {
+        // Production certifications live on the slot (ObserveProductionNode).
+        if node.certified.epoch != self.epoch + 1 {
             return;
-        };
+        }
         if node.pre_paint_invalidation.own() {
             node.pre_paint_revision = generation;
-            input.revision = generation;
+            node.certified.revision = generation;
         }
         node.pre_paint_subtree_revision = generation;
-        input.subtree_revision = generation;
+        node.certified.subtree_revision = generation;
     }
 
     pub fn FinishProductionUpdate(&mut self) {
@@ -550,6 +626,7 @@ impl Input {
             // The bound owner address is lifecycle identity, not paint input;
             // the fragment's own values are compared through its fields.
             resident_owner: _,
+            certified: _,
             fragment_instance_id,
             fragmentainer_instance_id,
             node_id,

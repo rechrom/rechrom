@@ -554,7 +554,25 @@ pub struct FragmentPaintData<Paint> {
     /// values migrate to getters over this owner. Lifecycle state beside the
     /// per-publication geometry, never part of the shared payload.
     pub resident_owner: ResidentFragmentOwner,
+    /// PrePaint input certification of this slot by the revision tracker
+    /// epoch that wrote it. Slots persist across replacement results, so
+    /// this is the previous certification of the same fragment instance.
+    pub certified: CertifiedPrePaintInput,
     pub paint: PaintPropertiesHandle<Paint>,
+}
+
+/// What the PrePaint revision tracker last certified for a slot: its
+/// revisions, DisplayItemClient owner ids and the paint resources (with the
+/// resource kinds the fragment used). `epoch` 0 means never certified, or
+/// certified by a tracker that has since been invalidated.
+#[derive(Clone, Default)]
+pub struct CertifiedPrePaintInput {
+    pub epoch: u64,
+    pub revision: u64,
+    pub subtree_revision: u64,
+    pub owner_ids: [u64; 7],
+    pub resources: Option<Arc<PaintResources>>,
+    pub resource_usage: u8,
 }
 
 /// Addresses of a slot's resident source owner, valid for the LayoutResult
@@ -594,6 +612,7 @@ impl<Paint> FragmentPaintData<Paint> {
             resources: None,
             pre_paint_invalidation: PrePaintInvalidation::default(),
             resident_owner: ResidentFragmentOwner::None,
+            certified: CertifiedPrePaintInput::default(),
             paint,
         }
     }
