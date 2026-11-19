@@ -715,7 +715,11 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
     // ComputedStyle::HasFixedAttachmentBackgroundImage rather than a full
     // projection of every background layer.
     let (fixed_background, style_images) = paint.style.ResourceUsageFacts(nine_piece_images);
-    let viewport = paint.IsLayoutView() || paint.canvas_background.is_some() || fixed_background;
+    // Viewport-relative painters, which also read the base background facts.
+    let viewport = paint.IsLayoutView()
+        || paint.canvas_background.is_some()
+        || paint.is_page_container
+        || fixed_background;
     let images = paint.replaced_is_image
         || paint.video_frame_resource_id.is_some()
         || paint
@@ -1293,10 +1297,17 @@ fn resources_equal(
         *device_pixel_ratio == b.device_pixel_ratio
             && *preferred_color_scheme == b.preferred_color_scheme
             && *layout_zoom_factor == b.layout_zoom_factor
-            && *base_background_color == b.base_background_color
-            && *paints_opaque_base_background == b.paints_opaque_base_background
-            && *should_clear_document_background == b.should_clear_document_background
-            && (usage & RESOURCE_VIEWPORT == 0 || *viewport == b.viewport)
+            // The base background (ViewPainter's opaque backdrop and clear)
+            // is read only by the view, canvas-background and page-container
+            // painters, which all carry RESOURCE_VIEWPORT. A document laid out
+            // both as itself and as a document image alternates these facts;
+            // that must not dirty every other fragment of the document.
+            && (usage & RESOURCE_VIEWPORT == 0
+                || (*viewport == b.viewport
+                    && *base_background_color == b.base_background_color
+                    && *paints_opaque_base_background == b.paints_opaque_base_background
+                    && *should_clear_document_background
+                        == b.should_clear_document_background))
             && (usage & RESOURCE_FONTS == 0
                 || (fonts.len() == b.fonts.len()
                     && (fonts.ptr_eq(&b.fonts)
