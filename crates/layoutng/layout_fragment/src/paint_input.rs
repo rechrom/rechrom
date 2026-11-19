@@ -2439,6 +2439,36 @@ impl PaintStyle {
         })
     }
 
+    /// visible(), outline_style(), outline_width() and outline_color().alpha
+    /// from a single source resolution, for PrePaint's per-node record.
+    pub fn PhaseStyleValues(&self) -> (bool, BorderLineStyle, f64, f32) {
+        match self.Source() {
+            Some(style) => {
+                let outline = style.OutlineStyle();
+                (
+                    style.Visibility() == foundation::EVisibility::kVisible,
+                    crate::internal::boundary::paint_style_export::BorderStyle(outline),
+                    if outline == foundation::EBorderStyle::kNone {
+                        0.0
+                    } else {
+                        *style.OutlineWidth() as f64
+                    },
+                    crate::internal::boundary::paint_style_export::StyleColor(
+                        style,
+                        style.OutlineColor(),
+                    )
+                    .alpha,
+                )
+            }
+            None => (
+                self.data.visible,
+                self.data.outline_style,
+                self.data.outline_width,
+                self.data.outline_color.alpha,
+            ),
+        }
+    }
+
     pub fn forced_color_adjust_auto(&self) -> bool {
         self.Source()
             .map_or(self.data.forced_color_adjust_auto, |style| {

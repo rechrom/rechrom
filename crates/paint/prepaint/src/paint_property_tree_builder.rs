@@ -2073,6 +2073,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             },
             revision: fragment.pre_paint_revision,
             subtree_revision: fragment.pre_paint_subtree_revision,
+            record: Default::default(),
             raw_properties: node.properties.clone(),
             raw_contents: node.contents_properties.clone(),
             raw_fixed_background: node.fixed_background_properties.clone(),

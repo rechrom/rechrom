@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use foundation::{PaintInvalidationReason, TrustedIdentityHashMap as HashMap};
 
-use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData, TextCombinePaintData};
+use layoutng_assembly::fragment_tree::{
+    FragmentKind, FragmentPaintData, TextCombinePaintData,
+};
 use layoutng_assembly::internal::layout_input::PaintStyle;
 use layoutng_assembly::internal::layout_input::{
     BorderLineStyle, Display, Edges, FloatSide, NodeKind, Offset, Overflow, PaintClipPathChild,
@@ -873,6 +875,9 @@ struct NodeCache {
     children: ChildContext,
     revision: u64,
     subtree_revision: u64,
+    /// The values this node compared, recorded after its comparisons; the
+    /// next lifecycle compares the paired fragment against them.
+    record: PrePaintPrevious,
     raw_properties: PropertyTreeState,
     raw_contents: PropertyTreeState,
     raw_fixed_background: Option<paint_model::paint_property_tree::PropertyTreeState>,
@@ -4522,6 +4527,111 @@ fn SamePhaseInputs(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     SamePhaseStructure(a, b) && a.size == b.size
 }
 
+/// Values of one fragment that this walk compares across lifecycles. Each
+/// retained node records them after its own comparisons, so the next
+/// lifecycle compares against the node's record instead of dereferencing the
+/// previous LayoutResult's sidecar copy (Chromium likewise compares against
+/// previous values kept on its persistent owners). Enums are stored as their
+/// `repr(i32)` discriminants; `kind` is `None` until recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct PrePaintPrevious {
+    kind: Option<FragmentKind>,
+    node_id: u64,
+    fragment_instance_id: u64,
+    fragmentainer_instance_id: u64,
+    display_item_client_id: u64,
+    display_item_fragment: u32,
+    size: foundation::LayoutSize,
+    offset: foundation::LayoutOffset,
+    content_size: foundation::LayoutSize,
+    /// Boolean inputs of SamePhaseStructure, as bits.
+    phase_flags: u32,
+    floating: i32,
+    display: i32,
+    outline_style: i32,
+    outline_width: f64,
+    outline_alpha: f32,
+    position: i32,
+    logical_parent_node_id: Option<u64>,
+    logical_parent_fragment_instance_id: Option<u64>,
+    logical_tree_order: u64,
+}
+
+fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
+    let p = &f.paint;
+    let (visible, outline_style, outline_width, outline_alpha) = p.style.PhaseStyleValues();
+    let phase_flags = u32::from(p.HasSource())
+        | u32::from(
+            p.form_control
+                .as_ref()
+                .is_some_and(|control| control.auto_focus_ring),
+        ) << 1
+        | u32::from(p.focused_image_map_area.is_some()) << 2
+        | u32::from(p.scrollbars.is_some()) << 3
+        | u32::from(p.establishes_paint_state) << 4
+        | u32::from(p.svg_hidden_container) << 5
+        | u32::from(visible) << 6;
+    PrePaintPrevious {
+        kind: Some(f.kind),
+        node_id: f.node_id,
+        fragment_instance_id: f.fragment_instance_id,
+        fragmentainer_instance_id: f.fragmentainer_instance_id,
+        display_item_client_id: p.display_item_client_id,
+        display_item_fragment: p.display_item_fragment,
+        size: f.size,
+        offset: f.offset,
+        content_size: f.content_size,
+        phase_flags,
+        floating: p.floating as i32,
+        display: p.display as i32,
+        outline_style: outline_style as i32,
+        outline_width,
+        outline_alpha,
+        position: p.position as i32,
+        logical_parent_node_id: p.logical_parent_node_id,
+        logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
+        logical_tree_order: p.logical_tree_order,
+    }
+}
+
+/// The record of a retained node; empty if it has none.
+fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
+    node.cache.as_ref().map_or_else(PrePaintPrevious::default, |cache| cache.record)
+}
+
+/// SameSourceIdentity of the retained node `previous` (by its record) and
+/// the paired `new` fragment.
+fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
+    let recorded = RecordOf(previous);
+    recorded.kind == Some(new.kind)
+        && recorded.node_id == new.node_id
+        && recorded.fragment_instance_id == new.fragment_instance_id
+        && recorded.fragmentainer_instance_id == new.fragmentainer_instance_id
+        && recorded.display_item_client_id == new.paint.display_item_client_id
+        && recorded.display_item_fragment == new.paint.display_item_fragment
+}
+
+/// SamePhaseInputs against the recorded previous values.
+fn SamePreviousPhaseInputs(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
+    recorded.phase_flags == current.phase_flags
+        && recorded.floating == current.floating
+        && recorded.display == current.display
+        && recorded.outline_style == current.outline_style
+        && recorded.outline_width == current.outline_width
+        && recorded.outline_alpha == current.outline_alpha
+        && recorded.size == current.size
+}
+
+/// The logical-tree inputs SameGeometry and the invalidation-only refresh
+/// compare, against the recorded previous values.
+fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
+    recorded.position == current.position
+        && recorded.logical_parent_node_id == current.logical_parent_node_id
+        && recorded.logical_parent_fragment_instance_id
+            == current.logical_parent_fragment_instance_id
+        && recorded.logical_tree_order == current.logical_tree_order
+}
+
 fn SameClientDirectory(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     let x = &a.paint;
     let y = &b.paint;
@@ -4613,19 +4723,23 @@ fn ObjectRequiresTreeBuilderContext(object: &FragmentPaintData) -> bool {
 /// geometry/property/phase data only when the direct layout inputs also prove
 /// unchanged. Any property update or geometry/topology change falls back to
 /// the complete builder comparison.
-fn CanRefreshInvalidationOnlySource(old: &FragmentPaintData, new: &FragmentPaintData) -> bool {
+fn CanRefreshInvalidationOnlySource(
+    previous: &PaintTreeNode<'_>,
+    new: &FragmentPaintData,
+    current: &PrePaintPrevious,
+) -> bool {
     let invalidation = new.pre_paint_invalidation;
-    invalidation.own()
-        && !ObjectRequiresTreeBuilderContext(new)
-        && SameSourceIdentity(old, new)
-        && SamePhaseInputs(old, new)
-        && old.offset == new.offset
-        && old.content_size == new.content_size
-        && old.paint.position == new.paint.position
-        && old.paint.logical_parent_node_id == new.paint.logical_parent_node_id
-        && old.paint.logical_parent_fragment_instance_id
-            == new.paint.logical_parent_fragment_instance_id
-        && old.paint.logical_tree_order == new.paint.logical_tree_order
+    if !invalidation.own()
+        || ObjectRequiresTreeBuilderContext(new)
+        || !SamePreviousSourceIdentity(previous, new)
+    {
+        return false;
+    }
+    let recorded = &RecordOf(previous);
+    SamePreviousPhaseInputs(recorded, current)
+        && recorded.offset == new.offset
+        && recorded.content_size == new.content_size
+        && SamePreviousLogicalPosition(recorded, current)
 }
 
 // ViewportGeometry is a host/CSS-pixel input, while the fragment tree and
@@ -4855,19 +4969,23 @@ impl PrePaintTreeWalk {
             )
     }
 
-    fn SameGeometry(&self, a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> bool {
+    fn SameGeometry(
+        &self,
+        a: &PaintTreeNode<'_>,
+        b: &PaintTreeNode<'_>,
+        current: &PrePaintPrevious,
+    ) -> bool {
         let old = a.cache.as_ref().expect("cached geometry");
         let new = b.cache.as_ref().expect("new geometry");
-        let af = a.fragment.as_deref().unwrap();
         let bf = b.fragment.as_deref().unwrap();
         if (bf.paint.DisplayItemClientState().is_just_created && !bf.pre_paint_owner_retained)
-            || !SameSourceIdentity(af, bf)
-            || !SamePhaseInputs(af, bf)
-            || af.paint.position != bf.paint.position
-            || af.paint.logical_parent_node_id != bf.paint.logical_parent_node_id
-            || af.paint.logical_parent_fragment_instance_id
-                != bf.paint.logical_parent_fragment_instance_id
-            || af.paint.logical_tree_order != bf.paint.logical_tree_order
+            || !SamePreviousSourceIdentity(a, bf)
+        {
+            return false;
+        }
+        let recorded = RecordOf(a);
+        if !SamePreviousPhaseInputs(&recorded, current)
+            || !SamePreviousLogicalPosition(&recorded, current)
         {
             return false;
         }
@@ -5140,12 +5258,16 @@ impl PrePaintTreeWalk {
         // FragmentData identity. An unchanged revision therefore proves the
         // same inputs Chromium would find on its retained FragmentData; only
         // the borrowed sidecar pointer has to move to the new owner.
+        // The values this lifecycle compares and then records on the slot
+        // (PrePaintPreviousOf), computed once per visited node.
+        let current_record = PrePaintPreviousOf(&fragment);
         let self_clean = (same_context || retained_geometry_covered)
             && self_revision_matches
             && (!self.source_owner_changed
                 || previous.as_ref().is_some_and(|node| {
                     let old = node.fragment.as_deref().unwrap();
-                    SameSourceIdentity(old, &fragment) && SameClientDirectory(old, &fragment)
+                    SamePreviousSourceIdentity(node, &fragment)
+                        && SameClientDirectory(old, &fragment)
                 }));
         // Both the invalidation-only and same-geometry proofs compare the old
         // sidecar's style projection with the new one. After a replacement
@@ -5157,7 +5279,7 @@ impl PrePaintTreeWalk {
             && previous.as_ref().is_some_and(|node| {
                 let old = node.fragment.as_deref().unwrap();
                 SameClientDirectory(old, &fragment)
-                    && CanRefreshInvalidationOnlySource(old, &fragment)
+                    && CanRefreshInvalidationOnlySource(node, &fragment, &current_record)
             });
         let mut node = if self_clean {
             self.stats.reused_nodes += 1;
@@ -5224,14 +5346,17 @@ impl PrePaintTreeWalk {
             built.previous_paint_result.set(old_previous_paint_result);
             if let Some(mut old) = previous.take() {
                 let same_geometry =
-                    !force && !self.source_owner_changed && self.SameGeometry(&old, &built);
+                    !force
+                        && !self.source_owner_changed
+                        && self.SameGeometry(&old, &built, &current_record);
                 if same_geometry {
                     self.stats.same_geometry_rebuilds += 1;
+                    // Bit 2 of the recorded phase flags is the previous
+                    // focused image-map area (PrePaintPreviousOf).
                     let focused_image_map_phase_changed =
-                        old.fragment.as_deref().is_some_and(|fragment| {
-                            fragment.paint.focused_image_map_area.is_some()
-                        }) != built.fragment.as_deref().is_some_and(|fragment| {
-                            fragment.paint.focused_image_map_area.is_some()
+                        built.fragment.as_deref().is_some_and(|fragment| {
+                            (RecordOf(&old).phase_flags & (1 << 2) != 0)
+                                != fragment.paint.focused_image_map_area.is_some()
                         });
                     self.needs_post_update |= focused_image_map_phase_changed;
                     // Only drawing content changed. Keep the already-finalized
@@ -5507,13 +5632,19 @@ impl PrePaintTreeWalk {
         // isolation. Reuse the existing piercing `force` channel for the
         // descendants; the current node has already been rebuilt above.
         let force_descendants = force || FilterTaintChanged(was_filter_origin_tainted, &node);
+        // This node's comparisons are complete: record the values the next
+        // lifecycle compares against. Children record theirs in their own
+        // UpdateNode, after the identity check below has read them.
+        if let Some(cache) = node.cache.as_mut() {
+            cache.record = current_record;
+        }
         let same_children = old_children.len()
             == OrdinaryPaintSourceChildren(fragment).count()
                 + usize::from(embedded_source.is_some())
             && old_children
                 .iter()
                 .zip(OrdinaryPaintSourceChildren(fragment).chain(embedded_source))
-                .all(|(old, source)| SameSourceIdentity(old.fragment.as_deref().unwrap(), &source));
+                .all(|(old, source)| SamePreviousSourceIdentity(old, &source));
         if !same_children {
             self.needs_post_update = true;
         }
