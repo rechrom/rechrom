@@ -2439,11 +2439,36 @@ impl PaintStyle {
         })
     }
 
+    /// Whether border-image paints: its NinePieceImage has an image (the only
+    /// case ExportNinePieceImageForFragment produces a value).
+    pub fn has_border_image(&self) -> bool {
+        self.Source().map_or(self.data.border_image.is_some(), |style| {
+            !style.BorderImage().GetImage().is_null()
+        })
+    }
+
+    /// Whether -webkit-mask-box-image paints (see has_border_image).
+    pub fn has_mask_box_image(&self) -> bool {
+        self.Source().map_or(self.data.mask_box_image.is_some(), |style| {
+            !style.MaskBoxImage().GetImage().is_null()
+        })
+    }
+
+    /// Whether a box reflection paints a mask image (see has_border_image).
+    pub fn has_box_reflection_mask_image(&self) -> bool {
+        self.Source()
+            .map_or(self.data.box_reflection_mask_image.is_some(), |style| {
+                unsafe { style.BoxReflect().as_ref() }.is_some_and(|reflection| {
+                    reflection.Mask().HasImage() && !reflection.Mask().GetImage().is_null()
+                })
+            })
+    }
+
     /// The style facts PrePaint's resource-usage classification needs, from
     /// one source resolution: whether any background layer has a fixed
     /// attachment image (ComputedStyle::HasFixedAttachmentBackgroundImage),
     /// and whether this style paints any image or filter resource.
-    pub fn ResourceUsageFacts(&self) -> (bool, bool) {
+    pub fn ResourceUsageFacts(&self, nine_piece_images: bool) -> (bool, bool) {
         let data_images = self.data.image_resource_id.is_some()
             || self.data.border_image.is_some()
             || self.data.mask_box_image.is_some()
@@ -2451,7 +2476,18 @@ impl PaintStyle {
         match self.Source() {
             Some(style) => (
                 style.HasFixedAttachmentBackgroundImage(),
-                data_images
+                self.data.image_resource_id.is_some()
+                    // Box fragments paint nine-piece images from the style
+                    // (border-image, mask-box-image, reflection mask).
+                    || (nine_piece_images
+                        && (!style.BorderImage().GetImage().is_null()
+                            || !style.MaskBoxImage().GetImage().is_null()
+                            || unsafe { style.BoxReflect().as_ref() }.is_some_and(
+                                |reflection| {
+                                    reflection.Mask().HasImage()
+                                        && !reflection.Mask().GetImage().is_null()
+                                },
+                            )))
                     || style.HasBackgroundImage()
                     || style.MaskLayers().AnyLayerHasImage()
                     || style.HasFilter()

@@ -462,7 +462,13 @@ fn PopulateInlineItemLocalPaintData(
     {
         output.content_size = output.size;
     }
-    if purpose == LayoutUpdateKind::Paint && item.Type() == ItemType::kBox && !object.is_null() {
+    // Box fragments with a live style resolve nine-piece images in Paint
+    // (ResidentBoxGeometry::BorderImage); only detached projections store them.
+    if purpose == LayoutUpdateKind::Paint
+        && item.Type() == ItemType::kBox
+        && !object.is_null()
+        && output.paint.style.Source().is_none()
+    {
         let style = if effective_style.is_null() {
             unsafe { &*object }.StyleRef()
         } else {
@@ -994,7 +1000,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
                 box_fragment,
             );
-        if purpose == LayoutUpdateKind::Paint && !object.is_null() {
+        // Live styles resolve nine-piece images in Paint (BorderImage).
+        if purpose == LayoutUpdateKind::Paint
+            && !object.is_null()
+            && output.paint.style.Source().is_none()
+        {
             let style = if effective_style.is_null() {
                 unsafe { &*object }.StyleRef()
             } else {

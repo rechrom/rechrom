@@ -247,20 +247,19 @@ impl BoxPaintInvalidator {
             || has_effective_appearance
             || style.has_filters()
             || style.has_mask_images()
-            || style.mask_box_image.is_some()
+            || style.has_mask_box_image()
             || style.clip_path.is_some()
         {
             return PaintInvalidationReason::kLayout;
         }
 
         if style
-            .border_radii
+            .border_radii()
             .as_ref()
             .is_some_and(|radii| radii.HasRadius())
             || style.border_radius != 0.0
-            || style
-                .border_image
-                .as_ref()
+            || fragment
+                .BorderImage()
                 .is_some_and(|image| image.resource_id != 0 || image.shader.is_some())
         {
             return PaintInvalidationReason::kLayout;

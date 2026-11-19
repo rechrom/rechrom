@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::internal::background_bleed_avoidance::BackgroundBleedAvoidance;
 use layoutng_assembly::internal::layout_input::BorderLineStyle;
 use layoutng_style::style::appearance::AppearanceValue;
@@ -49,7 +50,7 @@ impl BoxDecorationData {
         let border = IncludedBorderEdges(fragment);
         let widths = [border.top, border.right, border.bottom, border.left];
         let has_non_collapsed_border_decoration = !fragment.paint.has_collapsed_borders
-            && (style.border_image.is_some()
+            && (style.has_border_image()
                 || widths.iter().enumerate().any(|(edge, width)| {
                     *width > 0.0
                         && !matches!(
@@ -188,11 +189,12 @@ impl BoxDecorationData {
             .as_deref()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
-        let has_border_image = style.border_image.is_some();
+        let border_image = fragment.BorderImage();
+        let has_border_image = border_image.is_some();
         let has_border_radius = BackgroundRadii(node, BackgroundBox::kBorderBox).HasRadius();
 
         if !self.should_paint_border || !has_border_radius || has_border_image {
-            if let Some(border_image) = style.border_image.as_ref() {
+            if let Some(border_image) = border_image.as_ref() {
                 if has_border_radius
                     || border_image.outsets.top != 0.0
                     || border_image.outsets.right != 0.0

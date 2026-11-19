@@ -359,14 +359,11 @@ impl NinePieceImagePainter {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment")
-            .paint
-            .style
-            .border_image
-            .as_ref()
+            .BorderImage()
         else {
             return false;
         };
-        Self::PaintImage(node, context, phase, border_image, None)
+        Self::PaintImage(node, context, phase, &border_image, None)
     }
 
     pub fn PaintMaskBox(
@@ -378,14 +375,11 @@ impl NinePieceImagePainter {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment")
-            .paint
-            .style
-            .mask_box_image
-            .as_ref()
+            .MaskBoxImage()
         else {
             return false;
         };
-        Self::PaintImage(node, context, phase, mask_box_image, None)
+        Self::PaintImage(node, context, phase, &mask_box_image, None)
     }
 
     pub fn PaintMaskBoxWithin(
@@ -398,14 +392,11 @@ impl NinePieceImagePainter {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment")
-            .paint
-            .style
-            .mask_box_image
-            .as_ref()
+            .MaskBoxImage()
         else {
             return false;
         };
-        Self::PaintImage(node, context, phase, mask_box_image, Some(reference_rect))
+        Self::PaintImage(node, context, phase, &mask_box_image, Some(reference_rect))
     }
 
     fn PaintImage(

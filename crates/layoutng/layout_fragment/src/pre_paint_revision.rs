@@ -191,7 +191,7 @@ impl PrePaintRevisionTracker {
                     &old.resources,
                     &node.resources,
                     &mut update.resource_matches,
-                    old.resource_usage | paint_resource_usage(&node.paint),
+                    old.resource_usage | paint_resource_usage(node),
                 );
                 (!invalidation.own(), !invalidation.own(), resources)
             })
@@ -231,7 +231,7 @@ impl PrePaintRevisionTracker {
         };
         let (resources, resource_usage) = match old {
             Some(old) if self_same => (old.resources, old.resource_usage),
-            _ => (node.resources.clone(), paint_resource_usage(&node.paint)),
+            _ => (node.resources.clone(), paint_resource_usage(node)),
         };
         node.certified = layout_fragment_boundary::CertifiedPrePaintInput {
             epoch,
@@ -524,7 +524,7 @@ impl PrePaintRevisionTracker {
                     &old.resources,
                     &node.resources,
                     resource_matches,
-                    old.resource_usage | paint_resource_usage(&node.paint),
+                    old.resource_usage | paint_resource_usage(node),
                 );
                 (identity, geometry, paint, resources)
             })
@@ -611,7 +611,7 @@ impl Input {
             None
         };
         let resources = node.resources.clone();
-        let resource_usage = paint_resource_usage(&node.paint);
+        let resource_usage = paint_resource_usage(node);
         // Exhaustive pattern: a new fragment self field cannot accidentally be
         // omitted from this compact observer without a compiler error here.
         let FragmentPaintData {
@@ -698,7 +698,7 @@ pub fn SamePrePaintInput(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
             &a.resources,
             &b.resources,
             &mut HashMap::default(),
-            paint_resource_usage(&a.paint) | paint_resource_usage(&b.paint),
+            paint_resource_usage(a) | paint_resource_usage(b),
         )
 }
 
@@ -706,11 +706,15 @@ const RESOURCE_VIEWPORT: u8 = 1 << 0;
 const RESOURCE_FONTS: u8 = 1 << 1;
 const RESOURCE_IMAGES: u8 = 1 << 2;
 
-fn paint_resource_usage(paint: &PaintProperties) -> u8 {
+fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
+    let paint = &fragment.paint;
+    // Only box fragments with a source paint nine-piece images (the former
+    // ExportNinePieceImages admission).
+    let nine_piece_images = fragment.kind == FragmentKind::kBox && paint.HasSource();
     // One style-source resolution; the fixed-attachment check is
     // ComputedStyle::HasFixedAttachmentBackgroundImage rather than a full
     // projection of every background layer.
-    let (fixed_background, style_images) = paint.style.ResourceUsageFacts();
+    let (fixed_background, style_images) = paint.style.ResourceUsageFacts(nine_piece_images);
     let viewport = paint.IsLayoutView() || paint.canvas_background.is_some() || fixed_background;
     let images = paint.replaced_is_image
         || paint.video_frame_resource_id.is_some()

@@ -1347,7 +1347,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         for layer in self.node.mask_layers.iter().skip(1) {
             bounds.as_mut().unwrap().union(layer.clip_rect);
         }
-        if let Some(mask_box) = fragment.paint.style.mask_box_image.as_ref() {
+        let mask_box_image = fragment.MaskBoxImage();
+        if let Some(mask_box) = mask_box_image.as_ref() {
             let mask_box_bounds = reference_rect.map_or_else(
                 || NinePieceImagePainter::Bounds(self.node, mask_box),
                 |rect| NinePieceImagePainter::BoundsWithin(rect, mask_box),
@@ -7252,7 +7253,7 @@ fn ResolveBackgroundDestinationRects(
         || paint.stitched_decoration.is_some()
         || node.paint_layer_is_fragmented
         || paint.style.border_shape_unsupported
-        || paint.style.border_image.is_some()
+        || paint.style.has_border_image()
         || paint.has_collapsed_borders;
 
     if layer.clip == BackgroundBox::kNoClip

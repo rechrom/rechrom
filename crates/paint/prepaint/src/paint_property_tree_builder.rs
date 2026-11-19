@@ -538,7 +538,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             } else {
                 node.mask_layers.clear();
             }
-            node.applies_mask = !node.mask_layers.is_empty() || style.mask_box_image.is_some();
+            node.applies_mask = !node.mask_layers.is_empty() || style.has_mask_box_image();
         }
         if establishes {
             if let Some(style) = style {

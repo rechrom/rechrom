@@ -72,7 +72,7 @@ pub fn ClassifyFragmentPaintLayer(
                     || style.isolate_blending()
                     || style.clip_path.is_some()
                     || style.has_mask_images()
-                    || style.mask_box_image.is_some()
+                    || style.has_mask_box_image()
             }));
     // A source PaintLayer is authoritative when the bridge exported one.
     // Borrowed line/text fragments never become independent layer owners.
@@ -96,7 +96,7 @@ pub fn ClassifyFragmentPaintLayer(
                     || style.isolate_blending()
                     || style.clip_path.is_some()
                     || style.has_mask_images()
-                    || style.mask_box_image.is_some()
+                    || style.has_mask_box_image()
             }));
     if fragment.paint.paint_layer_client_id != 0 && is_paint_layer {
         is_stacking_context = is_root || fragment.paint.PaintLayerIsStackingContext();
