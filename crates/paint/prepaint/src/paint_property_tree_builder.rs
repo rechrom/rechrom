@@ -118,7 +118,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let inherited_transform_count = transforms.len();
         let mut transforms = transforms;
         let geometry_property_delta =
-            FlatToPropertySpaceOffset(&transforms, &parent_properties.nodes.transform)
+            self.walk.FlatToPropertySpaceOffsetMemo(&transforms, &parent_properties.nodes.transform)
                 .unwrap_or_default();
         let mut geometry = ResolveFragmentGeometry(
             fragment,
@@ -334,7 +334,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 // do not reset paint_offset and keep their scroll anchor.
                 let resets_paint_space = *role == PaintPropertyRole::PaintOffsetTranslation;
                 let property_matrix = if resets_paint_space {
-                    FlatToPropertySpaceOffset(
+                    self.walk.FlatToPropertySpaceOffsetMemo(
                         &flat_transform_context,
                         &node.properties.nodes.transform,
                     )
@@ -472,7 +472,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // Unsupported non-affine transforms are rejected by raster lowering;
         // only a proven coordinate translation changes these property payloads.
         let property_space_delta = if geometry.applies_transform {
-            FlatToPropertySpaceOffset(&node.transforms, &node.properties.nodes.transform)
+            self.walk.FlatToPropertySpaceOffsetMemo(&node.transforms, &node.properties.nodes.transform)
                 .unwrap_or_default()
         } else {
             // Neither flat transforms nor the property transform changed;

@@ -996,6 +996,9 @@ pub struct PrePaintTreeWalk {
     view_background_geometry_changed: bool,
     prior_property_keys: BTreeMap<u64, PaintPropertyKey>,
     needs_post_update: bool,
+    /// Root-to-node transform products of property nodes seen this walk.
+    /// The Arc keeps each key's allocation alive for the walk.
+    transform_world_memo: HashMap<usize, (Arc<TransformPaintPropertyNode>, TransformMatrix)>,
     pub stats: PrePaintUpdateStats,
     intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
@@ -1035,6 +1038,7 @@ impl Default for PrePaintTreeWalk {
             view_background_geometry_changed: false,
             prior_property_keys: BTreeMap::new(),
             needs_post_update: false,
+            transform_world_memo: HashMap::default(),
             stats: PrePaintUpdateStats::default(),
             intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
@@ -1630,21 +1634,34 @@ pub fn ResolveChildGeometryOrigin(
 // in that parent's space. Comparing the complete linear parts proves this is a pure
 // translation even across a CSS/SVG paint-space reset; summing scroll offsets
 // would be wrong when an intervening scale changes their coordinate space.
-fn FlatToPropertySpaceOffset(
-    flat: &[TransformMatrix],
-    property: &Arc<TransformPaintPropertyNode>,
-) -> Option<Offset> {
-    let mut parents = Vec::new();
-    let mut current = Some(property);
-    while let Some(node) = current {
-        parents.push(node.matrix);
-        current = node.parent.as_ref();
+impl PrePaintTreeWalk {
+    /// FlatToPropertySpaceOffset with each property node's root-to-node
+    /// product memoized for this walk. Property nodes are immutable
+    /// snapshots, and the product is formed in the same order (parent world
+    /// times own matrix), so results are bit-identical to the unmemoized
+    /// root-first loop.
+    pub(crate) fn FlatToPropertySpaceOffsetMemo(
+        &mut self,
+        flat: &[TransformMatrix],
+        property: &Arc<TransformPaintPropertyNode>,
+    ) -> Option<Offset> {
+        let world = self.TransformWorld(property);
+        FlatToWorldSpaceOffset(flat, &world)
     }
-    let mut property_world = TransformMatrix::default();
-    for matrix in parents.iter().rev() {
-        property_world = MultiplyTransforms(&property_world, matrix);
+
+    fn TransformWorld(&mut self, node: &Arc<TransformPaintPropertyNode>) -> TransformMatrix {
+        let key = Arc::as_ptr(node) as usize;
+        if let Some((_, world)) = self.transform_world_memo.get(&key) {
+            return *world;
+        }
+        let parent_world = match node.parent.as_ref() {
+            Some(parent) => self.TransformWorld(parent),
+            None => TransformMatrix::default(),
+        };
+        let world = MultiplyTransforms(&parent_world, &node.matrix);
+        self.transform_world_memo.insert(key, (Arc::clone(node), world));
+        world
     }
-    FlatToWorldSpaceOffset(flat, &property_world)
 }
 
 pub fn FlatToWorldSpaceOffset(
@@ -6184,6 +6201,7 @@ impl PrePaintTreeWalk {
         // Do not clone and rebind the resident graph here: that would preserve
         // a second snapshot-local marker model which Chromium does not have.
         self.stats = PrePaintUpdateStats::default();
+        self.transform_world_memo.clear();
         self.intersection_observation_state = Default::default();
         self.walk_generation = self
             .walk_generation
