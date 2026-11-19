@@ -75,4 +75,8 @@ pub struct PrePaintUpdateStats {
     pub shifted_nodes: usize,
     /// Verification mode: shifted nodes that differed from a rebuild.
     pub shift_check_mismatches: usize,
+    /// Rebuilt nodes by the first reason they could not be shifted (trace
+    /// only): no basis, own inputs changed, own property nodes, identity,
+    /// paint layer, SVG, own clip/cull/transform, other context change.
+    pub shift_rejects: [usize; 8],
 }

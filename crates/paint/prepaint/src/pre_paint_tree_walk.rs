@@ -5778,6 +5778,33 @@ impl PrePaintTreeWalk {
         } else {
             None
         };
+        if profile && shift_delta.is_none() && !self_clean && !invalidation_only {
+            // Why this node is rebuilt rather than shifted (trace only).
+            let reason = match previous.as_ref().and_then(|node| node.cache.as_ref().map(|c| (node, c))) {
+                None => 0,
+                _ if force => 0,
+                _ if !self_revision_matches => 1,
+                Some((_, cache)) if !cache.own_keys.is_empty() => 2,
+                Some((node, _))
+                    if self.source_owner_changed
+                        && !(SamePreviousSourceIdentity(node, &fragment)
+                            && SameClientDirectory(node, &fragment)) =>
+                {
+                    3
+                }
+                Some((node, _)) if node.is_paint_layer => 4,
+                Some((node, cache))
+                    if !node.local_transforms.is_empty()
+                        || cache.children.svg.is_some()
+                        || IsSvgLayoutChild(fragment.paint.source_kind) =>
+                {
+                    5
+                }
+                Some((node, _)) if !ShiftPreservesClips(node) => 6,
+                Some(_) => 7,
+            };
+            self.stats.shift_rejects[reason] += 1;
+        }
         let mut node = if let Some(delta) = shift_delta.filter(|_| !shift_check) {
             self.stats.shifted_nodes += 1;
             let mut node = previous.take().unwrap();

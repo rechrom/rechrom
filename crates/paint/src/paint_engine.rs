@@ -418,6 +418,21 @@ fn WalkPrePaint(
                 ("check_mismatches", stats.shift_check_mismatches as f64),
             ],
         );
+        let r = stats.shift_rejects;
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.ShiftRejects",
+            &[
+                ("no_basis", r[0] as f64),
+                ("own_inputs_changed", r[1] as f64),
+                ("own_property_nodes", r[2] as f64),
+                ("identity", r[3] as f64),
+                ("paint_layer", r[4] as f64),
+                ("svg", r[5] as f64),
+                ("own_clip_cull_transform", r[6] as f64),
+                ("other_context", r[7] as f64),
+            ],
+        );
         tree
     }
 }
