@@ -229,7 +229,11 @@ pub(crate) struct LayoutPaintState {
 }
 
 struct PaintFragmentSlot {
-    data: Box<FragmentPaintData>,
+    /// Shared with the slot of the same fragment instance in the result this
+    /// one was seeded from (Chromium keeps FragmentData on the persistent
+    /// LayoutObject), so a replacement result neither copies it nor frees it
+    /// while an earlier handle still points at it.
+    data: std::rc::Rc<UnsafeCell<FragmentPaintData>>,
     publication: u64,
     /// Source owner bound by the publication that last wrote this slot.
     owner: Option<PaintFragmentOwner>,
@@ -256,9 +260,11 @@ impl LayoutPaintState {
     /// Seed a replacement LayoutResult's state with the previous result's
     /// resident slots. Chromium keeps FragmentData/ObjectPaintProperties on
     /// the persistent LayoutObject across relayout, so a clean object keeps its
-    /// paint properties when the root LayoutResult is replaced. The previous
-    /// handle keeps its own slots; the shared paint payload is copy-on-write,
-    /// and slots not bound by the new publication are dropped at commit.
+    /// paint properties when the root LayoutResult is replaced. Slots are
+    /// shared with the previous handle, not copied: PrePaint compares against
+    /// the previous values its own retained nodes recorded, not against the
+    /// previous result's slots. Slots not bound by the new publication leave
+    /// this state at commit and live on only while the previous handle does.
     pub(crate) fn SeedFrom(&self, previous: &Self) {
         let previous = unsafe { &*previous.inputs.get() };
         let inputs = unsafe { &mut *self.inputs.get() };
@@ -267,7 +273,7 @@ impl LayoutPaintState {
             inputs.insert(
                 instance,
                 PaintFragmentSlot {
-                    data: Box::new((*slot.data).clone()),
+                    data: std::rc::Rc::clone(&slot.data),
                     publication: 0,
                     owner: slot.owner,
                 },
@@ -308,7 +314,7 @@ impl LayoutPaintState {
     pub(crate) fn ResidentFragment(&self, instance: u64) -> Option<&FragmentPaintData> {
         unsafe { &*self.inputs.get() }
             .get(&instance)
-            .map(|slot| slot.data.as_ref())
+            .map(|slot| unsafe { &*slot.data.get() })
     }
 
     fn Bind(&self, owner: PaintFragmentOwner, instance: u64) -> PaintSlotBinding {
@@ -320,17 +326,17 @@ impl LayoutPaintState {
             let same_owner = current.owner == Some(owner);
             current.owner = Some(owner);
             PaintSlotBinding {
-                data: current.data.as_mut() as *mut FragmentPaintData,
+                data: current.data.get(),
                 retained: true,
                 same_owner,
             }
         } else {
             let mut slot = PaintFragmentSlot {
-                data: Box::new(FragmentPaintData::default()),
+                data: std::rc::Rc::new(UnsafeCell::new(FragmentPaintData::default())),
                 publication,
                 owner: Some(owner),
             };
-            let pointer = slot.data.as_mut() as *mut FragmentPaintData;
+            let pointer = slot.data.get();
             inputs.insert(instance, slot);
             PaintSlotBinding {
                 data: pointer,

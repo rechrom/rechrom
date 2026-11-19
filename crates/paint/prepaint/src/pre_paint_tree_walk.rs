@@ -878,6 +878,10 @@ struct NodeCache {
     /// The values this node compared, recorded after its comparisons; the
     /// next lifecycle compares the paired fragment against them.
     record: PrePaintPrevious,
+    /// This node's fragment values as of its last visit: the paint payload
+    /// (shared, not copied) and the fragment's own scalar fields. The paint
+    /// invalidators read them as the previous fragment.
+    previous_fragment: Option<FragmentPaintData>,
     raw_properties: PropertyTreeState,
     raw_contents: PropertyTreeState,
     raw_fixed_background: Option<paint_model::paint_property_tree::PropertyTreeState>,
@@ -4533,6 +4537,15 @@ fn SamePhaseInputs(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 /// previous LayoutResult's sidecar copy (Chromium likewise compares against
 /// previous values kept on its persistent owners). Enums are stored as their
 /// `repr(i32)` discriminants; `kind` is `None` until recorded.
+/// DisplayItemClient ids of one fragment (see ClientDirectoryIds).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ClientIds {
+    display_item: u64,
+    paint_layer: u64,
+    /// Scroll corner, horizontal and vertical scrollbar clients.
+    scrollbars: Option<(u64, Option<u64>, Option<u64>)>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct PrePaintPrevious {
     kind: Option<FragmentKind>,
@@ -4555,6 +4568,8 @@ struct PrePaintPrevious {
     logical_parent_node_id: Option<u64>,
     logical_parent_fragment_instance_id: Option<u64>,
     logical_tree_order: u64,
+    /// DisplayItemClient ids compared by SameClientDirectory.
+    clients: ClientIds,
 }
 
 fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
@@ -4591,6 +4606,19 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         logical_parent_node_id: p.logical_parent_node_id,
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.logical_tree_order,
+        clients: ClientDirectoryIds(p),
+    }
+}
+
+/// The previous-fragment view a retained node keeps for the paint
+/// invalidators: the shared paint payload (an Arc, not a copy) and the
+/// fragment's scalar fields. CSSOM inline rectangles are not paint inputs.
+fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
+    FragmentPaintData {
+        inline_geometry: Vec::new(),
+        resources: f.resources.clone(),
+        paint: f.paint.clone(),
+        ..*f
     }
 }
 
@@ -4632,75 +4660,52 @@ fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPr
         && recorded.logical_tree_order == current.logical_tree_order
 }
 
-fn SameClientDirectory(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    let x = &a.paint;
+/// The DisplayItemClient ids of a fragment's paint payload: the object, its
+/// PaintLayer and, for a scroller, the scroll corner and scrollbar clients.
+fn ClientDirectoryIds(paint: &layoutng_assembly::fragment_tree::PaintProperties) -> ClientIds {
+    ClientIds {
+        display_item: paint.display_item_client_id,
+        paint_layer: paint.paint_layer_client_id,
+        scrollbars: paint.scrollbars.as_ref().map(|bars| {
+            (
+                bars.corner_client_id,
+                bars.horizontal.as_ref().map(|axis| axis.display_item_client_id),
+                bars.vertical.as_ref().map(|axis| axis.display_item_client_id),
+            )
+        }),
+    }
+}
+
+/// Whether `b` keeps the client directory of the retained node `previous`.
+/// The previous ids come from the node's record. Equal ids name the same
+/// live DisplayItemClient, so its cacheability is the same object state;
+/// only `b`'s just-created clients need the retained-owner proof.
+fn SameClientDirectory(previous: &PaintTreeNode<'_>, b: &FragmentPaintData) -> bool {
     let y = &b.paint;
-    let (x_item, x_layer) = (x.DisplayItemClientState(), x.PaintLayerClientState());
-    let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
-    if (
-        x.display_item_client_id,
-        x_item.is_cacheable,
-        x.paint_layer_client_id,
-        x_layer.is_cacheable,
-    ) != (
-        y.display_item_client_id,
-        y_item.is_cacheable,
-        y.paint_layer_client_id,
-        y_layer.is_cacheable,
-    ) {
+    if RecordOf(previous).clients != ClientDirectoryIds(y) {
         return false;
     }
+    let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
     let mut created = y_item.is_just_created || y_layer.is_just_created;
-    let (x_paint, y_paint) = (x, y);
-    match (&x.scrollbars, &y.scrollbars) {
-        (None, None) => {}
-        (Some(x), Some(y)) => {
-            let x_corner = x_paint.ScrollClientState(
-                x.corner_client_id,
-                x.corner_client_invalidation_reason,
-                x.corner_client_is_cacheable,
-                x.corner_client_is_just_created.get(),
-            );
-            let y_corner = y_paint.ScrollClientState(
-                y.corner_client_id,
-                y.corner_client_invalidation_reason,
-                y.corner_client_is_cacheable,
-                y.corner_client_is_just_created.get(),
-            );
-            if (x.corner_client_id, x_corner.is_cacheable)
-                != (y.corner_client_id, y_corner.is_cacheable)
-            {
-                return false;
-            }
-            created |= y_corner.is_just_created;
-            for (x, y) in [(&x.horizontal, &y.horizontal), (&x.vertical, &y.vertical)] {
-                match (x, y) {
-                    (None, None) => {}
-                    (Some(x), Some(y)) => {
-                        let x_state = x_paint.ScrollClientState(
-                            x.display_item_client_id,
-                            x.display_item_client_invalidation_reason,
-                            x.display_item_client_is_cacheable,
-                            x.display_item_client_is_just_created.get(),
-                        );
-                        let y_state = y_paint.ScrollClientState(
-                            y.display_item_client_id,
-                            y.display_item_client_invalidation_reason,
-                            y.display_item_client_is_cacheable,
-                            y.display_item_client_is_just_created.get(),
-                        );
-                        if (x.display_item_client_id, x_state.is_cacheable)
-                            != (y.display_item_client_id, y_state.is_cacheable)
-                        {
-                            return false;
-                        }
-                        created |= y_state.is_just_created;
-                    }
-                    _ => return false,
-                }
-            }
+    if let Some(bars) = &y.scrollbars {
+        created |= y
+            .ScrollClientState(
+                bars.corner_client_id,
+                bars.corner_client_invalidation_reason,
+                bars.corner_client_is_cacheable,
+                bars.corner_client_is_just_created.get(),
+            )
+            .is_just_created;
+        for axis in [&bars.horizontal, &bars.vertical].into_iter().flatten() {
+            created |= y
+                .ScrollClientState(
+                    axis.display_item_client_id,
+                    axis.display_item_client_invalidation_reason,
+                    axis.display_item_client_is_cacheable,
+                    axis.display_item_client_is_just_created.get(),
+                )
+                .is_just_created;
         }
-        _ => return false,
     }
     !created || b.pre_paint_owner_retained
 }
@@ -5163,10 +5168,6 @@ impl PrePaintTreeWalk {
             .map_or(paint_model::PaintResult::kMayBeClippedByCullRect, |node| {
                 node.previous_paint_result.get()
             });
-        let old_fragment = previous
-            .as_ref()
-            .and_then(|node| node.fragment.as_deref())
-            .map(|fragment| fragment as *const FragmentPaintData);
         let was_filter_origin_tainted = previous.as_deref().is_some_and(OwnFilterOriginTainted);
         let mut invalidation_context = parent_invalidation_context;
         let should_run_invalidation =
@@ -5261,13 +5262,23 @@ impl PrePaintTreeWalk {
         // The values this lifecycle compares and then records on the slot
         // (PrePaintPreviousOf), computed once per visited node.
         let current_record = PrePaintPreviousOf(&fragment);
+        // The previous lifecycle's fragment, as the retained node recorded
+        // it, instead of the previous LayoutResult's sidecar copy. Owned
+        // here: the rebuild path overwrites the retained node before the
+        // invalidators below read it.
+        let old_snapshot = previous
+            .as_mut()
+            .and_then(|node| node.cache.as_mut())
+            .and_then(|cache| cache.previous_fragment.take());
+        let old_fragment = old_snapshot
+            .as_ref()
+            .map(|fragment| fragment as *const FragmentPaintData);
         let self_clean = (same_context || retained_geometry_covered)
             && self_revision_matches
             && (!self.source_owner_changed
                 || previous.as_ref().is_some_and(|node| {
-                    let old = node.fragment.as_deref().unwrap();
                     SamePreviousSourceIdentity(node, &fragment)
-                        && SameClientDirectory(old, &fragment)
+                        && SameClientDirectory(node, &fragment)
                 }));
         // Both the invalidation-only and same-geometry proofs compare the old
         // sidecar's style projection with the new one. After a replacement
@@ -5277,8 +5288,7 @@ impl PrePaintTreeWalk {
         let invalidation_only = same_context
             && !self.source_owner_changed
             && previous.as_ref().is_some_and(|node| {
-                let old = node.fragment.as_deref().unwrap();
-                SameClientDirectory(old, &fragment)
+                SameClientDirectory(node, &fragment)
                     && CanRefreshInvalidationOnlySource(node, &fragment, &current_record)
             });
         let mut node = if self_clean {
@@ -5635,8 +5645,10 @@ impl PrePaintTreeWalk {
         // This node's comparisons are complete: record the values the next
         // lifecycle compares against. Children record theirs in their own
         // UpdateNode, after the identity check below has read them.
+        let snapshot = node.fragment.as_deref().map(PreviousFragmentSnapshot);
         if let Some(cache) = node.cache.as_mut() {
             cache.record = current_record;
+            cache.previous_fragment = snapshot;
         }
         let same_children = old_children.len()
             == OrdinaryPaintSourceChildren(fragment).count()
@@ -5661,11 +5673,8 @@ impl PrePaintTreeWalk {
             let mut children_by_instance = HashMap::default();
             children_by_instance.reserve(old_children.len());
             for child in old_children {
-                let instance_id = child
-                    .fragment
-                    .as_deref()
-                    .expect("PrePaint node must own a fragment")
-                    .fragment_instance_id;
+                // The instance id recorded when this child was last visited.
+                let instance_id = RecordOf(&child).fragment_instance_id;
                 if instance_id != 0 {
                     let replaced = children_by_instance.insert(instance_id, child);
                     debug_assert!(
