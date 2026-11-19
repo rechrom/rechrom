@@ -867,6 +867,9 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
     }
     // cpp: style_cascade.cc:297-334
     pub fn Apply(&mut self, filter: CascadeFilter) {
+        if browser_tracing::enabled() {
+            DECLARATION_PROFILE.with(|profile| profile.set(DeclarationProfile::default()));
+        }
         let _trace = browser_tracing::span("style_resolve", "StyleCascade.Apply");
         self.CollectDeclarationsIfNeeded();
         self.state_.InvalidateLengthConversionData();
@@ -876,16 +879,25 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         self.has_applied_ = true;
         let b = self.backend_;
         let mut resolver = b.NewCascadeResolver(filter);
-        self.ApplyCascadeAffecting(&mut resolver);
-        self.ApplyViewportUnitAffecting(&mut resolver);
-        self.ApplyHighPriority(&mut resolver);
-        self.state_.UpdateFont();
+        {
+            let _phase = browser_tracing::span("style_resolve", "StyleCascade.ApplyHighPriority");
+            self.ApplyCascadeAffecting(&mut resolver);
+            self.ApplyViewportUnitAffecting(&mut resolver);
+            self.ApplyHighPriority(&mut resolver);
+        }
+        {
+            let _phase = browser_tracing::span("style_resolve", "StyleCascade.UpdateFont");
+            self.state_.UpdateFont();
+        }
         if self.map_.NativeBitset().Has(CSSPropertyID::kLineHeight) {
             self.LookupAndApplyById(CSSPropertyID::kLineHeight, &mut resolver);
         }
         self.state_.UpdateLineHeight();
-        self.ApplyWideOverlapping(&mut resolver);
-        self.ApplyMatchResult(&mut resolver);
+        {
+            let _phase = browser_tracing::span("style_resolve", "StyleCascade.ApplyMatchResult");
+            self.ApplyWideOverlapping(&mut resolver);
+            self.ApplyMatchResult(&mut resolver);
+        }
         self.ApplyInterpolations(&mut resolver);
         self.state_
             .SetComputedStyleFlagsFromAuthorFlags(b.ResolverAuthorFlags(&resolver));
@@ -1248,7 +1260,10 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
     }
     // cpp: style_cascade.cc:810-852
     fn ApplyMatchResult(&mut self, resolver: &mut B::CascadeResolver) {
+        let mut trace = browser_tracing::span("style_resolve", "StyleCascade.ApplyDeclarations");
+        let native_started = browser_tracing::enabled().then(std::time::Instant::now);
         let properties: Vec<_> = self.map_.NativeBitset().BeginAfterHighPriority().collect();
+        let mut native_applied = 0usize;
         for id in properties {
             let name = CSSPropertyName::new(id);
             let priority = self.map_.At(&name);
@@ -1259,9 +1274,24 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
             if self.backend_.ResolverRejects(resolver, property) {
                 continue;
             }
+            native_applied += 1;
             self.LookupAndApplyDeclaration(&name, property, resolver);
         }
+        let custom_started = browser_tracing::enabled().then(std::time::Instant::now);
         let custom: Vec<_> = self.map_.GetCustomMap().keys().cloned().collect();
+        trace.set("native", native_applied as f64);
+        trace.set("custom", custom.len() as f64);
+        if let (Some(native), Some(custom_t)) = (native_started, custom_started) {
+            trace.set("native_ms", custom_t.duration_since(native).as_secs_f64() * 1e3);
+        }
+        if browser_tracing::enabled() {
+            let p =
+                DECLARATION_PROFILE.with(|profile| profile.replace(DeclarationProfile::default()));
+            trace.set("resolve_ms", p.resolve_ns as f64 / 1e6);
+            trace.set("apply_ms", p.apply_ns as f64 / 1e6);
+            trace.set("slowest_ms", p.max_ns as f64 / 1e6);
+            trace.set("slowest_property_id", p.max_id);
+        }
         for name in custom {
             let name = CSSPropertyName::custom(name);
             let priority = self.map_.At(&name);
@@ -1419,6 +1449,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         };
         let scope = self.GetTreeScope(priority);
         let mixin = self.GetMixinParameterBindings(priority);
+        let started = browser_tracing::enabled().then(std::time::Instant::now);
         let value = self.ResolveValue(
             property,
             name,
@@ -1430,8 +1461,24 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
             resolver,
         );
         let value = self.backend_.EnsureScopedValue(value, scope.as_deref());
+        let resolved = started.map(|_| std::time::Instant::now());
         self.backend_
             .ApplyPhysicalProperty(name, property, self.state_, &value);
+        if let (Some(started), Some(resolved)) = (started, resolved) {
+            let applied = std::time::Instant::now();
+            DECLARATION_PROFILE.with(|profile| {
+                let mut p = profile.get();
+                let resolve = resolved.duration_since(started).as_nanos() as u64;
+                let apply = applied.duration_since(resolved).as_nanos() as u64;
+                p.resolve_ns += resolve;
+                p.apply_ns += apply;
+                if resolve + apply > p.max_ns {
+                    p.max_ns = resolve + apply;
+                    p.max_id = name.Id() as u16 as f64;
+                }
+                profile.set(p);
+            });
+        }
     }
     // cpp: style_cascade.cc:1002-1027. The complete function precedes
     // the requested 1029 cutoff; the IsRootElement helper follows it.
@@ -2013,15 +2060,25 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
                 let mut sequence = TokenSequence::new();
                 let text = b.VariableText(&data);
                 let mut stream = TokenStream::new(StringView::from(&text), 0);
-                if !this.ResolveTokensInto(
-                    &mut stream,
-                    scope,
-                    resolver,
-                    &this.GetParserContext(&shorthand),
-                    frame,
-                    kEOFToken,
-                    &mut sequence,
-                ) {
+                let parser_context = {
+                    let _phase =
+                        browser_tracing::span("style_resolve", "StyleCascade.PendingParserContext");
+                    this.GetParserContext(&shorthand)
+                };
+                let resolved = {
+                    let _phase =
+                        browser_tracing::span("style_resolve", "StyleCascade.PendingResolveTokens");
+                    this.ResolveTokensInto(
+                        &mut stream,
+                        scope,
+                        resolver,
+                        &parser_context,
+                        frame,
+                        kEOFToken,
+                        &mut sequence,
+                    )
+                };
+                if !resolved {
                     return b.NewUnsetValue();
                 }
                 let text = sequence.OriginalText();
@@ -2029,8 +2086,13 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
                     StringView::from(&text),
                     Some(sequence.GetAttrTaintedRanges()),
                 );
-                let context = b.UnparsedParserContext(&shorthand);
-                let Some(properties) = b.ParseShorthand(id, &mut stream, context.as_deref()) else {
+                let parsed = {
+                    let _phase =
+                        browser_tracing::span("style_resolve", "StyleCascade.PendingParseShorthand");
+                    let context = b.UnparsedParserContext(&shorthand);
+                    b.ParseShorthand(id, &mut stream, context.as_deref())
+                };
+                let Some(properties) = parsed else {
                     return b.NewUnsetValue();
                 };
                 b.SetShorthandCache(resolver, value, properties);
@@ -3440,4 +3502,19 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
         }
         out.AppendSequence(self.backend_, &result, tainted, usize::MAX)
     }
+}
+
+/// Per-cascade declaration timing (trace only): ResolveValue vs
+/// ApplyPhysicalProperty and the slowest single declaration.
+#[derive(Clone, Copy, Default)]
+struct DeclarationProfile {
+    resolve_ns: u64,
+    apply_ns: u64,
+    max_ns: u64,
+    max_id: f64,
+}
+
+thread_local! {
+    static DECLARATION_PROFILE: std::cell::Cell<DeclarationProfile> =
+        const { std::cell::Cell::new(DeclarationProfile { resolve_ns: 0, apply_ns: 0, max_ns: 0, max_id: 0.0 }) };
 }
