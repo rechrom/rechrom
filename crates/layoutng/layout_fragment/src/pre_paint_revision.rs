@@ -630,28 +630,18 @@ const RESOURCE_FONTS: u8 = 1 << 1;
 const RESOURCE_IMAGES: u8 = 1 << 2;
 
 fn paint_resource_usage(paint: &PaintProperties) -> u8 {
-    use layoutng::internal::paint_input::BackgroundAttachment;
-    let viewport = paint.IsLayoutView()
-        || paint.canvas_background.is_some()
-        || paint
-            .style
-            .background_images()
-            .iter()
-            .any(|layer| layer.attachment == BackgroundAttachment::kFixed);
+    // One style-source resolution; the fixed-attachment check is
+    // ComputedStyle::HasFixedAttachmentBackgroundImage rather than a full
+    // projection of every background layer.
+    let (fixed_background, style_images) = paint.style.ResourceUsageFacts();
+    let viewport = paint.IsLayoutView() || paint.canvas_background.is_some() || fixed_background;
     let images = paint.replaced_is_image
         || paint.video_frame_resource_id.is_some()
         || paint
             .replaced_content
             .as_ref()
             .is_some_and(|content| content.is_canvas)
-        || paint.style.image_resource_id.is_some()
-        || paint.style.has_background_images()
-        || paint.style.has_mask_images()
-        || paint.style.border_image.is_some()
-        || paint.style.mask_box_image.is_some()
-        || paint.style.box_reflection_mask_image.is_some()
-        || paint.style.has_filters()
-        || paint.style.has_backdrop_filters()
+        || style_images
         || paint.table.is_some()
         || paint.svg_shape.is_some()
         || paint.svg_text.is_some();

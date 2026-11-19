@@ -2439,6 +2439,39 @@ impl PaintStyle {
         })
     }
 
+    /// The style facts PrePaint's resource-usage classification needs, from
+    /// one source resolution: whether any background layer has a fixed
+    /// attachment image (ComputedStyle::HasFixedAttachmentBackgroundImage),
+    /// and whether this style paints any image or filter resource.
+    pub fn ResourceUsageFacts(&self) -> (bool, bool) {
+        let data_images = self.data.image_resource_id.is_some()
+            || self.data.border_image.is_some()
+            || self.data.mask_box_image.is_some()
+            || self.data.box_reflection_mask_image.is_some();
+        match self.Source() {
+            Some(style) => (
+                style.HasFixedAttachmentBackgroundImage(),
+                data_images
+                    || style.HasBackgroundImage()
+                    || style.MaskLayers().AnyLayerHasImage()
+                    || style.HasFilter()
+                    || style.HasBoxReflect()
+                    || style.HasBackdropFilter(),
+            ),
+            None => (
+                self.data
+                    .background_images
+                    .iter()
+                    .any(|layer| layer.attachment == BackgroundAttachment::kFixed),
+                data_images
+                    || !self.data.background_images.is_empty()
+                    || !self.data.mask_images.is_empty()
+                    || !self.data.filters.is_empty()
+                    || !self.data.backdrop_filters.is_empty(),
+            ),
+        }
+    }
+
     /// visible(), outline_style(), outline_width() and outline_color().alpha
     /// from a single source resolution, for PrePaint's per-node record.
     pub fn PhaseStyleValues(&self) -> (bool, BorderLineStyle, f64, f32) {
