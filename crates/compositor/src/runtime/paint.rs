@@ -162,6 +162,10 @@ impl PaintRecord {
     pub fn ops(&self) -> &[PaintOp] {
         &self.artifact.items[self.range.clone()]
     }
+    /// The same immutable replay range of the same artifact allocation.
+    pub fn SameSource(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.artifact, &other.artifact) && self.range == other.range
+    }
     pub fn is_empty(&self) -> bool {
         self.range.is_empty()
     }

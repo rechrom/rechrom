@@ -797,6 +797,53 @@ mod wavy_tests {
         assert!(Arc::ptr_eq(records[0], records[1]));
     }
 }
+/// A document image's recording is one immutable PaintRecord reused by every
+/// paint of that image. Lower it once and return the same buffer, as cc keeps
+/// one PaintRecord in the PaintShader: the raster record-shader cache is keyed
+/// by buffer identity, so a fresh lowering of identical content on every
+/// commit re-rasterized the whole pattern tile.
+fn LoweredDocumentImageRecord<R: CpuSkiaBackend>(
+    source: PaintRecord,
+    values: Arc<dyn super::CpuPaintValueServices<R>>,
+) -> CpuPaintRecord<R> {
+    struct Memo {
+        // Holding the source keeps its artifact allocation from being reused.
+        source: PaintRecord,
+        values: *const (),
+        lowered: Box<dyn std::any::Any>,
+    }
+    const CAPACITY: usize = 16;
+    thread_local! {
+        static MEMO: std::cell::RefCell<Vec<Memo>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let values_id = Arc::as_ptr(&values) as *const ();
+    MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if let Some(index) = memo
+            .iter()
+            .position(|entry| entry.values == values_id && entry.source.SameSource(&source))
+        {
+            if let Some(lowered) = memo[index].lowered.downcast_ref::<CpuPaintRecord<R>>() {
+                let lowered = lowered.clone();
+                let entry = memo.remove(index);
+                memo.insert(0, entry);
+                return lowered;
+            }
+        }
+        let lowered = CpuPaintRecord::from_source(source.clone(), values);
+        memo.insert(
+            0,
+            Memo {
+                source,
+                values: values_id,
+                lowered: Box::new(lowered.clone()),
+            },
+        );
+        memo.truncate(CAPACITY);
+        lowered
+    })
+}
+
 fn DocumentImagePattern<R: CpuSkiaBackend>(
     source: &PaintSource,
     resource_id: u64,
@@ -856,7 +903,7 @@ fn DocumentImagePattern<R: CpuSkiaBackend>(
     let tile_width = record_source_width + spacing_width / scale_x;
     let tile_height = record_source_height + spacing_height / scale_y;
     Some(CpuPaintShader::PaintRecord {
-        record: CpuPaintRecord::from_source(record_image.record, values),
+        record: LoweredDocumentImageRecord(record_image.record, values),
         tile_rect: RectF::new(
             record_source_x as f32,
             record_source_y as f32,
