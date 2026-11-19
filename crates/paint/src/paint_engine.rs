@@ -410,6 +410,14 @@ fn WalkPrePaint(
                 ("tail_ms", ms(stats.profile_tail_ns)),
             ],
         );
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.Shift",
+            &[
+                ("shifted_nodes", stats.shifted_nodes as f64),
+                ("check_mismatches", stats.shift_check_mismatches as f64),
+            ],
+        );
         tree
     }
 }

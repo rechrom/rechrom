@@ -71,4 +71,8 @@ pub struct PrePaintUpdateStats {
     pub profile_children_setup_ns: u64,
     pub profile_child_loop_ns: u64,
     pub profile_tail_ns: u64,
+    /// Nodes updated by shifting their retained geometry (offset-only).
+    pub shifted_nodes: usize,
+    /// Verification mode: shifted nodes that differed from a rebuild.
+    pub shift_check_mismatches: usize,
 }

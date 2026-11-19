@@ -999,6 +999,9 @@ pub struct PrePaintTreeWalk {
     /// Root-to-node transform products of property nodes seen this walk.
     /// The Arc keeps each key's allocation alive for the walk.
     transform_world_memo: HashMap<usize, (Arc<TransformPaintPropertyNode>, TransformMatrix)>,
+    /// RECHROM_PREPAINT_SHIFT_CHECK: rebuild offset-only nodes anyway and
+    /// compare them with the shifted retained node (diagnostic).
+    shift_check: bool,
     pub stats: PrePaintUpdateStats,
     intersection_observation_state:
         foundation::intersection_observation_state::IntersectionObservationState,
@@ -1039,6 +1042,7 @@ impl Default for PrePaintTreeWalk {
             prior_property_keys: BTreeMap::new(),
             needs_post_update: false,
             transform_world_memo: HashMap::default(),
+            shift_check: std::env::var_os("RECHROM_PREPAINT_SHIFT_CHECK").is_some(),
             stats: PrePaintUpdateStats::default(),
             intersection_observation_state: Default::default(),
             client_nodes: HashMap::default(),
@@ -4713,6 +4717,326 @@ fn RebindCleanSubtree(node: &mut PaintTreeNode<'static>, source: PaintFragmentSo
     nodes
 }
 
+/// A node without own property nodes takes its clip, cull rects and flat
+/// transforms, and passes them to its children, unchanged from its parent.
+/// Only then is an offset-only update a pure translation.
+fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
+    let Some(cache) = node.cache.as_ref() else {
+        return false;
+    };
+    let inherited = &cache.inherited;
+    // A paint layer carries ordering and repaint state beyond geometry; SVG
+    // children receive their container's local transform per rebuild.
+    !node.is_paint_layer
+        && node.local_transforms.is_empty()
+        && cache.children.svg.is_none()
+        && !node
+            .fragment
+            .as_deref()
+            .is_some_and(|fragment| IsSvgLayoutChild(fragment.paint.source_kind))
+        && node.fixed_background_properties.is_none()
+        && node.overflow_controls_properties.is_none()
+        && node.horizontal_scrollbar_properties.is_none()
+        && node.vertical_scrollbar_properties.is_none()
+        && node.mask_properties.is_none()
+        && node.clip == inherited.clip
+        && node.cull_rect == inherited.cull
+        && node.self_cull_rect == inherited.cull
+        && node.transforms == inherited.transforms
+        && cache.children.clip == inherited.clip
+        && cache.children.cull == inherited.cull
+        && cache.children.transforms == inherited.transforms
+}
+
+/// How far an offset-only update moved a subtree and its property space.
+#[derive(Clone, Copy)]
+struct ShiftDelta {
+    offset: Offset,
+    paint_space: Offset,
+}
+
+/// Move a retained node (proven by ShiftPreservesClips) by `delta` under its
+/// new inherited context.
+/// Returns whether the new cull rects need a repaint (CullRectUpdater), as
+/// the rebuild path decides it; the node's repaint bit is raised already.
+fn ShiftRetainedNode(
+    node: &mut PaintTreeNode<'static>,
+    delta: ShiftDelta,
+    inherited: &InheritedContext,
+    previous_paint_result: paint_model::PaintResult,
+) -> bool {
+    let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
+        previous_paint_result,
+        Some(node.self_cull_rect),
+        Some(node.cull_rect),
+        inherited.cull,
+        inherited.cull,
+    );
+    RefreshLivePaintLayerFacts(node);
+    node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
+    // Paint offsets are relative to the property space, which moves by
+    // `paint_space` when the parent's own PaintOffsetTranslation moved.
+    node.absolute_offset.x += delta.offset.x;
+    node.absolute_offset.y += delta.offset.y;
+    node.paint_offset.x += delta.offset.x - delta.paint_space.x;
+    node.paint_offset.y += delta.offset.y - delta.paint_space.y;
+    node.clip = inherited.clip;
+    node.cull_rect = inherited.cull;
+    node.self_cull_rect = inherited.cull;
+    node.transforms = inherited.transforms.clone();
+    // Without own nodes the object paints in its parent's property state,
+    // which may itself be a new snapshot (e.g. the resized viewport clip).
+    node.properties = inherited.properties.clone();
+    node.contents_properties = inherited.properties.clone();
+    let cache = node.cache.as_mut().expect("shifted node has builder state");
+    cache.raw_properties = inherited.properties.clone();
+    cache.raw_contents = inherited.properties.clone();
+    cache.children.properties = inherited.properties.clone();
+    cache.inherited = inherited.clone();
+    cache.children.origin.x += delta.offset.x;
+    cache.children.origin.y += delta.offset.y;
+    cache.children.paint_space.x += delta.paint_space.x;
+    cache.children.paint_space.y += delta.paint_space.y;
+    cache.children.clip = inherited.clip;
+    cache.children.cull = inherited.cull;
+    cache.children.transforms = inherited.transforms.clone();
+    cull_change_needs_repaint
+}
+
+/// Re-read the live PaintLayer facts the builder reads on every visit
+/// (paint_property_tree_builder.rs BuildNode); a retained node would
+/// otherwise keep the values of its last build.
+fn RefreshLivePaintLayerFacts(node: &mut PaintTreeNode<'static>) {
+    let Some(fragment) = node.fragment.as_deref() else {
+        return;
+    };
+    let paint = &fragment.paint;
+    let authoritative = paint.PaintLayerStateIsAuthoritative();
+    let is_self_painting_layer = if authoritative {
+        paint.PaintLayerIsSelfPainting()
+    } else {
+        node.is_paint_layer
+    };
+    let invisible = paint.PaintLayerInvisibleForPositionVisibility();
+    let ancestor_invisible = paint.PaintLayerHasAncestorInvisibleForPositionVisibility();
+    let has_visible_content = paint.PaintLayerHasVisibleContent();
+    let has_self_painting_layer_descendant = paint.PaintLayerHasSelfPaintingLayerDescendant();
+    let under_svg_hidden = paint.PaintLayerIsUnderSvgHiddenContainer();
+    let supports_subsequence_caching = paint.PaintLayerSupportsSubsequenceCaching();
+    let needs_repaint = paint.PaintLayerSelfOrDescendantNeedsRepaint();
+    let fragmented = paint.PaintLayerIsFragmented();
+    let clips_to_padding = paint.PaintLayerKnownToClipSubtreeToPaddingBox();
+    let display_locked = paint.ChildPaintBlockedByDisplayLock();
+    node.paint_layer_facts_are_authoritative = authoritative;
+    node.is_self_painting_layer = is_self_painting_layer;
+    node.invisible_for_position_visibility = invisible;
+    node.has_ancestor_invisible_for_position_visibility = ancestor_invisible;
+    node.has_visible_content = has_visible_content;
+    node.has_self_painting_layer_descendant = has_self_painting_layer_descendant;
+    node.is_under_svg_hidden_container = under_svg_hidden;
+    node.supports_subsequence_caching = supports_subsequence_caching;
+    node.self_or_descendant_needs_repaint = needs_repaint;
+    node.paint_layer_is_fragmented = fragmented;
+    node.known_to_clip_subtree_to_padding_box = clips_to_padding;
+    node.child_paint_blocked_by_display_lock = display_locked;
+}
+
+/// The fields ShiftRetainedNode writes, for the verification mode.
+struct SavedShiftFields {
+    absolute_offset: Offset,
+    paint_offset: Offset,
+    clip: Option<PaintRect>,
+    cull_rect: Option<PaintRect>,
+    self_cull_rect: Option<PaintRect>,
+    transforms: Vec<TransformMatrix>,
+    properties: PropertyTreeState,
+    contents_properties: PropertyTreeState,
+    raw_properties: PropertyTreeState,
+    raw_contents: PropertyTreeState,
+    self_or_descendant_needs_repaint: bool,
+    layer_facts: [bool; 11],
+    inherited: InheritedContext,
+    children: ChildContext,
+}
+
+fn LayerFacts(node: &PaintTreeNode<'_>) -> [bool; 11] {
+    [
+        node.paint_layer_facts_are_authoritative,
+        node.is_self_painting_layer,
+        node.invisible_for_position_visibility,
+        node.has_ancestor_invisible_for_position_visibility,
+        node.has_visible_content,
+        node.has_self_painting_layer_descendant,
+        node.is_under_svg_hidden_container,
+        node.supports_subsequence_caching,
+        node.paint_layer_is_fragmented,
+        node.known_to_clip_subtree_to_padding_box,
+        node.child_paint_blocked_by_display_lock,
+    ]
+}
+
+fn SetLayerFacts(node: &mut PaintTreeNode<'_>, facts: [bool; 11]) {
+    [
+        node.paint_layer_facts_are_authoritative,
+        node.is_self_painting_layer,
+        node.invisible_for_position_visibility,
+        node.has_ancestor_invisible_for_position_visibility,
+        node.has_visible_content,
+        node.has_self_painting_layer_descendant,
+        node.is_under_svg_hidden_container,
+        node.supports_subsequence_caching,
+        node.paint_layer_is_fragmented,
+        node.known_to_clip_subtree_to_padding_box,
+        node.child_paint_blocked_by_display_lock,
+    ] = facts;
+}
+
+impl SavedShiftFields {
+    fn Save(node: &PaintTreeNode<'_>) -> Self {
+        let cache = node.cache.as_ref().expect("cached node");
+        Self {
+            absolute_offset: node.absolute_offset,
+            paint_offset: node.paint_offset,
+            clip: node.clip,
+            cull_rect: node.cull_rect,
+            self_cull_rect: node.self_cull_rect,
+            transforms: node.transforms.clone(),
+            properties: node.properties.clone(),
+            contents_properties: node.contents_properties.clone(),
+            raw_properties: cache.raw_properties.clone(),
+            raw_contents: cache.raw_contents.clone(),
+            self_or_descendant_needs_repaint: node.self_or_descendant_needs_repaint,
+            layer_facts: LayerFacts(node),
+            inherited: cache.inherited.clone(),
+            children: cache.children.clone(),
+        }
+    }
+
+    fn Restore(self, node: &mut PaintTreeNode<'_>) {
+        node.absolute_offset = self.absolute_offset;
+        node.paint_offset = self.paint_offset;
+        node.clip = self.clip;
+        node.cull_rect = self.cull_rect;
+        node.self_cull_rect = self.self_cull_rect;
+        node.transforms = self.transforms;
+        node.properties = self.properties;
+        node.contents_properties = self.contents_properties;
+        node.self_or_descendant_needs_repaint = self.self_or_descendant_needs_repaint;
+        SetLayerFacts(node, self.layer_facts);
+        let cache = node.cache.as_mut().expect("cached node");
+        cache.raw_properties = self.raw_properties;
+        cache.raw_contents = self.raw_contents;
+        cache.inherited = self.inherited;
+        cache.children = self.children;
+    }
+}
+
+/// Verification mode: the first geometry field of a shifted node that
+/// differs from the rebuilt node.
+fn ShiftFieldMismatch(a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> Option<&'static str> {
+    macro_rules! first_diff {
+        ($($field:ident),* $(,)?) => {{
+            $(if a.$field != b.$field { return Some(stringify!($field)); })*
+            None
+        }};
+    }
+    first_diff!(
+        absolute_offset,
+        paint_offset,
+        directly_composited_container_paint_offset_subpixel_delta,
+        paint_snap_offset,
+        pixel_snap_scale,
+        root_clip,
+        local_inner_border_radius_clip,
+        local_inner_border_radius_radii,
+        local_clip,
+        local_css_clip,
+        local_clip_radius,
+        local_clip_radii,
+        local_clip_path,
+        clip_path_even_odd,
+        clip,
+        cull_rect,
+        self_cull_rect,
+        transforms,
+        local_transforms,
+        scroll_offset,
+        fixed_background_acts_as_scroll,
+        is_paint_layer,
+        paint_layer_facts_are_authoritative,
+        is_self_painting_layer,
+        invisible_for_position_visibility,
+        has_ancestor_invisible_for_position_visibility,
+        has_visible_content,
+        has_self_painting_layer_descendant,
+        is_under_svg_hidden_container,
+        supports_subsequence_caching,
+        self_or_descendant_needs_repaint,
+        paint_layer_is_fragmented,
+        known_to_clip_subtree_to_padding_box,
+        child_paint_blocked_by_display_lock,
+        is_stacking_context,
+        is_stacked,
+        is_root,
+        stacking_level,
+        is_z_order_list_visible,
+        is_in_top_or_view_transition_layer,
+        is_direct_layout_view_child,
+        can_contain_absolute_position_objects,
+        can_contain_fixed_position_objects,
+        has_overlay_overflow_controls,
+        paint_layer_order_parent_unique_id,
+        paint_layer_order,
+        applies_transform,
+        applies_clip,
+        applies_root_clip,
+        applies_overflow_clip,
+        applies_css_clip,
+        applies_clip_path,
+        applies_effect,
+        applies_opacity,
+        applies_blend,
+        applies_filter,
+        applies_backdrop_filter,
+        applies_mask,
+        mask_layers,
+        overflow_controls_properties,
+    )
+}
+
+/// Verification mode: the child context a shifted node hands down must equal
+/// the one the builder computed.
+fn ShiftChildrenMismatch(shifted: &PaintTreeNode<'_>, built: &PaintTreeNode<'_>) -> Option<&'static str> {
+    let a = &shifted.cache.as_ref()?.children;
+    let b = &built.cache.as_ref()?.children;
+    if a.origin != b.origin {
+        return Some("children.origin");
+    }
+    if a.paint_space != b.paint_space {
+        return Some("children.paint_space");
+    }
+    if a.clip != b.clip {
+        return Some("children.clip");
+    }
+    if a.cull != b.cull {
+        return Some("children.cull");
+    }
+    if a.transforms != b.transforms {
+        return Some("children.transforms");
+    }
+    if a.opacity != b.opacity || a.scroll != b.scroll || a.svg != b.svg {
+        return Some("children.opacity_scroll_svg");
+    }
+    if a.directly_composited_container_paint_offset_subpixel_delta
+        != b.directly_composited_container_paint_offset_subpixel_delta
+        || a.subtree_should_use_infinite_cull_rect != b.subtree_should_use_infinite_cull_rect
+        || a.flex_or_grid_items != b.flex_or_grid_items
+    {
+        return Some("children.flags");
+    }
+    None
+}
+
 /// Nanoseconds between two profiling checkpoints; zero when not profiling.
 fn ProfileNs(from: Option<std::time::Instant>, to: Option<std::time::Instant>) -> u64 {
     match (from, to) {
@@ -5006,10 +5330,38 @@ impl PrePaintTreeWalk {
     }
 
     fn SameContext(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
+        self.SameContextImpl(a, b, true)
+    }
+
+    /// The offset delta when two inherited contexts differ only by where the
+    /// parent placed this subtree (Chromium updates only PaintOffset for an
+    /// object without its own paint properties).
+    /// Also admits a moved transformed ancestor: the flat transform values a
+    /// descendant inherits change while their structure stays the same.
+    fn OffsetOnlyContextDelta(&self, a: &InheritedContext, b: &InheritedContext) -> Option<ShiftDelta> {
+        ((a.offset != b.offset || a.transforms != b.transforms)
+            && self.SameContextImpl(a, b, false))
+        .then(|| ShiftDelta {
+            offset: Offset {
+                x: b.offset.x - a.offset.x,
+                y: b.offset.y - a.offset.y,
+            },
+            paint_space: Offset {
+                x: b.paint_space.x - a.paint_space.x,
+                y: b.paint_space.y - a.paint_space.y,
+            },
+        })
+    }
+
+    fn SameContextImpl(&self, a: &InheritedContext, b: &InheritedContext, exact: bool) -> bool {
         let cull_covers = Self::CullContextCovers(&a.cull, &b.cull);
         a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
-            && a.offset == b.offset
-            && a.paint_space == b.paint_space
+            && (!exact || a.offset == b.offset)
+            && (exact || a.transforms.len() == b.transforms.len())
+            && (a.paint_space == b.paint_space
+                || (!exact
+                    && b.paint_space.x - a.paint_space.x == b.offset.x - a.offset.x
+                    && b.paint_space.y - a.paint_space.y == b.offset.y - a.offset.y))
             // A shrinking inherited clip/cull cannot expose content omitted
             // by the retained node. The updated ancestor still publishes its
             // exact current clip; descendants may keep their larger recorded
@@ -5017,7 +5369,7 @@ impl PrePaintTreeWalk {
             // mutable property-node and cull-hysteresis behavior.
             && (Self::ClipContextCovers(&a.clip, &b.clip) || cull_covers)
             && cull_covers
-            && a.transforms == b.transforms
+            && (!exact || a.transforms == b.transforms)
             && a.opacity == b.opacity
             && a.scroll == b.scroll
             && a.fixed_background_acts_as_scroll == b.fixed_background_acts_as_scroll
@@ -5405,7 +5757,49 @@ impl PrePaintTreeWalk {
             });
         let t_admitted = checkpoint();
         self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
-        let mut node = if self_clean {
+        // Offset-only update: this object is unchanged and owns no paint
+        // property nodes, and its parent only moved it. Shift the retained
+        // geometry instead of rebuilding it (PaintPropertyTreeBuilder's
+        // UpdateForObjectLocation path updates just PaintOffset).
+        let shift_check = self.shift_check;
+        let shift_delta = if !self_clean && !invalidation_only && !force && self_revision_matches {
+            previous.as_ref().and_then(|node| {
+                let cache = node.cache.as_ref()?;
+                if !cache.own_keys.is_empty()
+                    || (self.source_owner_changed
+                        && !(SamePreviousSourceIdentity(node, &fragment)
+                            && SameClientDirectory(node, &fragment)))
+                    || !ShiftPreservesClips(node)
+                {
+                    return None;
+                }
+                self.OffsetOnlyContextDelta(&cache.inherited, &inherited)
+            })
+        } else {
+            None
+        };
+        let mut node = if let Some(delta) = shift_delta.filter(|_| !shift_check) {
+            self.stats.shifted_nodes += 1;
+            let mut node = previous.take().unwrap();
+            node.fragment = Some(ResidentFragment::FromSource(&fragment));
+            if ShiftRetainedNode(&mut node, delta, &inherited, old_previous_paint_result) {
+                self.stats.cull_change_repaints += 1;
+                InvalidateClientsForCullRectChange(
+                    node.fragment.as_mut().expect("shifted node keeps its fragment"),
+                );
+            }
+            // As UpdateForObjectLocation: a changed paint offset admits paint
+            // invalidation for this object.
+            if delta.offset != delta.paint_space {
+                node.fragment
+                    .as_mut()
+                    .expect("shifted node keeps its fragment")
+                    .pre_paint_invalidation
+                    .should_check_for_paint_invalidation = true;
+            }
+            self.needs_post_update = true;
+            node
+        } else if self_clean {
             self.stats.reused_nodes += 1;
             let mut node = previous.take().unwrap();
             if self.source_owner_changed {
@@ -5470,6 +5864,79 @@ impl PrePaintTreeWalk {
             }
             built.previous_paint_result.set(old_previous_paint_result);
             if let Some(mut old) = previous.take() {
+                if let Some(delta) = shift_delta.filter(|_| shift_check) {
+                    // Verification: the shifted retained node must equal the
+                    // node the builder just produced. Restore it afterwards.
+                    let saved = SavedShiftFields::Save(&old);
+                    ShiftRetainedNode(&mut old, delta, &inherited, old_previous_paint_result);
+                    self.stats.shifted_nodes += 1;
+                    let field_mismatch = ShiftFieldMismatch(&old, &built);
+                    let mismatch = if let Some(field) = field_mismatch {
+                        Some(field)
+                    } else if !self.SameGeometry(&old, &built, &current_record) {
+                        let bf = built.fragment.as_deref().unwrap();
+                        let recorded = RecordOf(&old);
+                        let (oc, nc) = (old.cache.as_ref().unwrap(), built.cache.as_ref().unwrap());
+                        Some(if bf.paint.DisplayItemClientState().is_just_created
+                            && !bf.pre_paint_owner_retained
+                        {
+                            "SG.just_created"
+                        } else if !SamePreviousSourceIdentity(&old, bf) {
+                            "SG.identity"
+                        } else if !SamePreviousPhaseInputs(&recorded, &current_record) {
+                            "SG.phase_inputs"
+                        } else if !SamePreviousLogicalPosition(&recorded, &current_record) {
+                            "SG.logical_position"
+                        } else if oc.raw_opacity != nc.raw_opacity {
+                            "SG.raw_opacity"
+                        } else if !state_compare::SameBuilderState(
+                            &oc.raw_properties.nodes,
+                            &nc.raw_properties.nodes,
+                            &self.property_keys,
+                            &self.prior_property_keys,
+                        ) {
+                            "SG.raw_properties"
+                        } else if !state_compare::SameBuilderState(
+                            &oc.raw_contents.nodes,
+                            &nc.raw_contents.nodes,
+                            &self.property_keys,
+                            &self.prior_property_keys,
+                        ) {
+                            "SG.raw_contents"
+                        } else {
+                            "SG.other_field"
+                        })
+                    } else {
+                        ShiftChildrenMismatch(&old, &built)
+                    };
+                    if mismatch.is_some() {
+                        browser_tracing::instant(
+                            "prepaint",
+                            "PrePaint.ShiftMismatchValues",
+                            &[
+                                ("shift_abs_x", old.absolute_offset.x),
+                                ("built_abs_x", built.absolute_offset.x),
+                                ("shift_po_x", old.paint_offset.x),
+                                ("built_po_x", built.paint_offset.x),
+                                ("delta_x", delta.offset.x),
+                            ],
+                        );
+                    }
+                    if let Some(field) = mismatch {
+                        self.stats.shift_check_mismatches += 1;
+                        let name = built
+                            .fragment
+                            .as_deref()
+                            .map_or("?", |f| &*f.paint.display_item_client_debug_name);
+                        browser_tracing::instant_with_text(
+                            "prepaint",
+                            "PrePaint.ShiftMismatch",
+                            &format!("{name}: {field}"),
+                            &[],
+                        );
+                    }
+                    saved.Restore(&mut old);
+                }
                 let same_geometry =
                     !force
                         && !self.source_owner_changed
