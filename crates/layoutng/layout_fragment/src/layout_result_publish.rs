@@ -178,6 +178,16 @@ pub(super) fn populate_layout_result_paint_data(
             stats.retained_other_owner_local_ns as f64 / 1e6,
         );
         phase.set("exported_local_ms", stats.exported_local_ns as f64 / 1e6);
+        browser_tracing::instant(
+            "layout",
+            "layout_fragment.PopulationProfile",
+            &[
+                ("prefix_ms", stats.prefix_ns as f64 / 1e6),
+                ("certify_ms", stats.certify_ns as f64 / 1e6),
+                ("sidecar_store_ms", stats.sidecar_store_ns as f64 / 1e6),
+                ("property_export_ms", stats.property_export_ns as f64 / 1e6),
+            ],
+        );
     }
     if let Some(mut tracker) = paint_state_owners.certification.take() {
         tracker.FinishProductionUpdate();

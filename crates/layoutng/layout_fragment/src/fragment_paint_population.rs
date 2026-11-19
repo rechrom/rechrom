@@ -244,6 +244,7 @@ fn PopulateInlineItemLocalPaintData(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) -> (*mut FragmentPaintData, bool) {
+    let prefix_started = browser_tracing::enabled().then(std::time::Instant::now);
     let object = item.GetLayoutObject();
     if purpose == LayoutUpdateKind::Paint {
         SynchronizeInlineFragmentData(item, container_fragment_instance_id, paint_state_owners);
@@ -295,6 +296,7 @@ fn PopulateInlineItemLocalPaintData(
         paint_state_owners,
     );
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
+    paint_state_owners.population_stats.RecordPrefix(prefix_started, store_started);
     let binding =
         paint_state.BindInline(fragment_items, item_index as usize, fragment_instance_id);
     let (output, slot_retained) = (binding.data, binding.retained);
@@ -792,6 +794,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
 ) -> bool {
+    let prefix_started = browser_tracing::enabled().then(std::time::Instant::now);
     SynchronizeBoxFragmentData(fragment);
     let object = fragment.GetLayoutObject();
     let kind = if fragment.IsBox() {
@@ -842,6 +845,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         paint_state_owners,
     );
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
+    paint_state_owners.population_stats.RecordPrefix(prefix_started, store_started);
     let binding = paint_state.BindPhysical(fragment, fragment_instance_id);
     let (output, slot_retained) = (binding.data, binding.retained);
     let slot = output;

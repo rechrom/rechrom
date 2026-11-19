@@ -23,6 +23,10 @@ pub(super) struct PaintPopulationStats {
     pub(super) retained_same_owner_local_ns: u64,
     pub(super) retained_other_owner_local_ns: u64,
     pub(super) exported_local_ns: u64,
+    /// Synchronize + identity + retained-properties check, before binding.
+    pub(super) prefix_ns: u64,
+    /// PrePaint input certification of each bound slot.
+    pub(super) certify_ns: u64,
 }
 
 impl PaintPopulationStats {
@@ -36,6 +40,18 @@ impl PaintPopulationStats {
         } else {
             self.retained_inline += 1;
             self.retained_inline_same_owner += same_owner as usize;
+        }
+    }
+
+    pub(super) fn RecordPrefix(
+        &mut self,
+        started: Option<std::time::Instant>,
+        ended: Option<std::time::Instant>,
+    ) {
+        if let (Some(started), Some(ended)) = (started, ended) {
+            self.prefix_ns = self
+                .prefix_ns
+                .saturating_add(ended.duration_since(started).as_nanos().min(u64::MAX as u128) as u64);
         }
     }
 
@@ -85,12 +101,18 @@ impl FragmentOwners {
         output: *mut FragmentPaintData,
         descendant_changed: bool,
     ) -> bool {
-        match self.certification.as_mut() {
-            Some(tracker) => {
-                tracker.ObserveProductionNode(unsafe { &mut *output }, descendant_changed)
-            }
-            None => false,
+        let Some(tracker) = self.certification.as_mut() else {
+            return false;
+        };
+        let started = browser_tracing::enabled().then(std::time::Instant::now);
+        let changed = tracker.ObserveProductionNode(unsafe { &mut *output }, descendant_changed);
+        if let Some(started) = started {
+            self.population_stats.certify_ns = self
+                .population_stats
+                .certify_ns
+                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
         }
+        changed
     }
 
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
