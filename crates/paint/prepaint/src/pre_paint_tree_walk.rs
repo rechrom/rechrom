@@ -4662,6 +4662,48 @@ fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
 }
 
 /// The record of a retained node; empty if it has none.
+/// Whether a clean retained subtree pairs one-to-one, by source identity and
+/// child order, with the replacement source subtree. Read-only.
+fn CleanSubtreeRebindable(node: &PaintTreeNode<'static>, source: PaintFragmentSource<'_>) -> bool {
+    if node.fragment.is_none() || !SamePreviousSourceIdentity(node, &source) {
+        return false;
+    }
+    let mut sources = OrdinaryPaintSourceChildren(source);
+    for child in &node.children {
+        match sources.next() {
+            Some(child_source) if CleanSubtreeRebindable(child, child_source) => {}
+            _ => return false,
+        }
+    }
+    sources.next().is_none()
+}
+
+/// Move every node of a clean subtree, proven by CleanSubtreeRebindable, to
+/// the replacement owner: its sidecar slot and its source cursor are the only
+/// references into a LayoutResult. Geometry, properties and caches are kept,
+/// as Chromium keeps a clean FragmentData across relayout. Returns the nodes.
+fn RebindCleanSubtree(node: &mut PaintTreeNode<'static>, source: PaintFragmentSource<'_>) -> usize {
+    node.fragment = Some(ResidentFragment::FromSource(&source));
+    node.source_cursor = Some(unsafe {
+        std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
+            source.Cursor(),
+        )
+    });
+    let mut nodes = 1;
+    for (child, child_source) in node.children.iter_mut().zip(OrdinaryPaintSourceChildren(source)) {
+        nodes += RebindCleanSubtree(child, child_source);
+    }
+    nodes
+}
+
+/// Nanoseconds between two profiling checkpoints; zero when not profiling.
+fn ProfileNs(from: Option<std::time::Instant>, to: Option<std::time::Instant>) -> u64 {
+    match (from, to) {
+        (Some(from), Some(to)) => to.duration_since(from).as_nanos().min(u64::MAX as u128) as u64,
+        _ => 0,
+    }
+}
+
 fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
     node.cache.as_ref().map_or_else(PrePaintPrevious::default, |cache| cache.record)
 }
@@ -4945,6 +4987,7 @@ impl PrePaintTreeWalk {
             _ => false,
         }
     }
+
     fn SameContext(&self, a: &InheritedContext, b: &InheritedContext) -> bool {
         let cull_covers = Self::CullContextCovers(&a.cull, &b.cull);
         a.inside_blocking_wheel_event_handler == b.inside_blocking_wheel_event_handler
@@ -5158,6 +5201,9 @@ impl PrePaintTreeWalk {
         mut previous: Option<Box<PaintTreeNode<'static>>>,
         force: bool,
     ) -> Box<PaintTreeNode<'static>> {
+        let profile = browser_tracing::enabled();
+        let checkpoint = || profile.then(std::time::Instant::now);
+        let t_start = checkpoint();
         // Source pre_paint_tree_walk.cc:270-282,725-730. The source registry
         // invalidates the affected native subtree; this existing walk updates
         // its resident LayoutObject/FragmentData before paint invalidation.
@@ -5268,9 +5314,18 @@ impl PrePaintTreeWalk {
             && !should_run_invalidation
             && !fragment.pre_paint_invalidation.descendants()
             && subtree_revision_matches
-            && source_tree_compatible;
+            // A replacement LayoutResult republishes the same stable sidecar
+            // slots; a clean subtree whose source topology is unchanged only
+            // needs its two owner references moved (RebindCleanSubtree).
+            && (source_tree_compatible
+                || previous
+                    .as_deref()
+                    .is_some_and(|node| CleanSubtreeRebindable(node, fragment)));
         if subtree_clean {
             let mut node = previous.unwrap();
+            if !source_tree_compatible {
+                self.stats.rebound_nodes += RebindCleanSubtree(&mut node, fragment);
+            }
             // Same-slot immutable snapshots need the same reference update that
             // Blink gets from retaining a pointer to its mutable property node.
             // CullRect::ChangedEnough keeps the old finite sliding window while
@@ -5291,6 +5346,7 @@ impl PrePaintTreeWalk {
                 .extend(cache.subtree_keys.iter().copied());
             self.stats.reused_nodes += cache.nodes;
             self.stats.skipped_subtrees += 1;
+            self.stats.profile_admission_ns += ProfileNs(t_start, checkpoint());
             return node;
         }
         // A replacement LayoutResult republishes every fragment-local sidecar
@@ -5330,6 +5386,8 @@ impl PrePaintTreeWalk {
                 SameClientDirectory(node, &fragment)
                     && CanRefreshInvalidationOnlySource(node, &fragment, &current_record)
             });
+        let t_admitted = checkpoint();
+        self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
         let mut node = if self_clean {
             self.stats.reused_nodes += 1;
             let mut node = previous.take().unwrap();
@@ -5474,6 +5532,8 @@ impl PrePaintTreeWalk {
                 Box::new(built)
             }
         };
+        let t_built = checkpoint();
+        self.stats.profile_build_ns += ProfileNs(t_admitted, t_built);
         // LayoutImage::last_paint_rect_ belongs to the retained LayoutImage,
         // not to one immutable PhysicalFragment generation. Rechrom keeps the
         // same lifecycle value on layout_fragment's shared Paint payload, so
@@ -5596,6 +5656,8 @@ impl PrePaintTreeWalk {
                 self.intersection_observation_state=foundation::intersection_observation_state::IntersectionObservationState::Desired;
             }
         }
+        let t_invalidated = checkpoint();
+        self.stats.profile_invalidation_ns += ProfileNs(t_built, t_invalidated);
         // Same opaque retained lifetime as ResidentFragment; the caller keeps
         // this result's PaintFragmentLease until replacement has been rebound.
         node.source_cursor = Some(unsafe {
@@ -5659,6 +5721,7 @@ impl PrePaintTreeWalk {
             cache.subtree_keys = keys;
             cache.nodes = nodes;
             cache.physical_children = physical_children;
+            self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, checkpoint());
             return node;
         }
         // Chromium's locked subtree keeps pointers to resident LayoutObjects.
@@ -5729,6 +5792,9 @@ impl PrePaintTreeWalk {
         let mut nodes = 1;
         let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
         let mut contains_local_frames = embedded_source.is_some();
+        let t_loop = checkpoint();
+        self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, t_loop);
+        let mut recursion_ns = 0;
         for (index, child) in OrdinaryPaintSourceChildren(fragment)
             .chain(embedded_source)
             .enumerate()
@@ -5758,6 +5824,7 @@ impl PrePaintTreeWalk {
                 )
             });
             self.local_frame_depth += u32::from(is_local_frame);
+            let t_child = checkpoint();
             let mut child_node = self.UpdateNode(
                 child,
                 child_context,
@@ -5765,6 +5832,7 @@ impl PrePaintTreeWalk {
                 previous,
                 force_descendants,
             );
+            recursion_ns += ProfileNs(t_child, checkpoint());
             self.local_frame_depth -= u32::from(is_local_frame);
             if let Some(previous) = previous_wheel_targets {
                 self.active_blocking_wheel_targets = previous;
@@ -5807,6 +5875,9 @@ impl PrePaintTreeWalk {
             nodes += cache.nodes;
             node.children.push(child_node);
         }
+        let t_looped = checkpoint();
+        self.stats.profile_child_loop_ns +=
+            ProfileNs(t_loop, t_looped).saturating_sub(recursion_ns);
         let physical_children = node
             .children
             .iter_mut()
@@ -5828,6 +5899,7 @@ impl PrePaintTreeWalk {
         cache.nodes = nodes;
         cache.physical_children = physical_children;
         cache.contains_local_frames = contains_local_frames;
+        self.stats.profile_tail_ns += ProfileNs(t_looped, checkpoint());
         node
     }
 

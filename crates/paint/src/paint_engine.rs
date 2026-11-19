@@ -397,6 +397,19 @@ fn WalkPrePaint(
                 ("post_walk", stats.post_walk as u8 as f64),
             ],
         );
+        let ms = |ns: u64| ns as f64 / 1e6;
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.NodeProfile",
+            &[
+                ("admission_ms", ms(stats.profile_admission_ns)),
+                ("build_ms", ms(stats.profile_build_ns)),
+                ("invalidation_ms", ms(stats.profile_invalidation_ns)),
+                ("children_setup_ms", ms(stats.profile_children_setup_ns)),
+                ("child_loop_ms", ms(stats.profile_child_loop_ns)),
+                ("tail_ms", ms(stats.profile_tail_ns)),
+            ],
+        );
         tree
     }
 }

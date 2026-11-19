@@ -63,4 +63,12 @@ pub struct PrePaintUpdateStats {
     pub rebind_walk: bool,
     /// Nodes whose cull-rect change forced a layer repaint this pass.
     pub cull_change_repaints: usize,
+    /// UpdateNode self time by section, excluding child recursion. Recorded
+    /// only while tracing is enabled.
+    pub profile_admission_ns: u64,
+    pub profile_build_ns: u64,
+    pub profile_invalidation_ns: u64,
+    pub profile_children_setup_ns: u64,
+    pub profile_child_loop_ns: u64,
+    pub profile_tail_ns: u64,
 }
