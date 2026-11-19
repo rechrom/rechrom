@@ -573,6 +573,12 @@ pub struct CertifiedPrePaintInput {
     pub owner_ids: [u64; 7],
     pub resources: Option<Arc<PaintResources>>,
     pub resource_usage: u8,
+    /// The slot's position in its container and size when certified. A
+    /// parent's relayout can move a child without dirtying the child itself
+    /// (a LayoutNG cache hit, e.g. re-centering under `margin: auto`), so
+    /// geometry is not proven by the child's own dirty bits.
+    pub offset: LayoutOffset,
+    pub size: LayoutSize,
 }
 
 /// Addresses of a slot's resident source owner, valid for the LayoutResult

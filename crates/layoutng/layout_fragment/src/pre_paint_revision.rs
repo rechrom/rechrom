@@ -193,7 +193,12 @@ impl PrePaintRevisionTracker {
                     &mut update.resource_matches,
                     old.resource_usage | paint_resource_usage(node),
                 );
-                (!invalidation.own(), !invalidation.own(), resources)
+                // Own geometry is proven by the object's dirty bits; its
+                // position and size in the container are not (a parent's
+                // relayout moves a cache-hit child without dirtying it).
+                let geometry =
+                    !invalidation.own() && old.offset == node.offset && old.size == node.size;
+                (geometry, !invalidation.own(), resources)
             })
             .unwrap_or((false, false, false));
         if old.is_some() {
@@ -240,6 +245,8 @@ impl PrePaintRevisionTracker {
             owner_ids: current_owner_ids,
             resources,
             resource_usage,
+            offset: node.offset,
+            size: node.size,
         };
         !self_same || !children_same
     }
