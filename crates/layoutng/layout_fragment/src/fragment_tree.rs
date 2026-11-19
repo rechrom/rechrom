@@ -867,6 +867,59 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 }
 
+/// The ::selection painting style, resolved on first use. Text painting
+/// borrows it up front but reads it only while painting selected content.
+pub struct LazySelectionPaintStyle<'a> {
+    paint: &'a PaintProperties,
+    style: std::cell::OnceCell<std::borrow::Cow<'a, PaintStyle>>,
+}
+
+impl std::ops::Deref for LazySelectionPaintStyle<'_> {
+    type Target = PaintStyle;
+    fn deref(&self) -> &PaintStyle {
+        self.style.get_or_init(|| self.paint.SelectionPaintStyle())
+    }
+}
+
+impl PaintProperties {
+    /// Source: core/highlight/highlight_style_utils.cc HighlightPaintingStyle.
+    /// Chromium resolves the ::selection painting style from the live
+    /// ComputedStyle while painting selected text. Projections without a live
+    /// source (detached fixtures) keep the stored export.
+    pub fn SelectionPaintStyle(&self) -> std::borrow::Cow<'_, PaintStyle> {
+        let Some(source) = self.style.Source() else {
+            return std::borrow::Cow::Borrowed(&self.selection_style);
+        };
+        let mut style =
+            crate::internal::boundary::layout_boundary::ExportSelectionPaintStyle(source);
+        // PrePaint applies the inherited auto-dark pause to the originating
+        // style; the selection layer follows the same node state.
+        let paused = self.style.auto_dark_mode_paused;
+        if style.auto_dark_mode_paused != paused {
+            style.auto_dark_mode_paused = paused;
+        }
+        std::borrow::Cow::Owned(style)
+    }
+
+    pub fn LazySelectionPaintStyle(&self) -> LazySelectionPaintStyle<'_> {
+        LazySelectionPaintStyle {
+            paint: self,
+            style: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Source: highlight_style_utils.cc:385-402, resolved like
+    /// SelectionPaintStyle.
+    pub fn SelectionTextDecoration(&self) -> Option<TextDecorationPaint> {
+        match self.style.Source() {
+            Some(source) => {
+                crate::internal::boundary::layout_boundary::ExportSelectionTextDecoration(source)
+            }
+            None => self.selection_text_decoration.clone(),
+        }
+    }
+}
+
 impl PaintProperties {
     pub fn LayoutObjectIdentity(
         &self,

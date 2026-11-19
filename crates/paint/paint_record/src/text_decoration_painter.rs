@@ -319,8 +319,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                     } else {
                         fragment
                             .paint
-                            .selection_text_decoration
-                            .as_ref()
+                            .SelectionTextDecoration()
                             .filter(|selection| SameDecorationLines(decoration, selection))
                             .and_then(|selection| selection.color)
                             .unwrap_or(originating_color)
@@ -823,8 +822,10 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 }
             }
         };
+        let selection_style;
         let shadow_style = if self.phase == Phase::Selection {
-            &fragment.paint.selection_style
+            selection_style = fragment.paint.SelectionPaintStyle();
+            &*selection_style
         } else {
             decoration_style
         };

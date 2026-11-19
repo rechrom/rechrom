@@ -542,7 +542,7 @@ pub(super) fn ExportProperties(
         exported_selection_styles
             .as_deref()
             .and_then(|styles| styles.get(&selection_key))
-            .map(|entry| entry.2)
+            .map(|entry| entry.1)
             .unwrap_or_else(|| crate::style_projection::ReadFragmentStyleFacts(layout_style))
     } else {
         crate::style_projection::ReadFragmentStyleFacts(layout_style)
@@ -657,24 +657,37 @@ pub(super) fn ExportProperties(
         }
     }
     if purpose == LayoutUpdateKind::Paint {
+        // Chromium resolves the ::selection painting style while painting
+        // selected text (HighlightStyleUtils::HighlightPaintingStyle); it is
+        // not stored per fragment. A projection with a live source resolves
+        // it in Paint (PaintProperties::SelectionPaintStyle); only detached
+        // projections receive a stored copy.
+        let live_selection = output.style.Source().is_some();
         let cached_selection = exported_selection_styles
             .as_deref()
             .and_then(|styles| styles.get(&selection_key))
             .cloned();
-        let (selection_style, selection_text_decoration, _) =
-            cached_selection.unwrap_or_else(|| {
-                let exported = (
-                    ExportSelectionPaintStyle(layout_style),
-                    ExportSelectionTextDecoration(layout_style),
-                    style_facts,
-                );
-                if let Some(styles) = exported_selection_styles.as_deref_mut() {
-                    styles.insert(selection_key, exported.clone());
-                }
-                exported
-            });
-        output.selection_style = selection_style;
-        output.selection_text_decoration = selection_text_decoration;
+        let mut entry = cached_selection.clone().unwrap_or((None, style_facts));
+        if !live_selection && entry.0.is_none() {
+            entry.0 = Some((
+                ExportSelectionPaintStyle(layout_style),
+                ExportSelectionTextDecoration(layout_style),
+            ));
+        }
+        let entry_changed = cached_selection
+            .as_ref()
+            .is_none_or(|cached| cached.0.is_none() != entry.0.is_none());
+        if entry_changed {
+            if let Some(styles) = exported_selection_styles.as_deref_mut() {
+                styles.insert(selection_key, entry.clone());
+            }
+        }
+        if !live_selection {
+            let (selection_style, selection_text_decoration) =
+                entry.0.expect("detached selection style was exported");
+            output.selection_style = selection_style;
+            output.selection_text_decoration = selection_text_decoration;
+        }
         output.svg_text_decoration_style =
             ExportSvgTextDecorationStyle(object, sources, style_sources, effective_style);
     }

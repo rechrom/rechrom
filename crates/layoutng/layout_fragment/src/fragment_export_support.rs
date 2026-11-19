@@ -75,7 +75,7 @@ fn SameDecorationLines(a: &TextDecorationPaint, b: &TextDecorationPaint) -> bool
 // 240-251,405-535. Freeze the selection layer while source ComputedStyle and
 // LayoutTheme color resolution are still available. In particular, the macOS
 // theme deliberately keeps the originating foreground for default selection.
-pub(super) fn ExportSelectionPaintStyle(style: &StyleComputedStyle) -> PaintStyle {
+pub(crate) fn ExportSelectionPaintStyle(style: &StyleComputedStyle) -> PaintStyle {
     let selection_style = style.HighlightData().Selection();
     let selection_style_ref = unsafe { selection_style.as_ref() };
     // HighlightPaintingStyle starts with the previous (originating) layer and
@@ -121,7 +121,7 @@ pub(super) fn ExportSelectionPaintStyle(style: &StyleComputedStyle) -> PaintStyl
 // decoration retains the originating last decoration unless ::selection has a
 // last decoration with the same line set, in which case its resolved color is
 // used by TextDecorationInfo::LineColor.
-pub(super) fn ExportSelectionTextDecoration(
+pub(crate) fn ExportSelectionTextDecoration(
     style: &StyleComputedStyle,
 ) -> Option<TextDecorationPaint> {
     let selection_style = style.HighlightData().Selection();
@@ -161,11 +161,13 @@ pub(super) type SourceMap = LayoutBoundaryHashMap<*const LayoutObject, SourceEnt
 pub(super) type StyleSourceEntry = LayoutBoundaryStyleSourceEntry;
 pub(super) type StyleSourceMap = LayoutBoundaryHashMap<*const StyleComputedStyle, StyleSourceEntry>;
 pub(super) type ExportedStyleCache = LayoutBoundaryHashMap<(usize, usize), PaintStyle>;
+/// Per-ComputedStyle export facts. The stored ::selection projection is
+/// `None` until a fragment without a live source style needs it; live
+/// fragments resolve it in Paint through PaintProperties::SelectionPaintStyle.
 pub(super) type ExportedSelectionStyleCache = LayoutBoundaryHashMap<
     usize,
     (
-        PaintStyle,
-        Option<TextDecorationPaint>,
+        Option<(PaintStyle, Option<TextDecorationPaint>)>,
         crate::style_projection::FragmentStyleFacts,
     ),
 >;

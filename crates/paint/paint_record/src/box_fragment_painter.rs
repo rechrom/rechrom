@@ -4119,7 +4119,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .map_or(style.svg_stroke_server.as_ref(), |paint| {
                 paint.server.as_ref()
             });
-        let selection_style = &fragment.paint.selection_style;
+        let selection_style = &fragment.paint.LazySelectionPaintStyle();
         let text_clip = phase == PaintPhase::kTextClip;
         let force_white_background = ShouldForceWhiteBackgroundForPrintEconomy(fragment);
         let text_fill_color = if force_white_background {
@@ -5549,7 +5549,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         );
         let color = InvertColorIfNeeded(
             &fragment.paint.style,
-            fragment.paint.selection_style.background_color(),
+            fragment.paint.SelectionPaintStyle().background_color(),
             ElementRole::kBackground,
         );
         if color.alpha <= 0.0 || selection_rect.is_empty() {

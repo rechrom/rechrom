@@ -4143,7 +4143,10 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
             .expect("PrePaint node must own a fragment");
         let paint = &fragment.paint;
         let style_changed = paint.style.auto_dark_mode_paused != inherited_paused;
-        let selection_changed = paint.selection_style.auto_dark_mode_paused != inherited_paused;
+        // A live-source selection style is resolved in Paint and takes the
+        // originating style's pause (PaintProperties::SelectionPaintStyle).
+        let selection_changed = paint.style.Source().is_none()
+            && paint.selection_style.auto_dark_mode_paused != inherited_paused;
         let decoration_changed = paint
             .svg_text_decoration_style
             .as_ref()

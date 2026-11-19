@@ -136,10 +136,12 @@ mod layout_invalidation_layout_object_factory;
 pub(crate) use layout_invalidation_layout_object_factory::CreateLayoutObject;
 #[path = "../../../../layout_fragment/src/fragment_export_support.rs"]
 mod layout_fragment_fragment_export_support;
-pub(crate) use layout_fragment_fragment_export_support::ExportAppliedTextDecoration;
+pub(crate) use layout_fragment_fragment_export_support::{
+    ExportAppliedTextDecoration, ExportSelectionPaintStyle, ExportSelectionTextDecoration,
+};
 use layout_fragment_fragment_export_support::{
-    DebugNameCache, ExportAppliedTextDecorations, ExportSelectionPaintStyle,
-    ExportSelectionTextDecoration, ExportedSelectionStyleCache, ExportedStyleCache, InputId,
+    DebugNameCache, ExportAppliedTextDecorations, ExportedSelectionStyleCache, ExportedStyleCache,
+    InputId,
     Number, PublicWritingMode, SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
 };
 #[path = "../../../../layout_fragment/src/fragment_property_export.rs"]
