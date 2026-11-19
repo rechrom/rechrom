@@ -45,6 +45,10 @@ pub struct PaintWalkMetrics {
     pub phase_visits: usize,
     pub skipped_hidden: usize,
     pub skipped_phase: usize,
+    /// Painted layers that created a subsequence scope.
+    pub subsequence_layers: usize,
+    /// Of those, layers whose PaintLayer still needed repaint (no reuse attempt).
+    pub subsequence_needs_repaint: usize,
 }
 
 pub mod cc {

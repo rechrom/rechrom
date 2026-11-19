@@ -35,6 +35,8 @@ impl TableCellPaintInvalidator {
             .invalidation_reason
             .unwrap_or(PaintInvalidationReason::kNone);
         if !IsFullPaintInvalidationReason(current) && PaintInvalidationReason::kLayout > current {
+            // container_context.painting_layer->SetNeedsRepaint().
+            container.paint.SetPaintingLayerNeedsRepaint();
             crate::object_paint_invalidator::ObjectPaintInvalidator::InvalidateDisplayItemClient(
                 container,
                 PaintInvalidationReason::kLayout,

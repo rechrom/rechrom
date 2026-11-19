@@ -719,6 +719,8 @@ fn RecordPaint(
         trace.set("phase_visits", walk.phase_visits as f64);
         trace.set("skipped_hidden", walk.skipped_hidden as f64);
         trace.set("skipped_phase", walk.skipped_phase as f64);
+        trace.set("subsequence_layers", walk.subsequence_layers as f64);
+        trace.set("subsequence_needs_repaint", walk.subsequence_needs_repaint as f64);
     }
     let subsequences = {
         let _trace = browser_tracing::span("paint_chunk", "PaintChunk.Finish");
@@ -769,6 +771,18 @@ fn RecordPaint(
             ("invalid", reuse.rejected_invalid as f64),
             ("missing_id", reuse.rejected_missing_id as f64),
             ("missing_previous", reuse.rejected_missing_previous as f64),
+        ],
+    );
+    browser_tracing::instant(
+        "paint_reuse",
+        "PaintReuse.Subsequences",
+        &[
+            ("attempts", reuse.subsequence_attempts as f64),
+            ("hits", reuse.subsequence_hits as f64),
+            ("rejected_client", reuse.subsequence_rejected_client as f64),
+            ("missing_index", reuse.subsequence_rejected_missing_index as f64),
+            ("tombstone", reuse.subsequence_rejected_tombstone as f64),
+            ("invalid", reuse.subsequence_rejected_invalid as f64),
         ],
     );
     drop(context);

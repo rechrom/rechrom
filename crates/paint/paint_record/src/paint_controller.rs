@@ -548,11 +548,14 @@ impl PaintController {
         if check_under_invalidation && self.under_invalidation_checker.IsChecking() {
             return None;
         }
+        self.metrics.subsequence_attempts += 1;
         if client.is_just_created || !client.is_cacheable {
+            self.metrics.subsequence_rejected_client += 1;
             return None;
         }
         let Some(subsequence_index) = self.previous_subsequences.GetSubsequenceIndex(client_id)
         else {
+            self.metrics.subsequence_rejected_missing_index += 1;
             return None;
         };
         let markers = self.previous_subsequences.tree[subsequence_index];
@@ -563,6 +566,7 @@ impl PaintController {
         if end_item_index > start_item_index
             && previous.display_items[start_item_index].IsTombstone()
         {
+            self.metrics.subsequence_rejected_tombstone += 1;
             return None;
         }
         if self.next_item_to_match == start_item_index {
@@ -575,9 +579,11 @@ impl PaintController {
             client.invalidation_reason,
             Some(foundation::PaintInvalidationReason::kNone)
         ) {
+            self.metrics.subsequence_rejected_invalid += 1;
             return None;
         }
         self.metrics.reused += end_item_index - start_item_index;
+        self.metrics.subsequence_hits += 1;
         if check_under_invalidation {
             self.under_invalidation_checker
                 .WouldUseCachedSubsequence(client_id, markers, previous, output);

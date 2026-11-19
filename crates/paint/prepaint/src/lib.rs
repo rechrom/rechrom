@@ -61,4 +61,6 @@ pub struct PrePaintUpdateStats {
     pub post_walk: bool,
     pub rebound_nodes: usize,
     pub rebind_walk: bool,
+    /// Nodes whose cull-rect change forced a layer repaint this pass.
+    pub cull_change_repaints: usize,
 }

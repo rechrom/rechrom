@@ -75,10 +75,12 @@ impl ObjectPaintInvalidator {
             }
             reason = PaintInvalidationReason::kSelection;
             if fragment.paint.selection_client_id != 0 {
+                fragment.paint.SetPaintingLayerNeedsRepaint();
                 Self::InvalidateSelectionClient(fragment, reason);
                 return;
             }
         }
+        fragment.paint.SetPaintingLayerNeedsRepaint();
         Self::InvalidateDisplayItemClient(fragment, reason);
         // LayoutText::InvalidateDisplayItemClients invalidates both its base
         // client and the independent selection client for ordinary reasons.

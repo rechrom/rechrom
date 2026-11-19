@@ -418,7 +418,10 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 fragment.paint.display_item_client_owner_node_id,
                 fragment.paint.display_item_client_debug_name.clone(),
             ));
-            if !self.layer.self_or_descendant_needs_repaint {
+            self.context.borrow_mut().walk_metrics.subsequence_layers += 1;
+            if self.layer.self_or_descendant_needs_repaint {
+                self.context.borrow_mut().walk_metrics.subsequence_needs_repaint += 1;
+            } else {
                 if let Some(cached_result) = SubsequenceRecorder::UseCachedSubsequenceIfPossible(
                     self.context,
                     fragment.paint.paint_layer_client_id,

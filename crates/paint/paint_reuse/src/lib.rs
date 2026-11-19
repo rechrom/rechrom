@@ -17,6 +17,13 @@ pub struct PaintReuseMetrics {
     pub rejected_invalid: usize,
     pub rejected_missing_id: usize,
     pub rejected_missing_previous: usize,
+    /// PaintLayer subsequence reuse (paint_controller.cc:337-409), per outcome.
+    pub subsequence_attempts: usize,
+    pub subsequence_hits: usize,
+    pub subsequence_rejected_client: usize,
+    pub subsequence_rejected_missing_index: usize,
+    pub subsequence_rejected_tombstone: usize,
+    pub subsequence_rejected_invalid: usize,
 }
 
 impl PaintReuseMetrics {

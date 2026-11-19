@@ -131,6 +131,8 @@ impl BoxPaintInvalidator {
                 };
                 // DisplayItemClient::Invalidate on the live scrolling-background
                 // client; a detached payload keeps the monotonic rule locally.
+                // box_paint_invalidator.cc marks the painting layer first.
+                fragment.paint.SetPaintingLayerNeedsRepaint();
                 if !fragment.paint.InvalidateLiveScrollClient(client_id, reason) {
                     let current = fragment
                         .paint

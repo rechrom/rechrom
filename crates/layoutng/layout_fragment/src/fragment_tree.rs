@@ -1160,6 +1160,13 @@ impl PaintProperties {
         changed
     }
     pub fn InvalidatePaintForHitTest(&self) {
+        self.SetPaintingLayerNeedsRepaint();
+    }
+    /// `context_.painting_layer->SetNeedsRepaint()`: Chromium marks the
+    /// painting layer whenever PrePaint invalidates one of its clients
+    /// (object_paint_invalidator.cc:95-121), so PaintLayerPainter's
+    /// subsequence check sees the change. A detached payload has no layer.
+    pub fn SetPaintingLayerNeedsRepaint(&self) {
         let layer = self
             .SourceObject()
             .map_or(std::ptr::null_mut(), LayoutObject::PaintingLayerDefault);

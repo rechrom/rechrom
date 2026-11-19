@@ -576,6 +576,8 @@ fn CullRectChangeNeedsRepaint(
 fn InvalidateClientsForCullRectChange(fragment: &mut FragmentPaintData) {
     use crate::object_paint_invalidator::ObjectPaintInvalidator;
     let reason = PaintInvalidationReason::kLayout;
+    // CullRectUpdater: layer.SetNeedsRepaint() on a repainting cull change.
+    fragment.paint.SetPaintingLayerNeedsRepaint();
     ObjectPaintInvalidator::InvalidateDisplayItemClient(fragment, reason);
     ObjectPaintInvalidator::InvalidatePaintLayerClient(fragment, reason);
     if fragment.paint.selection_client_id != 0 {
@@ -4439,6 +4441,28 @@ fn ResetPostPaintData(node: &mut PaintTreeNode<'_>) {
 // cpp: core/paint/paint_invalidator.cc:230-269
 // cpp: core/paint/paint_layer.h:451-457
 fn PropagateSubsequenceRepaint(node: &mut PaintTreeNode<'_>) -> bool {
+    PropagateSubsequenceRepaintCounting(node, &mut [0; 3])
+}
+
+/// `counts`: [paint layers, layers already flagged by the source PaintLayer,
+/// layers newly flagged from invalidated clients].
+fn PropagateSubsequenceRepaintCounting(
+    node: &mut PaintTreeNode<'_>,
+    counts: &mut [usize; 3],
+) -> bool {
+    if node.is_paint_layer {
+        // PaintLayerPainter reads PaintLayer::SelfOrDescendantNeedsRepaint()
+        // at paint time (paint_layer_painter.cc:412-424); the bit is cleared
+        // after each committed paint. A retained PrePaint node must not keep
+        // the value captured when it was last built, or a layer flagged once
+        // (e.g. at first paint) never reuses its subsequence again.
+        if let Some(fragment) = node.fragment.as_deref() {
+            node.self_or_descendant_needs_repaint =
+                fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint();
+        }
+        counts[0] += 1;
+        counts[1] += node.self_or_descendant_needs_repaint as usize;
+    }
     let client_needs_repaint = node.fragment.as_deref().is_some_and(|fragment| {
         [
             fragment.paint.DisplayItemClientState().invalidation_reason,
@@ -4447,17 +4471,28 @@ fn PropagateSubsequenceRepaint(node: &mut PaintTreeNode<'_>) -> bool {
         ]
         .into_iter()
         .flatten()
-        .any(|reason| reason != PaintInvalidationReason::kNone)
+        // A client stays kJustCreated until it first produces a display item
+        // (paint_controller.cc:127-143 validates only used clients). Chromium
+        // never consults that state for subsequence admission: the object's
+        // first PrePaint invalidation (kAppeared on insertion) marked its
+        // painting layer in InvalidatePaintWithComputedReason. Counting it
+        // here would keep every ancestor layer of a non-painting object out
+        // of subsequence reuse on every frame.
+        .any(|reason| {
+            reason != PaintInvalidationReason::kNone
+                && reason != PaintInvalidationReason::kJustCreated
+        })
     });
     // Every descendant PaintLayer needs its own admission bit updated. `any`
     // would stop after the first dirty sibling and leave later layers eligible
     // to reuse stale subsequences even though their clients were invalidated.
     let mut descendant_needs_repaint = false;
     for child in &mut node.children {
-        descendant_needs_repaint |= PropagateSubsequenceRepaint(child);
+        descendant_needs_repaint |= PropagateSubsequenceRepaintCounting(child, counts);
     }
     let subtree_needs_repaint = client_needs_repaint || descendant_needs_repaint;
     if node.is_paint_layer && subtree_needs_repaint {
+        counts[2] += !node.self_or_descendant_needs_repaint as usize;
         node.self_or_descendant_needs_repaint = true;
     }
     subtree_needs_repaint
@@ -5350,6 +5385,7 @@ impl PrePaintTreeWalk {
                 built.cull_rect,
             );
             if cull_change_needs_repaint {
+                self.stats.cull_change_repaints += 1;
                 InvalidateClientsForCullRectChange(
                     &mut built
                         .fragment
@@ -6316,7 +6352,18 @@ impl PrePaintTreeWalk {
             admission.set("invalidation_nodes", self.stats.invalidation_nodes as f64);
         }
         PropagateAutoDarkModeState(&mut tree, false);
-        PropagateSubsequenceRepaint(&mut tree);
+        let mut repaint_counts = [0; 3];
+        PropagateSubsequenceRepaintCounting(&mut tree, &mut repaint_counts);
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.Repaint",
+            &[
+                ("paint_layers", repaint_counts[0] as f64),
+                ("source_needs_repaint", repaint_counts[1] as f64),
+                ("client_propagated", repaint_counts[2] as f64),
+                ("cull_change_repaints", self.stats.cull_change_repaints as f64),
+            ],
+        );
         // Current keys are always retained; only a prior id that is not a
         // current key can be dropped, so the raw-state gather is needed only
         // when such an id exists.
