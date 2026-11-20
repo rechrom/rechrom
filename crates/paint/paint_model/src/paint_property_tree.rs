@@ -2341,10 +2341,38 @@ impl<T: PersistedPropertyNode> KeyedPropertyNodes<T> {
 /// snapshot when only an ancestor's value changed.
 #[derive(Default)]
 pub struct FrozenPropertyTrees {
-    transforms: KeyedPropertyNodes<TransformPaintPropertyNode>,
-    clips: KeyedPropertyNodes<ClipPaintPropertyNode>,
-    effects: KeyedPropertyNodes<EffectPaintPropertyNode>,
-    scrolls: KeyedPropertyNodes<ScrollPaintPropertyNode>,
+    transforms: NodesById<TransformPaintPropertyNode>,
+    clips: NodesById<ClipPaintPropertyNode>,
+    effects: NodesById<EffectPaintPropertyNode>,
+    scrolls: NodesById<ScrollPaintPropertyNode>,
+}
+
+/// One kind of published node, indexed directly by node id: every link
+/// resolution is a single hash probe.
+#[derive(Clone, Debug)]
+struct NodesById<T>(TrustedIdentityHashMap<u64, Arc<T>>);
+impl<T> Default for NodesById<T> {
+    fn default() -> Self {
+        Self(TrustedIdentityHashMap::default())
+    }
+}
+impl<T: PersistedPropertyNode> NodesById<T> {
+    fn of(nodes: &KeyedPropertyNodes<T>) -> Self {
+        let mut by_id = TrustedIdentityHashMap::default();
+        by_id.reserve(nodes.len());
+        for node in nodes.values() {
+            by_id.insert(node.node_id(), node.clone());
+        }
+        Self(by_id)
+    }
+}
+impl<T> NodesById<T> {
+    fn by_id(&self, id: u64) -> Option<&Arc<T>> {
+        self.0.get(&id)
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 /// Resolves a property-node link (a parent or cross-tree `Arc`) to the
@@ -2753,10 +2781,10 @@ impl PaintPropertyNodeStore {
     /// The persisted nodes as an immutable id-indexed value for publication.
     pub fn freeze(&self) -> FrozenPropertyTrees {
         FrozenPropertyTrees {
-            transforms: self.transforms.clone(),
-            clips: self.clips.clone(),
-            effects: self.effects.clone(),
-            scrolls: self.scrolls.clone(),
+            transforms: NodesById::of(&self.transforms),
+            clips: NodesById::of(&self.clips),
+            effects: NodesById::of(&self.effects),
+            scrolls: NodesById::of(&self.scrolls),
         }
     }
     /// Persisted nodes by id: the id-indexed parent links of the tree.
