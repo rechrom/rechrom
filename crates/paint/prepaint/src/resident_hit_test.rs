@@ -267,12 +267,13 @@ impl<'a> ResidentPaintHitTest<'a> {
     /// 2363-2385. Read the committed effect ancestry, including inherited
     /// effects, rather than reconstructing effective opacity from CSS.
     pub fn HasNonZeroEffectiveOpacity(self) -> bool {
+        use paint_model::paint_property_tree::PropertyNodeResolver;
         let mut effect = Some(self.node.properties.nodes.effect.as_ref());
         while let Some(current) = effect {
             if current.opacity == 0.0 {
                 return false;
             }
-            effect = current.parent.as_deref();
+            effect = current.parent.as_ref().map(|parent| &**self.slots.effect(parent));
         }
         true
     }
@@ -314,7 +315,10 @@ impl<'a> ResidentPaintHitTest<'a> {
             PaintPropertyRole::PixelMovingFilterClipExpander,
         ] {
             if let Some(clip) = self.Clip(role) {
-                return clip.parent.as_ref().expect("non-root own clip has parent");
+                return paint_model::paint_property_tree::PropertyNodeResolver::clip(
+                    self.slots,
+                    clip.parent.as_ref().expect("non-root own clip has parent"),
+                );
             }
         }
         &self.node.properties.nodes.clip
@@ -322,10 +326,10 @@ impl<'a> ResidentPaintHitTest<'a> {
     pub fn PreEffect(self) -> &'a std::sync::Arc<EffectPaintPropertyNode> {
         for role in [PaintPropertyRole::Effect, PaintPropertyRole::Filter] {
             if let Some(effect) = self.slots.EffectForKey(self.Key(role)) {
-                return effect
-                    .parent
-                    .as_ref()
-                    .expect("non-root own effect has parent");
+                return paint_model::paint_property_tree::PropertyNodeResolver::effect(
+                    self.slots,
+                    effect.parent.as_ref().expect("non-root own effect has parent"),
+                );
             }
         }
         &self.node.properties.nodes.effect

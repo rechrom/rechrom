@@ -2383,6 +2383,30 @@ impl PropertyNodeResolver for FrozenPropertyTrees {
     }
 }
 
+/// The live store resolves links the same way as a published tree.
+impl PropertyNodeResolver for PaintPropertyNodeStore {
+    fn transform<'a>(&'a self, link: &'a Arc<TransformPaintPropertyNode>) -> &'a Arc<TransformPaintPropertyNode> {
+        self.transform_by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
+        self.clip_by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn effect<'a>(&'a self, link: &'a Arc<EffectPaintPropertyNode>) -> &'a Arc<EffectPaintPropertyNode> {
+        self.effect_by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn scroll<'a>(&'a self, link: &'a Arc<ScrollPaintPropertyNode>) -> &'a Arc<ScrollPaintPropertyNode> {
+        self.scroll_by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+}
+
 impl<R: PropertyNodeResolver + ?Sized> PropertyNodeResolver for &R {
     fn transform<'a>(
         &'a self,
