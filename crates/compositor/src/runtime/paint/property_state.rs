@@ -239,7 +239,7 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
         self.effect_.node().RequiresCompositingForCanvasChild()
     }
     fn ChangedToRoot(&self, change: Self::PaintPropertyChange) -> bool {
-        self.as_source().ChangedToRoot(change)
+        self.as_source().ChangedToRootIn(self.transform_.trees(), change)
     }
     fn SameEffectNode(&self, other: &Self) -> bool {
         self.effect_ == other.effect_

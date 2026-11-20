@@ -518,6 +518,14 @@ impl TransformPaintPropertyNode {
     /// Source: transform_paint_property_node.cc:151-164. Supported producer
     /// nodes are unaliased; associated Scroll changes are cleared recursively.
     pub fn ClearChangedToRoot(&self, sequence_number: i32) {
+        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number() == sequence_number {
@@ -525,9 +533,9 @@ impl TransformPaintPropertyNode {
             }
             node.lifecycle.clear_changed(sequence_number);
             if let Some(scroll) = node.ScrollNode() {
-                scroll.ClearChangedToRoot(sequence_number);
+                resolver.scroll(scroll).ClearChangedToRootIn(resolver, sequence_number);
             }
-            current = node.parent.as_deref();
+            current = node.parent.as_ref().map(|parent| &**resolver.transform(parent));
         }
     }
 
@@ -783,15 +791,24 @@ impl ClipPaintPropertyNode {
     /// Source: clip_paint_property_node.cc:70-81. Supported snapshots are
     /// unaliased; each clip also clears its local transform chain.
     pub fn ClearChangedToRoot(&self, sequence_number: i32) {
+        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number() == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(sequence_number);
-            node.LocalTransformSpace()
-                .ClearChangedToRoot(sequence_number);
-            current = node.parent.as_deref();
+            resolver
+                .transform(node.LocalTransformSpace())
+                .ClearChangedToRootIn(resolver, sequence_number);
+            current = node.parent.as_ref().map(|parent| &**resolver.clip(parent));
         }
     }
 
@@ -1298,18 +1315,27 @@ impl EffectPaintPropertyNode {
     /// Source: effect_paint_property_node.cc:181-193. Supported snapshots are
     /// unaliased; local transform and output clip dependencies are included.
     pub fn ClearChangedToRoot(&self, sequence_number: i32) {
+        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number() == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(sequence_number);
-            node.LocalTransformSpace()
-                .ClearChangedToRoot(sequence_number);
+            resolver
+                .transform(node.LocalTransformSpace())
+                .ClearChangedToRootIn(resolver, sequence_number);
             if let Some(clip) = node.OutputClip() {
-                clip.ClearChangedToRoot(sequence_number);
+                resolver.clip(clip).ClearChangedToRootIn(resolver, sequence_number);
             }
-            current = node.parent.as_deref();
+            current = node.parent.as_ref().map(|parent| &**resolver.effect(parent));
         }
     }
 
@@ -1571,13 +1597,21 @@ impl ScrollPaintPropertyNode {
 
     /// Source: scroll_paint_property_node.cc:73-79.
     pub fn ClearChangedToRoot(&self, sequence_number: i32) {
+        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
         let mut current = Some(self);
         while let Some(node) = current {
             if node.lifecycle.changed_sequence_number() == sequence_number {
                 break;
             }
             node.lifecycle.clear_changed(sequence_number);
-            current = node.parent.as_deref();
+            current = node.parent.as_ref().map(|parent| &**resolver.scroll(parent));
         }
     }
 
@@ -1856,15 +1890,31 @@ impl PropertyTreeState {
 
     /// Source: property_tree_state.h:142-152,288-301.
     pub fn ClearChangedToRoot(&self, sequence_number: i32) {
-        self.Transform().ClearChangedToRoot(sequence_number);
-        self.Clip().ClearChangedToRoot(sequence_number);
-        self.Effect().ClearChangedToRoot(sequence_number);
+        self.ClearChangedToRootIn(&LinkedProperties, sequence_number)
+    }
+    /// ClearChangedToRoot following links through `resolver`.
+    pub fn ClearChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        sequence_number: i32,
+    ) {
+        self.Transform().ClearChangedToRootIn(resolver, sequence_number);
+        self.Clip().ClearChangedToRootIn(resolver, sequence_number);
+        self.Effect().ClearChangedToRootIn(resolver, sequence_number);
     }
     pub fn Changed(&self, change: PaintPropertyChangeType, relative_to: &Self) -> bool {
         crate::property_node_geometry::PropertyStateChanged(self, change, relative_to)
     }
     pub fn ChangedToRoot(&self, change: PaintPropertyChangeType) -> bool {
         self.Changed(change, &Self::Root())
+    }
+    /// ChangedToRoot following links through `resolver`.
+    pub fn ChangedToRootIn<R: PropertyNodeResolver + ?Sized>(
+        &self,
+        resolver: &R,
+        change: PaintPropertyChangeType,
+    ) -> bool {
+        crate::property_node_geometry::PropertyStateChangedIn(resolver, self, change, &Self::Root())
     }
 
     /// Source: property_tree_state.cc:198-200,212-218.
@@ -2404,6 +2454,34 @@ impl PropertyNodeResolver for PaintPropertyNodeStore {
         self.scroll_by_id(link.id)
             .filter(|node| node.lifecycle.same_node(&link.lifecycle))
             .unwrap_or(link)
+    }
+}
+
+/// An optional published tree: None follows the links themselves.
+impl PropertyNodeResolver for Option<Arc<FrozenPropertyTrees>> {
+    fn transform<'a>(&'a self, link: &'a Arc<TransformPaintPropertyNode>) -> &'a Arc<TransformPaintPropertyNode> {
+        match self {
+            Some(trees) => trees.transform(link),
+            None => link,
+        }
+    }
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
+        match self {
+            Some(trees) => trees.clip(link),
+            None => link,
+        }
+    }
+    fn effect<'a>(&'a self, link: &'a Arc<EffectPaintPropertyNode>) -> &'a Arc<EffectPaintPropertyNode> {
+        match self {
+            Some(trees) => trees.effect(link),
+            None => link,
+        }
+    }
+    fn scroll<'a>(&'a self, link: &'a Arc<ScrollPaintPropertyNode>) -> &'a Arc<ScrollPaintPropertyNode> {
+        match self {
+            Some(trees) => trees.scroll(link),
+            None => link,
+        }
     }
 }
 

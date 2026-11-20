@@ -32,7 +32,7 @@ where
         WithTransformCache(self, |c| c.scroll_translation_state())
     }
     fn ClearChangedToRoot(&self, s: i32) {
-        super::clear_transform_changed(self.as_arc(), s)
+        super::clear_transform_changed(self.as_arc(), self.trees(), s)
     }
     fn DirectCompositingReasonsForDebugging(&self) -> CpuCompositingReasons {
         CpuCompositingReasons::from_source(&self.node().DirectCompositingReasonsForDebugging())

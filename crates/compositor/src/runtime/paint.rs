@@ -426,7 +426,8 @@ impl<R> PropertyTreeState<R> {
     /// actual persistent Paint node identity, so shared ancestors are visited
     /// once without cloning or rewriting the artifact.
     pub fn clear_changed_to_root(&self, sequence_number: i32) {
-        self.as_source().ClearChangedToRoot(sequence_number);
+        self.as_source()
+            .ClearChangedToRootIn(self.transform_.trees(), sequence_number);
     }
 }
 
@@ -436,9 +437,10 @@ fn clear_scroll_changed(node: &paint_property_tree::ScrollPaintPropertyNode, seq
 
 fn clear_transform_changed(
     node: &paint_property_tree::TransformPaintPropertyNode,
+    trees: &HandleTrees,
     sequence_number: i32,
 ) {
-    node.ClearChangedToRoot(sequence_number);
+    node.ClearChangedToRootIn(trees, sequence_number);
 }
 
 fn clear_clip_changed(node: &paint_property_tree::ClipPaintPropertyNode, sequence_number: i32) {
