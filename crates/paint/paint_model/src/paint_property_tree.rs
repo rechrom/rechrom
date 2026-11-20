@@ -2216,6 +2216,7 @@ pub trait PersistedPropertyNode: Clone {
     fn linked_parent_id(&self) -> u64;
     fn recorded_parent_id(&self) -> u64;
     fn record_parent_id(&mut self, id: u64);
+    fn entity_lifecycle(&self) -> &PaintPropertyNodeLifecycle;
 }
 macro_rules! persisted_property_node {
     ($($type:ty),*) => {$(
@@ -2231,6 +2232,9 @@ macro_rules! persisted_property_node {
             }
             fn record_parent_id(&mut self, id: u64) {
                 self.lifecycle.parent_id = id;
+            }
+            fn entity_lifecycle(&self) -> &PaintPropertyNodeLifecycle {
+                &self.lifecycle
             }
         }
     )*};
@@ -2549,9 +2553,11 @@ impl FrozenPropertyTrees {
         self.transforms.len() + self.clips.len() + self.effects.len() + self.scrolls.len()
     }
 
-    /// Verification: every node reachable from `state` through Arc links is
-    /// the node this tree resolves by its id. Shared ancestors are counted
-    /// once across calls through `seen`.
+    /// Verification: `state`'s nodes are the current snapshots of their
+    /// slots, and every node reached from them, following each link through
+    /// this tree (PropertyNodeResolver), is a current snapshot too. Links may
+    /// hold older snapshots; resolution must never leave the tree's current
+    /// nodes. Shared ancestors are counted once across calls through `seen`.
     pub fn verify_state(
         &self,
         state: &PropertyTreeState,
@@ -2565,7 +2571,6 @@ impl FrozenPropertyTrees {
 
     fn admit<T>(
         node: &Arc<T>,
-        id: u64,
         resolved: Option<&Arc<T>>,
         seen: &mut std::collections::HashSet<usize>,
         coverage: &mut FrozenTreeCoverage,
@@ -2588,17 +2593,17 @@ impl FrozenPropertyTrees {
         seen: &mut std::collections::HashSet<usize>,
         coverage: &mut FrozenTreeCoverage,
     ) {
-        if !Self::admit(node, node.id, self.transforms.by_id(node.id), seen, coverage) {
+        if !Self::admit(node, self.transforms.by_id(node.id), seen, coverage) {
             return;
         }
         if let Some(parent) = &node.parent {
-            self.verify_transform(parent, seen, coverage);
+            self.verify_transform(PropertyNodeResolver::transform(self, parent), seen, coverage);
         }
         if let Some(scroll) = &node.scroll {
-            self.verify_scroll(scroll, seen, coverage);
+            self.verify_scroll(PropertyNodeResolver::scroll(self, scroll), seen, coverage);
         }
         if let Some(translation) = &node.scroll_parent_scroll_translation {
-            self.verify_transform(translation, seen, coverage);
+            self.verify_transform(PropertyNodeResolver::transform(self, translation), seen, coverage);
         }
     }
 
@@ -2608,15 +2613,19 @@ impl FrozenPropertyTrees {
         seen: &mut std::collections::HashSet<usize>,
         coverage: &mut FrozenTreeCoverage,
     ) {
-        if !Self::admit(node, node.id, self.clips.by_id(node.id), seen, coverage) {
+        if !Self::admit(node, self.clips.by_id(node.id), seen, coverage) {
             return;
         }
         if let Some(parent) = &node.parent {
-            self.verify_clip(parent, seen, coverage);
+            self.verify_clip(PropertyNodeResolver::clip(self, parent), seen, coverage);
         }
-        self.verify_transform(&node.local_transform_space, seen, coverage);
+        self.verify_transform(
+            PropertyNodeResolver::transform(self, &node.local_transform_space),
+            seen,
+            coverage,
+        );
         if let Some(filter) = &node.pixel_moving_filter {
-            self.verify_effect(filter, seen, coverage);
+            self.verify_effect(PropertyNodeResolver::effect(self, filter), seen, coverage);
         }
     }
 
@@ -2626,18 +2635,22 @@ impl FrozenPropertyTrees {
         seen: &mut std::collections::HashSet<usize>,
         coverage: &mut FrozenTreeCoverage,
     ) {
-        if !Self::admit(node, node.id, self.effects.by_id(node.id), seen, coverage) {
+        if !Self::admit(node, self.effects.by_id(node.id), seen, coverage) {
             return;
         }
         if let Some(parent) = &node.parent {
-            self.verify_effect(parent, seen, coverage);
+            self.verify_effect(PropertyNodeResolver::effect(self, parent), seen, coverage);
         }
-        self.verify_transform(&node.local_transform_space, seen, coverage);
+        self.verify_transform(
+            PropertyNodeResolver::transform(self, &node.local_transform_space),
+            seen,
+            coverage,
+        );
         if let Some(clip) = &node.output_clip {
-            self.verify_clip(clip, seen, coverage);
+            self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
         if let Some(clip) = &node.backdrop_filter_clip {
-            self.verify_clip(clip, seen, coverage);
+            self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
     }
 
@@ -2647,14 +2660,14 @@ impl FrozenPropertyTrees {
         seen: &mut std::collections::HashSet<usize>,
         coverage: &mut FrozenTreeCoverage,
     ) {
-        if !Self::admit(node, node.id, self.scrolls.by_id(node.id), seen, coverage) {
+        if !Self::admit(node, self.scrolls.by_id(node.id), seen, coverage) {
             return;
         }
         if let Some(parent) = &node.parent {
-            self.verify_scroll(parent, seen, coverage);
+            self.verify_scroll(PropertyNodeResolver::scroll(self, parent), seen, coverage);
         }
         if let Some(clip) = &node.overflow_clip {
-            self.verify_clip(clip, seen, coverage);
+            self.verify_clip(PropertyNodeResolver::clip(self, clip), seen, coverage);
         }
     }
 }
@@ -3660,9 +3673,9 @@ impl ArtifactPropertyStateRebinder {
             .scroll_parent_scroll_translation
             .as_ref()
             .map(|parent| self.RebindTransform(parent));
-        let node = if same_snapshot_option(&parent, &source.parent)
-            && same_snapshot_option(&scroll, &source.scroll)
-            && same_snapshot_option(
+        let node = if same_entity_option(&parent, &source.parent)
+            && same_entity_option(&scroll, &source.scroll)
+            && same_entity_option(
                 &scroll_parent_scroll_translation,
                 &source.scroll_parent_scroll_translation,
             ) {
@@ -3701,9 +3714,9 @@ impl ArtifactPropertyStateRebinder {
             .pixel_moving_filter
             .as_ref()
             .map(|effect| self.effect(effect));
-        let node = if same_snapshot_option(&parent, &source.parent)
-            && Arc::ptr_eq(&local_transform_space, &source.local_transform_space)
-            && same_snapshot_option(&pixel_moving_filter, &source.pixel_moving_filter)
+        let node = if same_entity_option(&parent, &source.parent)
+            && same_entity(&local_transform_space, &source.local_transform_space)
+            && same_entity_option(&pixel_moving_filter, &source.pixel_moving_filter)
         {
             source
         } else {
@@ -3756,10 +3769,10 @@ impl ArtifactPropertyStateRebinder {
                 Arc::new(rebound)
             }
         });
-        let node = if same_snapshot_option(&parent, &source.parent)
-            && Arc::ptr_eq(&local_transform_space, &source.local_transform_space)
-            && same_snapshot_option(&output_clip, &source.output_clip)
-            && same_snapshot_option(&backdrop_filter_clip, &source.backdrop_filter_clip)
+        let node = if same_entity_option(&parent, &source.parent)
+            && same_entity(&local_transform_space, &source.local_transform_space)
+            && same_entity_option(&output_clip, &source.output_clip)
+            && same_entity_option(&backdrop_filter_clip, &source.backdrop_filter_clip)
             && same_snapshot_option(&canvas_child_state, &source.compositor.canvas_child_state)
         {
             source
@@ -3799,8 +3812,8 @@ impl ArtifactPropertyStateRebinder {
         let source_identity = PaintPropertyTrees::identity(&source.lifecycle);
         let parent = source.parent.as_ref().map(|parent| self.scroll(parent));
         let overflow_clip = source.overflow_clip.as_ref().map(|clip| self.clip(clip));
-        let node = if same_snapshot_option(&parent, &source.parent)
-            && same_snapshot_option(&overflow_clip, &source.overflow_clip)
+        let node = if same_entity_option(&parent, &source.parent)
+            && same_entity_option(&overflow_clip, &source.overflow_clip)
         {
             source
         } else {
@@ -4034,6 +4047,21 @@ fn same_directory<T>(
             .zip(b)
             .all(|((ka, a), (kb, b))| ka == kb && same(a, b))
 }
+/// Two links name the same node entity (id and lifecycle identity), whichever
+/// snapshots they hold: Chromium's mutable-node pointer equality. A snapshot
+/// whose links name the same entities stays current when only an ancestor's
+/// value changed; readers resolve the links (PropertyNodeResolver).
+fn same_entity<T: PersistedPropertyNode>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (a.node_id() == b.node_id() && a.entity_lifecycle().same_node(b.entity_lifecycle()))
+}
+fn same_entity_option<T: PersistedPropertyNode>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => same_entity(a, b),
+        _ => false,
+    }
+}
 fn same_snapshot_option<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -4043,9 +4071,9 @@ fn same_snapshot_option<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
 }
 impl TransformPaintPropertyNode {
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_snapshot_option(&self.parent, &other.parent)
-            && same_snapshot_option(&self.scroll, &other.scroll)
-            && same_snapshot_option(
+        same_entity_option(&self.parent, &other.parent)
+            && same_entity_option(&self.scroll, &other.scroll)
+            && same_entity_option(
                 &self.scroll_parent_scroll_translation,
                 &other.scroll_parent_scroll_translation,
             )
@@ -4057,17 +4085,17 @@ impl TransformPaintPropertyNode {
 }
 impl ClipPaintPropertyNode {
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_snapshot_option(&self.parent, &other.parent)
-            && Arc::ptr_eq(&self.local_transform_space, &other.local_transform_space)
-            && same_snapshot_option(&self.pixel_moving_filter, &other.pixel_moving_filter)
+        same_entity_option(&self.parent, &other.parent)
+            && same_entity(&self.local_transform_space, &other.local_transform_space)
+            && same_entity_option(&self.pixel_moving_filter, &other.pixel_moving_filter)
     }
 }
 impl EffectPaintPropertyNode {
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_snapshot_option(&self.parent, &other.parent)
-            && Arc::ptr_eq(&self.local_transform_space, &other.local_transform_space)
-            && same_snapshot_option(&self.output_clip, &other.output_clip)
-            && same_snapshot_option(&self.backdrop_filter_clip, &other.backdrop_filter_clip)
+        same_entity_option(&self.parent, &other.parent)
+            && same_entity(&self.local_transform_space, &other.local_transform_space)
+            && same_entity_option(&self.output_clip, &other.output_clip)
+            && same_entity_option(&self.backdrop_filter_clip, &other.backdrop_filter_clip)
             && same_snapshot_option(
                 &self.compositor.canvas_child_state,
                 &other.compositor.canvas_child_state,
@@ -4076,8 +4104,8 @@ impl EffectPaintPropertyNode {
 }
 impl ScrollPaintPropertyNode {
     fn same_snapshot_references(&self, other: &Self) -> bool {
-        same_snapshot_option(&self.parent, &other.parent)
-            && same_snapshot_option(&self.overflow_clip, &other.overflow_clip)
+        same_entity_option(&self.parent, &other.parent)
+            && same_entity_option(&self.overflow_clip, &other.overflow_clip)
             // These are Rechrom package-boundary associations, not fields in
             // Chromium ScrollPaintPropertyNode::State. Keep a new value when
             // they change without promoting the source lifecycle category.
