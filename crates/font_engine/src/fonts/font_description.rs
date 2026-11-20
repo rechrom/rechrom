@@ -268,6 +268,20 @@ impl PartialEq for FontDescription {
     }
 }
 
+impl FontDescription {
+    /// A cheap key over fields that `PartialEq` compares exactly (sizes and
+    /// the packed flags), for bucketing caches before the full comparison.
+    /// Equal descriptions always have equal keys.
+    pub fn bucket_key(&self) -> u64 {
+        let mut key = self.fields_.0;
+        for size in [self.specified_size_, self.computed_size_, self.adjusted_size_] {
+            key = key.rotate_left(21) ^ u64::from(size.to_bits());
+            key = key.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+        key
+    }
+}
+
 // cpp: font_engine/fonts/font_description_data.cc:36
 #[allow(non_snake_case)]
 impl FontDescription {

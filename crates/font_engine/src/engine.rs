@@ -123,7 +123,7 @@ pub struct FontEngine {
     /// for the same immutable FontDescription while cascading a large
     /// inherited subtree. Cache the resolved primary metrics at the retained
     /// font-engine boundary; every font mutation below revokes these entries.
-    metrics_cache: Vec<(FontDescription, FontMetrics)>,
+    metrics_cache: MetricsCache,
 }
 
 /// Page-assembled handle to one retained font computation engine.
@@ -177,7 +177,7 @@ impl FontEngine {
             resolved_faces: None,
             discover_system: true,
             queries: Some(FontQueryCollector::default()),
-            metrics_cache: Vec::new(),
+            metrics_cache: MetricsCache::default(),
         }
     }
     /// Compatibility for hosts supplying an already resolved, immutable face
@@ -701,11 +701,7 @@ impl FontEngine {
         if version != self.context_version {
             return FontCompute::Error(FontError::StaleContext);
         }
-        if let Some((_, metrics)) = self
-            .metrics_cache
-            .iter()
-            .find(|(cached, _)| cached == description)
-        {
+        if let Some(metrics) = self.metrics_cache.find(description) {
             return FontCompute::Ready(metrics.clone());
         }
         match self.Prepare(description, version) {
@@ -726,8 +722,7 @@ impl FontEngine {
             return FontCompute::Error(FontError::NoUsableFont);
         }
         let metrics = unsafe { &*primary }.GetFontMetrics().clone();
-        self.metrics_cache
-            .push((description.clone(), metrics.clone()));
+        self.metrics_cache.insert(description.clone(), metrics.clone());
         FontCompute::Ready(metrics)
     }
     pub fn Shape(&mut self, request: &FontShapeRequest<'_>) -> FontCompute<RetainedShapeResult> {
@@ -1460,5 +1455,55 @@ mod tests {
             .unwrap();
         let second = engine.PrepareSystemQuery(query).system_queries.remove(0);
         assert!(matches!(&second.query, SystemFontQuery::OpenFace { id } if id.0 == "present"));
+    }
+}
+
+/// Primary-font metrics by FontDescription. Buckets by
+/// FontDescription::bucket_key so a lookup compares only descriptions of the
+/// same sizes; viewport-relative font sizes add a description per resize
+/// step, so the full comparison over a growing list became a hot path.
+/// Bounded like Chromium's purgeable FontCache: a full cache is dropped and
+/// refilled on demand.
+#[derive(Default)]
+struct MetricsCache {
+    buckets: std::collections::HashMap<u64, Vec<(FontDescription, FontMetrics)>>,
+    len: usize,
+}
+
+impl MetricsCache {
+    const CAPACITY: usize = 4096;
+
+    fn find(&self, description: &FontDescription) -> Option<&FontMetrics> {
+        self.buckets
+            .get(&description.bucket_key())?
+            .iter()
+            .find(|(cached, _)| cached == description)
+            .map(|(_, metrics)| metrics)
+    }
+
+    fn insert(&mut self, description: FontDescription, metrics: FontMetrics) {
+        if self.len >= Self::CAPACITY {
+            self.clear();
+        }
+        self.buckets
+            .entry(description.bucket_key())
+            .or_default()
+            .push((description, metrics));
+        self.len += 1;
+    }
+
+    fn clear(&mut self) {
+        self.buckets.clear();
+        self.len = 0;
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
