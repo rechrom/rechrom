@@ -126,6 +126,11 @@ pub struct PaintPropertyNodeLifecycle {
     pub identity: Arc<PaintPropertyNodeIdentity>,
     pub revision: u64,
     pub changed: PaintPropertyChangeType,
+    /// Id of the persisted parent node in the same PaintPropertyNodeStore
+    /// (0: root or not persisted). Set by PropertyNodeUpdater together with
+    /// the canonical `parent` link; the id-indexed form of that link
+    /// (PaintPropertyNodeStore::*_by_id) survives a parent value update.
+    pub parent_id: u64,
 }
 impl Default for PaintPropertyNodeLifecycle {
     fn default() -> Self {
@@ -143,6 +148,7 @@ impl Default for PaintPropertyNodeLifecycle {
             }),
             revision: 0,
             changed: PaintPropertyChangeType::NodeAddedOrRemoved,
+            parent_id: 0,
         }
     }
 }
@@ -178,6 +184,7 @@ impl PaintPropertyNodeLifecycle {
             identity: self.identity.clone(),
             revision: self.revision + u64::from(changed != PaintPropertyChangeType::Unchanged),
             changed,
+            parent_id: self.parent_id,
         }
     }
 
@@ -2152,14 +2159,132 @@ pub struct PaintPropertyKey {
 /// retained paint lifecycle, never global and never keyed by DOM order.
 /// Old frames keep immutable snapshots; identity allocations are retained by
 /// both snapshots. Removing a slot and later adding it creates a new entity.
+/// Node id of a persisted property node.
+pub trait PersistedPropertyNode: Clone {
+    fn node_id(&self) -> u64;
+    /// Id of the `parent` link (0 without a parent).
+    fn linked_parent_id(&self) -> u64;
+    fn recorded_parent_id(&self) -> u64;
+    fn record_parent_id(&mut self, id: u64);
+}
+macro_rules! persisted_property_node {
+    ($($type:ty),*) => {$(
+        impl PersistedPropertyNode for $type {
+            fn node_id(&self) -> u64 {
+                self.id
+            }
+            fn linked_parent_id(&self) -> u64 {
+                self.parent.as_ref().map_or(0, |parent| parent.id)
+            }
+            fn recorded_parent_id(&self) -> u64 {
+                self.lifecycle.parent_id
+            }
+            fn record_parent_id(&mut self, id: u64) {
+                self.lifecycle.parent_id = id;
+            }
+        }
+    )*};
+}
+persisted_property_node!(
+    TransformPaintPropertyNode,
+    ClipPaintPropertyNode,
+    EffectPaintPropertyNode,
+    ScrollPaintPropertyNode
+);
+
+/// One kind of persisted property node by slot key, with an index from node
+/// id to slot. Reads go through Deref; every write goes through `insert` or
+/// `retain`, which keep the index in step.
+#[derive(Clone, Debug)]
+pub struct KeyedPropertyNodes<T> {
+    by_key: BTreeMap<PaintPropertyKey, Arc<T>>,
+    ids: TrustedIdentityHashMap<u64, PaintPropertyKey>,
+}
+impl<T> Default for KeyedPropertyNodes<T> {
+    fn default() -> Self {
+        Self {
+            by_key: BTreeMap::new(),
+            ids: TrustedIdentityHashMap::default(),
+        }
+    }
+}
+impl<T> std::ops::Deref for KeyedPropertyNodes<T> {
+    type Target = BTreeMap<PaintPropertyKey, Arc<T>>;
+    fn deref(&self) -> &Self::Target {
+        &self.by_key
+    }
+}
+impl<'a, T> IntoIterator for &'a KeyedPropertyNodes<T> {
+    type Item = (&'a PaintPropertyKey, &'a Arc<T>);
+    type IntoIter = std::collections::btree_map::Iter<'a, PaintPropertyKey, Arc<T>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.by_key.iter()
+    }
+}
+impl<T: PersistedPropertyNode> FromIterator<(PaintPropertyKey, Arc<T>)> for KeyedPropertyNodes<T> {
+    fn from_iter<I: IntoIterator<Item = (PaintPropertyKey, Arc<T>)>>(iter: I) -> Self {
+        let mut nodes = Self::default();
+        for (key, node) in iter {
+            nodes.insert(key, node);
+        }
+        nodes
+    }
+}
+impl<T: PersistedPropertyNode> KeyedPropertyNodes<T> {
+    /// Store `node` in `key`'s slot. Every persisted node leaves here with its
+    /// parent id recorded, whichever producer built it.
+    pub fn insert(&mut self, key: PaintPropertyKey, mut node: Arc<T>) -> Option<Arc<T>> {
+        let parent_id = node.linked_parent_id();
+        if node.recorded_parent_id() != parent_id {
+            Arc::make_mut(&mut node).record_parent_id(parent_id);
+        }
+        let id = node.node_id();
+        let old = self.by_key.insert(key, node);
+        match &old {
+            // The common re-persist of a slot under its existing id.
+            Some(old) if old.node_id() == id => {}
+            Some(old) => {
+                if self.ids.get(&old.node_id()) == Some(&key) {
+                    self.ids.remove(&old.node_id());
+                }
+                self.ids.insert(id, key);
+            }
+            None => {
+                self.ids.insert(id, key);
+            }
+        }
+        old
+    }
+    pub fn retain(&mut self, mut keep: impl FnMut(&PaintPropertyKey, &mut Arc<T>) -> bool) {
+        let ids = &mut self.ids;
+        self.by_key.retain(|key, node| {
+            let retained = keep(key, node);
+            if !retained && ids.get(&node.node_id()) == Some(key) {
+                ids.remove(&node.node_id());
+            }
+            retained
+        });
+    }
+    /// Slot of the persisted node with this id.
+    pub fn key_of_id(&self, id: u64) -> Option<PaintPropertyKey> {
+        self.ids.get(&id).copied()
+    }
+    /// The persisted node with this id.
+    pub fn by_id(&self, id: u64) -> Option<&Arc<T>> {
+        self.by_key
+            .get(self.ids.get(&id)?)
+            .filter(|node| node.node_id() == id)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PaintPropertyNodeStore {
     next_id: u64,
     visual_viewport_unique_id: Option<u64>,
-    transforms: BTreeMap<PaintPropertyKey, Arc<TransformPaintPropertyNode>>,
-    clips: BTreeMap<PaintPropertyKey, Arc<ClipPaintPropertyNode>>,
-    effects: BTreeMap<PaintPropertyKey, Arc<EffectPaintPropertyNode>>,
-    scrolls: BTreeMap<PaintPropertyKey, Arc<ScrollPaintPropertyNode>>,
+    transforms: KeyedPropertyNodes<TransformPaintPropertyNode>,
+    clips: KeyedPropertyNodes<ClipPaintPropertyNode>,
+    effects: KeyedPropertyNodes<EffectPaintPropertyNode>,
+    scrolls: KeyedPropertyNodes<ScrollPaintPropertyNode>,
     // A cleared published graph stays cleared until an updater marks a node.
     // This avoids scanning all resident slots on entirely clean paint passes.
     change_markers_cleared: bool,
@@ -2173,10 +2298,10 @@ impl Default for PaintPropertyNodeStore {
         Self {
             next_id: 1,
             visual_viewport_unique_id: None,
-            transforms: BTreeMap::new(),
-            clips: BTreeMap::new(),
-            effects: BTreeMap::new(),
-            scrolls: BTreeMap::new(),
+            transforms: Default::default(),
+            clips: Default::default(),
+            effects: Default::default(),
+            scrolls: Default::default(),
             change_markers_cleared: true,
             changed: Default::default(),
             intersection_observation_state: Default::default(),
@@ -2184,6 +2309,47 @@ impl Default for PaintPropertyNodeStore {
     }
 }
 impl PaintPropertyNodeStore {
+    /// Verification of the id-indexed parent links: persisted nodes whose
+    /// parent is persisted but whose `parent_id` does not resolve to a node
+    /// with that parent's id. Zero when the index is consistent.
+    pub fn unresolved_parent_ids(&self) -> (usize, usize) {
+        fn count<T: PersistedPropertyNode>(
+            nodes: &KeyedPropertyNodes<T>,
+            parent: impl Fn(&T) -> Option<(u64, u64)>,
+        ) -> (usize, usize) {
+            let mut checked = 0;
+            let mut unresolved = 0;
+            for node in nodes.values() {
+                let Some((parent_id, recorded)) = parent(node) else { continue };
+                if nodes.by_id(parent_id).is_none() {
+                    continue;
+                }
+                checked += 1;
+                unresolved += usize::from(recorded != parent_id);
+            }
+            (checked, unresolved)
+        }
+        let parts = [
+            count(&self.transforms, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.clips, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.effects, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+            count(&self.scrolls, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
+        ];
+        parts.iter().fold((0, 0), |(c, u), (pc, pu)| (c + pc, u + pu))
+    }
+    /// Persisted nodes by id: the id-indexed parent links of the tree.
+    pub fn transform_by_id(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
+        self.transforms.by_id(id)
+    }
+    pub fn clip_by_id(&self, id: u64) -> Option<&Arc<ClipPaintPropertyNode>> {
+        self.clips.by_id(id)
+    }
+    pub fn effect_by_id(&self, id: u64) -> Option<&Arc<EffectPaintPropertyNode>> {
+        self.effects.by_id(id)
+    }
+    pub fn scroll_by_id(&self, id: u64) -> Option<&Arc<ScrollPaintPropertyNode>> {
+        self.scrolls.by_id(id)
+    }
     /// Borrow an ObjectPaintProperties slot by its existing owner and role.
     /// Query adapters retain neither another property graph nor a snapshot.
     pub fn TransformForKey(&self, key: PaintPropertyKey) -> Option<&TransformPaintPropertyNode> {
@@ -2928,22 +3094,6 @@ impl PaintPropertyNodeStore {
         // store is mutably borrowed. Once a rebuilt ancestor updates a slot,
         // every stale descendant reference can then resolve to that slot's
         // canonical current snapshot instead of reintroducing its old value.
-        let mut stable_transform_keys = TrustedIdentityHashMap::default();
-        for (key, node) in &self.transforms {
-            stable_transform_keys.insert(node.id, *key);
-        }
-        let mut stable_clip_keys = TrustedIdentityHashMap::default();
-        for (key, node) in &self.clips {
-            stable_clip_keys.insert(node.id, *key);
-        }
-        let mut stable_effect_keys = TrustedIdentityHashMap::default();
-        for (key, node) in &self.effects {
-            stable_effect_keys.insert(node.id, *key);
-        }
-        let mut stable_scroll_keys = TrustedIdentityHashMap::default();
-        for (key, node) in &self.scrolls {
-            stable_scroll_keys.insert(node.id, *key);
-        }
         self.changed = PaintPropertyChangeType::Unchanged;
         self.intersection_observation_state = Default::default();
         // A partial update cannot certify that every retained graph is clean.
@@ -2968,10 +3118,6 @@ impl PaintPropertyNodeStore {
             store: self,
             raw_keys: keys,
             prior_raw_keys: prior_keys,
-            stable_transform_keys,
-            stable_clip_keys,
-            stable_effect_keys,
-            stable_scroll_keys,
             effect_sources,
             seen,
             transforms: TrustedIdentityHashMap::default(),
@@ -3431,10 +3577,6 @@ pub struct PropertyNodeUpdater<'a> {
     store: &'a mut PaintPropertyNodeStore,
     raw_keys: &'a BTreeMap<u64, PaintPropertyKey>,
     prior_raw_keys: &'a BTreeMap<u64, PaintPropertyKey>,
-    stable_transform_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
-    stable_clip_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
-    stable_effect_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
-    stable_scroll_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
     effect_sources: &'a BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
     seen: TrustedIdentityHashSet<PaintPropertyKey>,
     transforms: TrustedIdentityHashMap<usize, Arc<TransformPaintPropertyNode>>,
@@ -3823,6 +3965,7 @@ macro_rules! update_snapshot {
             if $node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
                 $self.store.change_markers_cleared = false;
             }
+            $node.lifecycle.parent_id = $node.parent.as_ref().map_or(0, |parent| parent.id);
             let node = if let Some(old) = $self.store.$map.get(&key).filter(|old| {
                 $node.lifecycle.changed == PaintPropertyChangeType::Unchanged
                     && old.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
@@ -3847,9 +3990,9 @@ macro_rules! update_snapshot {
 }
 impl PropertyNodeUpdater<'_> {
     fn transform_key(&self, input: &TransformPaintPropertyNode) -> Option<PaintPropertyKey> {
-        self.stable_transform_keys
-            .get(&input.id)
-            .copied()
+        self.store
+            .transforms
+            .key_of_id(input.id)
             .filter(|key| {
                 self.store
                     .transforms
@@ -3861,9 +4004,9 @@ impl PropertyNodeUpdater<'_> {
     }
 
     fn clip_key(&self, input: &ClipPaintPropertyNode) -> Option<PaintPropertyKey> {
-        self.stable_clip_keys
-            .get(&input.id)
-            .copied()
+        self.store
+            .clips
+            .key_of_id(input.id)
             .filter(|key| {
                 self.store
                     .clips
@@ -3875,9 +4018,9 @@ impl PropertyNodeUpdater<'_> {
     }
 
     fn effect_key(&self, input: &EffectPaintPropertyNode) -> Option<PaintPropertyKey> {
-        self.stable_effect_keys
-            .get(&input.id)
-            .copied()
+        self.store
+            .effects
+            .key_of_id(input.id)
             .filter(|key| {
                 self.store
                     .effects
@@ -3889,9 +4032,9 @@ impl PropertyNodeUpdater<'_> {
     }
 
     fn scroll_key(&self, input: &ScrollPaintPropertyNode) -> Option<PaintPropertyKey> {
-        self.stable_scroll_keys
-            .get(&input.id)
-            .copied()
+        self.store
+            .scrolls
+            .key_of_id(input.id)
             .filter(|key| {
                 self.store
                     .scrolls

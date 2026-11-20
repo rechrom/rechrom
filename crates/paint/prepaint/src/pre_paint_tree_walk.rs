@@ -7108,6 +7108,14 @@ impl PrePaintTreeWalk {
                 );
                 PersistPropertyStates(&mut tree, &mut updater);
                 updater.finish();
+                if browser_tracing::enabled() {
+                    let (checked, unresolved) = self.property_node_store.unresolved_parent_ids();
+                    browser_tracing::instant(
+                        "prepaint",
+                        "PrePaint.ParentIds",
+                        &[("checked", checked as f64), ("unresolved", unresolved as f64)],
+                    );
+                }
                 self.intersection_observation_state = self
                     .intersection_observation_state
                     .max(self.property_node_store.intersection_observation_state);
