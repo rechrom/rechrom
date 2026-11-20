@@ -524,7 +524,10 @@ impl<R: CpuSkiaBackend> crate::adapter::paint_chunks_to_cc_layer::PaintChunksSer
 
 impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuPaintServices<R> {
     fn VisibilityLimit(&self, s: &paint::PropertyTreeState<R>) -> Option<RectF> {
-        GeometryMapper::<CpuGeometryMapper<R>>::VisibilityLimit(self.mapper.as_ref(), s)
+        GeometryMapper::<CpuGeometryMapper<R>>::VisibilityLimit(
+            &self.mapper.with_trees(s.transform().trees().clone()),
+            s,
+        )
     }
     fn MightOverlapForCompositing(
         &self,
@@ -534,7 +537,7 @@ impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuPaintServices<R> {
         sb: &paint::PropertyTreeState<R>,
     ) -> bool {
         GeometryMapper::<CpuGeometryMapper<R>>::MightOverlapForCompositing(
-            self.mapper.as_ref(),
+            &self.mapper.with_trees(sa.transform().trees().clone()),
             &a,
             sa,
             &b,
@@ -549,7 +552,7 @@ impl<R: CpuSkiaBackend> PendingLayerGeometry<Root<R>> for CpuPaintServices<R> {
     ) -> PendingMappedVisualRect {
         let mut value = FloatClipRect::FromRect(r);
         GeometryMapper::<CpuGeometryMapper<R>>::LocalToAncestorVisualRect(
-            self.mapper.as_ref(),
+            &self.mapper.with_trees(s.transform().trees().clone()),
             s,
             d,
             &mut value,

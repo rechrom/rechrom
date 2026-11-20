@@ -20,9 +20,10 @@ use std::{marker::PhantomData, sync::Arc};
 pub struct CpuGeometryMapper<R: CpuSkiaBackend> {
     pub(super) tracking: Arc<dyn super::CpuRasterTrackingServices<R>>,
     singular_transform_fix: bool,
-    /// The installed artifact's property trees; bare clip links handed to
-    /// this context resolve through them (see PropertyNodeResolver).
-    trees: std::sync::Mutex<super::HandleTrees>,
+    /// The published property trees of the states this context maps; bare
+    /// clip links handed to it resolve through them. Set per mapping call
+    /// with `with_trees`, from the states being mapped.
+    trees: super::HandleTrees,
     marker: PhantomData<fn() -> R>,
 }
 impl<R: CpuSkiaBackend> CpuGeometryMapper<R> {
@@ -36,16 +37,21 @@ impl<R: CpuSkiaBackend> CpuGeometryMapper<R> {
         Self {
             tracking,
             singular_transform_fix,
-            trees: Default::default(),
+            trees: None,
             marker: PhantomData,
         }
     }
-    /// Install the property trees of the artifact being composited.
-    pub fn SetPropertyTrees(&self, trees: super::HandleTrees) {
-        *self.trees.lock().expect("property trees lock") = trees;
+    /// This context resolving links through `trees`.
+    pub fn with_trees(&self, trees: super::HandleTrees) -> Self {
+        Self {
+            tracking: self.tracking.clone(),
+            singular_transform_fix: self.singular_transform_fix,
+            trees,
+            marker: PhantomData,
+        }
     }
     fn property_trees(&self) -> super::HandleTrees {
-        self.trees.lock().expect("property trees lock").clone()
+        self.trees.clone()
     }
     fn resolve_clip(
         &self,
@@ -256,7 +262,7 @@ impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         b: &Self::PropertyTreeState,
     ) -> FloatClipRect {
         GeometryMapper::<Self>::LocalToAncestorClipRect(
-            self,
+            &self.with_trees(a.transform_.trees().clone()),
             a,
             b,
             OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
@@ -269,7 +275,7 @@ impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         r: &mut FloatClipRect,
     ) {
         GeometryMapper::<Self>::LocalToAncestorVisualRect(
-            self,
+            &self.with_trees(a.transform_.trees().clone()),
             a,
             b,
             r,
