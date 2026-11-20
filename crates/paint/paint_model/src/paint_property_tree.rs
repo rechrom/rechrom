@@ -4667,7 +4667,17 @@ impl PropertyNodeUpdater<'_> {
         self.scrolls.insert(identity, node.clone());
         node
     }
-    pub fn finish(self) {
+    pub fn finish(mut self) {
+        self.finish_slots();
+        // Source: GeometryMapper::ClearCache() on a property change. A node
+        // can keep its snapshot while an ancestor's value changes, so cached
+        // ancestor-derived geometry is invalidated globally, as in Chromium.
+        if self.store.changed != PaintPropertyChangeType::Unchanged {
+            crate::geometry_mapper_source::geometry_mapper_transform_cache::ClearTransformCaches();
+            crate::geometry_mapper_source::geometry_mapper_clip_cache::GeometryMapperClipCache::ClearCache();
+        }
+    }
+    fn finish_slots(&mut self) {
         let geometry_before =
             self.store.transforms.len() + self.store.clips.len() + self.store.scrolls.len();
         let before = self.store.transforms.len()

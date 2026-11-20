@@ -76,6 +76,10 @@ impl Default for NativeGeometryMapperTransformCache {
         }
     }
 }
+/// Invalidate every transform cache (GeometryMapperTransformCache::ClearCache).
+pub fn ClearTransformCaches() {
+    NativeGeometryMapperTransformCache::ClearCache();
+}
 impl NativeGeometryMapperTransformCache {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_transform_cache.cc:18-24.
     pub fn ClearCache() {
