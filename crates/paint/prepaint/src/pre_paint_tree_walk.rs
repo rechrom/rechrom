@@ -4729,10 +4729,10 @@ fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
         return false;
     };
     let inherited = &cache.inherited;
-    // A paint layer carries ordering and repaint state beyond geometry; SVG
-    // children receive their container's local transform per rebuild.
-    !node.is_paint_layer
-        && node.local_transforms.is_empty()
+    // SVG children receive their container's local transform per rebuild.
+    // Paint layers are admitted: RefreshLivePaintLayerFacts re-reads every
+    // live layer fact the builder reads.
+    node.local_transforms.is_empty()
         && cache.children.svg.is_none()
         && !node
             .fragment
@@ -4750,6 +4750,68 @@ fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
         && cache.children.clip == inherited.clip
         && cache.children.cull == inherited.cull
         && cache.children.transforms == inherited.transforms
+}
+
+/// The object's only own property node is a plain Effect (opacity/blend, no
+/// filter, backdrop or mask) that BuildNode derived from the inherited
+/// transform, clip and effect alone, and the parent facts the builder copies
+/// into it are unchanged. Such an effect keeps its value when the object
+/// moves; RebaseOwnEffect re-links it to the new inherited nodes.
+fn RebasableOwnEffect(cache: &NodeCache, inherited: &InheritedContext) -> bool {
+    let [(_, key)] = cache.own_keys.as_slice() else {
+        return false;
+    };
+    if key.role != PaintPropertyRole::Effect {
+        return false;
+    }
+    let old = &cache.inherited.properties;
+    let raw = &cache.raw_properties;
+    let effect = &raw.nodes.effect;
+    let new_parent = &inherited.properties.nodes.effect;
+    let old_parent = &old.nodes.effect;
+    raw.effect_id == effect.id
+        && raw.effect_id != old.effect_id
+        && raw.transform_id == old.transform_id
+        && raw.clip_id == old.clip_id
+        && raw.scroll_id == old.scroll_id
+        && Arc::ptr_eq(&raw.nodes.transform, &old.nodes.transform)
+        && Arc::ptr_eq(&raw.nodes.clip, &old.nodes.clip)
+        && effect.parent.as_ref().is_some_and(|parent| Arc::ptr_eq(parent, old_parent))
+        && Arc::ptr_eq(&effect.local_transform_space, &old.nodes.transform)
+        && effect.output_clip.as_ref().is_some_and(|clip| Arc::ptr_eq(clip, &old.nodes.clip))
+        && effect.filters.is_empty()
+        && effect.backdrop_filters.is_empty()
+        && effect.backdrop_filter_clip.is_none()
+        && effect.backdrop_filter_bounds.is_none()
+        && effect.filter_reference_box.is_none()
+        && !effect.has_mask
+        && !effect.is_mask
+        && Arc::ptr_eq(&cache.raw_contents.nodes.effect, effect)
+        && Arc::ptr_eq(&cache.children.properties.nodes.effect, effect)
+        && cache.raw_contents.clip_id == raw.clip_id
+        && cache.raw_contents.transform_id == raw.transform_id
+        && cache.children.properties.clip_id == raw.clip_id
+        && cache.children.properties.transform_id == raw.transform_id
+        && new_parent.compositor.is_in_tainted_subtree
+            == old_parent.compositor.is_in_tainted_subtree
+        && new_parent.compositor.is_in_drawable_canvas_subtree
+            == old_parent.compositor.is_in_drawable_canvas_subtree
+        && new_parent.self_or_ancestor_participates_in_view_transition
+            == old_parent.self_or_ancestor_participates_in_view_transition
+}
+
+/// New snapshot of the object's own effect on the moved parent state:
+/// the same id and values, parent/transform-space/output-clip re-linked.
+fn RebaseOwnEffect(raw: &PropertyTreeState, inherited: &PropertyTreeState) -> PropertyTreeState {
+    let mut effect = (*raw.nodes.effect).clone();
+    effect.lifecycle = Default::default();
+    effect.parent = Some(inherited.nodes.effect.clone());
+    effect.local_transform_space = inherited.nodes.transform.clone();
+    effect.output_clip = Some(inherited.nodes.clip.clone());
+    let mut state = inherited.clone();
+    state.effect_id = raw.effect_id;
+    state.nodes.effect = Arc::new(effect);
+    state
 }
 
 /// How far an offset-only update moved a subtree and its property space.
@@ -4790,12 +4852,22 @@ fn ShiftRetainedNode(
     node.transforms = inherited.transforms.clone();
     // Without own nodes the object paints in its parent's property state,
     // which may itself be a new snapshot (e.g. the resized viewport clip).
-    node.properties = inherited.properties.clone();
-    node.contents_properties = inherited.properties.clone();
+    // An own plain effect is rebased onto that state: same identity and
+    // value, parent links updated (the in-place property update).
+    let properties = {
+        let cache = node.cache.as_ref().expect("shifted node has builder state");
+        if cache.own_keys.is_empty() {
+            inherited.properties.clone()
+        } else {
+            RebaseOwnEffect(&cache.raw_properties, &inherited.properties)
+        }
+    };
+    node.properties = properties.clone();
+    node.contents_properties = properties.clone();
     let cache = node.cache.as_mut().expect("shifted node has builder state");
-    cache.raw_properties = inherited.properties.clone();
-    cache.raw_contents = inherited.properties.clone();
-    cache.children.properties = inherited.properties.clone();
+    cache.raw_properties = properties.clone();
+    cache.raw_contents = properties.clone();
+    cache.children.properties = properties;
     cache.inherited = inherited.clone();
     cache.children.origin.x += delta.offset.x;
     cache.children.origin.y += delta.offset.y;
@@ -5771,7 +5843,7 @@ impl PrePaintTreeWalk {
         let shift_delta = if !self_clean && !invalidation_only && !force && self_revision_matches {
             previous.as_ref().and_then(|node| {
                 let cache = node.cache.as_ref()?;
-                if !cache.own_keys.is_empty()
+                if !(cache.own_keys.is_empty() || RebasableOwnEffect(cache, &inherited))
                     || (self.source_owner_changed
                         && !(SamePreviousSourceIdentity(node, &fragment)
                             && SameClientDirectory(node, &fragment)))
@@ -5790,7 +5862,11 @@ impl PrePaintTreeWalk {
                 None => 0,
                 _ if force => 0,
                 _ if !self_revision_matches => 1,
-                Some((_, cache)) if !cache.own_keys.is_empty() => 2,
+                Some((_, cache))
+                    if !(cache.own_keys.is_empty() || RebasableOwnEffect(cache, &inherited)) =>
+                {
+                    2
+                }
                 Some((node, _))
                     if self.source_owner_changed
                         && !(SamePreviousSourceIdentity(node, &fragment)
