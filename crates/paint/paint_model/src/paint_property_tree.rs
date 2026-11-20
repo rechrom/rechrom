@@ -4,6 +4,7 @@
 //! clip, effect and scroll_paint_property_node.h files. These are paint trees,
 //! not compositor layer trees. Numeric IDs are dump-local labels; reference
 //! equality, as in Blink, determines whether states share property nodes.
+use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
@@ -2098,7 +2099,7 @@ impl PaintPropertyTrees {
 
 /// ObjectPaintProperties owns one slot per property kind and fragment. The
 /// source-specific transform slots mirror ObjectPaintProperties roles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PaintPropertyRole {
     ViewportClip,
     OverscrollElasticityTransform,
@@ -2135,12 +2136,12 @@ pub enum PaintPropertyRole {
     ScrollTranslation,
     ReplacedContentTransform,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PaintPropertyOwner {
     Viewport,
     Fragment { client: u64, fragment: u32 },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PaintPropertyKey {
     pub owner: PaintPropertyOwner,
     pub role: PaintPropertyRole,
@@ -2917,8 +2918,8 @@ impl PaintPropertyNodeStore {
     }
     pub fn updater<'a>(
         &'a mut self,
-        keys: &BTreeMap<u64, PaintPropertyKey>,
-        prior_keys: &BTreeMap<u64, PaintPropertyKey>,
+        keys: &'a BTreeMap<u64, PaintPropertyKey>,
+        prior_keys: &'a BTreeMap<u64, PaintPropertyKey>,
         effect_sources: &'a BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
     ) -> PropertyNodeUpdater<'a> {
         // Raw builder ids name nodes created in this pass. Retained clean
@@ -2927,19 +2928,19 @@ impl PaintPropertyNodeStore {
         // store is mutably borrowed. Once a rebuilt ancestor updates a slot,
         // every stale descendant reference can then resolve to that slot's
         // canonical current snapshot instead of reintroducing its old value.
-        let mut stable_transform_keys = BTreeMap::new();
+        let mut stable_transform_keys = TrustedIdentityHashMap::default();
         for (key, node) in &self.transforms {
             stable_transform_keys.insert(node.id, *key);
         }
-        let mut stable_clip_keys = BTreeMap::new();
+        let mut stable_clip_keys = TrustedIdentityHashMap::default();
         for (key, node) in &self.clips {
             stable_clip_keys.insert(node.id, *key);
         }
-        let mut stable_effect_keys = BTreeMap::new();
+        let mut stable_effect_keys = TrustedIdentityHashMap::default();
         for (key, node) in &self.effects {
             stable_effect_keys.insert(node.id, *key);
         }
-        let mut stable_scroll_keys = BTreeMap::new();
+        let mut stable_scroll_keys = TrustedIdentityHashMap::default();
         for (key, node) in &self.scrolls {
             stable_scroll_keys.insert(node.id, *key);
         }
@@ -2965,18 +2966,18 @@ impl PaintPropertyNodeStore {
             .collect();
         PropertyNodeUpdater {
             store: self,
-            raw_keys: keys.clone(),
-            prior_raw_keys: prior_keys.clone(),
+            raw_keys: keys,
+            prior_raw_keys: prior_keys,
             stable_transform_keys,
             stable_clip_keys,
             stable_effect_keys,
             stable_scroll_keys,
             effect_sources,
             seen,
-            transforms: BTreeMap::new(),
-            clips: BTreeMap::new(),
-            effects: BTreeMap::new(),
-            scrolls: BTreeMap::new(),
+            transforms: TrustedIdentityHashMap::default(),
+            clips: TrustedIdentityHashMap::default(),
+            effects: TrustedIdentityHashMap::default(),
+            scrolls: TrustedIdentityHashMap::default(),
         }
     }
     pub fn next_id(&self) -> u64 {
@@ -3423,20 +3424,23 @@ impl RetainedScrollSnapshotRebinder {
     }
 }
 
+/// Per-pass lookup tables are probed once or more per property reference of
+/// every node; they are keyed by trusted lifecycle ids and node identities,
+/// so they use identity hashing rather than ordered maps (none is iterated).
 pub struct PropertyNodeUpdater<'a> {
     store: &'a mut PaintPropertyNodeStore,
-    raw_keys: BTreeMap<u64, PaintPropertyKey>,
-    prior_raw_keys: BTreeMap<u64, PaintPropertyKey>,
-    stable_transform_keys: BTreeMap<u64, PaintPropertyKey>,
-    stable_clip_keys: BTreeMap<u64, PaintPropertyKey>,
-    stable_effect_keys: BTreeMap<u64, PaintPropertyKey>,
-    stable_scroll_keys: BTreeMap<u64, PaintPropertyKey>,
+    raw_keys: &'a BTreeMap<u64, PaintPropertyKey>,
+    prior_raw_keys: &'a BTreeMap<u64, PaintPropertyKey>,
+    stable_transform_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
+    stable_clip_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
+    stable_effect_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
+    stable_scroll_keys: TrustedIdentityHashMap<u64, PaintPropertyKey>,
     effect_sources: &'a BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
-    seen: BTreeSet<PaintPropertyKey>,
-    transforms: BTreeMap<usize, Arc<TransformPaintPropertyNode>>,
-    clips: BTreeMap<usize, Arc<ClipPaintPropertyNode>>,
-    effects: BTreeMap<usize, Arc<EffectPaintPropertyNode>>,
-    scrolls: BTreeMap<usize, Arc<ScrollPaintPropertyNode>>,
+    seen: TrustedIdentityHashSet<PaintPropertyKey>,
+    transforms: TrustedIdentityHashMap<usize, Arc<TransformPaintPropertyNode>>,
+    clips: TrustedIdentityHashMap<usize, Arc<ClipPaintPropertyNode>>,
+    effects: TrustedIdentityHashMap<usize, Arc<EffectPaintPropertyNode>>,
+    scrolls: TrustedIdentityHashMap<usize, Arc<ScrollPaintPropertyNode>>,
 }
 
 fn same_directory<T>(
