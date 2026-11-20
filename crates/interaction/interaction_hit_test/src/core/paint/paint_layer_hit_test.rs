@@ -230,7 +230,6 @@ pub trait LayerTransformNode: TransformPaintPropertyNode {
         &self,
     ) -> &std::sync::Arc<paint::paint_property_tree::TransformPaintPropertyNode>;
     fn Identity(&self) -> usize;
-    fn IsAncestorOf(&self, descendant: &dyn LayerTransformNode) -> bool;
 }
 pub trait LayerRadiusClip {
     fn LocalTransformSpace(&self) -> &dyn LayerTransformNode;
@@ -320,6 +319,13 @@ pub trait PaintLayerHitTest<R: LayerHitTestResult> {
         source: &dyn LayerTransformNode,
         destination: &dyn LayerTransformNode,
     ) -> gfx::Transform;
+    /// Whether `ancestor` is `descendant` or one of its current ancestors in
+    /// this layer's published property trees.
+    fn TransformIsAncestorOf(
+        &self,
+        ancestor: &dyn LayerTransformNode,
+        descendant: &dyn LayerTransformNode,
+    ) -> bool;
     fn EnterAncestorPositionVisibilityScope(&self) -> Box<dyn LayerVisibilityScope + '_>;
     fn RootFrameToVisualViewport(&self, point: gfx::Point) -> gfx::Point;
     fn HitTestOverflowControl(
@@ -435,9 +441,10 @@ pub fn CollectFragments<'l, R: LayerHitTestResult>(
     for (physical_fragment_idx, fragment_data) in layer.FragmentData().enumerate() {
         let root_fragment_data = if let Some(root_fragment) = root_fragment_arg.as_ref() {
             debug_assert_ne!(layer.Identity(), root.Identity());
-            if !root_fragment
-                .ContentsTransform()
-                .IsAncestorOf(fragment_data.LocalBorderTransform())
+            if !layer.TransformIsAncestorOf(
+                root_fragment.ContentsTransform(),
+                fragment_data.LocalBorderTransform(),
+            )
             {
                 continue;
             }
@@ -784,8 +791,7 @@ pub fn HitTestLayer<'l, R: LayerHitTestResult>(
         debug_assert!(!facts.preserves_3d);
         let local_fragment = if let Some(data) = container_fragment_data.as_ref() {
             let Some(local) = layer.FragmentData().find(|fragment| {
-                data.ContentsTransform()
-                    .IsAncestorOf(fragment.LocalBorderTransform())
+                layer.TransformIsAncestorOf(data.ContentsTransform(), fragment.LocalBorderTransform())
             }) else {
                 return None;
             };

@@ -756,18 +756,9 @@ impl LayerTransformNode for Arc<TransformPaintPropertyNode> {
     fn NativeOwner(&self) -> &Arc<TransformPaintPropertyNode> {
         self
     }
+    /// The node entity (shared by all of its snapshots).
     fn Identity(&self) -> usize {
-        Arc::as_ptr(self) as usize
-    }
-    fn IsAncestorOf(&self, descendant: &dyn LayerTransformNode) -> bool {
-        let mut node = Some(descendant.NativeOwner());
-        while let Some(current) = node {
-            if Arc::ptr_eq(self, current) {
-                return true;
-            }
-            node = current.parent.as_ref();
-        }
-        false
+        Arc::as_ptr(&self.lifecycle.identity) as usize
     }
 }
 impl LayerRadiusClip for ClipPaintPropertyNode {
@@ -1053,6 +1044,26 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
         )
         .as_source()
         .clone()
+    }
+    fn TransformIsAncestorOf(
+        &self,
+        ancestor: &dyn LayerTransformNode,
+        descendant: &dyn LayerTransformNode,
+    ) -> bool {
+        // Links reached through fragments may hold older snapshots of their
+        // node; follow them through this layer's published trees.
+        let trees = self.resident.PublishedTrees();
+        let ancestor = ancestor.NativeOwner();
+        let mut node = Some(descendant.NativeOwner().clone());
+        while let Some(current) = node {
+            if ancestor.lifecycle.same_node(&current.lifecycle) {
+                return true;
+            }
+            node = current.parent.as_ref().map(|parent| {
+                paint::paint_property_tree::PropertyNodeResolver::transform(&*trees, parent).clone()
+            });
+        }
+        false
     }
     fn EnterAncestorPositionVisibilityScope(&self) -> Box<dyn LayerVisibilityScope + '_> {
         // Native HasAncestorInvisibleForPositionVisibility exports the exact
