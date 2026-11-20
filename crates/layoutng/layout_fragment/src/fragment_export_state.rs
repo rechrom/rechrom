@@ -92,6 +92,18 @@ pub(super) struct FragmentOwners {
     /// The engine's PrePaint input tracker, lent for a Paint publication.
     pub(super) certification:
         Option<layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker>,
+    /// The previous publication's slots (replay source) and this one's.
+    pub(super) replay_previous: PopulationReplay,
+    pub(super) replay_next: PopulationReplay,
+    /// Finished entries that do not qualify; an ancestor qualifies only if
+    /// none were finished inside its subtree.
+    pub(super) replay_blocked: usize,
+    /// The FragmentData of the box whose inline items are being populated.
+    pub(super) inline_container_data: usize,
+    /// Diagnostics: replayed subtrees / slots, check-mode mismatches.
+    pub(super) replay_stats: [usize; 3],
+    /// Diagnostics: why a box slot does not qualify (first reason).
+    pub(super) replay_reasons: [usize; 8],
 }
 impl FragmentOwners {
     /// Certify one bound slot after all of its children were populated.
@@ -118,6 +130,37 @@ impl FragmentOwners {
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
         self.instances.entry(source).or_insert(instance);
         self.paint.insert(source)
+    }
+
+    /// The instance `key` resolves to in this publication, without
+    /// claiming it (see fragment_instance).
+    pub(super) fn peek_instance(&self, key: &FragmentIdentityKey) -> Option<u64> {
+        self.fragment_instance_ids
+            .get(key)
+            .or_else(|| self.prior_fragment_instance_ids.get(key))
+            .copied()
+    }
+
+    /// Start recording a bound slot (finish_replay_entry closes it).
+    pub(super) fn begin_replay_entry(&mut self, entry: PopulationReplayEntry) -> (usize, usize) {
+        let index = self.replay_next.entries.len();
+        self.replay_next.entries.push(entry);
+        (index, self.replay_blocked)
+    }
+
+    /// Close a recorded slot after its subtree; `begin` from begin_replay_entry.
+    pub(super) fn finish_replay_entry(&mut self, begin: (usize, usize)) {
+        let (index, blocked) = begin;
+        let len = self.replay_next.entries.len() - index;
+        let entry = &mut self.replay_next.entries[index];
+        let own = entry.replayable;
+        entry.len = len;
+        entry.replayable = own && self.replay_blocked == blocked;
+        if !own {
+            self.replay_blocked += 1;
+        }
+        let instance = entry.instance;
+        self.replay_next.index.insert(instance, index);
     }
 
     pub(super) fn fragment_instance(
@@ -187,4 +230,44 @@ pub(super) fn PopulateSVGChildPaintData(
         child = layout_child.NextSibling();
     }
     changed
+}
+
+/// The fragment-local paint slots the last Paint publication bound, in
+/// preorder, so the next publication can rebind an unchanged subtree
+/// without re-deriving it (see TryReplaySubtree in fragment population).
+/// Chromium keeps FragmentData on the persistent LayoutObject and walks only
+/// dirty objects; a LayoutNG cache hit hands the replacement result the very
+/// same immutable fragments, so their published slots stay valid.
+#[derive(Default)]
+pub(crate) struct PopulationReplay {
+    pub(crate) entries: Vec<PopulationReplayEntry>,
+    /// Slot instance -> its entry.
+    pub(crate) index: LayoutBoundaryHashMap<u64, usize>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PopulationReplayOwner {
+    Physical(*const PhysicalFragment),
+    Inline(*const layout_fragment::fragment_items::FragmentItems, usize),
+}
+
+#[derive(Clone)]
+pub(crate) struct PopulationReplayEntry {
+    pub(crate) owner: PopulationReplayOwner,
+    pub(crate) instance: u64,
+    pub(crate) key: FragmentIdentityKey,
+    pub(crate) object: *const LayoutObject,
+    pub(crate) effective_style: *const StyleComputedStyle,
+    /// Box fragment registered as establishing paint state.
+    pub(crate) paint_state_owner: Option<*const PhysicalBoxFragment>,
+    /// Inline item: its container's slot instance (fragment-count progression).
+    pub(crate) inline_container: Option<u64>,
+    /// Text item: its line top in the container and the container's
+    /// FragmentData, whose paint offset an ancestor move changes.
+    pub(crate) text_snap: Option<(LayoutUnit, *const crate::fragment_data::FragmentData)>,
+    /// Entries in this slot's subtree, itself included.
+    pub(crate) len: usize,
+    /// While recording: this slot alone qualifies; once finished: the whole
+    /// subtree qualifies.
+    pub(crate) replayable: bool,
 }

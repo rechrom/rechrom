@@ -111,6 +111,11 @@ pub(super) fn populate_layout_result_paint_data(
         debug_names: std::mem::take(&mut cache.debug_names),
         fragment_instance_ids: std::mem::take(&mut cache.fragment_instance_ids),
         prior_fragment_instance_ids,
+        replay_previous: if purpose == LayoutUpdateKind::Paint {
+            std::mem::take(&mut cache.population_replay)
+        } else {
+            Default::default()
+        },
         ..FragmentOwners::default()
     };
     let mut next_fragment_instance_id = cache.next_fragment_instance_id.max(1);
@@ -188,6 +193,31 @@ pub(super) fn populate_layout_result_paint_data(
                 ("property_export_ms", stats.property_export_ns as f64 / 1e6),
             ],
         );
+        browser_tracing::instant(
+            "layout",
+            "layout_fragment.PopulationReplay",
+            &[
+                ("subtrees", paint_state_owners.replay_stats[0] as f64),
+                ("slots", paint_state_owners.replay_stats[1] as f64),
+                ("check_mismatches", paint_state_owners.replay_stats[2] as f64),
+                ("recorded", paint_state_owners.replay_next.entries.len() as f64),
+            ],
+        );
+        let r = paint_state_owners.replay_reasons;
+        browser_tracing::instant(
+            "layout",
+            "layout_fragment.ReplayReasons",
+            &[
+                ("not_retained", r[0] as f64),
+                ("fallback_key", r[1] as f64),
+                ("dirty", r[2] as f64),
+                ("scroll", r[3] as f64),
+                ("table", r[4] as f64),
+                ("page_fragmentainer", r[5] as f64),
+                ("special", r[6] as f64),
+                ("svg_fieldset", r[7] as f64),
+            ],
+        );
     }
     if let Some(mut tracker) = paint_state_owners.certification.take() {
         tracker.FinishProductionUpdate();
@@ -252,6 +282,9 @@ pub(super) fn populate_layout_result_paint_data(
     cache.styles = paint_state_owners.exported_styles;
     cache.debug_names = paint_state_owners.debug_names;
     cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
+    if purpose == LayoutUpdateKind::Paint {
+        cache.population_replay = std::mem::take(&mut paint_state_owners.replay_next);
+    }
     cache.next_fragment_instance_id = next_fragment_instance_id;
     cache.fragment_paint_state = Some(paint_state);
     handle

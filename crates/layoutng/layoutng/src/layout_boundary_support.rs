@@ -87,6 +87,9 @@ pub struct LayoutBoundaryCache {
     /// certification walk follows publication.
     pub(crate) pre_paint_certification:
         Option<layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker>,
+    /// The last Paint publication's slots in preorder (population replay).
+    pub(crate) population_replay:
+        crate::internal::boundary::layout_boundary::layout_fragment_fragment_export_state::PopulationReplay,
 }
 
 impl LayoutBoundaryCache {

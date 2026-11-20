@@ -176,7 +176,7 @@ use layout_fragment_specialized_paint_export::{
 mod layout_fragment_collapsed_table_paint_export;
 use layout_fragment_collapsed_table_paint_export::ExportCollapsedTablePaintData;
 #[path = "../../../../layout_fragment/src/fragment_export_state.rs"]
-mod layout_fragment_fragment_export_state;
+pub(crate) mod layout_fragment_fragment_export_state;
 use layout_fragment_fragment_export_state::{FragmentOwners, PopulateSVGChildPaintData};
 #[path = "../../../../layout_fragment/src/ink_overflow_export.rs"]
 mod layout_fragment_ink_overflow_export;

@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 
 use super::*;
+use super::layout_fragment_fragment_export_state::{PopulationReplayEntry, PopulationReplayOwner};
 use crate::inline_cursor::InlineCursor;
 use crate::fragment_tree::ResidentBoxGeometry as _;
 
@@ -274,18 +275,17 @@ fn PopulateInlineItemLocalPaintData(
     } else {
         unsafe { &*(object as *const DisplayItemClient) }.Id() as u64
     };
-    let fragment_instance_id = paint_state_owners.fragment_instance(
-        FragmentIdentityKey::InlineItem {
-            container: container_fragment_instance_id,
-            client: display_item_client_id,
-            fragment: item.FragmentId(),
-            kind: identity_kind,
-            start: identity_start,
-            end: identity_end,
-            index: item_index as u32,
-        },
-        next_fragment_instance_id,
-    );
+    let identity_key = FragmentIdentityKey::InlineItem {
+        container: container_fragment_instance_id,
+        client: display_item_client_id,
+        fragment: item.FragmentId(),
+        kind: identity_kind,
+        start: identity_start,
+        end: identity_end,
+        index: item_index as u32,
+    };
+    let fragment_instance_id =
+        paint_state_owners.fragment_instance(identity_key, next_fragment_instance_id);
     let retained_invalidation = RetainedPaintProperties(
         object,
         purpose,
@@ -299,6 +299,19 @@ fn PopulateInlineItemLocalPaintData(
     paint_state_owners.population_stats.RecordPrefix(prefix_started, store_started);
     let binding =
         paint_state.BindInline(fragment_items, item_index as usize, fragment_instance_id);
+    paint_state_owners.begin_replay_entry(PopulationReplayEntry {
+        owner: PopulationReplayOwner::Inline(fragment_items as *const _, item_index as usize),
+        instance: fragment_instance_id,
+        key: identity_key,
+        object,
+        effective_style,
+        paint_state_owner: None,
+        inline_container: (purpose == LayoutUpdateKind::Paint).then_some(container_fragment_instance_id),
+        text_snap: None,
+        len: 1,
+        replayable: false,
+    });
+    let replay_entry = paint_state_owners.replay_next.entries.len() - 1;
     let (output, slot_retained) = (binding.data, binding.retained);
     let slot = output;
     // Atomic inline boxes populate their own box children here.
@@ -409,6 +422,17 @@ fn PopulateInlineItemLocalPaintData(
         output.text_paint_timing_non_whitespace = text_paint_timing_non_whitespace;
         if kind == FragmentKind::kLine {
             output.node_id = 0;
+        }
+        let container = paint_state_owners.inline_container_data;
+        let snaps = item.IsText() || item.Type() == ItemType::kGeneratedText;
+        let entry = &mut paint_state_owners.replay_next.entries[replay_entry];
+        entry.replayable = !output.pre_paint_invalidation.own()
+            && !output.pre_paint_invalidation.descendants()
+            && (!snaps || containing_line_offset.is_none() || container != 0);
+        if snaps && container != 0 {
+            if let Some(line_offset) = containing_line_offset {
+                entry.text_snap = Some((line_offset.top, container as *const crate::fragment_data::FragmentData));
+            }
         }
         // Source: core/paint/text_fragment_painter.cc:69-103. The line-top
         // snap depends on the container's current paint offset, which an
@@ -653,6 +677,9 @@ fn PopulateInlineItemLocalPaintData(
                         let nested_paint_offset =
                             unsafe { &*box_fragment.GetFragmentData() }.PaintOffset();
                         let span = unsafe { &*nested_items }.Items();
+                        let saved_container = paint_state_owners.inline_container_data;
+                        paint_state_owners.inline_container_data =
+                            box_fragment.GetFragmentData() as usize;
                         let mut index = 0;
                         while index < span.len() {
                             let changed;
@@ -678,6 +705,7 @@ fn PopulateInlineItemLocalPaintData(
                             );
                             descendant_changed |= changed;
                         }
+                        paint_state_owners.inline_container_data = saved_container;
                     }
                 }
                 descendant_changed |= PopulateSVGChildPaintData(
@@ -730,6 +758,7 @@ fn PopulateInlineItemPaintData(
         .or_else(|| (item.Type() == ItemType::kLine).then(|| *item.OffsetInContainerFragment()));
     let line_height = containing_line_height
         .or_else(|| (item.Type() == ItemType::kLine).then(|| item.Size().height));
+    let replay_begin = (paint_state_owners.replay_next.entries.len(), paint_state_owners.replay_blocked);
     let (slot, mut descendant_changed) = PopulateInlineItemLocalPaintData(
         item,
         fragment_items,
@@ -773,6 +802,7 @@ fn PopulateInlineItemPaintData(
         );
         descendant_changed |= changed;
     }
+    paint_state_owners.finish_replay_entry(replay_begin);
     (
         subtree_end,
         paint_state_owners.certify(slot, descendant_changed),
@@ -780,6 +810,229 @@ fn PopulateInlineItemPaintData(
 }
 
 #[inline(never)]
+fn ReplayCheckEnabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_EXPORT_REPLAY_CHECK").is_some())
+}
+
+fn ReplayOwnerMatches(slot: &FragmentPaintData, owner: PopulationReplayOwner) -> bool {
+    match owner {
+        PopulationReplayOwner::Physical(fragment) => {
+            slot.resident_owner
+                == layout_fragment_boundary::ResidentFragmentOwner::Physical(fragment as usize)
+        }
+        PopulationReplayOwner::Inline(items, index) => {
+            slot.resident_owner
+                == layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
+                    items: items as usize,
+                    index,
+                }
+        }
+    }
+}
+
+/// Whether every slot of the previous publication's `entries` can be
+/// rebound unchanged: same immutable owner, clean dirty bits, the style the
+/// projection was exported from, the same identity and compatible resources
+/// (exactly what RetainedPaintProperties and the reuse paths prove).
+fn ReplayValid(
+    entries: &[PopulationReplayEntry],
+    resources: &Arc<PaintResources>,
+    paint_state: &crate::layout_engine::LayoutPaintState,
+    owners: &mut FragmentOwners,
+) -> bool {
+    for entry in entries {
+        if !entry.replayable || owners.peek_instance(&entry.key) != Some(entry.instance) {
+            return false;
+        }
+        let Some(slot) = paint_state.ResidentFragment(entry.instance) else {
+            return false;
+        };
+        if !ReplayOwnerMatches(slot, entry.owner)
+            || slot.pre_paint_invalidation.own()
+            || slot.pre_paint_invalidation.descendants()
+        {
+            return false;
+        }
+        if !entry.object.is_null() {
+            let expected = if entry.effective_style.is_null() {
+                unsafe { &*entry.object }.StyleRef() as *const StyleComputedStyle
+            } else {
+                entry.effective_style
+            };
+            if !(slot.paint.style.IsExportedFrom(expected)
+                || (slot.paint.style.IsExportedFrom(std::ptr::null())
+                    && !foundation::IsManagedLayoutAddress(expected)))
+            {
+                return false;
+            }
+        }
+        let previous = slot.resources.clone();
+        if !RetainedResourcesAreCompatible(previous.as_ref(), resources, owners) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The line-top snap of a replayed text item from its container's current
+/// paint offset (text_fragment_painter.cc:69-103; see the reuse path).
+fn ReplayTextSnap(entry: &PopulationReplayEntry) -> Option<Option<f64>> {
+    let (line_offset_top, container) = entry.text_snap?;
+    let line_top = unsafe { &*container }.PaintOffset().top + line_offset_top;
+    Some(Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top)))
+}
+
+/// Rebind the previous publication's unchanged subtree `entries` (all
+/// proven by ReplayValid) to this publication: the bookkeeping the
+/// population walk does for a retained slot, without re-deriving its
+/// payload. Returns whether any certified revision changed.
+fn ReplaySubtree(
+    entries: &[PopulationReplayEntry],
+    sources: &SourceMap,
+    resources: &Arc<PaintResources>,
+    paint_state: &crate::layout_engine::LayoutPaintState,
+    owners: &mut FragmentOwners,
+    next_fragment_instance_id: &mut u64,
+) -> bool {
+    let mut slots = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let instance = owners.fragment_instance(entry.key, next_fragment_instance_id);
+        debug_assert_eq!(instance, entry.instance);
+        let binding = match entry.owner {
+            PopulationReplayOwner::Physical(fragment) => {
+                owners.population_stats.physical_fragments += 1;
+                paint_state.BindPhysical(unsafe { &*fragment }, instance)
+            }
+            PopulationReplayOwner::Inline(items, index) => {
+                let items = unsafe { &*items };
+                if let Some(container) = entry.inline_container {
+                    SynchronizeInlineFragmentData(&items.Items()[index], container, owners);
+                }
+                owners.population_stats.inline_items += 1;
+                paint_state.BindInline(items, index, instance)
+            }
+        };
+        owners.population_stats.CountBinding(
+            true,
+            binding.same_owner,
+            matches!(entry.owner, PopulationReplayOwner::Physical(_)),
+        );
+        let output = unsafe { &mut *binding.data };
+        output.resources = Some(Arc::clone(resources));
+        RefreshRetainedTreeOrder(entry.object, sources, output);
+        if let Some(fragment) = entry.paint_state_owner {
+            let establishes = owners.insert(fragment, instance);
+            update_paint!(output.paint, establishes_paint_state, establishes);
+        }
+        if let Some(snap) = ReplayTextSnap(entry) {
+            update_paint!(output.paint, text_line_snap_delta, snap);
+        }
+        let mut copy = entry.clone();
+        copy.instance = instance;
+        let begin = owners.begin_replay_entry(copy);
+        slots.push((binding.data, begin));
+    }
+    // Certify after descendants (reverse preorder), as population does.
+    let mut changed = vec![false; entries.len()];
+    for i in (0..entries.len()).rev() {
+        let len = entries[i].len;
+        let descendant_changed = changed[i + 1..i + len].iter().any(|c| *c);
+        changed[i] = owners.certify(slots[i].0, descendant_changed);
+    }
+    // Close the copied entries (already finished subtrees: keep their
+    // recorded lengths and flags).
+    for (_, (index, _)) in &slots {
+        let entry = &owners.replay_next.entries[*index];
+        let instance = entry.instance;
+        owners.replay_next.index.insert(instance, *index);
+    }
+    owners.replay_stats[0] += 1;
+    owners.replay_stats[1] += entries.len();
+    changed.iter().any(|c| *c)
+}
+
+/// Check mode: the slot state replay would leave, captured before the
+/// population walk rebuilds it.
+fn ReplayCheckSnapshot(
+    entries: &[PopulationReplayEntry],
+    paint_state: &crate::layout_engine::LayoutPaintState,
+) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind), PrePaintInvalidation)>> {
+    entries
+        .iter()
+        .map(|entry| {
+            let slot = paint_state.ResidentFragment(entry.instance)?;
+            Some((
+                slot.paint.clone(),
+                (
+                    slot.node_id,
+                    slot.offset,
+                    slot.size,
+                    slot.content_size,
+                    slot.fragmentainer_instance_id,
+                    slot.text_start,
+                    slot.text_end,
+                    slot.text_paint_timing_non_whitespace,
+                    slot.kind,
+                ),
+                slot.pre_paint_invalidation,
+            ))
+        })
+        .collect()
+}
+
+/// Check mode: compare what the population walk produced with the replay
+/// prediction; returns the number of mismatching slots.
+fn ReplayCheckCompare(
+    entries: &[PopulationReplayEntry],
+    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind), PrePaintInvalidation)>>,
+    paint_state: &crate::layout_engine::LayoutPaintState,
+) -> usize {
+    let mut mismatches = 0;
+    for (entry, before) in entries.iter().zip(before) {
+        let (Some(slot), Some((mut paint, fields, invalidation))) =
+            (paint_state.ResidentFragment(entry.instance), before)
+        else {
+            mismatches += 1;
+            continue;
+        };
+        if let Some(snap) = ReplayTextSnap(entry) {
+            update_paint!(paint, text_line_snap_delta, snap);
+        }
+        update_paint!(paint, establishes_paint_state, slot.paint.establishes_paint_state);
+        update_paint!(paint, logical_tree_order, slot.paint.logical_tree_order);
+        let now = (
+            slot.node_id,
+            slot.offset,
+            slot.size,
+            slot.content_size,
+            slot.fragmentainer_instance_id,
+            slot.text_start,
+            slot.text_end,
+            slot.text_paint_timing_non_whitespace,
+            slot.kind,
+        );
+        if paint != slot.paint || fields != now || invalidation != slot.pre_paint_invalidation {
+            mismatches += 1;
+            if mismatches == 1 {
+                browser_tracing::instant_with_text(
+                    "layout",
+                    "layout_fragment.ReplayMismatch",
+                    &format!(
+                        "instance {} paint {} fields {} invalidation {}",
+                        entry.instance,
+                        paint != slot.paint,
+                        fields != now,
+                        invalidation != slot.pre_paint_invalidation
+                    ),
+                    &[],
+                );
+            }
+        }
+    }
+    mismatches
+}
+
 pub(super) fn PopulatePhysicalFragmentPaintData(
     fragment: &PhysicalFragment,
     offset: PhysicalOffset,
@@ -822,19 +1075,18 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     } else {
         unsafe { &*(object as *const DisplayItemClient) }.Id() as u64
     };
-    let fragment_instance_id = paint_state_owners.fragment_instance(
-        if property_fragment_unique_id != 0 {
-            FragmentIdentityKey::FragmentData(property_fragment_unique_id)
-        } else {
-            FragmentIdentityKey::PhysicalFallback {
-                client: display_item_client_id,
-                fragment: display_item_fragment,
-                kind: if fragment.IsBox() { 0 } else { 1 },
-                preorder: paint_state_owners.population_stats.physical_fragments as u32,
-            }
-        },
-        next_fragment_instance_id,
-    );
+    let identity_key = if property_fragment_unique_id != 0 {
+        FragmentIdentityKey::FragmentData(property_fragment_unique_id)
+    } else {
+        FragmentIdentityKey::PhysicalFallback {
+            client: display_item_client_id,
+            fragment: display_item_fragment,
+            kind: if fragment.IsBox() { 0 } else { 1 },
+            preorder: paint_state_owners.population_stats.physical_fragments as u32,
+        }
+    };
+    let fragment_instance_id =
+        paint_state_owners.fragment_instance(identity_key, next_fragment_instance_id);
     let retained_invalidation = RetainedPaintProperties(
         object,
         purpose,
@@ -847,6 +1099,18 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let store_started = browser_tracing::enabled().then(std::time::Instant::now);
     paint_state_owners.population_stats.RecordPrefix(prefix_started, store_started);
     let binding = paint_state.BindPhysical(fragment, fragment_instance_id);
+    let replay_begin = paint_state_owners.begin_replay_entry(PopulationReplayEntry {
+        owner: PopulationReplayOwner::Physical(fragment as *const PhysicalFragment),
+        instance: fragment_instance_id,
+        key: identity_key,
+        object,
+        effective_style,
+        paint_state_owner: None,
+        inline_container: None,
+        text_snap: None,
+        len: 1,
+        replayable: false,
+    });
     let (output, slot_retained) = (binding.data, binding.retained);
     let slot = output;
     paint_state_owners
@@ -944,6 +1208,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     }
     if !fragment.IsBox() {
         paint_state_owners.population_stats.RecordLocal(local_timing);
+        paint_state_owners.replay_next.entries[replay_begin.0].replayable = reuse_fragment_geometry
+            && matches!(identity_key, FragmentIdentityKey::FragmentData(_))
+            && !output.pre_paint_invalidation.own()
+            && !output.pre_paint_invalidation.descendants();
+        paint_state_owners.finish_replay_entry(replay_begin);
         return paint_state_owners.certify(slot, false);
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
@@ -1095,6 +1364,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         box_fragment as *const PhysicalBoxFragment,
         output.fragment_instance_id,
     );
+    paint_state_owners.replay_next.entries[replay_begin.0].paint_state_owner =
+        Some(box_fragment as *const PhysicalBoxFragment);
     update_paint!(output.paint, establishes_paint_state, establishes_paint_state);
     output.content_size = match retained_content_size {
         Some(size) if reuse_fragment_geometry => size,
@@ -1120,14 +1391,135 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     }
     paint_state_owners.population_stats.RecordLocal(local_timing);
     let mut descendant_changed = false;
-    let items = box_fragment.Items();
-    for child in box_fragment.Children() {
-        if !child.is_present() || (!items.is_null() && child.IsLineBox()) {
-            continue;
+    // Self qualification: a retained, same-owner, clean slot with no state
+    // that a population walk re-derives from live (non-fragment) inputs.
+    let self_replayable = reuse_fragment_geometry
+        && matches!(identity_key, FragmentIdentityKey::FragmentData(_))
+        && !output.pre_paint_invalidation.own()
+        && !output.pre_paint_invalidation.descendants()
+        && output.paint.scroll_container.is_none()
+        && output.paint.scrollbars.is_none()
+        && output.paint.table.is_none()
+        && output.paint.table_cell_column.is_none()
+        && !output.paint.has_collapsed_borders
+        && !output.paint.is_page_container
+        && !output.paint.is_page_border_box
+        && !box_fragment.IsFragmentainerBox()
+        && !box_fragment.HasExtraMathMLPainting()
+        && box_fragment.GetGapGeometry().is_null()
+        && box_fragment.GetFrameSetLayoutData().is_null()
+        && !box_fragment.IsTableCell()
+        && unsafe { object.as_ref() }.is_none_or(|owner| !owner.IsFieldset());
+    paint_state_owners.replay_next.entries[replay_begin.0].replayable = self_replayable;
+    if !self_replayable && browser_tracing::enabled() {
+        let reasons = [
+            !reuse_fragment_geometry,
+            !matches!(identity_key, FragmentIdentityKey::FragmentData(_)),
+            output.pre_paint_invalidation.own() || output.pre_paint_invalidation.descendants(),
+            output.paint.scroll_container.is_some() || output.paint.scrollbars.is_some(),
+            output.paint.table.is_some() || output.paint.table_cell_column.is_some() || output.paint.has_collapsed_borders || box_fragment.IsTableCell(),
+            output.paint.is_page_container || output.paint.is_page_border_box || box_fragment.IsFragmentainerBox(),
+            box_fragment.HasExtraMathMLPainting() || !box_fragment.GetGapGeometry().is_null() || !box_fragment.GetFrameSetLayoutData().is_null(),
+            true,
+        ];
+        let first = reasons.iter().position(|r| *r).unwrap_or(7);
+        paint_state_owners.replay_reasons[first] += 1;
+    }
+    let previous_subtree = if self_replayable {
+        paint_state_owners
+            .replay_previous
+            .index
+            .get(&output.fragment_instance_id)
+            .copied()
+            .filter(|index| {
+                paint_state_owners.replay_previous.entries[*index].instance
+                    == output.fragment_instance_id
+            })
+    } else {
+        None
+    };
+    let mut replayed = false;
+    let mut check: Option<(usize, usize, Vec<_>)> = None;
+    if let Some(index) = previous_subtree {
+        let previous = std::mem::take(&mut paint_state_owners.replay_previous);
+        let len = previous.entries[index].len;
+        let range = &previous.entries[index + 1..index + len];
+        if !range.is_empty() && ReplayValid(range, resources, paint_state, paint_state_owners) {
+            if ReplayCheckEnabled() {
+                check = Some((index + 1, index + len, ReplayCheckSnapshot(range, paint_state)));
+            } else {
+                descendant_changed = ReplaySubtree(
+                    range,
+                    sources,
+                    resources,
+                    paint_state,
+                    paint_state_owners,
+                    next_fragment_instance_id,
+                );
+                replayed = true;
+            }
         }
-        descendant_changed |= PopulatePhysicalFragmentPaintData(
-            child,
-            child.Offset(),
+        paint_state_owners.replay_previous = previous;
+    }
+    if !replayed {
+        let items = box_fragment.Items();
+        for child in box_fragment.Children() {
+            if !child.is_present() || (!items.is_null() && child.IsLineBox()) {
+                continue;
+            }
+            descendant_changed |= PopulatePhysicalFragmentPaintData(
+                child,
+                child.Offset(),
+                sources,
+                style_sources,
+                resources,
+                purpose,
+                paint_state,
+                paint_state_owners,
+                fragmentainer_instance_id,
+                display_item_fragment,
+                next_fragment_instance_id,
+                next_fragmentainer_instance_id,
+            );
+        }
+        if !items.is_null() {
+            let container_paint_offset = if fragment_data.is_null() {
+                PhysicalOffset::default()
+            } else {
+                unsafe { &*fragment_data }.PaintOffset()
+            };
+            let span = unsafe { &*items }.Items();
+            let saved_container = paint_state_owners.inline_container_data;
+            paint_state_owners.inline_container_data = fragment_data as usize;
+            let mut index = 0;
+            while index < span.len() {
+                let changed;
+                (index, changed) = PopulateInlineItemPaintData(
+                    span,
+                    unsafe { &*items },
+                    index,
+                    span.len(),
+                    PhysicalOffset::default(),
+                    None,
+                    None,
+                    container_paint_offset,
+                    sources,
+                    style_sources,
+                    resources,
+                    purpose,
+                    paint_state,
+                    paint_state_owners,
+                    output.fragment_instance_id,
+                    fragmentainer_instance_id,
+                    next_fragment_instance_id,
+                    next_fragmentainer_instance_id,
+                );
+                descendant_changed |= changed;
+            }
+            paint_state_owners.inline_container_data = saved_container;
+        }
+        descendant_changed |= PopulateSVGChildPaintData(
+            object,
             sources,
             style_sources,
             resources,
@@ -1140,51 +1532,14 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             next_fragmentainer_instance_id,
         );
     }
-    if !items.is_null() {
-        let container_paint_offset = if fragment_data.is_null() {
-            PhysicalOffset::default()
-        } else {
-            unsafe { &*fragment_data }.PaintOffset()
-        };
-        let span = unsafe { &*items }.Items();
-        let mut index = 0;
-        while index < span.len() {
-            let changed;
-            (index, changed) = PopulateInlineItemPaintData(
-                span,
-                unsafe { &*items },
-                index,
-                span.len(),
-                PhysicalOffset::default(),
-                None,
-                None,
-                container_paint_offset,
-                sources,
-                style_sources,
-                resources,
-                purpose,
-                paint_state,
-                paint_state_owners,
-                output.fragment_instance_id,
-                fragmentainer_instance_id,
-                next_fragment_instance_id,
-                next_fragmentainer_instance_id,
-            );
-            descendant_changed |= changed;
-        }
+    if let Some((start, end, before)) = check {
+        let previous = std::mem::take(&mut paint_state_owners.replay_previous);
+        let mismatches = ReplayCheckCompare(&previous.entries[start..end], before, paint_state);
+        paint_state_owners.replay_stats[2] += mismatches;
+        paint_state_owners.replay_stats[0] += 1;
+        paint_state_owners.replay_stats[1] += end - start;
+        paint_state_owners.replay_previous = previous;
     }
-    descendant_changed |= PopulateSVGChildPaintData(
-        object,
-        sources,
-        style_sources,
-        resources,
-        purpose,
-        paint_state,
-        paint_state_owners,
-        fragmentainer_instance_id,
-        display_item_fragment,
-        next_fragment_instance_id,
-        next_fragmentainer_instance_id,
-    );
+    paint_state_owners.finish_replay_entry(replay_begin);
     paint_state_owners.certify(slot, descendant_changed)
 }
