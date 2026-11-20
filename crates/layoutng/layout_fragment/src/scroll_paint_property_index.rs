@@ -9,6 +9,7 @@ use super::{
     FragmentPaintData, InputId, LayoutObject, LayoutResultHandle, Position, UpdateStickyOffsets,
 };
 use crate::layout_engine::PaintFragmentCursor;
+use super::layout_fragment_fragment_export_state::PopulationReplayEntry;
 use layout_fragment::fragment_tree::pre_paint_revision::MarkScrollPropertyChange;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -44,6 +45,50 @@ impl ScrollPaintPropertyIndex {
         fragments: &LayoutResultHandle,
         cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
         reuse: Option<Self>,
+    ) -> Self {
+        Self::new_from(root, fragments, cached_objects, reuse, None)
+    }
+
+    /// `new` over a Paint publication's recorded slots (its preorder
+    /// occurrence list), without a fragment cursor walk.
+    pub(crate) fn new_from_replay(
+        root: &mut LayoutObject,
+        fragments: &LayoutResultHandle,
+        cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
+        reuse: Option<Self>,
+        replay: &[PopulationReplayEntry],
+    ) -> Self {
+        let checked = super::layout_fragment_fragment_paint_population::ReplayCheckEnabled()
+            .then(|| Self::new_from(root, fragments, cached_objects.clone(), None, None));
+        let index = Self::new_from(root, fragments, cached_objects, reuse, Some(replay));
+        if let Some(walked) = checked {
+            let same = walked.fragments.len() == index.fragments.len()
+                && walked.fragments.iter().zip(&index.fragments).all(|(a, b)| {
+                    a.fragment == b.fragment
+                        && a.source_id == b.source_id
+                        && walked.path_components[a.path_start..a.path_start + a.path_len]
+                            == index.path_components[b.path_start..b.path_start + b.path_len]
+                })
+                && walked.sticky_fragments == index.sticky_fragments;
+            browser_tracing::instant(
+                "layout",
+                "layout_fragment.ScrollIndexCheck",
+                &[
+                    ("fragments", index.fragments.len() as f64),
+                    ("walked", walked.fragments.len() as f64),
+                    ("mismatch", (!same) as u8 as f64),
+                ],
+            );
+        }
+        index
+    }
+
+    fn new_from(
+        root: &mut LayoutObject,
+        fragments: &LayoutResultHandle,
+        cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
+        reuse: Option<Self>,
+        replay: Option<&[PopulationReplayEntry]>,
     ) -> Self {
         let root = root as *mut LayoutObject;
         let (sources, sticky_objects) = cached_objects.unwrap_or_else(|| {
@@ -87,56 +132,20 @@ impl ScrollPaintPropertyIndex {
         ) {
             let input = fragment.PaintData() as *const FragmentPaintData as *mut FragmentPaintData;
             path.push(input);
-            if fragment.paint.HasSource() {
-                let direct = fragment.paint.SourceObjectPointer();
-                let object = if direct.is_null() {
-                    fragment
-                        .paint
-                        .logical_tree_order
-                        .checked_sub(1)
-                        .and_then(|order| usize::try_from(order).ok())
-                        .and_then(|order| index.sources.get(order).copied())
-                        .unwrap_or(std::ptr::null_mut())
-                } else {
-                    direct
-                };
-                if !object.is_null() {
-                    let entry = index.fragments.len();
-                    let path_start = index.path_components.len();
-                    index.path_components.extend_from_slice(path);
-                    // ScrollingCoordinator reports the DOM owner associated
-                    // with the display-item client. For the global viewport
-                    // this intentionally differs from LayoutView's own node.
-                    let source_id = fragment.paint.display_item_client_owner_node_id as u64;
-                    let source_id = if source_id == 0 {
-                        InputId(object)
-                    } else {
-                        source_id
-                    };
-                    index.fragments.push(FragmentEntry {
-                        path_start,
-                        path_len: path.len(),
-                        fragment: input,
-                        node_id: fragment.node_id,
-                        source_id,
-                        logical_tree_order: fragment.paint.logical_tree_order,
-                    });
-                    index.by_source_id.entry(source_id).or_default().push(entry);
-                    if fragment.paint.position == Position::kSticky {
-                        index.sticky_fragments.push(entry);
-                    }
-                }
-            }
+            index.admit(input, path);
             for fragment in fragment.Children() {
                 collect(index, fragment, path);
             }
             path.pop();
         }
-        collect(
-            &mut index,
-            PaintFragmentCursor::FromHandle(fragments),
-            &mut Vec::new(),
-        );
+        match replay {
+            Some(entries) => index.collect_replay(entries),
+            None => collect(
+                &mut index,
+                PaintFragmentCursor::FromHandle(fragments),
+                &mut Vec::new(),
+            ),
+        }
         // Source identities may disappear after DOM mutations. Drop empty
         // buckets after their capacity had a chance to serve this rebuild.
         index.by_source_id.retain(|_, entries| !entries.is_empty());
@@ -209,5 +218,71 @@ impl ScrollPaintPropertyIndex {
         // the existing owner walk instead of certifying an old scroll
         // transform as current.
         changed_ids.iter().all(|id| refreshed_sources.contains(id))
+    }
+}
+
+impl ScrollPaintPropertyIndex {
+    /// Index one occurrence whose ancestor path (itself last) is `path`.
+    fn admit(&mut self, input: *mut FragmentPaintData, path: &[*mut FragmentPaintData]) {
+        let fragment = unsafe { &*input };
+        if !fragment.paint.HasSource() {
+            return;
+        }
+        let direct = fragment.paint.SourceObjectPointer();
+        let object = if direct.is_null() {
+            fragment
+                .paint
+                .logical_tree_order
+                .checked_sub(1)
+                .and_then(|order| usize::try_from(order).ok())
+                .and_then(|order| self.sources.get(order).copied())
+                .unwrap_or(std::ptr::null_mut())
+        } else {
+            direct
+        };
+        if object.is_null() {
+            return;
+        }
+        let entry = self.fragments.len();
+        let path_start = self.path_components.len();
+        self.path_components.extend_from_slice(path);
+        // ScrollingCoordinator reports the DOM owner associated
+        // with the display-item client. For the global viewport
+        // this intentionally differs from LayoutView's own node.
+        let source_id = fragment.paint.display_item_client_owner_node_id as u64;
+        let source_id = if source_id == 0 {
+            InputId(object)
+        } else {
+            source_id
+        };
+        self.fragments.push(FragmentEntry {
+            path_start,
+            path_len: path.len(),
+            fragment: input,
+            node_id: fragment.node_id,
+            source_id,
+            logical_tree_order: fragment.paint.logical_tree_order,
+        });
+        self.by_source_id.entry(source_id).or_default().push(entry);
+        if fragment.paint.position == Position::kSticky {
+            self.sticky_fragments.push(entry);
+        }
+    }
+
+    /// The occurrence walk over recorded publication slots: preorder, each
+    /// entry's `len` spanning its subtree.
+    fn collect_replay(&mut self, entries: &[PopulationReplayEntry]) {
+        let mut path: Vec<*mut FragmentPaintData> = Vec::new();
+        let mut ends: Vec<usize> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            while ends.last().is_some_and(|end| *end <= index) {
+                ends.pop();
+                path.pop();
+            }
+            let input = entry.slot as *mut FragmentPaintData;
+            path.push(input);
+            ends.push(index + entry.len.max(1));
+            self.admit(input, &path);
+        }
     }
 }
