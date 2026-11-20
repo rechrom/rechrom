@@ -71,6 +71,7 @@ impl PrePaintTreeWalk {
     ) -> ResidentLayerClipRects {
         let mapper = NativeGeometryMapperContext {
             singular_transform_fix: options.singular_transform_fix,
+            trees: None,
         };
         let layer_offset = if options.same_root_layer {
             PhysicalOffset::default()

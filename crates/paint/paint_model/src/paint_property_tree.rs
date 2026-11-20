@@ -2293,6 +2293,120 @@ pub struct FrozenPropertyTrees {
     scrolls: KeyedPropertyNodes<ScrollPaintPropertyNode>,
 }
 
+/// Resolves a property-node link (a parent or cross-tree `Arc`) to the
+/// current snapshot of the node it names. A link names a node entity by id
+/// and lifecycle identity; its target snapshot may be older than the current
+/// one once the store keeps a node's snapshot across an ancestor's value
+/// update (Chromium's mutable nodes: the pointer is the identity, the value
+/// is current). Readers follow links only through a resolver.
+pub trait PropertyNodeResolver {
+    fn transform<'a>(
+        &'a self,
+        link: &'a Arc<TransformPaintPropertyNode>,
+    ) -> &'a Arc<TransformPaintPropertyNode>;
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode>;
+    fn effect<'a>(
+        &'a self,
+        link: &'a Arc<EffectPaintPropertyNode>,
+    ) -> &'a Arc<EffectPaintPropertyNode>;
+    fn scroll<'a>(
+        &'a self,
+        link: &'a Arc<ScrollPaintPropertyNode>,
+    ) -> &'a Arc<ScrollPaintPropertyNode>;
+}
+
+/// The resolver for nodes outside any published tree (PrePaint's raw nodes,
+/// hand-built test trees): every link already names its current snapshot.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinkedProperties;
+
+impl PropertyNodeResolver for LinkedProperties {
+    fn transform<'a>(
+        &'a self,
+        link: &'a Arc<TransformPaintPropertyNode>,
+    ) -> &'a Arc<TransformPaintPropertyNode> {
+        link
+    }
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
+        link
+    }
+    fn effect<'a>(
+        &'a self,
+        link: &'a Arc<EffectPaintPropertyNode>,
+    ) -> &'a Arc<EffectPaintPropertyNode> {
+        link
+    }
+    fn scroll<'a>(
+        &'a self,
+        link: &'a Arc<ScrollPaintPropertyNode>,
+    ) -> &'a Arc<ScrollPaintPropertyNode> {
+        link
+    }
+}
+
+/// A published tree resolves a link to its node of the same id when that is
+/// the same entity (lifecycle identity); anything else (a root, an
+/// unpersisted or foreign node) resolves to the link itself.
+impl PropertyNodeResolver for FrozenPropertyTrees {
+    fn transform<'a>(
+        &'a self,
+        link: &'a Arc<TransformPaintPropertyNode>,
+    ) -> &'a Arc<TransformPaintPropertyNode> {
+        self.transforms
+            .by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
+        self.clips
+            .by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn effect<'a>(
+        &'a self,
+        link: &'a Arc<EffectPaintPropertyNode>,
+    ) -> &'a Arc<EffectPaintPropertyNode> {
+        self.effects
+            .by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+    fn scroll<'a>(
+        &'a self,
+        link: &'a Arc<ScrollPaintPropertyNode>,
+    ) -> &'a Arc<ScrollPaintPropertyNode> {
+        self.scrolls
+            .by_id(link.id)
+            .filter(|node| node.lifecycle.same_node(&link.lifecycle))
+            .unwrap_or(link)
+    }
+}
+
+impl<R: PropertyNodeResolver + ?Sized> PropertyNodeResolver for &R {
+    fn transform<'a>(
+        &'a self,
+        link: &'a Arc<TransformPaintPropertyNode>,
+    ) -> &'a Arc<TransformPaintPropertyNode> {
+        (**self).transform(link)
+    }
+    fn clip<'a>(&'a self, link: &'a Arc<ClipPaintPropertyNode>) -> &'a Arc<ClipPaintPropertyNode> {
+        (**self).clip(link)
+    }
+    fn effect<'a>(
+        &'a self,
+        link: &'a Arc<EffectPaintPropertyNode>,
+    ) -> &'a Arc<EffectPaintPropertyNode> {
+        (**self).effect(link)
+    }
+    fn scroll<'a>(
+        &'a self,
+        link: &'a Arc<ScrollPaintPropertyNode>,
+    ) -> &'a Arc<ScrollPaintPropertyNode> {
+        (**self).scroll(link)
+    }
+}
+
 /// Result of FrozenPropertyTrees::verify_state, counted over distinct nodes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrozenTreeCoverage {
@@ -2305,16 +2419,16 @@ pub struct FrozenTreeCoverage {
 }
 
 impl FrozenPropertyTrees {
-    pub fn transform(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
+    pub fn transform_by_id(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
         self.transforms.by_id(id)
     }
-    pub fn clip(&self, id: u64) -> Option<&Arc<ClipPaintPropertyNode>> {
+    pub fn clip_by_id(&self, id: u64) -> Option<&Arc<ClipPaintPropertyNode>> {
         self.clips.by_id(id)
     }
-    pub fn effect(&self, id: u64) -> Option<&Arc<EffectPaintPropertyNode>> {
+    pub fn effect_by_id(&self, id: u64) -> Option<&Arc<EffectPaintPropertyNode>> {
         self.effects.by_id(id)
     }
-    pub fn scroll(&self, id: u64) -> Option<&Arc<ScrollPaintPropertyNode>> {
+    pub fn scroll_by_id(&self, id: u64) -> Option<&Arc<ScrollPaintPropertyNode>> {
         self.scrolls.by_id(id)
     }
     pub fn len(&self) -> usize {

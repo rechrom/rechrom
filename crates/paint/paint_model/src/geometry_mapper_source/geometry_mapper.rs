@@ -59,7 +59,7 @@ where
             root.Effect().clone(),
         );
         if let Some(clip) = scroll.ScrollOverflowClip() {
-            state.SetClip(clip.parent.clone().expect("source overflow clip parent"));
+            state.SetClip(context.ClipParent(&clip).expect("source overflow clip parent"));
         }
         state
     }
@@ -343,7 +343,7 @@ where
                 }
             }
             last = new_state;
-            let next = clip.parent.as_ref().expect("source filter clip parent");
+            let next = &context.ClipParent(&clip).expect("source filter clip parent");
             last.SetClip(next.clone());
             filter_clip = nearest_filter(next);
         }
@@ -408,8 +408,8 @@ where
         if same_clip(descendant, ancestor) {
             return FloatClipRect::default();
         }
-        if descendant
-            .parent
+        if context
+            .ClipParent(descendant)
             .as_ref()
             .is_some_and(|p| same_clip(p, ancestor))
             && context.ClipLocalTransform(descendant) == *ancestor_transform
@@ -450,7 +450,7 @@ where
                 break;
             }
             intermediate.push(node.clone());
-            clip_node = node.parent.clone();
+            clip_node = context.ClipParent(&node);
         }
         if clip_node.is_none() {
             return InfiniteLooseFloatClipRect();
@@ -540,10 +540,10 @@ where
                     if !same_optional_clip(&nearest_filter(state.Clip()), &nearest_filter(&clip)) {
                         return true;
                     }
-                    state.SetClip(clip.parent.clone().expect("source ancestor clip"));
+                    state.SetClip(context.ClipParent(&clip).expect("source ancestor clip"));
                     return false;
                 }
-                clip = clip.parent.clone().expect("source ancestor clip");
+                clip = context.ClipParent(&clip).expect("source ancestor clip");
             }
             false
         };

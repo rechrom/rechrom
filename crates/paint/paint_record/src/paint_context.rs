@@ -176,6 +176,7 @@ impl<'o> PaintContext<'o> {
         let context = NativeGeometryMapperContext {
             singular_transform_fix:
                 foundation::RuntimeEnabledFeatures::GeometryMapperSingularTransformFixEnabled(),
+            trees: None,
         };
         GeometryMapper::<NativeGeometryMapperContext>::LocalToAncestorVisualRect(
             &context,

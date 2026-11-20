@@ -7,13 +7,49 @@ use crate::{
 };
 use std::sync::{Arc, Weak};
 
+/// The published tree a handle resolves its links through; None follows the
+/// Arc links themselves (raw PrePaint nodes, hand-built trees).
+pub type NativeTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
+
+fn resolve_transform<'a>(
+    trees: &'a NativeTrees,
+    link: &'a Arc<paint_property_tree::TransformPaintPropertyNode>,
+) -> &'a Arc<paint_property_tree::TransformPaintPropertyNode> {
+    match trees {
+        Some(trees) => paint_property_tree::PropertyNodeResolver::transform(&**trees, link),
+        None => link,
+    }
+}
+fn resolve_clip<'a>(
+    trees: &'a NativeTrees,
+    link: &'a Arc<paint_property_tree::ClipPaintPropertyNode>,
+) -> &'a Arc<paint_property_tree::ClipPaintPropertyNode> {
+    match trees {
+        Some(trees) => paint_property_tree::PropertyNodeResolver::clip(&**trees, link),
+        None => link,
+    }
+}
+fn resolve_effect<'a>(
+    trees: &'a NativeTrees,
+    link: &'a Arc<paint_property_tree::EffectPaintPropertyNode>,
+) -> &'a Arc<paint_property_tree::EffectPaintPropertyNode> {
+    match trees {
+        Some(trees) => paint_property_tree::PropertyNodeResolver::effect(&**trees, link),
+        None => link,
+    }
+}
+
 macro_rules! native_node {
     ($name:ident, $native:ident) => {
         #[derive(Clone)]
-        pub struct $name(Arc<paint_property_tree::$native>);
+        pub struct $name(Arc<paint_property_tree::$native>, NativeTrees);
         impl $name {
             pub fn from_arc(node: Arc<paint_property_tree::$native>) -> Self {
-                Self(node)
+                Self(node, None)
+            }
+            /// A handle whose links resolve through `trees`.
+            pub fn from_arc_in(node: Arc<paint_property_tree::$native>, trees: NativeTrees) -> Self {
+                Self(node, trees)
             }
             pub fn as_arc(&self) -> &Arc<paint_property_tree::$native> {
                 &self.0
@@ -40,16 +76,22 @@ pub struct NativeGeometryState {
 }
 impl NativeGeometryState {
     pub fn from_state(state: &paint_property_tree::PropertyTreeState) -> Self {
+        Self::from_state_in(state, None)
+    }
+    /// A state whose links resolve through `trees`.
+    pub fn from_state_in(state: &paint_property_tree::PropertyTreeState, trees: NativeTrees) -> Self {
         Self {
-            transform_: NativeTransformNode::from_arc(state.transform.clone()),
+            transform_: NativeTransformNode::from_arc_in(state.transform.clone(), trees.clone()),
             clip_: state.clip.clone(),
-            effect_: NativeEffectNode::from_arc(state.effect.clone()),
+            effect_: NativeEffectNode::from_arc_in(state.effect.clone(), trees),
         }
     }
 }
 /// Feature state supplied by the lifecycle owner, never inferred from geometry.
 pub struct NativeGeometryMapperContext {
     pub singular_transform_fix: bool,
+    /// The published tree the mapped states' links resolve through.
+    pub trees: NativeTrees,
 }
 fn rect(value: crate::PaintRect) -> Rect {
     ToEnclosingRect(RectF::new(
@@ -80,7 +122,7 @@ impl TransformCacheNode for NativeTransformNode {
         self.node()
             .parent
             .as_ref()
-            .map(|p| Self::from_arc(p.clone()))
+            .map(|p| Self(resolve_transform(&self.1, p).clone(), self.1.clone()))
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
         self.node().RequiresCompositingForStickyPosition()
@@ -102,7 +144,7 @@ impl TransformCacheNode for NativeTransformNode {
         self.node()
             .scroll_parent_scroll_translation
             .as_ref()
-            .map(|n| Self::from_arc(n.clone()))
+            .map(|n| Self(resolve_transform(&self.1, n).clone(), self.1.clone()))
     }
     fn HasDirectCompositingReasons(&self) -> bool {
         self.node().HasDirectCompositingReasons()
@@ -142,10 +184,17 @@ impl GeometryMapperNode for NativeTransformNode {
         SharedGeometryTransform::FromColMajor(&self.node().Matrix().values)
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
-        Self::from_arc(crate::property_node_geometry::LowestCommonAncestor(
+        let trees = self.1.clone().or_else(|| other.1.clone());
+        let common = crate::property_node_geometry::LowestCommonAncestorBy(
             self.as_arc(),
             other.as_arc(),
-        ))
+            |node| {
+                node.parent
+                    .as_ref()
+                    .map(|parent| resolve_transform(&trees, parent).clone())
+            },
+        );
+        Self(common, trees)
     }
     fn ParentScrollTranslationNode(&self) -> Self {
         let parent = self.Parent().expect("source parent scroll translation");
@@ -219,7 +268,10 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         self.singular_transform_fix
     }
     fn RootState(&self) -> Self::State {
-        NativeGeometryState::from_state(&paint_property_tree::PropertyTreeState::default())
+        NativeGeometryState::from_state_in(
+            &paint_property_tree::PropertyTreeState::default(),
+            self.trees.clone(),
+        )
     }
     fn MakeState(
         &self,
@@ -237,14 +289,25 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeTransformNode {
-        NativeTransformNode::from_arc(clip.LocalTransformSpace().clone())
+        NativeTransformNode::from_arc_in(
+            resolve_transform(&self.trees, clip.LocalTransformSpace()).clone(),
+            self.trees.clone(),
+        )
+    }
+    fn ClipParent(
+        &self,
+        clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
+        clip.parent
+            .as_ref()
+            .map(|parent| resolve_clip(&self.trees, parent).clone())
     }
     fn ClipLowestCommonAncestor(
         &self,
         a: &Arc<paint_property_tree::ClipPaintPropertyNode>,
         b: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> Arc<paint_property_tree::ClipPaintPropertyNode> {
-        crate::property_node_geometry::LowestCommonAncestor(a, b)
+        crate::property_node_geometry::LowestCommonAncestorBy(a, b, |clip| self.ClipParent(clip))
     }
     fn LayoutClipRectExcludingOverlayScrollbars(
         &self,
@@ -281,14 +344,17 @@ impl GeometryMapperContext for NativeGeometryMapperContext {
         &self,
         c: &Arc<paint_property_tree::ClipPaintPropertyNode>,
     ) -> NativeEffectNode {
-        NativeEffectNode::from_arc(
-            c.PixelMovingFilter()
-                .expect("source PixelMovingFilter")
+        NativeEffectNode::from_arc_in(
+            resolve_effect(&self.trees, c.PixelMovingFilter().expect("source PixelMovingFilter"))
                 .clone(),
+            self.trees.clone(),
         )
     }
     fn FilterLocalTransform(&self, e: &NativeEffectNode) -> NativeTransformNode {
-        NativeTransformNode::from_arc(e.node().local_transform_space.clone())
+        NativeTransformNode::from_arc_in(
+            resolve_transform(&self.trees, &e.node().local_transform_space).clone(),
+            self.trees.clone(),
+        )
     }
     fn HasActiveFilterAnimation(&self, e: &NativeEffectNode) -> bool {
         e.node()

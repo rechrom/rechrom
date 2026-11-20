@@ -76,6 +76,12 @@ impl<R: CpuSkiaBackend> GeometryMapperContext for CpuGeometryMapper<R> {
     ) -> TransformNode<R> {
         TransformNode::from_arc(clip.LocalTransformSpace().clone())
     }
+    fn ClipParent(
+        &self,
+        clip: &Arc<paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Option<Arc<paint_property_tree::ClipPaintPropertyNode>> {
+        clip.parent.clone()
+    }
     fn ClipLowestCommonAncestor(
         &self,
         a: &Arc<paint_property_tree::ClipPaintPropertyNode>,

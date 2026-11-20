@@ -120,6 +120,49 @@ fn NodeDepthOrFoundAncestor<N: PaintPropertyNodeGeometry>(node: &Arc<N>, ancesto
     }
     depth
 }
+/// LowestCommonAncestor following parents through `parent` (a resolver),
+/// for links whose snapshot may be older than the node's current one.
+pub fn LowestCommonAncestorBy<N>(
+    node: &Arc<N>,
+    other: &Arc<N>,
+    parent: impl Fn(&Arc<N>) -> Option<Arc<N>>,
+) -> Arc<N> {
+    let depth_or_found = |from: &Arc<N>, ancestor: &Arc<N>| -> i32 {
+        let mut depth = 0;
+        let mut current = Some(from.clone());
+        while let Some(node) = current {
+            if Arc::ptr_eq(&node, ancestor) {
+                return -1;
+            }
+            depth += 1;
+            current = parent(&node);
+        }
+        depth
+    };
+    let mut depth_a = depth_or_found(node, other);
+    if depth_a == -1 {
+        return other.clone();
+    }
+    let mut depth_b = depth_or_found(other, node);
+    if depth_b == -1 {
+        return node.clone();
+    }
+    let mut a = node.clone();
+    let mut b = other.clone();
+    if depth_a < depth_b {
+        std::mem::swap(&mut a, &mut b);
+        std::mem::swap(&mut depth_a, &mut depth_b);
+    }
+    while depth_a > depth_b {
+        a = parent(&a).expect("source common-root tree");
+        depth_a -= 1;
+    }
+    while !Arc::ptr_eq(&a, &b) {
+        a = parent(&a).expect("source nonnull common ancestor");
+        b = parent(&b).expect("source nonnull common ancestor");
+    }
+    a
+}
 // Source: third_party/blink/renderer/platform/graphics/paint/paint_property_node.h:171-183;
 // Source: third_party/blink/renderer/platform/graphics/paint/paint_property_node.cc:28-65.
 pub fn LowestCommonAncestor<N: PaintPropertyNodeGeometry>(node: &Arc<N>, other: &Arc<N>) -> Arc<N> {

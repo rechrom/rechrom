@@ -72,6 +72,11 @@ pub trait GeometryMapperContext {
         &self,
         clip: &std::sync::Arc<crate::paint_property_tree::ClipPaintPropertyNode>,
     ) -> <Self::State as GeometryMapperState>::Node;
+    /// The clip's current parent (links resolve through the context's tree).
+    fn ClipParent(
+        &self,
+        clip: &std::sync::Arc<crate::paint_property_tree::ClipPaintPropertyNode>,
+    ) -> Option<std::sync::Arc<crate::paint_property_tree::ClipPaintPropertyNode>>;
     fn ClipLowestCommonAncestor(
         &self,
         first: &std::sync::Arc<crate::paint_property_tree::ClipPaintPropertyNode>,
