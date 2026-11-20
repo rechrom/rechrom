@@ -190,6 +190,23 @@ impl PropertyNodeIdentity {
 /// Arc links themselves.
 pub type HandleTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
 
+thread_local! {
+    /// The published trees of the artifact this thread is compositing; a
+    /// handle made without trees (a display item's or hit-test region's
+    /// scroll translation) resolves its links through them. As in Chromium,
+    /// an older artifact's nodes then read the current node values.
+    static INSTALLED_TREES: std::cell::RefCell<HandleTrees> = const { std::cell::RefCell::new(None) };
+}
+
+/// Install the published trees of the artifact being composited on this thread.
+pub fn InstallPropertyTrees(trees: HandleTrees) {
+    INSTALLED_TREES.with(|installed| *installed.borrow_mut() = trees);
+}
+
+fn installed_trees() -> HandleTrees {
+    INSTALLED_TREES.with(|installed| installed.borrow().clone())
+}
+
 macro_rules! resolve_link {
     ($trees:expr, $kind:ident, $link:expr) => {
         match $trees {
@@ -216,8 +233,9 @@ macro_rules! node_handle {
             }
         }
         impl<R> $handle<R> {
+            /// A handle resolving through the installed artifact's trees.
             pub fn from_arc(node: Arc<paint_property_tree::$node>) -> Self {
-                Self::from_arc_in(node, None)
+                Self::from_arc_in(node, installed_trees())
             }
             /// A handle whose links resolve through `trees`.
             pub fn from_arc_in(node: Arc<paint_property_tree::$node>, trees: HandleTrees) -> Self {
