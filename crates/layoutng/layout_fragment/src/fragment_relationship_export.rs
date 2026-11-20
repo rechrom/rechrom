@@ -91,23 +91,27 @@ pub(super) fn ResolveLogicalParentOccurrences(root: crate::layout_engine::PaintF
 }
 
 #[inline(never)]
-pub(super) fn PopulateInlineStitchedDecorations(
+fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
+    (input.node_id != 0
+        && input.kind == FragmentKind::kBox
+        && input.paint.HasSource()
+        && input.paint.establishes_paint_state
+        && input.paint.display == Display::kInline
+        && input.paint.box_decoration_break == BoxDecorationBreak::kSlice)
+        .then_some((input.node_id, input.fragmentainer_instance_id))
+}
+
+fn CollectStitchGroupsByCursor(
     root: crate::layout_engine::PaintFragmentCursor<'_>,
-) {
+) -> HashMap<(u64, u64), Vec<*mut FragmentPaintData>> {
     fn collect(
         cursor: crate::layout_engine::PaintFragmentCursor<'_>,
         groups: &mut HashMap<(u64, u64), Vec<*mut FragmentPaintData>>,
     ) {
         let input = cursor.PaintData();
-        if input.node_id != 0
-            && input.kind == FragmentKind::kBox
-            && input.paint.HasSource()
-            && input.paint.establishes_paint_state
-            && input.paint.display == Display::kInline
-            && input.paint.box_decoration_break == BoxDecorationBreak::kSlice
-        {
+        if let Some(key) = StitchCandidate(input) {
             groups
-                .entry((input.node_id, input.fragmentainer_instance_id))
+                .entry(key)
                 .or_default()
                 .push(input as *const FragmentPaintData as *mut FragmentPaintData);
         }
@@ -117,6 +121,43 @@ pub(super) fn PopulateInlineStitchedDecorations(
     }
     let mut groups = HashMap::new();
     collect(root, &mut groups);
+    groups
+}
+
+pub(super) fn PopulateInlineStitchedDecorations(
+    root: crate::layout_engine::PaintFragmentCursor<'_>,
+) {
+    StitchGroups(CollectStitchGroupsByCursor(root));
+}
+
+/// PopulateInlineStitchedDecorations over a Paint publication's recorded
+/// slots (the same occurrences in preorder) instead of a cursor walk.
+pub(super) fn PopulateInlineStitchedDecorationsFromReplay(
+    entries: &[super::layout_fragment_fragment_export_state::PopulationReplayEntry],
+    check_root: Option<crate::layout_engine::PaintFragmentCursor<'_>>,
+) {
+    let mut groups: HashMap<(u64, u64), Vec<*mut FragmentPaintData>> = HashMap::new();
+    for entry in entries {
+        let input = entry.slot as *mut FragmentPaintData;
+        if let Some(key) = StitchCandidate(unsafe { &*input }) {
+            groups.entry(key).or_default().push(input);
+        }
+    }
+    if let Some(root) = check_root {
+        let walked = CollectStitchGroupsByCursor(root);
+        browser_tracing::instant(
+            "layout",
+            "layout_fragment.StitchCheck",
+            &[
+                ("groups", groups.len() as f64),
+                ("mismatch", (walked != groups) as u8 as f64),
+            ],
+        );
+    }
+    StitchGroups(groups);
+}
+
+fn StitchGroups(groups: HashMap<(u64, u64), Vec<*mut FragmentPaintData>>) {
     for fragments in groups.values() {
         if fragments.len() < 2 {
             continue;

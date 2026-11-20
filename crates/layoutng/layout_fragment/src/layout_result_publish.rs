@@ -296,7 +296,10 @@ pub(super) fn populate_layout_result_paint_data(
             space.should_apply_root_background_behavior,
         );
         ExportGlobalMainThreadScrollFacts(root, objects, source);
-        PopulateInlineStitchedDecorations(source);
+        PopulateInlineStitchedDecorationsFromReplay(
+            &paint_state_owners.replay_next.entries,
+            ReplayCheckEnabled().then_some(source),
+        );
     }
     trace.set(
         "payload_copies_global",

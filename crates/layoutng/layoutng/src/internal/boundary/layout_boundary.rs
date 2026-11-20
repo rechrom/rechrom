@@ -207,7 +207,8 @@ use layout_fragment_scrollbar_thumb_geometry::SetScrollbarThumb;
 #[path = "../../../../layout_fragment/src/fragment_relationship_export.rs"]
 mod layout_fragment_fragment_relationship_export;
 use layout_fragment_fragment_relationship_export::{
-    PopulateInlineStitchedDecorations, ResolveLogicalParentOccurrences,
+    PopulateInlineStitchedDecorations, PopulateInlineStitchedDecorationsFromReplay,
+    ResolveLogicalParentOccurrences,
 };
 #[path = "../../../../layout_fragment/src/sticky_paint_export.rs"]
 mod layout_fragment_sticky_paint_export;
