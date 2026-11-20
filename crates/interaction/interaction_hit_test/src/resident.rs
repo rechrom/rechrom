@@ -1046,9 +1046,10 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
             geometry_mapper::GeometryMapper,
             native::{NativeGeometryMapperContext, NativeTransformNode},
         };
+        let trees = Some(self.resident.PublishedTrees());
         GeometryMapper::<NativeGeometryMapperContext>::SourceToDestinationProjection(
-            &NativeTransformNode::from_arc(source.NativeOwner().clone()),
-            &NativeTransformNode::from_arc(destination.NativeOwner().clone()),
+            &NativeTransformNode::from_arc_in(source.NativeOwner().clone(), trees.clone()),
+            &NativeTransformNode::from_arc_in(destination.NativeOwner().clone(), trees),
         )
         .as_source()
         .clone()

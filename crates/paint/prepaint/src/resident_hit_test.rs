@@ -278,6 +278,11 @@ impl<'a> ResidentPaintHitTest<'a> {
         true
     }
 
+    /// The published property trees this node's states resolve through.
+    pub fn PublishedTrees(self) -> std::sync::Arc<paint_model::paint_property_tree::FrozenPropertyTrees> {
+        self.slots.published_trees()
+    }
+
     pub fn HasPaintProperties(self) -> bool {
         self.node.HasOwnPaintProperties()
     }

@@ -2672,6 +2672,9 @@ pub struct PaintPropertyNodeStore {
     change_markers_cleared: bool,
     /// Diagnostics: [reused, value changed, references only].
     pub snapshot_stats: [usize; 3],
+    /// The persisted nodes frozen for publication, made on first use and
+    /// dropped by invalidate_published() whenever a writer changes a slot.
+    published: std::sync::OnceLock<Arc<FrozenPropertyTrees>>,
     pub changed: PaintPropertyChangeType,
     /// Source PaintPropertyTreeBuilder.cc:4754-4763, effective local changes.
     pub intersection_observation_state:
@@ -2688,6 +2691,7 @@ impl Default for PaintPropertyNodeStore {
             scrolls: Default::default(),
             change_markers_cleared: true,
             snapshot_stats: [0; 3],
+            published: Default::default(),
             changed: Default::default(),
             intersection_observation_state: Default::default(),
         }
@@ -2721,6 +2725,17 @@ impl PaintPropertyNodeStore {
             count(&self.scrolls, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
         ];
         parts.iter().fold((0, 0), |(c, u), (pc, pu)| (c + pc, u + pu))
+    }
+    /// The persisted nodes as published: frozen once, shared until the next
+    /// store change (invalidate_published).
+    pub fn published_trees(&self) -> Arc<FrozenPropertyTrees> {
+        self.published
+            .get_or_init(|| Arc::new(self.freeze()))
+            .clone()
+    }
+    /// Drop the published freeze after a slot change.
+    pub fn invalidate_published(&mut self) {
+        self.published = Default::default();
     }
     /// The persisted nodes as an immutable id-indexed value for publication.
     pub fn freeze(&self) -> FrozenPropertyTrees {
@@ -3384,6 +3399,7 @@ impl PaintPropertyNodeStore {
             scrolls,
             change_markers_cleared: rebind.changed == PaintPropertyChangeType::Unchanged,
             snapshot_stats: [0; 3],
+            published: Default::default(),
             changed: rebind.changed,
             // No owning property-builder pass ran in this retained rebind;
             // scroll commits publish their source state separately.
