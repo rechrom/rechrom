@@ -6,7 +6,7 @@ use super::{
     float_clip_rect::{FloatClipRect, InfiniteLooseFloatClipRect},
     geometry_mapper_clip_cache::{
         ClipAndTransform, ClipCacheEntry, GeometryMapperClipCache, OverlayScrollbarClipBehavior,
-        WithClipCache,
+        WithClipCacheBy,
     },
     geometry_mapper_transform_cache::{GeometryMapperTransformCache, WithTransformCache},
 };
@@ -43,8 +43,13 @@ fn same_optional_clip(
         _ => false,
     }
 }
-fn nearest_filter(clip: &Arc<ClipPaintPropertyNode>) -> Option<Arc<ClipPaintPropertyNode>> {
-    WithClipCache(clip, |cache| cache.NearestPixelMovingFilterClip())
+fn nearest_filter<C: GeometryMapperContext>(
+    context: &C,
+    clip: &Arc<ClipPaintPropertyNode>,
+) -> Option<Arc<ClipPaintPropertyNode>> {
+    WithClipCacheBy(clip, &|clip| context.ClipParent(clip), |cache| {
+        cache.NearestPixelMovingFilterClip()
+    })
 }
 impl<C: GeometryMapperContext> GeometryMapper<C>
 where
@@ -254,8 +259,8 @@ where
         if !flags.Has(VisualRectFlag::kIgnoreFilters)
             && !same_clip(local.Clip(), ancestor.Clip())
             && !same_optional_clip(
-                &nearest_filter(local.Clip()),
-                &nearest_filter(ancestor.Clip()),
+                &nearest_filter(context, local.Clip()),
+                &nearest_filter(context, ancestor.Clip()),
             )
         {
             return Self::SlowLocalToAncestorVisualRectWithPixelMovingFilters::<OVERLAP>(
@@ -309,8 +314,8 @@ where
         debug_assert!(!flags.Has(VisualRectFlag::kIgnoreFilters));
         let mut last = local.clone();
         last.SetEffect(ancestor.Effect().clone());
-        let ancestor_filter = nearest_filter(ancestor.Clip());
-        let mut filter_clip = nearest_filter(local.Clip());
+        let ancestor_filter = nearest_filter(context, ancestor.Clip());
+        let mut filter_clip = nearest_filter(context, local.Clip());
         while !same_optional_clip(&filter_clip, &ancestor_filter) {
             let Some(clip) = filter_clip else {
                 *rect = InfiniteLooseFloatClipRect();
@@ -345,7 +350,7 @@ where
             last = new_state;
             let next = &context.ClipParent(&clip).expect("source filter clip parent");
             last.SetClip(next.clone());
-            filter_clip = nearest_filter(next);
+            filter_clip = nearest_filter(context, next);
         }
         Self::LocalToAncestorVisualRectInternal::<OVERLAP>(
             context, &last, ancestor, rect, behavior, flags,
@@ -436,7 +441,7 @@ where
                 && !(flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(node))
             {
-                cached = WithClipCache(node, |cache| cache.GetCachedClip(&key).cloned());
+                cached = WithClipCacheBy(node, &|clip| context.ClipParent(clip), |cache| cache.GetCachedClip(&key).cloned());
             }
             if OVERLAP
                 && cached
@@ -484,7 +489,7 @@ where
                 if !(flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(node))
                 {
-                    WithClipCache(node, |cache| {
+                    WithClipCacheBy(node, &|clip| context.ClipParent(clip), |cache| {
                         cache.SetCachedClip(&ClipCacheEntry {
                             clip_and_transform: key.clone(),
                             clip_rect: clip,
@@ -500,7 +505,7 @@ where
                 || (flags.Has(VisualRectFlag::kUsePreciseClipPath)
                     && context.IsForCompositeClipPathAnimation(descendant))
                 || OVERLAP
-                || WithClipCache(descendant, |cache| cache
+                || WithClipCacheBy(descendant, &|clip| context.ClipParent(clip), |cache| cache
                     .GetCachedClip(&key)
                     .expect("source cached descendant clip")
                     .clip_rect
@@ -537,7 +542,7 @@ where
                     c.nearest_scroll_translation()
                 }) != *scroll
                 {
-                    if !same_optional_clip(&nearest_filter(state.Clip()), &nearest_filter(&clip)) {
+                    if !same_optional_clip(&nearest_filter(context, state.Clip()), &nearest_filter(context, &clip)) {
                         return true;
                     }
                     state.SetClip(context.ClipParent(&clip).expect("source ancestor clip"));

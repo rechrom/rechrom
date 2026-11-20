@@ -71,9 +71,9 @@ impl Default for GeometryMapperClipCache {
 }
 impl GeometryMapperClipCache {
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.h:53-57.
-    pub fn UpdateIfNeeded(&mut self, node: &Arc<ClipPaintPropertyNode>) {
+    pub fn UpdateIfNeeded(&mut self, node: &Arc<ClipPaintPropertyNode>, parent_of: ClipParentFn<'_>) {
         if self.cache_generation_ != global_generation() {
-            self.Update(node);
+            self.Update(node, parent_of);
         }
         debug_assert_eq!(self.cache_generation_, global_generation());
     }
@@ -85,14 +85,14 @@ impl GeometryMapperClipCache {
         self.cache_generation_ == global_generation()
     }
     // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:36-50.
-    fn Update(&mut self, node: &Arc<ClipPaintPropertyNode>) {
+    fn Update(&mut self, node: &Arc<ClipPaintPropertyNode>, parent_of: ClipParentFn<'_>) {
         debug_assert_ne!(self.cache_generation_, global_generation());
         self.cache_generation_ = global_generation();
         self.clip_cache_.clear();
         if node.pixel_moving_filter.is_some() {
             self.nearest_pixel_moving_filter_clip_ = Some(Arc::downgrade(node));
-        } else if let Some(parent) = &node.parent {
-            self.nearest_pixel_moving_filter_clip_ = WithClipCache(parent, |cache| {
+        } else if let Some(parent) = parent_of(node) {
+            self.nearest_pixel_moving_filter_clip_ = WithClipCacheBy(&parent, parent_of, |cache| {
                 cache.nearest_pixel_moving_filter_clip_.clone()
             });
         } else {
@@ -130,11 +130,22 @@ pub fn WithClipCache<R>(
     node: &Arc<ClipPaintPropertyNode>,
     callback: impl FnOnce(&mut GeometryMapperClipCache) -> R,
 ) -> R {
+    WithClipCacheBy(node, &|clip| clip.parent.clone(), callback)
+}
+/// A clip's current parent (a resolver over its parent link).
+pub type ClipParentFn<'a> =
+    &'a dyn Fn(&Arc<ClipPaintPropertyNode>) -> Option<Arc<ClipPaintPropertyNode>>;
+/// WithClipCache whose update follows parents through `parent_of`.
+pub fn WithClipCacheBy<R>(
+    node: &Arc<ClipPaintPropertyNode>,
+    parent_of: ClipParentFn<'_>,
+    callback: impl FnOnce(&mut GeometryMapperClipCache) -> R,
+) -> R {
     let allocation = node
         .geometry_mapper_cache
         .get_or_init(|| Mutex::new(GeometryMapperClipCache::default()));
     let mut cache = allocation.lock().expect("Paint clip cache poisoned");
-    cache.UpdateIfNeeded(node);
+    cache.UpdateIfNeeded(node, parent_of);
     callback(&mut cache)
 }
 // Source: third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.cc:18-26,71.

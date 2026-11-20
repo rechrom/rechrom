@@ -12,7 +12,7 @@ use crate::{
     third_party::blink::renderer::platform::graphics::paint::{
         float_clip_rect::{FloatClipRect, InfiniteLooseFloatClipRect},
         geometry_mapper::GeometryMapper,
-        geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCache},
+        geometry_mapper_clip_cache::{OverlayScrollbarClipBehavior, WithClipCacheBy},
     },
 };
 use paint::paint_property_tree;
@@ -205,8 +205,20 @@ impl<R: CpuSkiaBackend> ChunkGeometryMapper for CpuGeometryMapper<R> {
         a: &Self::PropertyTreeState,
         b: &Self::PropertyTreeState,
     ) -> bool {
-        let a = WithClipCache(a.clip_.as_arc(), |c| c.NearestPixelMovingFilterClip());
-        let b = WithClipCache(b.clip_.as_arc(), |c| c.NearestPixelMovingFilterClip());
+        let nearest = |clip: &ClipNode<R>| {
+            let trees = clip.trees().clone();
+            WithClipCacheBy(
+                clip.as_arc(),
+                &|c| {
+                    ClipNode::<R>::from_arc_in(c.clone(), trees.clone())
+                        .parent_handle()
+                        .map(|parent| parent.as_arc().clone())
+                },
+                |c| c.NearestPixelMovingFilterClip(),
+            )
+        };
+        let a = nearest(&a.clip_);
+        let b = nearest(&b.clip_);
         match (a, b) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
