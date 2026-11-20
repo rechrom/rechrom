@@ -193,7 +193,10 @@ impl ImageDependencyIndex {
                             }
                         }
                     }
-                    effect = node.parent.as_deref();
+                    effect = node
+                        .parent
+                        .as_ref()
+                        .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent));
                 }
             }
             for image_id in ids {
@@ -768,7 +771,10 @@ impl PaintRecording {
                         }
                     }
                 }
-                effect = node.parent.as_deref();
+                effect = node
+                    .parent
+                    .as_ref()
+                    .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::effect(&chunk.property_trees.0, parent));
             }
         }
         output

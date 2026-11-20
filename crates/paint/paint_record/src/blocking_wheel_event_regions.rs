@@ -40,7 +40,10 @@ impl PaintRecording {
                     root_scrolling = true;
                     break;
                 }
-                transform = node.parent.as_deref();
+                transform = node
+                    .parent
+                    .as_ref()
+                    .map(|parent| &**paint_model::paint_property_tree::PropertyNodeResolver::transform(&chunk.property_trees.0, parent));
             }
             // Chromium maps hit-test regions into the scrolling layer before
             // applying its viewport clip. Keep that stationary outer clip out
