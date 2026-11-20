@@ -303,7 +303,6 @@ impl EngineCore {
         self.paint
             .GeometryMapper()
             .SetPropertyTrees(artifact.property_trees.clone());
-        super::paint::InstallPropertyTrees(artifact.property_trees.clone());
         self.SetViewportState(viewport)?;
         let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
         let source_frame = u64::try_from(self.main.pending_commit_state().source_frame_number)

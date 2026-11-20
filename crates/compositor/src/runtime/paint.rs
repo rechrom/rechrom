@@ -190,22 +190,6 @@ impl PropertyNodeIdentity {
 /// Arc links themselves.
 pub type HandleTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
 
-thread_local! {
-    /// The published trees of the artifact this thread is compositing; a
-    /// handle made without trees (a display item's or hit-test region's
-    /// scroll translation) resolves its links through them. As in Chromium,
-    /// an older artifact's nodes then read the current node values.
-    static INSTALLED_TREES: std::cell::RefCell<HandleTrees> = const { std::cell::RefCell::new(None) };
-}
-
-/// Install the published trees of the artifact being composited on this thread.
-pub fn InstallPropertyTrees(trees: HandleTrees) {
-    INSTALLED_TREES.with(|installed| *installed.borrow_mut() = trees);
-}
-
-fn installed_trees() -> HandleTrees {
-    INSTALLED_TREES.with(|installed| installed.borrow().clone())
-}
 
 macro_rules! resolve_link {
     ($trees:expr, $kind:ident, $link:expr) => {
@@ -233,9 +217,9 @@ macro_rules! node_handle {
             }
         }
         impl<R> $handle<R> {
-            /// A handle resolving through the installed artifact's trees.
+            /// A handle following its links directly (no published trees).
             pub fn from_arc(node: Arc<paint_property_tree::$node>) -> Self {
-                Self::from_arc_in(node, installed_trees())
+                Self::from_arc_in(node, None)
             }
             /// A handle whose links resolve through `trees`.
             pub fn from_arc_in(node: Arc<paint_property_tree::$node>, trees: HandleTrees) -> Self {
@@ -514,6 +498,9 @@ where
         EffectNode = EffectNode<R>,
     >,
 {
+    fn WithChunkTrees(&self, node: TransformNode<R>) -> TransformNode<R> {
+        TransformNode::from_arc_in(node.as_arc().clone(), self.property_trees.0.clone())
+    }
     fn CanMatchOldChunk(&self) -> bool {
         paint::paint_engine::PaintChunk::CanMatchOldChunk(self)
     }
@@ -524,13 +511,13 @@ where
             .same_node(&other.properties.transform.lifecycle)
     }
     fn UnaliasedTransform(&self) -> TransformNode<R> {
-        TransformNode::from_arc(Arc::clone(&self.properties.transform))
+        TransformNode::from_arc_in(Arc::clone(&self.properties.transform), self.property_trees.0.clone())
     }
     fn UnaliasedClip(&self) -> ClipNode<R> {
-        ClipNode::from_arc(Arc::clone(&self.properties.clip))
+        ClipNode::from_arc_in(Arc::clone(&self.properties.clip), self.property_trees.0.clone())
     }
     fn UnaliasedEffect(&self) -> EffectNode<R> {
-        EffectNode::from_arc(Arc::clone(&self.properties.effect))
+        EffectNode::from_arc_in(Arc::clone(&self.properties.effect), self.property_trees.0.clone())
     }
     fn opaque_rect(&self) -> crate::adapter::geometry::Rect {
         // The native producer's integer-cell opacity proof is retained before
@@ -550,12 +537,12 @@ where
         format!("{:?}", self.id)
     }
     fn RawTransformForDebug(&self) -> TransformNode<R> {
-        TransformNode::from_arc(Arc::clone(&self.properties.transform))
+        TransformNode::from_arc_in(Arc::clone(&self.properties.transform), self.property_trees.0.clone())
     }
     fn RawClipForDebug(&self) -> ClipNode<R> {
-        ClipNode::from_arc(Arc::clone(&self.properties.clip))
+        ClipNode::from_arc_in(Arc::clone(&self.properties.clip), self.property_trees.0.clone())
     }
     fn RawEffectForDebug(&self) -> EffectNode<R> {
-        EffectNode::from_arc(Arc::clone(&self.properties.effect))
+        EffectNode::from_arc_in(Arc::clone(&self.properties.effect), self.property_trees.0.clone())
     }
 }
