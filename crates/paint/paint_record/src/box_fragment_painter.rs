@@ -10927,7 +10927,7 @@ mod background_attachment_tests {
         let mut fixed = PaintTreeNode::default();
         fixed.SetOwnedFragmentForTesting(&fixed_fragment);
         fixed.scroll_offset = Offset { x: 7.0, y: 11.0 };
-        fixed.transforms.push(TranslationTransform(5.0, 9.0));
+        fixed.transforms = std::sync::Arc::from([TranslationTransform(5.0, 9.0)]);
         let viewport = FixedBackgroundPositioningArea(&fixed).unwrap();
         assert_eq!((viewport.x, viewport.y), (2.0, 2.0));
         assert_eq!((viewport.width, viewport.height), (480.0, 300.0));

@@ -5,6 +5,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
+/// Flat transform list shared by a node, its contexts and every descendant
+/// that adds no transform of its own; cloning only bumps a reference count.
+pub type FlatTransforms = Arc<[TransformMatrix]>;
+
 use foundation::{PaintInvalidationReason, TrustedIdentityHashMap as HashMap};
 
 use layoutng_assembly::fragment_tree::{
@@ -446,7 +450,7 @@ pub struct PaintTreeNode<'a> {
     pub cull_rect: Option<PaintRect>,
     pub self_cull_rect: Option<PaintRect>,
     pub(crate) cull_decision_inputs: crate::cull_rect_updater::CullRectDecisionInputs,
-    pub transforms: Vec<TransformMatrix>,
+    pub transforms: FlatTransforms,
     pub local_transforms: Vec<TransformMatrix>,
     /// ObjectPaintProperties::PaintOffsetTranslation. Keeping the source slot
     /// separate lets ScopedPaintState emit this one node as a raw drawing
@@ -627,7 +631,7 @@ impl<'a> PaintTreeNode<'a> {
             cull_rect: None,
             self_cull_rect: None,
             cull_decision_inputs: Default::default(),
-            transforms: Vec::new(),
+            transforms: FlatTransforms::default(),
             local_transforms: Vec::new(),
             paint_offset_translation: None,
             opacity: 1.0,
@@ -827,7 +831,7 @@ struct InheritedContext {
     paint_space: Offset,
     clip: Option<PaintRect>,
     cull: Option<PaintRect>,
-    transforms: Vec<TransformMatrix>,
+    transforms: FlatTransforms,
     opacity: f32,
     scroll: Offset,
     fixed_background_acts_as_scroll: bool,
@@ -850,7 +854,7 @@ struct ChildContext {
     paint_space: Offset,
     clip: Option<PaintRect>,
     cull: Option<PaintRect>,
-    transforms: Vec<TransformMatrix>,
+    transforms: FlatTransforms,
     opacity: f32,
     scroll: Offset,
     fixed_background_acts_as_scroll: bool,
@@ -867,7 +871,7 @@ struct ChildContext {
 struct RootFixedPositionContext {
     offset: Offset,
     paint_space: Offset,
-    transforms: Vec<TransformMatrix>,
+    transforms: FlatTransforms,
     clip: Option<PaintRect>,
     properties: PropertyTreeState,
     scroll_translation: Option<Arc<TransformPaintPropertyNode>>,
@@ -4848,7 +4852,7 @@ struct SavedShiftFields {
     clip: Option<PaintRect>,
     cull_rect: Option<PaintRect>,
     self_cull_rect: Option<PaintRect>,
-    transforms: Vec<TransformMatrix>,
+    transforms: FlatTransforms,
     properties: PropertyTreeState,
     contents_properties: PropertyTreeState,
     raw_properties: PropertyTreeState,
@@ -5369,7 +5373,9 @@ impl PrePaintTreeWalk {
             // mutable property-node and cull-hysteresis behavior.
             && (Self::ClipContextCovers(&a.clip, &b.clip) || cull_covers)
             && cull_covers
-            && (!exact || a.transforms == b.transforms)
+            && (!exact
+                || Arc::ptr_eq(&a.transforms, &b.transforms)
+                || a.transforms == b.transforms)
             && a.opacity == b.opacity
             && a.scroll == b.scroll
             && a.fixed_background_acts_as_scroll == b.fixed_background_acts_as_scroll
@@ -6558,7 +6564,7 @@ impl PrePaintTreeWalk {
         } else {
             properties.transform_id = self.viewport_properties.transform_id;
             properties.nodes.transform = self.viewport_properties.nodes.transform.clone();
-            (Offset::default(), Offset::default(), Vec::new())
+            (Offset::default(), Offset::default(), FlatTransforms::default())
         };
         self.root_fixed_position = Some(RootFixedPositionContext {
             offset,
@@ -6580,7 +6586,7 @@ impl PrePaintTreeWalk {
                 paint_space: Offset::default(),
                 clip: None,
                 cull: None,
-                transforms: Vec::new(),
+                transforms: FlatTransforms::default(),
                 opacity: 1.,
                 scroll: Offset::default(),
                 fixed_background_acts_as_scroll: false,
@@ -6792,7 +6798,7 @@ impl PrePaintTreeWalk {
             // lets incremental resize update the exact viewport clip without
             // repainting clean descendants which already have coverage.
             cull: visible_root_cull,
-            transforms: Vec::new(),
+            transforms: FlatTransforms::default(),
             opacity: 1.0,
             scroll: Offset::default(),
             fixed_background_acts_as_scroll: false,
@@ -9405,7 +9411,7 @@ mod tests {
         assert_eq!(child_context.paint_space, Offset { x: -40.0, y: -30.0 });
         let mut child = FragmentPaintData::default();
         child.offset = Offset { x: 5.0, y: 6.0 };
-        let mut transforms = child_context.transforms.clone();
+        let mut transforms = child_context.transforms.to_vec();
         let geometry = ResolveFragmentGeometry(
             &child,
             child_context.origin,

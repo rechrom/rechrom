@@ -62,7 +62,7 @@ struct OverflowControlGeometry {
     paint_snap_offset: Offset,
     properties: PrePaintPropertyTreeState,
     contents_properties: PrePaintPropertyTreeState,
-    transforms: Vec<TransformMatrix>,
+    transforms: std::sync::Arc<[TransformMatrix]>,
     phase: PaintPhase,
     is_self_painting_layer: bool,
     needs_reorder_overlay_overflow_controls: bool,

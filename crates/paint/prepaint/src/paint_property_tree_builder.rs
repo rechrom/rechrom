@@ -56,7 +56,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         paint_space_origin: Offset,
         parent_clip: Option<PaintRect>,
         parent_cull_rect: Option<PaintRect>,
-        transforms: Vec<TransformMatrix>,
+        transforms: FlatTransforms,
         parent_opacity: f32,
         scroll_offset: Offset,
         inherited_fixed_background_acts_as_scroll: bool,
@@ -116,7 +116,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.fixed_background_acts_as_scroll = inherited_fixed_background_acts_as_scroll
             || local_establishes_fixed_background_containing_block;
         let inherited_transform_count = transforms.len();
-        let mut transforms = transforms;
+        let inherited_transforms = transforms;
+        let mut transforms: Vec<TransformMatrix> = inherited_transforms.to_vec();
         let geometry_property_delta =
             self.walk.FlatToPropertySpaceOffsetMemo(&transforms, &parent_properties.nodes.transform)
                 .unwrap_or_default();
@@ -167,7 +168,12 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.clip = parent_clip;
         node.cull_rect = parent_cull_rect;
         node.self_cull_rect = parent_cull_rect;
-        node.transforms = transforms;
+        // Share the parent's list unless this node appended its own matrices.
+        node.transforms = if transforms.len() == inherited_transform_count {
+            inherited_transforms.clone()
+        } else {
+            FlatTransforms::from(transforms)
+        };
         node.scroll_offset = scroll_offset;
         let inherited_tainted_subtree = parent_properties
             .nodes
@@ -1851,7 +1857,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             node.pixel_snap_scale,
         );
         let mut child_properties = node.properties.clone();
-        let mut child_transforms = node.transforms.clone();
+        let mut child_transforms: Vec<TransformMatrix> = node.transforms.to_vec();
         let preserves_3d = style.is_some_and(|style| style.preserves_3d());
         let mut child_rendering_context_id = if preserves_3d {
             node.properties.nodes.transform.rendering_context_id
@@ -2049,7 +2055,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 },
                 clip: node.clip,
                 cull: node.cull_rect,
-                transforms: child_transforms,
+                transforms: if child_transforms.len() == node.transforms.len() {
+                    node.transforms.clone()
+                } else {
+                    FlatTransforms::from(child_transforms)
+                },
                 opacity: node.opacity,
                 scroll: child_scroll,
                 fixed_background_acts_as_scroll: node.fixed_background_acts_as_scroll,
