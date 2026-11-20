@@ -298,6 +298,11 @@ impl EngineCore {
         // state, and carry that same live input through PAC update. Rebuilding
         // PaintInput below would repeat the complete artifact/property walk.
         let paint_input = self.paint.PrepareInput(artifact.clone())?;
+        // Bare clip links handed to the GeometryMapper context resolve
+        // through the installed artifact's published trees.
+        self.paint
+            .GeometryMapper()
+            .SetPropertyTrees(artifact.property_trees.clone());
         self.SetViewportState(viewport)?;
         let had_canvas_children = self.pac.as_ref().unwrap().CanvasChildIds().next().is_some();
         let source_frame = u64::try_from(self.main.pending_commit_state().source_frame_number)
