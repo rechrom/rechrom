@@ -4878,12 +4878,34 @@ struct ShiftDelta {
 /// new inherited context.
 /// Returns whether the new cull rects need a repaint (CullRectUpdater), as
 /// the rebuild path decides it; the node's repaint bit is raised already.
+thread_local! {
+    /// Trace only: ShiftRetainedNode time by part (refresh layer facts,
+    /// property/context update, remainder).
+    static SHIFT_PART_NS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+}
+
+fn AddShiftPart(index: usize, from: Option<std::time::Instant>) -> Option<std::time::Instant> {
+    let from = from?;
+    let now = std::time::Instant::now();
+    SHIFT_PART_NS.with(|parts| {
+        let mut value = parts.get();
+        value[index] += now.duration_since(from).as_nanos() as u64;
+        parts.set(value);
+    });
+    Some(now)
+}
+
+pub fn TakeShiftPartNs() -> [u64; 3] {
+    SHIFT_PART_NS.with(|parts| parts.replace([0; 3]))
+}
+
 fn ShiftRetainedNode(
     node: &mut PaintTreeNode<'static>,
     delta: ShiftDelta,
     inherited: &InheritedContext,
     previous_paint_result: paint_model::PaintResult,
 ) -> bool {
+    let t = browser_tracing::enabled().then(std::time::Instant::now);
     let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
         previous_paint_result,
         Some(node.self_cull_rect),
@@ -4892,6 +4914,7 @@ fn ShiftRetainedNode(
         inherited.cull,
     );
     RefreshLivePaintLayerFacts(node);
+    let t = AddShiftPart(0, t);
     node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
     // Paint offsets are relative to the property space, which moves by
     // `paint_space` when the parent's own PaintOffsetTranslation moved. An
@@ -4940,6 +4963,7 @@ fn ShiftRetainedNode(
     cache.raw_contents = properties.clone();
     cache.children.properties = properties;
     cache.inherited = inherited.clone();
+    let t = AddShiftPart(1, t);
     cache.children.origin.x += delta.offset.x;
     cache.children.origin.y += delta.offset.y;
     cache.children.paint_space.x += children_paint_space.x;
@@ -4947,6 +4971,7 @@ fn ShiftRetainedNode(
     cache.children.clip = inherited.clip;
     cache.children.cull = inherited.cull;
     cache.children.transforms = shifted_transforms;
+    AddShiftPart(2, t);
     cull_change_needs_repaint
 }
 
@@ -4957,35 +4982,24 @@ fn RefreshLivePaintLayerFacts(node: &mut PaintTreeNode<'static>) {
     let Some(fragment) = node.fragment.as_deref() else {
         return;
     };
-    let paint = &fragment.paint;
-    let authoritative = paint.PaintLayerStateIsAuthoritative();
-    let is_self_painting_layer = if authoritative {
-        paint.PaintLayerIsSelfPainting()
+    let facts = fragment.paint.LivePaintLayerFacts();
+    node.paint_layer_facts_are_authoritative = facts.authoritative;
+    if facts.authoritative {
+        node.is_self_painting_layer = facts.is_self_painting;
     } else {
-        node.is_paint_layer
-    };
-    let invisible = paint.PaintLayerInvisibleForPositionVisibility();
-    let ancestor_invisible = paint.PaintLayerHasAncestorInvisibleForPositionVisibility();
-    let has_visible_content = paint.PaintLayerHasVisibleContent();
-    let has_self_painting_layer_descendant = paint.PaintLayerHasSelfPaintingLayerDescendant();
-    let under_svg_hidden = paint.PaintLayerIsUnderSvgHiddenContainer();
-    let supports_subsequence_caching = paint.PaintLayerSupportsSubsequenceCaching();
-    let needs_repaint = paint.PaintLayerSelfOrDescendantNeedsRepaint();
-    let fragmented = paint.PaintLayerIsFragmented();
-    let clips_to_padding = paint.PaintLayerKnownToClipSubtreeToPaddingBox();
-    let display_locked = paint.ChildPaintBlockedByDisplayLock();
-    node.paint_layer_facts_are_authoritative = authoritative;
-    node.is_self_painting_layer = is_self_painting_layer;
-    node.invisible_for_position_visibility = invisible;
-    node.has_ancestor_invisible_for_position_visibility = ancestor_invisible;
-    node.has_visible_content = has_visible_content;
-    node.has_self_painting_layer_descendant = has_self_painting_layer_descendant;
-    node.is_under_svg_hidden_container = under_svg_hidden;
-    node.supports_subsequence_caching = supports_subsequence_caching;
-    node.self_or_descendant_needs_repaint = needs_repaint;
-    node.paint_layer_is_fragmented = fragmented;
-    node.known_to_clip_subtree_to_padding_box = clips_to_padding;
-    node.child_paint_blocked_by_display_lock = display_locked;
+        node.is_self_painting_layer = node.is_paint_layer;
+    }
+    node.invisible_for_position_visibility = facts.invisible_for_position_visibility;
+    node.has_ancestor_invisible_for_position_visibility =
+        facts.has_ancestor_invisible_for_position_visibility;
+    node.has_visible_content = facts.has_visible_content;
+    node.has_self_painting_layer_descendant = facts.has_self_painting_layer_descendant;
+    node.is_under_svg_hidden_container = facts.is_under_svg_hidden_container;
+    node.supports_subsequence_caching = facts.supports_subsequence_caching;
+    node.self_or_descendant_needs_repaint = facts.self_or_descendant_needs_repaint;
+    node.paint_layer_is_fragmented = facts.is_fragmented;
+    node.known_to_clip_subtree_to_padding_box = facts.known_to_clip_subtree_to_padding_box;
+    node.child_paint_blocked_by_display_lock = facts.child_paint_blocked_by_display_lock;
 }
 
 /// The fields ShiftRetainedNode writes, for the verification mode.
@@ -5980,6 +5994,7 @@ impl PrePaintTreeWalk {
             self.stats.shift_rejects[reason] += 1;
         }
         let mut node = if let Some(delta) = shift_delta.filter(|_| !shift_check) {
+            let t_shift = checkpoint();
             self.stats.shifted_nodes += 1;
             let mut node = previous.take().unwrap();
             node.fragment = Some(ResidentFragment::FromSource(&fragment));
@@ -5999,6 +6014,7 @@ impl PrePaintTreeWalk {
                     .should_check_for_paint_invalidation = true;
             }
             self.needs_post_update = true;
+            self.stats.shift_branch_ns += ProfileNs(t_shift, checkpoint());
             node
         } else if self_clean {
             self.stats.reused_nodes += 1;

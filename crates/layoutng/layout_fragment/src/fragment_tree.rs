@@ -881,6 +881,24 @@ impl std::ops::Deref for LazySelectionPaintStyle<'_> {
     }
 }
 
+/// See PaintProperties::LivePaintLayerFacts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LivePaintLayerFacts {
+    pub authoritative: bool,
+    pub is_self_painting: bool,
+    pub invisible_for_position_visibility: bool,
+    pub has_ancestor_invisible_for_position_visibility: bool,
+    pub has_visible_content: bool,
+    pub has_self_painting_layer_descendant: bool,
+    pub is_under_svg_hidden_container: bool,
+    pub supports_subsequence_caching: bool,
+    pub self_or_descendant_needs_repaint: bool,
+    pub is_fragmented: bool,
+    pub known_to_clip_subtree_to_padding_box: bool,
+    pub child_paint_blocked_by_display_lock: bool,
+    pub is_z_order_list_visible: bool,
+}
+
 impl PaintProperties {
     /// Source: core/highlight/highlight_style_utils.cc HighlightPaintingStyle.
     /// Chromium resolves the ::selection painting style from the live
@@ -949,7 +967,10 @@ impl PaintProperties {
     }
 
     fn SourcePaintLayerPointer(&self) -> *mut PaintLayer {
-        let object = self.SourceObjectPointer();
+        Self::PaintLayerOfObject(self.SourceObjectPointer())
+    }
+
+    fn PaintLayerOfObject(object: *mut LayoutObject) -> *mut PaintLayer {
         if object.is_null() {
             return std::ptr::null_mut();
         }
@@ -1374,6 +1395,63 @@ impl PaintProperties {
     pub fn IsLayoutBlockFlow(&self) -> bool {
         self.SourceObject()
             .map_or(self.is_layout_block_flow, LayoutObject::IsLayoutBlockFlow)
+    }
+
+    /// Every live PaintLayer fact PrePaint reads per visit, resolved through
+    /// one validated source object and layer lookup instead of one per fact.
+    /// Each field equals the matching single-fact accessor below.
+    pub fn LivePaintLayerFacts(&self) -> LivePaintLayerFacts {
+        let object_pointer = self.SourceObjectPointer();
+        let object = unsafe { object_pointer.as_ref() };
+        let layer = unsafe { Self::PaintLayerOfObject(object_pointer).as_ref() };
+        LivePaintLayerFacts {
+            authoritative: object.is_some() || self.paint_layer_state_is_authoritative,
+            is_self_painting: layer.map_or(self.paint_layer_is_self_painting, |layer| {
+                layer.IsSelfPaintingLayer()
+            }),
+            invisible_for_position_visibility: layer.map_or(
+                self.paint_layer_invisible_for_position_visibility,
+                PaintLayer::InvisibleForPositionVisibility,
+            ),
+            has_ancestor_invisible_for_position_visibility: layer.map_or(
+                self.paint_layer_has_ancestor_invisible_for_position_visibility,
+                PaintLayer::HasAncestorInvisibleForPositionVisibility,
+            ),
+            has_visible_content: layer.map_or(self.paint_layer_has_visible_content, |layer| {
+                layer.HasVisibleContent()
+            }),
+            has_self_painting_layer_descendant: layer.map_or(
+                self.paint_layer_has_self_painting_layer_descendant,
+                PaintLayer::HasSelfPaintingLayerDescendant,
+            ),
+            is_under_svg_hidden_container: layer.map_or(
+                self.paint_layer_is_under_svg_hidden_container,
+                PaintLayer::IsUnderSVGHiddenContainer,
+            ),
+            supports_subsequence_caching: layer.map_or(
+                self.paint_layer_supports_subsequence_caching,
+                PaintLayer::SupportsSubsequenceCaching,
+            ),
+            self_or_descendant_needs_repaint: layer.map_or(
+                self.paint_layer_self_or_descendant_needs_repaint,
+                PaintLayer::SelfOrDescendantNeedsRepaint,
+            ),
+            is_fragmented: layer.map_or(self.paint_layer_is_fragmented, |layer| {
+                layer.GetLayoutObject().IsFragmented()
+            }),
+            known_to_clip_subtree_to_padding_box: layer.map_or(
+                self.paint_layer_known_to_clip_subtree_to_padding_box,
+                PaintLayer::KnownToClipSubtreeToPaddingBox,
+            ),
+            child_paint_blocked_by_display_lock: object.map_or(
+                self.child_paint_blocked_by_display_lock,
+                LayoutObject::ChildPaintBlockedByDisplayLock,
+            ),
+            is_z_order_list_visible: layer.map_or(
+                self.paint_layer_is_z_order_list_visible,
+                PaintLayer::IsZOrderListVisible,
+            ),
+        }
     }
 
     pub fn PaintLayerStateIsAuthoritative(&self) -> bool {

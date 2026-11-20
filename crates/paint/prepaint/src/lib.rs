@@ -84,4 +84,6 @@ pub struct PrePaintUpdateStats {
     /// SVG, paint layer without own nodes, plain.
     pub build_kind_ns: [u64; 6],
     pub build_kind_nodes: [usize; 6],
+    /// Trace only: time in the per-node shift branch of UpdateNode.
+    pub shift_branch_ns: u64,
 }

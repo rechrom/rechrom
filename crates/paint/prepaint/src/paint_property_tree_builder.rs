@@ -225,31 +225,27 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         let layer = ClassifyFragmentPaintLayer(fragment, is_root, is_flex_or_grid_item);
         node.stacking_level = layer.stacking_level;
         node.is_paint_layer = layer.is_paint_layer;
-        node.paint_layer_facts_are_authoritative = fragment.paint.PaintLayerStateIsAuthoritative();
-        node.is_self_painting_layer = if fragment.paint.PaintLayerStateIsAuthoritative() {
-            fragment.paint.PaintLayerIsSelfPainting()
+        let facts = fragment.paint.LivePaintLayerFacts();
+        node.paint_layer_facts_are_authoritative = facts.authoritative;
+        node.is_self_painting_layer = if facts.authoritative {
+            facts.is_self_painting
         } else {
             layer.is_paint_layer
         };
-        node.invisible_for_position_visibility =
-            fragment.paint.PaintLayerInvisibleForPositionVisibility();
-        node.has_ancestor_invisible_for_position_visibility = fragment
-            .paint
-            .PaintLayerHasAncestorInvisibleForPositionVisibility();
-        node.has_visible_content = fragment.paint.PaintLayerHasVisibleContent();
-        node.has_self_painting_layer_descendant =
-            fragment.paint.PaintLayerHasSelfPaintingLayerDescendant();
-        node.is_under_svg_hidden_container = fragment.paint.PaintLayerIsUnderSvgHiddenContainer();
-        node.supports_subsequence_caching = fragment.paint.PaintLayerSupportsSubsequenceCaching();
-        node.self_or_descendant_needs_repaint =
-            fragment.paint.PaintLayerSelfOrDescendantNeedsRepaint();
-        node.paint_layer_is_fragmented = fragment.paint.PaintLayerIsFragmented();
-        node.known_to_clip_subtree_to_padding_box =
-            fragment.paint.PaintLayerKnownToClipSubtreeToPaddingBox();
-        node.child_paint_blocked_by_display_lock = fragment.paint.ChildPaintBlockedByDisplayLock();
+        node.invisible_for_position_visibility = facts.invisible_for_position_visibility;
+        node.has_ancestor_invisible_for_position_visibility =
+            facts.has_ancestor_invisible_for_position_visibility;
+        node.has_visible_content = facts.has_visible_content;
+        node.has_self_painting_layer_descendant = facts.has_self_painting_layer_descendant;
+        node.is_under_svg_hidden_container = facts.is_under_svg_hidden_container;
+        node.supports_subsequence_caching = facts.supports_subsequence_caching;
+        node.self_or_descendant_needs_repaint = facts.self_or_descendant_needs_repaint;
+        node.paint_layer_is_fragmented = facts.is_fragmented;
+        node.known_to_clip_subtree_to_padding_box = facts.known_to_clip_subtree_to_padding_box;
+        node.child_paint_blocked_by_display_lock = facts.child_paint_blocked_by_display_lock;
         node.is_stacking_context = layer.is_stacking_context;
         node.is_stacked = layer.is_stacked;
-        node.is_z_order_list_visible = fragment.paint.PaintLayerIsZOrderListVisible();
+        node.is_z_order_list_visible = facts.is_z_order_list_visible;
         node.is_in_top_or_view_transition_layer = fragment
             .paint
             .paint_layer_is_in_top_or_view_transition_layer;

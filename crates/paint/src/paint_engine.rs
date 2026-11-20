@@ -398,6 +398,7 @@ fn WalkPrePaint(
             ],
         );
         let ms = |ns: u64| ns as f64 / 1e6;
+        let shift_parts = prepaint::pre_paint_tree_walk::TakeShiftPartNs();
         browser_tracing::instant(
             "prepaint",
             "PrePaint.NodeProfile",
@@ -416,6 +417,10 @@ fn WalkPrePaint(
             &[
                 ("shifted_nodes", stats.shifted_nodes as f64),
                 ("check_mismatches", stats.shift_check_mismatches as f64),
+                ("branch_ms", ms(stats.shift_branch_ns)),
+                ("refresh_ms", ms(shift_parts[0])),
+                ("context_ms", ms(shift_parts[1])),
+                ("rest_ms", ms(shift_parts[2])),
             ],
         );
         let r = stats.shift_rejects;
