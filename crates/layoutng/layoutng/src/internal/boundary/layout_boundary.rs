@@ -188,7 +188,9 @@ mod layout_fragment_nine_piece_image_export;
 use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
 #[path = "../../../../layout_fragment/src/fragment_paint_population.rs"]
 mod layout_fragment_fragment_paint_population;
-use layout_fragment_fragment_paint_population::PopulatePhysicalFragmentPaintData;
+use layout_fragment_fragment_paint_population::{
+    PopulatePhysicalFragmentPaintData, ReplayCheckEnabled, ResolveLogicalParentsFromReplay,
+};
 #[path = "../../../../layout_fragment/src/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
 use layout_fragment_global_paint_export::{

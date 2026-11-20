@@ -301,6 +301,7 @@ fn PopulateInlineItemLocalPaintData(
         paint_state.BindInline(fragment_items, item_index as usize, fragment_instance_id);
     paint_state_owners.begin_replay_entry(PopulationReplayEntry {
         owner: PopulationReplayOwner::Inline(fragment_items as *const _, item_index as usize),
+        slot: binding.data as usize,
         instance: fragment_instance_id,
         key: identity_key,
         object,
@@ -810,7 +811,103 @@ fn PopulateInlineItemPaintData(
 }
 
 #[inline(never)]
-fn ReplayCheckEnabled() -> bool {
+/// ResolveLogicalParentOccurrences over the publication's recorded slots:
+/// the replay list is the same occurrence tree in preorder (each entry's
+/// `len` spans its subtree) with direct slot pointers, so no fragment cursor
+/// walk or slot lookup is needed. Returns the resolution per slot without
+/// storing it when `apply` is false (check mode).
+pub(super) fn ResolveLogicalParentsFromReplay(
+    entries: &[PopulationReplayEntry],
+    apply: bool,
+) -> Vec<(usize, Option<u64>)> {
+    struct Occurrence {
+        parent: Option<usize>,
+        node_id: u64,
+        fragment_instance_id: u64,
+        fragmentainer_instance_id: u64,
+        establishes_paint_state: bool,
+        has_source: bool,
+    }
+    let mut all = Vec::with_capacity(entries.len());
+    let mut logical = Vec::new();
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        while open.last().is_some_and(|(_, end)| *end <= index) {
+            open.pop();
+        }
+        let input = unsafe { &*(entry.slot as *const FragmentPaintData) };
+        all.push(Occurrence {
+            parent: open.last().map(|(parent, _)| *parent),
+            node_id: input.node_id,
+            fragment_instance_id: input.fragment_instance_id,
+            fragmentainer_instance_id: input.fragmentainer_instance_id,
+            establishes_paint_state: input.paint.establishes_paint_state,
+            has_source: input.paint.HasSource(),
+        });
+        if input.paint.logical_parent_node_id.is_some()
+            || input.paint.logical_parent_fragment_instance_id.is_some()
+        {
+            logical.push(index);
+        }
+        open.push((index, index + entry.len.max(1)));
+    }
+    let mut by_node_id: Option<LayoutBoundaryHashMap<u64, Vec<usize>>> = None;
+    let mut results = Vec::with_capacity(logical.len());
+    for current_index in logical {
+        let input = unsafe { &mut *(entries[current_index].slot as *mut FragmentPaintData) };
+        let Some(parent_node_id) = input.paint.logical_parent_node_id else {
+            results.push((entries[current_index].slot, None));
+            if apply && input.paint.logical_parent_fragment_instance_id.is_some() {
+                input.paint.logical_parent_fragment_instance_id = None;
+            }
+            continue;
+        };
+        let mut ancestor = all[current_index].parent;
+        let mut resolved = None;
+        while let Some(index) = ancestor {
+            if all[index].node_id == parent_node_id && all[index].establishes_paint_state {
+                resolved = Some(index);
+                break;
+            }
+            ancestor = all[index].parent;
+        }
+        if resolved.is_none() {
+            let by_node_id = by_node_id.get_or_insert_with(|| {
+                let mut map = LayoutBoundaryHashMap::<u64, Vec<usize>>::default();
+                for (i, occurrence) in all.iter().enumerate() {
+                    if occurrence.node_id != 0
+                        && occurrence.has_source
+                        && occurrence.establishes_paint_state
+                    {
+                        map.entry(occurrence.node_id).or_default().push(i);
+                    }
+                }
+                map
+            });
+            if let Some(candidates) = by_node_id.get(&parent_node_id) {
+                let unique = |same_fragmentainer: bool| {
+                    let mut matches = candidates.iter().copied().filter(|&index| {
+                        index != current_index
+                            && (!same_fragmentainer
+                                || all[index].fragmentainer_instance_id
+                                    == all[current_index].fragmentainer_instance_id)
+                    });
+                    let first = matches.next()?;
+                    matches.next().is_none().then_some(first)
+                };
+                resolved = unique(true).or_else(|| unique(false));
+            }
+        }
+        let resolved = resolved.map(|index| all[index].fragment_instance_id);
+        results.push((entries[current_index].slot, resolved));
+        if apply && input.paint.logical_parent_fragment_instance_id != resolved {
+            input.paint.logical_parent_fragment_instance_id = resolved;
+        }
+    }
+    results
+}
+
+pub(super) fn ReplayCheckEnabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("RECHROM_EXPORT_REPLAY_CHECK").is_some())
 }
@@ -930,6 +1027,7 @@ fn ReplaySubtree(
         }
         let mut copy = entry.clone();
         copy.instance = instance;
+        copy.slot = binding.data as usize;
         let begin = owners.begin_replay_entry(copy);
         slots.push((binding.data, begin));
     }
@@ -1109,6 +1207,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let binding = paint_state.BindPhysical(fragment, fragment_instance_id);
     let replay_begin = paint_state_owners.begin_replay_entry(PopulationReplayEntry {
         owner: PopulationReplayOwner::Physical(fragment as *const PhysicalFragment),
+        slot: binding.data as usize,
         instance: fragment_instance_id,
         key: identity_key,
         object,

@@ -254,7 +254,30 @@ pub(super) fn populate_layout_result_paint_data(
         let _phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::ResolveLogicalParents,
         );
-        ResolveLogicalParentOccurrences(source);
+        if purpose == LayoutUpdateKind::Paint && ReplayCheckEnabled() {
+            // Check mode: the list resolution must equal the cursor walk.
+            let predicted =
+                ResolveLogicalParentsFromReplay(&paint_state_owners.replay_next.entries, false);
+            ResolveLogicalParentOccurrences(source);
+            let mismatches = predicted
+                .iter()
+                .filter(|(slot, resolved)| {
+                    unsafe { &*(*slot as *const FragmentPaintData) }
+                        .paint
+                        .logical_parent_fragment_instance_id
+                        != *resolved
+                })
+                .count();
+            browser_tracing::instant(
+                "layout",
+                "layout_fragment.LogicalParentCheck",
+                &[("checked", predicted.len() as f64), ("mismatches", mismatches as f64)],
+            );
+        } else if purpose == LayoutUpdateKind::Paint {
+            ResolveLogicalParentsFromReplay(&paint_state_owners.replay_next.entries, true);
+        } else {
+            ResolveLogicalParentOccurrences(source);
+        }
     }
     let copies_after_parents =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);

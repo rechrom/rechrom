@@ -270,6 +270,8 @@ pub(crate) enum PopulationReplayOwner {
 #[derive(Clone)]
 pub(crate) struct PopulationReplayEntry {
     pub(crate) owner: PopulationReplayOwner,
+    /// The bound slot (a stable, shared FragmentPaintData allocation).
+    pub(crate) slot: usize,
     pub(crate) instance: u64,
     pub(crate) key: FragmentIdentityKey,
     pub(crate) object: *const LayoutObject,
