@@ -2278,6 +2278,160 @@ impl<T: PersistedPropertyNode> KeyedPropertyNodes<T> {
 }
 
 #[derive(Clone, Debug)]
+/// One document's persisted property nodes frozen at publication, indexed by
+/// node id. This is the id-linked form of the property trees that crosses the
+/// Paint -> Compositor boundary with the PaintArtifact: the store behind it
+/// may change after publication, this value never does. Readers resolve a
+/// node's parent through `PaintPropertyNodeLifecycle::parent_id` here instead
+/// of following the node's own Arc link, which lets the store keep a node's
+/// snapshot when only an ancestor's value changed.
+#[derive(Default)]
+pub struct FrozenPropertyTrees {
+    transforms: KeyedPropertyNodes<TransformPaintPropertyNode>,
+    clips: KeyedPropertyNodes<ClipPaintPropertyNode>,
+    effects: KeyedPropertyNodes<EffectPaintPropertyNode>,
+    scrolls: KeyedPropertyNodes<ScrollPaintPropertyNode>,
+}
+
+/// Result of FrozenPropertyTrees::verify_state, counted over distinct nodes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrozenTreeCoverage {
+    /// Nodes reached through Arc links (parents and cross-tree links).
+    pub nodes: usize,
+    /// Reached nodes the frozen tree does not resolve by id to that exact node.
+    pub unresolved: usize,
+    /// Root and unpersisted (id 0 or unkeyed) nodes, which have no slot.
+    pub unkeyed: usize,
+}
+
+impl FrozenPropertyTrees {
+    pub fn transform(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
+        self.transforms.by_id(id)
+    }
+    pub fn clip(&self, id: u64) -> Option<&Arc<ClipPaintPropertyNode>> {
+        self.clips.by_id(id)
+    }
+    pub fn effect(&self, id: u64) -> Option<&Arc<EffectPaintPropertyNode>> {
+        self.effects.by_id(id)
+    }
+    pub fn scroll(&self, id: u64) -> Option<&Arc<ScrollPaintPropertyNode>> {
+        self.scrolls.by_id(id)
+    }
+    pub fn len(&self) -> usize {
+        self.transforms.len() + self.clips.len() + self.effects.len() + self.scrolls.len()
+    }
+
+    /// Verification: every node reachable from `state` through Arc links is
+    /// the node this tree resolves by its id. Shared ancestors are counted
+    /// once across calls through `seen`.
+    pub fn verify_state(
+        &self,
+        state: &PropertyTreeState,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) {
+        self.verify_transform(&state.transform, seen, coverage);
+        self.verify_clip(&state.clip, seen, coverage);
+        self.verify_effect(&state.effect, seen, coverage);
+    }
+
+    fn admit<T>(
+        node: &Arc<T>,
+        id: u64,
+        resolved: Option<&Arc<T>>,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) -> bool {
+        if !seen.insert(Arc::as_ptr(node) as *const u8 as usize) {
+            return false;
+        }
+        coverage.nodes += 1;
+        match resolved {
+            Some(found) if Arc::ptr_eq(found, node) => {}
+            None => coverage.unkeyed += 1,
+            Some(_) => coverage.unresolved += 1,
+        }
+        true
+    }
+
+    fn verify_transform(
+        &self,
+        node: &Arc<TransformPaintPropertyNode>,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) {
+        if !Self::admit(node, node.id, self.transforms.by_id(node.id), seen, coverage) {
+            return;
+        }
+        if let Some(parent) = &node.parent {
+            self.verify_transform(parent, seen, coverage);
+        }
+        if let Some(scroll) = &node.scroll {
+            self.verify_scroll(scroll, seen, coverage);
+        }
+        if let Some(translation) = &node.scroll_parent_scroll_translation {
+            self.verify_transform(translation, seen, coverage);
+        }
+    }
+
+    fn verify_clip(
+        &self,
+        node: &Arc<ClipPaintPropertyNode>,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) {
+        if !Self::admit(node, node.id, self.clips.by_id(node.id), seen, coverage) {
+            return;
+        }
+        if let Some(parent) = &node.parent {
+            self.verify_clip(parent, seen, coverage);
+        }
+        self.verify_transform(&node.local_transform_space, seen, coverage);
+        if let Some(filter) = &node.pixel_moving_filter {
+            self.verify_effect(filter, seen, coverage);
+        }
+    }
+
+    fn verify_effect(
+        &self,
+        node: &Arc<EffectPaintPropertyNode>,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) {
+        if !Self::admit(node, node.id, self.effects.by_id(node.id), seen, coverage) {
+            return;
+        }
+        if let Some(parent) = &node.parent {
+            self.verify_effect(parent, seen, coverage);
+        }
+        self.verify_transform(&node.local_transform_space, seen, coverage);
+        if let Some(clip) = &node.output_clip {
+            self.verify_clip(clip, seen, coverage);
+        }
+        if let Some(clip) = &node.backdrop_filter_clip {
+            self.verify_clip(clip, seen, coverage);
+        }
+    }
+
+    fn verify_scroll(
+        &self,
+        node: &Arc<ScrollPaintPropertyNode>,
+        seen: &mut std::collections::HashSet<usize>,
+        coverage: &mut FrozenTreeCoverage,
+    ) {
+        if !Self::admit(node, node.id, self.scrolls.by_id(node.id), seen, coverage) {
+            return;
+        }
+        if let Some(parent) = &node.parent {
+            self.verify_scroll(parent, seen, coverage);
+        }
+        if let Some(clip) = &node.overflow_clip {
+            self.verify_clip(clip, seen, coverage);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PaintPropertyNodeStore {
     next_id: u64,
     visual_viewport_unique_id: Option<u64>,
@@ -2339,6 +2493,15 @@ impl PaintPropertyNodeStore {
             count(&self.scrolls, |n| n.parent.as_ref().map(|p| (p.id, n.lifecycle.parent_id))),
         ];
         parts.iter().fold((0, 0), |(c, u), (pc, pu)| (c + pc, u + pu))
+    }
+    /// The persisted nodes as an immutable id-indexed value for publication.
+    pub fn freeze(&self) -> FrozenPropertyTrees {
+        FrozenPropertyTrees {
+            transforms: self.transforms.clone(),
+            clips: self.clips.clone(),
+            effects: self.effects.clone(),
+            scrolls: self.scrolls.clone(),
+        }
     }
     /// Persisted nodes by id: the id-indexed parent links of the tree.
     pub fn transform_by_id(&self, id: u64) -> Option<&Arc<TransformPaintPropertyNode>> {
@@ -2509,8 +2672,15 @@ impl PaintPropertyNodeStore {
         };
         let overscroll = if let Some(old) = self.transforms.get(&overscroll_key) {
             let change = transform_state_change(old, &overscroll);
-            if change == PaintPropertyChangeType::Unchanged {
+            // An unchanged value keeps the old snapshot only while its links
+            // still name the current parent/scroll snapshots; otherwise the
+            // slot would publish a stale ancestor beneath every descendant.
+            if change == PaintPropertyChangeType::Unchanged && overscroll.same_snapshot_references(old) {
                 old.clone()
+            } else if change == PaintPropertyChangeType::Unchanged {
+                overscroll.id = old.id;
+                overscroll.lifecycle = old.lifecycle.updated(change);
+                Arc::new(overscroll)
             } else {
                 overscroll.id = old.id;
                 overscroll.lifecycle = old.lifecycle.updated(change);
@@ -2562,8 +2732,15 @@ impl PaintPropertyNodeStore {
         };
         let page_scale = if let Some(old) = self.transforms.get(&page_scale_key) {
             let change = transform_state_change(old, &page_scale);
-            if change == PaintPropertyChangeType::Unchanged {
+            // An unchanged value keeps the old snapshot only while its links
+            // still name the current parent/scroll snapshots; otherwise the
+            // slot would publish a stale ancestor beneath every descendant.
+            if change == PaintPropertyChangeType::Unchanged && page_scale.same_snapshot_references(old) {
                 old.clone()
+            } else if change == PaintPropertyChangeType::Unchanged {
+                page_scale.id = old.id;
+                page_scale.lifecycle = old.lifecycle.updated(change);
+                Arc::new(page_scale)
             } else {
                 page_scale.id = old.id;
                 page_scale.lifecycle = old.lifecycle.updated(change);
@@ -2627,8 +2804,15 @@ impl PaintPropertyNodeStore {
         };
         let visual_scroll = if let Some(old) = self.scrolls.get(&visual_scroll_key) {
             let change = scroll_state_change(old, &visual_scroll);
-            if change == PaintPropertyChangeType::Unchanged {
+            // An unchanged value keeps the old snapshot only while its links
+            // still name the current parent/scroll snapshots; otherwise the
+            // slot would publish a stale ancestor beneath every descendant.
+            if change == PaintPropertyChangeType::Unchanged && visual_scroll.same_snapshot_references(old) {
                 old.clone()
+            } else if change == PaintPropertyChangeType::Unchanged {
+                visual_scroll.id = old.id;
+                visual_scroll.lifecycle = old.lifecycle.updated(change);
+                Arc::new(visual_scroll)
             } else {
                 visual_scroll.id = old.id;
                 visual_scroll.lifecycle = old.lifecycle.updated(change);
@@ -2683,8 +2867,15 @@ impl PaintPropertyNodeStore {
         }
         let visual_translation = if let Some(old) = self.transforms.get(&visual_translation_key) {
             let change = transform_state_change(old, &visual_translation);
-            if change == PaintPropertyChangeType::Unchanged {
+            // An unchanged value keeps the old snapshot only while its links
+            // still name the current parent/scroll snapshots; otherwise the
+            // slot would publish a stale ancestor beneath every descendant.
+            if change == PaintPropertyChangeType::Unchanged && visual_translation.same_snapshot_references(old) {
                 old.clone()
+            } else if change == PaintPropertyChangeType::Unchanged {
+                visual_translation.id = old.id;
+                visual_translation.lifecycle = old.lifecycle.updated(change);
+                Arc::new(visual_translation)
             } else {
                 visual_translation.id = old.id;
                 visual_translation.lifecycle = old.lifecycle.updated(change);

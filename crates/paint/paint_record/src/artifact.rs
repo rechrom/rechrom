@@ -297,6 +297,10 @@ pub struct PaintRecording {
     /// updates retain this backing; an actual operation edit uses Arc::make_mut
     /// to preserve old frame snapshots (Chromium PaintRecord sharing intent).
     pub items: Arc<Vec<DisplayItem>>,
+    /// The document's persisted property trees at publication, indexed by node
+    /// id (see FrozenPropertyTrees). Derived from the chunk states, so it is
+    /// not part of artifact equality.
+    pub property_trees: Option<Arc<paint_model::paint_property_tree::FrozenPropertyTrees>>,
     pub display_items: SharedArtifactData<DisplayItemList>,
     pub chunks: SharedArtifactData<PaintChunks>,
     /// Identity of the immutable display-item recording and its recording

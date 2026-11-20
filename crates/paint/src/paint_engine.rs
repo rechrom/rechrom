@@ -1410,6 +1410,19 @@ impl PaintEngine {
                 .expect("Paint must complete before commit"),
         );
         let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
+        let trees = self.pre_paint.property_node_store.freeze();
+        if browser_tracing::enabled() {
+            let mut seen = std::collections::HashSet::new();
+            let mut coverage = paint_model::paint_property_tree::FrozenTreeCoverage::default();
+            for chunk in artifact.chunks.iter() {
+                trees.verify_state(&chunk.properties, &mut seen, &mut coverage);
+            }
+            trace.set("frozen_nodes", trees.len() as f64);
+            trace.set("frozen_reached", coverage.nodes as f64);
+            trace.set("frozen_unresolved", coverage.unresolved as f64);
+            trace.set("frozen_unkeyed", coverage.unkeyed as f64);
+        }
+        artifact.property_trees = Some(Arc::new(trees));
         self.performance.commit = paint_commit::PaintCommitMetrics {
             clients: clients.len(),
             recording_revision: artifact.recording_revision,
