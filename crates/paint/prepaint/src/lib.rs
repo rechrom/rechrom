@@ -79,4 +79,9 @@ pub struct PrePaintUpdateStats {
     /// only): no basis, own inputs changed, own property nodes, identity,
     /// paint layer, SVG, own clip/cull/transform, other context change.
     pub shift_rejects: [usize; 8],
+    /// Build-section time and count of rebuilt nodes by what they own
+    /// (trace only): transform roles, clip roles only, effect roles only,
+    /// SVG, paint layer without own nodes, plain.
+    pub build_kind_ns: [u64; 6],
+    pub build_kind_nodes: [usize; 6],
 }

@@ -433,6 +433,31 @@ fn WalkPrePaint(
                 ("other_context", r[7] as f64),
             ],
         );
+        let (k, c) = (stats.build_kind_ns, stats.build_kind_nodes);
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.BuildKinds",
+            &[
+                ("transform_ms", ms(k[0])),
+                ("transform_n", c[0] as f64),
+                ("clip_ms", ms(k[1])),
+                ("clip_n", c[1] as f64),
+                ("effect_ms", ms(k[2])),
+                ("effect_n", c[2] as f64),
+                ("svg_ms", ms(k[3])),
+                ("svg_n", c[3] as f64),
+            ],
+        );
+        browser_tracing::instant(
+            "prepaint",
+            "PrePaint.BuildKinds2",
+            &[
+                ("layer_ms", ms(k[4])),
+                ("layer_n", c[4] as f64),
+                ("plain_ms", ms(k[5])),
+                ("plain_n", c[5] as f64),
+            ],
+        );
         tree
     }
 }

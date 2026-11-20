@@ -4729,15 +4729,12 @@ fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
         return false;
     };
     let inherited = &cache.inherited;
-    // SVG children receive their container's local transform per rebuild.
     // Paint layers are admitted: RefreshLivePaintLayerFacts re-reads every
-    // live layer fact the builder reads.
-    node.local_transforms.is_empty()
-        && cache.children.svg.is_none()
-        && !node
-            .fragment
-            .as_deref()
-            .is_some_and(|fragment| IsSvgLayoutChild(fragment.paint.source_kind))
+    // live layer fact the builder reads. SVG children are admitted: their own
+    // local matrices are in SVG user space and keep their values when the
+    // container moves (ShiftKeepsSvgPrefix checks the container's matrix).
+    // An SVG root still rebuilds: its viewBox matrix maps to its paint offset.
+    cache.children.svg.is_none()
         && node.fixed_background_properties.is_none()
         && node.overflow_controls_properties.is_none()
         && node.horizontal_scrollbar_properties.is_none()
@@ -4746,10 +4743,33 @@ fn ShiftPreservesClips(node: &PaintTreeNode<'_>) -> bool {
         && node.clip == inherited.clip
         && node.cull_rect == inherited.cull
         && node.self_cull_rect == inherited.cull
-        && node.transforms == inherited.transforms
+        && node.transforms.starts_with(&inherited.transforms)
+        && node.transforms.len() - inherited.transforms.len() <= node.local_transforms.len()
         && cache.children.clip == inherited.clip
         && cache.children.cull == inherited.cull
-        && cache.children.transforms == inherited.transforms
+        && (Arc::ptr_eq(&cache.children.transforms, &node.transforms)
+            || cache.children.transforms == node.transforms)
+}
+
+/// A node with local transforms may lead with its SVG container's matrix,
+/// which the parent inserts only into newly built children. Shifting keeps
+/// that leading matrix, so the container's matrix must be unchanged.
+fn ShiftKeepsSvgPrefix(node: &PaintTreeNode<'_>, old: &InheritedContext, new: &InheritedContext) -> bool {
+    node.local_transforms.is_empty() || old.transforms.last() == new.transforms.last()
+}
+
+/// The flat transform list of a shifted node: the parent's new list followed
+/// by the node's own matrices, which are independent of its position.
+fn ShiftedTransforms(old_node: &FlatTransforms, old_inherited_len: usize, inherited: &FlatTransforms) -> FlatTransforms {
+    let own = &old_node[old_inherited_len..];
+    if own.is_empty() {
+        inherited.clone()
+    } else {
+        let mut list = Vec::with_capacity(inherited.len() + own.len());
+        list.extend_from_slice(inherited);
+        list.extend_from_slice(own);
+        FlatTransforms::from(list)
+    }
 }
 
 /// The object's only own property node is a plain Effect (opacity/blend, no
@@ -4814,6 +4834,39 @@ fn RebaseOwnEffect(raw: &PropertyTreeState, inherited: &PropertyTreeState) -> Pr
     state
 }
 
+/// Trace-only classification of a rebuilt node for build_kind_ns.
+fn BuildKind(node: &PaintTreeNode<'_>, fragment: &FragmentPaintData) -> usize {
+    use PaintPropertyRole as R;
+    let roles: Vec<PaintPropertyRole> = node
+        .cache
+        .as_ref()
+        .map(|cache| cache.own_keys.iter().map(|(_, key)| key.role).collect())
+        .unwrap_or_default();
+    let is_transform = |role: &PaintPropertyRole| {
+        matches!(
+            role,
+            R::PaintOffsetTranslation
+                | R::Transform
+                | R::ReplacedContentTransform
+                | R::SvgLocalTransform
+        )
+    };
+    let is_effect = |role: &PaintPropertyRole| matches!(role, R::Effect | R::Filter | R::Mask);
+    if IsSvgLayoutChild(fragment.paint.source_kind) || !node.local_transforms.is_empty() {
+        3
+    } else if roles.iter().any(is_transform) {
+        0
+    } else if !roles.is_empty() && !roles.iter().any(is_effect) {
+        1
+    } else if !roles.is_empty() {
+        2
+    } else if node.is_paint_layer {
+        4
+    } else {
+        5
+    }
+}
+
 /// How far an offset-only update moved a subtree and its property space.
 #[derive(Clone, Copy)]
 struct ShiftDelta {
@@ -4841,15 +4894,33 @@ fn ShiftRetainedNode(
     RefreshLivePaintLayerFacts(node);
     node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
     // Paint offsets are relative to the property space, which moves by
-    // `paint_space` when the parent's own PaintOffsetTranslation moved.
+    // `paint_space` when the parent's own PaintOffsetTranslation moved. An
+    // SVG local transform resets the paint space to the object's own
+    // position, so its paint offset stays zero and its children's space
+    // moves with the object.
+    let resets_paint_space = node
+        .fragment
+        .as_deref()
+        .is_some_and(|fragment| fragment.paint.svg_local_transform.is_some());
     node.absolute_offset.x += delta.offset.x;
     node.absolute_offset.y += delta.offset.y;
-    node.paint_offset.x += delta.offset.x - delta.paint_space.x;
-    node.paint_offset.y += delta.offset.y - delta.paint_space.y;
+    if !resets_paint_space {
+        node.paint_offset.x += delta.offset.x - delta.paint_space.x;
+        node.paint_offset.y += delta.offset.y - delta.paint_space.y;
+    }
+    let children_paint_space = if resets_paint_space { delta.offset } else { delta.paint_space };
     node.clip = inherited.clip;
     node.cull_rect = inherited.cull;
     node.self_cull_rect = inherited.cull;
-    node.transforms = inherited.transforms.clone();
+    let old_inherited_len = node
+        .cache
+        .as_ref()
+        .expect("shifted node has builder state")
+        .inherited
+        .transforms
+        .len();
+    node.transforms = ShiftedTransforms(&node.transforms, old_inherited_len, &inherited.transforms);
+    let shifted_transforms = node.transforms.clone();
     // Without own nodes the object paints in its parent's property state,
     // which may itself be a new snapshot (e.g. the resized viewport clip).
     // An own plain effect is rebased onto that state: same identity and
@@ -4871,11 +4942,11 @@ fn ShiftRetainedNode(
     cache.inherited = inherited.clone();
     cache.children.origin.x += delta.offset.x;
     cache.children.origin.y += delta.offset.y;
-    cache.children.paint_space.x += delta.paint_space.x;
-    cache.children.paint_space.y += delta.paint_space.y;
+    cache.children.paint_space.x += children_paint_space.x;
+    cache.children.paint_space.y += children_paint_space.y;
     cache.children.clip = inherited.clip;
     cache.children.cull = inherited.cull;
-    cache.children.transforms = inherited.transforms.clone();
+    cache.children.transforms = shifted_transforms;
     cull_change_needs_repaint
 }
 
@@ -5016,6 +5087,23 @@ fn ShiftFieldMismatch(a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> Option<&'
             None
         }};
     }
+    // A newly built SVG child receives its container's matrix as a leading
+    // local transform only after it returns to the parent (UpdateNode's
+    // child loop); the shifted node already carries it.
+    if a.local_transforms != b.local_transforms {
+        let expected = b.cache.as_ref().and_then(|cache| cache.inherited.transforms.last());
+        let prefixed = a.local_transforms.len() == b.local_transforms.len() + 1
+            && a.local_transforms[1..] == b.local_transforms[..]
+            && expected == a.local_transforms.first();
+        if !prefixed {
+            return Some("local_transforms");
+        }
+        if !a.applies_transform {
+            return Some("applies_transform");
+        }
+    } else if a.applies_transform != b.applies_transform {
+        return Some("applies_transform");
+    }
     first_diff!(
         absolute_offset,
         paint_offset,
@@ -5035,7 +5123,6 @@ fn ShiftFieldMismatch(a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> Option<&'
         cull_rect,
         self_cull_rect,
         transforms,
-        local_transforms,
         scroll_offset,
         fixed_background_acts_as_scroll,
         is_paint_layer,
@@ -5063,7 +5150,6 @@ fn ShiftFieldMismatch(a: &PaintTreeNode<'_>, b: &PaintTreeNode<'_>) -> Option<&'
         has_overlay_overflow_controls,
         paint_layer_order_parent_unique_id,
         paint_layer_order,
-        applies_transform,
         applies_clip,
         applies_root_clip,
         applies_overflow_clip,
@@ -5835,6 +5921,11 @@ impl PrePaintTreeWalk {
             });
         let t_admitted = checkpoint();
         self.stats.profile_admission_ns += ProfileNs(t_start, t_admitted);
+        let retained_before = (
+            self.stats.reused_nodes,
+            self.stats.shifted_nodes,
+            self.stats.invalidation_only_nodes,
+        );
         // Offset-only update: this object is unchanged and owns no paint
         // property nodes, and its parent only moved it. Shift the retained
         // geometry instead of rebuilding it (PaintPropertyTreeBuilder's
@@ -5848,6 +5939,7 @@ impl PrePaintTreeWalk {
                         && !(SamePreviousSourceIdentity(node, &fragment)
                             && SameClientDirectory(node, &fragment)))
                     || !ShiftPreservesClips(node)
+                    || !ShiftKeepsSvgPrefix(node, &cache.inherited, &inherited)
                 {
                     return None;
                 }
@@ -5980,9 +6072,19 @@ impl PrePaintTreeWalk {
                     ShiftRetainedNode(&mut old, delta, &inherited, old_previous_paint_result);
                     self.stats.shifted_nodes += 1;
                     let field_mismatch = ShiftFieldMismatch(&old, &built);
+                    // Compare against the built node as the parent completes
+                    // it: a leading SVG container matrix (already verified by
+                    // ShiftFieldMismatch) is inserted after it returns.
+                    let built_local = (built.local_transforms.clone(), built.applies_transform);
+                    if field_mismatch.is_none() {
+                        built.local_transforms = old.local_transforms.clone();
+                        built.applies_transform = old.applies_transform;
+                    }
+                    let same_geometry = self.SameGeometry(&old, &built, &current_record);
+                    (built.local_transforms, built.applies_transform) = built_local;
                     let mismatch = if let Some(field) = field_mismatch {
                         Some(field)
-                    } else if !self.SameGeometry(&old, &built, &current_record) {
+                    } else if !same_geometry {
                         let bf = built.fragment.as_deref().unwrap();
                         let recorded = RecordOf(&old);
                         let (oc, nc) = (old.cache.as_ref().unwrap(), built.cache.as_ref().unwrap());
@@ -6127,6 +6229,18 @@ impl PrePaintTreeWalk {
         };
         let t_built = checkpoint();
         self.stats.profile_build_ns += ProfileNs(t_admitted, t_built);
+        if profile
+            && retained_before
+                == (
+                    self.stats.reused_nodes,
+                    self.stats.shifted_nodes,
+                    self.stats.invalidation_only_nodes,
+                )
+        {
+            let kind = BuildKind(&node, &fragment);
+            self.stats.build_kind_ns[kind] += ProfileNs(t_admitted, t_built);
+            self.stats.build_kind_nodes[kind] += 1;
+        }
         // LayoutImage::last_paint_rect_ belongs to the retained LayoutImage,
         // not to one immutable PhysicalFragment generation. Rechrom keeps the
         // same lifecycle value on layout_fragment's shared Paint payload, so
