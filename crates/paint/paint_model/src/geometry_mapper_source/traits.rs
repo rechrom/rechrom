@@ -15,7 +15,10 @@ pub trait FloatClipRectTransform {
 pub trait TransformCacheNode: Clone + PartialEq + Send + Sync + 'static {
     type Matrix: super::matrix::GeometryMapperMatrix + Send + Sync + 'static;
     fn Downgrade(&self) -> std::sync::Weak<crate::paint_property_tree::TransformPaintPropertyNode>;
+    /// A cached ancestor of this node as a handle that resolves its links
+    /// the way this one does.
     fn Upgrade(
+        &self,
         weak: &std::sync::Weak<crate::paint_property_tree::TransformPaintPropertyNode>,
     ) -> Self;
     fn CacheSlot(&self) -> &crate::opaque_paint_cache_slot::OpaquePaintCacheSlot;

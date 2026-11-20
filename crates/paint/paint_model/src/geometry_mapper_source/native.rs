@@ -106,8 +106,8 @@ impl TransformCacheNode for NativeTransformNode {
     fn Downgrade(&self) -> Weak<paint_property_tree::TransformPaintPropertyNode> {
         Arc::downgrade(self.as_arc())
     }
-    fn Upgrade(weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
-        Self::from_arc(weak.upgrade().expect("source live cached node"))
+    fn Upgrade(&self, weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
+        Self(weak.upgrade().expect("source live cached node"), self.1.clone())
     }
     fn CacheSlot(&self) -> &crate::opaque_paint_cache_slot::OpaquePaintCacheSlot {
         &self.node().geometry_mapper_cache

@@ -367,7 +367,7 @@ pub fn WithTransformCache<N: TransformCacheNode, R>(
     data.UpdateIfNeeded(node);
     callback(&mut GeometryMapperTransformCache {
         data: &mut data,
-        marker: PhantomData,
+        node,
     })
 }
 
@@ -375,7 +375,8 @@ pub fn WithTransformCache<N: TransformCacheNode, R>(
 /// wrapper, engine owner or second mutable cache is retained by a Paint node.
 pub struct GeometryMapperTransformCache<'a, N: TransformCacheNode> {
     data: &'a mut NativeGeometryMapperTransformCache,
-    marker: PhantomData<fn() -> N>,
+    /// The node whose cache this is; cached ancestors upgrade through it.
+    node: &'a N,
 }
 impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
     pub fn ClearCache() {
@@ -394,7 +395,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         self.data.to_2d_translation_root()
     }
     pub fn root_of_2d_translation(&self) -> N {
-        N::Upgrade(
+        self.node.Upgrade(
             self.data
                 .root_of_2d_translation_
                 .as_ref()
@@ -403,12 +404,12 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
     }
     pub fn plane_root(&self) -> N {
         match &self.data.plane_root_transform_ {
-            Some(plane) => N::Upgrade(&plane.plane_root),
+            Some(plane) => self.node.Upgrade(&plane.plane_root),
             None => self.root_of_2d_translation(),
         }
     }
     pub fn nearest_scroll_translation(&self) -> N {
-        N::Upgrade(
+        self.node.Upgrade(
             self.data
                 .nearest_scroll_translation_
                 .as_ref()
@@ -416,7 +417,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         )
     }
     pub fn scroll_translation_state(&self) -> N {
-        N::Upgrade(
+        self.node.Upgrade(
             self.data
                 .scroll_translation_state_
                 .as_ref()
@@ -427,7 +428,7 @@ impl<N: TransformCacheNode> GeometryMapperTransformCache<'_, N> {
         self.data
             .nearest_directly_composited_ancestor_
             .as_ref()
-            .map(N::Upgrade)
+            .map(|weak| self.node.Upgrade(weak))
     }
     pub fn projection_from_screen_is_valid(&self) -> bool {
         self.data.projection_from_screen_is_valid()

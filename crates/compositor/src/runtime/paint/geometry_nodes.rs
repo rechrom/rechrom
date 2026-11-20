@@ -22,8 +22,8 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
     fn Downgrade(&self) -> Weak<paint_property_tree::TransformPaintPropertyNode> {
         Arc::downgrade(self.as_arc())
     }
-    fn Upgrade(weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
-        Self::from_arc(weak.upgrade().expect("source live cached node"))
+    fn Upgrade(&self, weak: &Weak<paint_property_tree::TransformPaintPropertyNode>) -> Self {
+        Self::from_arc_in(weak.upgrade().expect("source live cached node"), self.trees().clone())
     }
     fn CacheSlot(&self) -> &paint::opaque_paint_cache_slot::OpaquePaintCacheSlot {
         &self.node().geometry_mapper_cache
