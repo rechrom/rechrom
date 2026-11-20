@@ -4834,6 +4834,242 @@ fn RebaseOwnEffect(raw: &PropertyTreeState, inherited: &PropertyTreeState) -> Pr
     state
 }
 
+/// Own raw property nodes of a moved object, re-linked onto its new
+/// inherited state: Chromium updates an object's ObjectPaintProperties in
+/// place when only an ancestor changed, keeping each node's identity and
+/// value. Here every own node gets a new snapshot with the same id and
+/// value whose links point at the new inherited nodes (or at the object's
+/// other rebased own nodes). Any link to a node that is neither inherited
+/// nor own rejects the rebase, so a stale ancestor pointer cannot survive.
+struct OwnNodeRebase<'a> {
+    own_ids: &'a [(u64, PaintPropertyKey)],
+    transforms: Vec<(*const TransformPaintPropertyNode, Arc<TransformPaintPropertyNode>)>,
+    clips: Vec<(*const ClipPaintPropertyNode, Arc<ClipPaintPropertyNode>)>,
+    effects: Vec<(*const EffectPaintPropertyNode, Arc<EffectPaintPropertyNode>)>,
+    scrolls: Vec<(*const ScrollPaintPropertyNode, Arc<ScrollPaintPropertyNode>)>,
+}
+
+impl<'a> OwnNodeRebase<'a> {
+    fn new(
+        own_ids: &'a [(u64, PaintPropertyKey)],
+        old: &paint_model::paint_property_tree::PropertyTreeState,
+        new: &paint_model::paint_property_tree::PropertyTreeState,
+    ) -> Self {
+        let mut rebase = Self {
+            own_ids,
+            transforms: vec![(Arc::as_ptr(&old.transform), new.transform.clone())],
+            clips: vec![(Arc::as_ptr(&old.clip), new.clip.clone())],
+            effects: vec![(Arc::as_ptr(&old.effect), new.effect.clone())],
+            scrolls: Vec::new(),
+        };
+        if let (Some(old), Some(new)) = (old.nearest_scroll(), new.nearest_scroll()) {
+            rebase.scrolls.push((Arc::as_ptr(&old), new));
+        }
+        rebase
+    }
+
+    fn is_own(&self, id: u64) -> bool {
+        self.own_ids.iter().any(|(own, _)| *own == id)
+    }
+
+    fn transform(
+        &mut self,
+        node: &Arc<TransformPaintPropertyNode>,
+    ) -> Option<Arc<TransformPaintPropertyNode>> {
+        let key = Arc::as_ptr(node);
+        if let Some((_, mapped)) = self.transforms.iter().find(|(old, _)| *old == key) {
+            return Some(mapped.clone());
+        }
+        if !self.is_own(node.id) {
+            return None;
+        }
+        let mut value = (**node).clone();
+        value.lifecycle = Default::default();
+        value.parent = match &node.parent {
+            Some(parent) => Some(self.transform(parent)?),
+            None => None,
+        };
+        value.scroll = match &node.scroll {
+            Some(scroll) => Some(self.scroll(scroll)?),
+            None => None,
+        };
+        value.scroll_parent_scroll_translation = match &node.scroll_parent_scroll_translation {
+            Some(translation) => Some(self.transform(translation)?),
+            None => None,
+        };
+        let value = Arc::new(value);
+        self.transforms.push((key, value.clone()));
+        Some(value)
+    }
+
+    fn clip(&mut self, node: &Arc<ClipPaintPropertyNode>) -> Option<Arc<ClipPaintPropertyNode>> {
+        let key = Arc::as_ptr(node);
+        if let Some((_, mapped)) = self.clips.iter().find(|(old, _)| *old == key) {
+            return Some(mapped.clone());
+        }
+        if !self.is_own(node.id) {
+            return None;
+        }
+        let mut value = (**node).clone();
+        value.lifecycle = Default::default();
+        value.parent = match &node.parent {
+            Some(parent) => Some(self.clip(parent)?),
+            None => None,
+        };
+        value.local_transform_space = self.transform(&node.local_transform_space)?;
+        value.pixel_moving_filter = match &node.pixel_moving_filter {
+            Some(filter) => Some(self.effect(filter)?),
+            None => None,
+        };
+        let value = Arc::new(value);
+        self.clips.push((key, value.clone()));
+        Some(value)
+    }
+
+    fn effect(
+        &mut self,
+        node: &Arc<EffectPaintPropertyNode>,
+    ) -> Option<Arc<EffectPaintPropertyNode>> {
+        let key = Arc::as_ptr(node);
+        if let Some((_, mapped)) = self.effects.iter().find(|(old, _)| *old == key) {
+            return Some(mapped.clone());
+        }
+        if !self.is_own(node.id) || node.compositor.canvas_child_state.is_some() {
+            return None;
+        }
+        let mut value = (**node).clone();
+        value.lifecycle = Default::default();
+        value.parent = match &node.parent {
+            Some(parent) => Some(self.effect(parent)?),
+            None => None,
+        };
+        value.local_transform_space = self.transform(&node.local_transform_space)?;
+        value.output_clip = match &node.output_clip {
+            Some(clip) => Some(self.clip(clip)?),
+            None => None,
+        };
+        value.backdrop_filter_clip = match &node.backdrop_filter_clip {
+            Some(clip) => Some(self.clip(clip)?),
+            None => None,
+        };
+        let value = Arc::new(value);
+        self.effects.push((key, value.clone()));
+        Some(value)
+    }
+
+    fn scroll(
+        &mut self,
+        node: &Arc<ScrollPaintPropertyNode>,
+    ) -> Option<Arc<ScrollPaintPropertyNode>> {
+        let key = Arc::as_ptr(node);
+        if let Some((_, mapped)) = self.scrolls.iter().find(|(old, _)| *old == key) {
+            return Some(mapped.clone());
+        }
+        if !self.is_own(node.id) {
+            return None;
+        }
+        let mut value = (**node).clone();
+        value.lifecycle = Default::default();
+        value.parent = match &node.parent {
+            Some(parent) => Some(self.scroll(parent)?),
+            None => None,
+        };
+        value.overflow_clip = match &node.overflow_clip {
+            Some(clip) => Some(self.clip(clip)?),
+            None => None,
+        };
+        let value = Arc::new(value);
+        self.scrolls.push((key, value.clone()));
+        Some(value)
+    }
+
+    /// A raw state of the object: inherited slots take the new inherited
+    /// node and id, own slots their rebased node and unchanged id.
+    fn state(
+        &mut self,
+        raw: &PropertyTreeState,
+        old: &PropertyTreeState,
+        new: &PropertyTreeState,
+    ) -> Option<PropertyTreeState> {
+        let pick = |raw: u64, old: u64, new: u64| if raw == old { new } else { raw };
+        Some(PropertyTreeState {
+            transform_id: pick(raw.transform_id, old.transform_id, new.transform_id),
+            clip_id: pick(raw.clip_id, old.clip_id, new.clip_id),
+            effect_id: pick(raw.effect_id, old.effect_id, new.effect_id),
+            scroll_id: pick(raw.scroll_id, old.scroll_id, new.scroll_id),
+            nodes: paint_model::paint_property_tree::PropertyTreeState {
+                transform: self.transform(&raw.nodes.transform)?,
+                clip: self.clip(&raw.nodes.clip)?,
+                effect: self.effect(&raw.nodes.effect)?,
+            },
+        })
+    }
+}
+
+/// The object's raw states rebased onto the new inherited state.
+struct RebasedOwnStates {
+    properties: PropertyTreeState,
+    contents: PropertyTreeState,
+    children: PropertyTreeState,
+    pre_transform: Option<Arc<TransformPaintPropertyNode>>,
+}
+
+/// Offset-only move of an object that owns property nodes, under an
+/// ancestor whose property space moved with it (its paint offset inside
+/// that space is unchanged, so its own node values are unchanged): its flat
+/// clip moves rigidly with the inherited clip, its own nodes are re-linked,
+/// and its cull rects are recomputed as the builder computes them.
+fn RebaseOwnStates(
+    node: &PaintTreeNode<'_>,
+    inherited: &InheritedContext,
+    delta: ShiftDelta,
+) -> Option<RebasedOwnStates> {
+    let cache = node.cache.as_ref()?;
+    let old = &cache.inherited;
+    let old_parent = &old.properties.nodes.effect;
+    let new_parent = &inherited.properties.nodes.effect;
+    if delta.offset != delta.paint_space
+        || cache.own_keys.is_empty()
+        || node.fixed_background_properties.is_some()
+        || node.overflow_controls_properties.is_some()
+        || node.horizontal_scrollbar_properties.is_some()
+        || node.vertical_scrollbar_properties.is_some()
+        || node.mask_properties.is_some()
+        || inherited.clip != MovedRect(old.clip, delta.offset)
+        || !node.transforms.starts_with(&old.transforms)
+        || !cache.children.transforms.starts_with(&old.transforms)
+        || new_parent.compositor.is_in_tainted_subtree
+            != old_parent.compositor.is_in_tainted_subtree
+        || new_parent.compositor.is_in_drawable_canvas_subtree
+            != old_parent.compositor.is_in_drawable_canvas_subtree
+        || new_parent.self_or_ancestor_participates_in_view_transition
+            != old_parent.self_or_ancestor_participates_in_view_transition
+    {
+        return None;
+    }
+    let mut rebase =
+        OwnNodeRebase::new(&cache.own_keys, &old.properties.nodes, &inherited.properties.nodes);
+    let properties = rebase.state(&cache.raw_properties, &old.properties, &inherited.properties)?;
+    let contents = rebase.state(&cache.raw_contents, &old.properties, &inherited.properties)?;
+    let children =
+        rebase.state(&cache.children.properties, &old.properties, &inherited.properties)?;
+    let pre_transform = rebase.transform(&node.pre_transform);
+    Some(RebasedOwnStates {
+        properties,
+        contents,
+        children,
+        pre_transform,
+    })
+}
+
+fn MovedRect(rect: Option<PaintRect>, offset: Offset) -> Option<PaintRect> {
+    rect.map(|mut rect| {
+        rect.x += offset.x;
+        rect.y += offset.y;
+        rect
+    })
+}
+
 /// Trace-only classification of a rebuilt node for build_kind_ns.
 fn BuildKind(node: &PaintTreeNode<'_>, fragment: &FragmentPaintData) -> usize {
     use PaintPropertyRole as R;
@@ -4904,7 +5140,12 @@ fn ShiftRetainedNode(
     delta: ShiftDelta,
     inherited: &InheritedContext,
     previous_paint_result: paint_model::PaintResult,
+    rebased: Option<RebasedOwnStates>,
+    viewport: &paint_model::paint_property_tree::PropertyTreeState,
 ) -> bool {
+    if let Some(rebased) = rebased {
+        return RebaseRetainedNode(node, delta, inherited, previous_paint_result, rebased, viewport);
+    }
     let t = browser_tracing::enabled().then(std::time::Instant::now);
     let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
         previous_paint_result,
@@ -4972,6 +5213,86 @@ fn ShiftRetainedNode(
     cache.children.cull = inherited.cull;
     cache.children.transforms = shifted_transforms;
     AddShiftPart(2, t);
+    cull_change_needs_repaint
+}
+
+/// ShiftRetainedNode for an object with own property nodes (RebaseOwnStates).
+fn RebaseRetainedNode(
+    node: &mut PaintTreeNode<'static>,
+    delta: ShiftDelta,
+    inherited: &InheritedContext,
+    previous_paint_result: paint_model::PaintResult,
+    rebased: RebasedOwnStates,
+    viewport: &paint_model::paint_property_tree::PropertyTreeState,
+) -> bool {
+    let fragment = node.fragment.as_deref().expect("shifted node keeps its fragment");
+    let inputs = node.cull_decision_inputs;
+    let infinite = crate::cull_rect_updater::ShouldUseInfiniteCullRect(
+        fragment,
+        inherited.subtree_should_use_infinite_cull_rect,
+        inputs.has_filter_that_moves_pixels,
+        inputs.has_perspective,
+        inputs.has_active_transform_animation,
+        inputs.has_non_composited_transform,
+        previous_paint_result,
+    );
+    let (self_cull_rect, cull_rect) = if infinite.use_infinite {
+        (None, None)
+    } else {
+        let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(fragment);
+        let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
+            inherited.cull,
+            Some(node.self_cull_rect),
+            viewport,
+            &inherited.properties.nodes,
+            &rebased.properties.nodes,
+            expansion_ratio,
+        );
+        let (contents_cull, _) = CullRectUpdater::ComputeFragmentContentsCullRect(
+            self_cull,
+            Some(node.cull_rect),
+            viewport,
+            &rebased.properties.nodes,
+            &rebased.contents.nodes,
+            expansion_ratio,
+        );
+        (self_cull, contents_cull)
+    };
+    let cull_change_needs_repaint = CullRectChangeNeedsRepaint(
+        previous_paint_result,
+        Some(node.self_cull_rect),
+        Some(node.cull_rect),
+        self_cull_rect,
+        cull_rect,
+    );
+    RefreshLivePaintLayerFacts(node);
+    node.self_or_descendant_needs_repaint |= cull_change_needs_repaint;
+    // The paint offset inside the moved property space is unchanged.
+    node.absolute_offset.x += delta.offset.x;
+    node.absolute_offset.y += delta.offset.y;
+    node.clip = MovedRect(node.clip, delta.offset);
+    node.self_cull_rect = self_cull_rect;
+    node.cull_rect = cull_rect;
+    let cache = node.cache.as_mut().expect("shifted node has builder state");
+    let old_inherited_len = cache.inherited.transforms.len();
+    node.transforms = ShiftedTransforms(&node.transforms, old_inherited_len, &inherited.transforms);
+    cache.children.transforms =
+        ShiftedTransforms(&cache.children.transforms, old_inherited_len, &inherited.transforms);
+    if let Some(pre_transform) = rebased.pre_transform {
+        node.pre_transform = pre_transform;
+    }
+    node.properties = rebased.properties.clone();
+    node.contents_properties = rebased.contents.clone();
+    cache.raw_properties = rebased.properties;
+    cache.raw_contents = rebased.contents;
+    cache.children.properties = rebased.children;
+    cache.inherited = inherited.clone();
+    cache.children.origin.x += delta.offset.x;
+    cache.children.origin.y += delta.offset.y;
+    cache.children.paint_space.x += delta.offset.x;
+    cache.children.paint_space.y += delta.offset.y;
+    cache.children.clip = MovedRect(cache.children.clip, delta.offset);
+    cache.children.cull = cull_rect;
     cull_change_needs_repaint
 }
 
@@ -5945,19 +6266,25 @@ impl PrePaintTreeWalk {
         // geometry instead of rebuilding it (PaintPropertyTreeBuilder's
         // UpdateForObjectLocation path updates just PaintOffset).
         let shift_check = self.shift_check;
+        let mut rebased_own_states = None;
         let shift_delta = if !self_clean && !invalidation_only && !force && self_revision_matches {
             previous.as_ref().and_then(|node| {
                 let cache = node.cache.as_ref()?;
-                if !(cache.own_keys.is_empty() || RebasableOwnEffect(cache, &inherited))
-                    || (self.source_owner_changed
-                        && !(SamePreviousSourceIdentity(node, &fragment)
-                            && SameClientDirectory(node, &fragment)))
-                    || !ShiftPreservesClips(node)
+                if (self.source_owner_changed
+                    && !(SamePreviousSourceIdentity(node, &fragment)
+                        && SameClientDirectory(node, &fragment)))
                     || !ShiftKeepsSvgPrefix(node, &cache.inherited, &inherited)
                 {
                     return None;
                 }
-                self.OffsetOnlyContextDelta(&cache.inherited, &inherited)
+                if (cache.own_keys.is_empty() || RebasableOwnEffect(cache, &inherited))
+                    && ShiftPreservesClips(node)
+                {
+                    return self.OffsetOnlyContextDelta(&cache.inherited, &inherited);
+                }
+                let delta = self.OffsetOnlyContextDelta(&cache.inherited, &inherited)?;
+                rebased_own_states = Some(RebaseOwnStates(node, &inherited, delta)?);
+                Some(delta)
             })
         } else {
             None
@@ -5998,7 +6325,14 @@ impl PrePaintTreeWalk {
             self.stats.shifted_nodes += 1;
             let mut node = previous.take().unwrap();
             node.fragment = Some(ResidentFragment::FromSource(&fragment));
-            if ShiftRetainedNode(&mut node, delta, &inherited, old_previous_paint_result) {
+            if ShiftRetainedNode(
+                &mut node,
+                delta,
+                &inherited,
+                old_previous_paint_result,
+                rebased_own_states.take(),
+                &self.viewport_properties.nodes,
+            ) {
                 self.stats.cull_change_repaints += 1;
                 InvalidateClientsForCullRectChange(
                     node.fragment.as_mut().expect("shifted node keeps its fragment"),
@@ -6085,7 +6419,14 @@ impl PrePaintTreeWalk {
                     // Verification: the shifted retained node must equal the
                     // node the builder just produced. Restore it afterwards.
                     let saved = SavedShiftFields::Save(&old);
-                    ShiftRetainedNode(&mut old, delta, &inherited, old_previous_paint_result);
+                    ShiftRetainedNode(
+                        &mut old,
+                        delta,
+                        &inherited,
+                        old_previous_paint_result,
+                        rebased_own_states.take(),
+                        &self.viewport_properties.nodes,
+                    );
                     self.stats.shifted_nodes += 1;
                     let field_mismatch = ShiftFieldMismatch(&old, &built);
                     // Compare against the built node as the parent completes
@@ -7114,6 +7455,12 @@ impl PrePaintTreeWalk {
                         "prepaint",
                         "PrePaint.ParentIds",
                         &[("checked", checked as f64), ("unresolved", unresolved as f64)],
+                    );
+                    let st = std::mem::take(&mut self.property_node_store.snapshot_stats);
+                    browser_tracing::instant(
+                        "prepaint",
+                        "PrePaint.Snapshots",
+                        &[("reused", st[0] as f64), ("changed", st[1] as f64), ("refs_only", st[2] as f64)],
                     );
                 }
                 self.intersection_observation_state = self

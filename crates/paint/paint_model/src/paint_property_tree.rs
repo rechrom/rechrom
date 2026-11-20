@@ -2288,6 +2288,8 @@ pub struct PaintPropertyNodeStore {
     // A cleared published graph stays cleared until an updater marks a node.
     // This avoids scanning all resident slots on entirely clean paint passes.
     change_markers_cleared: bool,
+    /// Diagnostics: [reused, value changed, references only].
+    pub snapshot_stats: [usize; 3],
     pub changed: PaintPropertyChangeType,
     /// Source PaintPropertyTreeBuilder.cc:4754-4763, effective local changes.
     pub intersection_observation_state:
@@ -2303,6 +2305,7 @@ impl Default for PaintPropertyNodeStore {
             effects: Default::default(),
             scrolls: Default::default(),
             change_markers_cleared: true,
+            snapshot_stats: [0; 3],
             changed: Default::default(),
             intersection_observation_state: Default::default(),
         }
@@ -2961,6 +2964,7 @@ impl PaintPropertyNodeStore {
             effects,
             scrolls,
             change_markers_cleared: rebind.changed == PaintPropertyChangeType::Unchanged,
+            snapshot_stats: [0; 3],
             changed: rebind.changed,
             // No owning property-builder pass ran in this retained rebind;
             // scroll commits publish their source state separately.
@@ -3971,8 +3975,14 @@ macro_rules! update_snapshot {
                     && old.lifecycle.node_changed() == PaintPropertyChangeType::Unchanged
                     && $node.same_snapshot_references(old)
             }) {
+                $self.store.snapshot_stats[0] += 1;
                 old.clone()
             } else {
+                if $node.lifecycle.changed != PaintPropertyChangeType::Unchanged {
+                    $self.store.snapshot_stats[1] += 1;
+                } else {
+                    $self.store.snapshot_stats[2] += 1;
+                }
                 Arc::new($node)
             };
             $self.store.$map.insert(key, node.clone());
