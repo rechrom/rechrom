@@ -127,6 +127,22 @@ impl FragmentOwners {
         changed
     }
 
+    /// certify for a slot population replayed unchanged.
+    pub(super) fn certify_replayed(&mut self, output: *mut FragmentPaintData) -> bool {
+        let Some(tracker) = self.certification.as_mut() else {
+            return false;
+        };
+        let started = browser_tracing::enabled().then(std::time::Instant::now);
+        let changed = tracker.ReplayProductionNode(unsafe { &mut *output });
+        if let Some(started) = started {
+            self.population_stats.certify_ns = self
+                .population_stats
+                .certify_ns
+                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+        }
+        changed
+    }
+
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
         self.instances.entry(source).or_insert(instance);
         self.paint.insert(source)

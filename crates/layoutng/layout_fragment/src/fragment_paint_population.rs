@@ -938,7 +938,11 @@ fn ReplaySubtree(
     for i in (0..entries.len()).rev() {
         let len = entries[i].len;
         let descendant_changed = changed[i + 1..i + len].iter().any(|c| *c);
-        changed[i] = owners.certify(slots[i].0, descendant_changed);
+        changed[i] = if descendant_changed {
+            owners.certify(slots[i].0, true)
+        } else {
+            owners.certify_replayed(slots[i].0)
+        };
     }
     // Close the copied entries (already finished subtrees: keep their
     // recorded lengths and flags).
@@ -957,7 +961,7 @@ fn ReplaySubtree(
 fn ReplayCheckSnapshot(
     entries: &[PopulationReplayEntry],
     paint_state: &crate::layout_engine::LayoutPaintState,
-) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind), PrePaintInvalidation)>> {
+) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>> {
     entries
         .iter()
         .map(|entry| {
@@ -974,6 +978,8 @@ fn ReplayCheckSnapshot(
                     slot.text_end,
                     slot.text_paint_timing_non_whitespace,
                     slot.kind,
+                    slot.pre_paint_revision,
+                    slot.pre_paint_subtree_revision,
                 ),
                 slot.pre_paint_invalidation,
             ))
@@ -985,7 +991,7 @@ fn ReplayCheckSnapshot(
 /// prediction; returns the number of mismatching slots.
 fn ReplayCheckCompare(
     entries: &[PopulationReplayEntry],
-    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind), PrePaintInvalidation)>>,
+    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>>,
     paint_state: &crate::layout_engine::LayoutPaintState,
 ) -> usize {
     let mut mismatches = 0;
@@ -1011,6 +1017,8 @@ fn ReplayCheckCompare(
             slot.text_end,
             slot.text_paint_timing_non_whitespace,
             slot.kind,
+            slot.pre_paint_revision,
+            slot.pre_paint_subtree_revision,
         );
         if paint != slot.paint || fields != now || invalidation != slot.pre_paint_invalidation {
             mismatches += 1;

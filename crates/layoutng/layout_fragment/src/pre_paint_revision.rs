@@ -251,6 +251,48 @@ impl PrePaintRevisionTracker {
         !self_same || !children_same
     }
 
+    /// ObserveProductionNode for a slot population replayed unchanged (same
+    /// immutable owner, clean dirty bits, same payload): when its previous
+    /// certification still holds - same epoch, unmarked revisions, same
+    /// geometry and resources - only the owner liveness bookkeeping and the
+    /// stats change. Anything else takes the full observation.
+    pub fn ReplayProductionNode(&mut self, node: &mut FragmentPaintData) -> bool {
+        let epoch = self.epoch + 1;
+        let update = self
+            .production_update
+            .as_mut()
+            .expect("production revision update has not begun");
+        let holds = node.certified.epoch == epoch
+            && node.pre_paint_revision == node.certified.revision
+            && node.pre_paint_subtree_revision == node.certified.subtree_revision
+            && node.pre_paint_revision != 0
+            && node.pre_paint_subtree_revision != 0
+            && !node.pre_paint_invalidation.own()
+            && !node.pre_paint_invalidation.descendants()
+            && node.certified.offset == node.offset
+            && node.certified.size == node.size
+            && resources_equal(
+                &node.certified.resources,
+                &node.resources,
+                &mut update.resource_matches,
+                node.certified.resource_usage,
+            );
+        if !holds {
+            return self.ObserveProductionNode(node, false);
+        }
+        // Owner liveness is idempotent per id within a pass, so a fallback
+        // after this registration observes the same liveness.
+        let owners_live =
+            retain_owners(&node.paint, &mut update.previous_owners, &mut update.next_owners);
+        let retained = owners_live && node.certified.owner_ids == owner_ids(&node.paint);
+        if !retained && just_created(&node.paint) {
+            return self.ObserveProductionNode(node, false);
+        }
+        update.stats.nodes += 1;
+        node.pre_paint_owner_retained = retained;
+        false
+    }
+
     /// A selection commit changes only native invalidation bits. Certify the
     /// already indexed selected-client/ancestor sidecar in place; do not walk
     /// fragments again or rebuild geometry/resource/owner observations.
