@@ -27,36 +27,24 @@ where
         self.node()
             .scroll
             .as_ref()
-            .map(|s| ScrollNode::from_arc(s.clone()))
+            .map(|s| self.link_scroll(s))
     }
     fn NearestScrollTranslationNode(&self) -> Self {
         WithTransformCache(self, |c| c.nearest_scroll_translation())
     }
     fn ParentScrollTranslationNode(&self) -> Option<Self> {
-        self.node().parent.as_ref().map(|p| {
-            WithTransformCache(&Self::from_arc(p.clone()), |c| {
-                c.nearest_scroll_translation()
-            })
+        self.parent_handle().map(|parent| {
+            WithTransformCache(&parent, |c| c.nearest_scroll_translation())
         })
     }
     fn IsAncestorOf(&self, other: &Self) -> bool {
-        let mut n = Some(other.node());
-        while let Some(node) = n {
-            if self.node().lifecycle.same_node(&node.lifecycle) {
-                return true;
-            }
-            n = node.parent.as_deref();
-        }
-        false
+        self.is_ancestor_of(other)
     }
     fn IsIdentity(&self) -> bool {
         crate::adapter::paint_geometry::TransformCacheNode::IsIdentity(self)
     }
     fn ParentIs(&self, other: &Self) -> bool {
-        self.node()
-            .parent
-            .as_ref()
-            .is_some_and(|p| p.lifecycle.same_node(&other.node().lifecycle))
+        self.parent_handle().is_some_and(|p| p == *other)
     }
 }
 impl<R, B> ConversionClipNode<B> for ClipNode<R>
@@ -72,7 +60,7 @@ where
         self.node()
             .parent
             .as_ref()
-            .map(|p| Self::from_arc(p.clone()))
+            .map(|p| self.link_same(p))
     }
     fn PaintClipRect(&self) -> RRectF {
         let r = self.node().PaintClipRadii();
@@ -99,7 +87,7 @@ where
         self.node()
             .parent
             .as_ref()
-            .map(|p| Self::from_arc(p.clone()))
+            .map(|p| self.link_same(p))
     }
     fn HasDirectCompositingReasons(&self) -> bool {
         self.node().HasDirectCompositingReasons()
@@ -165,7 +153,7 @@ where
         self.node()
             .parent
             .as_ref()
-            .map(|s| Self::from_arc(s.clone()))
+            .map(|s| self.link_same(s))
     }
     fn ContentsRect(&self) -> Rect {
         rect(self.node().ContentsRect())
@@ -189,6 +177,6 @@ where
     fn OverflowClipNode(&self) -> Option<ClipNode<R>> {
         self.node()
             .OverflowClipNode()
-            .map(|p| ClipNode::from_arc(p.clone()))
+            .map(|p| self.link_clip(p))
     }
 }

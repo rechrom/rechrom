@@ -66,7 +66,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
         self.node()
             .parent
             .as_ref()
-            .map(|n| Self::from_arc(n.clone()))
+            .map(|n| self.link_same(n))
     }
     fn ParentUnalias(&self) -> Self {
         self.UnaliasedParent().expect("source parent")
@@ -82,8 +82,8 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
             .HasDirectCompositingReasonsOtherThan3dTransform()
     }
     fn FlattensInheritedTransformSameAsParent(&self) -> bool {
-        self.node().parent.as_ref().is_none_or(|p| {
-            p.FlattensInheritedTransform() == self.node().FlattensInheritedTransform()
+        self.parent_handle().is_none_or(|p| {
+            p.node().FlattensInheritedTransform() == self.node().FlattensInheritedTransform()
         })
     }
     fn BackfaceVisibilitySameAsParent(&self) -> bool {
@@ -130,7 +130,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
     fn ScrollParentScrollTranslation(&self) -> Option<Self> {
         self.node()
             .ScrollParentScrollTranslation()
-            .map(|n| Self::from_arc(n.clone()))
+            .map(|n| self.link_same(n))
     }
     fn PropertyTreeNearestScrollTranslationNode(&self) -> Self {
         crate::third_party::blink::renderer::platform::graphics::paint::geometry_mapper_transform_cache::WithTransformCache(self,|c|c.nearest_scroll_translation())
@@ -203,10 +203,7 @@ impl<R: CpuSkiaBackend> crate::adapter::pending_layer::PendingTransformNode<Pain
         self.node().TransformAnimationIsAxisAligned()
     }
     fn PropertyTreeLowestCommonAncestor(&self, other: &Self) -> Self {
-        Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
-            self.as_arc(),
-            other.as_arc(),
-        ))
+        self.lowest_common_ancestor(other)
     }
     fn Get2dTranslation(&self) -> Vector2dF {
         let translation = self.node().Get2dTranslation();
@@ -252,16 +249,10 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         Arc::as_ptr(&self.node().lifecycle.identity) as usize
     }
     fn ParentUnalias(&self) -> Self {
-        Self::from_arc(
-            self.node()
-                .parent
-                .as_ref()
-                .expect("source effect parent")
-                .clone(),
-        )
+        self.parent_handle().expect("source effect parent")
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        TransformNode::from_arc(self.node().LocalTransformSpace().clone())
+        self.link_transform(self.node().LocalTransformSpace())
     }
     fn BlendMode(&self) -> BlendMode {
         blend(self.node())
@@ -303,10 +294,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         self.node().HasElementCaptureId()
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
-        Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
-            self.as_arc(),
-            other.as_arc(),
-        ))
+        self.lowest_common_ancestor(other)
     }
     // Source: effect_paint_property_node.h:355-385.
     fn MayHaveBackdropEffect(&self) -> bool {
@@ -316,7 +304,7 @@ impl<R: CpuSkiaBackend> PendingEffectNode<TransformNode<R>, usize> for EffectNod
         self.node()
             .output_clip
             .as_ref()
-            .map(|c| ClipNode::from_arc(c.clone()))
+            .map(|c| self.link_clip(c))
     }
     fn GetCompositorElementId(&self) -> ElementId {
         element(self.node().compositor.compositor_element_id)
@@ -385,36 +373,20 @@ impl<R: CpuSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R>
         Arc::as_ptr(&self.node().lifecycle.identity) as usize
     }
     fn ParentUnalias(&self) -> Self {
-        Self::from_arc(
-            self.node()
-                .parent
-                .as_ref()
-                .expect("source clip parent")
-                .clone(),
-        )
+        self.parent_handle().expect("source clip parent")
     }
     fn LocalTransformSpaceUnalias(&self) -> TransformNode<R> {
-        TransformNode::from_arc(self.node().LocalTransformSpace().clone())
+        self.link_transform(self.node().LocalTransformSpace())
     }
     fn PaintClipRectRect(&self) -> RectF {
         self.node().PaintClipRect().map(|r|RectF::new(r.x as f32,r.y as f32,r.width as f32,r.height as f32)).unwrap_or_else(||*crate::third_party::blink::renderer::platform::graphics::paint::float_clip_rect::FloatClipRect::default().Rect())
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
-        Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
-            self.as_arc(),
-            other.as_arc(),
-        ))
+        self.lowest_common_ancestor(other)
     }
     // Source: paint_property_node.h:159-168. Walk actual parent identities.
     fn IsAncestorOf(&self, other: &Self) -> bool {
-        let mut current = Some(other.node());
-        while let Some(node) = current {
-            if self.node().lifecycle.same_node(&node.lifecycle) {
-                return true;
-            }
-            current = node.parent.as_deref();
-        }
-        false
+        self.is_ancestor_of(other)
     }
     fn PaintClipRectIsRounded(&self) -> bool {
         self.node().PaintClipRadii().HasRadius()
@@ -437,6 +409,6 @@ impl<R: CpuSkiaBackend> PendingClipNode<TransformNode<R>, usize> for ClipNode<R>
     fn PixelMovingFilter(&self) -> Option<EffectNode<R>> {
         self.node()
             .PixelMovingFilter()
-            .map(|e| EffectNode::from_arc(e.clone()))
+            .map(|e| self.link_effect(e))
     }
 }

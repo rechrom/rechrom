@@ -2407,6 +2407,18 @@ impl<R: PropertyNodeResolver + ?Sized> PropertyNodeResolver for &R {
     }
 }
 
+/// The published property trees a paint chunk's state resolves its links
+/// through. It is lookup context derived from the publication, not part of a
+/// chunk's value: equality ignores it.
+#[derive(Clone, Debug, Default)]
+pub struct PublishedTrees(pub Option<Arc<FrozenPropertyTrees>>);
+
+impl PartialEq for PublishedTrees {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// Result of FrozenPropertyTrees::verify_state, counted over distinct nodes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrozenTreeCoverage {

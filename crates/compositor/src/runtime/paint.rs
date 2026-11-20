@@ -185,25 +185,123 @@ impl PropertyNodeIdentity {
     }
 }
 
+/// The artifact's published property trees a handle resolves its links
+/// through (see paint_property_tree::PropertyNodeResolver); None follows the
+/// Arc links themselves.
+pub type HandleTrees = Option<Arc<paint_property_tree::FrozenPropertyTrees>>;
+
+macro_rules! resolve_link {
+    ($trees:expr, $kind:ident, $link:expr) => {
+        match $trees {
+            Some(trees) => {
+                paint_property_tree::PropertyNodeResolver::$kind(&**trees, $link).clone()
+            }
+            None => $link.clone(),
+        }
+    };
+}
+
 macro_rules! node_handle {
-    ($handle:ident, $node:ident) => {
+    ($handle:ident, $node:ident, $kind:ident) => {
         /// Retains the actual native node; equality/hash concern persistent
         /// identity, independently of revision and all mutable-value metadata.
         pub struct $handle<R> {
             node: Arc<paint_property_tree::$node>,
+            trees: HandleTrees,
             backend: PhantomData<fn() -> R>,
         }
         impl<R> Clone for $handle<R> {
             fn clone(&self) -> Self {
-                Self::from_arc(Arc::clone(&self.node))
+                Self::from_arc_in(Arc::clone(&self.node), self.trees.clone())
             }
         }
         impl<R> $handle<R> {
             pub fn from_arc(node: Arc<paint_property_tree::$node>) -> Self {
+                Self::from_arc_in(node, None)
+            }
+            /// A handle whose links resolve through `trees`.
+            pub fn from_arc_in(node: Arc<paint_property_tree::$node>, trees: HandleTrees) -> Self {
                 Self {
                     node,
+                    trees,
                     backend: PhantomData,
                 }
+            }
+            pub fn trees(&self) -> &HandleTrees {
+                &self.trees
+            }
+            /// This node's current parent.
+            pub fn parent_handle(&self) -> Option<Self> {
+                self.node.parent.as_ref().map(|parent| self.link_same(parent))
+            }
+            /// Whether this node is `other` or one of its current ancestors.
+            pub fn is_ancestor_of(&self, other: &Self) -> bool {
+                let mut current = Some(other.clone());
+                while let Some(node) = current {
+                    if node == *self {
+                        return true;
+                    }
+                    current = node.parent_handle();
+                }
+                false
+            }
+            /// Lowest common ancestor over current parents, by identity.
+            pub fn lowest_common_ancestor(&self, other: &Self) -> Self {
+                let trees = self.trees.clone().or_else(|| other.trees.clone());
+                let a = Self::from_arc_in(self.node.clone(), trees.clone());
+                let b = Self::from_arc_in(other.node.clone(), trees);
+                let depth = |node: &Self| {
+                    let mut depth = 0;
+                    let mut current = node.parent_handle();
+                    while let Some(node) = current {
+                        depth += 1;
+                        current = node.parent_handle();
+                    }
+                    depth
+                };
+                let (mut a, mut b, mut depth_a, mut depth_b) = {
+                    let (da, db) = (depth(&a), depth(&b));
+                    (a, b, da, db)
+                };
+                while depth_a > depth_b {
+                    a = a.parent_handle().expect("source common-root tree");
+                    depth_a -= 1;
+                }
+                while depth_b > depth_a {
+                    b = b.parent_handle().expect("source common-root tree");
+                    depth_b -= 1;
+                }
+                while a != b {
+                    a = a.parent_handle().expect("source nonnull common ancestor");
+                    b = b.parent_handle().expect("source nonnull common ancestor");
+                }
+                a
+            }
+            /// The current node a same-kind link (parent) of this node names.
+            pub fn link_same(&self, link: &Arc<paint_property_tree::$node>) -> Self {
+                Self::from_arc_in(resolve_link!(&self.trees, $kind, link), self.trees.clone())
+            }
+            /// The current node a transform link of this node names.
+            pub fn link_transform(
+                &self,
+                link: &Arc<paint_property_tree::TransformPaintPropertyNode>,
+            ) -> TransformNode<R> {
+                TransformNode::from_arc_in(resolve_link!(&self.trees, transform, link), self.trees.clone())
+            }
+            pub fn link_clip(&self, link: &Arc<paint_property_tree::ClipPaintPropertyNode>) -> ClipNode<R> {
+                ClipNode::from_arc_in(resolve_link!(&self.trees, clip, link), self.trees.clone())
+            }
+            pub fn link_effect(
+                &self,
+                link: &Arc<paint_property_tree::EffectPaintPropertyNode>,
+            ) -> EffectNode<R> {
+                EffectNode::from_arc_in(resolve_link!(&self.trees, effect, link), self.trees.clone())
+            }
+            pub fn link_scroll(
+                &self,
+                link: &Arc<paint_property_tree::ScrollPaintPropertyNode>,
+            ) -> ScrollNode<R> {
+                ScrollNode::from_arc_in(resolve_link!(&self.trees, scroll, link), self.trees.clone())
             }
             pub fn as_arc(&self) -> &Arc<paint_property_tree::$node> {
                 &self.node
@@ -241,10 +339,10 @@ macro_rules! node_handle {
         }
     };
 }
-node_handle!(TransformNode, TransformPaintPropertyNode);
-node_handle!(ClipNode, ClipPaintPropertyNode);
-node_handle!(EffectNode, EffectPaintPropertyNode);
-node_handle!(ScrollNode, ScrollPaintPropertyNode);
+node_handle!(TransformNode, TransformPaintPropertyNode, transform);
+node_handle!(ClipNode, ClipPaintPropertyNode, clip);
+node_handle!(EffectNode, EffectPaintPropertyNode, effect);
+node_handle!(ScrollNode, ScrollPaintPropertyNode, scroll);
 
 /// The native three-node state. Clone retains only its three actual Arc nodes.
 /// No property node, directory, ancestry or recorded state is materialized.
@@ -288,10 +386,14 @@ impl<R> Default for PropertyTreeState<R> {
 
 impl<R> PropertyTreeState<R> {
     pub fn from_source(state: &paint_property_tree::PropertyTreeState) -> Self {
+        Self::from_source_in(state, None)
+    }
+    /// A state whose nodes resolve their links through `trees`.
+    pub fn from_source_in(state: &paint_property_tree::PropertyTreeState, trees: HandleTrees) -> Self {
         Self {
-            transform_: TransformNode::from_arc(state.transform.clone()),
-            clip_: ClipNode::from_arc(state.clip.clone()),
-            effect_: EffectNode::from_arc(state.effect.clone()),
+            transform_: TransformNode::from_arc_in(state.transform.clone(), trees.clone()),
+            clip_: ClipNode::from_arc_in(state.clip.clone(), trees.clone()),
+            effect_: EffectNode::from_arc_in(state.effect.clone(), trees),
         }
     }
     pub fn as_source(&self) -> paint_property_tree::PropertyTreeState {
@@ -356,7 +458,7 @@ where
         > + ?Sized,
 {
     fn properties_unalias(&self) -> PropertyTreeState<R> {
-        PropertyTreeState::from_source(&self.properties)
+        PropertyTreeState::from_source_in(&self.properties, self.property_trees.0.clone())
     }
     fn raster_effect_outset(&self) -> crate::adapter::paint_geometry::RasterEffectOutset {
         use crate::adapter::paint_geometry::RasterEffectOutset as Output;

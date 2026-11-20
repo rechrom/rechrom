@@ -46,8 +46,7 @@ fn nearest_composited_scroll_translation<R: CpuSkiaBackend>(
         if is_composited_scroll(&current) {
             return Some(current);
         }
-        let parent = current.node().parent.as_ref()?.clone();
-        let parent = TransformNode::from_arc(parent);
+        let parent = current.parent_handle()?;
         current = WithTransformCache(&parent, |cache| cache.nearest_scroll_translation());
     }
 }
@@ -206,7 +205,7 @@ fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
 ) -> bool {
     let mut current = node.clone();
     while current != *ancestor {
-        let local = TransformNode::from_arc(current.node().LocalTransformSpace().clone());
+        let local = current.link_transform(current.node().LocalTransformSpace());
         if in_same_transform_compositing_boundary(
             transform,
             &local,
@@ -217,10 +216,10 @@ fn clip_chain_in_transform_compositing_boundary<R: CpuSkiaBackend>(
         {
             return false;
         }
-        let Some(parent) = current.node().parent.as_ref() else {
+        let Some(parent) = current.parent_handle() else {
             return false;
         };
-        current = ClipNode::from_arc(parent.clone());
+        current = parent;
     }
     true
 }
@@ -248,10 +247,8 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
     fn EffectUnaliasedParentSameAs(&self, ancestor: &Self) -> bool {
         ancestor
             .effect_
-            .node()
-            .parent
-            .as_ref()
-            .is_some_and(|parent| parent.lifecycle.same_node(&self.effect_.node().lifecycle))
+            .parent_handle()
+            .is_some_and(|parent| parent == self.effect_)
     }
     fn EffectIsOpacityOnly(&self) -> bool {
         self.effect_.node().IsOpacityOnly()
@@ -300,10 +297,7 @@ impl<R: CpuSkiaBackend> PendingPropertyTreeState for PropertyTreeState<R> {
         let upcast_clip = if self.clip_ == guest.clip_ {
             self.clip_.clone()
         } else {
-            let clip = ClipNode::from_arc(paint::property_node_geometry::LowestCommonAncestor(
-                self.clip_.as_arc(),
-                guest.clip_.as_arc(),
-            ));
+            let clip = self.clip_.lowest_common_ancestor(&guest.clip_);
             if !clip_chain_in_transform_compositing_boundary(
                 &self.clip_,
                 &clip,

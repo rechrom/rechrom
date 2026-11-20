@@ -231,10 +231,7 @@ impl<R: CpuSkiaBackend> RasterInvalidationTypes for CpuGeometryMapper<R> {
         state.effect_.clone()
     }
     fn ParentEffect(&self, e: &Self::Effect) -> Option<Self::Effect> {
-        e.node()
-            .parent
-            .as_ref()
-            .map(|e| EffectNode::from_arc(e.clone()))
+        e.node().parent.as_ref().map(|parent| e.link_same(parent))
     }
     fn HasReferenceFilter(&self, e: &Self::Effect) -> bool {
         e.node()

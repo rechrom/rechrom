@@ -104,8 +104,9 @@ impl EngineCore {
         artifact: Arc<PaintArtifact>,
         state: &paint::paint_property_tree::PropertyTreeState,
     ) -> crate::engine::ImmutablePaintRecord {
+        let trees = artifact.property_trees.clone();
         let chunks = super::paint::PaintChunkSubset::from_artifact(artifact);
-        let state = super::paint::PropertyTreeState::<SkRegion>::from_source(state);
+        let state = super::paint::PropertyTreeState::<SkRegion>::from_source_in(state, trees);
         crate::third_party::blink::renderer::platform::graphics::compositing::paint_chunks_to_cc_layer::Convert::<Root>(
             &chunks, &state, None, self.paint.as_ref(),
         )

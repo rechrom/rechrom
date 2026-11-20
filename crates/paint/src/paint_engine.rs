@@ -891,6 +891,16 @@ fn RecordPaint(
             }
         }
     }
+    {
+        // The persisted trees this pass's chunk states name, frozen once and
+        // shared by every chunk and by the published artifact.
+        let trees = Arc::new(pre_paint.property_node_store.freeze());
+        for chunk in output.chunks.iter_mut() {
+            chunk.property_trees =
+                paint_model::paint_property_tree::PublishedTrees(Some(trees.clone()));
+        }
+        output.property_trees = Some(trees);
+    }
     let record = paint_record::PaintRecordMetrics {
         paint_ops: output.items.len(),
         display_items: output.display_items.len(),
@@ -1410,7 +1420,10 @@ impl PaintEngine {
                 .expect("Paint must complete before commit"),
         );
         let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
-        let trees = self.pre_paint.property_node_store.freeze();
+        let trees = match &artifact.property_trees {
+            Some(trees) => trees.clone(),
+            None => Arc::new(self.pre_paint.property_node_store.freeze()),
+        };
         if browser_tracing::enabled() {
             let mut seen = std::collections::HashSet::new();
             let mut coverage = paint_model::paint_property_tree::FrozenTreeCoverage::default();
@@ -1422,7 +1435,7 @@ impl PaintEngine {
             trace.set("frozen_unresolved", coverage.unresolved as f64);
             trace.set("frozen_unkeyed", coverage.unkeyed as f64);
         }
-        artifact.property_trees = Some(Arc::new(trees));
+        artifact.property_trees = Some(trees);
         self.performance.commit = paint_commit::PaintCommitMetrics {
             clients: clients.len(),
             recording_revision: artifact.recording_revision,

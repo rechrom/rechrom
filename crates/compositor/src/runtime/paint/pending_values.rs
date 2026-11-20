@@ -149,7 +149,7 @@ where
         metadata(self).hit_test_data.is_some()
     }
     fn PropertiesUnalias(&self) -> PropertyTreeState<R> {
-        PropertyTreeState::from_source(&self.properties)
+        PropertyTreeState::from_source_in(&self.properties, self.property_trees.0.clone())
     }
     fn client_id(&self) -> usize {
         self.id.client_id as usize

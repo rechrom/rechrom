@@ -28,6 +28,8 @@ pub struct PaintChunk {
     pub bounds_are_complete: bool,
     pub raster_effect_outset: RasterEffectOutset,
     pub properties: PropertyTreeState,
+    /// The publication's property trees `properties` resolves through.
+    pub property_trees: paint_model::paint_property_tree::PublishedTrees,
     pub is_moved_from_cached_subsequence: bool,
     pub effectively_invisible: bool,
 }
@@ -47,6 +49,7 @@ impl Default for PaintChunk {
             bounds_are_complete: true,
             raster_effect_outset: RasterEffectOutset::kNone,
             properties: PropertyTreeState::default(),
+            property_trees: Default::default(),
             is_moved_from_cached_subsequence: false,
             effectively_invisible: false,
         }

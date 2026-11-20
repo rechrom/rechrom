@@ -38,7 +38,7 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.node()
             .parent
             .as_ref()
-            .map(|p| Self::from_arc(p.clone()))
+            .map(|p| self.link_same(p))
     }
     fn RequiresCompositingForStickyPosition(&self) -> bool {
         self.node().RequiresCompositingForStickyPosition()
@@ -60,7 +60,7 @@ impl<R: CpuSkiaBackend> TransformCacheNode for TransformNode<R> {
         self.node()
             .scroll_parent_scroll_translation
             .as_ref()
-            .map(|n| Self::from_arc(n.clone()))
+            .map(|n| self.link_same(n))
     }
     fn HasDirectCompositingReasons(&self) -> bool {
         self.node().HasDirectCompositingReasons()
@@ -102,10 +102,7 @@ impl<R: CpuSkiaBackend> GeometryMapperNode for TransformNode<R> {
         Transform::FromColMajor(&self.node().Matrix().values)
     }
     fn LowestCommonAncestor(&self, other: &Self) -> Self {
-        Self::from_arc(paint::property_node_geometry::LowestCommonAncestor(
-            self.as_arc(),
-            other.as_arc(),
-        ))
+        self.lowest_common_ancestor(other)
     }
     fn ParentScrollTranslationNode(&self) -> Self {
         let parent = self.Parent().expect("source parent scroll translation");
@@ -151,7 +148,8 @@ impl<R: CpuSkiaBackend> GeometryMapperState for PropertyTreeState<R> {
         &self.effect_
     }
     fn SetClip(&mut self, clip: Arc<paint_property_tree::ClipPaintPropertyNode>) {
-        self.set_clip(super::ClipNode::from_arc(clip));
+        let trees = self.transform_.trees().clone();
+        self.set_clip(super::ClipNode::from_arc_in(clip, trees));
     }
     fn SetEffect(&mut self, effect: Self::Effect) {
         self.set_effect(effect);

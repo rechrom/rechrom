@@ -53,7 +53,7 @@ impl<R: CpuSkiaBackend> PropertyTreeManagerScrollNode for ScrollNode<R> {
         self.node()
             .parent
             .as_ref()
-            .map(|p| Self::from_arc(p.clone()))
+            .map(|p| self.link_same(p))
     }
     fn ContainerRect(&self) -> Rect {
         rect(self.node().ContainerRect())

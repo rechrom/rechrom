@@ -46,10 +46,10 @@ impl<R: CpuSkiaBackend> ArtifactEffectNode<CpuCompositorTypes<R>> for EffectNode
         self.node().HasCanvasChildState()
     }
     fn CanvasChildContentTransform(&self) -> TransformNode<R> {
-        TransformNode::from_arc(self.node().CanvasChildContentTransform().clone())
+        self.link_transform(self.node().CanvasChildContentTransform())
     }
     fn CanvasChildContentClip(&self) -> ClipNode<R> {
-        ClipNode::from_arc(self.node().CanvasChildContentClip().clone())
+        self.link_clip(self.node().CanvasChildContentClip())
     }
     fn CanvasChildContentEffect(&self) -> Self {
         Self::from_arc(self.node().CanvasChildContentEffect().clone())
