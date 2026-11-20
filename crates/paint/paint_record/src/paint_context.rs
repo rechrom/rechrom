@@ -176,12 +176,12 @@ impl<'o> PaintContext<'o> {
         let context = NativeGeometryMapperContext {
             singular_transform_fix:
                 foundation::RuntimeEnabledFeatures::GeometryMapperSingularTransformFixEnabled(),
-            trees: None,
+            trees: self.output.property_trees.clone(),
         };
         GeometryMapper::<NativeGeometryMapperContext>::LocalToAncestorVisualRect(
             &context,
-            &NativeGeometryState::from_state(&aggregation.properties),
-            &NativeGeometryState::from_state(root),
+            &NativeGeometryState::from_state_in(&aggregation.properties, context.trees.clone()),
+            &NativeGeometryState::from_state_in(root, context.trees.clone()),
             &mut mapped,
             foundation::OverlayScrollbarClipBehavior::kIgnoreOverlayScrollbarSize,
             Default::default(),

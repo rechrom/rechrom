@@ -690,6 +690,7 @@ fn RecordPaint(
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
     }
     let mut output = PaintRecording::default();
+    output.property_trees = Some(pre_paint.PublishedTrees());
     output.compositor_viewport = pre_paint.ExportCompositorViewport(&fragments);
     output.resources = fragments.resources.clone();
     // Same-Page LocalFrames record into this controller. Their immutable
@@ -894,7 +895,7 @@ fn RecordPaint(
     {
         // The persisted trees this pass's chunk states name, frozen once and
         // shared by every chunk and by the published artifact.
-        let trees = Arc::new(pre_paint.property_node_store.freeze());
+        let trees = pre_paint.PublishedTrees();
         for chunk in output.chunks.iter_mut() {
             chunk.property_trees =
                 paint_model::paint_property_tree::PublishedTrees(Some(trees.clone()));
@@ -1422,7 +1423,7 @@ impl PaintEngine {
         let clients = crate::PaintController::ValidateForCommittedPaint(artifact);
         let trees = match &artifact.property_trees {
             Some(trees) => trees.clone(),
-            None => Arc::new(self.pre_paint.property_node_store.freeze()),
+            None => self.pre_paint.PublishedTrees(),
         };
         if browser_tracing::enabled() {
             let mut seen = std::collections::HashSet::new();

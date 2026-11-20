@@ -966,6 +966,9 @@ pub struct CompositedAnimationPropertyBinding {
 pub struct PrePaintTreeWalk {
     pub next_property_id: u64,
     pub property_node_store: PaintPropertyNodeStore,
+    /// The persisted trees frozen for publication; cleared whenever the
+    /// store changes and frozen again on first use (PublishedTrees).
+    published_trees: Option<Arc<paint_model::paint_property_tree::FrozenPropertyTrees>>,
     visual_viewport_state: Option<paint_model::PaintVisualViewportState>,
     visual_viewport_scroll_offset:
         Option<(foundation::CompositorElementId, foundation::gfx::Vector2dF)>,
@@ -1019,6 +1022,7 @@ impl Default for PrePaintTreeWalk {
         Self {
             next_property_id: 1,
             property_node_store: Default::default(),
+            published_trees: None,
             visual_viewport_state: None,
             visual_viewport_scroll_offset: None,
             property_keys: BTreeMap::new(),
@@ -5684,6 +5688,12 @@ fn ArtifactViewport(root: &FragmentPaintData) -> Option<PaintRect> {
 }
 
 impl PrePaintTreeWalk {
+    /// The persisted property trees as published with this pass's artifact.
+    pub fn PublishedTrees(&mut self) -> Arc<paint_model::paint_property_tree::FrozenPropertyTrees> {
+        self.published_trees
+            .get_or_insert_with(|| Arc::new(self.property_node_store.freeze()))
+            .clone()
+    }
     pub fn IntersectionObservationState(
         &self,
     ) -> foundation::intersection_observation_state::IntersectionObservationState {
@@ -5752,6 +5762,7 @@ impl PrePaintTreeWalk {
     ) {
         self.RebindResidentPropertySnapshots(trees);
         self.property_node_store = store;
+        self.published_trees = None;
     }
 
     fn ClipContextCovers(old: &Option<PaintRect>, new: &Option<PaintRect>) -> bool {
@@ -7220,6 +7231,7 @@ impl PrePaintTreeWalk {
             && self.reset_owners.insert(owner)
         {
             self.property_node_store.clear_owner(owner);
+            self.published_trees = None;
         }
         self.property_keys
             .insert(id, PaintPropertyKey { owner, role });
@@ -7323,6 +7335,7 @@ impl PrePaintTreeWalk {
         // scale. Publishing the nodes as compositor viewport metadata alone
         // does not establish that ancestry.
         if let Some(viewport) = viewport {
+            self.published_trees = None;
             let (_, _, visual_scroll_translation) = self
                 .property_node_store
                 .ensure_single_layout_viewport_nodes(
@@ -7449,6 +7462,7 @@ impl PrePaintTreeWalk {
                 );
                 PersistPropertyStates(&mut tree, &mut updater);
                 updater.finish();
+                self.published_trees = None;
                 if browser_tracing::enabled() {
                     let (checked, unresolved) = self.property_node_store.unresolved_parent_ids();
                     browser_tracing::instant(
