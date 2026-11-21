@@ -182,7 +182,7 @@ pub(crate) use layout_fragment_fragment_geometry_export::{
 };
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
-use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
+pub(crate) use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
 #[path = "../../../../layout_fragment/src/specialized_paint_export.rs"]
 mod layout_fragment_specialized_paint_export;
 use layout_fragment_specialized_paint_export::{ExportOverflowClipMargin, ExportTablePaintData};

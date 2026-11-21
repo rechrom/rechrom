@@ -552,9 +552,7 @@ impl RetainedScrollPaintState {
                 properties: node.properties.nodes.clone(),
                 unrecorded_visual_rect,
                 controls: f
-                    .paint
-                    .scrollbars
-                    .as_ref()
+                    .ViewScrollbars()
                     .map(|scrollbars| OverflowControlGeometry {
                         paint_snap_offset: node.paint_snap_offset,
                         properties: node.properties.clone(),
@@ -1155,7 +1153,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         let Some(f) = f else {
             continue;
         };
-        if f.paint.scrollbars.is_none() || f.ViewHidden() {
+        if f.ViewScrollbars().is_none() || f.ViewHidden() {
             continue;
         }
         let geometry = old.controls.as_ref().ok_or(ScrollbarChanged)?;

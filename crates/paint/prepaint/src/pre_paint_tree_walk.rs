@@ -1294,7 +1294,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
         || fragment.paint.StickyOffset().x != 0.0
         || fragment.paint.StickyOffset().y != 0.0
         || fragment.paint.NeedsAnchorPositionScrollAdjustment()
-        || fragment.paint.scrollbars.is_some()
+        || fragment.ViewScrollbars().is_some()
         || fragment.paint.SourceKind() == NodeKind::kSvgRoot
         || (fragment.paint.PaintLayerClientId() != 0
             && (HasReferenceFilterOrReflection(style) || style.has_backdrop_filters()))
@@ -4298,9 +4298,7 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
                 && !(style.outline_width() <= 0.0)
                 && !(style.outline_color().alpha <= 0.0)));
     node.needs_overflow_controls_phase = fragment
-        .paint
-        .scrollbars
-        .as_ref()
+        .ViewScrollbars()
         .is_some_and(|scrollbars| scrollbars.should_paint_as_overlay && node.is_paint_layer);
     for child in &mut node.children {
         MarkPaintPhaseNeeds(child);
@@ -4635,7 +4633,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
                 .FormControl()
                 .is_some_and(|control| control.auto_focus_ring),
             f.paint.FocusedImageMapArea().is_some(),
-            f.paint.scrollbars.is_some(),
+            f.ViewScrollbars().is_some(),
             f.paint.Display(),
             f.paint.establishes_paint_state,
             f.paint.IsSVGHiddenContainer(),

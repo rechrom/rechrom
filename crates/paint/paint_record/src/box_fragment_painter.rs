@@ -1159,9 +1159,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // post-children hook derives the same condition and skips the
             // duplicate late pass.
             if fragment
-                .paint
-                .scrollbars
-                .as_ref()
+                .ViewScrollbars()
                 .is_some_and(|scrollbars| {
                     PaintsOverflowControlsBeforeContents(
                         paint_info.phase,
@@ -1465,9 +1463,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             TablePainter::new(self.node, self.context).PaintCollapsedBorders(paint_info);
         }
         let overflow_controls_were_painted_before_contents = fragment
-            .paint
-            .scrollbars
-            .as_ref()
+            .ViewScrollbars()
             .is_some_and(|scrollbars| {
                 PaintsOverflowControlsBeforeContents(
                     paint_info.phase,
@@ -1475,7 +1471,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 )
             });
         if fragment.paint.establishes_paint_state
-            && fragment.paint.scrollbars.is_some()
+            && fragment.ViewScrollbars().is_some()
             && !overflow_controls_were_painted_before_contents
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);

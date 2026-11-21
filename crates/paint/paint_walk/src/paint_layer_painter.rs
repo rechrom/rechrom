@@ -909,7 +909,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             && node
                 .fragment
                 .as_deref()
-                .is_some_and(|fragment| fragment.paint.scrollbars.is_some());
+                .is_some_and(|fragment| fragment.ViewScrollbars().is_some());
         if paint_controls {
             self.context.borrow_mut().EndEscapableGeometry(node);
         }

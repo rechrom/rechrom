@@ -1242,7 +1242,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         }
         // Source: paint_property_tree_builder.cc:2998-3062. This clip belongs
         // only to overflow controls and never enters the descendant context.
-        if let Some(scrollbars) = fragment.paint.scrollbars.as_ref() {
+        if let Some(scrollbars) = fragment.ViewScrollbars() {
             let mut controls_bounds: Option<PaintRect> = None;
             // Source: paint_layer_scrollable_area.cc:2304-2308 and
             // paint_property_tree_builder.cc:3004-3005. With no scroll corner,
@@ -1374,7 +1374,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 local.height = replaced.size.height;
             }
             let inner_radius_clip = local;
-            if let Some(scrollbars) = fragment.paint.scrollbars.as_ref() {
+            if let Some(scrollbars) = fragment.ViewScrollbars() {
                 if !scrollbars.uses_overlay_scrollbars {
                     if let Some(vertical) = scrollbars.vertical.as_ref() {
                         let thickness = vertical.track_size.width;
@@ -1498,9 +1498,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             );
             let mut excluding_overlay = precise_layout_clip;
             if let Some(scrollbars) = fragment
-                .paint
-                .scrollbars
-                .as_ref()
+                .ViewScrollbars()
                 .filter(|bars| bars.uses_overlay_scrollbars)
             {
                 if let Some(vertical) = &scrollbars.vertical {
@@ -1716,9 +1714,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // therefore needs its own effect node; sharing the page effect would
         // make the scrollbar fade mutate the entire document's opacity.
         if let Some(scrollbars) = fragment
-            .paint
-            .scrollbars
-            .as_ref()
+            .ViewScrollbars()
             .filter(|scrollbars| scrollbars.uses_overlay_scrollbars)
         {
             for (axis, role, horizontal) in [

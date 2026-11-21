@@ -14,13 +14,12 @@ use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 // scrollbar identities from core/scroll/scrollbar.{h,cc}. The projection is
 // consumed by Paint without recreating Blink's in-process LayoutObject graph.
 #[inline(never)]
-pub(super) fn ExportScrollbarPaintData(
+pub(crate) fn ExportScrollbarPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
+) -> Option<Arc<ScrollbarPaintData>> {
     let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
     if layout_box.is_null() {
-        return;
+        return None;
     }
     let layout_box = unsafe { &*layout_box };
     let area = layout_box.GetScrollableArea();
@@ -29,7 +28,7 @@ pub(super) fn ExportScrollbarPaintData(
             && !unsafe { &*area }.HasVerticalScrollbar()
             && !layout_box.CanResize())
     {
-        return;
+        return None;
     }
     // Source: paint_property_tree_builder.cc:4172-4175. Position the source
     // controls before exporting their immutable paint payload.
@@ -174,5 +173,5 @@ pub(super) fn ExportScrollbarPaintData(
             height: resizer_pointer_rect.height() as f64,
         };
     }
-    paint.scrollbars = Some(Arc::new(data));
+    Some(Arc::new(data))
 }

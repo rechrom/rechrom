@@ -612,7 +612,7 @@ fn PopulateInlineItemLocalPaintData(
                     ExportOverflowClipMargin(box_fragment, &mut output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportScrollbarPaintData(box_fragment, &mut output.paint);
+                    output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
                 }
                 if purpose == LayoutUpdateKind::Paint {
                     ExportTablePaintData(box_fragment, sources, &mut output.paint);
@@ -1367,7 +1367,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportScrollbarPaintData(box_fragment, &mut output.paint);
+        output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportTablePaintData(box_fragment, sources, &mut output.paint);

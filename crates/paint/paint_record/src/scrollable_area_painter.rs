@@ -176,7 +176,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.scrollbars.as_ref() else {
+        let Some(data) = fragment.ViewScrollbars() else {
             return;
         };
         if !ShouldPaintOverflowControls(self.node, data.should_paint_as_overlay, info.phase) {
@@ -407,7 +407,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.scrollbars.as_ref() else {
+        let Some(data) = fragment.ViewScrollbars() else {
             return;
         };
         if data.resizer_pointer_size.width <= 0.0 || data.resizer_pointer_size.height <= 0.0 {
@@ -542,7 +542,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.scrollbars.as_ref() else {
+        let Some(data) = fragment.ViewScrollbars() else {
             return;
         };
         if data.resizer_touch_size.width <= 0.0 || data.resizer_touch_size.height <= 0.0 {
