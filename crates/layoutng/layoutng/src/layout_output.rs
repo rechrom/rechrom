@@ -226,8 +226,13 @@ pub(crate) struct LayoutPaintState {
     /// Source owner -> slot, tagged with the publication that bound it. The
     /// map persists across publications so an unchanged owner rebinds in
     /// place; only entries bound by the current publication are visible.
+    /// Each entry shares its slot, so a previous handle's bound slots stay
+    /// alive while that handle does, after `inputs` moved to its successor.
     owners: UnsafeCell<
-        foundation::TrustedIdentityHashMap<PaintFragmentOwner, (*mut FragmentPaintData, u64)>,
+        foundation::TrustedIdentityHashMap<
+            PaintFragmentOwner,
+            (std::rc::Rc<UnsafeCell<FragmentPaintData>>, u64),
+        >,
     >,
     publication: Cell<u64>,
     generation: Cell<u64>,
@@ -268,22 +273,18 @@ impl LayoutPaintState {
     /// paint properties when the root LayoutResult is replaced. Slots are
     /// shared with the previous handle, not copied: PrePaint compares against
     /// the previous values its own retained nodes recorded, not against the
-    /// previous result's slots. Slots not bound by the new publication leave
-    /// this state at commit and live on only while the previous handle does.
+    /// previous result's slots. The instance directory moves to the
+    /// replacement instead of being copied every relayout: the previous
+    /// handle resolves its fragments through its own owner map, whose entries
+    /// keep its slots alive, and only the current publication's population
+    /// queries instances. Slots not bound by the new publication leave this
+    /// state at commit and live on only while the previous handle does.
     pub(crate) fn SeedFrom(&self, previous: &Self) {
-        let previous = unsafe { &*previous.inputs.get() };
-        let inputs = unsafe { &mut *self.inputs.get() };
-        inputs.reserve(previous.len());
-        for (&instance, slot) in previous {
-            inputs.insert(
-                instance,
-                PaintFragmentSlot {
-                    data: std::rc::Rc::clone(&slot.data),
-                    publication: 0,
-                    owner: slot.owner,
-                },
-            );
+        let mut moved = std::mem::take(unsafe { &mut *previous.inputs.get() });
+        for slot in moved.values_mut() {
+            slot.publication = 0;
         }
+        *unsafe { &mut *self.inputs.get() } = moved;
     }
 
     pub(crate) fn BeginPublication(&self) {
@@ -329,34 +330,45 @@ impl LayoutPaintState {
         assert_ne!(instance, 0, "paint fragment has no stable identity");
         let publication = self.publication.get();
         let inputs = unsafe { &mut *self.inputs.get() };
-        let binding = if let Some(current) = inputs.get_mut(&instance) {
+        let (binding, data) = if let Some(current) = inputs.get_mut(&instance) {
             current.publication = publication;
             let same_owner = current.owner == Some(owner);
             current.owner = Some(owner);
-            PaintSlotBinding {
-                data: current.data.get(),
-                retained: true,
-                same_owner,
-            }
+            (
+                PaintSlotBinding {
+                    data: current.data.get(),
+                    retained: true,
+                    same_owner,
+                },
+                &current.data,
+            )
         } else {
-            let mut slot = PaintFragmentSlot {
+            let slot = PaintFragmentSlot {
                 data: std::rc::Rc::new(UnsafeCell::new(FragmentPaintData::default())),
                 publication,
                 owner: Some(owner),
             };
             let pointer = slot.data.get();
-            inputs.insert(instance, slot);
-            PaintSlotBinding {
-                data: pointer,
-                retained: false,
-                same_owner: false,
-            }
+            let slot = inputs.entry(instance).or_insert(slot);
+            (
+                PaintSlotBinding {
+                    data: pointer,
+                    retained: false,
+                    same_owner: false,
+                },
+                &slot.data,
+            )
         };
         let owners = unsafe { &mut *self.owners.get() };
         match owners.get_mut(&owner) {
-            Some(entry) => *entry = (binding.data, publication),
+            Some(entry) => {
+                entry.1 = publication;
+                if !std::rc::Rc::ptr_eq(&entry.0, data) {
+                    entry.0 = std::rc::Rc::clone(data);
+                }
+            }
             None => {
-                owners.insert(owner, (binding.data, publication));
+                owners.insert(owner, (std::rc::Rc::clone(data), publication));
             }
         }
         binding
@@ -389,19 +401,19 @@ impl LayoutPaintState {
     }
 
     fn Get(&self, owner: PaintFragmentOwner) -> Option<&FragmentPaintData> {
-        let (pointer, publication) = *unsafe { &*self.owners.get() }.get(&owner)?;
-        if publication != self.publication.get() {
+        let (data, publication) = unsafe { &*self.owners.get() }.get(&owner)?;
+        if *publication != self.publication.get() {
             return None;
         }
-        Some(unsafe { &*pointer })
+        Some(unsafe { &*data.get() })
     }
 
     unsafe fn GetMut(&self, owner: PaintFragmentOwner) -> Option<&mut FragmentPaintData> {
-        let (pointer, publication) = *unsafe { &*self.owners.get() }.get(&owner)?;
-        if publication != self.publication.get() {
+        let (data, publication) = unsafe { &*self.owners.get() }.get(&owner)?;
+        if *publication != self.publication.get() {
             return None;
         }
-        Some(unsafe { &mut *pointer })
+        Some(unsafe { &mut *data.get() })
     }
 
     fn Generation(&self) -> u64 {
