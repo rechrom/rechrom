@@ -110,22 +110,25 @@ fn LocalPoint(
         point.x -= fragment.paint.StickyOffset().x;
         point.y -= fragment.paint.StickyOffset().y;
     }
-    if fragment.paint.establishes_paint_state
-        && fragment.paint.HasSource()
-        && fragment.paint.style.transform.is_some()
-    {
-        let transform = fragment.paint.style.transform.as_ref().unwrap();
+    // The transform comes from the fragment's live ComputedStyle
+    // (PhysicalFragment::Style()), as PaintPropertyTreeBuilder reads it.
+    // The projected PaintStyleData fields are never filled for managed
+    // production styles, so reading them dropped every CSS transform here.
+    let transform_style = (fragment.paint.establishes_paint_state && fragment.paint.HasSource())
+        .then(|| fragment.ViewStyle())
+        .and_then(|style| style.transform().map(|transform| (style, transform)));
+    if let Some((style, transform)) = transform_style {
         let reference_rect = paint::geometry_mapper::ResolveTransformReferenceRect(
-            fragment.paint.style.transform_reference_box,
+            style.transform_reference_box(),
             fragment.ViewSize(),
             fragment.Borders(),
             fragment.Padding(),
         );
         let matrix = paint::geometry_mapper::ResolveTransformAroundReferenceBox(
-            transform,
+            &transform,
             absolute,
             reference_rect,
-            fragment.paint.style.transform_origin.as_ref(),
+            style.transform_origin().as_ref(),
         );
         point = paint::geometry_mapper::MapPointWithTransform(point, &matrix, true)?;
     }
@@ -300,7 +303,7 @@ fn LineSelfBordersContain(
     ContouredBorderContainsAt(
         query,
         containing_box,
-        containing_box.size,
+        containing_box.ViewSize(),
         point,
         overflow_origin,
         true,
@@ -319,7 +322,7 @@ fn HitGeometry(
     // become a hit target through this package's flattened traversal.
     if fragment.ViewHidden()
         || fragment.paint.IsSVGHiddenContainer()
-        || !fragment.paint.CanPaintFragmentOccurrence()
+        || !fragment.ViewCanPaintFragmentOccurrence()
     {
         return None;
     }
@@ -416,8 +419,9 @@ fn ScrollbarHitTarget<'f>(
     point: Offset,
     absolute: Offset,
 ) -> Option<CursorHit<'f>> {
-    if !(fragment.paint.style.visible
-        && !fragment.paint.style.pointer_events_none
+    let style = fragment.ViewStyle();
+    if !(style.visible()
+        && !style.pointer_events_none()
         && document.ContainsNode(fragment.ViewNodeId()))
     {
         return None;
@@ -451,7 +455,7 @@ fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
         return false;
     }
     if matches!(fragment.paint.SourceKind(), NodeKind::kSvgText) {
-        return fragment.paint.style.pointer_events_bounding_box;
+        return fragment.ViewStyle().pointer_events_bounding_box();
     }
     !matches!(
         fragment.paint.Display(),
@@ -476,7 +480,7 @@ fn ViewHitTarget<'f>(
     fragment
         .Children()
         .into_iter()
-        .find(|child| child.node_id == element_id)
+        .find(|child| child.ViewNodeId() == element_id)
 }
 
 fn SelfHitTarget<'f>(
@@ -490,8 +494,11 @@ fn SelfHitTarget<'f>(
 ) -> Option<CursorHit<'f>> {
     if !inside
         || !CanHitTestSelf(&fragment)
-        || fragment.paint.style.pointer_events_none
-        || !fragment.paint.style.visible
+        || {
+            // Chromium: VisibleToHitTestRequest over the fragment's Style().
+            let style = fragment.ViewStyle();
+            style.pointer_events_none() || !style.visible()
+        }
         || !LineSelfBordersContain(query, &fragment, containing_box, point, absolute)
         || !OuterBorderContains(query, &fragment, point, absolute)
     {
@@ -499,7 +506,7 @@ fn SelfHitTarget<'f>(
     }
     if let Some(child) = ViewHitTarget(document, fragment) {
         return Some(CursorHit {
-            node_id: child.node_id,
+            node_id: child.ViewNodeId(),
             fragment: child.Cursor(),
             local_point: Offset {
                 x: point.x - absolute.x - child.Cursor().ViewOffsetInContainer().x,
@@ -623,7 +630,7 @@ fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
             | layoutng_assembly::fragment_tree::FragmentKind::kLine
     ) || fragment.paint.IsLayoutInline()
         || fragment.ViewIsInlineBox()
-        || fragment.ViewReplacedContent().is_some()
+        || fragment.ViewIsReplaced()
         || IsSvgHitObject(fragment.paint.SourceKind())
     {
         EventHitPhase::Foreground
@@ -903,7 +910,10 @@ pub fn HitTest<'f>(
         point,
     ))
 }
+/// `layout` resolves the chosen node's document tree order through
+/// LayoutNode::LogicalTreeOrder instead of a copied fragment-slot value.
 pub fn TextPositionAtPoint<'a>(
+    layout: layoutng_assembly::layout_engine::LayoutOutput<'_>,
     fragment: impl Into<ResidentFragmentSource<'a>>,
     point: Offset,
     require_inside: bool,
@@ -927,8 +937,10 @@ pub fn TextPositionAtPoint<'a>(
             layoutng_assembly::fragment_tree::FragmentKind::kText
                 | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
         ) && fragment.paint.TextControlHost().is_none()
-            && fragment.paint.style.visible
-            && !fragment.paint.style.user_select_none
+            && {
+                let style = fragment.ViewStyle();
+                style.visible() && !style.user_select_none()
+            }
             && (!require_inside || inside)
         {
             let dy = (absolute.y - point.y)
@@ -945,7 +957,8 @@ pub fn TextPositionAtPoint<'a>(
                     .unwrap_or(local.x);
                 let dx = (absolute.x + x - point.x).abs();
                 let candidate = DocumentSelectionPosition {
-                    tree_order: fragment.paint.logical_tree_order,
+                    // Resolved once for the chosen position below.
+                    tree_order: 0,
                     node_id: fragment.ViewNodeId(),
                     offset,
                 };
@@ -991,5 +1004,16 @@ pub fn TextPositionAtPoint<'a>(
         require_inside,
         &mut best,
     );
-    query.result(best.map(|(_, _, position)| position))
+    query.result(best.map(|(_, _, mut position)| {
+        // Chromium orders selection endpoints by DOM tree position
+        // (Position::CompareTo); read the same resident document-order index
+        // fragment selection paint compares against. Anonymous (generated)
+        // text has no node and keeps order 0.
+        position.tree_order = (position.node_id != 0)
+            .then(|| layout.Node(position.node_id))
+            .flatten()
+            .and_then(|node| node.LogicalTreeOrder())
+            .unwrap_or(0);
+        position
+    }))
 }

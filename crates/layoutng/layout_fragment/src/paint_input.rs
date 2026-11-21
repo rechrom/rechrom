@@ -2014,6 +2014,19 @@ impl PaintStyle {
         }
     }
 
+    /// A projection-free view of a live, managed ComputedStyle: every accessor
+    /// that reads `Source()` reads `style` itself, the way Chromium's hit
+    /// testing and painters read the fragment's `Style()`. Accessors that still
+    /// read projected data see `PaintStyleData::default()`. None for an
+    /// unmanaged style, whose values exist only in an exported projection.
+    pub fn LiveView(style: &layoutng_style::style::computed_style::ComputedStyle) -> Option<Self> {
+        let pointer = style as *const layoutng_style::style::computed_style::ComputedStyle;
+        foundation::IsManagedLayoutAddress(pointer).then(|| Self {
+            source_address: pointer as usize,
+            ..Self::default()
+        })
+    }
+
     /// Whether this projection was exported from exactly `source`. A retained
     /// projection whose owner has since received a different ComputedStyle
     /// must be re-exported; its old source address may already be reused.

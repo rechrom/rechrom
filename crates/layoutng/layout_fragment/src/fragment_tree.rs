@@ -883,6 +883,41 @@ pub trait ResidentBoxGeometry {
     fn BorderImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
     /// The -webkit-mask-box-image of a box fragment (see BorderImage).
     fn MaskBoxImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
+    /// The resident fragment's own ComputedStyle as a projection-free
+    /// PaintStyle view: PhysicalFragment::Style() or FragmentItem::Style(),
+    /// both LayoutObject::EffectiveStyle(StyleVariant()), so a fragment that
+    /// UsesFirstLineStyle reads the first-line style. Chromium's NodeAtPoint
+    /// reads this style (core/paint/box_fragment_painter.cc:2261-2468,
+    /// core/layout/hit_test_request.h VisibleToHitTestRequest). Detached
+    /// fixtures keep the stored projection.
+    fn ViewStyle(&self) -> PaintStyle;
+    /// BoxFragmentPainter::NodeAtPoint's repeated-fragment gate
+    /// (core/paint/box_fragment_painter.cc:2261-2271):
+    /// `IsFirstForNode() || CanPaintMultipleFragments()` of the resident box.
+    fn ViewCanPaintFragmentOccurrence(&self) -> bool;
+    /// Whether the resident box's LayoutObject is a LayoutReplaced
+    /// (ViewReplacedContent().is_some() without building its paint data).
+    fn ViewIsReplaced(&self) -> bool;
+}
+
+// Chromium: core/paint/box_fragment_painter.cc:102-127 and
+// core/layout/inline/fragment_item.h IsHiddenForPaint. A self-painting atomic
+// inline is entered through its own physical fragment, but its hidden-for-paint
+// state (line truncation) is recorded on the FragmentItem that places it.
+fn IsHiddenForPaintIncludingInlineItem(fragment: &crate::physical_fragment::PhysicalFragment) -> bool {
+    if fragment.IsHiddenForPaint() {
+        return true;
+    }
+    if !fragment.IsAtomicInline() || !fragment.HasSelfPaintingLayer() {
+        return false;
+    }
+    let object = fragment.GetLayoutObject();
+    if object.is_null() || !unsafe { &*object }.IsInLayoutNGInlineFormattingContext() {
+        return false;
+    }
+    let mut cursor = crate::inline_cursor::InlineCursor::default();
+    cursor.MoveToLayoutObject(unsafe { &*object });
+    cursor.IsNotNull() && cursor.Current().IsHiddenForPaint()
 }
 
 /// ExportNinePieceImageForFragment for a box fragment with a live style.
@@ -1287,7 +1322,13 @@ impl ResidentBoxGeometry for FragmentPaintData {
                         || self.paint.SvgViewport().is_some_and(|viewport| viewport.disabled)
                 })
             }
-            _ => self.paint.hidden,
+            layout_fragment_boundary::ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                IsHiddenForPaintIncludingInlineItem(fragment)
+                    || self.paint.SvgViewport().is_some_and(|viewport| viewport.disabled)
+            }
+            layout_fragment_boundary::ResidentFragmentOwner::None => self.paint.hidden,
         }
     }
 
@@ -1461,6 +1502,52 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     None => self.size,
                 }
             }
+        }
+    }
+
+    fn ViewStyle(&self) -> PaintStyle {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        let style = match self.resident_owner {
+            ResidentFragmentOwner::None => None,
+            ResidentFragmentOwner::Physical(address) => Some(
+                unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) }
+                    .Style(),
+            ),
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).map(crate::fragment_item::FragmentItem::Style)
+            }
+        };
+        style
+            .and_then(PaintStyle::LiveView)
+            .unwrap_or_else(|| self.paint.style.clone())
+    }
+
+    fn ViewCanPaintFragmentOccurrence(&self) -> bool {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => self.paint.CanPaintFragmentOccurrence(),
+            // Only box fragments carry IsFirstForNode; line boxes and inline
+            // items are not repeated-fragment painting roots.
+            ResidentFragmentOwner::Physical(_) => {
+                self.ResidentBoxFragment().is_none_or(|box_fragment| {
+                    box_fragment.IsFirstForNode()
+                        || crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
+                            box_fragment,
+                        )
+                })
+            }
+            ResidentFragmentOwner::InlineItem { .. } => true,
+        }
+    }
+
+    fn ViewIsReplaced(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => !foundation::DynamicTo::<
+                layoutng::internal::layout_replaced::LayoutReplaced,
+            >(box_fragment.GetLayoutObject())
+            .is_null(),
+            None => self.paint.replaced_content.is_some(),
         }
     }
 
