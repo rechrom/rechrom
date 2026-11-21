@@ -12,7 +12,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 pub mod boundary_types;
-pub mod revision;
 pub mod trace;
 
 #[cfg(test)]
@@ -24,7 +23,7 @@ pub use boundary_types::{
     FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
     MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
     PaintPropertiesHandle, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
-    CertifiedPrePaintInput, ResidentFragmentOwner,
+    ResidentFragmentOwner,
     ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
     ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
     SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,

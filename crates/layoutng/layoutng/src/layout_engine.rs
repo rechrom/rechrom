@@ -4,7 +4,6 @@ use foundation::{
     DynamicTo, InitStringStatics, LayoutHeapScope, Length, PrepareLayoutHeapForPointerQueries,
     UnsupportedLayout,
 };
-use layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker;
 use layout_fragment::fragment_tree::{FragmentPaintData, LayoutResultHandle};
 use layout_fragment::layout_result::EStatus;
 use std::{collections::HashSet, marker::PhantomData, rc::Rc, sync::Arc};
@@ -322,7 +321,6 @@ pub struct LayoutEngine {
         std::rc::Rc<std::cell::RefCell<Vec<(usize, foundation::CompositorElementId)>>>,
     >,
     constraints_: ConstraintSpace,
-    pre_paint_inputs_: PrePaintRevisionTracker,
     scroll_paint_index_: Option<ScrollPaintPropertyIndex>,
     // A Paint publication defers its scroll directory until a scroll asks for
     // it; the publication's replay list (boundary_cache_.population_replay)
@@ -390,7 +388,6 @@ impl LayoutEngine {
             user_scroll_disposal_queues_: Default::default(),
             scrollbar_activity_queues_: Default::default(),
             constraints_: ConstraintSpace::default(),
-            pre_paint_inputs_: PrePaintRevisionTracker::new(),
             scroll_paint_index_: None,
             scroll_paint_index_replay_pending_: false,
             scroll_paint_index_spare_: None,
@@ -776,7 +773,6 @@ impl LayoutEngine {
             return;
         };
         let root = PaintFragmentCursor::FromHandle(fragments);
-        let generation = layout_fragment_boundary::revision::next_revision();
         let mut seen_objects = std::collections::HashSet::new();
         let mut seen_fragments = std::collections::HashSet::new();
         for &object in objects {
@@ -791,7 +787,6 @@ impl LayoutEngine {
                     let source=cursor.Cursor().GetLayoutObject();
                     let data=unsafe{cursor.PaintDataMut()};
                     data.pre_paint_invalidation=crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(source);
-                    self.pre_paint_inputs_.ObserveSelectionInvalidation(data,generation);
                 });
                 current = object.Parent();
             }
@@ -846,7 +841,7 @@ impl LayoutEngine {
     }
 
     /// Flush source layout and publish only CSSOM geometry. This output has
-    /// no paint certification and cannot enter retained paint update paths.
+    /// no paint population and cannot enter retained paint update paths.
     pub fn UpdateLayout(&mut self) {
         self.UpdateLayoutOutput(LayoutUpdateKind::Layout);
     }
@@ -887,10 +882,6 @@ impl LayoutEngine {
             "measurement",
             (purpose == LayoutUpdateKind::Layout) as u8 as f64,
         );
-        // While layout and Paint-data population run, the engine has no
-        // certified input catalog.
-        // Unwinding leaves it empty; a subsequent success receives fresh
-        // globally unique revisions instead of reusing a failed pass's basis.
         // Chromium republishes the LayoutResult owner and keeps paint-local
         // data on FragmentData. A targeted relayout cannot splice a copied
         // Rust fragment subtree because no such tree exists.
@@ -907,12 +898,9 @@ impl LayoutEngine {
                 self,
                 preparation.root,
                 purpose,
-                preparation.inputs,
                 fragments,
             );
             trace.set("published", 1.0);
-        } else {
-            layout_commit_engine_layout_publish::abandon_layout_output(self);
         }
         true
     }
@@ -992,7 +980,7 @@ impl LayoutEngine {
     /// Publish paint-only values already applied to the retained fragment
     /// snapshot. Chromium updates FragmentData/ObjectPaintProperties in place;
     /// this immutable Rust boundary uses copy-on-write once per frame, then
-    /// refreshes the same subtree revision proof consumed by PrePaint.
+    /// refreshes the dirty-bit snapshots consumed by PrePaint.
     pub fn RefreshTargetedPaintData(&mut self) -> bool {
         EnginePaintUpdate::refresh_targeted_paint_data(self)
     }
@@ -1004,22 +992,15 @@ impl LayoutEngine {
         EnginePaintUpdate::refresh_targeted_paint_inputs(self)
     }
 
-    /// Re-certify canonical FragmentData after Page binds a newer resource
-    /// catalog to the move-only output. This walks the existing source graph
-    /// by reference and advances the same compact revision tracker used by
-    /// Layout publication; it creates no fragment snapshot or Paint copy.
+    /// Republish canonical FragmentData dirty-bit snapshots after Page binds a
+    /// newer resource catalog to the move-only output. This walks the existing
+    /// source graph by reference; it creates no fragment snapshot or Paint copy.
     pub fn RefreshOutputPrePaintInputs(&mut self, output: &mut LayoutPaintOutput) {
         let mut trace = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::UpdatePrePaintInputs,
         );
-        UpdatePrePaintInputs(
-            &mut self.pre_paint_inputs_,
-            &output.fragments,
-            &self.objects_,
-        );
-        let stats = self.pre_paint_inputs_.last_stats();
-        trace.set("nodes", stats.nodes as f64);
-        trace.set("new_nodes", stats.new_nodes as f64);
+        let nodes = UpdatePrePaintInputs(&output.fragments, &self.objects_);
+        trace.set("nodes", nodes as f64);
     }
 
     /// Deliver the resource-observer notification for document images whose
@@ -1164,8 +1145,8 @@ impl LayoutEngine {
     }
 
     /// Run the host-effect/font discovery pass without publishing a result.
-    /// The final pass certifies against the preceding committed FragmentData
-    /// basis, matching Chromium's retained PrePaint lifecycle.
+    /// The final pass publishes into the preceding committed FragmentData,
+    /// matching Chromium's retained PrePaint lifecycle.
     pub fn RunProvisionalLayoutWithoutPublication(&mut self) {
         layout_commit_engine_layout_publish::run_provisional_layout_without_publication(self)
     }
@@ -1507,12 +1488,6 @@ impl LayoutEngine {
     ) -> Option<LayoutResultHandle> {
         let mut result = self.RunLayout(root, space, publish, purpose);
         if purpose == LayoutUpdateKind::Paint && UpdateTextOverflowPostLayoutSnapshots(root) {
-            // The first publication already certified against the previous
-            // frame. Certify the replacement from an empty basis rather than
-            // against that superseded pass (rare: an inline scroll toggle).
-            if let Some(tracker) = self.boundary_cache_.pre_paint_certification.as_mut() {
-                tracker.invalidate();
-            }
             result = self.RunLayout(root, space, publish, purpose);
         }
         result

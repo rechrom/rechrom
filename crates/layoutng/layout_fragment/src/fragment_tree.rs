@@ -12,8 +12,8 @@ pub use layout_fragment_boundary::{
     SvgTextPaintData, SvgViewportGeometry, TextCombineEmphasisPaintData, TextCombinePaintData,
 };
 
-#[path = "pre_paint_revision.rs"]
-pub mod pre_paint_revision;
+#[path = "paint_resource_usage.rs"]
+pub mod paint_resource_usage;
 
 pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 use foundation::{LayoutOffset as Offset, LayoutSize as Size};

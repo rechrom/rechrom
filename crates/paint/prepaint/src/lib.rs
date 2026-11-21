@@ -55,8 +55,17 @@ pub struct PrePaintUpdateStats {
     pub same_context_nodes: usize,
     pub retained_context_nodes: usize,
     pub retained_geometry_covered_nodes: usize,
-    pub subtree_revision_matches: usize,
-    pub self_revision_matches: usize,
+    /// Retained nodes whose own inputs are unchanged: no own dirty bit, same
+    /// link offset and size, same source identity and live clients, same
+    /// document resources for their usage.
+    pub self_unchanged_nodes: usize,
+    /// Of those, nodes whose descendants are also unchanged: no descendant
+    /// dirty bit, no pending child walk, same resources for the subtree.
+    pub subtree_unchanged_nodes: usize,
+    /// Retained nodes rejected by the first failing admission rule: own
+    /// bits, offset, size, identity, owners, resources; then for the
+    /// subtree: descendant bits, pending child walk, subtree resources.
+    pub admission_rejects: [usize; 9],
     pub source_tree_compatible_nodes: usize,
     pub invalidation_nodes: usize,
     pub post_walk: bool,

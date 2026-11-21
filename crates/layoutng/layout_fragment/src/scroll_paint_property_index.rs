@@ -13,7 +13,6 @@ use super::{
 use crate::fragment_tree::ResidentBoxGeometry as _;
 use crate::layout_engine::PaintFragmentCursor;
 use super::layout_fragment_fragment_export_state::PopulationReplayEntry;
-use layout_fragment::fragment_tree::pre_paint_revision::MarkScrollPropertyChange;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -189,9 +188,6 @@ impl ScrollPaintPropertyIndex {
             if own_changed {
                 changed_fragments += 1;
                 refreshed_sources.insert(entry.source_id);
-                for (position, &fragment) in path.iter().enumerate().rev() {
-                    MarkScrollPropertyChange(unsafe { &mut *fragment }, position + 1 == path.len());
-                }
             }
         }
         trace.set("changed_fragments", changed_fragments as f64);

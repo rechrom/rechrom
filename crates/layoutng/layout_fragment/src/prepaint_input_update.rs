@@ -82,19 +82,19 @@ pub(super) fn VisitMutablePaintInputs(
 
 #[inline(never)]
 pub(super) fn UpdatePrePaintInputs(
-    tracker: &mut PrePaintRevisionTracker,
     fragments: &LayoutResultHandle,
     objects: &LayoutObjectFactorySet,
-) {
+) -> usize {
     // Keep source child traversal inside the engine's virtual-dispatch scope.
-    // Certify each canonical sidecar in place. Do not flatten the source
+    // Refresh each canonical sidecar in place. Do not flatten the source
     // topology into another document-sized Vec first.
     let _object_factory_scope = LayoutObjectFactoryScope::new(objects);
-    fn certify(cursor: PaintFragmentCursor<'_>, tracker: &mut PrePaintRevisionTracker) -> bool {
-        let descendant_changed = cursor
+    fn refresh(cursor: PaintFragmentCursor<'_>) -> usize {
+        let descendants = cursor
             .Children()
             .into_iter()
-            .fold(false, |changed, child| certify(child, tracker) || changed);
+            .map(|child| refresh(child))
+            .sum::<usize>();
         let cursor_source = cursor.Cursor().GetLayoutObject() as *const LayoutObject;
         let data = unsafe { cursor.PaintDataMut() };
         // Host notifications delivered after population (resource catalog
@@ -117,11 +117,7 @@ pub(super) fn UpdatePrePaintInputs(
                     source,
                 );
         }
-        tracker.ObserveProductionNode(data, descendant_changed)
+        descendants + 1
     }
-    tracker.BeginProductionUpdate();
-    let root = PaintFragmentCursor::FromHandle(fragments);
-    tracker.SetProductionDocumentResources(root.DocumentResources().cloned());
-    certify(root, tracker);
-    tracker.FinishProductionUpdate();
+    refresh(PaintFragmentCursor::FromHandle(fragments))
 }

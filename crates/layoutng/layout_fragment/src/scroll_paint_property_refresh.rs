@@ -28,39 +28,14 @@ pub(super) fn refresh_scroll_paint_properties(
         UpdateStickyOffsets(std::iter::once(object), reuse_sticky_constraints);
         object = next;
     }
-    unsafe fn update(
-        fragment: crate::layout_engine::PaintFragmentCursor<'_>,
-        retained_geometry: bool,
-    ) -> bool {
+    unsafe fn update(fragment: crate::layout_engine::PaintFragmentCursor<'_>) {
         let children = fragment.Children();
-        let own_changed =
-            refresh_fragment_scroll_paint_properties(unsafe { fragment.PaintDataMut() });
-        let mut changed = own_changed;
+        refresh_fragment_scroll_paint_properties(unsafe { fragment.PaintDataMut() });
         for child in children {
-            changed |= unsafe { update(child, retained_geometry) };
+            unsafe { update(child) };
         }
-        // The layout boundary's certification covered the exported inputs.
-        // Refresh mutated them in place: version exactly these paths so a
-        // different resident PaintEngine cannot mistake stale revisions for a
-        // fresh layout proof. Unaffected branches retain their certification.
-        if changed && retained_geometry {
-            layout_fragment::fragment_tree::pre_paint_revision::MarkScrollPropertyChange(
-                unsafe { fragment.PaintDataMut() },
-                own_changed,
-            );
-        } else {
-            // A refreshed layout is not the retained-geometry proof. Keep the
-            // existing unobserved-input fallback until a full certification.
-            if own_changed {
-                unsafe { fragment.PaintDataMut() }.pre_paint_revision = 0;
-            }
-            if changed {
-                unsafe { fragment.PaintDataMut() }.pre_paint_subtree_revision = 0;
-            }
-        }
-        changed
     }
-    unsafe { update(fragments, reuse_sticky_constraints) };
+    unsafe { update(fragments) };
 }
 
 pub(super) fn refresh_fragment_scroll_paint_properties(fragment: &mut FragmentPaintData) -> bool {

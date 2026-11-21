@@ -220,7 +220,7 @@ fn PopulateInlineItemLocalPaintData(
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) -> (*mut FragmentPaintData, bool) {
+) {
     let prefix_started = browser_tracing::enabled().then(std::time::Instant::now);
     let object = item.GetLayoutObject();
     if purpose == LayoutUpdateKind::Paint {
@@ -289,9 +289,6 @@ fn PopulateInlineItemLocalPaintData(
     });
     let replay_entry = paint_state_owners.replay_next.entries.len() - 1;
     let (output, slot_retained) = (binding.data, binding.retained);
-    let slot = output;
-    // Atomic inline boxes populate their own box children here.
-    let mut descendant_changed = false;
     paint_state_owners
         .population_stats
         .CountBinding(retained_invalidation.is_some(), binding.same_owner, false);
@@ -352,10 +349,8 @@ fn PopulateInlineItemLocalPaintData(
         }
         // The binding recorded this slot's resident owner; a fresh payload keeps it.
         let resident_owner = output.resident_owner;
-        let certified = std::mem::take(&mut output.certified);
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
-        output.certified = certified;
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
             output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
@@ -393,7 +388,7 @@ fn PopulateInlineItemLocalPaintData(
         entry.replayable = !output.pre_paint_invalidation.own()
             && !output.pre_paint_invalidation.descendants();
         paint_state_owners.population_stats.RecordLocal(local_timing);
-        return (slot, false);
+        return;
     }
     let rect = *item.RectInContainerFragment();
     output.offset = Offset {
@@ -476,7 +471,7 @@ fn PopulateInlineItemLocalPaintData(
                         if !child.is_present() || (!nested_items.is_null() && child.IsLineBox()) {
                             continue;
                         }
-                        descendant_changed |= PopulatePhysicalFragmentPaintData(
+                        PopulatePhysicalFragmentPaintData(
                             child,
                             child.Offset(),
                             sources,
@@ -495,8 +490,7 @@ fn PopulateInlineItemLocalPaintData(
                         let span = unsafe { &*nested_items }.Items();
                         let mut index = 0;
                         while index < span.len() {
-                            let changed;
-                            (index, changed) = PopulateInlineItemPaintData(
+                            index = PopulateInlineItemPaintData(
                                 span,
                                 unsafe { &*nested_items },
                                 index,
@@ -513,11 +507,10 @@ fn PopulateInlineItemLocalPaintData(
                                 next_fragment_instance_id,
                                 next_fragmentainer_instance_id,
                             );
-                            descendant_changed |= changed;
                         }
                     }
                 }
-                descendant_changed |= PopulateSVGChildPaintData(
+                PopulateSVGChildPaintData(
                     object,
                     sources,
                     style_sources,
@@ -535,7 +528,6 @@ fn PopulateInlineItemLocalPaintData(
         ItemType::kInvalid => unreachable!("invalid inline item"),
     }
     paint_state_owners.population_stats.RecordLocal(local_timing);
-    (slot, descendant_changed)
 }
 
 #[inline(never)]
@@ -555,13 +547,13 @@ fn PopulateInlineItemPaintData(
     fragmentainer_instance_id: u64,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) -> (usize, bool) {
+) -> usize {
     assert!(index < limit);
     let item = &items[index];
     let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
     let subtree_end = limit.min(index + subtree_size);
     let replay_begin = (paint_state_owners.replay_next.entries.len(), paint_state_owners.replay_blocked);
-    let (slot, mut descendant_changed) = PopulateInlineItemLocalPaintData(
+    PopulateInlineItemLocalPaintData(
         item,
         fragment_items,
         parent_offset,
@@ -578,8 +570,7 @@ fn PopulateInlineItemPaintData(
     );
     let mut child_index = index + 1;
     while child_index < subtree_end {
-        let changed;
-        (child_index, changed) = PopulateInlineItemPaintData(
+        child_index = PopulateInlineItemPaintData(
             items,
             fragment_items,
             child_index,
@@ -596,13 +587,9 @@ fn PopulateInlineItemPaintData(
             next_fragment_instance_id,
             next_fragmentainer_instance_id,
         );
-        descendant_changed |= changed;
     }
     paint_state_owners.finish_replay_entry(replay_begin);
-    (
-        subtree_end,
-        paint_state_owners.certify(slot, descendant_changed),
-    )
+    subtree_end
 }
 
 fn ReplayOwnerMatches(slot: &FragmentPaintData, owner: PopulationReplayOwner) -> bool {
@@ -669,7 +656,7 @@ fn ReplayValid(
 /// Rebind the previous publication's unchanged subtree `entries` (all
 /// proven by ReplayValid) to this publication: the bookkeeping the
 /// population walk does for a retained slot, without re-deriving its
-/// payload. Returns whether any certified revision changed.
+/// payload.
 fn ReplaySubtree(
     entries: &[PopulationReplayEntry],
     sources: &SourceMap,
@@ -677,7 +664,7 @@ fn ReplaySubtree(
     paint_state: &crate::layout_engine::LayoutPaintState,
     owners: &mut FragmentOwners,
     next_fragment_instance_id: &mut u64,
-) -> bool {
+) {
     let mut slots = Vec::with_capacity(entries.len());
     for entry in entries {
         let instance = owners.fragment_instance(entry.key, next_fragment_instance_id);
@@ -713,17 +700,6 @@ fn ReplaySubtree(
         let begin = owners.begin_replay_entry(copy);
         slots.push((binding.data, begin));
     }
-    // Certify after descendants (reverse preorder), as population does.
-    let mut changed = vec![false; entries.len()];
-    for i in (0..entries.len()).rev() {
-        let len = entries[i].len;
-        let descendant_changed = changed[i + 1..i + len].iter().any(|c| *c);
-        changed[i] = if descendant_changed {
-            owners.certify(slots[i].0, true)
-        } else {
-            owners.certify_replayed(slots[i].0)
-        };
-    }
     // Close the copied entries (already finished subtrees: keep their
     // recorded lengths and flags).
     for (_, (index, _)) in &slots {
@@ -733,7 +709,6 @@ fn ReplaySubtree(
     }
     owners.replay_stats[0] += 1;
     owners.replay_stats[1] += entries.len();
-    changed.iter().any(|c| *c)
 }
 
 pub(super) fn PopulatePhysicalFragmentPaintData(
@@ -749,7 +724,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     mut display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) -> bool {
+) {
     let prefix_started = browser_tracing::enabled().then(std::time::Instant::now);
     SynchronizeBoxFragmentData(fragment);
     let object = fragment.GetLayoutObject();
@@ -815,7 +790,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         replayable: false,
     });
     let (output, slot_retained) = (binding.data, binding.retained);
-    let slot = output;
     paint_state_owners
         .population_stats
         .CountBinding(retained_invalidation.is_some(), binding.same_owner, true);
@@ -867,10 +841,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         }
         // The binding recorded this slot's resident owner; a fresh payload keeps it.
         let resident_owner = output.resident_owner;
-        let certified = std::mem::take(&mut output.certified);
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
-        output.certified = certified;
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
             output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
@@ -900,7 +872,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             && !output.pre_paint_invalidation.own()
             && !output.pre_paint_invalidation.descendants();
         paint_state_owners.finish_replay_entry(replay_begin);
-        return paint_state_owners.certify(slot, false);
+        return;
     }
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
@@ -975,7 +947,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         Some(box_fragment as *const PhysicalBoxFragment);
     update_paint!(output.paint, establishes_paint_state, establishes_paint_state);
     paint_state_owners.population_stats.RecordLocal(local_timing);
-    let mut descendant_changed = false;
     // Self qualification: a retained, same-owner, clean slot with no state
     // that a population walk re-derives from live (non-fragment) inputs.
     let self_replayable = reuse_fragment_geometry
@@ -1032,7 +1003,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         let len = previous.entries[index].len;
         let range = &previous.entries[index + 1..index + len];
         if !range.is_empty() && ReplayValid(range, resources, paint_state, paint_state_owners) {
-            descendant_changed = ReplaySubtree(
+            ReplaySubtree(
                 range,
                 sources,
                 resources,
@@ -1050,7 +1021,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             if !child.is_present() || (!items.is_null() && child.IsLineBox()) {
                 continue;
             }
-            descendant_changed |= PopulatePhysicalFragmentPaintData(
+            PopulatePhysicalFragmentPaintData(
                 child,
                 child.Offset(),
                 sources,
@@ -1069,8 +1040,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             let span = unsafe { &*items }.Items();
             let mut index = 0;
             while index < span.len() {
-                let changed;
-                (index, changed) = PopulateInlineItemPaintData(
+                index = PopulateInlineItemPaintData(
                     span,
                     unsafe { &*items },
                     index,
@@ -1087,10 +1057,9 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                     next_fragment_instance_id,
                     next_fragmentainer_instance_id,
                 );
-                descendant_changed |= changed;
             }
         }
-        descendant_changed |= PopulateSVGChildPaintData(
+        PopulateSVGChildPaintData(
             object,
             sources,
             style_sources,
@@ -1105,5 +1074,4 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         );
     }
     paint_state_owners.finish_replay_entry(replay_begin);
-    paint_state_owners.certify(slot, descendant_changed)
 }

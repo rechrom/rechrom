@@ -204,12 +204,6 @@ pub struct LayoutBoundaryCache {
     /// `style_sources` / `sticky_objects` predate a compatible style
     /// replacement and must be rebuilt before their next read.
     pub(crate) style_indices_stale: bool,
-    /// Present only while a Paint publication runs. Population certifies each
-    /// fragment-local input as it binds it, after its children, the way
-    /// PrePaintTreeWalk consumes dirty bits in one pass; no separate
-    /// certification walk follows publication.
-    pub(crate) pre_paint_certification:
-        Option<layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker>,
     /// The last Paint publication's slots in preorder (population replay).
     pub(crate) population_replay:
         crate::internal::boundary::layout_boundary::layout_fragment_fragment_export_state::PopulationReplay,

@@ -597,7 +597,6 @@ mod package_contract_tests {
         for relative in [
             "src/package.rs",
             "src/boundary_types.rs",
-            "src/revision.rs",
             "src/trace.rs",
         ] {
             let contents = std::fs::read_to_string(package.join(relative))
@@ -4361,15 +4360,10 @@ mod package_contract_tests {
             "fn publish_layout_output",
             "scroll_paint_index_spare_",
             "pending_subtree_layout_id_ = None",
-            "std::mem::take(&mut engine.pre_paint_inputs_)",
             "TracePhase::RunLayoutWithoutPublication",
-            "engine.pre_paint_inputs_.invalidate()",
-            "fn abandon_layout_output",
-            "boundary_cache_.pre_paint_certification",
             "TracePhase::BuildScrollIndex",
             "ScrollPaintPropertyIndex::new",
             "engine.fragments = Some(fragments)",
-            "engine.pre_paint_inputs_ = inputs",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -4833,7 +4827,6 @@ mod package_contract_tests {
             "while !object.is_null()",
             "for child in children",
             "SetScrollbarThumb(",
-            "MarkScrollPropertyChange",
         ] {
             assert!(
                 owner.contains(owned_policy),
