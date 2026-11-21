@@ -169,7 +169,7 @@ pub(super) fn refresh_retained_paint_inputs(
         }
         if let Some(&item) = ink_items.get(&(
             node.paint.DisplayItemClientId(),
-            node.paint.display_item_fragment,
+            node.ViewDisplayItemFragment(),
         )) {
             node.paint.self_ink_overflow = None;
             node.paint.ink_overflow = None;

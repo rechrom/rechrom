@@ -699,8 +699,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment")
-            .paint
-            .CanPaintFragmentOccurrence()
+            .ViewCanPaintFragmentOccurrence()
         {
             self.context.borrow_mut().walk_metrics.skipped_phase += 1;
             return;

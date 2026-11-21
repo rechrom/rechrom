@@ -2,6 +2,7 @@
 // output handle remains part of LayoutEngine's public compatibility surface.
 
 use super::*;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 #[inline(never)]
 pub(super) fn paint_cull_rect_has_scrolled_enough(
@@ -19,7 +20,7 @@ pub(super) fn paint_cull_rect_has_scrolled_enough(
             .map_or(1.0, |resources| resources.device_pixel_ratio)
             .max(f64::MIN_POSITIVE);
         let threshold = CHANGED_ENOUGH_DISTANCE * expansion_ratio;
-        (cursor.node_id == id
+        (cursor.ViewNodeId() == id
             && cursor.paint_cull_scroll_offset.is_some_and(|origin| {
                 (offset.x - origin.x).abs() >= threshold || (offset.y - origin.y).abs() >= threshold
             }))

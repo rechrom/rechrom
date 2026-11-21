@@ -388,7 +388,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
                 continue;
             };
             if matches!(
-                child_fragment.kind,
+                child_fragment.ViewKind(),
                 FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
             ) || child_fragment.ViewIsInlineBox()
             {
@@ -726,7 +726,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         !matches!(
-            child.kind,
+            child.ViewKind(),
             FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
         ) && !child.ViewIsInlineBox()
     }
@@ -866,7 +866,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.IsSVGHiddenContainer()
             || (!fragment.paint.HasSource() && !text_combine)
             || fragment.ViewHidden()
-            || !fragment.paint.CanPaintFragmentOccurrence()
+            || !fragment.ViewCanPaintFragmentOccurrence()
         {
             return;
         }
@@ -1711,8 +1711,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let clip = PaintRect {
                 x: cell.paint_offset.x,
                 y: cell.paint_offset.y,
-                width: cell_fragment.size.width,
-                height: cell_fragment.size.height,
+                width: cell_fragment.ViewSize().width,
+                height: cell_fragment.ViewSize().height,
             };
             if !IsVisible(self.node, &clip) {
                 continue;

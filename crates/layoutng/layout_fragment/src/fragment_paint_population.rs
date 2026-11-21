@@ -7,7 +7,6 @@
 
 use super::*;
 use super::layout_fragment_fragment_export_state::{PopulationReplayEntry, PopulationReplayOwner};
-use crate::inline_cursor::InlineCursor;
 use crate::fragment_tree::ResidentBoxGeometry as _;
 
 /// Store a payload field only when its value changes. The payload is shared
@@ -129,28 +128,6 @@ fn RefreshRetainedTreeOrder(
             output.paint.logical_tree_order = entry.logical_tree_order;
         }
     }
-}
-
-// Chromium: core/paint/box_fragment_painter.cc:102-127.  Line truncation
-// marks the FragmentItem in the inline formatting context, while a
-// self-painting atomic inline is later entered through its stored physical
-// fragment.  Export the effective IsHiddenForPaint result once at the source
-// Layout-to-Paint boundary so the paint packages do not have to recreate an
-// InlineCursor from flattened data.
-fn IsHiddenForPaintIncludingInlineItem(fragment: &PhysicalFragment) -> bool {
-    if fragment.IsHiddenForPaint() {
-        return true;
-    }
-    if !fragment.IsAtomicInline() || !fragment.HasSelfPaintingLayer() {
-        return false;
-    }
-    let object = fragment.GetLayoutObject();
-    if object.is_null() || !unsafe { &*object }.IsInLayoutNGInlineFormattingContext() {
-        return false;
-    }
-    let mut cursor = InlineCursor::default();
-    cursor.MoveToLayoutObject(unsafe { &*object });
-    cursor.IsNotNull() && cursor.Current().IsHiddenForPaint()
 }
 
 // Chromium grows and shrinks a LayoutObject's FragmentData list while
@@ -1110,12 +1087,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     paint_state_owners.population_stats.physical_fragments += 1;
     output.node_id = InputId(object);
     update_paint!(output.paint, display_item_fragment, display_item_fragment);
-    update_paint!(
-        output.paint,
-        hidden,
-        IsHiddenForPaintIncludingInlineItem(fragment)
-            || output.paint.SvgViewport().is_some_and(|v| v.disabled)
-    );
+    // IsHiddenForPaint is read live from the resident physical owner
+    // (ResidentBoxGeometry::ViewHidden); nothing is stored here.
     output.kind = kind;
     output.offset = Offset {
         x: Number(offset.left),
@@ -1143,7 +1116,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
     if !reuse_fragment_geometry {
-        output.paint.is_first_for_node = box_fragment.IsFirstForNode();
+        // IsFirstForNode / CanPaintMultipleFragments are read live from the
+        // resident box (ResidentBoxGeometry::ViewCanPaintFragmentOccurrence).
         // Live styles resolve nine-piece images in Paint (BorderImage).
         if purpose == LayoutUpdateKind::Paint
             && !object.is_null()

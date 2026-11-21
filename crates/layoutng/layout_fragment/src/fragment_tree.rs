@@ -966,7 +966,7 @@ fn LiveNinePieceImage(
         -> &layoutng_style::style::nine_piece_image::NinePieceImage,
 ) -> Option<Option<crate::internal::paint_input::NinePieceImagePaint>> {
     let style = fragment.paint.style.Source()?;
-    if fragment.kind != FragmentKind::kBox || !fragment.paint.HasSource() {
+    if fragment.ViewKind() != FragmentKind::kBox || !fragment.paint.HasSource() {
         return Some(None);
     }
     let source = image(style);
@@ -985,7 +985,7 @@ fn LiveNinePieceImage(
         crate::internal::boundary::paint_style_export::ExportNinePieceImageForFragment(
             style,
             source,
-            fragment.size,
+            fragment.ViewSize(),
             fragment.Borders(),
             resource,
         ),

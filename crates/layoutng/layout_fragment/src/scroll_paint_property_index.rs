@@ -8,6 +8,7 @@ use super::layout_fragment_scroll_paint_property_refresh::refresh_fragment_scrol
 use super::{
     FragmentPaintData, InputId, LayoutObject, LayoutResultHandle, Position, UpdateStickyOffsets,
 };
+use crate::fragment_tree::ResidentBoxGeometry as _;
 use crate::layout_engine::PaintFragmentCursor;
 use super::layout_fragment_fragment_export_state::PopulationReplayEntry;
 use layout_fragment::fragment_tree::pre_paint_revision::MarkScrollPropertyChange;
@@ -178,7 +179,7 @@ impl ScrollPaintPropertyIndex {
             let entry = &self.fragments[entry];
             let fragment = unsafe { &*entry.fragment };
             if !fragment.paint.HasSource()
-                || fragment.node_id != entry.node_id
+                || fragment.ViewNodeId() != entry.node_id
                 || fragment.paint.logical_tree_order != entry.logical_tree_order
             {
                 return false;
@@ -259,7 +260,7 @@ impl ScrollPaintPropertyIndex {
             path_start,
             path_len: path.len(),
             fragment: input,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             source_id,
             logical_tree_order: fragment.paint.logical_tree_order,
         });
