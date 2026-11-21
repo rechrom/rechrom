@@ -158,6 +158,7 @@ impl EngineMutation for LayoutEngine {
                 self.scroll_paint_index_spare_ = Some(index);
             }
             self.pending_scroll_ids_.clear();
+            self.scroll_paint_index_replay_pending_ = false;
         }
         if !matches!(
             &mutation,
@@ -252,6 +253,7 @@ impl EngineMutation for LayoutEngine {
                 }
                 self.scroll_paint_index_ = None;
                 self.scroll_paint_index_spare_ = None;
+                self.scroll_paint_index_replay_pending_ = false;
                 self.boundary_cache_.Clear();
                 self.tree_facts_ = None;
                 self.tree_relations_dirty_ = true;

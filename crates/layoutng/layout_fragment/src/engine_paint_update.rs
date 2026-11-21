@@ -49,21 +49,12 @@ impl EnginePaintUpdate for LayoutEngine {
             .pre_paint_certification
             .take()
             .expect("Paint publication must return its PrePaint certification");
-        let reuse = self
-            .scroll_paint_index_
-            .take()
-            .or(self.scroll_paint_index_spare_.take());
-        let cached_objects = self.CachedScrollIndexObjects();
-        self.scroll_paint_index_ = Some({
-            let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);
-            ScrollPaintPropertyIndex::new_from_replay(
-                unsafe { &mut *root },
-                &fragments,
-                cached_objects,
-                reuse,
-                &self.boundary_cache_.population_replay.entries,
-            )
-        });
+        // The scroll directory is built on the first scroll that needs it
+        // (EnsureScrollPaintIndex), from this publication's replay list.
+        if let Some(index) = self.scroll_paint_index_.take() {
+            self.scroll_paint_index_spare_ = Some(index);
+        }
+        self.scroll_paint_index_replay_pending_ = true;
         self.pending_scroll_ids_.clear();
         self.published_result_stale_ = false;
         self.fragments = Some(fragments);
@@ -157,6 +148,9 @@ impl EnginePaintUpdate for LayoutEngine {
             return false;
         }
         let root = self.RootPointer();
+        if !self.pending_scroll_ids_.is_empty() {
+            self.EnsureScrollPaintIndex(fragments);
+        }
         let indexed = {
             let mut heap = LayoutHeapScope::new();
             let _pass = LayoutPassScope::new(&self.algorithms_, &self.objects_);

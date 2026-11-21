@@ -304,6 +304,10 @@ pub struct LayoutEngine {
     constraints_: ConstraintSpace,
     pre_paint_inputs_: PrePaintRevisionTracker,
     scroll_paint_index_: Option<ScrollPaintPropertyIndex>,
+    // A Paint publication defers its scroll directory until a scroll asks for
+    // it; the publication's replay list (boundary_cache_.population_replay)
+    // stays valid for that result until the next publication or mutation.
+    pub(crate) scroll_paint_index_replay_pending_: bool,
     // Chromium retains FragmentData/property directories across lifecycle
     // updates. A stale directory is never queried, but its allocation storage
     // can seed the replacement built after the next successful layout.
@@ -368,6 +372,7 @@ impl LayoutEngine {
             constraints_: ConstraintSpace::default(),
             pre_paint_inputs_: PrePaintRevisionTracker::new(),
             scroll_paint_index_: None,
+            scroll_paint_index_replay_pending_: false,
             scroll_paint_index_spare_: None,
             pending_scroll_ids_: HashSet::new(),
             pending_paint_ids_: HashSet::new(),
@@ -930,6 +935,34 @@ impl LayoutEngine {
             self.published_result_stale_ = true;
         }
         true
+    }
+
+    /// Build the deferred scroll directory of the current Paint publication
+    /// from its replay list. Publications no longer pay for it every frame;
+    /// only a scroll that needs the targeted refresh does.
+    pub(crate) fn EnsureScrollPaintIndex(&mut self, fragments: &LayoutResultHandle) {
+        if !self.scroll_paint_index_replay_pending_ || self.scroll_paint_index_.is_some() {
+            return;
+        }
+        self.scroll_paint_index_replay_pending_ = false;
+        if self.tree_.is_none() {
+            return;
+        }
+        let root = self.RootPointer();
+        let reuse = self.scroll_paint_index_spare_.take();
+        let cached_objects = self.CachedScrollIndexObjects();
+        let _pass = crate::internal::layout_pass_scope::LayoutPassScope::new(
+            &self.algorithms_,
+            &self.objects_,
+        );
+        let index = ScrollPaintPropertyIndex::new_from_replay(
+            unsafe { &mut *root },
+            fragments,
+            cached_objects,
+            reuse,
+            &self.boundary_cache_.population_replay.entries,
+        );
+        self.scroll_paint_index_ = Some(index);
     }
 
     pub fn PopulatePaintData(&mut self) -> bool {

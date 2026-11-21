@@ -19,6 +19,7 @@ pub(super) fn begin_layout_output(
         engine.scroll_paint_index_spare_ = Some(index);
     }
     engine.pending_scroll_ids_.clear();
+    engine.scroll_paint_index_replay_pending_ = false;
     let root = engine.RootPointer();
     let subtree_id = (purpose == LayoutUpdateKind::Paint)
         .then_some(engine.pending_subtree_layout_id_)
@@ -70,6 +71,7 @@ fn run_layout_without_publication_impl(
         engine.scroll_paint_index_spare_ = Some(index);
     }
     engine.pending_scroll_ids_.clear();
+    engine.scroll_paint_index_replay_pending_ = false;
     let root = engine.RootPointer();
     engine.fragments = None;
     if invalidate_pre_paint_basis {

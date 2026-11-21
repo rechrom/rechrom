@@ -26,6 +26,7 @@ pub(super) fn refresh_retained_scroll_geometry(
         });
     }
 
+    engine.EnsureScrollPaintIndex(fragments);
     let mut heap = LayoutHeapScope::new();
     let _pass = LayoutPassScope::new(&engine.algorithms_, &engine.objects_);
     let refreshed = engine
