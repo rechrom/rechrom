@@ -1349,7 +1349,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 clip_inset.right += fragment.Padding().right;
                 clip_inset.bottom += fragment.Padding().bottom;
                 clip_inset.left += fragment.Padding().left;
-            } else if let Some(outsets) = fragment.paint.overflow_clip_margin_outsets {
+            } else if let Some(outsets) = fragment.ViewOverflowClipMarginOutsets() {
                 clip_inset = Edges {
                     top: -outsets.top,
                     right: -outsets.right,
@@ -1424,8 +1424,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 style.filter(|_| fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer)
             {
                 if let Some(outsets) = fragment
-                    .paint
-                    .overflow_clip_margin_outsets
+                    .ViewOverflowClipMarginOutsets()
                     .filter(|_| !replaced_always_clips)
                 {
                     resolved_clip_radii = ExpandCornerRadiiEdges(

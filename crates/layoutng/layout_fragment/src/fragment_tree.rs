@@ -801,6 +801,8 @@ pub trait ResidentBoxGeometry {
     fn ViewScrollbars(&self) -> Option<Arc<ScrollbarPaintData>>;
     /// The resident box's self outline rects (AddSelfOutlineRects).
     fn ViewSelfOutline(&self) -> Option<SelfOutlinePaintData>;
+    /// overflow-clip-margin outsets of the resident box.
+    fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -871,6 +873,15 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::ExportOverflowClipMargin(box_fragment)
+            }
+            None => self.paint.overflow_clip_margin_outsets,
+        }
+    }
+
     fn ViewSelfOutline(&self) -> Option<SelfOutlinePaintData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportSelfOutlineGeometry(

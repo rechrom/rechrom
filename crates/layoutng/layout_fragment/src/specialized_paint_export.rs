@@ -898,20 +898,19 @@ pub(crate) fn ExportGapRulePaintData(
     None
 }
 
-pub(super) fn ExportOverflowClipMargin(
-    box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintProperties,
-) {
+/// Source: PhysicalBoxFragment::OverflowClipMarginOutsets, read by
+/// PaintPropertyTreeBuilder for the overflow clip.
+pub(crate) fn ExportOverflowClipMargin(box_fragment: &PhysicalBoxFragment) -> Option<Edges> {
     if !box_fragment.ShouldApplyOverflowClipMargin() {
-        return;
+        return None;
     }
     let outsets = box_fragment.OverflowClipMarginOutsets();
-    paint.overflow_clip_margin_outsets = Some(Edges {
+    Some(Edges {
         top: Number(outsets.top),
         right: Number(outsets.right),
         bottom: Number(outsets.bottom),
         left: Number(outsets.left),
-    });
+    })
 }
 
 #[cfg(test)]

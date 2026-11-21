@@ -609,7 +609,7 @@ fn PopulateInlineItemLocalPaintData(
                     output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportOverflowClipMargin(box_fragment, &mut output.paint);
+                    output.paint.overflow_clip_margin_outsets = ExportOverflowClipMargin(box_fragment);
                 }
                 if purpose == LayoutUpdateKind::Paint {
                     output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
@@ -1360,7 +1360,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 unsafe { &*effective_style }
             };
             output.paint.self_outline = ExportSelfOutlineGeometry(box_fragment, outline_style);
-            ExportOverflowClipMargin(box_fragment, &mut output.paint);
+            output.paint.overflow_clip_margin_outsets = ExportOverflowClipMargin(box_fragment);
         }
     }
     if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {

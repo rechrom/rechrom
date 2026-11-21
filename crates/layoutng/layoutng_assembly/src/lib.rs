@@ -10079,13 +10079,13 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layout_fragment/src/specialized_paint_export.rs"))
                 .expect("read specialized fragment paint owner");
         for owned_policy in [
-            "pub(super) fn ExportTablePaintData",
-            "pub(super) fn ExportMathMLPaintData",
-            "pub(super) fn ExportFrameSetPaintData",
-            "pub(super) fn ExportFieldsetPaintData",
-            "pub(super) fn ExportColumnRulePaintData",
-            "pub(super) fn ExportGapRulePaintData",
-            "pub(super) fn ExportOverflowClipMargin",
+            "fn ExportTablePaintData",
+            "fn ExportMathMLPaintData",
+            "fn ExportFrameSetPaintData",
+            "fn ExportFieldsetPaintData",
+            "fn ExportColumnRulePaintData",
+            "fn ExportGapRulePaintData",
+            "fn ExportOverflowClipMargin",
         ] {
             assert!(
                 specialized.contains(owned_policy),
