@@ -10009,7 +10009,6 @@ mod package_contract_tests {
             "fn ExportSvgTextPaintData",
             "fn ExportStitchedDecorationData",
             "pub(super) fn ExportBoxPaintGeometry",
-            "pub(super) fn ExportContentSize",
             "stitched_decoration",
             "scroll_container",
         ] {

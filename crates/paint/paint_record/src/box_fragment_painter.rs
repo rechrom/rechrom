@@ -2498,7 +2498,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let id =
-            CanvasBackgroundDisplayItemId(fragment, DisplayItemIdType::kDocumentRootBackdrop, 0);
+            CanvasBackgroundDisplayItemId(self.node, DisplayItemIdType::kDocumentRootBackdrop, 0);
         let client = crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment);
         let _properties = crate::paint_context::ScopedPaintChunkProperties::with_client(
             self.context,
@@ -2573,7 +2573,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
-        let id = CanvasBackgroundDisplayItemId(fragment, DisplayItemIdType::kDocumentBackground, 0);
+        let id = CanvasBackgroundDisplayItemId(self.node, DisplayItemIdType::kDocumentBackground, 0);
         let client = crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment);
         let _drawing = DrawingRecorder::with_client(self.context, self.node, id, client, rect);
 
@@ -2800,7 +2800,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let _drawing = DrawingRecorder::with_client(
                 self.context,
                 self.node,
-                CanvasBackgroundDisplayItemId(fragment, DisplayItemIdType::kDocumentBackground, 0),
+                CanvasBackgroundDisplayItemId(self.node, DisplayItemIdType::kDocumentBackground, 0),
                 crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
                 scrolling_rect,
             );
@@ -2906,7 +2906,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let drawing = DrawingRecorder::with_client(
                 self.context,
                 self.node,
-                CanvasBackgroundDisplayItemId(fragment, item_type, layer_index + 1),
+                CanvasBackgroundDisplayItemId(self.node, item_type, layer_index + 1),
                 crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
                 rect,
             );
@@ -3021,7 +3021,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 r#type: DisplayItemIdType::PaintPhaseToClipType(
                     PaintPhase::kSelfBlockBackgroundOnly,
                 ),
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: self.node.DisplayItemFragment(),
             },
             client,
             visual_rect,
@@ -3210,7 +3210,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let _drawing = DrawingRecorder::with_client(
             self.context,
             self.node,
-            CanvasBackgroundDisplayItemId(fragment, item_type, 0),
+            CanvasBackgroundDisplayItemId(self.node, item_type, 0),
             crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
             rect,
         );
@@ -4357,7 +4357,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItemId {
                         client_id: fragment.paint.SelectionClientId(),
                         r#type: drawing_type,
-                        fragment: fragment.ViewDisplayItemFragment(),
+                        fragment: self.node.DisplayItemFragment(),
                     },
                     client,
                 )
@@ -6661,10 +6661,14 @@ fn CanvasBackgroundEffect(
 }
 
 fn CanvasBackgroundDisplayItemId(
-    fragment: &layoutng_assembly::fragment_tree::FragmentPaintData,
+    node: &PaintTreeNode<'_>,
     item_type: DisplayItemIdType,
     layer_ordinal: usize,
 ) -> DisplayItemId {
+    let fragment = node
+        .fragment
+        .as_deref()
+        .expect("paint tree node has a fragment");
     // LayoutView never fragments. Use ScopedDisplayItemFragment's occurrence
     // field to give each independently transformed canvas layer a stable
     // semantic record identity while retaining the source LayoutView client.
@@ -6672,8 +6676,8 @@ fn CanvasBackgroundDisplayItemId(
     DisplayItemId {
         client_id: fragment.paint.DisplayItemClientId(),
         r#type: item_type,
-        fragment: fragment
-            .ViewDisplayItemFragment()
+        fragment: node
+            .DisplayItemFragment()
             .checked_add(occurrence)
             .expect("canvas display item fragment must fit u32"),
     }
@@ -7981,7 +7985,7 @@ fn TextWritingModeTransform(
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment")
-        .size;
+        .ViewSize();
     let writing_mode = match writing_mode {
         WritingMode::kHorizontalTb => StyleWritingMode::kHorizontalTb,
         WritingMode::kVerticalRl => StyleWritingMode::kVerticalRl,

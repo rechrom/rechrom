@@ -705,7 +705,7 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
             root: &layoutng_assembly::fragment_tree::FragmentPaintData,
             id: u64,
         ) -> Option<&layoutng_assembly::fragment_tree::FragmentPaintData> {
-            if root.node_id == id {
+            if layoutng_assembly::fragment_tree::ResidentBoxGeometry::ViewNodeId(root) == id {
                 return Some(root);
             }
             root.children.iter().find_map(|child| find(child, id))

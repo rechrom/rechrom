@@ -724,7 +724,7 @@ fn PaintMarkers(
                 .fragment
                 .as_deref()
                 .expect("paint tree node has a fragment")
-                .node_id;
+                .ViewNodeId();
             if !began_marker {
                 context.borrow_mut().Append(
                     DisplayItem {
@@ -830,7 +830,7 @@ fn PaintMarkers(
                         .fragment
                         .as_deref()
                         .expect("paint tree node has a fragment")
-                        .node_id,
+                        .ViewNodeId(),
                     svg_marker_resource_id: marker.resource_id,
                     ..Default::default()
                 },

@@ -102,7 +102,7 @@ impl<'n, 'f, 'c, 'o> ControlCanvas<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment")
-            .node_id
+            .ViewNodeId()
     }
 
     // cpp: paint/theme_painter.cc:65-82

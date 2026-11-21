@@ -229,22 +229,6 @@ pub(super) fn ExportBoxPaintGeometry(
     paint.stitched_decoration = ExportStitchedDecorationData(box_fragment);
 }
 
-// Chromium's PhysicalBoxFragment::ContentRect() DCHECKs that border and
-// padding fit inside the fragment. That precondition intentionally does not
-// hold for every table-part fragment: CSS padding may remain represented in
-// the fragment metadata even though the table algorithm resolves a zero row
-// block-size. The public FragmentPaintData boundary still needs a total content-box
-// size for every fragment, so use the same non-negative subtraction semantics
-// as Blink's ShrinkLogicalSize rather than calling ContentRect() outside its
-// valid domain.
-pub(super) fn ExportContentSize(box_fragment: &PhysicalBoxFragment) -> Size {
-    let insets = box_fragment.Borders() + box_fragment.Padding();
-    let size = box_fragment.Size();
-    Size {
-        width: Number((size.width - insets.HorizontalSum()).ClampNegativeToZero()),
-        height: Number((size.height - insets.VerticalSum()).ClampNegativeToZero()),
-    }
-}
 
 /// LayoutVideo display mode can change without a new physical fragment.
 /// Re-read the same native replaced geometry at the paint-only commit too.

@@ -204,7 +204,7 @@ impl EnginePaintUpdate for LayoutEngine {
             let fragment = unsafe { cursor.PaintDataMut() };
             let mut committed = 0;
             if fragment.ViewScrollContainer().is_some()
-                && (changed.is_empty() || changed.contains(&fragment.node_id))
+                && (changed.is_empty() || changed.contains(&fragment.ViewNodeId()))
             {
                 let origin = Some(fragment.paint.ScrollOffset());
                 if fragment.paint_cull_scroll_offset != origin {

@@ -328,7 +328,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
         id: u64,
         offset: layoutng_assembly::internal::layout_input::Offset,
     ) -> bool {
-        node.node_id == id && paint::CullRectUpdater::HasScrolledEnough(
+        node.ViewNodeId() == id && paint::CullRectUpdater::HasScrolledEnough(
                 &node,
                 node.DocumentResources().map(|resources| &**resources),
                 offset,
@@ -347,7 +347,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     // phase does not defer that decision until the gesture ends.
     let refresh_cull_rect = cull_rect_changed_enough;
     fn contains(node: PaintFragmentCursor<'_>, id: u64) -> bool {
-        node.node_id == id || node.Children().into_iter().any(|child| contains(child, id))
+        node.ViewNodeId() == id || node.Children().into_iter().any(|child| contains(child, id))
     }
     let style_impact = owner.GetDocument().StyleState().impact;
     if style_impact.layout
@@ -426,7 +426,7 @@ mod tests {
     }
     fn fragment(root: &FragmentPaintData, id: u64) -> &FragmentPaintData {
         fn find(root: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
-            if root.node_id == id {
+            if root.ViewNodeId() == id {
                 return Some(root);
             }
             root.children.iter().find_map(|c| find(c, id))
@@ -865,7 +865,7 @@ mod tests {
                 fn show(name: &str, tree: &FragmentPaintData) {
                     println!(
                         "{name}: node={} kind={:?} color={:?} offset={:?} size={:?}",
-                        tree.node_id, tree.kind, tree.paint.style.color, tree.offset, tree.size
+                        tree.ViewNodeId(), tree.ViewKind(), tree.paint.style.color, tree.offset, tree.ViewSize()
                     );
                     for child in &tree.children {
                         show(name, child);

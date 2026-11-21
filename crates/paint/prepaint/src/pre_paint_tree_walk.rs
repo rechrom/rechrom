@@ -422,6 +422,9 @@ pub struct PaintTreeNode<'a> {
     pub fragment: Option<ResidentFragment>,
     pub source_lifetime: std::marker::PhantomData<&'a FragmentPaintData>,
     physical_index: usize,
+    /// The ScopedDisplayItemFragment this node paints in: traversal state the
+    /// PrePaint walk derives from the paint parent (see DisplayItemFragment).
+    display_item_fragment: Option<u32>,
     cache: Option<NodeCache>,
     pub absolute_offset: Offset,
     pub paint_offset: Offset,
@@ -613,6 +616,7 @@ impl<'a> PaintTreeNode<'a> {
             fragment: None,
             source_lifetime: std::marker::PhantomData,
             physical_index: 0,
+            display_item_fragment: None,
             cache: None,
             absolute_offset: Offset::default(),
             paint_offset: Offset::default(),
@@ -732,6 +736,24 @@ impl PaintTreeNode<'_> {
 
     pub fn SourceCursor(&self) -> Option<PaintFragmentCursor<'_>> {
         self.source_cursor
+    }
+
+    /// The active ScopedDisplayItemFragment of this node's display items.
+    /// Chromium keeps it as paint traversal state: a fragmentainer opens its
+    /// break token's SequenceNumber()+1 (box_fragment_painter.cc:394-403), a
+    /// layer box its index in LayoutBox::PhysicalFragments()
+    /// (paint_layer_painter.cc:776-778), an inline item its FragmentId()
+    /// (inline_box_fragment_painter.cc:63-64), and everything else inherits
+    /// its paint parent's scope. The PrePaint walk records it per node;
+    /// hand-built nodes outside a walk read the fragment's value.
+    pub fn DisplayItemFragment(&self) -> u32 {
+        match self.display_item_fragment {
+            Some(fragment) => fragment,
+            None => self
+                .fragment
+                .as_deref()
+                .map_or(0, |fragment| fragment.ViewDisplayItemFragment()),
+        }
     }
 
     /// The paint resources of the document this node's fragment belongs to
@@ -1020,6 +1042,11 @@ pub struct PrePaintTreeWalk {
     retained_local_frame_leases: Vec<PaintFragmentLease>,
     local_frame_sources_changed: bool,
     local_frame_depth: u32,
+    /// The ScopedDisplayItemFragment of the node UpdateNode is visiting
+    /// (core/paint/box_fragment_painter.cc:394-403,
+    /// core/paint/paint_layer_painter.cc:776-778). Set by the parent before
+    /// each child visit; `None` outside a walk.
+    display_item_fragment_scope: Option<u32>,
     completed_local_frame_prepaint: HashSet<u64>,
     // Source: core/paint/paint_property_tree_builder.cc:4692-4701.
     requires_main_thread_for_background_attachment_fixed: Option<bool>,
@@ -1068,6 +1095,7 @@ impl Default for PrePaintTreeWalk {
             retained_local_frame_leases: Vec::new(),
             local_frame_sources_changed: false,
             local_frame_depth: 0,
+            display_item_fragment_scope: None,
             completed_local_frame_prepaint: HashSet::new(),
             requires_main_thread_for_background_attachment_fixed: None,
             view_background_geometry_changed: false,
@@ -3842,7 +3870,7 @@ fn ResolveLogicalParentOccurrence<'a>(
 ) -> Option<*mut PaintTreeNode<'a>> {
     let establishes = |node: &PaintTreeNode<'a>| {
         node.fragment.as_deref().is_some_and(|candidate| {
-            candidate.node_id == logical_id
+            candidate.ViewNodeId() == logical_id
                 && candidate.paint.HasSource()
                 && candidate.ViewEstablishesPaintState()
         })
@@ -3850,7 +3878,7 @@ fn ResolveLogicalParentOccurrence<'a>(
     for &ancestor in physical_ancestors.iter().rev() {
         let node = unsafe { &*ancestor };
         if node.fragment.as_deref().is_some_and(|candidate| {
-            candidate.node_id == logical_id && candidate.ViewEstablishesPaintState()
+            candidate.ViewNodeId() == logical_id && candidate.ViewEstablishesPaintState()
         }) {
             return Some(ancestor as *mut PaintTreeNode<'a>);
         }
@@ -3898,7 +3926,7 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
                     .fragment
                     .as_deref()
                     .expect("PrePaint node must own a fragment");
-                if logical_parent_fragment.node_id != logical_id {
+                if logical_parent_fragment.ViewNodeId() != logical_id {
                     panic!("logical parent node id and fragment instance id disagree");
                 }
             }
@@ -4609,12 +4637,12 @@ fn PropagateSubsequenceRepaintCounting(
 }
 
 fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    a.node_id == b.node_id
+    a.ViewNodeId() == b.ViewNodeId()
         && a.fragment_instance_id == b.fragment_instance_id
         && a.fragmentainer_instance_id == b.fragmentainer_instance_id
-        && a.kind == b.kind
+        && a.ViewKind() == b.ViewKind()
         && a.paint.DisplayItemClientId() == b.paint.DisplayItemClientId()
-        && a.paint.display_item_fragment == b.paint.display_item_fragment
+        && a.ViewDisplayItemFragment() == b.ViewDisplayItemFragment()
 }
 
 // Chromium's display-lock path retains children because their LayoutObject and
@@ -4675,7 +4703,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
 }
 
 fn SamePhaseInputs(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
-    SamePhaseStructure(a, b) && a.size == b.size
+    SamePhaseStructure(a, b) && a.ViewSize() == b.ViewSize()
 }
 
 /// Values of one fragment that this walk compares across lifecycles. Each
@@ -4738,7 +4766,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         fragment_instance_id: f.fragment_instance_id,
         fragmentainer_instance_id: f.fragmentainer_instance_id,
         display_item_client_id: p.DisplayItemClientId(),
-        display_item_fragment: p.display_item_fragment,
+        display_item_fragment: f.ViewDisplayItemFragment(),
         size: f.ViewSize(),
         offset: link_offset,
         content_size: f.ViewContentSize(),
@@ -4811,6 +4839,32 @@ fn RebindCleanSubtree(node: &mut PaintTreeNode<'static>, source: PaintFragmentSo
         nodes += RebindCleanSubtree(child, child_source);
     }
     nodes
+}
+
+/// A retained subtree the walk did not descend into keeps the
+/// ScopedDisplayItemFragment values recorded at its last visit. When its
+/// root's scope changed, re-derive the inherited scopes below it through the
+/// physical links: a fragment opening its own scope keeps it and an embedded
+/// frame root starts at 0 (box_fragment_painter.cc:394-403,
+/// paint_layer_painter.cc:776-778).
+fn RefreshInheritedDisplayItemFragments(node: &mut PaintTreeNode<'static>) {
+    let scope = node.DisplayItemFragment();
+    let Some(children) = node.cache.as_ref().map(|cache| cache.physical_children.clone()) else {
+        return;
+    };
+    for child in children {
+        // Physical links stay valid while the retained tree owns every box.
+        let child = unsafe { &mut *child };
+        let value = child
+            .fragment
+            .as_deref()
+            .and_then(|fragment| fragment.ViewOwnDisplayItemFragment())
+            .unwrap_or(if child.is_embedded_local_frame_root { 0 } else { scope });
+        if child.display_item_fragment != Some(value) {
+            child.display_item_fragment = Some(value);
+            RefreshInheritedDisplayItemFragments(child);
+        }
+    }
 }
 
 /// A node without own property nodes takes its clip, cull rects and flat
@@ -5644,12 +5698,12 @@ fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
 /// the paired `new` fragment.
 fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
     let recorded = RecordOf(previous);
-    recorded.kind == Some(new.kind)
-        && recorded.node_id == new.node_id
+    recorded.kind == Some(new.ViewKind())
+        && recorded.node_id == new.ViewNodeId()
         && recorded.fragment_instance_id == new.fragment_instance_id
         && recorded.fragmentainer_instance_id == new.fragmentainer_instance_id
         && recorded.display_item_client_id == new.paint.DisplayItemClientId()
-        && recorded.display_item_fragment == new.paint.display_item_fragment
+        && recorded.display_item_fragment == new.ViewDisplayItemFragment()
 }
 
 /// SamePhaseInputs against the recorded previous values.
@@ -5756,8 +5810,8 @@ fn CanRefreshInvalidationOnlySource(
     }
     let recorded = &RecordOf(previous);
     SamePreviousPhaseInputs(recorded, current)
-        && recorded.offset == new.offset
-        && recorded.content_size == new.content_size
+        && recorded.offset == current.offset
+        && recorded.content_size == current.content_size
         && SamePreviousLogicalPosition(recorded, current)
 }
 
@@ -6907,7 +6961,7 @@ impl PrePaintTreeWalk {
         let embedded_view = self
             .local_frame_views
             .get(&fragment.paint.DisplayItemClientId())
-            .filter(|_| fragment.paint.CanPaintFragmentOccurrence())
+            .filter(|_| fragment.ViewCanPaintFragmentOccurrence())
             .cloned();
         let embedded_source = embedded_view
             .as_ref()
@@ -6963,6 +7017,9 @@ impl PrePaintTreeWalk {
         };
         let mut keys = own_keys;
         let mut nodes = 1;
+        // This node's ScopedDisplayItemFragment, set by the caller before
+        // this visit; no child has been visited yet.
+        let display_item_fragment = self.display_item_fragment_scope.unwrap_or(0);
         let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
         let mut contains_local_frames = embedded_source.is_some();
         let t_loop = checkpoint();
@@ -6997,6 +7054,12 @@ impl PrePaintTreeWalk {
                 )
             });
             self.local_frame_depth += u32::from(is_local_frame);
+            // A child paints in this node's scope unless it opens its own; an
+            // embedded frame's root starts its document's walk at 0.
+            let child_display_item_fragment = child
+                .ViewOwnDisplayItemFragment()
+                .unwrap_or(if is_local_frame { 0 } else { display_item_fragment });
+            self.display_item_fragment_scope = Some(child_display_item_fragment);
             let t_child = checkpoint();
             let mut child_node = self.UpdateNode(
                 child,
@@ -7043,6 +7106,13 @@ impl PrePaintTreeWalk {
                 }
             }
             child_node.physical_index = index;
+            let scope_changed = child_node
+                .display_item_fragment
+                .is_some_and(|old| old != child_display_item_fragment);
+            child_node.display_item_fragment = Some(child_display_item_fragment);
+            if scope_changed {
+                RefreshInheritedDisplayItemFragments(&mut child_node);
+            }
             let cache = child_node.cache.as_ref().unwrap();
             keys.extend(cache.subtree_keys.iter().copied());
             nodes += cache.nodes;
@@ -7324,9 +7394,13 @@ impl PrePaintTreeWalk {
         if client == 0 {
             return;
         }
+        // BuildNode runs while UpdateNode visits this fragment's node, so the
+        // walk's scope is the node's ScopedDisplayItemFragment.
         let owner = PaintPropertyOwner::Fragment {
             client,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: self
+                .display_item_fragment_scope
+                .unwrap_or_else(|| fragment.ViewDisplayItemFragment()),
         };
         // Chromium client creation is the lifetime boundary, including allocator
         // address reuse. Never infer identity from a recycled pointer alone.
@@ -7538,6 +7612,10 @@ impl PrePaintTreeWalk {
                 RestorePhysicalOwnership(tree);
             }
         }
+        // LayoutView's own scope (its layer fragment index); a publication
+        // walk starts at 0.
+        let root_display_item_fragment = root.ViewOwnDisplayItemFragment().unwrap_or(0);
+        self.display_item_fragment_scope = Some(root_display_item_fragment);
         let mut tree = self.UpdateNode(
             root,
             context,
@@ -7545,6 +7623,14 @@ impl PrePaintTreeWalk {
             previous,
             force,
         );
+        self.display_item_fragment_scope = None;
+        let scope_changed = tree
+            .display_item_fragment
+            .is_some_and(|old| old != root_display_item_fragment);
+        tree.display_item_fragment = Some(root_display_item_fragment);
+        if scope_changed {
+            RefreshInheritedDisplayItemFragments(&mut tree);
+        }
         if self.needs_post_update {
             self.stats.post_walk = true;
             {
@@ -7763,7 +7849,7 @@ impl PrePaintTreeWalk {
             }
             let owner = PaintPropertyOwner::Fragment {
                 client,
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             };
 
             let active_transform_roles = [
