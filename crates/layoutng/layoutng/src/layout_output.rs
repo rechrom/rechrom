@@ -223,7 +223,12 @@ enum PaintFragmentOwner {
 /// `FragmentCursor`.
 pub(crate) struct LayoutPaintState {
     inputs: UnsafeCell<foundation::TrustedIdentityHashMap<u64, PaintFragmentSlot>>,
-    owners: UnsafeCell<foundation::TrustedIdentityHashMap<PaintFragmentOwner, *mut FragmentPaintData>>,
+    /// Source owner -> slot, tagged with the publication that bound it. The
+    /// map persists across publications so an unchanged owner rebinds in
+    /// place; only entries bound by the current publication are visible.
+    owners: UnsafeCell<
+        foundation::TrustedIdentityHashMap<PaintFragmentOwner, (*mut FragmentPaintData, u64)>,
+    >,
     publication: Cell<u64>,
     generation: Cell<u64>,
 }
@@ -282,7 +287,10 @@ impl LayoutPaintState {
     }
 
     pub(crate) fn BeginPublication(&self) {
-        unsafe { &mut *self.owners.get() }.clear();
+        // Keep only the owners the previous publication bound; they rebind in
+        // place. Older entries name fragments that are no longer resident.
+        let previous = self.publication.get();
+        unsafe { &mut *self.owners.get() }.retain(|_, (_, publication)| *publication == previous);
         self.publication.set(
             self.publication
                 .get()
@@ -344,7 +352,13 @@ impl LayoutPaintState {
                 same_owner: false,
             }
         };
-        unsafe { &mut *self.owners.get() }.insert(owner, binding.data);
+        let owners = unsafe { &mut *self.owners.get() };
+        match owners.get_mut(&owner) {
+            Some(entry) => *entry = (binding.data, publication),
+            None => {
+                owners.insert(owner, (binding.data, publication));
+            }
+        }
         binding
     }
 
@@ -375,12 +389,18 @@ impl LayoutPaintState {
     }
 
     fn Get(&self, owner: PaintFragmentOwner) -> Option<&FragmentPaintData> {
-        let pointer = *unsafe { &*self.owners.get() }.get(&owner)?;
+        let (pointer, publication) = *unsafe { &*self.owners.get() }.get(&owner)?;
+        if publication != self.publication.get() {
+            return None;
+        }
         Some(unsafe { &*pointer })
     }
 
     unsafe fn GetMut(&self, owner: PaintFragmentOwner) -> Option<&mut FragmentPaintData> {
-        let pointer = *unsafe { &*self.owners.get() }.get(&owner)?;
+        let (pointer, publication) = *unsafe { &*self.owners.get() }.get(&owner)?;
+        if publication != self.publication.get() {
+            return None;
+        }
         Some(unsafe { &mut *pointer })
     }
 
