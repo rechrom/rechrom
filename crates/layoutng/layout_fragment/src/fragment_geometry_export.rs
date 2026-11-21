@@ -222,7 +222,6 @@ pub(super) fn ExportBoxPaintGeometry(
                 }
             };
         }
-        paint.scroll_container = LiveScrollContainer(box_fragment);
         let replaced = DynamicTo::<LayoutReplaced>(box_fragment.GetLayoutObject());
         if !replaced.is_null() {
             paint.replaced_content = Some(ExportReplacedContentPaintData(replaced));

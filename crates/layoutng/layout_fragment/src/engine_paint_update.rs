@@ -2,6 +2,7 @@
 // ownership. LayoutEngine keeps only its stable public entry points.
 
 use super::*;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 pub(super) trait EnginePaintUpdate {
     fn populate_paint_data(&mut self) -> bool;
@@ -203,7 +204,7 @@ impl EnginePaintUpdate for LayoutEngine {
             let children = cursor.Children();
             let fragment = unsafe { cursor.PaintDataMut() };
             let mut committed = 0;
-            if fragment.paint.scroll_container.is_some()
+            if fragment.ViewScrollContainer().is_some()
                 && (changed.is_empty() || changed.contains(&fragment.node_id))
             {
                 let origin = Some(fragment.paint.ScrollOffset());

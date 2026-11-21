@@ -120,8 +120,8 @@ impl PrePaintRevisionTracker {
             stats.new_nodes += 1;
         }
         let owners_live =
-            retain_owners(&node.paint, &mut update.previous_owners, &mut update.next_owners);
-        let current_owner_ids = owner_ids(&node.paint);
+            retain_owners(node, &mut update.previous_owners, &mut update.next_owners);
+        let current_owner_ids = owner_ids(node);
         node.pre_paint_owner_retained =
             owners_live && old.as_ref().is_some_and(|old| old.owner_ids == current_owner_ids);
         let (same_geometry, same_paint, same_resources) = old
@@ -158,7 +158,7 @@ impl PrePaintRevisionTracker {
             && same_geometry
             && same_paint
             && same_resources
-            && (node.pre_paint_owner_retained || !just_created(&node.paint));
+            && (node.pre_paint_owner_retained || !just_created(node));
         let children_same = old.is_some()
             && !marked_subtree
             && !invalidation.descendants()
@@ -223,9 +223,9 @@ impl PrePaintRevisionTracker {
         // Owner liveness is idempotent per id within a pass, so a fallback
         // after this registration observes the same liveness.
         let owners_live =
-            retain_owners(&node.paint, &mut update.previous_owners, &mut update.next_owners);
-        let retained = owners_live && node.certified.owner_ids == owner_ids(&node.paint);
-        if !retained && just_created(&node.paint) {
+            retain_owners(node, &mut update.previous_owners, &mut update.next_owners);
+        let retained = owners_live && node.certified.owner_ids == owner_ids(node);
+        if !retained && just_created(node) {
             return self.ObserveProductionNode(node, false);
         }
         update.stats.nodes += 1;
@@ -305,7 +305,8 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
         | u8::from(images) * RESOURCE_IMAGES
 }
 
-fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
+fn owner_ids(fragment: &FragmentPaintData) -> [u64; 7] {
+    let paint = &fragment.paint;
     let mut ids = [
         paint.DisplayItemClientId(),
         paint.SelectionClientId(),
@@ -315,10 +316,10 @@ fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
         0,
         0,
     ];
-    if let Some(scroll) = &paint.scroll_container {
+    if let Some(scroll) = fragment.ViewScrollContainer() {
         ids[3] = scroll.scrolling_background_client_id;
     }
-    if let Some(bars) = &paint.scrollbars {
+    if let Some(bars) = fragment.ViewScrollbars() {
         ids[4] = bars.corner_client_id;
         ids[5] = bars
             .horizontal
@@ -333,13 +334,13 @@ fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
 }
 
 fn retain_owners(
-    paint: &PaintProperties,
+    fragment: &FragmentPaintData,
     previous: &mut HashMap<u64, LiveOwner>,
     next: &mut HashMap<u64, LiveOwner>,
 ) -> bool {
     let mut observed = false;
     let mut retained = true;
-    for id in owner_ids(paint).into_iter().filter(|id| *id != 0) {
+    for id in owner_ids(fragment).into_iter().filter(|id| *id != 0) {
         observed = true;
         // Evaluate every owner even after a rejection so all clients are
         // registered for the next pass, once per id across every fragment.
@@ -361,11 +362,12 @@ fn retain_owner(
     retained
 }
 
-fn just_created(paint: &PaintProperties) -> bool {
+fn just_created(fragment: &FragmentPaintData) -> bool {
+    let paint = &fragment.paint;
     paint.DisplayItemClientState().is_just_created
         || paint.SelectionClientState().is_just_created
         || paint.PaintLayerClientState().is_just_created
-        || paint.scroll_container.as_ref().is_some_and(|scroll| {
+        || fragment.ViewScrollContainer().is_some_and(|scroll| {
             paint
                 .ScrollClientState(
                     scroll.scrolling_background_client_id,
@@ -375,7 +377,7 @@ fn just_created(paint: &PaintProperties) -> bool {
                 )
                 .is_just_created
         })
-        || paint.scrollbars.as_ref().is_some_and(|bars| {
+        || fragment.ViewScrollbars().is_some_and(|bars| {
             paint
                 .ScrollClientState(
                     bars.corner_client_id,

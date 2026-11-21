@@ -4727,7 +4727,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         logical_parent_node_id: p.LogicalParentNodeId(),
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.logical_tree_order,
-        clients: ClientDirectoryIds(p),
+        clients: ClientDirectoryIds(f),
     }
 }
 
@@ -5647,11 +5647,12 @@ fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPr
 
 /// The DisplayItemClient ids of a fragment's paint payload: the object, its
 /// PaintLayer and, for a scroller, the scroll corner and scrollbar clients.
-fn ClientDirectoryIds(paint: &layoutng_assembly::fragment_tree::PaintProperties) -> ClientIds {
+fn ClientDirectoryIds(fragment: &FragmentPaintData) -> ClientIds {
+    let paint = &fragment.paint;
     ClientIds {
         display_item: paint.DisplayItemClientId(),
         paint_layer: paint.PaintLayerClientId(),
-        scrollbars: paint.scrollbars.as_ref().map(|bars| {
+        scrollbars: fragment.ViewScrollbars().map(|bars| {
             (
                 bars.corner_client_id,
                 bars.horizontal.as_ref().map(|axis| axis.display_item_client_id),
@@ -5667,7 +5668,7 @@ fn ClientDirectoryIds(paint: &layoutng_assembly::fragment_tree::PaintProperties)
 /// only `b`'s just-created clients need the retained-owner proof.
 fn SameClientDirectory(previous: &PaintTreeNode<'_>, b: &FragmentPaintData) -> bool {
     let y = &b.paint;
-    if RecordOf(previous).clients != ClientDirectoryIds(y) {
+    if RecordOf(previous).clients != ClientDirectoryIds(b) {
         return false;
     }
     let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
@@ -7653,7 +7654,7 @@ impl PrePaintTreeWalk {
                 if let Some(scroll) = f.ViewScrollContainer() {
                     add(scroll.scrolling_background_client_id);
                 }
-                if let Some(bars) = &f.paint.scrollbars {
+                if let Some(bars) = f.ViewScrollbars() {
                     if let Some(axis) = &bars.horizontal {
                         add(axis.display_item_client_id);
                     }

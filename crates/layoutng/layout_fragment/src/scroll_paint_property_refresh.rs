@@ -5,7 +5,6 @@
 //! depend on concrete LayoutObject types.
 
 use super::*;
-use crate::internal::scrollbar_orientation::ScrollbarOrientation;
 
 #[inline(never)]
 pub(super) fn refresh_scroll_paint_properties(
@@ -75,16 +74,19 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
     fragment: &mut FragmentPaintData,
     sources: &[*mut LayoutObject],
 ) -> bool {
-    let old_scroll_coordinates = fragment
-        .paint
-        .scroll_container
-        .as_ref()
-        .map(|scroll| (scroll.scroll_origin, scroll.scroll_position));
     // A sticky box moves with every scroll of its scroller; PrePaint reads
     // its offset and constraint live (LiveStickyPaintProperties), so report
     // it changed rather than keeping copies to compare.
     let mut sticky = false;
-    let old_scrollbars = fragment.paint.scrollbars.clone();
+    // Scroll containers and scrollbars are read live from the LayoutBox and
+    // its PaintLayerScrollableArea (ViewScrollContainer / ViewScrollbars).
+    // Their source dirty bits say what a scroll changed:
+    // PaintLayerScrollableArea::UpdateScrollOffset sets
+    // NeedsPaintPropertyUpdate (paint_layer_scrollable_area.cc:427-432) and
+    // scrollbar paint invalidation sets ShouldCheckForPaintInvalidation
+    // (scrollable_area.cc:786-826, paint_layer_scrollable_area.cc:3328-3330).
+    // Both stay set until the frame's client commit clears the paint flags.
+    let mut scroll_changed = false;
     if fragment.paint.HasSource() {
         let direct = fragment.paint.SourceObjectPointer();
         let object = if direct.is_null() {
@@ -99,65 +101,14 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
             direct
         };
         if !object.is_null() {
-            sticky = unsafe { &*object }.StyleRef().GetPosition() == foundation::EPosition::kSticky;
+            let source = unsafe { &*object };
+            sticky = source.StyleRef().GetPosition() == foundation::EPosition::kSticky;
             let layout_box = DynamicTo::<LayoutBox>(object);
-            if !layout_box.is_null() {
-                let layout_box = unsafe { &*layout_box };
-                let area = layout_box.GetScrollableArea();
-                if let Some(scroll) = fragment.paint.scroll_container.as_mut() {
-                    // Source: core/paint/paint_property_tree_builder.cc:
-                    // 3574-3614. A retained Scroll node has one source
-                    // ScrollableArea owner; scroll-only refresh must consume
-                    // it rather than fabricate origin/position from the DOM
-                    // offset when ownership is missing.
-                    assert!(!area.is_null());
-                    let area = unsafe { &*area };
-                    let origin = area.ScrollOrigin();
-                    let position = area.ScrollPosition();
-                    scroll.scroll_origin = Offset {
-                        x: origin.x() as f64,
-                        y: origin.y() as f64,
-                    };
-                    scroll.scroll_position = Offset {
-                        x: position.x() as f64,
-                        y: position.y() as f64,
-                    };
-                }
-                if fragment.paint.scrollbars.is_some() {
-                    assert!(!area.is_null());
-                    let area = unsafe { &*area };
-                    let data = Arc::make_mut(fragment.paint.scrollbars.as_mut().unwrap());
-                    if let Some(axis) = data.horizontal.as_mut() {
-                        let scrollbar = area.HorizontalScrollbar();
-                        if !scrollbar.is_null() {
-                            axis.painted_opacity = area.ScrollbarPaintedOpacity(
-                                ScrollbarOrientation::kHorizontalScrollbar,
-                            );
-                            axis.painted_thumb_width =
-                                area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar });
-                            SetScrollbarThumb(axis, unsafe { &*scrollbar });
-                        }
-                    }
-                    if let Some(axis) = data.vertical.as_mut() {
-                        let scrollbar = area.VerticalScrollbar();
-                        if !scrollbar.is_null() {
-                            axis.painted_opacity = area
-                                .ScrollbarPaintedOpacity(ScrollbarOrientation::kVerticalScrollbar);
-                            axis.painted_thumb_width =
-                                area.ScrollbarPaintedThumbWidth(unsafe { &*scrollbar });
-                            SetScrollbarThumb(axis, unsafe { &*scrollbar });
-                        }
-                    }
-                }
+            if !layout_box.is_null() && !unsafe { &*layout_box }.GetScrollableArea().is_null() {
+                scroll_changed =
+                    source.NeedsPaintPropertyUpdate() || source.ShouldCheckForPaintInvalidation();
             }
         }
     }
-    sticky
-        || old_scroll_coordinates
-            != fragment
-                .paint
-                .scroll_container
-                .as_ref()
-                .map(|scroll| (scroll.scroll_origin, scroll.scroll_position))
-        || old_scrollbars != fragment.paint.scrollbars
+    sticky || scroll_changed
 }

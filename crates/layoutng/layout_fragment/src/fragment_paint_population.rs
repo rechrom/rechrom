@@ -565,11 +565,8 @@ fn PopulateInlineItemLocalPaintData(
                 {
                     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {
+                if purpose == LayoutUpdateKind::Paint && LiveScrollContainer(box_fragment).is_some() {
                     output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
                 }
                 let owner_fragment = item.PostLayoutBoxFragment();
                 let owner_fragment = if owner_fragment.is_null() {
@@ -1275,11 +1272,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     if !reuse_fragment_geometry {
         ExportBoxPaintGeometry(box_fragment, &mut output.paint);
     }
-    if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {
+    if purpose == LayoutUpdateKind::Paint && LiveScrollContainer(box_fragment).is_some() {
         output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
     }
     let establishes_paint_state = paint_state_owners.insert(
         box_fragment as *const PhysicalBoxFragment,
@@ -1300,8 +1294,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         && matches!(identity_key, FragmentIdentityKey::FragmentData(_))
         && !output.pre_paint_invalidation.own()
         && !output.pre_paint_invalidation.descendants()
-        && output.paint.scroll_container.is_none()
-        && output.paint.scrollbars.is_none()
+        // Scroll containers and scrollbars are read live, but a scrollable
+        // area's controls are positioned at PrePaint; keep those boxes on the
+        // full path.
+        && unsafe { DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject()).as_ref() }
+            .is_none_or(|layout_box| layout_box.GetScrollableArea().is_null())
         && !output.paint.is_page_container
         && !output.paint.is_page_border_box
         && !box_fragment.IsFragmentainerBox();
@@ -1311,7 +1308,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             !reuse_fragment_geometry,
             !matches!(identity_key, FragmentIdentityKey::FragmentData(_)),
             output.pre_paint_invalidation.own() || output.pre_paint_invalidation.descendants(),
-            output.paint.scroll_container.is_some() || output.paint.scrollbars.is_some(),
+            !(unsafe { DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject()).as_ref() }
+            .is_none_or(|layout_box| layout_box.GetScrollableArea().is_null())),
             false,
             output.paint.is_page_container || output.paint.is_page_border_box || box_fragment.IsFragmentainerBox(),
             false,
