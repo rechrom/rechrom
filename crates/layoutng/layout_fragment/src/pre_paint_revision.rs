@@ -297,7 +297,7 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
             .is_some_and(|content| content.is_canvas)
         || style_images
         || paint.table.is_some()
-        || paint.svg_shape.is_some()
+        || paint.SvgShape().is_some()
         || paint.svg_text.is_some();
     u8::from(viewport) * RESOURCE_VIEWPORT
         | u8::from(!paint.glyph_runs.is_empty()) * RESOURCE_FONTS

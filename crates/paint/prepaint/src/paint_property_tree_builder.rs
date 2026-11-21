@@ -285,18 +285,17 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             {
                 source_roles.push(PaintPropertyRole::StickyTranslation);
             }
-            if fragment.paint.svg_local_transform.is_none() {
+            if fragment.paint.SvgLocalTransform().is_none() {
                 if let Some(style) = style {
                     source_roles.extend(TransformPropertyRoles(fragment, style));
                 }
             }
-            if fragment.paint.svg_local_transform.is_some() {
+            if fragment.paint.SvgLocalTransform().is_some() {
                 source_roles.push(PaintPropertyRole::SvgLocalTransform);
             }
             if fragment
                 .paint
-                .svg_shape
-                .as_ref()
+                .SvgShape()
                 .is_some_and(|shape| shape.local_transform.is_some())
             {
                 // The source SVG affine matrix is a distinct existing replay
@@ -1025,7 +1024,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 // equivalent fallback.
                 fragment
                     .paint
-                    .svg_visual_rect
+                    .SvgVisualRect()
                     .map_or_else(PaintRect::default, |rect| PaintRect {
                         x: node.paint_offset.x + rect.offset.x,
                         y: node.paint_offset.y + rect.offset.y,
@@ -1410,7 +1409,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 };
                 local = node.PixelSnappedRect(&precise_layout_clip);
             }
-            if let Some(viewport) = fragment.paint.svg_viewport {
+            if let Some(viewport) = fragment.paint.SvgViewport() {
                 if let Some(clip) = viewport.clip {
                     local = PaintRect {
                         x: clip.offset.x,

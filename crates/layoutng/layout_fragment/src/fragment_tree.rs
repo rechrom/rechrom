@@ -1918,6 +1918,55 @@ impl PaintProperties {
         }
     }
 
+    pub fn SvgShape(&self) -> Option<&Arc<SvgShapeData>> {
+        match self
+            .SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveSvgShape)
+        {
+            Some(live) => live,
+            None => self.svg_shape.as_ref(),
+        }
+    }
+
+    fn SvgPaintGeometry(
+        &self,
+    ) -> Option<(Option<TransformMatrix>, Option<SvgViewportGeometry>, Option<FragmentPaintRect>)>
+    {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveSvgPaintGeometry)
+    }
+
+    pub fn SvgLocalTransform(&self) -> Option<TransformMatrix> {
+        match self.SvgPaintGeometry() {
+            Some((transform, _, _)) => transform,
+            None => self.svg_local_transform.clone(),
+        }
+    }
+
+    pub fn SvgViewport(&self) -> Option<SvgViewportGeometry> {
+        match self.SvgPaintGeometry() {
+            Some((_, viewport, _)) => viewport,
+            None => self.svg_viewport.clone(),
+        }
+    }
+
+    pub fn SvgVisualRect(&self) -> Option<FragmentPaintRect> {
+        match self.SvgPaintGeometry() {
+            Some((_, _, visual_rect)) => visual_rect,
+            None => self.svg_visual_rect,
+        }
+    }
+
+    pub fn SvgViewBox(&self) -> Option<SvgViewBoxData> {
+        match self
+            .SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveSvgViewBox)
+        {
+            Some(live) => live,
+            None => self.svg_view_box,
+        }
+    }
+
     /// Whether the source is an anonymous LayoutTextCombine wrapper.
     pub fn IsTextCombine(&self) -> bool {
         match self.SourceObject() {

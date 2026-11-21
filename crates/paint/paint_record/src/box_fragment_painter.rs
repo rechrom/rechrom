@@ -674,7 +674,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // suppress those source culls while the parent walks resident
         // children. Chromium: svg_shape_painter.cc:52-64 and
         // svg_container_painter.cc:36-90.
-        if fragment.paint.svg_shape.is_some()
+        if fragment.paint.SvgShape().is_some()
             || matches!(
                 fragment.paint.SourceKind(),
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
@@ -758,7 +758,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         // SVGShapePainter performs its own transformed visual-bounds cull.
         // The resident NG box for a shape has no CSS box ink overflow.
-        if fragment.paint.svg_shape.is_some() {
+        if fragment.paint.SvgShape().is_some() {
             return true;
         }
         let Some(rect) = fragment.paint.filtered_ink_overflow else {
@@ -1246,7 +1246,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if phase == PaintPhase::kForeground && is_visible && fragment.paint.mathml.is_some() {
             MathMLPainter::new(self.node, self.context).Paint(paint_info);
         }
-        if phase == PaintPhase::kForeground && is_visible && fragment.paint.svg_shape.is_some() {
+        if phase == PaintPhase::kForeground && is_visible && fragment.paint.SvgShape().is_some() {
             SVGShapePainter::new(self.node, self.context).Paint(paint_info);
         }
         if matches!(

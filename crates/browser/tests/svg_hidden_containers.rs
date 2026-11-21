@@ -199,7 +199,7 @@ fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
             let object = native(&page, name);
             assert!(object.IsSVGShape());
             assert!(!object.NeedsLayout());
-            assert!(fragment(&page, name).paint.svg_shape.is_some());
+            assert!(fragment(&page, name).paint.SvgShape().is_some());
         }
     });
 }
@@ -248,7 +248,7 @@ fn hidden_svg_subtrees_never_paint_or_hit_and_stay_hidden_after_mutations() {
             old_pixels
         );
         assert_eq!(pixels(&page, &old), old_pixels);
-        assert!(fragment(&page, "definition").paint.svg_shape.is_some());
+        assert!(fragment(&page, "definition").paint.SvgShape().is_some());
     });
 }
 

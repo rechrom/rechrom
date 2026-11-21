@@ -1073,7 +1073,7 @@ fn Intersect(mut a: PaintRect, b: &PaintRect) -> PaintRect {
 
 pub fn SvgViewBoxTransform(fragment: &FragmentPaintData) -> Option<TransformMatrix> {
     (fragment.paint.SourceKind() == NodeKind::kSvgRoot)
-        .then(|| fragment.paint.svg_viewport.map(|v| v.content_transform))
+        .then(|| fragment.paint.SvgViewport().map(|v| v.content_transform))
         .flatten()
 }
 
@@ -1091,7 +1091,7 @@ pub fn SvgTransformToPixelSnappedBorderBox(
     if fragment.paint.SourceKind() != NodeKind::kSvgRoot {
         return None;
     }
-    let viewport = fragment.paint.svg_viewport?;
+    let viewport = fragment.paint.SvgViewport()?;
     let pixel_snap_scale = if pixel_snap_scale.is_finite() && pixel_snap_scale > 0.0 {
         pixel_snap_scale
     } else {
@@ -1436,12 +1436,11 @@ pub fn ResolveFragmentGeometry(
             || text_combine.is_some()
             || style.is_some_and(|style| {
                 has_sticky_translation
-                    || fragment.paint.svg_local_transform.is_some()
+                    || fragment.paint.SvgLocalTransform().is_some()
                     || !TransformPropertyRoles(fragment, style).is_empty()
                     || fragment
                         .paint
-                        .svg_shape
-                        .as_ref()
+                        .SvgShape()
                         .is_some_and(|shape| shape.local_transform.is_some())
             }))
     {
@@ -1513,7 +1512,7 @@ pub fn ResolveFragmentGeometry(
                 y: total.y - rounded.y,
             };
         }
-        if let Some(style) = style.filter(|_| fragment.paint.svg_local_transform.is_none()) {
+        if let Some(style) = style.filter(|_| fragment.paint.SvgLocalTransform().is_none()) {
             // Blink snaps the layout paint offset in the current property
             // parent, whose ScrollTranslation remains a separate ancestor.
             let reference_rect = ResolveTransformReferenceRect(
@@ -1545,7 +1544,7 @@ pub fn ResolveFragmentGeometry(
                 ));
             }
         }
-        if let Some(transform) = fragment.paint.svg_local_transform {
+        if let Some(transform) = fragment.paint.SvgLocalTransform() {
             transforms.push(transform);
             paint_space_origin = geometry.absolute_offset;
             geometry.paint_offset = Offset::default();
@@ -1553,8 +1552,7 @@ pub fn ResolveFragmentGeometry(
         }
         if let Some(local_transform) = fragment
             .paint
-            .svg_shape
-            .as_ref()
+            .SvgShape()
             .and_then(|shape| shape.local_transform)
         {
             transforms.push(local_transform);
@@ -1825,7 +1823,7 @@ fn NeedsOverflowClip(node: &FragmentPaintData) -> bool {
         }
     }
     if node.paint.SourceKind() == NodeKind::kSvgViewportContainer {
-        return node.paint.svg_viewport.is_some_and(|v| v.clip.is_some());
+        return node.paint.SvgViewport().is_some_and(|v| v.clip.is_some());
     }
     if !node.paint.IsLayoutBox() {
         return false;
@@ -3146,7 +3144,7 @@ fn ClipPathReferenceRect(
 ) -> PaintRect {
     let paint = &fragment.paint;
     if IsSvgEffectChild(paint.SourceKind()) {
-        let fill = paint.svg_shape.as_ref().map_or(
+        let fill = paint.SvgShape().map_or(
             PaintRect {
                 x: paint_offset.x,
                 y: paint_offset.y,
@@ -3165,7 +3163,7 @@ fn ClipPathReferenceRect(
             // reject stroke-box until that exact Layout result crosses the
             // package boundary; never reconstruct it from stroke width here.
             ClipPathReferenceBox::kStrokeBox => fill,
-            ClipPathReferenceBox::kViewBox => paint.svg_view_box.map_or(
+            ClipPathReferenceBox::kViewBox => paint.SvgViewBox().map_or(
                 PaintRect {
                     x: paint_offset.x,
                     y: paint_offset.y,
@@ -3384,7 +3382,7 @@ fn SvgMaskReferenceBox(
     if matches!(
         reference_box,
         ClipPathReferenceBox::kFillBox | ClipPathReferenceBox::kStrokeBox
-    ) && fragment.paint.svg_shape.is_none()
+    ) && fragment.paint.SvgShape().is_none()
     {
         return Err("SVG container mask reference-box geometry");
     }
@@ -3547,7 +3545,7 @@ fn ResolveMaskLayers(
             if let Some(graph) = reference.graph.as_deref() {
                 use layoutng_assembly::internal::paint_input::SvgMaskUnits;
                 if IsSvgEffectChild(fragment.paint.SourceKind())
-                    && fragment.paint.svg_shape.is_none()
+                    && fragment.paint.SvgShape().is_none()
                     && (graph.mask_units == SvgMaskUnits::kObjectBoundingBox
                         || graph.content_units == SvgMaskUnits::kObjectBoundingBox)
                 {
@@ -5230,7 +5228,7 @@ fn ShiftRetainedNode(
     let resets_paint_space = node
         .fragment
         .as_deref()
-        .is_some_and(|fragment| fragment.paint.svg_local_transform.is_some());
+        .is_some_and(|fragment| fragment.paint.SvgLocalTransform().is_some());
     node.absolute_offset.x += delta.offset.x;
     node.absolute_offset.y += delta.offset.y;
     if !resets_paint_space {

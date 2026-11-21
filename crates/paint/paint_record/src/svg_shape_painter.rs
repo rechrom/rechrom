@@ -601,8 +601,7 @@ fn PaintNativeMarkers(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) -> boo
     let fragment = node.fragment.as_deref().expect("SVG shape Paint owner");
     let shape = fragment
         .paint
-        .svg_shape
-        .as_ref()
+        .SvgShape()
         .expect("SVG shape geometry owner");
     let reference_box = PaintRect {
         x: shape.bounds_offset.x,
@@ -860,13 +859,13 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if paint_info.phase != PaintPhase::kForeground || fragment.paint.svg_shape.is_none() {
+        if paint_info.phase != PaintPhase::kForeground || fragment.paint.SvgShape().is_none() {
             return;
         }
         if !crate::scoped_svg_paint_state::ScopedSVGPaintState::PaintsContent(self.node) {
             return;
         }
-        let shape = fragment.paint.svg_shape.as_deref().unwrap();
+        let shape = fragment.paint.SvgShape().map(|shape| &**shape).unwrap();
         if (shape.geometry == SvgShapeGeometry::kPath && shape.path.is_empty())
             || (shape.geometry != SvgShapeGeometry::kPath
                 && (shape.bounds_width <= 0.0 || shape.bounds_height <= 0.0))

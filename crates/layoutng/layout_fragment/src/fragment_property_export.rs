@@ -427,51 +427,9 @@ pub(super) fn ExportProperties(
     };
     if let Some(element_data) = element_data {
         output.scroll_offset = element_data.scroll_offset;
-        if !object.is_null() && unsafe { &*object }.IsSVGShape() {
-            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-            output.svg_shape = unsafe { algorithms.as_ref() }
-                .and_then(|a| a.svg_support.retained_shape)
-                .and_then(|query| query(unsafe { &*object }))
-                .cloned();
-        }
-        output.svg_view_box = element_data.svg_view_box;
     }
-    if !object.is_null() && unsafe { &*object }.IsSVG() {
-        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        if let Some(query) =
-            unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.paint_geometry)
-        {
-            let (transform, viewport, visual_rect) = query(unsafe { &*object });
-            output.svg_local_transform = transform;
-            output.svg_viewport = viewport;
-            output.svg_visual_rect = visual_rect.map(|rect| FragmentPaintRect {
-                offset: Offset {
-                    x: rect.x() as f64,
-                    y: rect.y() as f64,
-                },
-                size: Size {
-                    width: rect.width() as f64,
-                    height: rect.height() as f64,
-                },
-            });
-        }
-    }
-    // SVGResources::ReferenceBoxForEffects(kViewBox) uses (0,0) and the
-    // nearest viewport's resolved dimensions. Stop at a nested viewport even
-    // when it has no viewBox; Paint does not discover Layout/DOM ancestors.
-    if !object.is_null() && unsafe { &*object }.IsSVGChild() {
-        let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        if let Some(resolve) =
-            unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size)
-        {
-            let size = resolve(unsafe { &*object });
-            output.svg_view_box = Some(crate::internal::layout_input::SvgViewBoxData {
-                width: size.width() as f64,
-                height: size.height() as f64,
-                ..Default::default()
-            });
-        }
-    }
+    // SVG shape, transform, viewport and viewBox are read live from the
+    // LayoutSVG owners (PaintProperties::SvgShape / SvgViewport / ...).
     if purpose == LayoutUpdateKind::Layout {
         return output;
     }
@@ -964,4 +922,79 @@ pub(crate) fn LiveTextCombine(
             .ComputedSize() as f64,
         emphasis: ExportTextCombineEmphasis(parent_style),
     })
+}
+
+// SVG layout geometry. Chromium's SVG painters read these members of the
+// LayoutSVG objects (LayoutSVGShape path, LocalSVGTransform, viewport). The
+// SVG layout package keeps them on its owners and answers through its
+// queries, which stay callable after the pass (ResidentSvgSupport). `None`
+// means the object has no source Node, for which nothing was exported.
+
+pub(crate) fn LiveSvgShape(
+    object: &LayoutObject,
+) -> Option<Option<&Arc<crate::internal::layout_input::SvgShapeData>>> {
+    let data = LiveElementInputData(object)?;
+    if data.is_none() || !object.IsSVGShape() {
+        return Some(None);
+    }
+    Some(
+        crate::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
+            .retained_shape
+            .and_then(|query| query(object)),
+    )
+}
+
+pub(crate) fn LiveSvgPaintGeometry(
+    object: &LayoutObject,
+) -> Option<(
+    Option<crate::internal::layout_input::TransformMatrix>,
+    Option<layout_fragment::fragment_tree::SvgViewportGeometry>,
+    Option<FragmentPaintRect>,
+)> {
+    LiveSourceNode(object)?;
+    if !object.IsSVG() {
+        return Some((None, None, None));
+    }
+    let Some(query) =
+        crate::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport().paint_geometry
+    else {
+        return Some((None, None, None));
+    };
+    let (transform, viewport, visual_rect) = query(object);
+    Some((
+        transform,
+        viewport,
+        visual_rect.map(|rect| FragmentPaintRect {
+            offset: Offset {
+                x: rect.x() as f64,
+                y: rect.y() as f64,
+            },
+            size: Size {
+                width: rect.width() as f64,
+                height: rect.height() as f64,
+            },
+        }),
+    ))
+}
+
+/// The authored viewBox of the element, or for an SVG child the nearest
+/// viewport's resolved size (SVGResources::ReferenceBoxForEffects(kViewBox)).
+pub(crate) fn LiveSvgViewBox(
+    object: &LayoutObject,
+) -> Option<Option<crate::internal::layout_input::SvgViewBoxData>> {
+    let data = LiveElementInputData(object)?;
+    if object.IsSVGChild() {
+        if let Some(resolve) =
+            crate::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
+                .viewport_size
+        {
+            let size = resolve(object);
+            return Some(Some(crate::internal::layout_input::SvgViewBoxData {
+                width: size.width() as f64,
+                height: size.height() as f64,
+                ..Default::default()
+            }));
+        }
+    }
+    Some(data.and_then(|data| data.svg_view_box))
 }

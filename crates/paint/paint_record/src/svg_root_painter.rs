@@ -36,7 +36,7 @@ impl SVGRootPainter {
             && snapped_viewport.height > 0.0
             && !fragment
                 .paint
-                .svg_viewport
+                .SvgViewport()
                 .is_some_and(|viewport| viewport.disabled)
             && !fragment.paint.SvgViewBoxIsEmpty()
             && !paint_info.DescendantPaintingBlocked()

@@ -129,8 +129,7 @@ fn LocalPoint(
     if fragment.paint.establishes_paint_state {
         if let Some(transform) = fragment
             .paint
-            .svg_shape
-            .as_ref()
+            .SvgShape()
             .and_then(|shape| shape.local_transform.as_ref())
         {
             point = paint::geometry_mapper::MapPointWithTransform(point, transform, true)?;

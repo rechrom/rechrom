@@ -405,7 +405,7 @@ mod tests {
         let url = format!("file://{}", fixture.display());
         let root = LayoutUrl(&url, 400, 320).unwrap();
         fn inspect(node: &FragmentPaintData, shapes: &mut usize) {
-            if node.paint.svg_shape.is_some() {
+            if node.paint.SvgShape().is_some() {
                 *shapes += 1;
             }
             for child in &node.children {

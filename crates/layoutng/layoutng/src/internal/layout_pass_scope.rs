@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::layout_algorithm_set::{FloatLayoutSupport, LayoutAlgorithmSet};
+use super::layout_algorithm_set::{FloatLayoutSupport, LayoutAlgorithmSet, SvgLayoutSupport};
 use super::layout_object_factory_set::LayoutObjectFactorySet;
 use foundation::UnsupportedLayout;
 
@@ -56,6 +56,11 @@ impl Drop for LayoutObjectFactoryScope {
 thread_local! {
     static DEPTH: Cell<u32> = const { Cell::new(0) };
     static ALGORITHMS: Cell<*const LayoutAlgorithmSet> = const { Cell::new(std::ptr::null()) };
+    // The SVG queries of the last installed algorithm set. They only read
+    // geometry the SVG layout package stored on its LayoutSVG owners, so
+    // PrePaint and Paint (same document thread, after the pass) can ask them
+    // as Chromium's painters read LayoutSVGShape / LayoutSVGRoot members.
+    static RESIDENT_SVG_SUPPORT: Cell<SvgLayoutSupport> = Cell::new(SvgLayoutSupport::default());
 }
 
 // cpp: layoutng/internal/layout_pass_scope.h:38-61
@@ -86,6 +91,8 @@ impl LayoutPassScope {
         DEPTH.with(|depth| depth.set(depth.get().wrapping_add(1)));
         if !algorithms.is_null() {
             ALGORITHMS.with(|current| current.set(algorithms));
+            let svg_support = unsafe { &*algorithms }.svg_support;
+            RESIDENT_SVG_SUPPORT.with(|resident| resident.set(svg_support));
         }
         Self {
             previous_algorithms_: previous_algorithms,
@@ -100,6 +107,17 @@ impl LayoutPassScope {
 
     pub fn Algorithms() -> *const LayoutAlgorithmSet {
         ALGORITHMS.with(Cell::get)
+    }
+
+    /// The SVG layout queries for post-layout readers: the active pass's
+    /// set, else the last one a pass installed on this thread.
+    pub fn ResidentSvgSupport() -> SvgLayoutSupport {
+        let algorithms = Self::Algorithms();
+        if algorithms.is_null() {
+            RESIDENT_SVG_SUPPORT.with(Cell::get)
+        } else {
+            unsafe { &*algorithms }.svg_support
+        }
     }
 
     pub fn Objects() -> *const LayoutObjectFactorySet {

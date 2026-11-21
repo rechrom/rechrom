@@ -73,7 +73,7 @@ impl ScopedSVGPaintState {
         if fragment.paint.SourceKind() != NodeKind::kSvgShape {
             return true;
         }
-        let Some(shape) = fragment.paint.svg_shape.as_deref() else {
+        let Some(shape) = fragment.paint.SvgShape().map(|shape| &**shape) else {
             return false;
         };
         let empty = if shape.geometry == SvgShapeGeometry::kPath {

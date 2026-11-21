@@ -60,7 +60,7 @@ pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     let mut contents = FragmentRect(fragment.paint.PaintLayerContentsVisualRect()?);
     contents.x += node.paint_offset.x;
     contents.y += node.paint_offset.y;
-    if fragment.paint.svg_view_box.is_some() {
+    if fragment.paint.SvgViewBox().is_some() {
         contents = SourceToDestinationRect(
             &node.properties.nodes.transform,
             &node.contents_properties.nodes.transform,

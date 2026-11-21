@@ -43,7 +43,7 @@ impl SVGModelObjectPainter {
     /// callers must not substitute the frame rect for culling.
     pub fn VisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
         let fragment = node.fragment.as_deref()?;
-        if let Some(rect) = fragment.paint.svg_visual_rect {
+        if let Some(rect) = fragment.paint.SvgVisualRect() {
             return Some(PaintRect {
                 x: node.paint_offset.x + rect.offset.x,
                 y: node.paint_offset.y + rect.offset.y,
@@ -57,7 +57,7 @@ impl SVGModelObjectPainter {
         // even when the Layout paint-geometry query was unavailable.
         // Chromium: layout_svg_model_object.h:48-52 and
         // layout_svg_shape.cc:353-400.
-        if let Some(shape) = fragment.paint.svg_shape.as_deref() {
+        if let Some(shape) = fragment.paint.SvgShape().map(|shape| &**shape) {
             let style = &fragment.paint.style;
             let has_stroke = style.svg_stroke_server.is_some()
                 || style.svg_stroke_reference().is_some()
@@ -79,7 +79,7 @@ impl SVGModelObjectPainter {
         }
         let rect = fragment
             .paint
-            .svg_visual_rect
+            .SvgVisualRect()
             .or(fragment.paint.ink_overflow)
             .or(fragment.paint.contents_ink_overflow)
             .or(fragment.paint.self_ink_overflow)

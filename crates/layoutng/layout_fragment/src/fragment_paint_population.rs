@@ -402,7 +402,7 @@ fn PopulateInlineItemLocalPaintData(
     update_paint!(
         output.paint,
         hidden,
-        item.IsHiddenForPaint() || output.paint.svg_viewport.is_some_and(|v| v.disabled)
+        item.IsHiddenForPaint() || output.paint.SvgViewport().is_some_and(|v| v.disabled)
     );
     if let Some((
         kind,
@@ -1206,7 +1206,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.paint,
         hidden,
         IsHiddenForPaintIncludingInlineItem(fragment)
-            || output.paint.svg_viewport.is_some_and(|v| v.disabled)
+            || output.paint.SvgViewport().is_some_and(|v| v.disabled)
     );
     output.kind = kind;
     output.offset = Offset {
