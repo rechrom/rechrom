@@ -3962,7 +3962,6 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
             logical_id.and_then(|logical_id| {
                 ResolveLogicalParentOccurrence(
                     child_pointer,
-                    fragment,
                     logical_id,
                     physical_ancestors,
                     fragment_instances,
