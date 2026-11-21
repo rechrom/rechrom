@@ -129,7 +129,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
                 layer.SetIsDrawable(true);
                 layer.SetHitTestable(true);
                 let id = DisplayItemId {
-                    client_id: fragment.paint.display_item_client_id,
+                    client_id: fragment.paint.DisplayItemClientId(),
                     r#type: DisplayItemIdType::kForeignLayerCanvas,
                     fragment: fragment.paint.display_item_fragment,
                 };

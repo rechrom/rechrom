@@ -98,7 +98,7 @@ fn fragment_identity(f: &FragmentPaintData) -> (u64, u64, u64, u32) {
     (
         f.node_id,
         f.fragment_instance_id,
-        f.paint.display_item_client_id,
+        f.paint.DisplayItemClientId(),
         f.paint.display_item_fragment,
     )
 }
@@ -245,7 +245,7 @@ fn identity(node: &PaintTreeNode<'_>) -> (u64, u64, u64, u32) {
     (
         f.node_id,
         f.fragment_instance_id,
-        f.paint.display_item_client_id,
+        f.paint.DisplayItemClientId(),
         f.paint.display_item_fragment,
     )
 }
@@ -474,7 +474,7 @@ impl RetainedScrollPaintState {
             }
             let paintable = f.paint.HasSource() && f.paint.style.visible() && !f.paint.hidden;
             let was_recorded = recorded_clients.contains(&(
-                f.paint.display_item_client_id,
+                f.paint.DisplayItemClientId(),
                 f.paint.display_item_fragment,
             ));
             let unrecorded_visual_rect = (paintable && !was_recorded)
@@ -631,7 +631,7 @@ fn collect_current_fragments<'a>(
                 "scroll-paint-reject stage=missing-fragment node_id={} fragment_instance_id={} client_id={} fragment={}",
                 f.node_id,
                 f.fragment_instance_id,
-                f.paint.display_item_client_id,
+                f.paint.DisplayItemClientId(),
                 f.paint.display_item_fragment
             );
         }
@@ -644,7 +644,7 @@ fn collect_current_fragments<'a>(
                 ("fragment_instance_id", f.fragment_instance_id as f64),
                 (
                     "display_item_client_id",
-                    f.paint.display_item_client_id as f64,
+                    f.paint.DisplayItemClientId() as f64,
                 ),
             ],
         );
@@ -689,7 +689,7 @@ fn collect_current_fragments<'a>(
     }
     let self_clean = f.pre_paint_revision != 0 && f.pre_paint_revision == old.revision;
     let unowned_sticky_change = f.paint.sticky_offset != old.sticky_offset
-        && (f.paint.sticky_constraint.is_none() || f.paint.display_item_client_id == 0);
+        && (f.paint.sticky_constraint.is_none() || f.paint.DisplayItemClientId() == 0);
     if !self_clean && (f.offset != old.offset || f.size != old.size || unowned_sticky_change) {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
@@ -724,9 +724,9 @@ fn collect_current_fragments<'a>(
         nodes[index] = Some(f);
     }
     *collected += 1;
-    if f.paint.display_item_client_id != 0 {
+    if f.paint.DisplayItemClientId() != 0 {
         let owner = PaintPropertyOwner::Fragment {
-            client: f.paint.display_item_client_id,
+            client: f.paint.DisplayItemClientId(),
             fragment: f.paint.display_item_fragment,
         };
         // ScrollTranslation and StickyTranslation are property values. Layout

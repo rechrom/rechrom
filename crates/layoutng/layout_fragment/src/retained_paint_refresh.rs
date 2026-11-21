@@ -103,7 +103,7 @@ pub(super) fn refresh_retained_paint_inputs(
         node: crate::layout_engine::PaintFragmentCursor<'_>,
         clients: &HashMap<u64, *mut LayoutObject>,
     ) -> bool {
-        if clients.contains_key(&node.paint.display_item_client_id)
+        if clients.contains_key(&node.paint.DisplayItemClientId())
             && (node.paint.has_collapsed_borders
                 || node.paint.svg_text.is_some()
                 || node.paint.text_combine.is_some())
@@ -132,14 +132,14 @@ pub(super) fn refresh_retained_paint_inputs(
         node.paint.page_document_background_style = None;
         node.paint.canvas_background = None;
         node.paint.view_background_invalidation = None;
-        if ink_clients.contains(&node.paint.display_item_client_id) {
+        if ink_clients.contains(&node.paint.DisplayItemClientId()) {
             // Ancestor contents ink depends on the invalidated text item.
             // Keep that proof unavailable until the source overflow owner
             // completes it, as ExportBoxInkOverflow does for unset ink.
             node.paint.contents_ink_overflow = None;
             node.paint.ink_overflow = None;
         }
-        if let Some(&object) = clients.get(&node.paint.display_item_client_id) {
+        if let Some(&object) = clients.get(&node.paint.DisplayItemClientId()) {
             let resources = node
                 
                 .resources
@@ -159,9 +159,6 @@ pub(super) fn refresh_retained_paint_inputs(
             // FragmentData; do not collapse fragmented boxes back to it.
             node.paint.display_item_client_debug_name =
                 current.display_item_client_debug_name.clone();
-            node.paint.display_item_client_owner_node_id =
-                current.display_item_client_owner_node_id;
-            node.paint.selection_client_id = current.selection_client_id;
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
@@ -182,7 +179,7 @@ pub(super) fn refresh_retained_paint_inputs(
             }
         }
         if let Some(&item) = ink_items.get(&(
-            node.paint.display_item_client_id,
+            node.paint.DisplayItemClientId(),
             node.paint.display_item_fragment,
         )) {
             node.paint.self_ink_overflow = None;

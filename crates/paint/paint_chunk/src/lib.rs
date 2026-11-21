@@ -79,7 +79,7 @@ impl DisplayItemClientInfo {
     }
 
     pub fn from_selection(fragment: &FragmentPaintData) -> Option<Self> {
-        (fragment.paint.selection_client_id != 0).then(|| {
+        (fragment.paint.SelectionClientId() != 0).then(|| {
             let state = fragment.paint.SelectionClientState();
             Self {
                 invalidation_reason: state.invalidation_reason,

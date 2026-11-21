@@ -1672,8 +1672,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     },
                     lifecycle: Default::default(),
                     id: node.properties.scroll_id,
-                    owner_client_id: fragment.paint.display_item_client_id,
-                    owner_node_id: u64::try_from(fragment.paint.display_item_client_owner_node_id)
+                    owner_client_id: fragment.paint.DisplayItemClientId(),
+                    owner_node_id: u64::try_from(fragment.paint.DisplayItemClientOwnerNodeId())
                         .unwrap_or_default(),
                     parent: parent_properties.nodes.nearest_scroll(),
                     overflow_clip: Some(node.properties.nodes.clip.clone()),

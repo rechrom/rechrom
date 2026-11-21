@@ -391,7 +391,7 @@ fn equal_style_slot_redistribution_updates_measurement_before_the_next_frame() {
         "#,
         );
         let sibling_id = id(&page, "sibling");
-        let sibling_client = published(&page, "sibling").paint.display_item_client_id;
+        let sibling_client = published(&page, "sibling").paint.DisplayItemClientId();
         evaluate(
             &mut page,
             r#"
@@ -409,7 +409,7 @@ fn equal_style_slot_redistribution_updates_measurement_before_the_next_frame() {
         );
         assert_eq!(id(&page, "sibling"), sibling_id);
         assert_eq!(
-            published(&page, "sibling").paint.display_item_client_id,
+            published(&page, "sibling").paint.DisplayItemClientId(),
             sibling_client,
             "unchanged sibling keeps its resident native layout owner"
         );
@@ -543,8 +543,8 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
         let old_box_size = published(&page, "box").size;
         let old_glyphs = glyph_ids(published(&page, "box"));
         assert!(!old_glyphs.is_empty());
-        let box_client = published(&page, "box").paint.display_item_client_id;
-        let sibling_client = published(&page, "sibling").paint.display_item_client_id;
+        let box_client = published(&page, "box").paint.DisplayItemClientId();
+        let sibling_client = published(&page, "sibling").paint.DisplayItemClientId();
         assert_eq!(old_box_size.width, 80.0);
         assert!(
             published(&page, "box").paint.style.color == published(&page, "host").paint.style.color,
@@ -560,7 +560,7 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
             "paint-only shadow mutations preserve geometry"
         );
         assert_eq!(
-            published(&page, "box").paint.display_item_client_id,
+            published(&page, "box").paint.DisplayItemClientId(),
             box_client
         );
         assert!(
@@ -602,7 +602,7 @@ fn shadow_style_width_and_text_mutations_preserve_older_published_frames() {
         assert!(find(&old_fragments, box_id).unwrap().paint == old_box_paint);
         assert!(old_artifact.items.as_ref() == &old_items);
         assert_eq!(
-            published(&page, "sibling").paint.display_item_client_id,
+            published(&page, "sibling").paint.DisplayItemClientId(),
             sibling_client,
             "unmodified sibling remains resident across shadow changes"
         );
@@ -693,7 +693,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
                 (
                     fragment.node_id,
                     fragment.size,
-                    fragment.paint.display_item_client_id,
+                    fragment.paint.DisplayItemClientId(),
                 )
             })
             .collect();
@@ -752,7 +752,7 @@ fn ua_control_attachment_owners_remain_single_and_stable_with_author_shadow() {
                 assert_eq!(count(fragments, node_id), 1, "one control box for {name}");
                 assert_eq!(fragment.size, size, "stable {name} control dimensions");
                 assert_eq!(
-                    fragment.paint.display_item_client_id, client,
+                    fragment.paint.DisplayItemClientId(), client,
                     "stable {name} layout owner"
                 );
             }

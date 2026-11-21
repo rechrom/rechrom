@@ -150,14 +150,7 @@ pub(super) fn ExportProperties(
         unsafe { &*object }
             .GetMutableForPainting()
             .EnsureIsReadyForPaintInvalidation();
-        let client = unsafe { &*(object as *const DisplayItemClient) };
-        // LayoutObject's base-first representation preserves the source
-        // DisplayItemClient subobject, including anonymous layout clients.
-        // cpp: core/layout/layout_object.h:280
-        // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
         output.property_fragment_unique_id = PropertyFragmentUniqueId(object, fragment_data);
-        output.display_item_client_id = client.Id() as u64;
-        output.display_item_client_owner_node_id = unsafe { &*object }.OwnerNodeIdDefault();
         output.display_item_client_debug_name = if let Some(cache) = debug_names.as_deref_mut() {
             Arc::clone(
                 cache
@@ -167,15 +160,6 @@ pub(super) fn ExportProperties(
         } else {
             Arc::from(unsafe { &*object }.DebugName().Utf8())
         };
-        let layout_text = DynamicTo::<LayoutText>(object);
-        let selection_client = if layout_text.is_null() {
-            std::ptr::null()
-        } else {
-            unsafe { &*layout_text }.GetSelectionDisplayItemClient()
-        };
-        if let Some(selection_client) = unsafe { selection_client.as_ref() } {
-            output.selection_client_id = selection_client.Id() as u64;
-        }
     }
     let text_combine = DynamicTo::<LayoutTextCombine>(object);
     if !text_combine.is_null() {

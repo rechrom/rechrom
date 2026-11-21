@@ -1023,25 +1023,17 @@ impl PaintProperties {
     // *_is_cacheable and *_is_just_created fields are only the detached
     // payload's state (fixtures and payloads without a managed source).
     fn LiveDisplayItemClient(&self) -> Option<&DisplayItemClient> {
-        if self.display_item_client_id == 0 {
-            return None;
-        }
         let object = self.SourceObject()?;
-        let client = unsafe { &*(object as *const LayoutObject).cast::<DisplayItemClient>() };
-        (client.Id() as u64 == self.display_item_client_id).then_some(client)
+        Some(unsafe { &*(object as *const LayoutObject).cast::<DisplayItemClient>() })
     }
 
     fn LiveSelectionClient(&self) -> Option<&DisplayItemClient> {
-        if self.selection_client_id == 0 {
-            return None;
-        }
         let object = self.SourceObjectPointer();
         if object.is_null() {
             return None;
         }
         let text = foundation::DynamicTo::<LayoutText>(object);
-        let client = unsafe { text.as_ref()?.GetSelectionDisplayItemClient().as_ref()? };
-        (client.Id() as u64 == self.selection_client_id).then_some(client)
+        unsafe { text.as_ref()?.GetSelectionDisplayItemClient().as_ref() }
     }
 
     fn LivePaintLayerClient(&self) -> Option<&DisplayItemClient> {
@@ -1879,6 +1871,40 @@ impl PaintProperties {
                 self.display_item_raster_effect_outset,
                 "display_item_raster_effect_outset",
             )
+    }
+
+    // DisplayItemClient identity. Chromium's PaintController and PrePaint
+    // use the LayoutObject (and LayoutText selection) DisplayItemClient
+    // itself (display_item_client.h:33-35,71-82).
+
+    pub fn DisplayItemClientId(&self) -> u64 {
+        self.SourceObject()
+            .map(|object| {
+                unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id() as u64
+            })
+            .SourceCheckedOr(self.display_item_client_id, "display_item_client_id")
+    }
+
+    pub fn DisplayItemClientOwnerNodeId(&self) -> i32 {
+        self.SourceObject()
+            .map(|object| object.OwnerNodeIdDefault())
+            .SourceCheckedOr(
+                self.display_item_client_owner_node_id,
+                "display_item_client_owner_node_id",
+            )
+    }
+
+    pub fn SelectionClientId(&self) -> u64 {
+        self.SourceObject()
+            .map(|object| {
+                let text = foundation::DynamicTo::<LayoutText>(
+                    object as *const LayoutObject as *mut LayoutObject,
+                );
+                unsafe { text.as_ref() }
+                    .and_then(|text| unsafe { text.GetSelectionDisplayItemClient().as_ref() })
+                    .map_or(0, |client| client.Id() as u64)
+            })
+            .SourceCheckedOr(self.selection_client_id, "selection_client_id")
     }
 
     /// The source Node id of the LayoutObject's nearest ancestor with a Node.

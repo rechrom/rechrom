@@ -123,10 +123,10 @@ impl PaintInvalidator {
         if invalidation.should_delay_full_paint_invalidation
             && (!IsFullPaintInvalidationReason(reason)
                 || reason == PaintInvalidationReason::kJustCreated)
-            && fragment.paint.display_item_client_id != 0
+            && fragment.paint.DisplayItemClientId() != 0
         {
             self.pending_delayed_paint_invalidations
-                .insert(fragment.paint.display_item_client_id);
+                .insert(fragment.paint.DisplayItemClientId());
         }
     }
 

@@ -497,7 +497,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         let id = DisplayItemId {
-            client_id: fragment.paint.display_item_client_id,
+            client_id: fragment.paint.DisplayItemClientId(),
             r#type: item_type,
             fragment: fragment.paint.display_item_fragment,
         };
@@ -505,7 +505,7 @@ impl<'o> PaintContext<'o> {
             id,
             DisplayItemClientInfo::from_fragment(fragment),
             Some((
-                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.DisplayItemClientOwnerNodeId(),
                 fragment.paint.display_item_client_debug_name.clone(),
             )),
         )
@@ -613,7 +613,7 @@ impl<'o> PaintContext<'o> {
         // Blink's fallback ID is a semantic DisplayItem ID, not a Skia opcode.
         // The standalone stream remains flat; scopes supply the outer ID.
         let id = DisplayItemId {
-            client_id: fragment.paint.display_item_client_id,
+            client_id: fragment.paint.DisplayItemClientId(),
             r#type: DisplayItemIdType::PaintPhaseToDrawingType(item.phase),
             fragment: fragment.paint.display_item_fragment,
         };
@@ -621,7 +621,7 @@ impl<'o> PaintContext<'o> {
         self.output.RecordDebugInfo(
             id.client_id as usize,
             fragment.paint.display_item_client_debug_name.clone(),
-            fragment.paint.display_item_client_owner_node_id,
+            fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         let (visual_rect, visual_rect_is_accurate) = TightenVisualRect(
             item.rect,
@@ -685,13 +685,13 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         self.output.RecordDebugInfo(
-            fragment.paint.display_item_client_id as usize,
+            fragment.paint.DisplayItemClientId() as usize,
             fragment.paint.display_item_client_debug_name.clone(),
-            fragment.paint.display_item_client_owner_node_id,
+            fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         self.BeginDrawingRecorderWithClient(
             DisplayItemId {
-                client_id: fragment.paint.display_item_client_id,
+                client_id: fragment.paint.DisplayItemClientId(),
                 r#type: item_type,
                 fragment: fragment.paint.display_item_fragment,
             },
@@ -941,7 +941,7 @@ impl<'o> PaintContext<'o> {
     ) {
         let fragment = node.fragment.as_deref().expect("scroll hit-test fragment");
         let id = DisplayItemId {
-            client_id: fragment.paint.display_item_client_id,
+            client_id: fragment.paint.DisplayItemClientId(),
             r#type: DisplayItemIdType::kScrollHitTest,
             fragment: fragment.paint.display_item_fragment,
         };
@@ -949,7 +949,7 @@ impl<'o> PaintContext<'o> {
         self.output.RecordDebugInfo(
             id.client_id as usize,
             fragment.paint.display_item_client_debug_name.clone(),
-            fragment.paint.display_item_client_owner_node_id,
+            fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         self.paint_controller.RecordScrollHitTestData(
             self.output,
@@ -981,7 +981,7 @@ impl<'o> PaintContext<'o> {
         let fragment = node.fragment.as_deref().expect("hit-test fragment");
         self.RecordHitTestDataWithClient(
             node,
-            fragment.paint.display_item_client_id,
+            fragment.paint.DisplayItemClientId(),
             DisplayItemClientInfo::from_fragment(fragment),
             rect,
             opaqueness,
@@ -1002,11 +1002,11 @@ impl<'o> PaintContext<'o> {
             r#type: DisplayItemIdType::kHitTest,
             fragment: fragment.paint.display_item_fragment,
         };
-        if client_id == fragment.paint.display_item_client_id {
+        if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfo(
                 id.client_id as usize,
                 fragment.paint.display_item_client_debug_name.clone(),
-                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }
         self.paint_controller.RecordHitTestData(
@@ -1031,7 +1031,7 @@ impl<'o> PaintContext<'o> {
         let fragment = node.fragment.as_deref().expect("region-capture fragment");
         self.RecordRegionCaptureDataWithClient(
             node,
-            fragment.paint.display_item_client_id,
+            fragment.paint.DisplayItemClientId(),
             DisplayItemClientInfo::from_fragment(fragment),
             crop_id,
             rect,
@@ -1053,11 +1053,11 @@ impl<'o> PaintContext<'o> {
             r#type: DisplayItemIdType::kRegionCapture,
             fragment: fragment.paint.display_item_fragment,
         };
-        if client_id == fragment.paint.display_item_client_id {
+        if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfo(
                 id.client_id as usize,
                 fragment.paint.display_item_client_debug_name.clone(),
-                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }
         self.paint_controller
@@ -1074,7 +1074,7 @@ impl<'o> PaintContext<'o> {
         let fragment = node.fragment.as_deref().expect("tracked-element fragment");
         self.RecordTrackedElementDataWithClient(
             node,
-            fragment.paint.display_item_client_id,
+            fragment.paint.DisplayItemClientId(),
             DisplayItemClientInfo::from_fragment(fragment),
             element_paint_rect,
             sub_rects,
@@ -1138,11 +1138,11 @@ impl<'o> PaintContext<'o> {
             r#type: DisplayItemIdType::kTrackedElement,
             fragment: fragment.paint.display_item_fragment,
         };
-        if client_id == fragment.paint.display_item_client_id {
+        if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfo(
                 id.client_id as usize,
                 fragment.paint.display_item_client_debug_name.clone(),
-                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }
         self.paint_controller.RecordTrackedElementData(
@@ -1247,7 +1247,7 @@ impl<'o> PaintContext<'o> {
         self.paint_controller
             .UpdateCurrentPaintChunkIdAndProperties(
                 DisplayItemId {
-                    client_id: fragment.paint.display_item_client_id,
+                    client_id: fragment.paint.DisplayItemClientId(),
                     r#type: item_type,
                     fragment: fragment.paint.display_item_fragment,
                 },
@@ -1961,7 +1961,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             // Standalone owners without a source PaintLayer use their real
             // drawing client. The recorder supplies the same legal fallback.
             (
-                fragment.paint.display_item_client_id,
+                fragment.paint.DisplayItemClientId(),
                 DisplayItemClientInfo::from_fragment(fragment),
             )
         };
@@ -1987,7 +1987,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let previous = borrowed.chunk_properties();
         borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
-                client_id: fragment.paint.display_item_client_id,
+                client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToClipType(phase),
                 fragment: fragment.paint.display_item_fragment,
             },
@@ -2026,7 +2026,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             .expect("text combine transform must have a parent");
         borrowed.update_chunk_id_and_properties_raw(
             DisplayItemId {
-                client_id: fragment.paint.display_item_client_id,
+                client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToDrawingType(phase),
                 fragment: fragment.paint.display_item_fragment,
             },

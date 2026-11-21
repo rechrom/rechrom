@@ -249,7 +249,7 @@ impl ScrollPaintPropertyIndex {
         // ScrollingCoordinator reports the DOM owner associated
         // with the display-item client. For the global viewport
         // this intentionally differs from LayoutView's own node.
-        let source_id = fragment.paint.display_item_client_owner_node_id as u64;
+        let source_id = fragment.paint.DisplayItemClientOwnerNodeId() as u64;
         let source_id = if source_id == 0 {
             InputId(object)
         } else {

@@ -92,7 +92,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
                 layer.SetIsDrawable(true);
                 layer.SetHitTestable(true);
                 let id = DisplayItemId {
-                    client_id: fragment.paint.display_item_client_id,
+                    client_id: fragment.paint.DisplayItemClientId(),
                     r#type: DisplayItemIdType::kForeignLayerVideo,
                     fragment: fragment.paint.display_item_fragment,
                 };

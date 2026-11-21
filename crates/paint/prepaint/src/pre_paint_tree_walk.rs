@@ -88,11 +88,11 @@ impl EmbeddedLocalFrameView {
             .replaced_content
             .as_ref()
             .is_some_and(|content| content.is_layout_embedded_content));
-        assert_ne!(owner.paint.display_item_client_id, 0);
+        assert_ne!(owner.paint.DisplayItemClientId(), 0);
         // Exactly the same source-owner lease used by ResidentFragment. It
         // outlives every cursor installed in the cross-document PrePaint tree.
         Self {
-            owner_client: owner.paint.display_item_client_id,
+            owner_client: owner.paint.DisplayItemClientId(),
             root: unsafe {
                 std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
                     layout.PaintCursor(),
@@ -373,13 +373,18 @@ impl std::ops::DerefMut for ResidentFragment {
     }
 }
 
-fn RetainImagePaintedRect(current: &FragmentPaintData, previous: Option<&FragmentPaintData>) {
+/// `previous_client_id` is the DisplayItemClient id PrePaint recorded for the
+/// previous fragment; the previous snapshot's LayoutObject may be gone.
+fn RetainImagePaintedRect(
+    current: &FragmentPaintData,
+    previous: Option<&FragmentPaintData>,
+    previous_client_id: Option<u64>,
+) {
     if !current.paint.ReplacedIsImage() {
         return;
     }
-    let previous = previous.filter(|previous| {
-        previous.paint.display_item_client_id == current.paint.display_item_client_id
-    });
+    let previous = previous
+        .filter(|_| previous_client_id == Some(current.paint.DisplayItemClientId()));
     if current.paint.image_last_paint_rect.get().is_none() {
         if let Some(retained) =
             previous.and_then(|previous| previous.paint.image_last_paint_rect.get())
@@ -584,7 +589,7 @@ fn InvalidateClientsForCullRectChange(fragment: &mut FragmentPaintData) {
     fragment.paint.SetPaintingLayerNeedsRepaint();
     ObjectPaintInvalidator::InvalidateDisplayItemClient(fragment, reason);
     ObjectPaintInvalidator::InvalidatePaintLayerClient(fragment, reason);
-    if fragment.paint.selection_client_id != 0 {
+    if fragment.paint.SelectionClientId() != 0 {
         ObjectPaintInvalidator::InvalidateSelectionClient(fragment, reason);
     }
 }
@@ -4327,7 +4332,7 @@ fn GatherFinalEffects(
         .filter(|f| f.paint.IsSVGHiddenContainer())
     {
         resources.insert(
-            fragment.paint.display_item_client_id,
+            fragment.paint.DisplayItemClientId(),
             node as *const PaintTreeNode<'_> as *const PaintTreeNode<'static>,
         );
     }
@@ -4591,7 +4596,7 @@ fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
         && a.fragment_instance_id == b.fragment_instance_id
         && a.fragmentainer_instance_id == b.fragmentainer_instance_id
         && a.kind == b.kind
-        && a.paint.display_item_client_id == b.paint.display_item_client_id
+        && a.paint.DisplayItemClientId() == b.paint.DisplayItemClientId()
         && a.paint.display_item_fragment == b.paint.display_item_fragment
 }
 
@@ -4717,7 +4722,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         node_id: f.node_id,
         fragment_instance_id: f.fragment_instance_id,
         fragmentainer_instance_id: f.fragmentainer_instance_id,
-        display_item_client_id: p.display_item_client_id,
+        display_item_client_id: p.DisplayItemClientId(),
         display_item_fragment: p.display_item_fragment,
         size: f.size,
         offset: f.offset,
@@ -5617,7 +5622,7 @@ fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintD
         && recorded.node_id == new.node_id
         && recorded.fragment_instance_id == new.fragment_instance_id
         && recorded.fragmentainer_instance_id == new.fragmentainer_instance_id
-        && recorded.display_item_client_id == new.paint.display_item_client_id
+        && recorded.display_item_client_id == new.paint.DisplayItemClientId()
         && recorded.display_item_fragment == new.paint.display_item_fragment
 }
 
@@ -5646,7 +5651,7 @@ fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPr
 /// PaintLayer and, for a scroller, the scroll corner and scrollbar clients.
 fn ClientDirectoryIds(paint: &layoutng_assembly::fragment_tree::PaintProperties) -> ClientIds {
     ClientIds {
-        display_item: paint.display_item_client_id,
+        display_item: paint.DisplayItemClientId(),
         paint_layer: paint.PaintLayerClientId(),
         scrollbars: paint.scrollbars.as_ref().map(|bars| {
             (
@@ -6242,7 +6247,7 @@ impl PrePaintTreeWalk {
         self.stats.source_tree_compatible_nodes += source_tree_compatible as usize;
         let subtree_clean = !self
             .local_frame_views
-            .contains_key(&fragment.paint.display_item_client_id)
+            .contains_key(&fragment.paint.DisplayItemClientId())
             && previous
                 .as_ref()
                 .is_none_or(|node| !node.cache.as_ref().unwrap().contains_local_frames)
@@ -6293,6 +6298,8 @@ impl PrePaintTreeWalk {
         // The values this lifecycle compares and then records on the slot
         // (PrePaintPreviousOf), computed once per visited node.
         let current_record = PrePaintPreviousOf(&fragment);
+        let previous_display_item_client_id =
+            previous.as_ref().map(|node| RecordOf(node).display_item_client_id);
         // The previous lifecycle's fragment, as the retained node recorded
         // it, instead of the previous LayoutResult's sidecar copy. Owned
         // here: the rebuild path overwrites the retained node before the
@@ -6678,6 +6685,7 @@ impl PrePaintTreeWalk {
                 .as_deref()
                 .expect("PrePaint node must own a fragment"),
             PreviousFragment(old_fragment),
+            previous_display_item_client_id,
         );
         node.cache.as_mut().unwrap().inherited = inherited.clone();
         // Chromium runs invalidation after property construction. The initial
@@ -6865,7 +6873,7 @@ impl PrePaintTreeWalk {
         // still skipped by the source's display-lock dirty-bit projection.
         let embedded_view = self
             .local_frame_views
-            .get(&fragment.paint.display_item_client_id)
+            .get(&fragment.paint.DisplayItemClientId())
             .filter(|_| fragment.paint.CanPaintFragmentOccurrence())
             .cloned();
         let embedded_source = embedded_view
@@ -6974,7 +6982,7 @@ impl PrePaintTreeWalk {
                 is_local_frame && embedded_view.as_ref().unwrap().cross_origin_to_parent;
             if is_local_frame {
                 self.completed_local_frame_prepaint
-                    .insert(fragment.paint.display_item_client_id);
+                    .insert(fragment.paint.DisplayItemClientId());
             }
             if let Some(fixed) = frame_fixed_context {
                 self.root_fixed_position = fixed;
@@ -7272,7 +7280,7 @@ impl PrePaintTreeWalk {
         }
     }
     fn RegisterProperty(&mut self, fragment: &FragmentPaintData, role: PaintPropertyRole, id: u64) {
-        let client = fragment.paint.display_item_client_id;
+        let client = fragment.paint.DisplayItemClientId();
         if client == 0 {
             return;
         }
@@ -7627,8 +7635,8 @@ impl PrePaintTreeWalk {
                         clients.entry(id).or_default().push(pointer);
                     }
                 };
-                add(f.paint.display_item_client_id);
-                add(f.paint.selection_client_id);
+                add(f.paint.DisplayItemClientId());
+                add(f.paint.SelectionClientId());
                 add(f.paint.PaintLayerClientId());
                 if let Some(scroll) = &f.paint.scroll_container {
                     add(scroll.scrolling_background_client_id);
@@ -7703,7 +7711,7 @@ impl PrePaintTreeWalk {
                 continue;
             }
             let style = &fragment.paint.style;
-            let client = fragment.paint.display_item_client_id;
+            let client = fragment.paint.DisplayItemClientId();
             if client == 0 {
                 rejection = 2;
                 break;
@@ -8071,7 +8079,7 @@ impl PrePaintTreeWalk {
                 let f = node.fragment.as_deref_mut().unwrap();
                 // Live source clients were validated by the Layout commit's
                 // PaintController cycle; only detached payload state is local.
-                if f.paint.display_item_client_id == id
+                if f.paint.DisplayItemClientId() == id
                     && f.paint.display_item_client_is_cacheable
                     && !f.paint.HasLiveDisplayItemClient()
                 {
@@ -8080,7 +8088,7 @@ impl PrePaintTreeWalk {
                         .replace(PaintInvalidationReason::kNone);
                     f.paint.display_item_client_is_just_created.set(false);
                 }
-                if f.paint.selection_client_id == id
+                if f.paint.SelectionClientId() == id
                     && f.paint.selection_client_is_cacheable
                     && !f.paint.HasLiveSelectionClient()
                 {
@@ -8506,7 +8514,7 @@ mod tests {
         let mut current = FragmentPaintData::default();
         current.paint.replaced_is_image = true;
         current.paint.display_item_client_id = 7;
-        RetainImagePaintedRect(&current, Some(&previous));
+        RetainImagePaintedRect(&current, Some(&previous), Some(7));
         assert_eq!(
             current.paint.image_last_paint_rect.get(),
             Some(painted_rect)
@@ -8519,7 +8527,7 @@ mod tests {
         let mut different_client = FragmentPaintData::default();
         different_client.paint.replaced_is_image = true;
         different_client.paint.display_item_client_id = 8;
-        RetainImagePaintedRect(&different_client, Some(&previous));
+        RetainImagePaintedRect(&different_client, Some(&previous), Some(7));
         assert_eq!(different_client.paint.image_last_paint_rect.get(), None);
         assert_eq!(
             different_client.paint.image_last_painted_id.get(),

@@ -152,7 +152,7 @@ impl PrePaintTreeWalk {
         let source = source.PaintData();
         let candidates = self
             .client_nodes
-            .get(&source.paint.display_item_client_id)?;
+            .get(&source.paint.DisplayItemClientId())?;
         for pointer in candidates {
             // RetainTree populates this directory after restoring resident
             // ownership. Its boxes cannot move or disappear during this borrow.
@@ -195,7 +195,7 @@ impl PrePaintTreeWalk {
         let identity = source.paint.LayoutObjectIdentity()?;
         let candidates = self
             .client_nodes
-            .get(&source.paint.display_item_client_id)?;
+            .get(&source.paint.DisplayItemClientId())?;
         for pointer in candidates {
             let node = unsafe { &**pointer };
             if !node.is_paint_layer {
@@ -364,7 +364,7 @@ impl<'a> ResidentPaintHitTest<'a> {
         let fragment = self.Fragment();
         PaintPropertyKey {
             owner: PaintPropertyOwner::Fragment {
-                client: fragment.paint.display_item_client_id,
+                client: fragment.paint.DisplayItemClientId(),
                 fragment: fragment.paint.display_item_fragment,
             },
             role,

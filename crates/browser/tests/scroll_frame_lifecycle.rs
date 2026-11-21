@@ -278,7 +278,7 @@ fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
         );
         let owner = PaintFragmentCursor::FromHandle(&page.CurrentFrame().unwrap().fragments)
             .paint
-            .display_item_client_id;
+            .DisplayItemClientId();
         page.ApplyCompositorScrollDelta(1, owner, Offset { x: 0., y: 80. })
             .unwrap();
         assert_eq!(page.CurrentFrame().unwrap().compositor_scroll_sequence, 0);

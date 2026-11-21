@@ -575,7 +575,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let paint_rect = PixelSnappedBorderBoxRect(self.node, fragment.size);
         self.RecordRegionCaptureAndTrackedElementDataForClient(
             paint_rect,
-            fragment.paint.display_item_client_id,
+            fragment.paint.DisplayItemClientId(),
             crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
         );
     }
@@ -1132,7 +1132,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     })
                     .flatten();
                 let (background_client_id, background_client) = scrolling_client.unwrap_or((
-                    fragment.paint.display_item_client_id,
+                    fragment.paint.DisplayItemClientId(),
                     crate::paint_chunker::DisplayItemClientInfo::from_fragment(fragment),
                 ));
                 if !(paint_info.IsPaintingBackgroundInContentsSpace()
@@ -3012,7 +3012,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         self.context.borrow_mut().RegisterAuxiliaryClient(
             scroll.scrolling_background_client_id,
-            fragment.paint.display_item_client_owner_node_id,
+            fragment.paint.DisplayItemClientOwnerNodeId(),
             std::sync::Arc::from(format!(
                 "{} scrolling background",
                 fragment.paint.display_item_client_debug_name
@@ -4379,7 +4379,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             crate::paint_chunker::DisplayItemClientInfo::from_selection(fragment).map(|client| {
                 (
                     DisplayItemId {
-                        client_id: fragment.paint.selection_client_id,
+                        client_id: fragment.paint.SelectionClientId(),
                         r#type: drawing_type,
                         fragment: fragment.paint.display_item_fragment,
                     },
@@ -4402,7 +4402,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     id,
                     client,
                     Some((
-                        fragment.paint.display_item_client_owner_node_id,
+                        fragment.paint.DisplayItemClientOwnerNodeId(),
                         Arc::<str>::from(format!(
                             "{} selection",
                             fragment.paint.display_item_client_debug_name
@@ -6696,7 +6696,7 @@ fn CanvasBackgroundDisplayItemId(
     // semantic record identity while retaining the source LayoutView client.
     let occurrence = u32::try_from(layer_ordinal).expect("canvas layer count must fit u32");
     DisplayItemId {
-        client_id: fragment.paint.display_item_client_id,
+        client_id: fragment.paint.DisplayItemClientId(),
         r#type: item_type,
         fragment: fragment
             .paint

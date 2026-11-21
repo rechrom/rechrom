@@ -1112,7 +1112,7 @@ impl PaintEngine {
         for view in views {
             if self
                 .pre_paint
-                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+                .LocalFramePrePaintCompleted(view.owner.paint.DisplayItemClientId())
             {
                 view.lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
                 view.lifecycle
@@ -1135,7 +1135,7 @@ impl PaintEngine {
         for view in views {
             if self
                 .pre_paint
-                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+                .LocalFramePrePaintCompleted(view.owner.paint.DisplayItemClientId())
             {
                 view.lifecycle.AdvanceTo(PaintLifecyclePhase::InPaint);
             }
@@ -1144,7 +1144,7 @@ impl PaintEngine {
         for view in views {
             if self
                 .pre_paint
-                .LocalFramePrePaintCompleted(view.owner.paint.display_item_client_id)
+                .LocalFramePrePaintCompleted(view.owner.paint.DisplayItemClientId())
             {
                 view.lifecycle.AdvanceTo(PaintLifecyclePhase::PaintClean);
             }

@@ -244,7 +244,7 @@ fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
         assert!(!classification.is_paint_layer);
         let artifact = &page.CurrentFrame().unwrap().display_items;
         assert!(artifact.display_items.iter().any(|item| {
-            item.id.client_id == masked.paint.display_item_client_id
+            item.id.client_id == masked.paint.DisplayItemClientId()
                 && item.id.r#type == paint::display_item_id::DisplayItemIdType::kSVGMask
         }));
         assert!(artifact.items.iter().any(|item| {

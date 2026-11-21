@@ -351,7 +351,7 @@ impl PrePaintRevisionTracker {
                 continue;
             };
             if committed(
-                paint.display_item_client_id,
+                paint.DisplayItemClientId(),
                 paint.display_item_client_is_cacheable,
             ) {
                 paint.display_item_client_invalidation_reason =
@@ -359,7 +359,7 @@ impl PrePaintRevisionTracker {
                 paint.display_item_client_is_just_created.set(false);
             }
             if committed(
-                paint.selection_client_id,
+                paint.SelectionClientId(),
                 paint.selection_client_is_cacheable,
             ) {
                 paint.selection_client_invalidation_reason =
@@ -786,8 +786,8 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
 
 fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
     let mut ids = [
-        paint.display_item_client_id,
-        paint.selection_client_id,
+        paint.DisplayItemClientId(),
+        paint.SelectionClientId(),
         paint.PaintLayerClientId(),
         0,
         0,

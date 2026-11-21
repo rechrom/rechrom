@@ -415,7 +415,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             let client = DisplayItemClientInfo::from_paint_layer(fragment)
                 .expect("subsequence requires a source PaintLayer client");
             let debug = Some((
-                fragment.paint.display_item_client_owner_node_id,
+                fragment.paint.DisplayItemClientOwnerNodeId(),
                 fragment.paint.display_item_client_debug_name.clone(),
             ));
             self.context.borrow_mut().walk_metrics.subsequence_layers += 1;
@@ -650,7 +650,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         let paint_info = &dispatched_info;
         let fragment = node.fragment.as_deref().expect("native Paint owner");
         if fragment.paint.IsSVGHiddenContainer()
-            && !paint_info.IsSvgResourceRoot(fragment.paint.display_item_client_id)
+            && !paint_info.IsSvgResourceRoot(fragment.paint.DisplayItemClientId())
         {
             return;
         }
