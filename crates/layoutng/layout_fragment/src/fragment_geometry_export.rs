@@ -1,8 +1,8 @@
 //! Chromium fragment-local geometry projection.
 //!
-//! SVG text transforms, stitched decoration geometry, box paint geometry,
-//! and content size are fragment output concerns and keep package-qualified
-//! sampling symbols here.
+//! SVG text transforms, stitched decoration geometry and box paint geometry
+//! are fragment output concerns and keep package-qualified sampling symbols
+//! here.
 
 #![allow(non_snake_case)]
 
@@ -225,24 +225,14 @@ pub(super) fn ExportBoxPaintGeometry(
     }
     // Borders, padding and included sides are read from this resident
     // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
-    // read PhysicalBoxFragment directly; they are not copied here.
-    paint.stitched_decoration = ExportStitchedDecorationData(box_fragment);
-}
-
-// Chromium's PhysicalBoxFragment::ContentRect() DCHECKs that border and
-// padding fit inside the fragment. That precondition intentionally does not
-// hold for every table-part fragment: CSS padding may remain represented in
-// the fragment metadata even though the table algorithm resolves a zero row
-// block-size. The public FragmentPaintData boundary still needs a total content-box
-// size for every fragment, so use the same non-negative subtraction semantics
-// as Blink's ShrinkLogicalSize rather than calling ContentRect() outside its
-// valid domain.
-pub(super) fn ExportContentSize(box_fragment: &PhysicalBoxFragment) -> Size {
-    let insets = box_fragment.Borders() + box_fragment.Padding();
-    let size = box_fragment.Size();
-    Size {
-        width: Number((size.width - insets.HorizontalSum()).ClampNegativeToZero()),
-        height: Number((size.height - insets.VerticalSum()).ClampNegativeToZero()),
+    // read PhysicalBoxFragment directly; they are not copied here. The
+    // content size and a non-inline box's stitched geometry are read live
+    // too (ViewContentSize / ViewStitchedDecoration). A sliced inline box's
+    // strip spans the object's sibling box fragments and is written by
+    // PrePaint (PopulateInlineStitchedDecorations) only for strips of two or
+    // more fragments, so a republished inline box drops its previous strip.
+    if box_fragment.IsInlineBox() && paint.stitched_decoration.is_some() {
+        paint.stitched_decoration = None;
     }
 }
 

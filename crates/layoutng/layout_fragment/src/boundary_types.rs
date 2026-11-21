@@ -574,6 +574,8 @@ pub struct FragmentPaintData<Paint> {
     pub kind: FragmentKind,
     pub offset: LayoutOffset,
     pub size: LayoutSize,
+    /// Fixture-only content-box size for hand-built slots without a resident
+    /// owner. Production reads it live (ResidentBoxGeometry::ViewContentSize).
     pub content_size: LayoutSize,
     pub text_start: Option<u32>,
     pub text_end: Option<u32>,

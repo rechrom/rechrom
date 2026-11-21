@@ -458,6 +458,9 @@ pub struct PaintProperties {
     pub border_sides: FragmentBoxSides,
     pub border_styles: [BorderLineStyle; 4],
     pub padding: Edges,
+    /// A sliced inline box's strip, written by PrePaint
+    /// (PopulateInlineStitchedDecorations), and the fixture fallback. Other
+    /// resident boxes read it live (ViewStitchedDecoration).
     pub stitched_decoration: Option<StitchedDecorationData>,
     pub box_decoration_break: BoxDecorationBreak,
     pub display: Display,
@@ -1559,6 +1562,12 @@ impl ResidentBoxGeometry for FragmentPaintData {
             return self.content_size;
         }
         match self.ResidentBoxFragment() {
+            // Chromium's PhysicalBoxFragment::ContentRect() DCHECKs that
+            // border and padding fit inside the fragment, which does not hold
+            // for every table-part fragment (CSS padding may remain in the
+            // fragment metadata although the table algorithm resolves a zero
+            // row block-size). Use Blink's ShrinkLogicalSize non-negative
+            // subtraction instead of calling ContentRect() outside its domain.
             Some(box_fragment) => {
                 let insets = box_fragment.Borders() + box_fragment.Padding();
                 let size = box_fragment.Size();

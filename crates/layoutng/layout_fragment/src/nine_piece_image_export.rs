@@ -11,6 +11,9 @@ use super::*;
 pub(super) fn ExportNinePieceImages(
     style: &StyleComputedStyle,
     size: Size,
+    // The fragment's stitched decoration size (ViewStitchedDecoration): the
+    // reflection mask's image area when the box is sliced.
+    stitched_size: Option<Size>,
     resources: &PaintResources,
     // The painted fragment's border widths (ResidentBoxGeometry::Borders).
     borders: Edges,
@@ -35,11 +38,8 @@ pub(super) fn ExportNinePieceImages(
     paint.style.mask_box_image = export(style.MaskBoxImage(), size);
     if let Some(reflection) = unsafe { style.BoxReflect().as_ref() } {
         if reflection.Mask().HasImage() {
-            let stitched_size = paint
-                .stitched_decoration
-                .as_ref()
-                .map_or(size, |stitched| stitched.size);
-            paint.style.box_reflection_mask_image = export(reflection.Mask(), stitched_size);
+            paint.style.box_reflection_mask_image =
+                export(reflection.Mask(), stitched_size.unwrap_or(size));
         }
     }
 }
