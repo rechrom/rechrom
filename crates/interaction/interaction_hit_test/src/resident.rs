@@ -312,12 +312,11 @@ impl<L: ?Sized> HitTestBoxFragment for ResidentFragment<'_, L> {
 }
 impl<L: ?Sized> PhysicalFragment<L> for ResidentFragment<'_, L> {
     fn Flags(&self) -> FragmentFlags {
-        let data = &self.cursor.paint;
         let physical = self.Physical();
         FragmentFlags {
             can_traverse: self.Object().CanTraversePhysicalFragments(),
             first_for_node: self.Box().is_none_or(PhysicalBoxFragment::IsFirstForNode),
-            can_paint_multiple_fragments: data.can_paint_multiple_fragments,
+            can_paint_multiple_fragments: self.cursor.ViewCanPaintMultipleFragments(),
             hidden_for_paint: physical.is_some_and(|fragment| fragment.IsHiddenForPaint()),
             atomic_inline: physical.is_some_and(|f| f.IsAtomicInline()),
             self_painting_layer: physical.is_some_and(|fragment| fragment.HasSelfPaintingLayer()),
@@ -456,12 +455,9 @@ impl<L: ?Sized> FragmentItem<L> for ResidentFragment<'_, L> {
             },
             hidden_for_paint: item.IsHiddenForPaint(),
             svg_text: item.IsSvgText(),
-            svg_bounding_box_transform: self
-                .cursor
-                .paint
-                .svg_text
-                .as_ref()
-                .is_some_and(|text| text.has_transform),
+            // Chromium: BoxFragmentPainter::HitTestTextItem tests
+            // FragmentItem::HasSvgTransformForBoundingBox() on the item.
+            svg_bounding_box_transform: item.HasSvgTransformForBoundingBox(),
             svg_inline: self.Object().IsSVGInline(),
             self_painting_layer: item.HasSelfPaintingLayer(),
             floating: item.IsFloating(),
