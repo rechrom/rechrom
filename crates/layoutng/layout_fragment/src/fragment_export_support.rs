@@ -156,10 +156,7 @@ pub(super) fn PublicWritingMode(mode: StyleWritingMode) -> WritingMode {
     mode.into()
 }
 
-pub(super) type SourceEntry = LayoutBoundarySourceEntry;
-pub(super) type SourceMap = LayoutBoundaryHashMap<*const LayoutObject, SourceEntry>;
 pub(super) type StyleSourceEntry = LayoutBoundaryStyleSourceEntry;
-pub(super) type StyleSourceMap = LayoutBoundaryHashMap<*const StyleComputedStyle, StyleSourceEntry>;
 /// The Layout boundary's persistent PaintStyle projection cache generation lent
 /// to one publication (None: projections resolve without memoization).
 pub(super) type ExportedStyleCache = Option<crate::internal::layout_input::ExportedStyleCacheKey>;

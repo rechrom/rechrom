@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use crate::layout_boundary_support::{
-    LayoutBoundaryCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet,
-    LayoutBoundarySourceEntry, LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
+    LayoutBoundaryCache, LayoutBoundaryHashSet,
+    LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
 };
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -142,7 +142,7 @@ pub(crate) use layout_fragment_fragment_export_support::{
 use layout_fragment_fragment_export_support::{
     ExportAppliedTextDecorations, ExportedStyleCache,
     InputId,
-    Number, PublicWritingMode, SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
+    Number, PublicWritingMode, StyleSourceEntry,
 };
 #[path = "../../../../layout_fragment/src/fragment_property_export.rs"]
 mod layout_fragment_fragment_property_export;
@@ -162,6 +162,13 @@ pub(crate) use layout_fragment_fragment_property_export::{
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,
+};
+#[path = "../../../../layout_fragment/src/fragment_paint_data_init.rs"]
+mod layout_fragment_fragment_paint_data_init;
+use layout_fragment_fragment_paint_data_init::ReadyPrePaintInvalidation;
+pub(crate) use layout_fragment_fragment_paint_data_init::{
+    InitializeInlineItemPaintData, InitializePhysicalFragmentPaintData,
+    PaintResourcesAreCompatible, SynchronizeBoxFragmentData, SynchronizeInlineFragmentData,
 };
 #[path = "../../../../layout_fragment/src/text_paint_export.rs"]
 mod layout_fragment_text_paint_export;
@@ -192,18 +199,12 @@ pub(crate) use layout_fragment_specialized_paint_export::{
 #[path = "../../../../layout_fragment/src/collapsed_table_paint_export.rs"]
 mod layout_fragment_collapsed_table_paint_export;
 pub(crate) use layout_fragment_collapsed_table_paint_export::ExportCollapsedTablePaintData;
-#[path = "../../../../layout_fragment/src/fragment_export_state.rs"]
-pub(crate) mod layout_fragment_fragment_export_state;
-use layout_fragment_fragment_export_state::{FragmentOwners, PopulateSVGChildPaintData};
 #[path = "../../../../layout_fragment/src/ink_overflow_export.rs"]
 mod layout_fragment_ink_overflow_export;
 use layout_fragment_ink_overflow_export::ExportInkRect;
 #[path = "../../../../layout_fragment/src/nine_piece_image_export.rs"]
 mod layout_fragment_nine_piece_image_export;
 use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
-#[path = "../../../../layout_fragment/src/fragment_paint_population.rs"]
-mod layout_fragment_fragment_paint_population;
-use layout_fragment_fragment_paint_population::PopulatePhysicalFragmentPaintData;
 #[path = "../../../../layout_fragment/src/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
 pub(crate) use layout_fragment_global_paint_export::{

@@ -180,9 +180,6 @@ pub struct LayoutBoundaryCache {
     /// `style_sources` / `sticky_objects` predate a compatible style
     /// replacement and must be rebuilt before their next read.
     pub(crate) style_indices_stale: bool,
-    /// The last Paint publication's slots in preorder (population replay).
-    pub(crate) population_replay:
-        crate::internal::boundary::layout_boundary::layout_fragment_fragment_export_state::PopulationReplay,
 }
 
 impl LayoutBoundaryCache {

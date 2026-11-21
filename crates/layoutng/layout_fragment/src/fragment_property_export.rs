@@ -16,21 +16,50 @@ use layoutng_style::style::style_transform::{
 #[inline(never)]
 pub(super) fn ExportPaintProperties(
     object: *const LayoutObject,
-    sources: &SourceMap,
-    style_sources: &StyleSourceMap,
     effective_style: *const StyleComputedStyle,
-    resources: &Arc<PaintResources>,
 ) -> PaintProperties {
     ExportProperties(
         object,
         std::ptr::null_mut(),
-        sources,
-        style_sources,
         effective_style,
-        resources,
         LayoutUpdateKind::Paint,
         None,
     )
+}
+
+/// The StyleResourceData paired with `effective_style` for `object`, whose
+/// own Node is `node`: the object's own resources for its own style, and the
+/// ::first-line resources of the Node whose first-line style it is (the
+/// fragment's object or the ancestor whose ::first-line it inherits), the
+/// same pairing the Layout boundary's style index records.
+fn EffectiveStyleResources<'a>(
+    object: *const LayoutObject,
+    node: &'a Node,
+    effective_style: *const StyleComputedStyle,
+) -> &'a crate::internal::layout_input::StyleResourceData {
+    let own = node.InputStyleResources();
+    if effective_style.is_null() {
+        return own;
+    }
+    let mut current = object;
+    while let Some(candidate) = unsafe { current.as_ref() } {
+        if let Some(candidate_node) = unsafe { candidate.GetNode().as_ref() } {
+            if std::ptr::eq(candidate_node.InputFirstLineStyle(), effective_style) {
+                // SAFETY: the Node outlives this paint export like `node`.
+                let candidate_node = unsafe { &*(candidate_node as *const Node) };
+                return candidate_node
+                    .InputFirstLineStyleResources()
+                    .as_deref()
+                    .unwrap_or_else(|| candidate_node.InputStyleResources());
+            }
+            if std::ptr::eq(candidate.StyleRef() as *const StyleComputedStyle, effective_style) {
+                let candidate_node = unsafe { &*(candidate_node as *const Node) };
+                return candidate_node.InputStyleResources();
+            }
+        }
+        current = candidate.Parent() as *const LayoutObject;
+    }
+    own
 }
 
 // Source: core/paint/paint_property_tree_builder.cc:464-470. Compositor
@@ -140,10 +169,7 @@ pub(crate) fn LiveSvgTextDecorationStyle(
 pub(super) fn ExportProperties(
     object: *const LayoutObject,
     fragment_data: *mut FragmentData,
-    sources: &SourceMap,
-    style_sources: &StyleSourceMap,
     effective_style: *const StyleComputedStyle,
-    resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
     exported_styles: ExportedStyleCache,
 ) -> PaintProperties {
@@ -153,12 +179,8 @@ pub(super) fn ExportProperties(
     }
     output.BindSourceObject(object);
     if purpose == LayoutUpdateKind::Paint {
-        // Source: paint_invalidator.cc:222. LayoutBox uses this point to
-        // promote a delayed full invalidation once it intersects the visible
-        // viewport, before Paint snapshots the invalidation facts below.
-        unsafe { &*object }
-            .GetMutableForPainting()
-            .EnsureIsReadyForPaintInvalidation();
+        // PaintInvalidator's readiness step (paint_invalidator.cc:222) runs
+        // in the caller that snapshots the invalidation facts.
         output.property_fragment_unique_id = PropertyFragmentUniqueId(object, fragment_data);
         // DisplayItemClient::DebugName() is read from the bound source object
         // on demand (PaintProperties::DisplayItemClientDebugName).
@@ -173,14 +195,8 @@ pub(super) fn ExportProperties(
         // cpp: core/paint/text_combine_painter.cc:35-48
         let parent = text_combine.Parent();
         let parent_style = unsafe { &*parent }.StyleRef();
-        let parent_image_resource_id = sources
-            .get(&(parent as *const LayoutObject))
-            .map(|entry| {
-                unsafe { &*entry.node }
-                    .InputStyleResources()
-                    .image_resource_id
-            })
-            .unwrap_or(None);
+        let parent_image_resource_id = unsafe { (*parent).GetNode().as_ref() }
+            .and_then(|node| node.InputStyleResources().image_resource_id);
         output.style = if purpose == LayoutUpdateKind::Paint {
             crate::internal::boundary::paint_style_export::ExportStyle(
                 parent_style,
@@ -192,17 +208,12 @@ pub(super) fn ExportProperties(
         output.writing_mode = PublicWritingMode(parent_style.GetWritingMode());
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
-    let Some(source_entry) = sources.get(&object) else {
+    // Only objects with a Node carry source paint inputs.
+    let Some(source) = (unsafe { (*object).GetNode().as_ref() }) else {
         return output;
     };
-    let source = unsafe { &*source_entry.node };
-    let mut style_resources = source.InputStyleResources();
-    if !effective_style.is_null() {
-        if let Some(effective_source) = style_sources.get(&effective_style) {
-            style_resources = unsafe { &*effective_source.resources };
-        }
-    }
-    output.logical_tree_order = source_entry.logical_tree_order;
+    let style_resources = EffectiveStyleResources(object, source, effective_style);
+    output.logical_tree_order = unsafe { &*object }.LogicalTreeOrder();
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
@@ -219,7 +230,7 @@ pub(super) fn ExportProperties(
         output.style =
             ResolveFragmentPaintStyle(object, layout_style, style_resources, exported_styles);
     } else {
-        // Population records only the projection's identity: the effective
+        // The slot initialization records only the projection's identity: the effective
         // ComputedStyle and its StyleResourceData. The values resolve through
         // ResolveFragmentPaintStyle on their first read.
         output.style = PaintStyle::FromPending(crate::internal::layout_input::PendingPaintStyle {
@@ -298,7 +309,7 @@ pub(super) fn ExportProperties(
 
 /// A counted handle on the StyleResourceData paired with a fragment's
 /// effective ComputedStyle, so a pending projection resolves against exactly
-/// the resources population saw.
+/// the resources the slot initialization saw.
 fn RetainStyleResources(
     resources: &crate::internal::layout_input::StyleResourceData,
 ) -> Arc<crate::internal::layout_input::StyleResourceData> {
@@ -377,7 +388,7 @@ fn ApplyResolvedOffsetTransform(
 /// The Paint projection of a fragment's effective ComputedStyle and the
 /// StyleResourceData paired with it: the identity-keyed cache lookup, the
 /// export, the SVG clip-path / mask resource viewports and the motion-path
-/// offset transform. Population resolves through this directly only for an
+/// offset transform. The slot initialization resolves through this directly only for an
 /// offset style; every other fragment PaintStyle resolves through it on its
 /// first projected-value read (ResolvePendingPaintStyle).
 #[inline(never)]
@@ -453,7 +464,7 @@ pub(crate) fn ResolveFragmentPaintStyle(
     style
 }
 
-/// Resolve a fragment PaintStyle recorded by population, on its first read.
+/// Resolve a fragment PaintStyle recorded by the slot initialization, on its first read.
 pub(crate) fn ResolvePendingPaintStyle(
     pending: &crate::internal::layout_input::PendingPaintStyle,
 ) -> Arc<crate::internal::paint_input::PaintStyleData> {

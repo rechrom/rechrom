@@ -226,7 +226,18 @@ impl PaintFragmentOwner {
     fn InstanceId(self) -> u64 {
         match self {
             Self::Physical(fragment) => {
-                layout_fragment::fragment_tree::PhysicalFragmentInstanceId(unsafe { &*fragment })
+                let fragment = unsafe { &*fragment };
+                // A box's FragmentData::UniqueId is read from the entry of its
+                // fragment index; establish the entries first
+                // (GetOrCreateFragmentData, pre_paint_tree_walk.cc).
+                if fragment.IsBox() {
+                    if let Some(object) = unsafe { fragment.GetLayoutObject().as_ref() } {
+                        crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(
+                            object,
+                        );
+                    }
+                }
+                layout_fragment::fragment_tree::PhysicalFragmentInstanceId(fragment)
             }
             Self::Inline(items, index) => {
                 layout_fragment::fragment_tree::InlineItemInstanceId(unsafe { &*items }, index)
@@ -239,21 +250,40 @@ impl PaintFragmentOwner {
 /// A replacement LayoutResult rebinds its source owners to these stable slots;
 /// geometry and child topology remain canonical and are always read through
 /// `FragmentCursor`.
+///
+/// Slots are initialized lazily. Chromium keeps FragmentData on the
+/// persistent LayoutObject and PrePaintTreeWalk brings the FragmentData of
+/// each object it reaches up to date (core/paint/pre_paint_tree_walk.cc,
+/// GetOrCreateFragmentData / WalkInternal); a publication here only starts a
+/// new binding generation, and the first cursor of that publication to reach
+/// an owner binds and refreshes its slot from the owner. Slots persist across
+/// publications under their live identity, so PrePaint and Paint state kept
+/// on them survives exactly as Chromium's FragmentData does.
 pub(crate) struct LayoutPaintState {
     inputs: UnsafeCell<foundation::TrustedIdentityHashMap<u64, PaintFragmentSlot>>,
-    /// Source owner -> slot, tagged with the publication that bound it. The
-    /// map persists across publications so an unchanged owner rebinds in
-    /// place; only entries bound by the current publication are visible.
-    /// Each entry shares its slot, so a previous handle's bound slots stay
-    /// alive while that handle does, after `inputs` moved to its successor.
+    /// Source owner -> (slot, publication that bound it, whether that binding
+    /// knew the owner's display-item fragment scope). The map persists across
+    /// publications so an unchanged owner rebinds in place; only entries
+    /// bound by the current publication are current. Each entry shares its
+    /// slot, so a previous handle's bound slots stay alive while that handle
+    /// does, after `inputs` moved to its successor.
     owners: UnsafeCell<
         foundation::TrustedIdentityHashMap<
             PaintFragmentOwner,
-            (std::rc::Rc<UnsafeCell<FragmentPaintData>>, u64),
+            (std::rc::Rc<UnsafeCell<FragmentPaintData>>, u64, bool),
         >,
     >,
+    /// LayoutInline objects whose FragmentData list this publication already
+    /// synchronized with their inline containers.
+    synchronized_inlines: UnsafeCell<std::collections::HashSet<usize>>,
     publication: Cell<u64>,
     generation: Cell<u64>,
+    /// Advanced whenever a publication installs document resources that are
+    /// incompatible with the ones the resident slots were exported with.
+    resource_epoch: Cell<u64>,
+    /// The Layout boundary's PaintStyle projection cache generation lent to
+    /// the current publication.
+    exported_styles: Cell<Option<crate::internal::layout_input::ExportedStyleCacheKey>>,
     /// The document's paint resources (fonts, images, canvases, device scale,
     /// layout zoom, base background, viewport) for this result. Chromium
     /// reads these from the Document / LocalFrame / LocalFrameView / Settings
@@ -268,19 +298,12 @@ struct PaintFragmentSlot {
     /// LayoutObject), so a replacement result neither copies it nor frees it
     /// while an earlier handle still points at it.
     data: std::rc::Rc<UnsafeCell<FragmentPaintData>>,
+    /// Publication of this state that last bound the slot.
     publication: u64,
+    /// Resource epoch the slot was last initialized under.
+    resource_epoch: u64,
     /// Source owner bound by the publication that last wrote this slot.
     owner: Option<PaintFragmentOwner>,
-}
-
-/// Result of binding a fragment owner to its stable Paint slot.
-pub(crate) struct PaintSlotBinding {
-    pub(crate) data: *mut FragmentPaintData,
-    /// The owner's live identity the slot is keyed by.
-    pub(crate) instance: u64,
-    pub(crate) retained: bool,
-    /// The slot was last published from this exact immutable fragment owner.
-    pub(crate) same_owner: bool,
 }
 
 impl LayoutPaintState {
@@ -288,8 +311,11 @@ impl LayoutPaintState {
         Arc::new(Self {
             inputs: UnsafeCell::new(Default::default()),
             owners: UnsafeCell::new(Default::default()),
+            synchronized_inlines: UnsafeCell::new(Default::default()),
             publication: Cell::new(0),
             generation: Cell::new(1),
+            resource_epoch: Cell::new(0),
+            exported_styles: Cell::new(None),
             document_resources: UnsafeCell::new(None),
         })
     }
@@ -326,20 +352,52 @@ impl LayoutPaintState {
     /// shared with the previous handle, not copied: PrePaint compares against
     /// the previous values its own retained nodes recorded, not against the
     /// previous result's slots. The instance directory moves to the
-    /// replacement instead of being copied every relayout: the previous
-    /// handle resolves its fragments through its own owner map, whose entries
-    /// keep its slots alive, and only the current publication's population
-    /// queries instances. Slots not bound by the new publication leave this
-    /// state at commit and live on only while the previous handle does.
-    pub(crate) fn SeedFrom(&self, previous: &Self) {
+    /// replacement instead of being copied every relayout.
+    ///
+    /// Two kinds of slot stay behind with the previous state, alive exactly as
+    /// long as its handles (and the PrePaint nodes built through them) are:
+    /// a slot whose source LayoutObject was destroyed (`is_live`, given after
+    /// a topology mutation rebuilt the object index; Chromium's FragmentData
+    /// dies with its LayoutObject), and a slot without a source object
+    /// (fragmentainers, objectless fragments, possibly keyed by the immutable
+    /// fragment itself) that the previous publication did not bind.
+    pub(crate) fn SeedFrom(
+        &self,
+        previous: &Self,
+        is_live: Option<&dyn Fn(*const LayoutObject) -> bool>,
+    ) {
+        let last = previous.publication.get();
         let mut moved = std::mem::take(unsafe { &mut *previous.inputs.get() });
-        for slot in moved.values_mut() {
-            slot.publication = 0;
-        }
+        let mut left: foundation::TrustedIdentityHashMap<u64, PaintFragmentSlot> =
+            Default::default();
+        moved.retain(|instance, slot| {
+            let object = unsafe { &*slot.data.get() }.paint.SourceObjectPointer();
+            let keep = if object.is_null() {
+                slot.publication == last
+            } else {
+                is_live.is_none_or(|is_live| is_live(object as *const LayoutObject))
+            };
+            if keep {
+                slot.publication = 0;
+            } else {
+                left.insert(
+                    *instance,
+                    PaintFragmentSlot {
+                        data: std::rc::Rc::clone(&slot.data),
+                        publication: slot.publication,
+                        resource_epoch: slot.resource_epoch,
+                        owner: slot.owner,
+                    },
+                );
+            }
+            keep
+        });
         *unsafe { &mut *self.inputs.get() } = moved;
+        *unsafe { &mut *previous.inputs.get() } = left;
+        self.resource_epoch.set(previous.resource_epoch.get());
         // The seeded slots were last painted with the previous result's
-        // document resources; population compares against them before the
-        // replacement installs its own.
+        // document resources; the publication compares against them before
+        // the replacement installs its own.
         *unsafe { &mut *self.document_resources.get() } = previous.DocumentResources().cloned();
     }
 
@@ -347,13 +405,36 @@ impl LayoutPaintState {
         // Keep only the owners the previous publication bound; they rebind in
         // place. Older entries name fragments that are no longer resident.
         let previous = self.publication.get();
-        unsafe { &mut *self.owners.get() }.retain(|_, (_, publication)| *publication == previous);
+        unsafe { &mut *self.owners.get() }
+            .retain(|_, (_, publication, _)| *publication == previous);
+        unsafe { &mut *self.synchronized_inlines.get() }.clear();
         self.publication.set(
             self.publication
                 .get()
                 .checked_add(1)
                 .expect("paint publication generation exhausted"),
         );
+    }
+
+    /// Install this publication's document resources and PaintStyle cache
+    /// generation. `compatible`: whether the slots exported with the
+    /// previously installed resources stay valid under these.
+    pub(crate) fn InstallPublication(
+        &self,
+        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+        compatible: bool,
+        exported_styles: Option<crate::internal::layout_input::ExportedStyleCacheKey>,
+    ) {
+        if !compatible {
+            self.resource_epoch.set(
+                self.resource_epoch
+                    .get()
+                    .checked_add(1)
+                    .expect("paint resource epoch exhausted"),
+            );
+        }
+        self.SetDocumentResources(resources);
+        self.exported_styles.set(exported_styles);
     }
 
     pub(crate) fn FinishPublication(&self, topology_retained: bool) {
@@ -367,115 +448,150 @@ impl LayoutPaintState {
         }
     }
 
-    pub(crate) fn CommitPublication(&self) {
+    /// The current publication's slot of `owner`, binding and initializing it
+    /// on first access. `display_item_fragment` is the display-item fragment
+    /// scope the reaching walk carries for a physical owner, when known.
+    fn Slot(
+        &self,
+        owner: PaintFragmentOwner,
+        display_item_fragment: Option<u32>,
+    ) -> *mut FragmentPaintData {
         let publication = self.publication.get();
-        unsafe { &mut *self.inputs.get() }.retain(|_, slot| slot.publication == publication);
-    }
-
-    pub(crate) fn ResidentPaintProperties(&self, instance: u64) -> Option<&PaintPropertiesHandle> {
-        self.ResidentFragment(instance).map(|data| &data.paint)
-    }
-
-    pub(crate) fn ResidentFragment(&self, instance: u64) -> Option<&FragmentPaintData> {
-        unsafe { &*self.inputs.get() }
-            .get(&instance)
-            .map(|slot| unsafe { &*slot.data.get() })
+        let current = unsafe { &mut *self.owners.get() }
+            .get_mut(&owner)
+            .filter(|(_, bound, _)| *bound == publication)
+            .map(|(data, _, scope_known)| {
+                let refresh = !*scope_known && display_item_fragment.is_some();
+                if refresh {
+                    *scope_known = true;
+                }
+                (data.get(), refresh)
+            });
+        match current {
+            Some((data, refresh)) => {
+                // A first binding through a call-scoped cursor (no walk
+                // context) left the inherited scope unresolved.
+                if let (true, PaintFragmentOwner::Physical(fragment)) = (refresh, owner) {
+                    if let Some(value) =
+                        PhysicalDisplayItemFragment(unsafe { &*fragment }, display_item_fragment)
+                    {
+                        let data = unsafe { &mut *data };
+                        if data.paint.display_item_fragment != value {
+                            data.paint.display_item_fragment = value;
+                        }
+                    }
+                }
+                data
+            }
+            None => self.Bind(owner, display_item_fragment),
+        }
     }
 
     /// Bind `owner` to the slot of its live identity (PaintFragmentOwner::
     /// InstanceId): the same FragmentData / (client, FragmentId) occurrence
     /// rebinds the slot it last published, whichever immutable fragment of a
-    /// replacement LayoutResult now carries it.
-    fn Bind(&self, owner: PaintFragmentOwner) -> PaintSlotBinding {
+    /// replacement LayoutResult now carries it, and refresh the slot from
+    /// the owner for this publication.
+    fn Bind(
+        &self,
+        owner: PaintFragmentOwner,
+        display_item_fragment: Option<u32>,
+    ) -> *mut FragmentPaintData {
+        // GetOrCreateFragmentData (pre_paint_tree_walk.cc): the object's
+        // FragmentData list matches its fragments (InstanceId, for a box) or
+        // inline containers (a LayoutInline) before the slot is refreshed.
+        if let PaintFragmentOwner::Inline(items, index) = owner {
+            if let Some(object) = unsafe { &*items }
+                .Items()
+                .get(index)
+                .and_then(|item| unsafe { item.GetLayoutObject().as_ref() })
+            {
+                self.SynchronizeInlineObjectFragmentData(object);
+            }
+        }
         let instance = owner.InstanceId();
         assert_ne!(instance, 0, "paint fragment has no stable identity");
         let publication = self.publication.get();
-        let inputs = unsafe { &mut *self.inputs.get() };
-        let (binding, data) = if let Some(current) = inputs.get_mut(&instance) {
-            current.publication = publication;
-            let same_owner = current.owner == Some(owner);
-            current.owner = Some(owner);
-            (
-                PaintSlotBinding {
-                    data: current.data.get(),
-                    instance,
-                    retained: true,
-                    same_owner,
-                },
-                &current.data,
-            )
-        } else {
-            let slot = PaintFragmentSlot {
-                data: std::rc::Rc::new(UnsafeCell::new(FragmentPaintData::default())),
-                publication,
-                owner: Some(owner),
-            };
-            let pointer = slot.data.get();
-            let slot = inputs.entry(instance).or_insert(slot);
-            (
-                PaintSlotBinding {
-                    data: pointer,
-                    instance,
-                    retained: false,
-                    same_owner: false,
-                },
-                &slot.data,
-            )
-        };
-        let owners = unsafe { &mut *self.owners.get() };
-        match owners.get_mut(&owner) {
-            Some(entry) => {
-                entry.1 = publication;
-                if !std::rc::Rc::ptr_eq(&entry.0, data) {
-                    entry.0 = std::rc::Rc::clone(data);
+        let epoch = self.resource_epoch.get();
+        let (data, retained, same_owner) = {
+            let inputs = unsafe { &mut *self.inputs.get() };
+            match inputs.get_mut(&instance) {
+                Some(slot) => {
+                    let same_owner = slot.owner == Some(owner);
+                    let retained = slot.resource_epoch == epoch;
+                    slot.owner = Some(owner);
+                    slot.publication = publication;
+                    slot.resource_epoch = epoch;
+                    (std::rc::Rc::clone(&slot.data), retained, same_owner)
+                }
+                None => {
+                    let data = std::rc::Rc::new(UnsafeCell::new(FragmentPaintData::default()));
+                    inputs.insert(
+                        instance,
+                        PaintFragmentSlot {
+                            data: std::rc::Rc::clone(&data),
+                            publication,
+                            resource_epoch: epoch,
+                            owner: Some(owner),
+                        },
+                    );
+                    (data, false, false)
                 }
             }
-            None => {
-                owners.insert(owner, (std::rc::Rc::clone(data), publication));
+        };
+        let output = unsafe { &mut *data.get() };
+        let resources = self.DocumentResources().cloned();
+        let exported_styles = self.exported_styles.get();
+        match owner {
+            PaintFragmentOwner::Physical(fragment) => {
+                let fragment = unsafe { &*fragment };
+                output.resident_owner = layout_fragment_boundary::ResidentFragmentOwner::Physical(
+                    fragment as *const PhysicalFragment as usize,
+                );
+                crate::internal::boundary::layout_boundary::InitializePhysicalFragmentPaintData(
+                    fragment,
+                    output,
+                    retained,
+                    same_owner,
+                    PhysicalDisplayItemFragment(fragment, display_item_fragment),
+                    resources.as_ref(),
+                    exported_styles,
+                );
+            }
+            PaintFragmentOwner::Inline(items, index) => {
+                output.resident_owner =
+                    layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
+                        items: items as usize,
+                        index,
+                    };
+                crate::internal::boundary::layout_boundary::InitializeInlineItemPaintData(
+                    unsafe { &*items },
+                    index,
+                    output,
+                    retained,
+                    same_owner,
+                    resources.as_ref(),
+                    exported_styles,
+                );
             }
         }
-        binding
+        let pointer = data.get();
+        let scope_known = match owner {
+            PaintFragmentOwner::Physical(_) => display_item_fragment.is_some(),
+            PaintFragmentOwner::Inline(..) => true,
+        };
+        unsafe { &mut *self.owners.get() }.insert(owner, (data, publication, scope_known));
+        pointer
     }
 
-    pub(crate) fn BindPhysical(&self, fragment: &PhysicalFragment) -> PaintSlotBinding {
-        let owner = PaintFragmentOwner::Physical(fragment as *const PhysicalFragment);
-        let binding = self.Bind(owner);
-        unsafe { &mut *binding.data }.resident_owner =
-            layout_fragment_boundary::ResidentFragmentOwner::Physical(
-                fragment as *const PhysicalFragment as usize,
-            );
-        binding
-    }
-
-    pub(crate) fn BindInline(
-        &self,
-        items: &layout_fragment::fragment_items::FragmentItems,
-        index: usize,
-    ) -> PaintSlotBinding {
-        let owner = PaintFragmentOwner::Inline(items as *const _, index);
-        let binding = self.Bind(owner);
-        unsafe { &mut *binding.data }.resident_owner =
-            layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
-                items: items as *const _ as usize,
-                index,
-            };
-        binding
-    }
-
-    fn Get(&self, owner: PaintFragmentOwner) -> Option<&FragmentPaintData> {
-        let (data, publication) = unsafe { &*self.owners.get() }.get(&owner)?;
-        if *publication != self.publication.get() {
-            return None;
+    /// SynchronizeInlineFragmentData once per LayoutInline and publication.
+    fn SynchronizeInlineObjectFragmentData(&self, object: &LayoutObject) {
+        if object.IsLayoutInline()
+            && unsafe { &mut *self.synchronized_inlines.get() }
+                .insert(object as *const LayoutObject as usize)
+        {
+            crate::internal::boundary::layout_boundary::SynchronizeInlineFragmentData(object);
         }
-        Some(unsafe { &*data.get() })
-    }
-
-    unsafe fn GetMut(&self, owner: PaintFragmentOwner) -> Option<&mut FragmentPaintData> {
-        let (data, publication) = unsafe { &*self.owners.get() }.get(&owner)?;
-        if *publication != self.publication.get() {
-            return None;
-        }
-        Some(unsafe { &mut *data.get() })
     }
 
     fn Generation(&self) -> u64 {
@@ -483,10 +599,55 @@ impl LayoutPaintState {
     }
 }
 
+/// The display-item fragment a physical fragment paints under: its own scope
+/// (a fragmentainer's break-token sequence, box_fragment_painter.cc:398-403,
+/// 1211-1212; a layered box's fragment index in its LayoutBox,
+/// paint_layer_painter.cc:776-778), else the scope `inherited` from the walk
+/// that reached it.
+fn PhysicalDisplayItemFragment(
+    fragment: &PhysicalFragment,
+    inherited: Option<u32>,
+) -> Option<u32> {
+    if !fragment.IsBox() {
+        return inherited;
+    }
+    let box_fragment =
+        unsafe { &*(fragment as *const PhysicalFragment as *const PhysicalBoxFragment) };
+    if box_fragment.IsFragmentainerBox() {
+        let token = box_fragment.GetBreakToken();
+        return Some(if token.is_null() {
+            0
+        } else {
+            unsafe { &*token }.SequenceNumber() + 1
+        });
+    }
+    let Some(object) = (unsafe { box_fragment.GetLayoutObject().as_ref() }) else {
+        return inherited;
+    };
+    if !object.HasLayer() {
+        return inherited;
+    }
+    let mut fragments = crate::fragment_data_iterator::AccompaniedFragmentIterator::new(object);
+    let mut index = 0;
+    while let Some(physical) = fragments.GetPhysicalBoxFragment() {
+        if std::ptr::eq(physical, box_fragment) {
+            return Some(index);
+        }
+        index += 1;
+        fragments.Advance();
+    }
+    inherited
+}
+
 #[derive(Clone, Copy)]
 pub struct PaintFragmentCursor<'a> {
     source: FragmentCursor<'a>,
     state: Option<&'a LayoutPaintState>,
+    /// The display-item fragment scope inherited from the walk that reached
+    /// this cursor (ScopedDisplayItemFragment of the nearest enclosing
+    /// fragmentainer, layered box or atomic inline); None for a call-scoped
+    /// cursor rebound without a walk.
+    display_item_fragment: Option<u32>,
 }
 
 /// Opaque borrowed identity of the live LayoutObject behind a Paint client.
@@ -823,11 +984,13 @@ impl<'a> PaintFragmentCursor<'a> {
             offset: PhysicalOffset::default(),
         };
         let state = handle.PaintState::<LayoutPaintState>()?;
-        let cursor = Self {
+        // The root's scope is 0 (PaintLayerPainter scopes the LayoutView
+        // layer's own fragment index over it).
+        Some(Self {
             source,
             state: Some(state),
-        };
-        cursor.PaintDataOption().is_some().then_some(cursor)
+            display_item_fragment: Some(0),
+        })
     }
 
     pub fn FromHandle(handle: &'a LayoutResultHandle) -> Self {
@@ -882,6 +1045,12 @@ impl<'a> PaintFragmentCursor<'a> {
         self,
         object: &'a LayoutObject,
     ) -> PaintObjectFragmentCursors<'a> {
+        // The FragmentData list is iterated directly; establish its entries
+        // first (GetOrCreateFragmentData, pre_paint_tree_walk.cc).
+        if let Some(state) = self.state {
+            crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(object);
+            state.SynchronizeInlineObjectFragmentData(object);
+        }
         let layout_box = foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object);
         let empty = object.IsFragmentLessBox()
             || unsafe { layout_box.as_ref() }
@@ -968,6 +1137,7 @@ impl<'a> PaintFragmentCursor<'a> {
                 offset: PhysicalOffset::default(),
             },
             state: self.state,
+            display_item_fragment: None,
         }
     }
 
@@ -985,6 +1155,7 @@ impl<'a> PaintFragmentCursor<'a> {
                 offset: *item.OffsetInContainerFragment(),
             },
             state: self.state,
+            display_item_fragment: None,
         }
     }
 
@@ -1056,17 +1227,29 @@ impl<'a> PaintFragmentCursor<'a> {
             .expect("source fragment has no committed paint input")
     }
 
+    /// The fragment's resident Paint sidecar, bound and brought up to date
+    /// for the current publication on first access (LayoutPaintState).
     pub unsafe fn PaintDataMut(self) -> &'a mut FragmentPaintData {
-        unsafe {
-            self.state
-                .expect("paint cursor has no result state")
-                .GetMut(self.source.PaintOwner())
-        }
-        .expect("source fragment has no committed paint input")
+        let state = self.state.expect("paint cursor has no result state");
+        unsafe { &mut *state.Slot(self.source.PaintOwner(), self.display_item_fragment) }
     }
 
     pub(crate) fn PaintDataOption(self) -> Option<&'a FragmentPaintData> {
-        self.state?.Get(self.source.PaintOwner())
+        let state = self.state?;
+        Some(unsafe { &*state.Slot(self.source.PaintOwner(), self.display_item_fragment) })
+    }
+
+    /// The display-item fragment scope this cursor's children inherit: an
+    /// atomic inline's FragmentItem::FragmentId (box_fragment_painter.cc:
+    /// 2025-2026,2071-2072), a box's own scope, else this cursor's inherited
+    /// one.
+    pub(crate) fn ChildDisplayItemFragmentScope(self) -> Option<u32> {
+        match self.source {
+            FragmentCursor::Physical { fragment, .. } => {
+                PhysicalDisplayItemFragment(fragment, self.display_item_fragment)
+            }
+            FragmentCursor::Inline { item, .. } => Some(item.FragmentId()),
+        }
     }
 
     /// The paint resources of the document this fragment belongs to. Chromium

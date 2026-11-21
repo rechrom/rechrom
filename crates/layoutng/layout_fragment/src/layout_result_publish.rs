@@ -1,8 +1,14 @@
-//! Fragment-owned publication of a source LayoutResult paint snapshot.
+//! Fragment-owned publication of a source LayoutResult to Paint.
 //!
 //! Included at the reciprocal source boundary. The physical source and
 //! out-of-line symbol keep publication self time attributable to
 //! `layout_fragment` while translated helper types remain available.
+//!
+//! Publication does not walk the fragment tree. Chromium keeps FragmentData
+//! on the persistent LayoutObjects and PrePaintTreeWalk brings each reached
+//! object's FragmentData up to date (core/paint/pre_paint_tree_walk.cc);
+//! LayoutPaintState likewise initializes a fragment's sidecar the first time
+//! a cursor of this publication reaches it.
 
 use super::*;
 
@@ -18,9 +24,6 @@ pub(super) fn populate_layout_result_paint_data(
         layout_fragment_boundary::trace::TracePhase::PopulateLayoutResultPaintData,
     );
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
-    let copy_ns_at_start = layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPY_NS
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let copies_at_start =layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
     let result_identity = result as *const LayoutResult as usize;
     let result_changed = cache.fragment_identity_result != result_identity;
     // A retained update of the same LayoutResult mutates Chromium's canonical
@@ -30,12 +33,37 @@ pub(super) fn populate_layout_result_paint_data(
     // and values. Reusing the cache Arc here let BeginPublication clear the old
     // handle's owner map before the replacement was committed.
     let retained_paint_state = !result_changed && cache.fragment_paint_state.is_some();
+    // A topology mutation cleared the object index; the objects it drops are
+    // the only owners whose resident slots can disappear.
+    let objects_rebuilt = cache.objects.is_empty();
+    if objects_rebuilt {
+        let _phase = layout_fragment_boundary::trace::span(
+            layout_fragment_boundary::trace::TracePhase::IndexObjects,
+        );
+        EnsureLayoutBoundaryObjectIndex(root, cache);
+    }
     let paint_state = if result_changed {
         let state = crate::layout_engine::LayoutPaintState::New();
         if purpose == LayoutUpdateKind::Paint {
             if let Some(previous) = &cache.fragment_paint_state {
                 trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
-                state.SeedFrom(previous);
+                let live: Option<LayoutBoundaryHashSet<*const LayoutObject>> =
+                    objects_rebuilt.then(|| {
+                        cache
+                            .objects
+                            .iter()
+                            .map(|object| *object as *const LayoutObject)
+                            .collect()
+                    });
+                let is_live = live
+                    .as_ref()
+                    .map(|live| move |object: *const LayoutObject| live.contains(&object));
+                state.SeedFrom(
+                    previous,
+                    is_live
+                        .as_ref()
+                        .map(|is_live| is_live as &dyn Fn(*const LayoutObject) -> bool),
+                );
             }
         }
         state
@@ -49,18 +77,9 @@ pub(super) fn populate_layout_result_paint_data(
     if result_changed {
         cache.fragment_identity_result = result_identity;
     }
-    if cache.objects.is_empty() {
-        let _phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::IndexObjects,
-        );
-        EnsureLayoutBoundaryObjectIndex(root, cache);
-    }
     EnsureBoundaryStyleIndices(cache);
     let objects = &cache.objects;
-    let sources = &cache.sources;
-    let style_sources = &cache.style_sources;
     trace.set("objects", objects.len() as f64);
-    trace.set("sources", sources.len() as f64);
     {
         let _phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::UpdateStickyOffsets,
@@ -103,15 +122,6 @@ pub(super) fn populate_layout_result_paint_data(
     });
     let handle =
         unsafe { LayoutResultHandle::FromLayoutResultWithPaintState(result, paint_state.clone()) };
-    let mut paint_state_owners = FragmentOwners {
-        exported_styles: Some(cache.styles.Key()),
-        replay_previous: if purpose == LayoutUpdateKind::Paint {
-            std::mem::take(&mut cache.population_replay)
-        } else {
-            Default::default()
-        },
-        ..FragmentOwners::default()
-    };
     if purpose == LayoutUpdateKind::Paint {
         // Source: core/frame/local_frame_view.cc:3034 and
         // core/paint/paint_layer.cc:386-514. Chromium updates descendant
@@ -126,119 +136,19 @@ pub(super) fn populate_layout_result_paint_data(
             }
         }
     }
-    {
-        let mut phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::PopulateFragmentPaintData,
-        );
-        PopulatePhysicalFragmentPaintData(
-            result.GetPhysicalFragment(),
-            PhysicalOffset::default(),
-            sources,
-            style_sources,
-            &resources,
-            purpose,
-            &paint_state,
-            &mut paint_state_owners,
-            0,
-        );
-        // The enclosing span's bounded field slots are full; LayoutNG cache
-        // reuse accounting belongs to this population phase.
-        let stats = &paint_state_owners.population_stats;
-        phase.set("physical_fragments", stats.physical_fragments as f64);
-        phase.set("inline_items", stats.inline_items as f64);
-        phase.set("retained_physical", stats.retained_physical as f64);
-        phase.set(
-            "retained_physical_same_owner",
-            stats.retained_physical_same_owner as f64,
-        );
-        phase.set("retained_inline_same_owner", stats.retained_inline_same_owner as f64);
-        phase.set(
-            "retained_same_owner_local_ms",
-            stats.retained_same_owner_local_ns as f64 / 1e6,
-        );
-        phase.set(
-            "retained_other_owner_local_ms",
-            stats.retained_other_owner_local_ns as f64 / 1e6,
-        );
-        phase.set("exported_local_ms", stats.exported_local_ns as f64 / 1e6);
-        browser_tracing::instant(
-            "layout",
-            "layout_fragment.PopulationProfile",
-            &[
-                ("prefix_ms", stats.prefix_ns as f64 / 1e6),
-                ("sidecar_store_ms", stats.sidecar_store_ns as f64 / 1e6),
-                ("property_export_ms", stats.property_export_ns as f64 / 1e6),
-            ],
-        );
-        browser_tracing::instant(
-            "layout",
-            "layout_fragment.PopulationReplay",
-            &[
-                ("subtrees", paint_state_owners.replay_stats[0] as f64),
-                ("slots", paint_state_owners.replay_stats[1] as f64),
-                ("recorded", paint_state_owners.replay_next.entries.len() as f64),
-            ],
-        );
-        let r = paint_state_owners.replay_reasons;
-        browser_tracing::instant(
-            "layout",
-            "layout_fragment.ReplayReasons",
-            &[
-                ("not_retained", r[0] as f64),
-                ("fallback_key", r[1] as f64),
-                ("dirty", r[2] as f64),
-                ("scroll", r[3] as f64),
-                ("table", r[4] as f64),
-                ("page_fragmentainer", r[5] as f64),
-                ("special", r[6] as f64),
-                ("svg_fieldset", r[7] as f64),
-            ],
-        );
-    }
-    // Population compared the resident slots against the document resources
-    // they were last painted with; the result now paints with these. They
-    // are the Document / LocalFrameView values Chromium reads, held once per
-    // result rather than on every fragment slot.
-    paint_state.SetDocumentResources(resources);
-    let copies_after_population =
-        layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
-    trace.set(
-        "payload_copies_population",
-        (copies_after_population - copies_at_start) as f64,
-    );
-    trace.set(
-        "payload_copy_ms",
-        (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPY_NS
-            .load(std::sync::atomic::Ordering::Relaxed)
-            - copy_ns_at_start) as f64
-            / 1e6,
-    );
-    trace.set(
-        "paint_property_export_ms",
-        paint_state_owners.population_stats.property_export_ns as f64 / 1_000_000.0,
-    );
-    trace.set(
-        "sidecar_store_ms",
-        paint_state_owners.population_stats.sidecar_store_ns as f64 / 1_000_000.0,
-    );
-    // The same LayoutResult republished every occurrence onto a slot it
-    // already had: no live identity appeared (and none can disappear while
-    // the fragments are unchanged).
-    let topology_retained = retained_paint_state && paint_state_owners.new_fragment_instances == 0;
+    // The resident slots were last exported with the document resources the
+    // state holds (its previous publication or a later Page resource
+    // update). Slots initialized after an incompatible change re-export;
+    // the values are the Document / LocalFrameView facts Chromium reads,
+    // held once per result rather than on every fragment slot.
+    let resources_compatible =
+        PaintResourcesAreCompatible(paint_state.DocumentResources(), &resources);
+    paint_state.InstallPublication(resources, resources_compatible, Some(cache.styles.Key()));
+    // The same LayoutResult republishes the same immutable fragments, so no
+    // live identity can appear or disappear.
+    let topology_retained = retained_paint_state;
     paint_state.FinishPublication(topology_retained);
     trace.set("topology_retained", topology_retained as u8 as f64);
-    // Logical (LayoutObject-tree) parents of out-of-flow occurrences are
-    // resolved by PrePaint and the client-rect walk from their own trees
-    // (stage 5 of the export removal), not per publication here.
-    let copies_after_parents =
-        layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
-    trace.set(
-        "payload_copies_logical_parents",
-        (copies_after_parents - copies_after_population) as f64,
-    );
-    if purpose == LayoutUpdateKind::Paint {
-        cache.population_replay = std::mem::take(&mut paint_state_owners.replay_next);
-    }
     cache.fragment_paint_state = Some(paint_state);
     handle
 }

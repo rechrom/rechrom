@@ -323,8 +323,8 @@ pub struct LayoutEngine {
     constraints_: ConstraintSpace,
     scroll_paint_index_: Option<ScrollPaintPropertyIndex>,
     // A Paint publication defers its scroll directory until a scroll asks for
-    // it; the publication's replay list (boundary_cache_.population_replay)
-    // stays valid for that result until the next publication or mutation.
+    // it from the publication's fragment cursor, valid for that result until
+    // the next publication or mutation.
     pub(crate) scroll_paint_index_replay_pending_: bool,
     // Chromium retains FragmentData/property directories across lifecycle
     // updates. A stale directory is never queried, but its allocation storage
@@ -945,8 +945,8 @@ impl LayoutEngine {
     }
 
     /// Build the deferred scroll directory of the current Paint publication
-    /// from its replay list. Publications no longer pay for it every frame;
-    /// only a scroll that needs the targeted refresh does.
+    /// from its fragment cursor. Publications no longer pay for it every
+    /// frame; only a scroll that needs the targeted refresh does.
     pub(crate) fn EnsureScrollPaintIndex(&mut self, fragments: &LayoutResultHandle) {
         if !self.scroll_paint_index_replay_pending_ || self.scroll_paint_index_.is_some() {
             return;
@@ -962,12 +962,11 @@ impl LayoutEngine {
             &self.algorithms_,
             &self.objects_,
         );
-        let index = ScrollPaintPropertyIndex::new_from_replay(
+        let index = ScrollPaintPropertyIndex::new(
             unsafe { &mut *root },
             fragments,
             cached_objects,
             reuse,
-            &self.boundary_cache_.population_replay.entries,
         );
         self.scroll_paint_index_ = Some(index);
     }
