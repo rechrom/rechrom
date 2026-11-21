@@ -1278,7 +1278,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.establishes_paint_state
+        if !fragment.ViewEstablishesPaintState()
             || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
         {
             return;
@@ -1363,7 +1363,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource()
-            || !fragment.paint.establishes_paint_state
+            || !fragment.ViewEstablishesPaintState()
             || !node.applies_overflow_clip
             || node.local_clip.is_none()
         {
@@ -1440,7 +1440,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
         }
         let style = &fragment.paint.style;
@@ -1558,7 +1558,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
         }
         if node.applies_filter {
@@ -1579,7 +1579,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if fragment.paint.HasSource() && fragment.paint.establishes_paint_state && node.applies_mask
+        if fragment.paint.HasSource() && fragment.ViewEstablishesPaintState() && node.applies_mask
         {
             // The mask source uses its original ancestor clip, not MaskClip.
             self.Append(
@@ -1607,7 +1607,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource()
-            || !fragment.paint.establishes_paint_state
+            || !fragment.ViewEstablishesPaintState()
             || !node.applies_css_clip
         {
             return;
@@ -1641,7 +1641,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource()
-            || !fragment.paint.establishes_paint_state
+            || !fragment.ViewEstablishesPaintState()
             || !node.applies_css_clip
         {
             return;
@@ -1662,7 +1662,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
+        if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
             return;
         }
         if node.applies_mask {
@@ -1720,7 +1720,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if !fragment.paint.establishes_paint_state
+        if !fragment.ViewEstablishesPaintState()
             || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
         {
             return;
@@ -1766,7 +1766,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.HasSource()
-            || !fragment.paint.establishes_paint_state
+            || !fragment.ViewEstablishesPaintState()
             || !node.applies_overflow_clip
             || node.local_clip.is_none()
         {

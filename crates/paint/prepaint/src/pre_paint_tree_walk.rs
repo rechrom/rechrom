@@ -1416,7 +1416,7 @@ pub fn ResolveFragmentGeometry(
         resets_paint_space: false,
     };
     let style: Option<&PaintStyle> = fragment.paint.HasSource().then_some(&fragment.paint.style);
-    let establishes = fragment.paint.establishes_paint_state;
+    let establishes = fragment.ViewEstablishesPaintState();
     let position = if fragment.paint.HasSource() {
         fragment.paint.Position()
     } else {
@@ -1602,7 +1602,7 @@ fn TextCombineTransform(data: &TextCombinePaintData, paint_offset: Offset) -> Tr
 }
 
 pub fn ChildGeometryOrigin(fragment: &FragmentPaintData, absolute_offset: Offset) -> Offset {
-    if fragment.paint.establishes_paint_state
+    if fragment.ViewEstablishesPaintState()
         && (fragment.paint.ScrollOffset().x != 0.0 || fragment.paint.ScrollOffset().y != 0.0)
     {
         Offset {
@@ -1814,7 +1814,7 @@ fn NeedsOverflowClipForReplacedContents(node: &FragmentPaintData) -> bool {
 // Source: paint_property_tree_builder.cc:2928-2952. The LocalFrame
 // ClipsContent exception remains an explicit unsupported frame-tree input.
 fn NeedsOverflowClip(node: &FragmentPaintData) -> bool {
-    if !node.paint.HasSource() || !node.paint.establishes_paint_state {
+    if !node.paint.HasSource() || !node.ViewEstablishesPaintState() {
         return false;
     }
     if let Some(replaced) = node.ViewReplacedContent() {
@@ -3817,13 +3817,13 @@ fn ResolveLogicalParentOccurrence<'a>(
         node.fragment.as_deref().is_some_and(|candidate| {
             candidate.node_id == logical_id
                 && candidate.paint.HasSource()
-                && candidate.paint.establishes_paint_state
+                && candidate.ViewEstablishesPaintState()
         })
     };
     for &ancestor in physical_ancestors.iter().rev() {
         let node = unsafe { &*ancestor };
         if node.fragment.as_deref().is_some_and(|candidate| {
-            candidate.node_id == logical_id && candidate.paint.establishes_paint_state
+            candidate.node_id == logical_id && candidate.ViewEstablishesPaintState()
         }) {
             return Some(ancestor as *mut PaintTreeNode<'a>);
         }
@@ -3957,7 +3957,7 @@ fn RebindLogicalEffectState(
         .as_deref()
         .expect("PrePaint node must own a fragment");
     let style: Option<&PaintStyle> = fragment.paint.HasSource().then_some(&fragment.paint.style);
-    let local_opacity = if fragment.paint.establishes_paint_state {
+    let local_opacity = if fragment.ViewEstablishesPaintState() {
         style.map_or(1.0, MaskAdjustedOpacity)
     } else {
         1.0
@@ -4156,7 +4156,7 @@ fn GatherInlineOutlineGroups<'a>(
     if fragment.ViewNodeId() != 0
         && fragment.ViewKind() == FragmentKind::kBox
         && fragment.paint.HasSource()
-        && fragment.paint.establishes_paint_state
+        && fragment.ViewEstablishesPaintState()
         && fragment.paint.Display() == Display::kInline
         && fragment.paint.style.visible()
         && fragment.paint.style.outline_width() > 0.0
@@ -4638,7 +4638,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
             f.paint.FocusedImageMapArea().is_some(),
             f.ViewScrollbars().is_some(),
             f.paint.Display(),
-            f.paint.establishes_paint_state,
+            f.ViewEstablishesPaintState(),
             f.paint.IsSVGHiddenContainer(),
             f.paint.style.visible(),
             f.paint.style.outline_style(),
@@ -4704,7 +4704,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         ) << 1
         | u32::from(p.FocusedImageMapArea().is_some()) << 2
         | u32::from(p.scrollbars.is_some()) << 3
-        | u32::from(p.establishes_paint_state) << 4
+        | u32::from(f.ViewEstablishesPaintState()) << 4
         | u32::from(p.IsSVGHiddenContainer()) << 5
         | u32::from(visible) << 6;
     PrePaintPrevious {
@@ -7227,7 +7227,7 @@ impl PrePaintTreeWalk {
                 flex_or_grid_item: false,
             };
         }
-        if child.paint.FixedToView() && child.paint.establishes_paint_state {
+        if child.paint.FixedToView() && child.ViewEstablishesPaintState() {
             // Blink switches fixed-to-view descendants to the LayoutView's
             // fixed-position context. Its transform is above document scroll,
             // but its clip still excludes classic root scrollbar gutters.
@@ -7720,7 +7720,7 @@ impl PrePaintTreeWalk {
             }
             trace.set("fragment_opacity", fragment.paint.style.opacity() as f64);
             matched.insert(fragment.ViewNodeId());
-            if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
+            if !fragment.paint.HasSource() || !fragment.ViewEstablishesPaintState() {
                 continue;
             }
             let style = &fragment.paint.style;

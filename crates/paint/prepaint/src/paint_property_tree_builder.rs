@@ -118,7 +118,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.SetFragment(fragment);
         node.is_root = is_root;
         let local_establishes_fixed_background_containing_block = !is_root
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
             && fragment.paint.HasSource()
             && (fragment.paint.style.has_transform_payload()
                 || fragment.paint.style.will_change_transform());
@@ -205,7 +205,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
 
         let style: Option<&PaintStyle> =
             fragment.paint.HasSource().then_some(&fragment.paint.style);
-        let establishes = fragment.paint.establishes_paint_state;
+        let establishes = fragment.ViewEstablishesPaintState();
         let authored_filters = style
             .filter(|_| establishes)
             .map(PaintStyle::filters)
@@ -1822,7 +1822,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             });
         let child_origin = node.absolute_offset;
         let mut child_scroll = node.scroll_offset;
-        if fragment.paint.establishes_paint_state
+        if fragment.ViewEstablishesPaintState()
             && (geometry_scroll.x != 0.0 || geometry_scroll.y != 0.0)
         {
             let local_scroll = geometry_scroll;

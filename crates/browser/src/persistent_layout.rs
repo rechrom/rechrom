@@ -851,7 +851,7 @@ mod tests {
                         f.offset,
                         f.paint.style.background_color,
                         f.paint.HasSource(),
-                        f.paint.establishes_paint_state
+                        f.ViewEstablishesPaintState()
                     );
                 }
                 println!(

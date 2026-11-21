@@ -814,6 +814,12 @@ pub trait ResidentBoxGeometry {
     /// FragmentData::UniqueId of the owner's property fragment (the box
     /// fragment's FragmentData, else the object's first fragment).
     fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// Whether this occurrence applies the box fragment's own paint state
+    /// (its FragmentData properties, decorations and layer): every box
+    /// fragment and every kBox inline item with a box fragment. Boxes reached
+    /// through an SVG root's children are applied once, under the root's
+    /// first fragment, which only the traversal knows.
+    fn ViewEstablishesPaintState(&self) -> bool;
     /// A text item's offsets in its text content (FragmentItem::StartOffset /
     /// EndOffset).
     fn ViewTextStart(&self) -> Option<u32>;
@@ -920,6 +926,33 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewEstablishesPaintState(&self) -> bool {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).is_some_and(|item| {
+                    item.Type() == crate::fragment_item::ItemType::kBox
+                        && !item.BoxFragment().is_null()
+                })
+            }
+            ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                if !fragment.IsBox() {
+                    return false;
+                }
+                let object = unsafe { fragment.GetLayoutObject().as_ref() };
+                if object.is_some_and(|object| object.IsSVGForeignObject() || object.IsSVGText()) {
+                    self.paint.establishes_paint_state
+                } else {
+                    true
+                }
+            }
+            ResidentFragmentOwner::None => self.paint.establishes_paint_state,
+        }
+    }
+
     fn ResidentTextItem(
         &self,
     ) -> Option<(&crate::fragment_item::FragmentItem, &crate::fragment_items::FragmentItems)> {

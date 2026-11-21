@@ -246,7 +246,7 @@ impl CompositingReasonFinder {
                 fragment.ViewSize().width,
                 fragment.ViewSize().height,
                 fragment.paint.HasSource(),
-                fragment.paint.establishes_paint_state,
+                fragment.ViewEstablishesPaintState(),
                 style.will_change_transform(),
                 style.will_change_transform_property(),
                 style.will_change_opacity(),

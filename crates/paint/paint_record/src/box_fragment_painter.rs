@@ -954,7 +954,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             )
             && fragment.ViewKind() == FragmentKind::kBox
             && !fragment.ViewIsInlineBox()
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             // ViewPainter queries the current chunk before recording the root
             // background. A later query would observe the drawing we are
@@ -1247,7 +1247,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             PaintPhase::kForeground | PaintPhase::kSelectionDragImage
         ) && is_visible
             && fragment.paint.SourceKind() == NodeKind::kReplaced
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
             && (phase != PaintPhase::kSelectionDragImage
                 || fragment.paint.ReplacedSelectionState() != SelectionState::kNone)
         {
@@ -1285,7 +1285,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && is_visible
             && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
             && fragment.ViewKind() == FragmentKind::kBox
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             self.PaintOutline(phase);
         }
@@ -1294,7 +1294,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if phase == PaintPhase::kOutline
             && is_visible
             && fragment.paint.ReplacedIsImage()
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             self.PaintAreaElementFocusRing();
         }
@@ -1437,7 +1437,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && PaintsSelfOutlineAfterChildren(paint_info.phase)
             && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
             && fragment.ViewKind() == FragmentKind::kBox
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             self.PaintOutline(PaintPhase::kSelfOutlineOnly);
         }
@@ -1465,14 +1465,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     scrollbars.should_paint_as_overlay,
                 )
             });
-        if fragment.paint.establishes_paint_state
+        if fragment.ViewEstablishesPaintState()
             && fragment.ViewScrollbars().is_some()
             && !overflow_controls_were_painted_before_contents
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);
         }
         if fragment.paint.SourceKind() == NodeKind::kReplaced
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             self.PaintReplacedSelection(paint_info);
         }

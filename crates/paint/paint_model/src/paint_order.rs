@@ -28,7 +28,7 @@ pub fn ClassifyFragmentPaintLayer(
     // siblings above later untransformed ones.
     if fragment.paint.PaintLayerStateIsAuthoritative() {
         let is_paint_layer = fragment.ViewKind() == FragmentKind::kBox
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
             && fragment.paint.PaintLayerClientId() != 0
             && fragment.paint.PaintLayerIsSelfPainting();
         return PaintLayerClassification {
@@ -44,7 +44,7 @@ pub fn ClassifyFragmentPaintLayer(
         };
     }
     let style = fragment.paint.HasSource().then_some(&fragment.paint.style);
-    let establishes = fragment.paint.establishes_paint_state;
+    let establishes = fragment.ViewEstablishesPaintState();
     let position = if fragment.paint.HasSource() {
         fragment.paint.Position()
     } else {

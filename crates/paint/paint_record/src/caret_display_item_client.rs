@@ -57,7 +57,7 @@ fn PaintCaretWithState(
         });
     if !matches_painter
         || fragment.ViewKind() != FragmentKind::kBox
-        || (caret.native.is_none() && !fragment.paint.establishes_paint_state)
+        || (caret.native.is_none() && !fragment.ViewEstablishesPaintState())
     {
         return;
     }

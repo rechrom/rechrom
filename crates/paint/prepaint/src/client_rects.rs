@@ -93,7 +93,7 @@ fn Gather<'a>(
         }
         world
     };
-    if fragment.paint.establishes_paint_state {
+    if fragment.ViewEstablishesPaintState() {
         child_property_world = MultiplyTransforms(
             &child_property_world,
             &TranslationTransform(
@@ -298,7 +298,7 @@ fn ResolveLogicalParentOccurrence(
     let mut ancestor = nodes[index].parent;
     while ancestor != NONE && ancestor < nodes.len() {
         let fragment = nodes[ancestor].fragment;
-        if fragment.ViewNodeId() == parent_node_id && fragment.paint.establishes_paint_state {
+        if fragment.ViewNodeId() == parent_node_id && fragment.ViewEstablishesPaintState() {
             return Some(ancestor);
         }
         if ancestor == 0 {
@@ -335,7 +335,7 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
         }
         if fragment.ViewNodeId() != 0
             && fragment.paint.HasSource()
-            && fragment.paint.establishes_paint_state
+            && fragment.ViewEstablishesPaintState()
         {
             source_nodes
                 .entry(fragment.ViewNodeId())
