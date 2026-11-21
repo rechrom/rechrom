@@ -9,7 +9,8 @@ use foundation::{TrustedIdentityHashMap, TrustedIdentityHashSet};
 pub use layout_commit::LayoutUpdateKind;
 
 use crate::internal::constraint_space::ConstraintSpace as LayoutConstraintSpace;
-use crate::internal::layout_input::{ConstraintSpace, PaintStyle};
+use crate::internal::layout_input::{ConstraintSpace, ExportedStyleCacheKey};
+use crate::internal::paint_input::PaintStyleData;
 use crate::internal::layout_node_metadata::Node;
 use crate::internal::layout_object::LayoutObject;
 
@@ -58,9 +59,132 @@ pub(crate) struct LayoutBoundaryStyleSourceEntry {
     pub(crate) resources: *const crate::internal::layout_input::StyleResourceData,
 }
 
+/// The persistent PaintStyle projection cache of one Layout boundary, keyed
+/// by (ComputedStyle, StyleResourceData) identity. Fragment PaintStyles
+/// resolve their projection lazily (on first read, possibly during PrePaint
+/// or Paint), so the memoized values live in a per-thread registry addressed
+/// by this owner's id rather than in a map moved through publication.
+/// `clear()` keeps the original clearing points: it advances the generation,
+/// so entries keyed by addresses of replaced styles are never read again,
+/// even by a pending projection resolved after the clear.
+pub(crate) struct ExportedStyleCacheOwner {
+    key: ExportedStyleCacheKey,
+}
+
+type ExportedStyleMap = LayoutBoundaryHashMap<(usize, usize), Arc<PaintStyleData>>;
+
+thread_local! {
+    static EXPORTED_STYLES: std::cell::RefCell<
+        std::collections::HashMap<u64, (u64, ExportedStyleMap)>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+impl Default for ExportedStyleCacheOwner {
+    fn default() -> Self {
+        static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            key: ExportedStyleCacheKey {
+                owner: NEXT_OWNER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                generation: 1,
+            },
+        }
+    }
+}
+
+impl ExportedStyleCacheOwner {
+    /// The current generation, registered on this (the publishing document)
+    /// thread so projections resolved on it can memoize their values.
+    pub(crate) fn Key(&self) -> ExportedStyleCacheKey {
+        let key = self.key;
+        let _ = EXPORTED_STYLES.try_with(|registry| {
+            if let Ok(mut registry) = registry.try_borrow_mut() {
+                let (generation, styles) = registry
+                    .entry(key.owner)
+                    .or_insert_with(|| (key.generation, ExportedStyleMap::default()));
+                if *generation != key.generation {
+                    *generation = key.generation;
+                    styles.clear();
+                }
+            }
+        });
+        key
+    }
+
+    /// Memoized projections of the current generation (trace metric).
+    pub(crate) fn len(&self) -> usize {
+        let key = self.key;
+        EXPORTED_STYLES
+            .try_with(|registry| {
+                let registry = registry.try_borrow().ok()?;
+                let (generation, styles) = registry.get(&key.owner)?;
+                (*generation == key.generation).then_some(styles.len())
+            })
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.key.generation += 1;
+        self.Unregister();
+    }
+
+    fn Unregister(&self) {
+        let owner = self.key.owner;
+        let _ = EXPORTED_STYLES.try_with(|registry| {
+            if let Ok(mut registry) = registry.try_borrow_mut() {
+                registry.remove(&owner);
+            }
+        });
+    }
+}
+
+impl Drop for ExportedStyleCacheOwner {
+    fn drop(&mut self) {
+        self.Unregister();
+    }
+}
+
+/// The memoized projection for `entry` in the cache generation `key`.
+pub(crate) fn LookupExportedStyle(
+    key: ExportedStyleCacheKey,
+    entry: (usize, usize),
+) -> Option<Arc<PaintStyleData>> {
+    EXPORTED_STYLES
+        .try_with(|registry| {
+            let registry = registry.try_borrow().ok()?;
+            let (generation, styles) = registry.get(&key.owner)?;
+            (*generation == key.generation)
+                .then(|| styles.get(&entry).cloned())
+                .flatten()
+        })
+        .ok()
+        .flatten()
+}
+
+/// Memoize a projection resolved for the cache generation `key`. Nothing is
+/// stored for a generation that has since been cleared, or for an owner that
+/// no longer exists or was registered on another thread.
+pub(crate) fn StoreExportedStyle(
+    key: ExportedStyleCacheKey,
+    entry: (usize, usize),
+    style: Arc<PaintStyleData>,
+) {
+    let _ = EXPORTED_STYLES.try_with(|registry| {
+        let Ok(mut registry) = registry.try_borrow_mut() else {
+            return;
+        };
+        if let Some((generation, styles)) = registry.get_mut(&key.owner) {
+            if *generation == key.generation {
+                styles.insert(entry, style);
+            }
+        }
+    });
+}
+
 #[derive(Default)]
 pub struct LayoutBoundaryCache {
-    pub(crate) styles: LayoutBoundaryHashMap<(usize, usize), PaintStyle>,
+    pub(crate) styles: ExportedStyleCacheOwner,
     pub(crate) objects: Vec<*mut LayoutObject>,
     pub(crate) source_objects: Arc<Vec<*mut LayoutObject>>,
     pub(crate) sticky_objects: Arc<Vec<*mut LayoutObject>>,

@@ -1970,16 +1970,26 @@ impl PaintStyleData {
 // of its values; this is not a source-style-pointer geometry shortcut.
 impl PartialEq for PaintStyle {
     fn eq(&self, other: &Self) -> bool {
-        if std::sync::Arc::ptr_eq(&self.data, &other.data) && self.SourcePtr() == other.SourcePtr()
-        {
-            return true;
+        if self.SourcePtr() == other.SourcePtr() {
+            // Two unresolved projections of the same inputs resolve to the
+            // same values; comparing them must not force either resolution.
+            if let (None, None, Some(a), Some(b)) =
+                (self.data.get(), other.data.get(), &self.pending, &other.pending)
+            {
+                if a.SameInputs(b) {
+                    return true;
+                }
+            }
+            if std::sync::Arc::ptr_eq(self.DataArc(), other.DataArc()) {
+                return true;
+            }
         }
         let source_equal = match (self.Source(), other.Source()) {
             (Some(a), Some(b)) => a == b,
             (None, None) => true,
             _ => false,
         };
-        source_equal && self.data == other.data
+        source_equal && self.Data() == other.Data()
     }
 }
 
@@ -1988,7 +1998,10 @@ impl Default for PaintStyle {
         static DEFAULT_DATA: OnceLock<Arc<PaintStyleData>> = OnceLock::new();
         Self {
             source_address: 0,
-            data: Arc::clone(DEFAULT_DATA.get_or_init(|| Arc::new(PaintStyleData::default()))),
+            data: OnceLock::from(Arc::clone(
+                DEFAULT_DATA.get_or_init(|| Arc::new(PaintStyleData::default())),
+            )),
+            pending: None,
         }
     }
 }
@@ -1997,7 +2010,8 @@ impl PaintStyle {
     pub(crate) fn FromData(data: PaintStyleData) -> Self {
         Self {
             source_address: 0,
-            data: Arc::new(data),
+            data: OnceLock::from(Arc::new(data)),
+            pending: None,
         }
     }
 
@@ -2010,8 +2024,72 @@ impl PaintStyle {
             source_address: foundation::IsManagedLayoutAddress(pointer)
                 .then_some(pointer as usize)
                 .unwrap_or(0),
-            data: Arc::new(data),
+            data: OnceLock::from(Arc::new(data)),
+            pending: None,
         }
+    }
+
+    /// `FromSource` sharing an already resolved (memoized) projection.
+    pub(crate) fn FromSourceData(
+        source: &layoutng_style::style::computed_style::ComputedStyle,
+        data: Arc<PaintStyleData>,
+    ) -> Self {
+        let pointer = source as *const _;
+        Self {
+            source_address: foundation::IsManagedLayoutAddress(pointer)
+                .then_some(pointer as usize)
+                .unwrap_or(0),
+            data: OnceLock::from(data),
+            pending: None,
+        }
+    }
+
+    /// The shared projected values (resolving a pending projection).
+    pub(crate) fn SharedData(&self) -> Arc<PaintStyleData> {
+        Arc::clone(self.DataArc())
+    }
+
+    /// A projection whose values are resolved on first read from `pending`
+    /// (fragment-local Paint data population records only these inputs).
+    /// The source identity is the one ExportStyle records for the same
+    /// ComputedStyle, so Source() and IsExportedFrom() never resolve it.
+    pub(crate) fn FromPending(pending: crate::internal::layout_input::PendingPaintStyle) -> Self {
+        let pointer =
+            pending.style as *const layoutng_style::style::computed_style::ComputedStyle;
+        Self {
+            source_address: foundation::IsManagedLayoutAddress(pointer)
+                .then_some(pointer as usize)
+                .unwrap_or(0),
+            data: OnceLock::new(),
+            pending: Some(pending),
+        }
+    }
+
+    /// False only for a pending fragment projection none of whose projected
+    /// values has been read yet.
+    pub fn IsResolved(&self) -> bool {
+        self.data.get().is_some()
+    }
+
+    fn DataArc(&self) -> &Arc<PaintStyleData> {
+        self.data.get_or_init(|| {
+            let pending = self
+                .pending
+                .as_ref()
+                .expect("an unresolved PaintStyle carries its pending projection");
+            crate::internal::boundary::layout_boundary::ResolvePendingPaintStyle(pending)
+        })
+    }
+
+    fn Data(&self) -> &PaintStyleData {
+        self.DataArc()
+    }
+
+    fn DataMut(&mut self) -> &mut PaintStyleData {
+        self.DataArc();
+        // A written projection is no longer a pure function of its inputs.
+        self.pending = None;
+        Arc::make_mut(self.data.get_mut().expect("resolved above"))
     }
 
     /// A projection-free view of a live, managed ComputedStyle: every accessor
@@ -2055,175 +2133,175 @@ impl PaintStyle {
     // ComputedStyle, as Chromium's painters read them; detached projections
     // (no live source) keep the exported PaintStyleData values.
     pub fn border_radii(&self) -> Option<PaintCornerRadii> {
-        self.Source().map_or(self.data.border_radii, |style| {
+        self.Source().map_or_else(|| self.Data().border_radii, |style| {
             crate::internal::boundary::paint_style_export::BorderRadiiParts(style).0
         })
     }
 
     pub fn border_radii_percentages(&self) -> PaintCornerRadii {
-        self.Source().map_or(self.data.border_radii_percentages, |style| {
+        self.Source().map_or_else(|| self.Data().border_radii_percentages, |style| {
             crate::internal::boundary::paint_style_export::BorderRadiiParts(style).1
         })
     }
 
     pub fn border_corner_curvatures(&self) -> PaintCornerCurvatures {
-        self.Source().map_or(self.data.border_corner_curvatures, |style| {
+        self.Source().map_or_else(|| self.Data().border_corner_curvatures, |style| {
             crate::internal::boundary::paint_style_export::BorderRadiiParts(style).2
         })
     }
 
     pub fn svg_fill(&self) -> Option<Color> {
-        self.Source().map_or(self.data.svg_fill, |style| {
+        self.Source().map_or_else(|| self.Data().svg_fill, |style| {
             crate::internal::boundary::paint_style_export::SvgFill(style)
         })
     }
 
     pub fn svg_stroke(&self) -> Option<Color> {
-        self.Source().map_or(self.data.svg_stroke, |style| {
+        self.Source().map_or_else(|| self.Data().svg_stroke, |style| {
             crate::internal::boundary::paint_style_export::SvgStroke(style)
         })
     }
 
     pub fn svg_fill_reference(&self) -> Option<String> {
         self.Source().map_or_else(
-            || self.data.svg_fill_reference.clone(),
+            || self.Data().svg_fill_reference.clone(),
             crate::internal::boundary::paint_style_export::SvgFillReference,
         )
     }
 
     pub fn svg_stroke_reference(&self) -> Option<String> {
         self.Source().map_or_else(
-            || self.data.svg_stroke_reference.clone(),
+            || self.Data().svg_stroke_reference.clone(),
             crate::internal::boundary::paint_style_export::SvgStrokeReference,
         )
     }
 
     pub fn svg_fill_current_color(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_fill_current_color,
+        self.Source().map_or_else(
+            || self.Data().svg_fill_current_color,
             crate::internal::boundary::paint_style_export::SvgFillCurrentColor,
         )
     }
 
     pub fn svg_stroke_current_color(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_stroke_current_color,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_current_color,
             crate::internal::boundary::paint_style_export::SvgStrokeCurrentColor,
         )
     }
 
     pub fn svg_stop_color(&self) -> Color {
-        self.Source().map_or(
-            self.data.svg_stop_color,
+        self.Source().map_or_else(
+            || self.Data().svg_stop_color,
             crate::internal::boundary::paint_style_export::SvgStopColor,
         )
     }
 
     pub fn svg_stop_current_color(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_stop_current_color,
+        self.Source().map_or_else(
+            || self.Data().svg_stop_current_color,
             crate::internal::boundary::paint_style_export::SvgStopCurrentColor,
         )
     }
 
     pub fn svg_stop_opacity(&self) -> f32 {
-        self.Source().map_or(
-            self.data.svg_stop_opacity,
+        self.Source().map_or_else(
+            || self.Data().svg_stop_opacity,
             crate::internal::boundary::paint_style_export::SvgStopOpacity,
         )
     }
 
     pub fn svg_stroke_width(&self) -> f64 {
-        self.Source().map_or(
-            self.data.svg_stroke_width,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_width,
             crate::internal::boundary::paint_style_export::SvgStrokeWidth,
         )
     }
 
     pub fn svg_stroke_dash_offset(&self) -> f64 {
-        self.Source().map_or(
-            self.data.svg_stroke_dash_offset,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_dash_offset,
             crate::internal::boundary::paint_style_export::SvgStrokeDashOffset,
         )
     }
 
     pub fn svg_stroke_dash_array(&self) -> Vec<f64> {
         self.Source().map_or_else(
-            || self.data.svg_stroke_dash_array.clone(),
+            || self.Data().svg_stroke_dash_array.clone(),
             crate::internal::boundary::paint_style_export::SvgStrokeDashArray,
         )
     }
 
     pub fn svg_stroke_line_cap(&self) -> SvgStrokeLineCap {
-        self.Source().map_or(
-            self.data.svg_stroke_line_cap,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_line_cap,
             crate::internal::boundary::paint_style_export::SvgStrokeLineCapValue,
         )
     }
 
     pub fn svg_stroke_line_join(&self) -> SvgStrokeLineJoin {
-        self.Source().map_or(
-            self.data.svg_stroke_line_join,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_line_join,
             crate::internal::boundary::paint_style_export::SvgStrokeLineJoinValue,
         )
     }
 
     pub fn svg_stroke_miter_limit(&self) -> f64 {
-        self.Source().map_or(
-            self.data.svg_stroke_miter_limit,
+        self.Source().map_or_else(
+            || self.Data().svg_stroke_miter_limit,
             crate::internal::boundary::paint_style_export::SvgStrokeMiterLimit,
         )
     }
 
     pub fn svg_fill_even_odd(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_fill_even_odd,
+        self.Source().map_or_else(
+            || self.Data().svg_fill_even_odd,
             crate::internal::boundary::paint_style_export::SvgFillEvenOdd,
         )
     }
 
     pub fn svg_clip_even_odd(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_clip_even_odd,
+        self.Source().map_or_else(
+            || self.Data().svg_clip_even_odd,
             crate::internal::boundary::paint_style_export::SvgClipEvenOdd,
         )
     }
 
     pub fn svg_non_scaling_stroke(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_non_scaling_stroke,
+        self.Source().map_or_else(
+            || self.Data().svg_non_scaling_stroke,
             crate::internal::boundary::paint_style_export::SvgNonScalingStroke,
         )
     }
 
     pub fn svg_shape_antialias(&self) -> bool {
-        self.Source().map_or(
-            self.data.svg_shape_antialias,
+        self.Source().map_or_else(
+            || self.Data().svg_shape_antialias,
             crate::internal::boundary::paint_style_export::SvgShapeAntialias,
         )
     }
 
     pub fn svg_paint_order(&self) -> [SvgPaintComponent; 3] {
-        self.Source().map_or(
-            self.data.svg_paint_order,
+        self.Source().map_or_else(
+            || self.Data().svg_paint_order,
             crate::internal::boundary::paint_style_export::SvgPaintOrder,
         )
     }
 
     pub fn color(&self) -> Color {
-        self.Source().map_or(self.data.color, |style| {
+        self.Source().map_or_else(|| self.Data().color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(style, style.Color())
         })
     }
 
     pub fn text_fill_color(&self) -> Color {
-        self.Source().map_or(self.data.text_fill_color, |style| {
+        self.Source().map_or_else(|| self.Data().text_fill_color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(style, style.TextFillColor())
         })
     }
 
     pub fn text_stroke_color(&self) -> Color {
-        self.Source().map_or(self.data.text_stroke_color, |style| {
+        self.Source().map_or_else(|| self.Data().text_stroke_color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(
                 style,
                 style.TextStrokeColor(),
@@ -2232,56 +2310,56 @@ impl PaintStyle {
     }
 
     pub fn text_stroke_width(&self) -> f64 {
-        self.Source().map_or(self.data.text_stroke_width, |style| {
+        self.Source().map_or_else(|| self.Data().text_stroke_width, |style| {
             f64::from(style.TextStrokeWidth())
         })
     }
 
     pub fn print_color_adjust_economy(&self) -> bool {
         self.Source()
-            .map_or(self.data.print_color_adjust_economy, |style| {
+            .map_or_else(|| self.Data().print_color_adjust_economy, |style| {
                 style.PrintColorAdjust() == foundation::EPrintColorAdjust::kEconomy
             })
     }
 
     pub fn caret_shape(&self) -> CaretShape {
         self.Source()
-            .map_or(self.data.caret_shape, |style| match style.CaretShape() {
+            .map_or_else(|| self.Data().caret_shape, |style| match style.CaretShape() {
                 foundation::ECaretShape::kAuto | foundation::ECaretShape::kBar => CaretShape::kBar,
                 foundation::ECaretShape::kBlock => CaretShape::kBlock,
                 foundation::ECaretShape::kUnderscore => CaretShape::kUnderscore,
             })
     }
     pub fn caret_color(&self) -> Color {
-        self.Source().map_or(self.data.caret_color, |style| {
+        self.Source().map_or_else(|| self.Data().caret_color, |style| {
             crate::internal::boundary::paint_style_export::ColorValue(style.ResolvedCaretColor())
         })
     }
 
     pub fn image_interpolation_quality(&self) -> foundation::InterpolationQuality {
         self.Source()
-            .map_or(self.data.image_interpolation_quality, |style| {
+            .map_or_else(|| self.Data().image_interpolation_quality, |style| {
                 style.GetInterpolationQuality()
             })
     }
 
     pub fn dynamic_range_limit(&self) -> foundation::DynamicRangeLimit {
         self.Source()
-            .map_or(self.data.dynamic_range_limit, |style| {
+            .map_or_else(|| self.Data().dynamic_range_limit, |style| {
                 *style.GetDynamicRangeLimit()
             })
     }
 
     pub fn color_scheme_flags_is_normal(&self) -> bool {
         self.Source()
-            .map_or(self.data.color_scheme_flags_is_normal, |style| {
+            .map_or_else(|| self.Data().color_scheme_flags_is_normal, |style| {
                 style.ColorSchemeFlagsIsNormal()
             })
     }
 
     pub fn used_dark_color_scheme(&self) -> bool {
         self.Source()
-            .map_or(self.data.used_dark_color_scheme, |style| {
+            .map_or_else(|| self.Data().used_dark_color_scheme, |style| {
                 matches!(
                     style.UsedColorScheme(),
                     layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kDark
@@ -2291,15 +2369,28 @@ impl PaintStyle {
 
     pub fn force_dark(&self) -> bool {
         self.Source()
-            .map_or(self.data.force_dark, |style| style.ForceDark())
+            .map_or_else(|| self.Data().force_dark, |style| style.ForceDark())
     }
 
+    /// Projections are exported with the pause clear; only PrePaint sets it
+    /// (through `SetAutoDarkModePaused` or DerefMut, which resolve first), so
+    /// an unresolved pending projection reads false without resolving.
     pub fn auto_dark_mode_paused(&self) -> bool {
-        self.data.auto_dark_mode_paused
+        self.data
+            .get()
+            .is_some_and(|data| data.auto_dark_mode_paused)
+    }
+
+    /// PrePaint's inherited GraphicsContext::ScopedAutoDarkModeState. Leaves
+    /// an unresolved projection pending when the pause stays clear.
+    pub fn SetAutoDarkModePaused(&mut self, paused: bool) {
+        if self.auto_dark_mode_paused() != paused {
+            self.DataMut().auto_dark_mode_paused = paused;
+        }
     }
 
     pub fn background_color(&self) -> Color {
-        self.Source().map_or(self.data.background_color, |style| {
+        self.Source().map_or_else(|| self.Data().background_color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(
                 style,
                 style.BackgroundColor(),
@@ -2308,13 +2399,13 @@ impl PaintStyle {
     }
 
     pub fn background_clip(&self) -> BackgroundBox {
-        self.Source().map_or(self.data.background_clip, |style| {
+        self.Source().map_or_else(|| self.Data().background_clip, |style| {
             crate::internal::boundary::paint_style_export::BottomBackgroundClip(style)
         })
     }
 
     pub fn border_colors(&self) -> [Color; 4] {
-        self.Source().map_or(self.data.border_colors, |style| {
+        self.Source().map_or_else(|| self.Data().border_colors, |style| {
             [
                 crate::internal::boundary::paint_style_export::StyleColor(
                     style,
@@ -2337,13 +2428,13 @@ impl PaintStyle {
     }
 
     pub fn outline_color(&self) -> Color {
-        self.Source().map_or(self.data.outline_color, |style| {
+        self.Source().map_or_else(|| self.Data().outline_color, |style| {
             crate::internal::boundary::paint_style_export::StyleColor(style, style.OutlineColor())
         })
     }
 
     pub fn outline_width(&self) -> f64 {
-        self.Source().map_or(self.data.outline_width, |style| {
+        self.Source().map_or_else(|| self.Data().outline_width, |style| {
             if style.OutlineStyle() == foundation::EBorderStyle::kNone {
                 0.0
             } else {
@@ -2353,26 +2444,26 @@ impl PaintStyle {
     }
 
     pub fn outline_offset(&self) -> f64 {
-        self.Source().map_or(self.data.outline_offset, |style| {
+        self.Source().map_or_else(|| self.Data().outline_offset, |style| {
             *style.OutlineOffset() as f64
         })
     }
 
     pub fn outline_style(&self) -> BorderLineStyle {
-        self.Source().map_or(self.data.outline_style, |style| {
+        self.Source().map_or_else(|| self.Data().outline_style, |style| {
             crate::internal::boundary::paint_style_export::BorderStyle(style.OutlineStyle())
         })
     }
 
     pub fn border_shape_unsupported(&self) -> bool {
         self.Source()
-            .map_or(self.data.border_shape_unsupported, |style| {
+            .map_or_else(|| self.Data().border_shape_unsupported, |style| {
                 style.HasBorderShape()
             })
     }
 
     pub fn box_shadow_count(&self) -> usize {
-        self.Source().map_or(self.data.box_shadows.len(), |style| {
+        self.Source().map_or_else(|| self.Data().box_shadows.len(), |style| {
             let list = style.BoxShadow();
             if list.is_null() {
                 0
@@ -2384,7 +2475,7 @@ impl PaintStyle {
 
     pub fn box_shadow(&self, index: usize) -> PaintShadow {
         self.Source().map_or_else(
-            || self.data.box_shadows[index].clone(),
+            || self.Data().box_shadows[index].clone(),
             |style| {
                 let list = style.BoxShadow();
                 let shadow = &unsafe { &*list }.Shadows()[index];
@@ -2394,7 +2485,7 @@ impl PaintStyle {
     }
 
     pub fn text_shadow_count(&self) -> usize {
-        self.Source().map_or(self.data.text_shadows.len(), |style| {
+        self.Source().map_or_else(|| self.Data().text_shadows.len(), |style| {
             let list = style.TextShadow();
             if list.is_null() {
                 0
@@ -2406,7 +2497,7 @@ impl PaintStyle {
 
     pub fn text_shadow(&self, index: usize) -> PaintShadow {
         self.Source().map_or_else(
-            || self.data.text_shadows[index].clone(),
+            || self.Data().text_shadows[index].clone(),
             |style| {
                 let list = style.TextShadow();
                 let shadow = &unsafe { &*list }.Shadows()[index];
@@ -2417,7 +2508,7 @@ impl PaintStyle {
 
     pub fn applied_text_decoration_count(&self) -> usize {
         self.Source()
-            .map_or(self.data.applied_text_decorations.len(), |style| {
+            .map_or_else(|| self.Data().applied_text_decorations.len(), |style| {
                 let decorations = style.AppliedTextDecorationData();
                 if decorations.is_null() {
                     0
@@ -2429,7 +2520,7 @@ impl PaintStyle {
 
     pub fn applied_text_decoration(&self, index: usize) -> TextDecorationPaint {
         self.Source().map_or_else(
-            || self.data.applied_text_decorations[index].clone(),
+            || self.Data().applied_text_decorations[index].clone(),
             |style| {
                 let decorations = style.AppliedTextDecorationData();
                 let decoration = &unsafe { &*decorations }[index];
@@ -2443,11 +2534,11 @@ impl PaintStyle {
 
     pub fn opacity(&self) -> f32 {
         self.Source()
-            .map_or(self.data.opacity, |style| style.Opacity())
+            .map_or_else(|| self.Data().opacity, |style| style.Opacity())
     }
 
     pub fn visible(&self) -> bool {
-        self.Source().map_or(self.data.visible, |style| {
+        self.Source().map_or_else(|| self.Data().visible, |style| {
             style.Visibility() == foundation::EVisibility::kVisible
         })
     }
@@ -2455,14 +2546,14 @@ impl PaintStyle {
     /// Whether border-image paints: its NinePieceImage has an image (the only
     /// case ExportNinePieceImageForFragment produces a value).
     pub fn has_border_image(&self) -> bool {
-        self.Source().map_or(self.data.border_image.is_some(), |style| {
+        self.Source().map_or_else(|| self.Data().border_image.is_some(), |style| {
             !style.BorderImage().GetImage().is_null()
         })
     }
 
     /// Whether -webkit-mask-box-image paints (see has_border_image).
     pub fn has_mask_box_image(&self) -> bool {
-        self.Source().map_or(self.data.mask_box_image.is_some(), |style| {
+        self.Source().map_or_else(|| self.Data().mask_box_image.is_some(), |style| {
             !style.MaskBoxImage().GetImage().is_null()
         })
     }
@@ -2470,7 +2561,7 @@ impl PaintStyle {
     /// Whether a box reflection paints a mask image (see has_border_image).
     pub fn has_box_reflection_mask_image(&self) -> bool {
         self.Source()
-            .map_or(self.data.box_reflection_mask_image.is_some(), |style| {
+            .map_or_else(|| self.Data().box_reflection_mask_image.is_some(), |style| {
                 unsafe { style.BoxReflect().as_ref() }.is_some_and(|reflection| {
                     reflection.Mask().HasImage() && !reflection.Mask().GetImage().is_null()
                 })
@@ -2482,14 +2573,14 @@ impl PaintStyle {
     /// attachment image (ComputedStyle::HasFixedAttachmentBackgroundImage),
     /// and whether this style paints any image or filter resource.
     pub fn ResourceUsageFacts(&self, nine_piece_images: bool) -> (bool, bool) {
-        let data_images = self.data.image_resource_id.is_some()
-            || self.data.border_image.is_some()
-            || self.data.mask_box_image.is_some()
-            || self.data.box_reflection_mask_image.is_some();
+        let data_images = self.Data().image_resource_id.is_some()
+            || self.Data().border_image.is_some()
+            || self.Data().mask_box_image.is_some()
+            || self.Data().box_reflection_mask_image.is_some();
         match self.Source() {
             Some(style) => (
                 style.HasFixedAttachmentBackgroundImage(),
-                self.data.image_resource_id.is_some()
+                self.Data().image_resource_id.is_some()
                     // Box fragments paint nine-piece images from the style
                     // (border-image, mask-box-image, reflection mask).
                     || (nine_piece_images
@@ -2508,15 +2599,15 @@ impl PaintStyle {
                     || style.HasBackdropFilter(),
             ),
             None => (
-                self.data
+                self.Data()
                     .background_images
                     .iter()
                     .any(|layer| layer.attachment == BackgroundAttachment::kFixed),
                 data_images
-                    || !self.data.background_images.is_empty()
-                    || !self.data.mask_images.is_empty()
-                    || !self.data.filters.is_empty()
-                    || !self.data.backdrop_filters.is_empty(),
+                    || !self.Data().background_images.is_empty()
+                    || !self.Data().mask_images.is_empty()
+                    || !self.Data().filters.is_empty()
+                    || !self.Data().backdrop_filters.is_empty(),
             ),
         }
     }
@@ -2543,24 +2634,24 @@ impl PaintStyle {
                 )
             }
             None => (
-                self.data.visible,
-                self.data.outline_style,
-                self.data.outline_width,
-                self.data.outline_color.alpha,
+                self.Data().visible,
+                self.Data().outline_style,
+                self.Data().outline_width,
+                self.Data().outline_color.alpha,
             ),
         }
     }
 
     pub fn forced_color_adjust_auto(&self) -> bool {
         self.Source()
-            .map_or(self.data.forced_color_adjust_auto, |style| {
+            .map_or_else(|| self.Data().forced_color_adjust_auto, |style| {
                 style.ForcedColorAdjust() == foundation::EForcedColorAdjust::kAuto
             })
     }
 
     pub fn forced_background_color(&self) -> Color {
         self.Source()
-            .map_or(self.data.forced_background_color, |style| {
+            .map_or_else(|| self.Data().forced_background_color, |style| {
                 crate::internal::boundary::paint_style_export::StyleColor(
                     style,
                     style.InternalForcedBackgroundColor(),
@@ -2570,37 +2661,37 @@ impl PaintStyle {
 
     pub fn pointer_events_none(&self) -> bool {
         self.Source()
-            .map_or(self.data.pointer_events_none, |style| {
+            .map_or_else(|| self.Data().pointer_events_none, |style| {
                 style.PointerEvents() == foundation::EPointerEvents::kNone
             })
     }
 
     pub fn pointer_events_bounding_box(&self) -> bool {
         self.Source()
-            .map_or(self.data.pointer_events_bounding_box, |style| {
+            .map_or_else(|| self.Data().pointer_events_bounding_box, |style| {
                 style.UsedPointerEvents() == foundation::EPointerEvents::kBoundingBox
             })
     }
 
     pub fn user_select_none(&self) -> bool {
-        self.Source().map_or(self.data.user_select_none, |style| {
+        self.Source().map_or_else(|| self.Data().user_select_none, |style| {
             style.UsedUserSelect() == foundation::EUserSelect::kNone
         })
     }
 
     pub fn cursor(&self) -> ECursor {
         self.Source()
-            .map_or(self.data.cursor, |style| style.Cursor())
+            .map_or_else(|| self.Data().cursor, |style| style.Cursor())
     }
 
     pub fn z_index(&self) -> Option<i32> {
-        self.Source().map_or(self.data.z_index, |style| {
+        self.Source().map_or_else(|| self.Data().z_index, |style| {
             (!style.HasAutoZIndex()).then(|| style.ZIndex())
         })
     }
 
     pub fn blend_mode(&self) -> PaintBlendMode {
-        self.Source().map_or(self.data.blend_mode, |style| {
+        self.Source().map_or_else(|| self.Data().blend_mode, |style| {
             crate::internal::boundary::paint_style_export::BlendValue(style.GetBlendMode())
         })
     }
@@ -2621,7 +2712,7 @@ impl PaintStyle {
                 continue;
             };
             if let Some(graph) = self
-                .data
+                .Data()
                 .svg_filter_graphs
                 .iter()
                 .find(|graph| graph.id == id)
@@ -2640,7 +2731,7 @@ impl PaintStyle {
                 "PaintStyle.BindFilterResources",
                 &[
                     ("references", references as f64),
-                    ("graphs", self.data.svg_filter_graphs.len() as f64),
+                    ("graphs", self.Data().svg_filter_graphs.len() as f64),
                     ("bound", bound as f64),
                 ],
             );
@@ -2649,7 +2740,7 @@ impl PaintStyle {
 
     pub fn filters(&self) -> Vec<PaintFilterOperation> {
         let Some(style) = self.Source() else {
-            return self.data.filters.clone();
+            return self.Data().filters.clone();
         };
         let mut filters =
             crate::internal::boundary::paint_style_export::Filters(style, style.Filter());
@@ -2658,7 +2749,7 @@ impl PaintStyle {
             .iter_mut()
             .find(|filter| filter.r#type == PaintFilterType::kBoxReflect)
         {
-            reflection.reflection_mask_image = self.data.box_reflection_mask_image.clone();
+            reflection.reflection_mask_image = self.Data().box_reflection_mask_image.clone();
         }
         self.BindFilterResources(&mut filters);
         filters
@@ -2666,7 +2757,7 @@ impl PaintStyle {
 
     pub fn backdrop_filters(&self) -> Vec<PaintFilterOperation> {
         let Some(style) = self.Source() else {
-            return self.data.backdrop_filters.clone();
+            return self.Data().backdrop_filters.clone();
         };
         let mut filters =
             crate::internal::boundary::paint_style_export::Filters(style, style.BackdropFilter());
@@ -2676,7 +2767,7 @@ impl PaintStyle {
 
     pub fn has_filters(&self) -> bool {
         self.Source()
-            .map_or(!self.data.filters.is_empty(), |style| {
+            .map_or(!self.Data().filters.is_empty(), |style| {
                 style.HasFilter() || style.HasBoxReflect()
             })
     }
@@ -2684,7 +2775,7 @@ impl PaintStyle {
     pub fn has_reference_filter_or_reflection(&self) -> bool {
         self.Source().map_or_else(
             || {
-                self.data.filters.iter().any(|operation| {
+                self.Data().filters.iter().any(|operation| {
                     matches!(
                         operation.r#type,
                         PaintFilterType::kReference | PaintFilterType::kBoxReflect
@@ -2698,7 +2789,7 @@ impl PaintStyle {
     pub fn filter_moves_pixels(&self) -> bool {
         self.Source().map_or_else(
             || {
-                self.data.filters.iter().any(|operation| {
+                self.Data().filters.iter().any(|operation| {
                     matches!(
                         operation.r#type,
                         PaintFilterType::kBlur
@@ -2728,7 +2819,7 @@ impl PaintStyle {
 
     pub fn has_backdrop_filters(&self) -> bool {
         self.Source()
-            .map_or(!self.data.backdrop_filters.is_empty(), |style| {
+            .map_or(!self.Data().backdrop_filters.is_empty(), |style| {
                 style.HasBackdropFilter()
             })
     }
@@ -2741,21 +2832,21 @@ impl PaintStyle {
 
     pub fn background_images(&self) -> Vec<BackgroundImageLayer> {
         self.Source().map_or_else(
-            || self.data.background_images.clone(),
+            || self.Data().background_images.clone(),
             crate::internal::boundary::paint_style_export::Backgrounds,
         )
     }
 
     pub fn has_background_images(&self) -> bool {
         self.Source()
-            .map_or(!self.data.background_images.is_empty(), |style| {
+            .map_or(!self.Data().background_images.is_empty(), |style| {
                 style.HasBackgroundImage()
             })
     }
 
     pub fn mask_images(&self) -> Vec<PaintMaskLayer> {
         let Some(style) = self.Source() else {
-            return self.data.mask_images.clone();
+            return self.Data().mask_images.clone();
         };
         let mut layers = crate::internal::boundary::paint_style_export::Masks(style);
         for layer in &mut layers {
@@ -2763,7 +2854,7 @@ impl PaintStyle {
                 continue;
             };
             let Some(binding) = self
-                .data
+                .Data()
                 .svg_mask_bindings
                 .iter()
                 .find(|binding| binding.id == reference.id && binding.scope == reference.scope)
@@ -2786,7 +2877,7 @@ impl PaintStyle {
 
     pub fn has_mask_images(&self) -> bool {
         self.Source()
-            .map_or(!self.data.mask_images.is_empty(), |style| {
+            .map_or(!self.Data().mask_images.is_empty(), |style| {
                 style.MaskLayers().AnyLayerHasImage()
             })
     }
@@ -2795,65 +2886,65 @@ impl PaintStyle {
         self.has_translate()
             || self.has_rotate()
             || self.has_scale()
-            || self.data.offset_transform.is_some()
+            || self.Data().offset_transform.is_some()
             || self.has_transform()
     }
 
     pub fn has_translate(&self) -> bool {
         self.Source()
-            .map_or(self.data.translate.is_some(), |style| {
+            .map_or_else(|| self.Data().translate.is_some(), |style| {
                 !style.Translate().is_null()
             })
     }
 
     pub fn has_rotate(&self) -> bool {
-        self.Source().map_or(self.data.rotate.is_some(), |style| {
+        self.Source().map_or_else(|| self.Data().rotate.is_some(), |style| {
             !style.Rotate().is_null()
         })
     }
 
     pub fn has_scale(&self) -> bool {
         self.Source()
-            .map_or(self.data.scale.is_some(), |style| !style.Scale().is_null())
+            .map_or_else(|| self.Data().scale.is_some(), |style| !style.Scale().is_null())
     }
 
     pub fn has_transform(&self) -> bool {
         self.Source()
-            .map_or(self.data.transform.is_some(), |style| {
+            .map_or_else(|| self.Data().transform.is_some(), |style| {
                 style.HasTransformOperations()
             })
     }
 
     pub fn translate(&self) -> Option<PaintTransform> {
         self.Source().map_or_else(
-            || self.data.translate.clone(),
+            || self.Data().translate.clone(),
             crate::internal::boundary::paint_style_export::Translate,
         )
     }
 
     pub fn rotate(&self) -> Option<PaintTransform> {
         self.Source().map_or_else(
-            || self.data.rotate.clone(),
+            || self.Data().rotate.clone(),
             crate::internal::boundary::paint_style_export::Rotate,
         )
     }
 
     pub fn scale(&self) -> Option<PaintTransform> {
         self.Source().map_or_else(
-            || self.data.scale.clone(),
+            || self.Data().scale.clone(),
             crate::internal::boundary::paint_style_export::Scale,
         )
     }
 
     pub fn transform(&self) -> Option<PaintTransform> {
         self.Source().map_or_else(
-            || self.data.transform.clone(),
+            || self.Data().transform.clone(),
             crate::internal::boundary::paint_style_export::Transform,
         )
     }
 
     pub fn transform_origin(&self) -> Option<PaintTransformOrigin> {
-        self.Source().map_or(self.data.transform_origin, |style| {
+        self.Source().map_or_else(|| self.Data().transform_origin, |style| {
             (self.has_translate()
                 || self.has_rotate()
                 || self.has_scale()
@@ -2864,14 +2955,14 @@ impl PaintStyle {
     }
 
     pub fn perspective_origin(&self) -> PaintTransformOrigin {
-        self.Source().map_or(self.data.perspective_origin, |style| {
+        self.Source().map_or_else(|| self.Data().perspective_origin, |style| {
             crate::internal::boundary::paint_style_export::PerspectiveOrigin(style)
         })
     }
 
     pub fn transform_reference_box(&self) -> PaintTransformReferenceBox {
         self.Source()
-            .map_or(self.data.transform_reference_box, |style| {
+            .map_or_else(|| self.Data().transform_reference_box, |style| {
                 use foundation::ETransformBox;
                 use layoutng_style::style::style_transform::TransformBoxContext;
                 match style.UsedTransformBox(TransformBoxContext::kLayoutBox) {
@@ -2889,7 +2980,7 @@ impl PaintStyle {
     }
 
     pub fn perspective(&self) -> Option<f64> {
-        self.Source().map_or(self.data.perspective, |style| {
+        self.Source().map_or_else(|| self.Data().perspective, |style| {
             style
                 .HasPerspective()
                 .then(|| f64::from(style.UsedPerspective()))
@@ -2898,19 +2989,19 @@ impl PaintStyle {
 
     pub fn preserves_3d(&self) -> bool {
         self.Source()
-            .map_or(self.data.preserves_3d, |style| style.Preserves3D())
+            .map_or_else(|| self.Data().preserves_3d, |style| style.Preserves3D())
     }
 
     pub fn has_3d_transform_operation(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_3d_transform_operation, |style| {
+            .map_or_else(|| self.Data().has_3d_transform_operation, |style| {
                 style.Has3DTransformOperation()
             })
     }
 
     pub fn has_nontrivial_3d_transform(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_nontrivial_3d_transform, |style| {
+            .map_or_else(|| self.Data().has_nontrivial_3d_transform, |style| {
                 style.Transform().HasNonPerspective3DOperation()
                     && style.Transform().HasNonTrivial3DComponent()
             })
@@ -2918,7 +3009,7 @@ impl PaintStyle {
 
     pub fn has_trivial_3d_transform(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_trivial_3d_transform, |style| {
+            .map_or_else(|| self.Data().has_trivial_3d_transform, |style| {
                 style.Transform().HasNonPerspective3DOperation()
                     && !style.Transform().HasNonTrivial3DComponent()
             })
@@ -2926,7 +3017,7 @@ impl PaintStyle {
 
     pub fn has_3d_translate(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_3d_translate, |style| unsafe {
+            .map_or_else(|| self.Data().has_3d_translate, |style| unsafe {
                 let value = style.Translate();
                 !value.is_null() && (*value).Z() != 0.0
             })
@@ -2934,7 +3025,7 @@ impl PaintStyle {
 
     pub fn has_3d_rotate(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_3d_rotate, |style| unsafe {
+            .map_or_else(|| self.Data().has_3d_rotate, |style| unsafe {
                 let value = style.Rotate();
                 !value.is_null() && ((*value).X() != 0.0 || (*value).Y() != 0.0)
             })
@@ -2942,21 +3033,21 @@ impl PaintStyle {
 
     pub fn has_3d_scale(&self) -> bool {
         self.Source()
-            .map_or(self.data.has_3d_scale, |style| unsafe {
+            .map_or_else(|| self.Data().has_3d_scale, |style| unsafe {
                 let value = style.Scale();
                 !value.is_null() && (*value).Z() != 1.0
             })
     }
 
     pub fn isolate_blending(&self) -> bool {
-        self.Source().map_or(self.data.isolate_blending, |style| {
+        self.Source().map_or_else(|| self.Data().isolate_blending, |style| {
             style.Isolation() == foundation::EIsolation::kIsolate
         })
     }
 
     pub fn respect_image_orientation(&self) -> bool {
         self.Source()
-            .map_or(self.data.respect_image_orientation, |style| {
+            .map_or_else(|| self.Data().respect_image_orientation, |style| {
                 style.ImageOrientation()
                     == foundation::RespectImageOrientationEnum::kRespectImageOrientation
             })
@@ -2964,14 +3055,14 @@ impl PaintStyle {
 
     pub fn will_change_scroll_position(&self) -> bool {
         self.Source()
-            .map_or(self.data.will_change_scroll_position, |style| {
+            .map_or_else(|| self.Data().will_change_scroll_position, |style| {
                 style.HasWillChangeScrollPosition()
             })
     }
 
     pub fn subtree_will_change_contents(&self) -> bool {
         self.Source()
-            .map_or(self.data.subtree_will_change_contents, |style| {
+            .map_or_else(|| self.Data().subtree_will_change_contents, |style| {
                 style.SubtreeWillChangeContents()
             })
     }
@@ -2983,96 +3074,96 @@ impl PaintStyle {
 
     pub fn will_change_transform(&self) -> bool {
         self.Source()
-            .map_or(self.data.will_change_transform, |style| {
+            .map_or_else(|| self.Data().will_change_transform, |style| {
                 style.HasWillChangeAnyTransformProperty()
             })
     }
 
     pub fn will_change_transform_property(&self) -> bool {
         self.Source()
-            .map_or(self.data.will_change_transform_property, |style| {
+            .map_or_else(|| self.Data().will_change_transform_property, |style| {
                 style.HasWillChangeProperty(foundation::CSSPropertyID::kTransform)
             })
     }
 
     pub fn will_change_opacity(&self) -> bool {
         self.Source()
-            .map_or(self.data.will_change_opacity, |style| {
+            .map_or_else(|| self.Data().will_change_opacity, |style| {
                 style.HasWillChangeProperty(foundation::CSSPropertyID::kOpacity)
             })
     }
 
     pub fn will_change_filter(&self) -> bool {
-        self.Source().map_or(self.data.will_change_filter, |style| {
+        self.Source().map_or_else(|| self.Data().will_change_filter, |style| {
             style.HasWillChangeProperty(foundation::CSSPropertyID::kFilter)
         })
     }
 
     pub fn will_change_backdrop_filter(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_backdrop_filter,
+            self.Data().will_change_backdrop_filter,
             foundation::CSSPropertyID::kBackdropFilter,
         )
     }
 
     pub fn will_change_clip_path(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_clip_path,
+            self.Data().will_change_clip_path,
             foundation::CSSPropertyID::kClipPath,
         )
     }
 
     pub fn will_change_mask(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_mask,
+            self.Data().will_change_mask,
             foundation::CSSPropertyID::kMaskImage,
         )
     }
 
     pub fn will_change_mix_blend_mode(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_mix_blend_mode,
+            self.Data().will_change_mix_blend_mode,
             foundation::CSSPropertyID::kMixBlendMode,
         )
     }
 
     pub fn will_change_perspective(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_perspective,
+            self.Data().will_change_perspective,
             foundation::CSSPropertyID::kPerspective,
         )
     }
 
     pub fn will_change_transform_style(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_transform_style,
+            self.Data().will_change_transform_style,
             foundation::CSSPropertyID::kTransformStyle,
         )
     }
 
     pub fn will_change_scale(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_scale,
+            self.Data().will_change_scale,
             foundation::CSSPropertyID::kScale,
         )
     }
 
     pub fn will_change_rotate(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_rotate,
+            self.Data().will_change_rotate,
             foundation::CSSPropertyID::kRotate,
         )
     }
 
     pub fn will_change_translate(&self) -> bool {
         self.has_will_change(
-            self.data.will_change_translate,
+            self.Data().will_change_translate,
             foundation::CSSPropertyID::kTranslate,
         )
     }
 
     pub fn will_change_other(&self) -> bool {
-        self.Source().map_or(self.data.will_change_other, |style| {
+        self.Source().map_or_else(|| self.Data().will_change_other, |style| {
             [
                 foundation::CSSPropertyID::kOffsetPath,
                 foundation::CSSPropertyID::kOffsetPosition,
@@ -3088,42 +3179,42 @@ impl PaintStyle {
 
     pub fn backface_visibility_hidden(&self) -> bool {
         self.Source()
-            .map_or(self.data.backface_visibility_hidden, |style| {
+            .map_or_else(|| self.Data().backface_visibility_hidden, |style| {
                 style.BackfaceVisibility() == foundation::EBackfaceVisibility::kHidden
             })
     }
 
     pub fn active_transform_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_transform_animation, |style| {
+            .map_or_else(|| self.Data().active_transform_animation, |style| {
                 style.HasCurrentTransformAnimation()
             })
     }
 
     pub fn active_scale_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_scale_animation, |style| {
+            .map_or_else(|| self.Data().active_scale_animation, |style| {
                 style.HasCurrentScaleAnimation()
             })
     }
 
     pub fn active_rotate_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_rotate_animation, |style| {
+            .map_or_else(|| self.Data().active_rotate_animation, |style| {
                 style.HasCurrentRotateAnimation()
             })
     }
 
     pub fn active_translate_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_translate_animation, |style| {
+            .map_or_else(|| self.Data().active_translate_animation, |style| {
                 style.HasCurrentTranslateAnimation()
             })
     }
 
     pub fn active_opacity_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_opacity_animation, |style| {
+            .map_or_else(|| self.Data().active_opacity_animation, |style| {
                 // The animation bit is almost always clear; consult the base
                 // !important set only for an animating style.
                 if !style.HasCurrentOpacityAnimation() {
@@ -3142,43 +3233,43 @@ impl PaintStyle {
 
     pub fn active_filter_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_filter_animation, |style| {
+            .map_or_else(|| self.Data().active_filter_animation, |style| {
                 style.HasCurrentFilterAnimation()
             })
     }
 
     pub fn active_backdrop_filter_animation(&self) -> bool {
         self.Source()
-            .map_or(self.data.active_backdrop_filter_animation, |style| {
+            .map_or_else(|| self.Data().active_backdrop_filter_animation, |style| {
                 style.HasCurrentBackdropFilterAnimation()
             })
     }
 
     pub fn SetVisibleForTesting(&mut self, value: bool) {
         debug_assert!(self.Source().is_none());
-        Arc::make_mut(&mut self.data).visible = value;
+        self.DataMut().visible = value;
     }
 
     pub fn SetOpacityForTesting(&mut self, value: f32) {
         debug_assert!(self.Source().is_none());
-        Arc::make_mut(&mut self.data).opacity = value;
+        self.DataMut().opacity = value;
     }
 
     pub fn SetPointerEventsNoneForTesting(&mut self, value: bool) {
         debug_assert!(self.Source().is_none());
-        Arc::make_mut(&mut self.data).pointer_events_none = value;
+        self.DataMut().pointer_events_none = value;
     }
 }
 
 impl std::ops::Deref for PaintStyle {
     type Target = PaintStyleData;
     fn deref(&self) -> &Self::Target {
-        &self.data
+        self.Data()
     }
 }
 
 impl std::ops::DerefMut for PaintStyle {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.data)
+        self.DataMut()
     }
 }

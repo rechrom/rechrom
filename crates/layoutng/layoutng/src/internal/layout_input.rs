@@ -1509,7 +1509,45 @@ pub struct PaintStyle {
     // LayoutResult lease that owns the fragment keeps this managed object
     // alive through PrePaint and Paint.
     pub(super) source_address: usize,
-    pub(super) data: std::sync::Arc<super::paint_input::PaintStyleData>,
+    // The projected values. Fragment-local Paint data population records only
+    // the (ComputedStyle, StyleResourceData) identity in `pending`; the
+    // projection is resolved through the Layout boundary's identity-keyed
+    // cache on the first read of a value that is not read live from Source().
+    pub(super) data: std::sync::OnceLock<std::sync::Arc<super::paint_input::PaintStyleData>>,
+    pub(super) pending: Option<PendingPaintStyle>,
+}
+
+/// The inputs of a not yet resolved fragment PaintStyle projection: the
+/// effective ComputedStyle, the document StyleResourceData paired with it,
+/// the LayoutObject owning the fragment (motion-path offset and SVG resource
+/// viewports) and the boundary cache generation that may memoize the result.
+/// The addresses are non-owning, kept alive by the same LayoutResult lease as
+/// `PaintStyle::source_address`.
+#[derive(Clone)]
+pub struct PendingPaintStyle {
+    pub(crate) style: usize,
+    pub(crate) object: usize,
+    pub(crate) resources: std::sync::Arc<StyleResourceData>,
+    pub(crate) cache: Option<ExportedStyleCacheKey>,
+}
+
+impl PendingPaintStyle {
+    /// Two pending projections of the same inputs resolve to the same values.
+    pub(crate) fn SameInputs(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.object == other.object
+            && std::sync::Arc::ptr_eq(&self.resources, &other.resources)
+    }
+}
+
+/// One generation of a Layout boundary's persistent exported-style cache.
+/// The generation advances at every clearing point (style replacement or
+/// topology change), so a projection resolved later never reads or writes
+/// entries keyed by addresses that may since have been reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExportedStyleCacheKey {
+    pub(crate) owner: u64,
+    pub(crate) generation: u64,
 }
 
 // cpp: layoutng/internal/layout_input.h:756-767
