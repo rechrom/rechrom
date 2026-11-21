@@ -772,11 +772,11 @@ fn collect_current_fragments<'a>(
     // LayoutSVGHiddenContainer remains in Layout snapshots for resource users,
     // but PrePaint creates no ordinary owners beneath that boundary. Traverse
     // the same owner-selected children when validating retained identities.
-    let hidden = f.paint.svg_hidden_container;
+    let hidden = f.paint.IsSVGHiddenContainer();
     source
         .Children()
         .into_iter()
-        .filter(|child| !hidden && !child.paint.svg_hidden_container)
+        .filter(|child| !hidden && !child.paint.IsSVGHiddenContainer())
         .all(|child| {
             collect_current_fragments(
                 child,
@@ -808,7 +808,7 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
             BackgroundAttachment::kLocal => fragment.paint.scroll_container.is_some(),
             BackgroundAttachment::kFixed => {
                 let independently_recorded =
-                    fragment.paint.can_composite_background_attachment_fixed
+                    fragment.paint.CanCompositeBackgroundAttachmentFixed()
                         && !node.fixed_background_acts_as_scroll
                         && fragment.paint.background_paint_location.PaintsBorderBox()
                         && background_images.len() == 1

@@ -150,9 +150,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.BindSourceObject(object);
             // ExportPaintProperties has made the object ready for invalidation.
             node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
-            node.paint.is_printing = current.is_printing;
-            node.paint.should_print_backgrounds = current.should_print_backgrounds;
-            node.paint.effective_allowed_touch_action = current.effective_allowed_touch_action;
             node.paint.inside_blocking_wheel_event_handler =
                 current.inside_blocking_wheel_event_handler;
             node.paint.region_capture_crop_id = current.region_capture_crop_id;
@@ -163,16 +160,12 @@ pub(super) fn refresh_retained_paint_inputs(
             // fragment. ExportPaintProperties has no physical-fragment
             // context and therefore reports the LayoutObject's first
             // FragmentData; do not collapse fragmented boxes back to it.
-            node.paint
-                .svg_descendant_may_have_transform_related_operations =
-                current.svg_descendant_may_have_transform_related_operations;
             node.paint.svg_view_box_is_empty = current.svg_view_box_is_empty;
             node.paint.display_item_client_debug_name =
                 current.display_item_client_debug_name.clone();
             node.paint.display_item_client_owner_node_id =
                 current.display_item_client_owner_node_id;
             node.paint.selection_client_id = current.selection_client_id;
-            node.paint.is_selected = current.is_selected;
             node.paint.replaced_selection_state = current.replaced_selection_state;
             node.paint.replaced_local_selection_visual_rect =
                 current.replaced_local_selection_visual_rect;
@@ -197,13 +190,9 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
-            node.paint.background_is_known_to_be_obscured =
-                current.background_is_known_to_be_obscured;
             node.paint.background_paint_location = current.background_paint_location;
             node.paint.background_fill_layer_count = current.background_fill_layer_count;
             node.paint.has_background = current.has_background;
-            node.paint.background_should_always_be_clipped =
-                current.background_should_always_be_clipped;
             node.paint.background_any_local_attachment_image =
                 current.background_any_local_attachment_image;
             node.paint.background_any_default_attachment_image =

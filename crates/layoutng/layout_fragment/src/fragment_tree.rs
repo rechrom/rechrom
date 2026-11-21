@@ -1345,6 +1345,69 @@ impl PaintProperties {
             .SourceCheckedOr(self.is_box_model_object, "is_box_model_object")
     }
 
+    // Stage 2 of the export removal: LayoutObject facts read live (Chromium
+    // PrePaint/Paint read them from the LayoutObject); the stored copy is
+    // only the detached-fixture fallback.
+    pub fn VisibleToHitTesting(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::VisibleToHitTesting)
+            .SourceCheckedOr(self.visible_to_hit_testing, "visible_to_hit_testing")
+    }
+
+    pub fn IsSelected(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::IsSelected)
+            .SourceCheckedOr(self.is_selected, "is_selected")
+    }
+
+    pub fn EffectiveAllowedTouchAction(&self) -> foundation::TouchAction {
+        self.SourceObject()
+            .map(LayoutObject::EffectiveAllowedTouchAction)
+            .SourceCheckedOr(self.effective_allowed_touch_action, "effective_allowed_touch_action")
+    }
+
+    pub fn BackgroundIsKnownToBeObscured(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::BackgroundIsKnownToBeObscured)
+            .SourceCheckedOr(self.background_is_known_to_be_obscured, "background_is_known_to_be_obscured")
+    }
+
+    pub fn IsSVGChild(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::IsSVGChild)
+            .SourceCheckedOr(self.is_svg_child, "is_svg_child")
+    }
+
+    pub fn IsSVGHiddenContainer(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::IsSVGHiddenContainer)
+            .SourceCheckedOr(self.svg_hidden_container, "svg_hidden_container")
+    }
+
+    pub fn SVGDescendantMayHaveTransformRelatedOperations(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::SVGDescendantMayHaveTransformRelatedOperations)
+            .SourceCheckedOr(self.svg_descendant_may_have_transform_related_operations, "svg_descendant_may_have_transform_related_operations")
+    }
+
+    pub fn BackgroundShouldAlwaysBeClipped(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                let box_ = foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object);
+                !box_.is_null() && unsafe { &*box_ }.BackgroundShouldAlwaysBeClipped()
+            })
+            .SourceCheckedOr(self.background_should_always_be_clipped, "background_should_always_be_clipped")
+    }
+
+    pub fn CanCompositeBackgroundAttachmentFixed(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).is_null()
+                    && object.CanCompositeBackgroundAttachmentFixed()
+            })
+            .SourceCheckedOr(self.can_composite_background_attachment_fixed, "can_composite_background_attachment_fixed")
+    }
+
     pub fn IsLayoutBox(&self) -> bool {
         self.SourceObject().map(|object| {
             !foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).is_null()

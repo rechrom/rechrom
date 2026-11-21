@@ -54,7 +54,7 @@ impl OverriddenCullRectScope {
         starting: bool,
     ) {
         let fragment = node.fragment.as_deref().expect("retained FragmentData");
-        if fragment.paint.IsFragmentLessBox() || fragment.paint.svg_hidden_container {
+        if fragment.paint.IsFragmentLessBox() || fragment.paint.IsSVGHiddenContainer() {
             return;
         }
         // UpdateRecursively, source.cc:305-310. Containing-block contexts

@@ -1179,7 +1179,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // viewport-sized background in the LayoutView transform, then clips
         // it with a node whose local transform space is this element.  The
         // clip is deliberately not installed into the descendant context.
-        if fragment.paint.can_composite_background_attachment_fixed {
+        if fragment.paint.CanCompositeBackgroundAttachmentFixed() {
             let style = style.expect("composited fixed background requires style");
             let background_images = style.background_images();
             let layer = background_images

@@ -144,24 +144,12 @@ pub(super) fn ExportProperties(
     }
     output.BindSourceObject(object);
     let object_ref = unsafe { &*object };
-    output.is_printing = object_ref.IsPrintingForLayout();
-    output.should_print_backgrounds = object_ref.ShouldPrintBackgroundsForLayout();
-    output.visible_to_hit_testing = object_ref.VisibleToHitTesting();
-    if purpose == LayoutUpdateKind::Paint {
-        output.is_selected = object_ref.IsSelected();
-    }
-    output.effective_allowed_touch_action = object_ref.EffectiveAllowedTouchAction();
     output.inside_blocking_wheel_event_handler = object_ref.InsideBlockingWheelEventHandler();
-    output.background_is_known_to_be_obscured = object_ref.BackgroundIsKnownToBeObscured();
     let element = DynamicTo::<Element>(object_ref.GetNode());
     if let Some(element) = unsafe { element.as_ref() } {
         output.region_capture_crop_id = element.InputRegionCaptureCropId();
         output.tracked_element_sub_rects = element.InputTrackedElementSubRects().to_vec();
     }
-    output.is_svg_child = object_ref.IsSVGChild();
-    output.svg_hidden_container = object_ref.IsSVGHiddenContainer();
-    output.svg_descendant_may_have_transform_related_operations =
-        object_ref.SVGDescendantMayHaveTransformRelatedOperations();
     if purpose == LayoutUpdateKind::Paint {
         // Source: paint_invalidator.cc:222. LayoutBox uses this point to
         // promote a delayed full invalidation once it intersects the visible
@@ -310,13 +298,9 @@ pub(super) fn ExportProperties(
                         )
                     }),
                 });
-            output.background_should_always_be_clipped =
-                unsafe { &*layout_box }.BackgroundShouldAlwaysBeClipped();
             output.scrollable_overflow = Some(ExportInkRect(
                 unsafe { &*layout_box }.ScrollableOverflowRect(),
             ));
-            output.can_composite_background_attachment_fixed =
-                unsafe { &*object }.CanCompositeBackgroundAttachmentFixed();
             output.background_paint_location =
                 match unsafe { &*layout_box }.GetBackgroundPaintLocation() {
                     crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {

@@ -80,11 +80,11 @@ pub struct BoxFragmentPainter<'n, 'f, 'c, 'o> {
 /// scroll-container metadata and source scrollbar recording.
 pub fn GetHitTestOpaqueness(fragment: &FragmentPaintData) -> PaintHitTestOpaqueness {
     let style = &fragment.paint.style;
-    if !fragment.paint.visible_to_hit_testing || !style.visible() || style.pointer_events_none() {
+    if !fragment.paint.VisibleToHitTesting() || !style.visible() || style.pointer_events_none() {
         PaintHitTestOpaqueness::Transparent
     } else if style.border_radius > 0.0
         || style.border_radii().is_some()
-        || fragment.paint.is_svg_child
+        || fragment.paint.IsSVGChild()
     {
         PaintHitTestOpaqueness::Mixed
     } else {
@@ -868,7 +868,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             panic!("unsupported CSS border-shape paint path");
         }
         let text_combine = fragment.paint.text_combine.is_some();
-        if fragment.paint.svg_hidden_container
+        if fragment.paint.IsSVGHiddenContainer()
             || (!fragment.paint.HasSource() && !text_combine)
             || fragment.paint.hidden
             || !fragment.paint.CanPaintFragmentOccurrence()
@@ -967,7 +967,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // hit-test client.
             let records_background_hit_test = !fragment.paint.IsLayoutView()
                 || paint_info.IsPaintingBackgroundInContentsSpace()
-                || fragment.paint.effective_allowed_touch_action != foundation::TouchAction::kAuto
+                || fragment.paint.EffectiveAllowedTouchAction() != foundation::TouchAction::kAuto
                 || fragment.paint.inside_blocking_wheel_event_handler
                 || fragment.paint.style.pointer_events_none()
                 || self
@@ -2112,7 +2112,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         if fragment.paint.background_transfers_to_view
-            || fragment.paint.background_is_known_to_be_obscured
+            || fragment.paint.BackgroundIsKnownToBeObscured()
         {
             return;
         }
@@ -6602,7 +6602,7 @@ fn UsesCompositedFixedBackground(node: &PaintTreeNode<'_>) -> bool {
         .as_deref()
         .expect("paint tree node has a fragment");
     let background_images = fragment.paint.style.background_images();
-    fragment.paint.can_composite_background_attachment_fixed
+    fragment.paint.CanCompositeBackgroundAttachmentFixed()
         && !fragment.paint.background_transfers_to_view
         && !node.fixed_background_acts_as_scroll
         && node.fixed_background_properties.is_some()

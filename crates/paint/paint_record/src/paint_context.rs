@@ -1014,7 +1014,7 @@ impl<'o> PaintContext<'o> {
             id,
             client,
             rect,
-            fragment.paint.effective_allowed_touch_action,
+            fragment.paint.EffectiveAllowedTouchAction(),
             fragment.paint.inside_blocking_wheel_event_handler,
             opaqueness,
         );

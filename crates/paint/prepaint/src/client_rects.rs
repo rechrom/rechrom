@@ -106,7 +106,7 @@ fn Gather<'a>(
         absolute_offset: geometry.absolute_offset,
         // LayoutSVGHiddenContainer overrides QuadsInAncestorInternal with
         // no quads. Its descendants still expose their own SVG geometry.
-        rect: (fragment.kind == FragmentKind::kBox && !fragment.paint.svg_hidden_container)
+        rect: (fragment.kind == FragmentKind::kBox && !fragment.paint.IsSVGHiddenContainer())
             .then(|| {
                 MapRectToRoot(
                     PaintRect {

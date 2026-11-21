@@ -375,7 +375,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         // Source: paint_layer_painter.cc:330-333. This is Layout's actual
         // selection state, not intersection with selection geometry.
         let selection_drag_image_only = self.paint_flags & PaintFlag::kSelectionDragImageOnly != 0;
-        if selection_drag_image_only && !fragment.paint.is_selected {
+        if selection_drag_image_only && !fragment.paint.IsSelected() {
             return PaintResult::kFullyPainted;
         }
         // Source: core/paint/paint_layer_painter.cc:334-348. The document-wide
@@ -649,7 +649,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
         dispatched_info.svg_resource_painter = Some(PaintSvgResourceSubtree);
         let paint_info = &dispatched_info;
         let fragment = node.fragment.as_deref().expect("native Paint owner");
-        if fragment.paint.svg_hidden_container
+        if fragment.paint.IsSVGHiddenContainer()
             && !paint_info.IsSvgResourceRoot(fragment.paint.display_item_client_id)
         {
             return;

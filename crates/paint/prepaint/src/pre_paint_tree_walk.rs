@@ -4261,7 +4261,7 @@ fn GatherFinalEffects(
     if let Some(fragment) = node
         .fragment
         .as_deref()
-        .filter(|f| f.paint.svg_hidden_container)
+        .filter(|f| f.paint.IsSVGHiddenContainer())
     {
         resources.insert(
             fragment.paint.display_item_client_id,
@@ -4580,7 +4580,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
             f.paint.scrollbars.is_some(),
             f.paint.display,
             f.paint.establishes_paint_state,
-            f.paint.svg_hidden_container,
+            f.paint.IsSVGHiddenContainer(),
             f.paint.style.visible(),
             f.paint.style.outline_style(),
             f.paint.style.outline_width(),
@@ -4647,7 +4647,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         | u32::from(p.focused_image_map_area.is_some()) << 2
         | u32::from(p.scrollbars.is_some()) << 3
         | u32::from(p.establishes_paint_state) << 4
-        | u32::from(p.svg_hidden_container) << 5
+        | u32::from(p.IsSVGHiddenContainer()) << 5
         | u32::from(visible) << 6;
     PrePaintPrevious {
         kind: Some(f.kind),
@@ -7130,7 +7130,7 @@ impl PrePaintTreeWalk {
 
     fn ContextForChild(&self, child: &FragmentPaintData, base: &ChildContext) -> InheritedContext {
         // cpp: paint_property_tree_builder.cc:4519-4532.
-        if child.paint.svg_hidden_container {
+        if child.paint.IsSVGHiddenContainer() {
             return InheritedContext {
                 inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
                 blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,

@@ -78,7 +78,7 @@ impl PaintInvalidator {
         fragment: &FragmentPaintData,
         context: &mut PaintInvalidatorContext,
     ) -> bool {
-        if fragment.paint.svg_hidden_container
+        if fragment.paint.IsSVGHiddenContainer()
             || matches!(
                 fragment.paint.display,
                 Display::kTableColumn | Display::kTableColumnGroup

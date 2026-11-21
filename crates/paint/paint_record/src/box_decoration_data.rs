@@ -204,7 +204,7 @@ impl BoxDecorationData {
                     return kBackgroundBleedNone;
                 }
             }
-            if fragment.paint.background_should_always_be_clipped {
+            if fragment.paint.BackgroundShouldAlwaysBeClipped() {
                 return kBackgroundBleedClipOnly;
             }
             if has_border_radius && style.has_background_images() {

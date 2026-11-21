@@ -109,7 +109,7 @@ impl SVGModelObjectPainter {
             .fragment
             .as_deref()
             .expect("SVG hit-test object must own a fragment");
-        debug_assert!(fragment.paint.is_svg_child);
+        debug_assert!(fragment.paint.IsSVGChild());
         debug_assert_eq!(paint_info.phase, PaintPhase::kForeground);
         if paint_info.ShouldOmitCompositingInfo() || !fragment.paint.style.visible() {
             return;
@@ -117,7 +117,7 @@ impl SVGModelObjectPainter {
         let Some(rect) = Self::VisualRect(node) else {
             return;
         };
-        let opaqueness = if fragment.paint.visible_to_hit_testing {
+        let opaqueness = if fragment.paint.VisibleToHitTesting() {
             PaintHitTestOpaqueness::Mixed
         } else {
             PaintHitTestOpaqueness::Transparent

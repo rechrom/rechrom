@@ -317,7 +317,7 @@ fn HitGeometry(
     // repeated non-first monolithic fragment cannot contribute descendants or
     // become a hit target through this package's flattened traversal.
     if fragment.paint.hidden
-        || fragment.paint.svg_hidden_container
+        || fragment.paint.IsSVGHiddenContainer()
         || !fragment.paint.CanPaintFragmentOccurrence()
     {
         return None;

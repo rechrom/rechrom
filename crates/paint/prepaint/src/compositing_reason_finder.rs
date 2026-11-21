@@ -118,7 +118,7 @@ impl CompositingReasonFinder {
                 | NodeKind::kSvgShape
         );
         let supports_transform_animation = if is_svg_child {
-            !fragment.paint.svg_hidden_container
+            !fragment.paint.IsSVGHiddenContainer()
                 && !fragment.paint.IsLayoutInline()
                 && fragment.kind == FragmentKind::kBox
         } else {

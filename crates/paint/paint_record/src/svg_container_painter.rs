@@ -60,10 +60,10 @@ impl SVGContainerPainter {
             return false;
         }
 
-        if fragment.paint.svg_hidden_container
+        if fragment.paint.IsSVGHiddenContainer()
             || fragment
                 .paint
-                .svg_descendant_may_have_transform_related_operations
+                .SVGDescendantMayHaveTransformRelatedOperations()
             || !SVGModelObjectPainter::CanUseCullRect(node)
         {
             return true;
