@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::{
@@ -454,7 +455,7 @@ fn BuildShapeItems(
                 FillType(shape.geometry)
             },
             phase: PaintPhase::kForeground,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect: bounds,
             color: style.fill.unwrap_or_default(),
             ..Default::default()
@@ -510,7 +511,7 @@ fn BuildShapeItems(
                 StrokeType(shape.geometry)
             },
             phase: PaintPhase::kForeground,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect: bounds,
             color: style.stroke.unwrap_or_default(),
             line_style: BorderLineStyle::kSolid,
@@ -618,7 +619,7 @@ fn PaintNativeMarkers(node: &PaintTreeNode<'_>, info: &PaintInfo<'_, '_>) -> boo
         let command = |kind, transform, rect| DisplayItem {
             r#type: kind,
             phase: info.phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             svg_marker_resource_id: marker.resource_client_id,
             transform,
             rect,

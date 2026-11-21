@@ -4,6 +4,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/scoped_paint_state.cc:130-164`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::sync::Arc;
 
 use layoutng_assembly::fragment_tree::FragmentPaintData;
@@ -142,7 +143,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase: paint_info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -151,7 +152,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kConcat,
                     phase: paint_info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     transform: TranslationTransform(translation.values[12], translation.values[13]),
                     ..Default::default()
                 },
@@ -249,7 +250,7 @@ impl Drop for ScopedPaintState<'_, '_, '_, '_> {
             .node
             .fragment
             .as_deref()
-            .map_or(0, |fragment| fragment.node_id);
+            .map_or(0, |fragment| fragment.ViewNodeId());
         self.input_paint_info.context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kRestore,

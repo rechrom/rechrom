@@ -3,6 +3,7 @@
 //! Source paint display-list ABI. The entry point and private painters are
 //! connected after their owning source files have been translated.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::sync::Arc;
 #[path = "drag_image.rs"]
 pub mod drag_image;
@@ -600,7 +601,7 @@ fn CollectCompositedAnimationPropertyUpdate(
             let node_id = node
                 .fragment
                 .as_deref()
-                .map_or(0, |fragment| fragment.node_id);
+                .map_or(0, |fragment| fragment.ViewNodeId());
             if targeted_nodes.contains(&node_id) {
                 self.matched_targets.insert(node_id);
                 // Blink's pending sets contain LayoutObjects, not every

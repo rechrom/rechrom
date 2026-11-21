@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
@@ -56,7 +57,7 @@ impl SVGMaskPainter {
             DisplayItem {
                 r#type: DisplayItemType::kDrawMask,
                 phase: PaintPhase::kMask,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: visual_rect,
                 mask_layers,
                 ..DisplayItem::default()

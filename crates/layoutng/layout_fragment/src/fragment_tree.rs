@@ -757,6 +757,9 @@ pub trait ResidentBoxGeometry {
     /// Borrowed-view content size: the box fragment's border box minus
     /// borders and padding (clamped at zero), else the view size.
     fn ViewContentSize(&self) -> Size;
+    /// Borrowed-view source Node id: the resident owner's LayoutObject
+    /// Node (0 without one, and for an inline line item).
+    fn ViewNodeId(&self) -> u64;
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
@@ -803,6 +806,31 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewNodeId(&self) -> u64 {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        let object = match self.resident_owner {
+            ResidentFragmentOwner::None => return self.node_id,
+            ResidentFragmentOwner::Physical(address) => {
+                unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) }
+                    .GetLayoutObject()
+            }
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                let Some(item) = items.Items().get(index) else {
+                    return self.node_id;
+                };
+                if item.Type() == crate::fragment_item::ItemType::kLine {
+                    return 0;
+                }
+                item.GetLayoutObject()
+            }
+        };
+        let Some(object) = (unsafe { object.as_ref() }) else {
+            return 0;
+        };
+        unsafe { object.GetNode().as_ref() }.map_or(0, |node| node.InputId())
+    }
+
     fn ViewContentSize(&self) -> Size {
         if matches!(self.resident_owner, layout_fragment_boundary::ResidentFragmentOwner::None) {
             return self.content_size;

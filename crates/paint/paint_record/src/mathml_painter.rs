@@ -117,7 +117,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 color,
                 ..Default::default()
@@ -197,7 +197,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kDrawGlyphRun,
                 phase: info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: PaintRect {
                     x: self.node.paint_offset.x,
                     y: self.node.paint_offset.y,

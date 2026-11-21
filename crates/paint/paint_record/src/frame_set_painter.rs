@@ -81,7 +81,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 color,
                 ..Default::default()

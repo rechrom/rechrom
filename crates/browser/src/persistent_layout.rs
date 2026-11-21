@@ -1240,7 +1240,7 @@ mod tests {
                 &crate::CreateBrowserConstraints(320, 200),
             );
             fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
-                if f.node_id == id && f.kind == layoutng_assembly::fragment_tree::FragmentKind::kBox
+                if f.ViewNodeId() == id && f.kind == layoutng_assembly::fragment_tree::FragmentKind::kBox
                 {
                     return Some(f);
                 }

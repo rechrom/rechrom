@@ -4,6 +4,7 @@
 
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::box_fragment_painter::IsVisible;
@@ -50,7 +51,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
             resources
                 .canvases
                 .iter()
-                .find(|resource| resource.dom_node_id == fragment.node_id)
+                .find(|resource| resource.dom_node_id == fragment.ViewNodeId())
         });
         // html_canvas_painter.cc:43-46.
         if paint_info.IsPrivacyPreserving()
@@ -94,8 +95,8 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kCustomData,
                     phase: paint_info.phase,
-                    node_id: fragment.node_id,
-                    custom_data_id: u32::try_from(fragment.node_id)
+                    node_id: fragment.ViewNodeId(),
+                    custom_data_id: u32::try_from(fragment.ViewNodeId())
                         .expect("DOMNodeId must fit CustomDataOp's uint32 payload"),
                     ..Default::default()
                 },
@@ -107,7 +108,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
         // through to the vector/software snapshot path. Nested canvases use
         // the separate CustomData substitution protocol and cannot publish a
         // foreign layer from inside that subtree.
-        let layer = { self.context.borrow().ForeignLayerForNode(fragment.node_id) };
+        let layer = { self.context.borrow().ForeignLayerForNode(fragment.ViewNodeId()) };
         if let Some(layer) = layer {
             // html_canvas_painter.cc:74-79. Color::Rgb() quantizes the
             // resolved CSS color to SkColor before SkColor4f::FromColor.
@@ -175,7 +176,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawImageRect,
                 phase: paint_info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: destination,
                 source_rect: PaintRect {
                     x: 0.0,
@@ -397,7 +398,7 @@ mod tests {
         assert!(recording.first_contentful_painted);
         assert_eq!(recording.items.len(), 1);
         assert_eq!(recording.items[0].r#type, DisplayItemType::kCustomData);
-        assert_eq!(recording.items[0].custom_data_id, fragment.node_id as u32);
+        assert_eq!(recording.items[0].custom_data_id, fragment.ViewNodeId() as u32);
         assert_eq!(recording.display_items.len(), 1);
         assert_eq!(
             recording.display_items[0].id.r#type,
@@ -428,7 +429,7 @@ mod tests {
         });
         let mut layers = foundation::TrustedIdentityHashMap::default();
         layers.insert(
-            fragment.node_id,
+            fragment.ViewNodeId(),
             layer.clone() as Arc<dyn crate::ForeignLayer>,
         );
         let mut recording = PaintRecording::default();

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::{NodeKind, SvgShapeGeometry};
@@ -209,7 +210,7 @@ mod tests {
             .iter()
             .any(|item| item.id.r#type == DisplayItemIdType::kSVGMask));
         assert!(output.items.iter().any(|item| {
-            item.node_id == fragment.node_id && item.r#type == DisplayItemType::kDrawMask
+            item.node_id == fragment.ViewNodeId() && item.r#type == DisplayItemType::kDrawMask
         }));
         let mask = output
             .items
@@ -222,7 +223,7 @@ mod tests {
             .enumerate()
             .skip(mask + 1)
             .find(|(_, item)| {
-                item.node_id == fragment.node_id
+                item.node_id == fragment.ViewNodeId()
                     && item.phase == PaintPhase::kSelfOutlineOnly
                     && (item.r#type as u8) >= (DisplayItemType::kDrawRect as u8)
             })

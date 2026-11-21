@@ -71,7 +71,7 @@ fn run_matrix(smoke: bool) {
     );
 
     fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
-        if f.node_id == id && f.kind == FragmentKind::kBox {
+        if f.ViewNodeId() == id && f.kind == FragmentKind::kBox {
             return Some(f);
         }
         f.children.iter().find_map(|c| find(c, id))

@@ -803,7 +803,7 @@ fn DrawEdge(
         let mut item = DisplayItem {
             r#type: DisplayItemType::kStrokeLine,
             phase: info.phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect: line,
             color,
             line_style: style,
@@ -857,7 +857,7 @@ fn DrawEdge(
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: band_rect,
                     color,
                     line_style: style,
@@ -873,7 +873,7 @@ fn DrawEdge(
         DisplayItem {
             r#type: DisplayItemType::kDrawRect,
             phase: info.phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect,
             color,
             line_style: style,

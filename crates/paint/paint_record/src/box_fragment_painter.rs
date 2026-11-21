@@ -1286,7 +1286,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         && self
                             .context
                             .borrow()
-                            .ForeignLayerForNode(fragment.node_id)
+                            .ForeignLayerForNode(fragment.ViewNodeId())
                             .is_some()))
             {
                 VideoPainter::new(self.node, self.context).PaintReplaced(paint_info);
@@ -1388,7 +1388,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawMask,
                     phase: PaintPhase::kMask,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: bounds,
                     mask_layers,
                     ..Default::default()
@@ -1565,7 +1565,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase: PaintPhase::kForcedColorsModeBackplate,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color,
                     ..Default::default()
@@ -1611,7 +1611,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color,
                     line_style: rule.line_style,
@@ -1736,7 +1736,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -1745,7 +1745,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: clip,
                     ..Default::default()
                 },
@@ -1756,7 +1756,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSaveLayerBlend,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         blend_mode: PaintBlendMode::kNormal,
                         ..Default::default()
                     },
@@ -1768,7 +1768,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: clip,
                         color: background_color,
                         ..Default::default()
@@ -1784,7 +1784,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -1794,7 +1794,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -1829,7 +1829,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -1838,7 +1838,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRoundedRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: self
                         .node
                         .PixelSnappedRect(&BackgroundBoxRect(self.node, BackgroundBox::kBorderBox)),
@@ -1855,7 +1855,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSaveLayerBlend,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         blend_mode: PaintBlendMode::kNormal,
                         ..Default::default()
                     },
@@ -1888,7 +1888,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -1898,7 +1898,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -2024,7 +2024,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2033,7 +2033,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: PaintRect {
                             x: decoration_box.x - left,
                             y: decoration_box.y - top,
@@ -2062,7 +2062,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawBoxShadow,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: box_rect,
                     color: shadow_color,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
@@ -2089,7 +2089,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2152,7 +2152,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2161,7 +2161,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: self.node.PixelSnappedRect(&border_box),
                         corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                             &border_radii,
@@ -2176,7 +2176,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -2250,7 +2250,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kSave,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -2259,7 +2259,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kClipRoundedRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: clip_rect,
                             corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                                 &clip_radii,
@@ -2274,7 +2274,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                             DisplayItem {
                                 r#type: DisplayItemType::kSaveLayerBlend,
                                 phase,
-                                node_id: fragment.node_id,
+                                node_id: fragment.ViewNodeId(),
                                 blend_mode: PaintBlendMode::kNormal,
                                 ..Default::default()
                             },
@@ -2294,7 +2294,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                             DisplayItemType::kDrawRect
                         },
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect,
                         color: background_color,
                         corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
@@ -2324,7 +2324,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kRestore,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -2334,7 +2334,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2347,7 +2347,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -2357,7 +2357,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2417,7 +2417,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect,
                         color: background_color,
                         ..Default::default()
@@ -2436,7 +2436,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -2448,7 +2448,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: background_color,
                     ..Default::default()
@@ -2471,7 +2471,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -2521,7 +2521,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 color,
                 source_overwrite: fragment
@@ -2590,7 +2590,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: InvertColorIfNeeded(
                         style,
@@ -2618,7 +2618,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -2630,7 +2630,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: background_color,
                     ..Default::default()
@@ -2666,7 +2666,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -2770,7 +2770,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -2823,7 +2823,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: scrolling_rect,
                         color: canvas_color,
                         source_overwrite: !paints_separate_backdrop
@@ -2883,7 +2883,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kSaveLayerBlend,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             blend_mode: layer.blend_mode,
                             ..Default::default()
                         },
@@ -2951,7 +2951,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -2963,7 +2963,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -3051,7 +3051,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -3067,7 +3067,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: background_color,
                     ..Default::default()
@@ -3091,7 +3091,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kDrawRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: border_rect,
                             color: background_color,
                             ..Default::default()
@@ -3131,7 +3131,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -3234,7 +3234,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: PaintBlendMode::kNormal,
                     ..Default::default()
                 },
@@ -3246,7 +3246,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: canvas_color,
                     source_overwrite: !paints_separate_backdrop
@@ -3297,7 +3297,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -3329,7 +3329,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSave,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             self.node,
@@ -3340,7 +3340,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRoundedRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: mask_rect,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(&radii),
                     corner_radii: radii,
@@ -3354,7 +3354,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kClipRect,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: mask_rect,
                 ..Default::default()
             },
@@ -3364,7 +3364,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSaveLayerBlend,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 blend_mode,
                 ..Default::default()
             },
@@ -3382,7 +3382,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSaveLayerDstIn,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             self.node,
@@ -3405,7 +3405,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -3428,7 +3428,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 color,
                 ..Default::default()
@@ -3477,7 +3477,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color,
                     ..Default::default()
@@ -3821,7 +3821,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -3836,7 +3836,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItemType::kClipRect
                     },
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: outer_clip,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                         &outer_radii,
@@ -3862,7 +3862,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItemType::kClipRect
                     },
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: paint_clip,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(&radii),
                     corner_radii: radii,
@@ -3883,7 +3883,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItemType::kDrawGradientRect
                 },
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: gradient_destination,
                 tile_rect: gradient_tile,
                 repeat_x,
@@ -3933,7 +3933,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawTiledImage,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: image_destination,
                     source_rect,
                     // BackgroundImageGeometry pixel-snaps the bitmap phase
@@ -3995,7 +3995,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawImageRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     // BackgroundImageGeometry snaps the no-repeat origin before
                     // snapping the destination size; the phase retains its size.
                     rect: image_destination,
@@ -4021,7 +4021,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -4364,7 +4364,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color,
                     ..Default::default()
@@ -4443,7 +4443,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -4451,7 +4451,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let mut concat = DisplayItem {
                 r#type: DisplayItemType::kConcat,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             };
             concat.transform = RootSpaceTextTransform(self.node);
@@ -4485,7 +4485,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let mut marker = DisplayItem {
                 r#type: DisplayItemType::kDrawEllipse,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: marker_rect,
                 color: if text_clip {
                     mask_color
@@ -4508,7 +4508,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -4578,7 +4578,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kDrawGlyphRun,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color,
                     shadow_offset,
@@ -4612,7 +4612,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 {
                     eprintln!(
                         "FONT_PAINT_ORIGIN node={} paint=({:.4},{:.4}) blob=({:.4},{:.4}) baseline={:.4} line_top={:.4} line_height={:.4} smoothing={:?} variations={:?} glyphs={:?}",
-                        fragment.node_id,
+                        fragment.ViewNodeId(),
                         self.node.paint_offset.x,
                         self.node.paint_offset.y,
                         item.text_blob_origin.x,
@@ -4979,7 +4979,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -4988,7 +4988,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: shadow_clip_rect,
                         ..Default::default()
                     },
@@ -5001,7 +5001,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -5135,7 +5135,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kSave,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -5144,7 +5144,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kClipRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: glyph_clip_rect,
                             ..Default::default()
                         },
@@ -5158,7 +5158,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -5206,7 +5206,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 .borrow()
                 .document_composition_markers
                 .iter()
-                .filter(|marker| marker.node_id == fragment.node_id)
+                .filter(|marker| marker.node_id == fragment.ViewNodeId())
                 .map(|marker| (marker.start, marker.end))
                 .collect()
         } else {
@@ -5222,7 +5222,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect,
                     color: style.color(),
                     ..Default::default()
@@ -5245,7 +5245,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -5254,7 +5254,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: PaintRect {
                         x: physical_offset.x + local.x,
                         y: physical_offset.y + local.y,
@@ -5293,7 +5293,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -5304,7 +5304,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -5353,7 +5353,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kDrawGlyphRun,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 color,
                 font_face_index: run.font_face_index,
@@ -5437,7 +5437,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DecorationVisualRect(self.node),
         );
         let phase = PaintPhase::kOutline;
-        let node_id = fragment.node_id;
+        let node_id = fragment.ViewNodeId();
         self.context.borrow_mut().Append(
             DisplayItem {
                 r#type: DisplayItemType::kSave,
@@ -5558,7 +5558,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: selection_rect,
                 color,
                 ..Default::default()
@@ -5640,7 +5640,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -5649,7 +5649,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: visual_rect,
                         ..Default::default()
                     },
@@ -5660,7 +5660,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawGradientRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: destination,
                     tile_rect: destination,
                     paint_shader: Some(ResolvePaintShader(
@@ -5684,7 +5684,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -5750,7 +5750,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kStrokeRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: outline_rect,
                             color,
                             line_style: BorderLineStyle::kSolid,
@@ -5877,7 +5877,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // the final DrawImage boundary, after source clipping and orientation
         // have resolved the exact rectangles submitted to the display list.
         let mut trace = browser_tracing::span("devtools.timeline", "PaintImage");
-        trace.set("node_id", fragment.node_id as f64);
+        trace.set("node_id", fragment.ViewNodeId() as f64);
         trace.set("src_x", source.x);
         trace.set("src_y", source.y);
         trace.set("src_width", source.width);
@@ -5901,7 +5901,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawImageRect,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 // cpp: core/paint/image_painter.cc:277-278
                 rect: destination,
                 source_rect: source,
@@ -5996,7 +5996,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kStrokeRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: PaintRect {
                             x: source.x + 1.0,
                             y: source.y + 1.0,
@@ -6045,7 +6045,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             let mut outline = DisplayItem {
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: bounds,
                 color: outline_color,
                 line_style: style.outline_style(),
@@ -6143,7 +6143,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawDoubleRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: outer,
                         inner_rect: inner,
                         color: outline_color,
@@ -6177,7 +6177,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let mut outline = DisplayItem {
             r#type: DisplayItemType::kStrokeRect,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect,
             color: outline_color,
             line_style: style.outline_style(),
@@ -6262,7 +6262,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -6271,7 +6271,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRoundedRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: outer_clip,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                         &outer_clip_radii,
@@ -6285,7 +6285,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipOutRoundedRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: inner_clip,
                     corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                         &inner_clip_radii,
@@ -6300,7 +6300,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -6309,7 +6309,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipPath,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         path: side_path,
                         antialias: false,
                         ..Default::default()
@@ -6321,7 +6321,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -6331,7 +6331,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -6719,7 +6719,7 @@ fn FindPaintNodeById<'n, 'f>(
     if node
         .fragment
         .as_deref()
-        .is_some_and(|fragment| fragment.node_id == node_id)
+        .is_some_and(|fragment| fragment.ViewNodeId() == node_id)
     {
         return Some(node);
     }
@@ -7792,7 +7792,7 @@ fn AppendTextFitTransform(
             DisplayItem {
                 r#type: DisplayItemType::kRestore,
                 phase,
-                node_id: node.fragment.as_deref().map_or(0, |f| f.node_id),
+                node_id: node.fragment.as_deref().map_or(0, |f| f.ViewNodeId()),
                 ..Default::default()
             },
             node,
@@ -7807,7 +7807,7 @@ fn AppendTextFitTransform(
         DisplayItem {
             r#type: DisplayItemType::kSave,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             ..Default::default()
         },
         node,
@@ -7817,7 +7817,7 @@ fn AppendTextFitTransform(
         DisplayItem {
             r#type: DisplayItemType::kConcat,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             transform,
             ..Default::default()
         },

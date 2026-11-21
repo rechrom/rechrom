@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::fragment_tree::ScrollbarPaintAxis;
@@ -272,7 +273,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawScrollbarTrack,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: visual_rect,
                     color: data.track_color,
                     horizontal: axis.horizontal,
@@ -285,7 +286,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawScrollbarThumb,
                         phase: info.phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: AbsoluteRoundedRect(self.node, axis.thumb_offset, axis.thumb_size),
                         color: data.thumb_color,
                         horizontal: axis.horizontal,
@@ -321,7 +322,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawScrollbarButton,
                         phase: info.phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: AbsoluteRoundedRect(self.node, axis.track_offset, button_size),
                         color: data.button_color,
                         horizontal: axis.horizontal,
@@ -334,7 +335,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawScrollbarButton,
                         phase: info.phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: AbsoluteRoundedRect(self.node, end_offset, button_size),
                         color: data.button_color,
                         horizontal: axis.horizontal,
@@ -386,7 +387,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawScrollbarCorner,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: corner_rect,
                     color: data.corner_color,
                     ..Default::default()
@@ -474,7 +475,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kStrokePath,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     color,
                     line_style: layoutng_assembly::internal::layout_input::BorderLineStyle::kSolid,
                     stroke_width,
@@ -491,13 +492,13 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 DisplayItem {
                     r#type: DisplayItemType::kClipRect,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: visual_rect,
                     antialias: false,
                     ..Default::default()
@@ -505,7 +506,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kStrokeRect,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: PaintRect {
                         x: visual_rect.x + 0.5,
                         y: visual_rect.y + 0.5,
@@ -524,7 +525,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: info.phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
             ] {

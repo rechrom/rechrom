@@ -4156,7 +4156,7 @@ fn GatherInlineOutlineGroups<'a>(
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
-    if fragment.node_id != 0
+    if fragment.ViewNodeId() != 0
         && fragment.kind == FragmentKind::kBox
         && fragment.paint.HasSource()
         && fragment.paint.establishes_paint_state
@@ -4167,7 +4167,7 @@ fn GatherInlineOutlineGroups<'a>(
         && fragment.paint.style.outline_color().alpha > 0.0
     {
         groups
-            .entry((fragment.node_id, fragment.fragmentainer_instance_id))
+            .entry((fragment.ViewNodeId(), fragment.fragmentainer_instance_id))
             .or_default()
             .push(node as *mut PaintTreeNode<'a>);
     }
@@ -4714,7 +4714,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         | u32::from(visible) << 6;
     PrePaintPrevious {
         kind: Some(f.kind),
-        node_id: f.node_id,
+        node_id: f.ViewNodeId(),
         fragment_instance_id: f.fragment_instance_id,
         fragmentainer_instance_id: f.fragmentainer_instance_id,
         display_item_client_id: p.DisplayItemClientId(),
@@ -6149,7 +6149,7 @@ impl PrePaintTreeWalk {
             .blocking_wheel_event_handler_changed;
         let has_handler = self
             .active_blocking_wheel_targets
-            .binary_search(&fragment.node_id)
+            .binary_search(&fragment.ViewNodeId())
             .is_ok()
             || (fragment.paint.IsLayoutView()
                 && self.active_blocking_wheel_targets.binary_search(&0).is_ok());
@@ -7702,11 +7702,11 @@ impl PrePaintTreeWalk {
             let Some(fragment) = node.fragment.as_deref() else {
                 continue;
             };
-            if !targeted.contains(&fragment.node_id) {
+            if !targeted.contains(&fragment.ViewNodeId()) {
                 continue;
             }
             trace.set("fragment_opacity", fragment.paint.style.opacity() as f64);
-            matched.insert(fragment.node_id);
+            matched.insert(fragment.ViewNodeId());
             if !fragment.paint.HasSource() || !fragment.paint.establishes_paint_state {
                 continue;
             }
@@ -7744,7 +7744,7 @@ impl PrePaintTreeWalk {
                 if !is_active {
                     continue;
                 }
-                active.insert(fragment.node_id);
+                active.insert(fragment.ViewNodeId());
                 if IsSvgLayoutChild(fragment.paint.SourceKind())
                     || !node.applies_transform
                     || !TransformPropertyRoles(fragment, style).contains(&role)
@@ -7801,14 +7801,14 @@ impl PrePaintTreeWalk {
                     rejection = 4;
                     break;
                 }
-                transform_proposals.insert(key, (Arc::new(next), change, fragment.node_id));
+                transform_proposals.insert(key, (Arc::new(next), change, fragment.ViewNodeId()));
             }
             if rejection != 0 {
                 break;
             }
 
             if style.active_opacity_animation() {
-                active.insert(fragment.node_id);
+                active.insert(fragment.ViewNodeId());
                 let key = PaintPropertyKey {
                     owner,
                     role: PaintPropertyRole::Effect,
@@ -7844,7 +7844,7 @@ impl PrePaintTreeWalk {
                         rejection = 4;
                         break;
                     }
-                    effect_proposals.insert(key, (Arc::new(next), change, fragment.node_id));
+                    effect_proposals.insert(key, (Arc::new(next), change, fragment.ViewNodeId()));
                 }
             }
         }
@@ -7980,7 +7980,7 @@ impl PrePaintTreeWalk {
             let node_id = node
                 .fragment
                 .as_deref()
-                .map_or(0, |fragment| fragment.node_id);
+                .map_or(0, |fragment| fragment.ViewNodeId());
             if targeted.contains(&node_id) {
                 matched.insert(node_id);
                 browser_tracing::instant(

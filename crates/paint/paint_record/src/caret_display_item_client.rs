@@ -51,7 +51,7 @@ fn PaintCaretWithState(
     let fragment = node.fragment.as_deref().expect("caret owner");
     let matches_painter = caret
         .native
-        .map_or(fragment.node_id == caret.node_id, |native| {
+        .map_or(fragment.ViewNodeId() == caret.node_id, |native| {
             node.SourceCursor()
                 .is_some_and(|cursor| native.Matches(cursor))
         });

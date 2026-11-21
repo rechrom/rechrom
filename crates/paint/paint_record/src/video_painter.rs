@@ -83,7 +83,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         // reserved for printing/capture (kOmitCompositingInfo) and the
         // selection-drag path.
         if paint_info.phase == PaintPhase::kForeground && !paint_info.ShouldOmitCompositingInfo() {
-            let layer = self.context.borrow().ForeignLayerForNode(fragment.node_id);
+            let layer = self.context.borrow().ForeignLayerForNode(fragment.ViewNodeId());
             if let Some(layer) = layer {
                 layer.SetBounds(crate::ForeignLayerSize {
                     width: destination.width,
@@ -170,7 +170,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kDrawImageRect,
                 phase: paint_info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: destination,
                 source_rect: PaintRect {
                     x: 0.0,
@@ -346,7 +346,7 @@ mod tests {
         let context = RefCell::new(PaintContext::new(&mut recording));
         let mut layers = foundation::TrustedIdentityHashMap::default();
         layers.insert(
-            fragment.node_id,
+            fragment.ViewNodeId(),
             layer.clone() as Arc<dyn crate::ForeignLayer>,
         );
         context.borrow_mut().BindForeignLayers(&layers);

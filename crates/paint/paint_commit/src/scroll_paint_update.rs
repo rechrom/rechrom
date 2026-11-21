@@ -97,7 +97,7 @@ pub struct RetainedScrollPaintState {
 
 fn fragment_identity(f: &FragmentPaintData) -> (u64, u64, u64, u32) {
     (
-        f.node_id,
+        f.ViewNodeId(),
         f.fragment_instance_id,
         f.paint.DisplayItemClientId(),
         f.paint.display_item_fragment,
@@ -244,7 +244,7 @@ fn identity(node: &PaintTreeNode<'_>) -> (u64, u64, u64, u32) {
         .as_deref()
         .expect("PrePaint owns a real fragment");
     (
-        f.node_id,
+        f.ViewNodeId(),
         f.fragment_instance_id,
         f.paint.DisplayItemClientId(),
         f.paint.display_item_fragment,
@@ -630,7 +630,7 @@ fn collect_current_fragments<'a>(
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
                 "scroll-paint-reject stage=missing-fragment node_id={} fragment_instance_id={} client_id={} fragment={}",
-                f.node_id,
+                f.ViewNodeId(),
                 f.fragment_instance_id,
                 f.paint.DisplayItemClientId(),
                 f.paint.display_item_fragment
@@ -641,7 +641,7 @@ fn collect_current_fragments<'a>(
             "ScrollPaintReuseRejected",
             &[
                 ("stage", 1.0),
-                ("node_id", f.node_id as f64),
+                ("node_id", f.ViewNodeId() as f64),
                 ("fragment_instance_id", f.fragment_instance_id as f64),
                 (
                     "display_item_client_id",
@@ -662,13 +662,13 @@ fn collect_current_fragments<'a>(
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
                 "scroll-paint-reject stage=duplicate-fragment node_id={} physical={}",
-                f.node_id, physical
+                f.ViewNodeId(), physical
             );
         }
         browser_tracing::instant(
             "paint_reuse",
             "ScrollPaintReuseRejected",
-            &[("stage", 2.0), ("node_id", f.node_id as f64)],
+            &[("stage", 2.0), ("node_id", f.ViewNodeId() as f64)],
         );
         return false;
     }
@@ -695,7 +695,7 @@ fn collect_current_fragments<'a>(
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
                 "scroll-paint-reject stage=geometry node_id={} self_revision={} old_revision={} offset_changed={} size_changed={} sticky_changed={}",
-                f.node_id,
+                f.ViewNodeId(),
                 f.pre_paint_revision,
                 old.revision,
                 f.offset != old.offset,
@@ -708,7 +708,7 @@ fn collect_current_fragments<'a>(
             "ScrollPaintReuseRejected",
             &[
                 ("stage", 3.0),
-                ("node_id", f.node_id as f64),
+                ("node_id", f.ViewNodeId() as f64),
                 ("offset_changed", (f.offset != old.offset) as u8 as f64),
                 ("size_changed", (f.ViewSize() != old.size) as u8 as f64),
                 (

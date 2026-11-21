@@ -162,7 +162,7 @@ fn AppendGradientPiece(
         DisplayItem {
             r#type: DisplayItemType::kSave,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             ..Default::default()
         },
         node,
@@ -171,7 +171,7 @@ fn AppendGradientPiece(
         DisplayItem {
             r#type: DisplayItemType::kConcat,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             transform,
             ..Default::default()
         },
@@ -181,7 +181,7 @@ fn AppendGradientPiece(
         DisplayItem {
             r#type: DisplayItemType::kDrawGradientRect,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect: source,
             tile_rect: source,
             paint_shader: Some(shader.clone()),
@@ -193,7 +193,7 @@ fn AppendGradientPiece(
         DisplayItem {
             r#type: DisplayItemType::kRestore,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             ..Default::default()
         },
         node,
@@ -247,7 +247,7 @@ fn AppendGradientTiledPiece(
         DisplayItem {
             r#type: DisplayItemType::kSave,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             ..Default::default()
         },
         node,
@@ -256,7 +256,7 @@ fn AppendGradientTiledPiece(
         DisplayItem {
             r#type: DisplayItemType::kClipRect,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             rect: info.destination,
             antialias: false,
             ..Default::default()
@@ -298,7 +298,7 @@ fn AppendGradientTiledPiece(
         DisplayItem {
             r#type: DisplayItemType::kRestore,
             phase,
-            node_id: fragment.node_id,
+            node_id: fragment.ViewNodeId(),
             ..Default::default()
         },
         node,
@@ -472,7 +472,7 @@ impl NinePieceImagePainter {
         // DevTools image event at the resolved image/geometry boundary before
         // the nine source pieces are emitted.
         let mut trace = browser_tracing::span("devtools.timeline", "PaintImage");
-        trace.set("node_id", fragment.node_id as f64);
+        trace.set("node_id", fragment.ViewNodeId() as f64);
         trace.set("src_x", 0.0);
         trace.set("src_y", 0.0);
         trace.set("src_width", source_size.width);
@@ -509,7 +509,7 @@ impl NinePieceImagePainter {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -518,7 +518,7 @@ impl NinePieceImagePainter {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: clip,
                     ..Default::default()
                 },
@@ -563,7 +563,7 @@ impl NinePieceImagePainter {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawImageRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: info.destination,
                         source_rect: info.source,
                         resource_id: image.id,
@@ -607,7 +607,7 @@ impl NinePieceImagePainter {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawTiledImage,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: info.destination,
                     source_rect: info.source,
                     resource_id: image.id,
@@ -635,7 +635,7 @@ impl NinePieceImagePainter {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,

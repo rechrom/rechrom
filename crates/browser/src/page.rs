@@ -5,6 +5,7 @@
 //! Page connects DOM mutation notifications and the style/layout/paint lifecycle;
 //! each engine owns its state and invalidation, like LocalFrameView lifecycle wiring.
 pub(crate) mod canvas_2d;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
 pub use compositor::CompositorMainThreadEffect;
 use compositor::{
@@ -8606,7 +8607,7 @@ impl Page {
                     FragmentKind::kText | FragmentKind::kGeneratedText
                 ) && order >= start.tree_order
                     && order <= end.tree_order
-                    && fragment.node_id != 0
+                    && fragment.ViewNodeId() != 0
                 {
                     let state = if order == start.tree_order && order == end.tree_order {
                         Membership::StartAndEnd
@@ -8617,7 +8618,7 @@ impl Page {
                     } else {
                         Membership::Inside
                     };
-                    output.insert(fragment.node_id, state);
+                    output.insert(fragment.ViewNodeId(), state);
                 }
                 for child in fragment.Children() {
                     selected_membership(child, selection, output);
@@ -10564,7 +10565,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
         page.UpdateFrameIfNeeded().unwrap();
         assert!(page.CurrentFrame().unwrap().sequence > before);
         fn scroll_offset(fragment: PaintFragmentCursor<'_>, id: u64) -> Option<Offset> {
-            if fragment.node_id == id {
+            if fragment.ViewNodeId() == id {
                 return Some(fragment.paint.ScrollOffset());
             }
             fragment

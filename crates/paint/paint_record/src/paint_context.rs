@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::TrustedIdentityHashMap as HashMap;
 use layoutng_assembly::fragment_tree::PaintGlyphRun;
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
@@ -1287,7 +1288,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1296,7 +1297,7 @@ impl<'o> PaintContext<'o> {
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kConcat,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 };
                 item.transform = *transform;
@@ -1309,7 +1310,7 @@ impl<'o> PaintContext<'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase: PaintPhase::kForeground,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     node,
@@ -1318,7 +1319,7 @@ impl<'o> PaintContext<'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRect,
                         phase: PaintPhase::kForeground,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: root_clip,
                         // paint_chunks_to_cc_layer.cc:589-595: property clips
                         // use AA for both plain and rounded rectangles.
@@ -1334,7 +1335,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1342,7 +1343,7 @@ impl<'o> PaintContext<'o> {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kClipPath,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 antialias: true,
                 ..Default::default()
             };
@@ -1372,7 +1373,7 @@ impl<'o> PaintContext<'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSave,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             node,
@@ -1388,7 +1389,7 @@ impl<'o> PaintContext<'o> {
                             DisplayItemType::kClipRect
                         },
                         phase: PaintPhase::kForeground,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: inner_clip,
                         corner_radius: UniformCornerRadius(&inner_radii),
                         corner_radii: inner_radii,
@@ -1423,7 +1424,7 @@ impl<'o> PaintContext<'o> {
                     DisplayItemType::kClipRect
                 },
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: clip,
                 corner_radius: UniformCornerRadius(&radii),
                 corner_radii: radii,
@@ -1455,7 +1456,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayer,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1466,7 +1467,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerBlend,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     blend_mode: style.blend_mode(),
                     opacity: if node.applies_opacity {
                         MaskAdjustedOpacity(style)
@@ -1488,7 +1489,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerAlpha,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     opacity: MaskAdjustedOpacity(style),
                     ..Default::default()
                 },
@@ -1502,7 +1503,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayer,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1513,7 +1514,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1522,7 +1523,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRect,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: node.ResolvedMaskClipRect().expect("resolved MaskClip"),
                     antialias: true,
                     ..Default::default()
@@ -1535,7 +1536,7 @@ impl<'o> PaintContext<'o> {
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kSaveLayerFilter,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             };
             // PaintLayer::UpdateCompositorFilterOperationsForFilter publishes
@@ -1565,7 +1566,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1585,7 +1586,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1616,7 +1617,7 @@ impl<'o> PaintContext<'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSave,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             node,
@@ -1625,7 +1626,7 @@ impl<'o> PaintContext<'o> {
             DisplayItem {
                 r#type: DisplayItemType::kClipRect,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 antialias: true,
                 ..Default::default()
@@ -1649,7 +1650,7 @@ impl<'o> PaintContext<'o> {
             DisplayItem {
                 r#type: DisplayItemType::kRestore,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             node,
@@ -1669,7 +1670,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1680,7 +1681,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1691,7 +1692,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1706,7 +1707,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1729,7 +1730,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1740,7 +1741,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1751,7 +1752,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: PaintPhase::kForeground,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 node,
@@ -1775,7 +1776,7 @@ impl<'o> PaintContext<'o> {
             DisplayItem {
                 r#type: DisplayItemType::kRestore,
                 phase: PaintPhase::kForeground,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             node,

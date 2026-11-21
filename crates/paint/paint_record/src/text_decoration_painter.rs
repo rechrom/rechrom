@@ -402,7 +402,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                                 DisplayItemType::kStrokeLine
                             },
                             phase: self.paint_phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: line,
                             color: item_color,
                             decoration_style: resolved_style,
@@ -840,7 +840,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSaveLayerFilter,
                     phase: self.paint_phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     text_shadow_filters: shadows.clone(),
                     ..Default::default()
                 },
@@ -851,7 +851,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase: self.paint_phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -876,7 +876,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSave,
                 phase: self.paint_phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             self.node,
@@ -889,7 +889,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                     DisplayItemType::kClipOutRect
                 },
                 phase: self.paint_phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect,
                 ..Default::default()
             },
@@ -911,7 +911,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kRestore,
                 phase: self.paint_phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             self.node,

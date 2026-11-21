@@ -292,7 +292,7 @@ fn ResolveLogicalParentOccurrence(
     let mut ancestor = nodes[index].parent;
     while ancestor != NONE && ancestor < nodes.len() {
         let fragment = nodes[ancestor].fragment;
-        if fragment.node_id == parent_node_id && fragment.paint.establishes_paint_state {
+        if fragment.ViewNodeId() == parent_node_id && fragment.paint.establishes_paint_state {
             return Some(ancestor);
         }
         if ancestor == 0 {
@@ -327,12 +327,12 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
                 "FragmentTree contains duplicate fragment_instance_id values"
             );
         }
-        if fragment.node_id != 0
+        if fragment.ViewNodeId() != 0
             && fragment.paint.HasSource()
             && fragment.paint.establishes_paint_state
         {
             source_nodes
-                .entry(fragment.node_id)
+                .entry(fragment.ViewNodeId())
                 .or_default()
                 .push(index);
         }
@@ -357,7 +357,7 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
                     .expect("logical_parent_fragment_instance_id does not name a Fragment");
                 if let Some(id) = logical_id {
                     assert_eq!(
-                        nodes[exact].fragment.node_id, id,
+                        nodes[exact].fragment.ViewNodeId(), id,
                         "logical parent node id and fragment instance id disagree"
                     );
                 }
@@ -498,7 +498,7 @@ fn RestoreLogicalSiblingOrder(nodes: &mut [GeometryNode<'_>]) {
 fn Collect(nodes: &[GeometryNode<'_>], index: usize, output: &mut HashMap<u64, Vec<PaintRect>>) {
     if let Some(rect) = nodes[index].rect {
         output
-            .entry(nodes[index].fragment.node_id)
+            .entry(nodes[index].fragment.ViewNodeId())
             .or_default()
             .push(rect);
     }

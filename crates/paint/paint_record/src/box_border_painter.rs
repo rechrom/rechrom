@@ -82,7 +82,7 @@ pub(crate) fn DrawBoxSide(
             DisplayItem {
                 r#type: DisplayItemType::kDrawRect,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: draw_rect,
                 color: draw_color,
                 line_style: BorderLineStyle::kSolid,
@@ -226,7 +226,7 @@ pub(crate) fn DrawBoxSide(
             let mut item = DisplayItem {
                 r#type: DisplayItemType::kStrokeLine,
                 phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: PaintRect {
                     x: p1.0,
                     y: p1.1,
@@ -446,7 +446,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kDrawDoubleRoundedRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: inset_rect(outer_inset),
                             inner_rect: inset_rect(inner_inset),
                             color: border_color(0),
@@ -514,7 +514,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kStrokePath,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: PaintRect {
                         x,
                         y,
@@ -579,7 +579,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     let mut item = DisplayItem {
                         r#type: DisplayItemType::kDrawPath,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: inner,
                         color: border_color(0),
                         line_style: BorderLineStyle::kSolid,
@@ -598,7 +598,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawDoubleRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: outer,
                         inner_rect: inner,
                         color: border_color(0),
@@ -654,7 +654,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSave,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -663,7 +663,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: outer,
                         corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                             &outer_radii,
@@ -677,7 +677,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kClipOutRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: inner,
                         corner_radius: crate::contoured_border_geometry::UniformCornerRadius(
                             &inner_radii,
@@ -695,7 +695,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kSave,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -730,7 +730,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     if first_antialias == second_antialias {
                         self.context.borrow_mut().Append(
                             BorderEdgeClip(
-                                fragment.node_id,
+                                fragment.ViewNodeId(),
                                 phase,
                                 &CombinedBorderEdgeClip(
                                     edge,
@@ -747,7 +747,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     } else {
                         self.context.borrow_mut().Append(
                             BorderEdgeClip(
-                                fragment.node_id,
+                                fragment.ViewNodeId(),
                                 phase,
                                 &corner_clips[0],
                                 first_antialias,
@@ -756,7 +756,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         );
                         self.context.borrow_mut().Append(
                             BorderEdgeClip(
-                                fragment.node_id,
+                                fragment.ViewNodeId(),
                                 phase,
                                 &corner_clips[1],
                                 second_antialias,
@@ -768,7 +768,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kDrawRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: outer,
                             color: border_color(edge),
                             line_style: BorderLineStyle::kSolid,
@@ -780,7 +780,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kRestore,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -790,7 +790,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -834,7 +834,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawDoubleRoundedRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: inset_rect(outer_inset),
                         inner_rect: inset_rect(inner_inset),
                         color,
@@ -867,13 +867,13 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kSave,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
                     );
                     self.context.borrow_mut().Append(
-                        BorderEdgeClip(fragment.node_id, phase, &edge_polygons[edge], false),
+                        BorderEdgeClip(fragment.ViewNodeId(), phase, &edge_polygons[edge], false),
                         self.node,
                     );
                     let line_style = style.BorderStyles()[edge];
@@ -885,7 +885,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         let mut item = DisplayItem {
                             r#type: DisplayItemType::kStrokePath,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: outer,
                             color,
                             line_style,
@@ -950,7 +950,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kRestore,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             ..Default::default()
                         },
                         self.node,
@@ -1032,7 +1032,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kStrokeLine,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: center_lines[edge],
                     color: border_color(edge),
                     line_style,
@@ -1113,7 +1113,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kDrawRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect: band_rect,
                             color: border_color(edge),
                             line_style,
@@ -1147,7 +1147,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         DisplayItem {
                             r#type: DisplayItemType::kDrawRect,
                             phase,
-                            node_id: fragment.node_id,
+                            node_id: fragment.ViewNodeId(),
                             rect,
                             color,
                             line_style: BorderLineStyle::kSolid,
@@ -1162,7 +1162,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kDrawRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: rects[edge],
                     color: styled_border_color(edge, line_style),
                     line_style,
@@ -1237,7 +1237,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kDrawRect,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         rect: corner_rect,
                         color: auto_dark_color(average(first, second)),
                         line_style: BorderLineStyle::kSolid,

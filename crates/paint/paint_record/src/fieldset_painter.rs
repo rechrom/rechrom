@@ -92,7 +92,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kSave,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -101,7 +101,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kClipRoundedRect,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     rect: self.node.PixelSnappedRect(&Self::DecorationRect(self.node)),
                     corner_radius: UniformCornerRadius(&border_radii),
                     corner_radii: border_radii,
@@ -114,7 +114,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kSaveLayerBlend,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         blend_mode: PaintBlendMode::kNormal,
                         ..Default::default()
                     },
@@ -143,7 +143,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                     DisplayItem {
                         r#type: DisplayItemType::kRestore,
                         phase,
-                        node_id: fragment.node_id,
+                        node_id: fragment.ViewNodeId(),
                         ..Default::default()
                     },
                     self.node,
@@ -153,7 +153,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                 DisplayItem {
                     r#type: DisplayItemType::kRestore,
                     phase,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     ..Default::default()
                 },
                 self.node,
@@ -193,7 +193,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kSave,
                 phase: info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 ..Default::default()
             },
             self.node,
@@ -214,7 +214,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             DisplayItem {
                 r#type: DisplayItemType::kClipOutRect,
                 phase: info.phase,
-                node_id: fragment.node_id,
+                node_id: fragment.ViewNodeId(),
                 rect: legend_cutout,
                 ..Default::default()
             },

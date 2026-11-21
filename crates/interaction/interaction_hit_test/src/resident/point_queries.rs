@@ -415,7 +415,7 @@ fn ScrollbarHitTarget<'f>(
 ) -> Option<CursorHit<'f>> {
     if !(fragment.paint.style.visible
         && !fragment.paint.style.pointer_events_none
-        && document.ContainsNode(fragment.node_id))
+        && document.ContainsNode(fragment.ViewNodeId()))
     {
         return None;
     }
@@ -425,7 +425,7 @@ fn ScrollbarHitTarget<'f>(
         OverflowControlHit::Corner | OverflowControlHit::Resizer => None,
     };
     Some(CursorHit {
-        node_id: fragment.node_id,
+        node_id: fragment.ViewNodeId(),
         fragment: fragment.Cursor(),
         local_point: Offset {
             x: point.x - absolute.x,
@@ -507,8 +507,8 @@ fn SelfHitTarget<'f>(
             native_scrollbar: None,
         });
     }
-    document.ContainsNode(fragment.node_id).then(|| CursorHit {
-        node_id: fragment.node_id,
+    document.ContainsNode(fragment.ViewNodeId()).then(|| CursorHit {
+        node_id: fragment.ViewNodeId(),
         fragment: fragment.Cursor(),
         local_point: Offset {
             x: point.x - absolute.x,
@@ -943,7 +943,7 @@ pub fn TextPositionAtPoint<'a>(
                 let dx = (absolute.x + x - point.x).abs();
                 let candidate = DocumentSelectionPosition {
                     tree_order: fragment.paint.logical_tree_order,
-                    node_id: fragment.node_id,
+                    node_id: fragment.ViewNodeId(),
                     offset,
                 };
                 if best
