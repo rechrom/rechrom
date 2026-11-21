@@ -231,9 +231,6 @@ fn PopulateInlineItemLocalPaintData(
     item: &FragmentItem,
     fragment_items: &layout_fragment::fragment_items::FragmentItems,
     parent_offset: PhysicalOffset,
-    containing_line_offset: Option<PhysicalOffset>,
-    containing_line_height: Option<LayoutUnit>,
-    container_paint_offset: PhysicalOffset,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
@@ -308,7 +305,6 @@ fn PopulateInlineItemLocalPaintData(
         effective_style,
         paint_state_owner: None,
         inline_container: (purpose == LayoutUpdateKind::Paint).then_some(container_fragment_instance_id),
-        text_snap: None,
         len: 1,
         replayable: false,
     });
@@ -418,30 +414,12 @@ fn PopulateInlineItemLocalPaintData(
         if kind == FragmentKind::kLine {
             output.node_id = 0;
         }
-        let container = paint_state_owners.inline_container_data;
-        let snaps = item.IsText() || item.Type() == ItemType::kGeneratedText;
+        // Text line geometry (core/paint/text_fragment_painter.cc:69-103) is
+        // read live by Paint from the containing line and container
+        // FragmentData, so a retained item carries no line-top snap.
         let entry = &mut paint_state_owners.replay_next.entries[replay_entry];
         entry.replayable = !output.pre_paint_invalidation.own()
-            && !output.pre_paint_invalidation.descendants()
-            && (!snaps || containing_line_offset.is_none() || container != 0);
-        if snaps && container != 0 {
-            if let Some(line_offset) = containing_line_offset {
-                entry.text_snap = Some((line_offset.top, container as *const crate::fragment_data::FragmentData));
-            }
-        }
-        // Source: core/paint/text_fragment_painter.cc:69-103. The line-top
-        // snap depends on the container's current paint offset, which an
-        // ancestor move changes without touching this immutable item.
-        if item.IsText() || item.Type() == ItemType::kGeneratedText {
-            if let Some(line_offset) = containing_line_offset {
-                let line_top = container_paint_offset.top + line_offset.top;
-                update_paint!(
-                    output.paint,
-                    text_line_snap_delta,
-                    Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top))
-                );
-            }
-        }
+            && !output.pre_paint_invalidation.descendants();
         paint_state_owners.population_stats.RecordLocal(local_timing);
         return (slot, false);
     }
@@ -482,58 +460,10 @@ fn PopulateInlineItemLocalPaintData(
             } else {
                 FragmentKind::kGeneratedText
             };
-            if let Some(line_offset) = containing_line_offset {
-                output.paint.text_line_top_offset = Some(Number(line_offset.top - rect.offset.top));
-                // Source: core/paint/text_fragment_painter.cc:69-103.
-                // Preserve the exact inputs to ComputePhysicalBoxGeometry;
-                // flattened text-item offsets no longer identify the source
-                // containing fragment after PaintOffsetTranslation.
-                let line_top = container_paint_offset.top + line_offset.top;
-                output.paint.text_line_snap_delta =
-                    Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top));
-            }
-            output.paint.text_line_height = containing_line_height.map(Number);
         }
         ItemType::kLine => {
             output.kind = FragmentKind::kLine;
             output.node_id = 0;
-            if uses_first_line_style && !object.is_null() {
-                let line_style = unsafe { &*effective_style };
-                let normal_style = unsafe { &*object }.StyleRef();
-                if !std::ptr::eq(line_style, normal_style) {
-                    let line_box = item.LineBoxFragment();
-                    debug_assert!(!line_box.is_null());
-                    let line_box = unsafe { &*line_box };
-                    let line_metrics = line_box.Metrics();
-                    let text_metrics = line_style.GetFontHeightForDefaultBaseline();
-                    output.paint.first_line_decoration_rect =
-                        Some(if line_style.IsHorizontalWritingMode() {
-                            FragmentPaintRect {
-                                offset: Offset {
-                                    x: 0.0,
-                                    y: Number(line_metrics.ascent - text_metrics.ascent),
-                                },
-                                size: Size {
-                                    width: output.size.width,
-                                    height: Number(text_metrics.LineHeight()),
-                                },
-                            }
-                        } else {
-                            FragmentPaintRect {
-                                offset: Offset {
-                                    x: output.size.width
-                                        - Number(line_metrics.ascent)
-                                        - Number(text_metrics.descent),
-                                    y: 0.0,
-                                },
-                                size: Size {
-                                    width: Number(text_metrics.LineHeight()),
-                                    height: output.size.height,
-                                },
-                            }
-                        });
-                }
-            }
         }
         ItemType::kBox => {
             output.kind = FragmentKind::kBox;
@@ -583,12 +513,7 @@ fn PopulateInlineItemLocalPaintData(
                         );
                     }
                     if !nested_items.is_null() {
-                        let nested_paint_offset =
-                            unsafe { &*box_fragment.GetFragmentData() }.PaintOffset();
                         let span = unsafe { &*nested_items }.Items();
-                        let saved_container = paint_state_owners.inline_container_data;
-                        paint_state_owners.inline_container_data =
-                            box_fragment.GetFragmentData() as usize;
                         let mut index = 0;
                         while index < span.len() {
                             let changed;
@@ -598,9 +523,6 @@ fn PopulateInlineItemLocalPaintData(
                                 index,
                                 span.len(),
                                 PhysicalOffset::default(),
-                                None,
-                                None,
-                                nested_paint_offset,
                                 sources,
                                 style_sources,
                                 resources,
@@ -614,7 +536,6 @@ fn PopulateInlineItemLocalPaintData(
                             );
                             descendant_changed |= changed;
                         }
-                        paint_state_owners.inline_container_data = saved_container;
                     }
                 }
                 descendant_changed |= PopulateSVGChildPaintData(
@@ -645,9 +566,6 @@ fn PopulateInlineItemPaintData(
     index: usize,
     limit: usize,
     parent_offset: PhysicalOffset,
-    containing_line_offset: Option<PhysicalOffset>,
-    containing_line_height: Option<LayoutUnit>,
-    container_paint_offset: PhysicalOffset,
     sources: &SourceMap,
     style_sources: &StyleSourceMap,
     resources: &Arc<PaintResources>,
@@ -663,18 +581,11 @@ fn PopulateInlineItemPaintData(
     let item = &items[index];
     let subtree_size = 1_usize.max(item.DescendantsCount() as usize);
     let subtree_end = limit.min(index + subtree_size);
-    let line_offset = containing_line_offset
-        .or_else(|| (item.Type() == ItemType::kLine).then(|| *item.OffsetInContainerFragment()));
-    let line_height = containing_line_height
-        .or_else(|| (item.Type() == ItemType::kLine).then(|| item.Size().height));
     let replay_begin = (paint_state_owners.replay_next.entries.len(), paint_state_owners.replay_blocked);
     let (slot, mut descendant_changed) = PopulateInlineItemLocalPaintData(
         item,
         fragment_items,
         parent_offset,
-        line_offset,
-        line_height,
-        container_paint_offset,
         sources,
         style_sources,
         resources,
@@ -695,9 +606,6 @@ fn PopulateInlineItemPaintData(
             child_index,
             subtree_end,
             *item.OffsetInContainerFragment(),
-            line_offset,
-            line_height,
-            container_paint_offset,
             sources,
             style_sources,
             resources,
@@ -790,14 +698,6 @@ fn ReplayValid(
     true
 }
 
-/// The line-top snap of a replayed text item from its container's current
-/// paint offset (text_fragment_painter.cc:69-103; see the reuse path).
-fn ReplayTextSnap(entry: &PopulationReplayEntry) -> Option<Option<f64>> {
-    let (line_offset_top, container) = entry.text_snap?;
-    let line_top = unsafe { &*container }.PaintOffset().top + line_offset_top;
-    Some(Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top)))
-}
-
 /// Rebind the previous publication's unchanged subtree `entries` (all
 /// proven by ReplayValid) to this publication: the bookkeeping the
 /// population walk does for a retained slot, without re-deriving its
@@ -839,9 +739,6 @@ fn ReplaySubtree(
         if let Some(fragment) = entry.paint_state_owner {
             let establishes = owners.insert(fragment, instance);
             update_paint!(output.paint, establishes_paint_state, establishes);
-        }
-        if let Some(snap) = ReplayTextSnap(entry) {
-            update_paint!(output.paint, text_line_snap_delta, snap);
         }
         let mut copy = entry.clone();
         copy.instance = instance;
@@ -918,9 +815,6 @@ fn ReplayCheckCompare(
             mismatches += 1;
             continue;
         };
-        if let Some(snap) = ReplayTextSnap(entry) {
-            update_paint!(paint, text_line_snap_delta, snap);
-        }
         update_paint!(paint, establishes_paint_state, slot.paint.establishes_paint_state);
         update_paint!(paint, logical_tree_order, slot.paint.logical_tree_order);
         let now = (
@@ -1032,7 +926,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         effective_style,
         paint_state_owner: None,
         inline_container: None,
-        text_snap: None,
         len: 1,
         replayable: false,
     });
@@ -1300,14 +1193,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             );
         }
         if !items.is_null() {
-            let container_paint_offset = if fragment_data.is_null() {
-                PhysicalOffset::default()
-            } else {
-                unsafe { &*fragment_data }.PaintOffset()
-            };
             let span = unsafe { &*items }.Items();
-            let saved_container = paint_state_owners.inline_container_data;
-            paint_state_owners.inline_container_data = fragment_data as usize;
             let mut index = 0;
             while index < span.len() {
                 let changed;
@@ -1317,9 +1203,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                     index,
                     span.len(),
                     PhysicalOffset::default(),
-                    None,
-                    None,
-                    container_paint_offset,
                     sources,
                     style_sources,
                     resources,
@@ -1333,7 +1216,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 );
                 descendant_changed |= changed;
             }
-            paint_state_owners.inline_container_data = saved_container;
         }
         descendant_changed |= PopulateSVGChildPaintData(
             object,

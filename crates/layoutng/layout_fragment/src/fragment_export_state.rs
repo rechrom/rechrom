@@ -98,8 +98,6 @@ pub(super) struct FragmentOwners {
     /// Finished entries that do not qualify; an ancestor qualifies only if
     /// none were finished inside its subtree.
     pub(super) replay_blocked: usize,
-    /// The FragmentData of the box whose inline items are being populated.
-    pub(super) inline_container_data: usize,
     /// Diagnostics: replayed subtrees / slots, check-mode mismatches.
     pub(super) replay_stats: [usize; 3],
     /// Diagnostics: why a box slot does not qualify (first reason).
@@ -286,9 +284,6 @@ pub(crate) struct PopulationReplayEntry {
     pub(crate) paint_state_owner: Option<*const PhysicalBoxFragment>,
     /// Inline item: its container's slot instance (fragment-count progression).
     pub(crate) inline_container: Option<u64>,
-    /// Text item: its line top in the container and the container's
-    /// FragmentData, whose paint offset an ancestor move changes.
-    pub(crate) text_snap: Option<(LayoutUnit, *const crate::fragment_data::FragmentData)>,
     /// Entries in this slot's subtree, itself included.
     pub(crate) len: usize,
     /// While recording: this slot alone qualifies; once finished: the whole

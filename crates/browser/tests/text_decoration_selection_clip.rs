@@ -8,6 +8,7 @@ use browser::page::Page;
 use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType, Offset};
 use layoutng_assembly::{
     internal::layout_input::{FontFace, NodeKind},
+    fragment_tree::ResidentBoxGeometry as _,
     layout_engine::PaintFragmentCursor,
 };
 use paint::paint_engine::DisplayItemType;
@@ -706,7 +707,7 @@ fn selection_background_expands_to_containing_line_height() {
         let text =
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let data = text.PaintData();
-        let line_height = data.paint.text_line_height.expect("containing line height");
+        let line_height = data.ViewTextLineHeight().expect("containing line height");
         assert!(line_height > data.size.height);
         let background = frame
             .display_items
