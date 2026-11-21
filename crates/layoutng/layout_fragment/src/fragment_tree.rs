@@ -789,6 +789,15 @@ pub trait ResidentBoxGeometry {
     /// The active ScopedDisplayItemFragment value; an inline item's
     /// FragmentItem::FragmentId().
     fn ViewDisplayItemFragment(&self) -> u32;
+    /// The ScopedDisplayItemFragment this fragment opens for itself and its
+    /// paint descendants, or `None` when it paints in its paint parent's
+    /// scope. A fragmentainer box opens its break token's SequenceNumber()+1
+    /// (0 without a token; core/paint/box_fragment_painter.cc:394-403), a
+    /// layer box its index in LayoutBox::PhysicalFragments()
+    /// (core/paint/paint_layer_painter.cc:776-778), an inline item its
+    /// FragmentItem::FragmentId() (core/paint/inline_box_fragment_painter.cc:63-64).
+    /// Detached fixtures without an owner keep the stored value.
+    fn ViewOwnDisplayItemFragment(&self) -> Option<u32>;
     /// A text item's containing line top relative to the item and the line
     /// height, read from the resident FragmentItems through its containing
     /// line (InlineCursor::MoveToContainingLine; core/paint/
@@ -1525,6 +1534,44 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     .map_or(self.paint.display_item_fragment, |item| item.FragmentId())
             }
             _ => self.paint.display_item_fragment,
+        }
+    }
+
+    fn ViewOwnDisplayItemFragment(&self) -> Option<u32> {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => Some(self.paint.display_item_fragment),
+            ResidentFragmentOwner::InlineItem { .. } => Some(self.ViewDisplayItemFragment()),
+            ResidentFragmentOwner::Physical(_) => {
+                let box_fragment = self.ResidentBoxFragment()?;
+                if box_fragment.IsFragmentainerBox() {
+                    // cpp: core/paint/box_fragment_painter.cc:398-403,1211-1212
+                    let token = box_fragment.GetBreakToken();
+                    return Some(if token.is_null() {
+                        0
+                    } else {
+                        unsafe { &*token }.SequenceNumber() + 1
+                    });
+                }
+                // PaintLayerPainter scopes each physical fragment using its
+                // index in the owning LayoutBox.
+                // cpp: core/paint/paint_layer_painter.cc:776-778
+                let object = unsafe { box_fragment.GetLayoutObject().as_ref() }?;
+                if !object.HasLayer() {
+                    return None;
+                }
+                let mut fragments =
+                    crate::fragment_data_iterator::AccompaniedFragmentIterator::new(object);
+                let mut index = 0;
+                while let Some(physical) = fragments.GetPhysicalBoxFragment() {
+                    if std::ptr::eq(physical, box_fragment) {
+                        return Some(index);
+                    }
+                    index += 1;
+                    fragments.Advance();
+                }
+                None
+            }
         }
     }
 

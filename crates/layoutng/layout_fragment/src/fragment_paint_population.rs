@@ -316,7 +316,6 @@ fn PopulateInlineItemLocalPaintData(
         && item.Type() != ItemType::kBox)
         .then(|| {
             (
-                output.kind,
                 output.offset,
                 output.size,
                 output.text_start,
@@ -368,22 +367,17 @@ fn PopulateInlineItemLocalPaintData(
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     update_paint!(output.paint, display_item_fragment, item.FragmentId());
-    if let Some((
-        kind,
-        offset,
-        size,
-        text_start,
-        text_end,
-        text_paint_timing_non_whitespace,
-    )) = reused_item
+    // Kind and content size are read live from the resident item
+    // (ResidentBoxGeometry::ViewKind / ViewContentSize); nothing is stored.
+    if let Some((offset, size, text_start, text_end, text_paint_timing_non_whitespace)) =
+        reused_item
     {
-        output.kind = kind;
         output.offset = offset;
         output.size = size;
         output.text_start = text_start;
         output.text_end = text_end;
         output.text_paint_timing_non_whitespace = text_paint_timing_non_whitespace;
-        if kind == FragmentKind::kLine {
+        if item.Type() == ItemType::kLine {
             output.node_id = 0;
         }
         // Text line geometry (core/paint/text_fragment_painter.cc:69-103) is
@@ -404,7 +398,6 @@ fn PopulateInlineItemLocalPaintData(
         width: Number(rect.size.width),
         height: Number(rect.size.height),
     };
-    // The content size is read live (ResidentBoxGeometry::ViewContentSize).
     // Box fragments with a live style resolve nine-piece images in Paint
     // (ResidentBoxGeometry::BorderImage); only detached projections store them.
     if purpose == LayoutUpdateKind::Paint
@@ -432,19 +425,11 @@ fn PopulateInlineItemLocalPaintData(
         ExportInlineInkOverflow(item, &mut output.paint);
     }
     match item.Type() {
-        ItemType::kText | ItemType::kGeneratedText => {
-            output.kind = if item.Type() == ItemType::kText {
-                FragmentKind::kText
-            } else {
-                FragmentKind::kGeneratedText
-            };
-        }
+        ItemType::kText | ItemType::kGeneratedText => {}
         ItemType::kLine => {
-            output.kind = FragmentKind::kLine;
             output.node_id = 0;
         }
         ItemType::kBox => {
-            output.kind = FragmentKind::kBox;
             let box_fragment = item.BoxFragment();
             if !box_fragment.is_null() {
                 let box_fragment = unsafe { &*box_fragment };
@@ -747,7 +732,7 @@ fn ReplaySubtree(
 fn ReplayCheckSnapshot(
     entries: &[PopulationReplayEntry],
     paint_state: &crate::layout_engine::LayoutPaintState,
-) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>> {
+) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, u64, u64), PrePaintInvalidation)>> {
     entries
         .iter()
         .map(|entry| {
@@ -762,7 +747,6 @@ fn ReplayCheckSnapshot(
                     slot.text_start,
                     slot.text_end,
                     slot.text_paint_timing_non_whitespace,
-                    slot.kind,
                     slot.pre_paint_revision,
                     slot.pre_paint_subtree_revision,
                 ),
@@ -776,7 +760,7 @@ fn ReplayCheckSnapshot(
 /// prediction; returns the number of mismatching slots.
 fn ReplayCheckCompare(
     entries: &[PopulationReplayEntry],
-    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>>,
+    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, u64, u64), PrePaintInvalidation)>>,
     paint_state: &crate::layout_engine::LayoutPaintState,
 ) -> usize {
     let mut mismatches = 0;
@@ -797,7 +781,6 @@ fn ReplayCheckCompare(
             slot.text_start,
             slot.text_end,
             slot.text_paint_timing_non_whitespace,
-            slot.kind,
             slot.pre_paint_revision,
             slot.pre_paint_subtree_revision,
         );
@@ -839,11 +822,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let prefix_started = browser_tracing::enabled().then(std::time::Instant::now);
     SynchronizeBoxFragmentData(fragment);
     let object = fragment.GetLayoutObject();
-    let kind = if fragment.IsBox() {
-        FragmentKind::kBox
-    } else {
-        FragmentKind::kLine
-    };
     let effective_style = if fragment.UsesFirstLineStyle() {
         fragment.Style() as *const StyleComputedStyle
     } else {
@@ -966,9 +944,9 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     paint_state_owners.population_stats.physical_fragments += 1;
     output.node_id = InputId(object);
     update_paint!(output.paint, display_item_fragment, display_item_fragment);
-    // IsHiddenForPaint is read live from the resident physical owner
-    // (ResidentBoxGeometry::ViewHidden); nothing is stored here.
-    output.kind = kind;
+    // IsHiddenForPaint, the fragment kind and the content size are read live
+    // from the resident physical owner (ResidentBoxGeometry::ViewHidden,
+    // ViewKind, ViewContentSize); nothing is stored here.
     output.offset = Offset {
         x: Number(offset.left),
         y: Number(offset.top),

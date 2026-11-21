@@ -867,7 +867,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                     .fragment
                     .as_deref()
                     .expect("PrePaint node must own a fragment")
-                    .kind,
+                    .ViewKind(),
                 FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
             ) || child
                 .fragment

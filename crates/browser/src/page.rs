@@ -6894,8 +6894,8 @@ impl Page {
             node: PaintFragmentCursor<'_>,
             output: &mut Vec<(usize, f64)>,
         ) {
-            if node.kind == FragmentKind::kBox && node.ViewReplacedContent().is_some() {
-                if let Some(index) = document.FindNodeById(node.node_id) {
+            if node.ViewKind() == FragmentKind::kBox && node.ViewReplacedContent().is_some() {
+                if let Some(index) = document.FindNodeById(node.ViewNodeId()) {
                     if document.AllowsResponsiveImageAutoSizes(index) {
                         let zoom = node.paint.EffectiveZoom().max(f32::MIN_POSITIVE);
                         let width = (node.ViewContentSize().width as f32 / zoom).round() as f64;

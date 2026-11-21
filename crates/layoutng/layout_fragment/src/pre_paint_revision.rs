@@ -136,6 +136,10 @@ impl PrePaintRevisionTracker {
         let current_owner_ids = owner_ids(node);
         node.pre_paint_owner_retained =
             owners_live && old.as_ref().is_some_and(|old| old.owner_ids == current_owner_ids);
+        // The resident owner's size (PhysicalFragment::Size or the inline
+        // item's RectInContainerFragment), read live; the certification below
+        // stores the same value as the next comparison baseline.
+        let size = node.ViewSize();
         let (same_geometry, same_paint, same_resources) = old
             .as_ref()
             .map(|old| {
@@ -149,7 +153,7 @@ impl PrePaintRevisionTracker {
                 // position and size in the container are not (a parent's
                 // relayout moves a cache-hit child without dirtying it).
                 let geometry =
-                    !invalidation.own() && old.offset == node.offset && old.size == node.size;
+                    !invalidation.own() && old.offset == node.offset && old.size == size;
                 (geometry, !invalidation.own(), resources)
             })
             .unwrap_or((false, false, false));
@@ -198,7 +202,7 @@ impl PrePaintRevisionTracker {
             resources,
             resource_usage,
             offset: node.offset,
-            size: node.size,
+            size,
         };
         !self_same || !children_same
     }
@@ -222,7 +226,7 @@ impl PrePaintRevisionTracker {
             && !node.pre_paint_invalidation.own()
             && !node.pre_paint_invalidation.descendants()
             && node.certified.offset == node.offset
-            && node.certified.size == node.size
+            && node.certified.size == node.ViewSize()
             && resources_equal(
                 &node.certified.resources,
                 &update.document_resources,
@@ -292,7 +296,7 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
     let paint = &fragment.paint;
     // Only box fragments with a source paint nine-piece images (the former
     // ExportNinePieceImages admission).
-    let nine_piece_images = fragment.kind == FragmentKind::kBox && paint.HasSource();
+    let nine_piece_images = fragment.ViewKind() == FragmentKind::kBox && paint.HasSource();
     // One style-source resolution; the fixed-attachment check is
     // ComputedStyle::HasFixedAttachmentBackgroundImage rather than a full
     // projection of every background layer.
