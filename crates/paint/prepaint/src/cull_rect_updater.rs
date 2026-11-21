@@ -34,7 +34,7 @@ pub fn ExpansionRatio(fragment: &FragmentPaintData) -> f64 {
 
 #[inline]
 fn ContainerRect(fragment: &FragmentPaintData) -> PaintRect {
-    let size = fragment.paint.client_size.unwrap_or(fragment.ViewSize());
+    let size = fragment.ViewScrollGeometry().1.unwrap_or(fragment.ViewSize());
     PaintRect {
         x: 0.0,
         y: 0.0,
@@ -48,8 +48,8 @@ fn ContentsRect(fragment: &FragmentPaintData) -> PaintRect {
     PaintRect {
         x: 0.0,
         y: 0.0,
-        width: fragment.paint.scroll_size.width.max(0.0),
-        height: fragment.paint.scroll_size.height.max(0.0),
+        width: fragment.ViewScrollGeometry().0.width.max(0.0),
+        height: fragment.ViewScrollGeometry().0.height.max(0.0),
     }
 }
 

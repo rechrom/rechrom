@@ -1564,13 +1564,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     x: precise_layout_clip.x,
                     y: precise_layout_clip.y,
                     width: fragment
-                        .paint
-                        .scroll_size
+                        .ViewScrollGeometry().0
                         .width
                         .max(precise_layout_clip.width),
                     height: fragment
-                        .paint
-                        .scroll_size
+                        .ViewScrollGeometry().0
                         .height
                         .max(precise_layout_clip.height),
                 });
@@ -1684,8 +1682,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .map_or(Offset::default(), |scroll| scroll.minimum_scroll_offset),
                     maximum_scroll_offset: fragment.ViewScrollContainer().map_or_else(
                         || Offset {
-                            x: (fragment.paint.scroll_size.width - local.width).max(0.0),
-                            y: (fragment.paint.scroll_size.height - local.height).max(0.0),
+                            x: (fragment.ViewScrollGeometry().0.width - local.width).max(0.0),
+                            y: (fragment.ViewScrollGeometry().0.height - local.height).max(0.0),
                         },
                         |scroll| scroll.maximum_scroll_offset,
                     ),

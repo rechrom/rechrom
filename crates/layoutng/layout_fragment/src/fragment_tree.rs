@@ -795,6 +795,8 @@ pub trait ResidentBoxGeometry {
     /// Scroll container inputs from the resident box's LayoutBox and
     /// PaintLayerScrollableArea.
     fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData>;
+    /// Scroll size, CSSOM client size and ScrollsOverflow of the resident box.
+    fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool);
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -865,6 +867,25 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool) {
+        let layout_box = self.ResidentBoxFragment().and_then(|box_fragment| unsafe {
+            foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(
+                box_fragment.GetLayoutObject(),
+            )
+            .as_ref()
+        });
+        match layout_box {
+            Some(layout_box) => {
+                crate::internal::boundary::layout_boundary::LiveScrollGeometry(layout_box)
+            }
+            None => (
+                self.paint.scroll_size,
+                self.paint.client_size,
+                self.paint.scrolls_overflow,
+            ),
+        }
+    }
+
     fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

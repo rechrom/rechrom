@@ -1174,7 +1174,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             if !theme_owns_decoration {
                 let paints_contents = fragment.paint.BackgroundPaintLocation().PaintsContents();
-                if paints_contents || fragment.paint.scrolls_overflow {
+                if paints_contents || fragment.ViewScrollGeometry().2 {
                     let _contents_properties =
                         crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
                             paint_info, self.node,
@@ -1185,7 +1185,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     if decoration_data.ShouldPaintGapDecorations() {
                         self.PaintGapRules(phase);
                     }
-                    if fragment.paint.scrolls_overflow {
+                    if fragment.ViewScrollGeometry().2 {
                         self.PaintColumnRules(phase);
                     }
                 } else {
@@ -6875,11 +6875,11 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
         width: viewport
             .width
             .max(fragment.ViewSize().width)
-            .max(fragment.paint.scroll_size.width),
+            .max(fragment.ViewScrollGeometry().0.width),
         height: viewport
             .height
             .max(fragment.ViewSize().height)
-            .max(fragment.paint.scroll_size.height),
+            .max(fragment.ViewScrollGeometry().0.height),
     };
     if let Some(source_background) = source_background {
         rect.union(source_background);
@@ -7484,8 +7484,8 @@ fn ContentsBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     // LayoutBox::ScrollWidth/Height describe the scrolling padding area. The
     // background painter adds the border widths while recording the local
     // layer into scrolling-contents space.
-    rect.width = fragment.paint.scroll_size.width + border.left + border.right;
-    rect.height = fragment.paint.scroll_size.height + border.top + border.bottom;
+    rect.width = fragment.ViewScrollGeometry().0.width + border.left + border.right;
+    rect.height = fragment.ViewScrollGeometry().0.height + border.top + border.bottom;
     rect
 }
 

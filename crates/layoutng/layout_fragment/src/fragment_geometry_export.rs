@@ -207,47 +207,11 @@ pub(super) fn ExportBoxPaintGeometry(
     let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
     if !layout_box.is_null() {
         let layout_box = unsafe { &*layout_box };
-        paint.scroll_size = Size {
-            width: Number(layout_box.ScrollWidth()),
-            height: Number(layout_box.ScrollHeight()),
-        };
-        // CSSOM View client geometry is not FragmentPaintData's paint content size.
-        // Element::clientWidth/Height read the layout viewport for the root,
-        // otherwise the source padding box (which excludes classic bars).
-        let client_size = if layout_box.IsLayoutView() {
-            let view = unsafe { &*To::<LayoutView>(box_fragment.GetLayoutObject()) };
-            let size = view.GetLayoutSize(
-                crate::internal::scroll_types::IncludeScrollbarsInRect::kExcludeScrollbars,
-            );
-            Size {
-                width: size.width() as f64,
-                height: size.height() as f64,
-            }
-        } else {
-            let size = if layout_box.IsTable() {
-                layout_box.StitchedSize()
-            } else {
-                layout_box.PhysicalPaddingBoxRect().size
-            };
-            Size {
-                width: Number(size.width),
-                height: Number(size.height),
-            }
-        };
-        paint.client_size = Some(client_size);
-        paint.scrolls_overflow = layout_box.ScrollsOverflow();
-        // Node::GetLayoutBox uses the source class hierarchy. Extracted SVG
-        // shapes/containers share LayoutBox storage but are not CSS boxes;
-        // SVGRoot and SVGBlock subclasses (text/foreignObject) really are.
+        let (scroll_size, client_size, scrolls_overflow) = LiveScrollGeometry(layout_box);
+        paint.scroll_size = scroll_size;
+        paint.client_size = client_size;
+        paint.scrolls_overflow = scrolls_overflow;
         let object = unsafe { &*box_fragment.GetLayoutObject() };
-        if object.IsSVG()
-            && !object.IsSVGRoot()
-            && !object.IsSVGText()
-            && !object.IsSVGForeignObject()
-        {
-            paint.client_size = Some(Size::default());
-            paint.scroll_size = Size::default();
-        }
 
         // The element input is the source tree's current, already-clamped
         // offset and is also used by the retained scroll-property refresh.
@@ -501,4 +465,53 @@ pub(crate) fn LiveScrollContainer(
         });
     }
     None
+}
+
+/// A LayoutBox's scroll size (ScrollWidth/Height), CSSOM client size (the
+/// layout viewport for the root, else the padding box) and ScrollsOverflow,
+/// read from the box as Chromium's painters and CSSOM do. Extracted SVG
+/// shapes/containers report empty sizes.
+pub(crate) fn LiveScrollGeometry(layout_box: &LayoutBox) -> (Size, Option<Size>, bool) {
+    let object: &LayoutObject = layout_box;
+    let mut scroll_size = Size {
+        width: Number(layout_box.ScrollWidth()),
+        height: Number(layout_box.ScrollHeight()),
+    };
+    // CSSOM View client geometry is not FragmentPaintData's paint content size.
+    // Element::clientWidth/Height read the layout viewport for the root,
+    // otherwise the source padding box (which excludes classic bars).
+    let client_size = if layout_box.IsLayoutView() {
+        let view = unsafe { &*To::<LayoutView>(object as *const LayoutObject) };
+        let size = view.GetLayoutSize(
+            crate::internal::scroll_types::IncludeScrollbarsInRect::kExcludeScrollbars,
+        );
+        Size {
+            width: size.width() as f64,
+            height: size.height() as f64,
+        }
+    } else {
+        let size = if layout_box.IsTable() {
+            layout_box.StitchedSize()
+        } else {
+            layout_box.PhysicalPaddingBoxRect().size
+        };
+        Size {
+            width: Number(size.width),
+            height: Number(size.height),
+        }
+    };
+    let mut client_size = Some(client_size);
+    let scrolls_overflow = layout_box.ScrollsOverflow();
+    // Node::GetLayoutBox uses the source class hierarchy. Extracted SVG
+    // shapes/containers share LayoutBox storage but are not CSS boxes;
+    // SVGRoot and SVGBlock subclasses (text/foreignObject) really are.
+    if object.IsSVG()
+        && !object.IsSVGRoot()
+        && !object.IsSVGText()
+        && !object.IsSVGForeignObject()
+    {
+        client_size = Some(Size::default());
+        scroll_size = Size::default();
+    }
+    (scroll_size, client_size, scrolls_overflow)
 }

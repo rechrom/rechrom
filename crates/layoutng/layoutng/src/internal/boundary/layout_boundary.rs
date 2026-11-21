@@ -178,6 +178,7 @@ use layout_fragment_fragment_geometry_export::{
 };
 pub(crate) use layout_fragment_fragment_geometry_export::{
     ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer,
+    LiveScrollGeometry,
 };
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
