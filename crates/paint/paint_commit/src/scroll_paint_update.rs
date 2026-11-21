@@ -756,9 +756,7 @@ fn collect_current_fragments<'a>(
         // PrePaint/Paint instead of manufacturing a retained owner here.
         if offsets.contains_key(&owner) {
             let scroll_position = f
-                .paint
-                .scroll_container
-                .as_ref()
+                .ViewScrollContainer()
                 .map_or(f.paint.ScrollOffset(), |scroll| scroll.scroll_position);
             if dirty_offsets
                 .insert(owner, scroll_position)
@@ -805,7 +803,7 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
         .iter()
         .any(|layer| match layer.attachment {
             BackgroundAttachment::kScroll => false,
-            BackgroundAttachment::kLocal => fragment.paint.scroll_container.is_some(),
+            BackgroundAttachment::kLocal => fragment.ViewScrollContainer().is_some(),
             BackgroundAttachment::kFixed => {
                 let independently_recorded =
                     fragment.paint.CanCompositeBackgroundAttachmentFixed()

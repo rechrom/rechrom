@@ -116,9 +116,7 @@ impl BoxPaintInvalidator {
         let paints_contents = BackgroundPaintsInContentsSpace(fragment);
         let paints_border_box = BackgroundPaintsInBorderBoxSpace(fragment);
         let scrolling_background_client = fragment
-            .paint
-            .scroll_container
-            .as_ref()
+            .ViewScrollContainer()
             .map(|scroll| scroll.scrolling_background_client_id);
         if let Some(client_id) = scrolling_background_client {
             if invalidation.invalidate_both_spaces
@@ -135,9 +133,7 @@ impl BoxPaintInvalidator {
                 fragment.paint.SetPaintingLayerNeedsRepaint();
                 if !fragment.paint.InvalidateLiveScrollClient(client_id, reason) {
                     let current = fragment
-                        .paint
-                        .scroll_container
-                        .as_ref()
+                        .ViewScrollContainer()
                         .and_then(|scroll| scroll.scrolling_background_client_invalidation_reason)
                         .unwrap_or(PaintInvalidationReason::kNone);
                     if reason > current {
@@ -768,9 +764,7 @@ mod tests {
         assert_eq!(reason, PaintInvalidationReason::kNone);
         assert_eq!(
             fragment
-                .paint
-                .scroll_container
-                .as_ref()
+                .ViewScrollContainer()
                 .unwrap()
                 .scrolling_background_client_invalidation_reason,
             Some(PaintInvalidationReason::kBackground)

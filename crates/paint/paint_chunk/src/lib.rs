@@ -5,6 +5,7 @@
 //! The package owns chunk-boundary and client metadata decisions. It does not
 //! record operations or publish a PaintArtifact.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use paint_model::display_item_id::DisplayItemIdType;
 
@@ -62,7 +63,7 @@ impl DisplayItemClientInfo {
     }
 
     pub fn from_scrolling_background(fragment: &FragmentPaintData) -> Option<Self> {
-        let scroll = fragment.paint.scroll_container.as_ref()?;
+        let scroll = fragment.ViewScrollContainer()?;
         (scroll.scrolling_background_client_id != 0).then(|| {
             let state = fragment.paint.ScrollClientState(
                 scroll.scrolling_background_client_id,

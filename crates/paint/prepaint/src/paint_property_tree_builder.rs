@@ -11,7 +11,7 @@ use crate::compositing_reason_finder::CompositingReasonFinder;
 // boundary materializes ScrollContainerPaintData from the source predicate,
 // including root-scroller, non-zero-position and non-propagating cases.
 fn NeedsScrollAndScrollTranslation(fragment: &FragmentPaintData) -> bool {
-    fragment.paint.IsOverscrollContainer() || fragment.paint.scroll_container.is_some()
+    fragment.paint.IsOverscrollContainer() || fragment.ViewScrollContainer().is_some()
 }
 
 // Source: core/paint/paint_property_tree_builder.cc,
@@ -1398,7 +1398,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // physical clip geometry when present.
             let mut precise_layout_clip = local;
             local = node.PixelSnappedRect(&local);
-            if let Some(scroll) = fragment.paint.scroll_container.as_ref() {
+            if let Some(scroll) = fragment.ViewScrollContainer() {
                 precise_layout_clip = PaintRect {
                     x: node.paint_offset.x + scroll.container_rect.offset.x,
                     y: node.paint_offset.y + scroll.container_rect.offset.y,
@@ -1590,9 +1590,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             ) {
                                 paint_model::paint_property_tree::PaintCompositedScrollingPreference::Preferred
                             } else if fragment
-                                .paint
-                                .scroll_container
-                                .as_ref()
+                                .ViewScrollContainer()
                                 .and_then(|scroll| scroll.prefers_non_composited_scrolling)
                                 == Some(true)
                             {
@@ -1614,7 +1612,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             fragment.paint.OverscrollBehaviorX(),
                             fragment.paint.OverscrollBehaviorY(),
                         ];
-                        if let Some(scroll) = fragment.paint.scroll_container.as_ref() {
+                        if let Some(scroll) = fragment.ViewScrollContainer() {
                             state.compositor_element_id = scroll.compositor_element_id;
                             if let Some(scroll_snap_type) = scroll.scroll_snap_type {
                                 if scroll_snap_type.is_none {
@@ -1682,11 +1680,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         height: snapped_contents.height.max(local.height),
                     },
                     minimum_scroll_offset: fragment
-                        .paint
-                        .scroll_container
-                        .as_ref()
+                        .ViewScrollContainer()
                         .map_or(Offset::default(), |scroll| scroll.minimum_scroll_offset),
-                    maximum_scroll_offset: fragment.paint.scroll_container.as_ref().map_or_else(
+                    maximum_scroll_offset: fragment.ViewScrollContainer().map_or_else(
                         || Offset {
                             x: (fragment.paint.scroll_size.width - local.width).max(0.0),
                             y: (fragment.paint.scroll_size.height - local.height).max(0.0),
@@ -1694,9 +1690,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         |scroll| scroll.maximum_scroll_offset,
                     ),
                     user_scrollable_horizontal: fragment
-                        .paint
-                        .scroll_container
-                        .as_ref()
+                        .ViewScrollContainer()
                         .map_or_else(
                             || {
                                 matches!(
@@ -1706,7 +1700,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             },
                             |scroll| scroll.user_scrollable_horizontal,
                         ),
-                    user_scrollable_vertical: fragment.paint.scroll_container.as_ref().map_or_else(
+                    user_scrollable_vertical: fragment.ViewScrollContainer().map_or_else(
                         || {
                             matches!(
                                 fragment.paint.OverflowY(),
@@ -1819,9 +1813,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // cancel visually while the property tree retains Chromium's exact
         // scroll-coordinate basis.
         let (scroll_origin, scroll_position) = fragment
-            .paint
-            .scroll_container
-            .as_ref()
+            .ViewScrollContainer()
             .map_or((Offset::default(), geometry_scroll), |scroll| {
                 (scroll.scroll_origin, scroll.scroll_position)
             });

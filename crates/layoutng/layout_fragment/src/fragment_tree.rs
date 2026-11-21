@@ -792,6 +792,9 @@ pub trait ResidentBoxGeometry {
     fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>>;
     /// The replaced content rect of the resident box's LayoutReplaced.
     fn ViewReplacedContent(&self) -> Option<ReplacedContentPaintData>;
+    /// Scroll container inputs from the resident box's LayoutBox and
+    /// PaintLayerScrollableArea.
+    fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -862,6 +865,15 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewScrollContainer(&self) -> Option<ScrollContainerPaintData> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveScrollContainer(box_fragment)
+            }
+            None => self.paint.scroll_container.clone(),
+        }
+    }
+
     fn ViewReplacedContent(&self) -> Option<ReplacedContentPaintData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

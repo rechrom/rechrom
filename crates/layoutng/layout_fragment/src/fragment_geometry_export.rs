@@ -264,157 +264,7 @@ pub(super) fn ExportBoxPaintGeometry(
                 }
             };
         }
-        // Source: core/paint/paint_property_tree_builder.cc:499-530.
-        // Export the source decision itself by materializing ScrollContainer
-        // data whenever Blink needs the Scroll/ScrollTranslation pair. Paint
-        // must not reconstruct it from CSS overflow or current geometry.
-        let needs_local_scroll = if object.IsOverscrollContainer() {
-            true
-        } else if !layout_box.IsScrollContainer() {
-            false
-        } else if object.IsGlobalRootScroller() {
-            // Rechrom always has an accelerated compositor for a live page.
-            true
-        } else {
-            // Source: core/paint/paint_property_tree_builder.cc:516-530.
-            // A LayoutBox that needs Scroll/ScrollTranslation must already
-            // own its PaintLayerScrollableArea.  Chromium CHECKs this owner;
-            // silently dropping the scroll node here creates a second,
-            // geometry-derived lifecycle.
-            assert!(!area.is_null());
-            let area = unsafe { &*area };
-            let position = area.ScrollPosition();
-            let offset = area.GetScrollOffset();
-            layout_box.ScrollsOverflow()
-                || position.x() != 0.0
-                || position.y() != 0.0
-                || offset.x() != 0.0
-                || offset.y() != 0.0
-                || !area.CanPropagateScroll()
-        };
-        if layout_box.IsLayoutView() || needs_local_scroll {
-            // Source: core/paint/paint_property_tree_builder.cc:3574-3614.
-            // UpdateScrollNode consumes the retained ScrollableArea directly;
-            // it never manufactures scroll state from the exported clip or
-            // fragment geometry.
-            assert!(!area.is_null());
-            let area = unsafe { &*area };
-            let clip = layout_box.OverflowClipRectForScrollNode();
-            let minimum = area.MinimumScrollOffsetInt();
-            let maximum = area.MaximumScrollOffsetInt();
-            let minimum_scroll_offset = Offset {
-                x: minimum.x() as f64,
-                y: minimum.y() as f64,
-            };
-            let maximum_scroll_offset = Offset {
-                x: maximum.x() as f64,
-                y: maximum.y() as f64,
-            };
-            let horizontal = area.UserInputScrollable(ScrollbarOrientation::kHorizontalScrollbar);
-            let vertical = area.UserInputScrollable(ScrollbarOrientation::kVerticalScrollbar);
-            let scrolling_background_client = area.GetScrollingBackgroundDisplayItemClient();
-            // Source: core/paint/paint_layer_scrollable_area.cc:3407-3418 and
-            // core/paint/box_fragment_painter.cc:1408-1411. Preserve the
-            // source pixel-snapped visual rect separately from the enlarged
-            // scrolling background paint rect.
-            let paint_offset = layout_box.FirstFragment().PaintOffset();
-            let rect = area.ScrollingBackgroundVisualRect(&paint_offset);
-            let scrolling_background_visual_rect = FragmentPaintRect {
-                offset: Offset {
-                    x: rect.x() as f64 - Number(paint_offset.left),
-                    y: rect.y() as f64 - Number(paint_offset.top),
-                },
-                size: Size {
-                    width: rect.width() as f64,
-                    height: rect.height() as f64,
-                },
-            };
-            let origin = area.ScrollOrigin();
-            let position = area.ScrollPosition();
-            let scroll_origin = Offset {
-                x: origin.x() as f64,
-                y: origin.y() as f64,
-            };
-            let scroll_position = Offset {
-                x: position.x() as f64,
-                y: position.y() as f64,
-            };
-            let scroll_snap_type = layout_box.StyleRef().GetScrollSnapType();
-            let scroll_snap_axis = match scroll_snap_type.axis {
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kBoth => {
-                    ScrollSnapAxisPaintData::Both
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kX => {
-                    ScrollSnapAxisPaintData::X
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kY => {
-                    ScrollSnapAxisPaintData::Y
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kBlock => {
-                    ScrollSnapAxisPaintData::Block
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kInline => {
-                    ScrollSnapAxisPaintData::Inline
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapAxis::kPair => {
-                    ScrollSnapAxisPaintData::Pair
-                }
-            };
-            let scroll_snap_strictness = match scroll_snap_type.strictness {
-                layoutng_style::style::scroll_snap_data::cc::SnapStrictness::kProximity => {
-                    ScrollSnapStrictnessPaintData::Proximity
-                }
-                layoutng_style::style::scroll_snap_data::cc::SnapStrictness::kMandatory => {
-                    ScrollSnapStrictnessPaintData::Mandatory
-                }
-            };
-            paint.scroll_container = Some(ScrollContainerPaintData {
-                prefers_non_composited_scrolling: Some(area.PrefersNonCompositedScrolling()),
-                scroll_snap_type: Some(ScrollSnapTypePaintData {
-                    is_none: scroll_snap_type.is_none,
-                    axis: scroll_snap_axis,
-                    strictness: scroll_snap_strictness,
-                }),
-                background_needs_repaint_on_scroll: Some(area.BackgroundNeedsRepaintOnScroll()),
-                // Source: core/paint/paint_layer_scrollable_area.cc:2515-2538.
-                scrollable_axes: if !layout_box.IsScrollContainer() {
-                    [false, false]
-                } else if layout_box.IsLayoutView() {
-                    [true, true]
-                } else {
-                    [
-                        layout_box.StyleRef().IsOverflowValueScrollableX(),
-                        layout_box.StyleRef().IsOverflowValueScrollableY(),
-                    ]
-                },
-                compositor_element_id: area.GetScrollElementId(),
-                scroll_origin,
-                scroll_position,
-                container_rect: FragmentPaintRect {
-                    offset: Offset {
-                        x: Number(clip.offset.left),
-                        y: Number(clip.offset.top),
-                    },
-                    size: Size {
-                        width: Number(clip.size.width),
-                        height: Number(clip.size.height),
-                    },
-                },
-                scrolling_background_visual_rect,
-                minimum_scroll_offset,
-                maximum_scroll_offset,
-                user_scrollable_horizontal: horizontal,
-                user_scrollable_vertical: vertical,
-                scrolling_background_client_id: scrolling_background_client.Id() as u64,
-                scrolling_background_client_invalidation_reason: Some(
-                    scrolling_background_client.GetPaintInvalidationReason(),
-                ),
-                scrolling_background_client_is_cacheable: scrolling_background_client.IsCacheable(),
-                scrolling_background_client_is_just_created: std::cell::Cell::new(
-                    scrolling_background_client.IsJustCreated(),
-                ),
-            });
-        }
+        paint.scroll_container = LiveScrollContainer(box_fragment);
         let replaced = DynamicTo::<LayoutReplaced>(box_fragment.GetLayoutObject());
         if !replaced.is_null() {
             paint.replaced_content = Some(ExportReplacedContentPaintData(replaced));
@@ -484,4 +334,171 @@ pub(crate) fn ExportReplacedContentPaintData(
         is_layout_embedded_content: unsafe { &*replaced }.IsLayoutEmbeddedContent(),
         is_embedded_object: unsafe { &*replaced }.IsEmbeddedObject(),
     }
+}
+
+/// Source: core/paint/paint_property_tree_builder.cc:499-530,3574-3614.
+/// The Scroll/ScrollTranslation inputs of a scroll container, read from the
+/// LayoutBox and its PaintLayerScrollableArea (stage 3 of the borrowed-view
+/// boundary); `None` when the box needs no local scroll node.
+pub(crate) fn LiveScrollContainer(
+    box_fragment: &PhysicalBoxFragment,
+) -> Option<ScrollContainerPaintData> {
+    let layout_box = unsafe { DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject()).as_ref() }?;
+    let object = unsafe { &*box_fragment.GetLayoutObject() };
+    let area = layout_box.GetScrollableArea();
+    // Source: core/paint/paint_property_tree_builder.cc:499-530.
+    // Export the source decision itself by materializing ScrollContainer
+    // data whenever Blink needs the Scroll/ScrollTranslation pair. Paint
+    // must not reconstruct it from CSS overflow or current geometry.
+    let needs_local_scroll = if object.IsOverscrollContainer() {
+        true
+    } else if !layout_box.IsScrollContainer() {
+        false
+    } else if object.IsGlobalRootScroller() {
+        // Rechrom always has an accelerated compositor for a live page.
+        true
+    } else {
+        // Source: core/paint/paint_property_tree_builder.cc:516-530.
+        // A LayoutBox that needs Scroll/ScrollTranslation must already
+        // own its PaintLayerScrollableArea.  Chromium CHECKs this owner;
+        // silently dropping the scroll node here creates a second,
+        // geometry-derived lifecycle.
+        assert!(!area.is_null());
+        let area = unsafe { &*area };
+        let position = area.ScrollPosition();
+        let offset = area.GetScrollOffset();
+        layout_box.ScrollsOverflow()
+            || position.x() != 0.0
+            || position.y() != 0.0
+            || offset.x() != 0.0
+            || offset.y() != 0.0
+            || !area.CanPropagateScroll()
+    };
+    if !(layout_box.IsLayoutView() || needs_local_scroll) {
+        return None;
+    }
+    {
+        // Source: core/paint/paint_property_tree_builder.cc:3574-3614.
+        // UpdateScrollNode consumes the retained ScrollableArea directly;
+        // it never manufactures scroll state from the exported clip or
+        // fragment geometry.
+        assert!(!area.is_null());
+        let area = unsafe { &*area };
+        let clip = layout_box.OverflowClipRectForScrollNode();
+        let minimum = area.MinimumScrollOffsetInt();
+        let maximum = area.MaximumScrollOffsetInt();
+        let minimum_scroll_offset = Offset {
+            x: minimum.x() as f64,
+            y: minimum.y() as f64,
+        };
+        let maximum_scroll_offset = Offset {
+            x: maximum.x() as f64,
+            y: maximum.y() as f64,
+        };
+        let horizontal = area.UserInputScrollable(ScrollbarOrientation::kHorizontalScrollbar);
+        let vertical = area.UserInputScrollable(ScrollbarOrientation::kVerticalScrollbar);
+        let scrolling_background_client = area.GetScrollingBackgroundDisplayItemClient();
+        // Source: core/paint/paint_layer_scrollable_area.cc:3407-3418 and
+        // core/paint/box_fragment_painter.cc:1408-1411. Preserve the
+        // source pixel-snapped visual rect separately from the enlarged
+        // scrolling background paint rect.
+        let paint_offset = layout_box.FirstFragment().PaintOffset();
+        let rect = area.ScrollingBackgroundVisualRect(&paint_offset);
+        let scrolling_background_visual_rect = FragmentPaintRect {
+            offset: Offset {
+                x: rect.x() as f64 - Number(paint_offset.left),
+                y: rect.y() as f64 - Number(paint_offset.top),
+            },
+            size: Size {
+                width: rect.width() as f64,
+                height: rect.height() as f64,
+            },
+        };
+        let origin = area.ScrollOrigin();
+        let position = area.ScrollPosition();
+        let scroll_origin = Offset {
+            x: origin.x() as f64,
+            y: origin.y() as f64,
+        };
+        let scroll_position = Offset {
+            x: position.x() as f64,
+            y: position.y() as f64,
+        };
+        let scroll_snap_type = layout_box.StyleRef().GetScrollSnapType();
+        let scroll_snap_axis = match scroll_snap_type.axis {
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kBoth => {
+                ScrollSnapAxisPaintData::Both
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kX => {
+                ScrollSnapAxisPaintData::X
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kY => {
+                ScrollSnapAxisPaintData::Y
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kBlock => {
+                ScrollSnapAxisPaintData::Block
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kInline => {
+                ScrollSnapAxisPaintData::Inline
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapAxis::kPair => {
+                ScrollSnapAxisPaintData::Pair
+            }
+        };
+        let scroll_snap_strictness = match scroll_snap_type.strictness {
+            layoutng_style::style::scroll_snap_data::cc::SnapStrictness::kProximity => {
+                ScrollSnapStrictnessPaintData::Proximity
+            }
+            layoutng_style::style::scroll_snap_data::cc::SnapStrictness::kMandatory => {
+                ScrollSnapStrictnessPaintData::Mandatory
+            }
+        };
+        return Some(ScrollContainerPaintData {
+            prefers_non_composited_scrolling: Some(area.PrefersNonCompositedScrolling()),
+            scroll_snap_type: Some(ScrollSnapTypePaintData {
+                is_none: scroll_snap_type.is_none,
+                axis: scroll_snap_axis,
+                strictness: scroll_snap_strictness,
+            }),
+            background_needs_repaint_on_scroll: Some(area.BackgroundNeedsRepaintOnScroll()),
+            // Source: core/paint/paint_layer_scrollable_area.cc:2515-2538.
+            scrollable_axes: if !layout_box.IsScrollContainer() {
+                [false, false]
+            } else if layout_box.IsLayoutView() {
+                [true, true]
+            } else {
+                [
+                    layout_box.StyleRef().IsOverflowValueScrollableX(),
+                    layout_box.StyleRef().IsOverflowValueScrollableY(),
+                ]
+            },
+            compositor_element_id: area.GetScrollElementId(),
+            scroll_origin,
+            scroll_position,
+            container_rect: FragmentPaintRect {
+                offset: Offset {
+                    x: Number(clip.offset.left),
+                    y: Number(clip.offset.top),
+                },
+                size: Size {
+                    width: Number(clip.size.width),
+                    height: Number(clip.size.height),
+                },
+            },
+            scrolling_background_visual_rect,
+            minimum_scroll_offset,
+            maximum_scroll_offset,
+            user_scrollable_horizontal: horizontal,
+            user_scrollable_vertical: vertical,
+            scrolling_background_client_id: scrolling_background_client.Id() as u64,
+            scrolling_background_client_invalidation_reason: Some(
+                scrolling_background_client.GetPaintInvalidationReason(),
+            ),
+            scrolling_background_client_is_cacheable: scrolling_background_client.IsCacheable(),
+            scrolling_background_client_is_just_created: std::cell::Cell::new(
+                scrolling_background_client.IsJustCreated(),
+            ),
+        });
+    }
+    None
 }

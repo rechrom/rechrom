@@ -1289,7 +1289,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
     };
     if NeedsIsolationNodes(fragment)
         || HasTransformPayload(style)
-        || fragment.paint.scroll_container.is_some()
+        || fragment.ViewScrollContainer().is_some()
         || fragment.paint.StickyConstraint().is_some()
         || fragment.paint.StickyOffset().x != 0.0
         || fragment.paint.StickyOffset().y != 0.0
@@ -7630,7 +7630,7 @@ impl PrePaintTreeWalk {
                 add(f.paint.DisplayItemClientId());
                 add(f.paint.SelectionClientId());
                 add(f.paint.PaintLayerClientId());
-                if let Some(scroll) = &f.paint.scroll_container {
+                if let Some(scroll) = f.ViewScrollContainer() {
                     add(scroll.scrolling_background_client_id);
                 }
                 if let Some(bars) = &f.paint.scrollbars {
@@ -8100,7 +8100,7 @@ impl PrePaintTreeWalk {
                 }
                 let live_scroll_client = f.paint.HasLiveScrollClient(id);
                 let scroll_matches = !live_scroll_client
-                    && f.paint.scroll_container.as_ref().is_some_and(|scroll| {
+                    && f.ViewScrollContainer().is_some_and(|scroll| {
                         scroll.scrolling_background_client_id == id
                             && scroll.scrolling_background_client_is_cacheable
                     });

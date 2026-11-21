@@ -308,16 +308,14 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
                 _chunk_properties: None,
             };
         }
-        if fragment.paint.scroll_container.is_some()
+        if fragment.ViewScrollContainer().is_some()
             && !Arc::ptr_eq(
                 &node.properties.nodes.transform,
                 &node.contents_properties.nodes.transform,
             )
         {
             let scroll_origin = fragment
-                .paint
-                .scroll_container
-                .as_ref()
+                .ViewScrollContainer()
                 .unwrap()
                 .scroll_origin;
             state.paint_offset.x += scroll_origin.x;

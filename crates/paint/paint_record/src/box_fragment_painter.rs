@@ -1123,7 +1123,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 };
                 let scrolling_client = painting_contents
                     .then(|| {
-                        let scroll = fragment.paint.scroll_container.as_ref()?;
+                        let scroll = fragment.ViewScrollContainer()?;
                         let client =
                             crate::paint_chunker::DisplayItemClientInfo::from_scrolling_background(
                                 fragment,
@@ -1204,7 +1204,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && is_visible
             && fragment.ViewKind() == FragmentKind::kBox
             && ShouldRecordHitTestData(fragment.paint.Display())
-            && fragment.paint.scroll_container.is_some()
+            && fragment.ViewScrollContainer().is_some()
             && ShouldRecordScrollHitTestDataForPaint(
                 paint_info.ShouldOmitCompositingInfo(),
                 fragment.paint.CanvasDrawElementEnabled(),
@@ -2988,7 +2988,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         } else {
             &[]
         };
-        let Some(scroll) = fragment.paint.scroll_container.as_ref() else {
+        let Some(scroll) = fragment.ViewScrollContainer() else {
             return;
         };
         let Some(client) =
@@ -7441,7 +7441,7 @@ fn EffectiveBackgroundAttachment(
         // A local attachment only establishes scrolling geometry on an actual
         // source scroll owner. Without one, Chromium paints it in border-box
         // space and it is visually equivalent to scroll attachment.
-        BackgroundAttachment::kLocal if fragment.paint.scroll_container.is_none() => {
+        BackgroundAttachment::kLocal if fragment.ViewScrollContainer().is_none() => {
             BackgroundAttachment::kScroll
         }
         attachment => attachment,
@@ -7495,9 +7495,7 @@ fn ScrollingBackgroundVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .as_deref()
         .expect("paint tree node has a fragment");
     let local = fragment
-        .paint
-        .scroll_container
-        .as_ref()
+        .ViewScrollContainer()
         .expect("scrolling background requires a scroll container")
         .scrolling_background_visual_rect;
     PaintRect {
