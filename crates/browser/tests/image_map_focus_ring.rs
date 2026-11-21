@@ -204,7 +204,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
         let image_fragment =
             find_fragment(&page.CurrentFrame().unwrap().fragments, image).expect("image fragment");
         assert!(
-            image_fragment.paint.focused_image_map_area.is_some(),
+            image_fragment.paint.FocusedImageMapArea().is_some(),
             "focused area must reach LayoutImage fragment"
         );
 

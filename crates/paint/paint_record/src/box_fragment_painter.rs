@@ -517,11 +517,11 @@ fn ImageDecodingModeForPainting(
         && image.paint_image_id != image_resource::PaintImageId::INVALID
         && previous != image.paint_image_id;
     if content_transitioned
-        && fragment.paint.image_decoding_mode == image_resource::ImageDecodingMode::kUnspecified
+        && fragment.paint.ImageDecodingMode() == image_resource::ImageDecodingMode::kUnspecified
     {
         image_resource::ImageDecodingMode::kSync
     } else {
-        fragment.paint.image_decoding_mode
+        fragment.paint.ImageDecodingMode()
     }
 }
 
@@ -676,7 +676,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // svg_container_painter.cc:36-90.
         if fragment.paint.svg_shape.is_some()
             || matches!(
-                fragment.paint.source_kind,
+                fragment.paint.SourceKind(),
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
         {
@@ -936,7 +936,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        if fragment.paint.source_kind == NodeKind::kFrameSet {
+        if fragment.paint.SourceKind() == NodeKind::kFrameSet {
             return;
         }
         if phase == PaintPhase::kForeground
@@ -954,7 +954,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
             && is_visible
             && !matches!(
-                fragment.paint.source_kind,
+                fragment.paint.SourceKind(),
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
             && fragment.kind == FragmentKind::kBox
@@ -1253,7 +1253,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             phase,
             PaintPhase::kForeground | PaintPhase::kSelectionDragImage
         ) && is_visible
-            && fragment.paint.source_kind == NodeKind::kReplaced
+            && fragment.paint.SourceKind() == NodeKind::kReplaced
             && fragment.paint.establishes_paint_state
             && (phase != PaintPhase::kSelectionDragImage
                 || fragment.paint.ReplacedSelectionState() != SelectionState::kNone)
@@ -1460,7 +1460,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !has_source {
             return;
         }
-        if fragment.paint.source_kind == NodeKind::kFrameSet {
+        if fragment.paint.SourceKind() == NodeKind::kFrameSet {
             FrameSetPainter::new(self.node, self.context).PaintBorders(paint_info);
         }
         if matches!(
@@ -1486,7 +1486,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             ScrollableAreaPainter::new(self.node, self.context).PaintOverflowControls(paint_info);
         }
-        if fragment.paint.source_kind == NodeKind::kReplaced
+        if fragment.paint.SourceKind() == NodeKind::kReplaced
             && fragment.paint.establishes_paint_state
         {
             self.PaintReplacedSelection(paint_info);
@@ -4179,11 +4179,11 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let control_selection_state = (!text_clip)
             .then(|| self.context.borrow().text_control_selection)
             .flatten()
-            .filter(|state| fragment.paint.text_control_host == Some(state.host_id));
+            .filter(|state| fragment.paint.TextControlHost() == Some(state.host_id));
         let control_caret = (!text_clip)
             .then(|| self.context.borrow().caret)
             .flatten()
-            .filter(|state| fragment.paint.text_control_host == state.text_control_host);
+            .filter(|state| fragment.paint.TextControlHost() == state.text_control_host);
         let range_rect = |range: (u32, u32), selects_soft_line_break: bool| {
             self.context
                 .borrow()
@@ -4212,7 +4212,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
         });
         let document_selection = (!text_clip
-            && fragment.paint.text_control_host.is_none()
+            && fragment.paint.TextControlHost().is_none()
             && !fragment.paint.style.user_select_none())
         .then(|| self.context.borrow().document_selection)
         .flatten()
@@ -4276,7 +4276,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     let selects_soft_line_break = range.1 > fragment_end;
                     range_rect(selected, selects_soft_line_break).map(|rect| (state, rect))
                 });
-                let document = (fragment.paint.text_control_host.is_none()
+                let document = (fragment.paint.TextControlHost().is_none()
                     && !fragment.paint.style.user_select_none())
                 .then(|| self.context.borrow().document_selection)
                 .flatten()
@@ -5196,7 +5196,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 false,
             );
         }
-        let composition_ranges: Vec<_> = if fragment.paint.text_control_host.is_some() {
+        let composition_ranges: Vec<_> = if fragment.paint.TextControlHost().is_some() {
             control_caret
                 .and_then(|state| state.composition)
                 .into_iter()
@@ -5392,7 +5392,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.IsPrinting() {
             return;
         }
-        let Some(area) = fragment.paint.focused_image_map_area.as_ref() else {
+        let Some(area) = fragment.paint.FocusedImageMapArea() else {
             return;
         };
         if !area.has_outline || !area.outline_style_is_auto {
@@ -7684,7 +7684,7 @@ fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
         .expect("paint tree node has a fragment");
     let style = &fragment.paint.style;
     if !BackgroundRadii(node, BackgroundBox::kBorderBox).HasRadius()
-        || fragment.paint.source_kind == NodeKind::kFieldset
+        || fragment.paint.SourceKind() == NodeKind::kFieldset
     {
         return None;
     }

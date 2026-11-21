@@ -138,7 +138,7 @@ fn assert_label_alignment(page: &Page, name: &str, align: ETextAlign) {
     })
     .unwrap();
     let (label, label_origin) = find_fragment(control, Offset::default(), &|fragment| {
-        fragment.paint.source_kind == NodeKind::kText
+        fragment.paint.SourceKind() == NodeKind::kText
     })
     .unwrap();
     // label_origin includes the control's offset, so remove that offset to

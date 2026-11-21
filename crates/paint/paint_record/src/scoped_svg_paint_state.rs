@@ -31,7 +31,7 @@ impl ScopedSVGPaintState {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         matches!(
-            fragment.paint.source_kind,
+            fragment.paint.SourceKind(),
             NodeKind::kSvgGroup
                 | NodeKind::kSvgResourceMarker
                 | NodeKind::kSvgText
@@ -70,7 +70,7 @@ impl ScopedSVGPaintState {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if fragment.paint.source_kind != NodeKind::kSvgShape {
+        if fragment.paint.SourceKind() != NodeKind::kSvgShape {
             return true;
         }
         let Some(shape) = fragment.paint.svg_shape.as_deref() else {
@@ -89,7 +89,7 @@ impl ScopedSVGPaintState {
 
     pub fn PaintsContent(node: &PaintTreeNode<'_>) -> bool {
         node.fragment.as_deref().is_none_or(|fragment| {
-            fragment.paint.source_kind != NodeKind::kSvgShape || fragment.paint.style.visible()
+            fragment.paint.SourceKind() != NodeKind::kSvgShape || fragment.paint.style.visible()
         })
     }
 
@@ -100,7 +100,7 @@ impl ScopedSVGPaintState {
         paint_info.phase == PaintPhase::kForeground
             && !paint_info.IsRenderingClipPathAsMaskImage()
             && node.fragment.as_deref().is_some_and(|fragment| {
-                fragment.paint.source_kind == NodeKind::kSvgShape
+                fragment.paint.SourceKind() == NodeKind::kSvgShape
                     && !fragment.paint.style.visible()
                     && Self::HasReferenceFilter(node)
             })

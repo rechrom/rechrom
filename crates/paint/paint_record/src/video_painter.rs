@@ -117,7 +117,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         if !paint_info.ShouldOmitCompositingInfo() {
             return;
         }
-        let Some(resource_id) = fragment.paint.video_frame_resource_id else {
+        let Some(resource_id) = fragment.paint.VideoFrameResourceId() else {
             return;
         };
         let Some(frame) = fragment

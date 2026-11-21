@@ -1789,6 +1789,50 @@ impl PaintProperties {
         }
     }
 
+    // Source Node / Element facts. `None` from the live query means the
+    // LayoutObject has no source Node (anonymous), for which ExportProperties
+    // exported nothing; the stored defaults are used then.
+
+    pub fn SourceKind(&self) -> NodeKind {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveSourceKind)
+            .SourceCheckedOr(self.source_kind, "source_kind")
+    }
+
+    pub fn ImageDecodingMode(&self) -> image_resource::ImageDecodingMode {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveImageDecodingMode)
+            .SourceCheckedOr(self.image_decoding_mode, "image_decoding_mode")
+    }
+
+    pub fn VideoFrameResourceId(&self) -> Option<image_resource::ImageId> {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveVideoFrameResourceId)
+            .SourceCheckedOr(self.video_frame_resource_id, "video_frame_resource_id")
+    }
+
+    pub fn FocusedImageMapArea(&self) -> Option<&FocusedImageMapArea> {
+        match self
+            .SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveFocusedImageMapArea)
+        {
+            Some(live) => live,
+            None => self.focused_image_map_area.as_ref(),
+        }
+    }
+
+    pub fn SvgViewBoxIsEmpty(&self) -> bool {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveSvgViewBoxIsEmpty)
+            .SourceCheckedOr(self.svg_view_box_is_empty, "svg_view_box_is_empty")
+    }
+
+    pub fn TextControlHost(&self) -> Option<u64> {
+        self.SourceObject()
+            .and_then(crate::internal::boundary::layout_boundary::LiveTextControlHost)
+            .SourceCheckedOr(self.text_control_host, "text_control_host")
+    }
+
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
         self.live_style_facts = live;
     }

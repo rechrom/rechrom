@@ -163,7 +163,7 @@ pub(super) fn ExportMathMLPaintData(
                 "MathML radical paint module is not installed",
             ));
         };
-        let has_index = paint.source_kind == NodeKind::kMathRoot;
+        let has_index = paint.SourceKind() == NodeKind::kMathRoot;
         let mut vertical_gap = LayoutUnit::default();
         let mut rule_thickness = LayoutUnit::default();
         radical_metrics(
@@ -198,7 +198,7 @@ pub(super) fn ExportFrameSetPaintData(
     box_fragment: &PhysicalBoxFragment,
     paint: &mut PaintPropertiesHandle,
 ) {
-    if paint.source_kind != NodeKind::kFrameSet {
+    if paint.SourceKind() != NodeKind::kFrameSet {
         return;
     }
     let source = box_fragment.GetFrameSetLayoutData();
@@ -228,7 +228,7 @@ pub(super) fn ExportFieldsetPaintData(
     box_fragment: &PhysicalBoxFragment,
     paint: &mut PaintPropertiesHandle,
 ) {
-    if paint.source_kind != NodeKind::kFieldset {
+    if paint.SourceKind() != NodeKind::kFieldset {
         return;
     }
     let mut data = FieldsetPaintData::default();

@@ -550,7 +550,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     // coordinates and therefore do not add paint_offset to a
                     // clip-path. foreignObject is a CSS box and stays on the
                     // ordinary paint-offset path.
-                    let svg_effect_child = IsSvgEffectChild(fragment.paint.source_kind);
+                    let svg_effect_child = IsSvgEffectChild(fragment.paint.SourceKind());
                     node.clip_path_error = clip_path.reference_error.clone();
                     if svg_effect_child
                         && clip_path.reference_box == ClipPathReferenceBox::kStrokeBox
@@ -769,7 +769,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             } else {
                 Vec::new()
             };
-            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
+            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.SourceKind()) {
                 1.0
             } else {
                 f64::from(fragment.paint.EffectiveZoom())
@@ -1015,7 +1015,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             // paint_property_tree_builder.cc:2602,2609-2612. A pixel-moving layer
             // uses its stitched visual overflow including self-painting layer
             // descendants, not this physical fragment's border box.
-            let local_reference_box = if IsSvgEffectChild(fragment.paint.source_kind) {
+            let local_reference_box = if IsSvgEffectChild(fragment.paint.SourceKind()) {
                 // Source: paint_property_tree_builder.cc:2615-2627 and
                 // LayoutSVGModelObject::VisualRectInLocalSVGCoordinates().
                 // SVG children do not use a PaintLayer filter reference box;
@@ -1050,7 +1050,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         }
                     })
             };
-            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
+            let filter_reference_scale = if IsSvgEffectChild(fragment.paint.SourceKind()) {
                 1.0
             } else {
                 f64::from(fragment.paint.EffectiveZoom())
@@ -1424,7 +1424,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             node.local_clip = Some(local);
             let mut resolved_clip_radii = PaintCornerRadii::default();
             if let Some(style) =
-                style.filter(|_| fragment.paint.source_kind != NodeKind::kSvgViewportContainer)
+                style.filter(|_| fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer)
             {
                 if let Some(outsets) = fragment
                     .paint
@@ -1539,13 +1539,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 .with_layout_clip_values(
                     Some(PropertySpaceRect(precise_layout_clip, property_space_delta)),
                     None,
-                    (fragment.paint.source_kind != NodeKind::kSvgViewportContainer)
+                    (fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer)
                         .then_some(PropertySpaceRect(excluding_overlay, property_space_delta)),
                 ),
             );
             node.applies_clip = true;
             node.applies_overflow_clip = true;
-            if fragment.paint.source_kind != NodeKind::kSvgViewportContainer
+            if fragment.paint.SourceKind() != NodeKind::kSvgViewportContainer
                 && NeedsScrollAndScrollTranslation(fragment)
             {
                 node.properties.scroll_id = self.walk.next_property_id;

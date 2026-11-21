@@ -101,7 +101,7 @@ impl CompositingReasonFinder {
             return reasons;
         }
         let is_svg_child = matches!(
-            fragment.paint.source_kind,
+            fragment.paint.SourceKind(),
             NodeKind::kSvgGroup
                 | NodeKind::kSvgHiddenContainer
                 | NodeKind::kSvgResourceClipper

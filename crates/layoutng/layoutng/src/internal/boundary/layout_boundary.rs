@@ -151,7 +151,9 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveCssMaskBoundingBox, LivePaintLayerContentsVisualRect, LivePaintLayerFilterReferenceBox,
     LivePaintLayerFilterViewport, LivePaintLayerFirstFragmentVisualRect,
     LiveRegionCaptureCropId, LiveReplacedLocalSelectionVisualRect, LiveReplacedSelectionState,
-    LiveScrollableOverflow, LiveTrackedElementSubRects,
+    LiveScrollableOverflow, LiveTrackedElementSubRects, LiveFocusedImageMapArea,
+    LiveImageDecodingMode, LiveSourceKind, LiveSvgViewBoxIsEmpty, LiveTextControlHost,
+    LiveVideoFrameResourceId,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,

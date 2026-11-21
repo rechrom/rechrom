@@ -174,7 +174,7 @@ impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
             .as_deref()
             .expect("SVG drawing owner must have a fragment");
         if !matches!(
-            fragment.paint.source_kind,
+            fragment.paint.SourceKind(),
             layoutng_assembly::internal::layout_input::NodeKind::kSvgShape
                 | layoutng_assembly::internal::layout_input::NodeKind::kSvgText
                 | layoutng_assembly::internal::layout_input::NodeKind::kSvgInline

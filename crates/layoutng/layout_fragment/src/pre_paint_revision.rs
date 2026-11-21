@@ -770,7 +770,7 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
         || paint.is_page_container
         || fixed_background;
     let images = paint.replaced_is_image
-        || paint.video_frame_resource_id.is_some()
+        || paint.VideoFrameResourceId().is_some()
         || paint
             .replaced_content
             .as_ref()

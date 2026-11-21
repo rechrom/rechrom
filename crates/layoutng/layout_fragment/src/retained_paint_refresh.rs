@@ -159,7 +159,6 @@ pub(super) fn refresh_retained_paint_inputs(
             // fragment. ExportPaintProperties has no physical-fragment
             // context and therefore reports the LayoutObject's first
             // FragmentData; do not collapse fragmented boxes back to it.
-            node.paint.svg_view_box_is_empty = current.svg_view_box_is_empty;
             node.paint.display_item_client_debug_name =
                 current.display_item_client_debug_name.clone();
             node.paint.display_item_client_owner_node_id =
@@ -184,9 +183,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.previous_box_geometry = current.previous_box_geometry;
             node.paint.previous_view_background_rect = current.previous_view_background_rect;
             node.paint.view_background_rect = current.view_background_rect;
-            node.paint.focused_image_map_area = current.focused_image_map_area;
-            node.paint.image_decoding_mode = current.image_decoding_mode;
-            node.paint.video_frame_resource_id = current.video_frame_resource_id;
             if unsafe { &*object }.IsVideo() {
                 node.paint.replaced_content = Some(ExportReplacedContentPaintData(
                     object.cast::<LayoutReplaced>(),

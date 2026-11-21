@@ -444,11 +444,11 @@ fn ScrollbarHitTarget<'f>(
 // kind and does not enter this event-targeting path.
 fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
     if fragment.kind == layoutng_assembly::fragment_tree::FragmentKind::kLine
-        && matches!(fragment.paint.source_kind, NodeKind::kSvgText)
+        && matches!(fragment.paint.SourceKind(), NodeKind::kSvgText)
     {
         return false;
     }
-    if matches!(fragment.paint.source_kind, NodeKind::kSvgText) {
+    if matches!(fragment.paint.SourceKind(), NodeKind::kSvgText) {
         return fragment.paint.style.pointer_events_bounding_box;
     }
     !matches!(
@@ -622,7 +622,7 @@ fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
     ) || fragment.paint.is_layout_inline
         || fragment.paint.box_fragment_is_inline_box
         || fragment.paint.replaced_content.is_some()
-        || IsSvgHitObject(fragment.paint.source_kind)
+        || IsSvgHitObject(fragment.paint.SourceKind())
     {
         EventHitPhase::Foreground
     } else {
@@ -924,7 +924,7 @@ pub fn TextPositionAtPoint<'a>(
             fragment.kind,
             layoutng_assembly::fragment_tree::FragmentKind::kText
                 | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
-        ) && fragment.paint.text_control_host.is_none()
+        ) && fragment.paint.TextControlHost().is_none()
             && fragment.paint.style.visible
             && !fragment.paint.style.user_select_none
             && (!require_inside || inside)

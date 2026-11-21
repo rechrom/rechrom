@@ -17,7 +17,7 @@ impl SVGRootPainter {
     pub fn IsRoot(node: &PaintTreeNode<'_>) -> bool {
         node.fragment
             .as_deref()
-            .is_some_and(|fragment| fragment.paint.source_kind == NodeKind::kSvgRoot)
+            .is_some_and(|fragment| fragment.paint.SourceKind() == NodeKind::kSvgRoot)
     }
 
     pub fn ShouldPaintSubtree(node: &PaintTreeNode<'_>, paint_info: &PaintInfo<'_, '_>) -> bool {
@@ -38,7 +38,7 @@ impl SVGRootPainter {
                 .paint
                 .svg_viewport
                 .is_some_and(|viewport| viewport.disabled)
-            && !fragment.paint.svg_view_box_is_empty
+            && !fragment.paint.SvgViewBoxIsEmpty()
             && !paint_info.DescendantPaintingBlocked()
     }
 }

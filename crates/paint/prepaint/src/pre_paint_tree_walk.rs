@@ -149,7 +149,7 @@ fn TransformCompositorState(
     use foundation::{CompositorElementIdFromUniqueObjectId, CompositorElementIdNamespace as Ns};
     let mut value = paint_model::paint_property_tree::TransformCompositorState::default();
     value.is_for_svg_child = role == PaintPropertyRole::SvgLocalTransform
-        && fragment.paint.source_kind != NodeKind::kSvgRoot;
+        && fragment.paint.SourceKind() != NodeKind::kSvgRoot;
     value.is_frame_paint_offset_translation =
         role == PaintPropertyRole::PaintOffsetTranslation && fragment.paint.IsLayoutView();
     let ns = match role {
@@ -749,7 +749,7 @@ impl PaintTreeNode<'_> {
     /// source rectangle before that projection, avoiding round-trip drift.
     pub fn ResolvedMaskClipRect(&self) -> Option<PaintRect> {
         let fragment = self.fragment.as_deref()?;
-        let is_svg_effect_child = IsSvgEffectChild(fragment.paint.source_kind);
+        let is_svg_effect_child = IsSvgEffectChild(fragment.paint.SourceKind());
         if !is_svg_effect_child {
             let bounds = fragment.paint.CssMaskBoundingBox()?;
             return Some(PaintRect {
@@ -1067,7 +1067,7 @@ fn Intersect(mut a: PaintRect, b: &PaintRect) -> PaintRect {
 }
 
 pub fn SvgViewBoxTransform(fragment: &FragmentPaintData) -> Option<TransformMatrix> {
-    (fragment.paint.source_kind == NodeKind::kSvgRoot)
+    (fragment.paint.SourceKind() == NodeKind::kSvgRoot)
         .then(|| fragment.paint.svg_viewport.map(|v| v.content_transform))
         .flatten()
 }
@@ -1083,7 +1083,7 @@ pub fn SvgTransformToPixelSnappedBorderBox(
     paint_snap_offset: Offset,
     pixel_snap_scale: f64,
 ) -> Option<TransformMatrix> {
-    if fragment.paint.source_kind != NodeKind::kSvgRoot {
+    if fragment.paint.SourceKind() != NodeKind::kSvgRoot {
         return None;
     }
     let viewport = fragment.paint.svg_viewport?;
@@ -1227,7 +1227,7 @@ fn TransformPropertyRoles(
     fragment: &FragmentPaintData,
     style: &PaintStyle,
 ) -> Vec<PaintPropertyRole> {
-    if IsSvgLayoutChild(fragment.paint.source_kind) {
+    if IsSvgLayoutChild(fragment.paint.SourceKind()) {
         return Vec::new();
     }
     let mut roles = Vec::new();
@@ -1276,7 +1276,7 @@ fn TransformPropertyRoles(
 // reasons not represented by the typed boundary remain explicitly
 // unsupported; no style/display proxy is substituted for them.
 fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&PaintStyle>) -> bool {
-    if !fragment.paint.IsBoxModelObject() || IsSvgLayoutChild(fragment.paint.source_kind) {
+    if !fragment.paint.IsBoxModelObject() || IsSvgLayoutChild(fragment.paint.SourceKind()) {
         return false;
     }
     if fragment.paint.IsLayoutView() {
@@ -1293,7 +1293,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
         || fragment.paint.sticky_offset.y != 0.0
         || fragment.paint.NeedsAnchorPositionScrollAdjustment()
         || fragment.paint.scrollbars.is_some()
-        || fragment.paint.source_kind == NodeKind::kSvgRoot
+        || fragment.paint.SourceKind() == NodeKind::kSvgRoot
         || (fragment.paint.paint_layer_client_id != 0
             && (HasReferenceFilterOrReflection(style) || style.has_backdrop_filters()))
         || fragment.paint.FixedToView()
@@ -1618,7 +1618,7 @@ pub fn ResolveChildGeometryOrigin(
 ) -> Offset {
     if child.paint.HasSource()
         && matches!(
-            child.paint.source_kind,
+            child.paint.SourceKind(),
             NodeKind::kSvgShape | NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
         )
     {
@@ -1819,7 +1819,7 @@ fn NeedsOverflowClip(node: &FragmentPaintData) -> bool {
             return NeedsOverflowClipForReplacedContents(node);
         }
     }
-    if node.paint.source_kind == NodeKind::kSvgViewportContainer {
+    if node.paint.SourceKind() == NodeKind::kSvgViewportContainer {
         return node.paint.svg_viewport.is_some_and(|v| v.clip.is_some());
     }
     if !node.paint.IsLayoutBox() {
@@ -3140,7 +3140,7 @@ fn ClipPathReferenceRect(
     reference_box: ClipPathReferenceBox,
 ) -> PaintRect {
     let paint = &fragment.paint;
-    if IsSvgEffectChild(paint.source_kind) {
+    if IsSvgEffectChild(paint.SourceKind()) {
         let fill = paint.svg_shape.as_ref().map_or(
             PaintRect {
                 x: paint_offset.x,
@@ -3229,7 +3229,7 @@ fn GeometryBoxClipPathRadii(
     fragment: &FragmentPaintData,
     reference_box: ClipPathReferenceBox,
 ) -> Result<PaintCornerRadii, &'static str> {
-    if IsSvgEffectChild(fragment.paint.source_kind) {
+    if IsSvgEffectChild(fragment.paint.SourceKind()) {
         return Ok(PaintCornerRadii::default());
     }
     let style = &fragment.paint.style;
@@ -3525,7 +3525,7 @@ fn ResolveMaskLayers(
             let object = ClipPathReferenceRect(
                 fragment,
                 absolute_offset,
-                if IsSvgEffectChild(fragment.paint.source_kind) {
+                if IsSvgEffectChild(fragment.paint.SourceKind()) {
                     ClipPathReferenceBox::kFillBox
                 } else {
                     ClipPathReferenceBox::kBorderBox
@@ -3541,7 +3541,7 @@ fn ResolveMaskLayers(
             };
             if let Some(graph) = reference.graph.as_deref() {
                 use layoutng_assembly::internal::paint_input::SvgMaskUnits;
-                if IsSvgEffectChild(fragment.paint.source_kind)
+                if IsSvgEffectChild(fragment.paint.SourceKind())
                     && fragment.paint.svg_shape.is_none()
                     && (graph.mask_units == SvgMaskUnits::kObjectBoundingBox
                         || graph.content_units == SvgMaskUnits::kObjectBoundingBox)
@@ -3551,7 +3551,7 @@ fn ResolveMaskLayers(
                 }
                 if resolved.source_error.is_none() {
                     if let Some(viewport) = reference.viewport {
-                        let zoom = if IsSvgEffectChild(fragment.paint.source_kind) {
+                        let zoom = if IsSvgEffectChild(fragment.paint.SourceKind()) {
                             1.0
                         } else {
                             f64::from(fragment.paint.EffectiveZoom())
@@ -3585,7 +3585,7 @@ fn ResolveMaskLayers(
         if !layer.image.position.x.is_finite() || !layer.image.position.y.is_finite() {
             panic!("mask position must be finite");
         }
-        let svg_effect_child = IsSvgEffectChild(fragment.paint.source_kind);
+        let svg_effect_child = IsSvgEffectChild(fragment.paint.SourceKind());
         let (positioning, clip, has_clip) = if svg_effect_child {
             let positioning = SvgMaskReferenceBox(fragment, absolute_offset, layer.image.origin)
                 .unwrap_or_else(|reason| {
@@ -4144,7 +4144,7 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        if fragment.paint.source_kind == NodeKind::kSvgRoot && fragment.paint.style.force_dark() {
+        if fragment.paint.SourceKind() == NodeKind::kSvgRoot && fragment.paint.style.force_dark() {
             let snapped = node.PixelSnappedRect(&PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
@@ -4232,7 +4232,7 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
         fragment.paint.HasSource() && fragment.paint.Floating() != FloatSide::kNone;
     let style = &fragment.paint.style;
     node.needs_outline_phase = !node.is_paint_layer
-        && (fragment.paint.focused_image_map_area.is_some()
+        && (fragment.paint.FocusedImageMapArea().is_some()
             || fragment
                 .paint
                 .form_control
@@ -4579,7 +4579,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
                 .form_control
                 .as_ref()
                 .is_some_and(|control| control.auto_focus_ring),
-            f.paint.focused_image_map_area.is_some(),
+            f.paint.FocusedImageMapArea().is_some(),
             f.paint.scrollbars.is_some(),
             f.paint.Display(),
             f.paint.establishes_paint_state,
@@ -4647,7 +4647,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
                 .as_ref()
                 .is_some_and(|control| control.auto_focus_ring),
         ) << 1
-        | u32::from(p.focused_image_map_area.is_some()) << 2
+        | u32::from(p.FocusedImageMapArea().is_some()) << 2
         | u32::from(p.scrollbars.is_some()) << 3
         | u32::from(p.establishes_paint_state) << 4
         | u32::from(p.IsSVGHiddenContainer()) << 5
@@ -5091,7 +5091,7 @@ fn BuildKind(node: &PaintTreeNode<'_>, fragment: &FragmentPaintData) -> usize {
         )
     };
     let is_effect = |role: &PaintPropertyRole| matches!(role, R::Effect | R::Filter | R::Mask);
-    if IsSvgLayoutChild(fragment.paint.source_kind) || !node.local_transforms.is_empty() {
+    if IsSvgLayoutChild(fragment.paint.SourceKind()) || !node.local_transforms.is_empty() {
         3
     } else if roles.iter().any(is_transform) {
         0
@@ -6319,7 +6319,7 @@ impl PrePaintTreeWalk {
                 Some((node, cache))
                     if !node.local_transforms.is_empty()
                         || cache.children.svg.is_some()
-                        || IsSvgLayoutChild(fragment.paint.source_kind) =>
+                        || IsSvgLayoutChild(fragment.paint.SourceKind()) =>
                 {
                     5
                 }
@@ -6524,7 +6524,7 @@ impl PrePaintTreeWalk {
                     let focused_image_map_phase_changed =
                         built.fragment.as_deref().is_some_and(|fragment| {
                             (RecordOf(&old).phase_flags & (1 << 2) != 0)
-                                != fragment.paint.focused_image_map_area.is_some()
+                                != fragment.paint.FocusedImageMapArea().is_some()
                         });
                     self.needs_post_update |= focused_image_map_phase_changed;
                     // Only drawing content changed. Keep the already-finalized
@@ -7677,7 +7677,7 @@ impl PrePaintTreeWalk {
                     continue;
                 }
                 active.insert(fragment.node_id);
-                if IsSvgLayoutChild(fragment.paint.source_kind)
+                if IsSvgLayoutChild(fragment.paint.SourceKind())
                     || !node.applies_transform
                     || !TransformPropertyRoles(fragment, style).contains(&role)
                 {

@@ -37,7 +37,7 @@ impl URLLoader for FixtureLoader {
 
 fn find_svg_text(fragment: PaintFragmentCursor<'_>) -> Option<PaintFragmentCursor<'_>> {
     let paint = fragment.PaintData();
-    if paint.paint.source_kind == NodeKind::kText && paint.paint.svg_text.is_some() {
+    if paint.paint.SourceKind() == NodeKind::kText && paint.paint.svg_text.is_some() {
         return Some(fragment);
     }
     fragment.Children().into_iter().find_map(find_svg_text)

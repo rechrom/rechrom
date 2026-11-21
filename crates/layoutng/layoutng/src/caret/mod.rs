@@ -138,7 +138,7 @@ impl CaretPaintState {
         if !self.control_block_text
             || self.composition.is_some()
             || self.selection.is_some()
-            || cursor.paint.text_control_host != self.text_control_host
+            || cursor.paint.TextControlHost() != self.text_control_host
             || !foundation::RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled()
         {
             return None;

@@ -58,7 +58,7 @@ pub fn ClassifyFragmentPaintLayer(
         0
     };
     let mut is_paint_layer = is_root
-        || fragment.paint.source_kind == NodeKind::kSvgRoot
+        || fragment.paint.SourceKind() == NodeKind::kSvgRoot
         || (establishes
             && style.is_some_and(|style| {
                 position != Position::kStatic

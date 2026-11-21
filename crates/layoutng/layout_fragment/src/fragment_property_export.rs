@@ -376,7 +376,6 @@ pub(super) fn ExportProperties(
         }
         parent = unsafe { &*parent }.Parent();
     }
-    output.source_kind = source.InputKind();
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
@@ -587,9 +586,6 @@ pub(super) fn ExportProperties(
     };
     if let Some(element_data) = element_data {
         output.scroll_offset = element_data.scroll_offset;
-        output.image_decoding_mode = element_data.image_decoding_mode;
-        output.video_frame_resource_id = element_data.video_frame_resource_id;
-        output.focused_image_map_area = element_data.focused_image_map_area.clone();
         if !object.is_null() && unsafe { &*object }.IsSVGShape() {
             let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
             output.svg_shape = unsafe { algorithms.as_ref() }
@@ -598,9 +594,6 @@ pub(super) fn ExportProperties(
                 .cloned();
         }
         output.svg_view_box = element_data.svg_view_box;
-        output.svg_view_box_is_empty = element_data
-            .svg_view_box
-            .is_some_and(|view_box| view_box.width <= 0.0 || view_box.height <= 0.0);
     }
     if !object.is_null() && unsafe { &*object }.IsSVG() {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
@@ -640,16 +633,6 @@ pub(super) fn ExportProperties(
     }
     if purpose == LayoutUpdateKind::Layout {
         return output;
-    }
-    // Preserve the real editor identity rather than reconstructing its synthetic id.
-    let mut ancestor = source as *const Node;
-    while !ancestor.is_null() {
-        let node = unsafe { &*ancestor };
-        if node.InputKind() == NodeKind::kFormControl {
-            output.text_control_host = Some(node.InputId());
-            break;
-        }
-        ancestor = node.parentNode().cast();
     }
     let appearance = layout_style.EffectiveAppearance();
     if appearance != AppearanceValue::kNone
@@ -861,4 +844,71 @@ pub(crate) fn LiveTrackedElementSubRects(
     object: &LayoutObject,
 ) -> &[crate::internal::layout_input::TrackedElementSubRect] {
     LiveElement(object).map_or(&[], |element| element.InputTrackedElementSubRects())
+}
+
+// DOM-sourced facts. Chromium's painters read them from the LayoutObject's
+// Node / Element (e.g. ImagePainter's HTMLImageElement decoding mode,
+// VideoPainter's HTMLVideoElement frame). `None` means the object has no
+// source Node; ExportProperties exported no such facts for it either.
+
+fn LiveSourceNode(object: &LayoutObject) -> Option<&Node> {
+    unsafe { object.GetNode().as_ref() }
+}
+
+fn LiveElementInputData(
+    object: &LayoutObject,
+) -> Option<Option<&crate::internal::layout_input::ElementData>> {
+    let node = LiveSourceNode(object)?;
+    Some(if node.IsElementNode() {
+        unsafe { &*(node as *const Node as *const Element) }
+            .InputElementData()
+            .as_ref()
+    } else {
+        None
+    })
+}
+
+pub(crate) fn LiveSourceKind(object: &LayoutObject) -> Option<NodeKind> {
+    LiveSourceNode(object).map(|node| node.InputKind())
+}
+
+pub(crate) fn LiveImageDecodingMode(
+    object: &LayoutObject,
+) -> Option<image_resource::ImageDecodingMode> {
+    LiveElementInputData(object)
+        .map(|data| data.map(|data| data.image_decoding_mode).unwrap_or_default())
+}
+
+pub(crate) fn LiveVideoFrameResourceId(
+    object: &LayoutObject,
+) -> Option<Option<image_resource::ImageId>> {
+    LiveElementInputData(object).map(|data| data.and_then(|data| data.video_frame_resource_id))
+}
+
+pub(crate) fn LiveFocusedImageMapArea(
+    object: &LayoutObject,
+) -> Option<Option<&crate::internal::layout_input::FocusedImageMapArea>> {
+    LiveElementInputData(object)
+        .map(|data| data.and_then(|data| data.focused_image_map_area.as_ref()))
+}
+
+/// SVGViewportContainerElement::HasEmptyViewBox().
+pub(crate) fn LiveSvgViewBoxIsEmpty(object: &LayoutObject) -> Option<bool> {
+    LiveElementInputData(object).map(|data| {
+        data.and_then(|data| data.svg_view_box)
+            .is_some_and(|view_box| view_box.width <= 0.0 || view_box.height <= 0.0)
+    })
+}
+
+/// The enclosing text control (form control) host of the source Node.
+pub(crate) fn LiveTextControlHost(object: &LayoutObject) -> Option<Option<u64>> {
+    let mut ancestor = LiveSourceNode(object)? as *const Node;
+    while !ancestor.is_null() {
+        let node = unsafe { &*ancestor };
+        if node.InputKind() == NodeKind::kFormControl {
+            return Some(Some(node.InputId()));
+        }
+        ancestor = node.parentNode().cast();
+    }
+    Some(None)
 }

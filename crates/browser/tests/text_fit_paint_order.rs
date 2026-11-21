@@ -36,7 +36,7 @@ impl URLLoader for FixtureLoader {
 }
 
 fn find_text(fragment: PaintFragmentCursor<'_>) -> Option<PaintFragmentCursor<'_>> {
-    if fragment.PaintData().paint.source_kind == NodeKind::kText {
+    if fragment.PaintData().paint.SourceKind() == NodeKind::kText {
         return Some(fragment);
     }
     fragment.Children().into_iter().find_map(find_text)

@@ -192,7 +192,7 @@ fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
             assert!(object.VisualRectInLocalSVGCoordinates().IsEmpty());
             let fragment = fragment(&page, name);
             assert!(fragment.paint.svg_hidden_container);
-            assert_eq!(fragment.paint.source_kind, expected);
+            assert_eq!(fragment.paint.SourceKind(), expected);
             assert!(!fragment.children.is_empty());
         }
         for name in ["definition", "clip-shape"] {

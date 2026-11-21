@@ -131,7 +131,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
         // layer-owned state.
         let layer_adjusted = paint_info.phase == PaintPhase::kOverlayOverflowControls
             || (node.is_paint_layer && node.is_self_painting_layer);
-        let svg_child = IsSvgLayoutChild(fragment.paint.source_kind);
+        let svg_child = IsSvgLayoutChild(fragment.paint.SourceKind());
         let paint_offset_translation_as_drawing = !layer_adjusted
             && !svg_child
             && node.paint_offset_translation.is_some()

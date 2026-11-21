@@ -22,7 +22,7 @@ impl SVGContainerPainter {
     pub fn IsContainer(node: &PaintTreeNode<'_>) -> bool {
         node.fragment.as_deref().is_some_and(|fragment| {
             matches!(
-                fragment.paint.source_kind,
+                fragment.paint.SourceKind(),
                 NodeKind::kSvgGroup
                     | NodeKind::kSvgResourceMarker
                     | NodeKind::kSvgViewportContainer
@@ -49,7 +49,7 @@ impl SVGContainerPainter {
             .fragment
             .as_deref()
             .expect("SVG container must own a fragment");
-        if fragment.paint.svg_view_box_is_empty {
+        if fragment.paint.SvgViewBoxIsEmpty() {
             return false;
         }
 
