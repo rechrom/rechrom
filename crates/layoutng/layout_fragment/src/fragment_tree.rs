@@ -765,6 +765,21 @@ pub trait ResidentBoxGeometry {
     /// Borrowed-view ink overflow (self, contents, ink, filtered), read
     /// from the resident fragment or item.
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4];
+    /// Box-fragment geometry facts (inline box, hit-test overflow clip,
+    /// scrolled content offset, self visual overflow) from the resident box.
+    fn ViewBoxGeometryFacts(&self) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>);
+    fn ViewIsInlineBox(&self) -> bool {
+        self.ViewBoxGeometryFacts().0
+    }
+    fn ViewHitTestOverflowClip(&self) -> Option<FragmentPaintRect> {
+        self.ViewBoxGeometryFacts().1
+    }
+    fn ViewScrolledContentOffset(&self) -> Offset {
+        self.ViewBoxGeometryFacts().2
+    }
+    fn ViewBoxSelfVisualOverflow(&self) -> Option<FragmentPaintRect> {
+        self.ViewBoxGeometryFacts().3
+    }
     fn ViewSelfInkOverflow(&self) -> Option<FragmentPaintRect> {
         self.ViewInkOverflows()[0]
     }
@@ -823,6 +838,21 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewBoxGeometryFacts(&self) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>) {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::LiveBoxGeometryFacts(
+                box_fragment,
+                self.paint.ShouldClipOverflowAlongEitherAxis(),
+            ),
+            None => (
+                self.paint.box_fragment_is_inline_box,
+                self.paint.hit_test_overflow_clip,
+                self.paint.pixel_snapped_scrolled_content_offset,
+                self.paint.box_self_visual_overflow,
+            ),
+        }
+    }
+
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4] {
         use layout_fragment_boundary::ResidentFragmentOwner;
         let stored = [

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::fragment_tree::FragmentKind;
@@ -872,8 +873,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 .fragment
                 .as_deref()
                 .expect("PrePaint node must own a fragment")
-                .paint
-                .box_fragment_is_inline_box;
+                .ViewIsInlineBox();
             if child_is_fragment_item
                 && !BoxFragmentPainter::ChildIntersectsCullRect(child, &contents_paint_info)
             {

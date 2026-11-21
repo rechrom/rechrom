@@ -13,6 +13,7 @@
 //! This required-services adapter is the production Page hit-test route.
 //! Source layer traversal, DOM result owners and virtual geometry operations
 //! are supplied by the call-scoped resident binding below.
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::{
     core::{
         layout::{
@@ -331,7 +332,7 @@ impl<L: ?Sized> PhysicalFragment<L> for ResidentFragment<'_, L> {
             painted_atomically: physical.is_some_and(|f| f.IsPaintedAtomically()),
             floating_descendants: physical.is_some_and(|f| f.HasFloatingDescendantsForPaint()),
             destroyed_or_moved: physical.is_some_and(|f| f.IsLayoutObjectDestroyedOrMoved()),
-            clip_overflow: data.hit_test_overflow_clip.is_some(),
+            clip_overflow: self.cursor.ViewHitTestOverflowClip().is_some(),
             scroll_container: self.Object().IsScrollContainer(),
             non_overlay_overscroll_container: physical
                 .is_some_and(|fragment| fragment.IsNonOverlayOverscrollScrollContainer()),
@@ -379,7 +380,7 @@ impl<L: ?Sized> PhysicalFragment<L> for ResidentFragment<'_, L> {
         self.ItemOwner().map(|_| InlineCursor::Root(self))
     }
     fn ScrolledContentOffset(&self) -> PhysicalOffset {
-        offset(self.cursor.paint.pixel_snapped_scrolled_content_offset)
+        offset(self.cursor.ViewScrolledContentOffset())
     }
     fn OverscrollContentOffset(&self) -> PhysicalOffset {
         self.Box().map_or(PhysicalOffset::default(), |box_| {

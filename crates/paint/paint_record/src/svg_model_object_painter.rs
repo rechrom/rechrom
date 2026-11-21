@@ -89,7 +89,7 @@ impl SVGModelObjectPainter {
             // PhysicalFragment ink overflow and is the retained source value
             // corresponding to LayoutSVGModelObject::DecoratedBoundingBox().
             // Do not substitute the fragment frame when neither exists.
-            .or(fragment.paint.box_self_visual_overflow)?;
+            .or(fragment.ViewBoxSelfVisualOverflow())?;
         Some(PaintRect {
             x: node.paint_offset.x + rect.offset.x,
             y: node.paint_offset.y + rect.offset.y,

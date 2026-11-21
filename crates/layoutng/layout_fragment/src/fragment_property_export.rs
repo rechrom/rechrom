@@ -1006,3 +1006,37 @@ pub(crate) fn LiveItemInkOverflow(item: &FragmentItem) -> Option<[Option<Fragmen
         ]
     })
 }
+
+/// Box-fragment geometry facts Chromium's box painter and hit testing read
+/// from the PhysicalBoxFragment / LayoutBox: whether it is an inline box,
+/// the hit-test overflow clip rect (only when `clips` — the box clips
+/// overflow), the pixel-snapped scrolled content offset, and the
+/// LayoutBox's self visual overflow (box_painter.cc:124-129).
+pub(crate) fn LiveBoxGeometryFacts(
+    fragment: &PhysicalBoxFragment,
+    clips: bool,
+) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>) {
+    let hit_test_overflow_clip = clips.then(|| {
+        ExportInkRect(fragment.OverflowClipRect(
+            foundation::OverlayScrollbarClipBehavior::kExcludeOverlayScrollbarSizeForHitTesting,
+        ))
+    });
+    let object = fragment.GetLayoutObject();
+    let scrolled = if object.is_null() {
+        Offset::default()
+    } else {
+        let scrolled = fragment.PixelSnappedScrolledContentOffset();
+        Offset {
+            x: scrolled.x() as f64,
+            y: scrolled.y() as f64,
+        }
+    };
+    let self_visual_overflow = unsafe { DynamicTo::<LayoutBox>(object).as_ref() }
+        .map(|layout_box| ExportInkRect(layout_box.SelfVisualOverflowRect()));
+    (
+        fragment.IsInlineBox(),
+        hit_test_overflow_clip,
+        scrolled,
+        self_visual_overflow,
+    )
+}

@@ -254,7 +254,7 @@ pub(crate) fn BackgroundForPainting(
                 false,
             )
         } else if fragment.paint.InForcedColorsMode()
-            && fragment.paint.box_fragment_is_inline_box
+            && fragment.ViewIsInlineBox()
             && style.forced_color_adjust_auto()
         {
             (color, false)
@@ -390,7 +390,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
             if matches!(
                 child_fragment.kind,
                 FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
-            ) || child_fragment.paint.box_fragment_is_inline_box
+            ) || child_fragment.ViewIsInlineBox()
             {
                 Visit(child, backplates);
             }
@@ -733,7 +733,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         !matches!(
             child.kind,
             FragmentKind::kLine | FragmentKind::kText | FragmentKind::kGeneratedText
-        ) && !child.paint.box_fragment_is_inline_box
+        ) && !child.ViewIsInlineBox()
     }
 
     // Chromium: box_fragment_painter.cc:615-620,643-669,2122-2133.
@@ -941,7 +941,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
         if phase == PaintPhase::kForeground
             && fragment.ViewKind() == FragmentKind::kBox
-            && fragment.paint.box_fragment_is_inline_box
+            && fragment.ViewIsInlineBox()
         {
             InlineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
         }
@@ -958,7 +958,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
             && fragment.ViewKind() == FragmentKind::kBox
-            && !fragment.paint.box_fragment_is_inline_box
+            && !fragment.ViewIsInlineBox()
             && fragment.paint.establishes_paint_state
         {
             // ViewPainter queries the current chunk before recording the root
@@ -6616,8 +6616,7 @@ pub(crate) fn DecorationVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .expect("paint tree node has a fragment");
     // BoxPainter::VisualRect:124-129; inline boxes use their item ink overflow.
     let rect = fragment
-        .paint
-        .box_self_visual_overflow
+        .ViewBoxSelfVisualOverflow()
         .or(fragment.ViewInkOverflow())
         .expect("painted box fragment has source visual overflow");
     // Source: core/paint/box_fragment_painter.cc:3021-3030 and
@@ -7529,8 +7528,8 @@ fn LocalBackgroundBorderRect(node: &PaintTreeNode<'_>) -> PaintRect {
     // equivalent both consume the source pixel-snapped scroll displacement.
     // Border-box painting has no ScrollTranslation property, so apply that
     // displacement explicitly to the enlarged local-background rectangle.
-    rect.x -= fragment.paint.pixel_snapped_scrolled_content_offset.x;
-    rect.y -= fragment.paint.pixel_snapped_scrolled_content_offset.y;
+    rect.x -= fragment.ViewScrolledContentOffset().x;
+    rect.y -= fragment.ViewScrolledContentOffset().y;
     rect
 }
 

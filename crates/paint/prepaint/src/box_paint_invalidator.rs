@@ -303,8 +303,7 @@ pub(crate) fn PreviousGeometry(
 
 fn SelfVisualOverflow(fragment: &FragmentPaintData) -> FragmentPaintRect {
     fragment
-        .paint
-        .box_self_visual_overflow
+        .ViewBoxSelfVisualOverflow()
         .unwrap_or(FragmentPaintRect {
             offset: Offset::default(),
             size: StitchedSize(fragment),
@@ -577,8 +576,7 @@ fn StitchedSize(fragment: &FragmentPaintData) -> Size {
 
 fn SelfVisualOverflowSize(fragment: &FragmentPaintData) -> Size {
     fragment
-        .paint
-        .box_self_visual_overflow
+        .ViewBoxSelfVisualOverflow()
         .map_or_else(|| StitchedSize(fragment), |rect| rect.size)
 }
 

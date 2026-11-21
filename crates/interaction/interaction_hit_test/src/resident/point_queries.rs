@@ -140,8 +140,8 @@ fn LocalPoint(
 fn ChildOrigin(fragment: &FragmentPaintData, absolute: Offset) -> Offset {
     if fragment.paint.establishes_paint_state {
         Offset {
-            x: absolute.x - fragment.paint.pixel_snapped_scrolled_content_offset.x,
-            y: absolute.y - fragment.paint.pixel_snapped_scrolled_content_offset.y,
+            x: absolute.x - fragment.ViewScrolledContentOffset().x,
+            y: absolute.y - fragment.ViewScrolledContentOffset().y,
         }
     } else {
         absolute
@@ -349,7 +349,7 @@ fn HitGeometry(
         && point.y >= hit_top
         && point.x < hit_left + hit_bounds.size.width
         && point.y < hit_top + hit_bounds.size.height;
-    let outside_overflow_clip = fragment.paint.hit_test_overflow_clip.is_some_and(|clip| {
+    let outside_overflow_clip = fragment.ViewHitTestOverflowClip().is_some_and(|clip| {
         let left = absolute.x + clip.offset.x;
         let top = absolute.y + clip.offset.y;
         point.x < left
@@ -364,7 +364,7 @@ fn HitGeometry(
     // the inner contoured border suppress descendants, not the box's own hit.
     let children_clipped = fragment.paint.ChildPaintBlockedByDisplayLock()
         || outside_overflow_clip
-        || (fragment.paint.hit_test_overflow_clip.is_some()
+        || (fragment.ViewHitTestOverflowClip().is_some()
             && !InnerBorderContains(query, fragment, point, absolute));
     Some((point, absolute, inside, children_clipped))
 }
@@ -618,7 +618,7 @@ fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
             | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             | layoutng_assembly::fragment_tree::FragmentKind::kLine
     ) || fragment.paint.is_layout_inline
-        || fragment.paint.box_fragment_is_inline_box
+        || fragment.ViewIsInlineBox()
         || fragment.paint.replaced_content.is_some()
         || IsSvgHitObject(fragment.paint.SourceKind())
     {
