@@ -159,7 +159,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.display_item_client_debug_name =
                 current.display_item_client_debug_name.clone();
             node.paint.BindLiveStyleFacts(live_style_facts);
-            node.paint.previous_box_geometry = current.previous_box_geometry;
             node.paint.background_fill_layer_count =
                 current.background_fill_layer_count;
             node.paint.has_background = current.has_background;

@@ -190,12 +190,6 @@ pub(super) fn ExportProperties(
         output.writing_mode = PublicWritingMode(parent_style.GetWritingMode());
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
-    if purpose == LayoutUpdateKind::Paint
-        && !DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object).is_null()
-    {
-        // The replaced content rect needs this pass's natural dimensions.
-        output.previous_box_geometry = ExportPreviousBoxGeometry(unsafe { &*object });
-    }
     let Some(source_entry) = sources.get(&object) else {
         return output;
     };
@@ -679,17 +673,12 @@ pub(crate) fn LiveTextControlHost(object: &LayoutObject) -> Option<Option<u64>> 
 /// PreviousSelfVisualOverflowRect / PreviousScrollableOverflowRect). The
 /// layout commit saves them after the artifact commits
 /// (SavePreviousBoxGeometriesIfNeeded), so PrePaint reads the previous values.
-/// `None` for a LayoutReplaced: its replaced content rect needs the natural
-/// dimensions only installed during a layout pass, so ExportProperties keeps
-/// exporting it (ExportReplacedPreviousBoxGeometry). `Some(None)` for
-/// objects that are not boxes.
+/// `Some(None)` for objects that are not boxes. A replaced box's previous
+/// content rect uses its natural dimensions, which SVG roots answer through
+/// the resident SVG queries outside a pass.
 pub(crate) fn LivePreviousBoxGeometry(
     object: &LayoutObject,
 ) -> Option<Option<layout_fragment::fragment_tree::PreviousBoxGeometry>> {
-    let object_ptr = object as *const LayoutObject;
-    if !DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object_ptr).is_null() {
-        return None;
-    }
     Some(ExportPreviousBoxGeometry(object))
 }
 

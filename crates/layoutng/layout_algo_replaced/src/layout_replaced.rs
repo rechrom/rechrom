@@ -646,11 +646,12 @@ pub extern "Rust" fn DispatchLayoutReplacedGetNaturalDimensions(
     this: &LayoutReplaced,
 ) -> PhysicalNaturalSizingInfo {
     if this.RuntimeClass() == LayoutObjectClass::SvgRoot {
-        let algorithms =
-            layoutng_assembly::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-        let dimensions = unsafe { algorithms.as_ref() }
-            .and_then(|algorithms| algorithms.svg_support.root_natural_dimensions)
-            .expect("SVG root natural dimensions are not installed");
+        // The SVG queries of the active pass, or the last one installed on
+        // this thread when PrePaint asks for the previous replaced content.
+        let dimensions =
+            layoutng_assembly::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
+                .root_natural_dimensions
+                .expect("SVG root natural dimensions are not installed");
         return dimensions(unsafe {
             &*(this as *const LayoutReplaced)
                 .cast::<layoutng_assembly::internal::layout_object::LayoutObject>()
