@@ -164,7 +164,9 @@ use layout_fragment_fragment_property_export::{
 };
 #[path = "../../../../layout_fragment/src/text_paint_export.rs"]
 mod layout_fragment_text_paint_export;
-pub(crate) use layout_fragment_text_paint_export::{BuildPaintGlyphRuns, ExportTextPaintBaseline};
+pub(crate) use layout_fragment_text_paint_export::{
+    BuildPaintGlyphRuns, ExportTextPaintBaseline, LiveTextItemFacts,
+};
 use layout_fragment_text_paint_export::{
     ExportListMarkerSymbol, ExportShapeResult, ExportTextCombineEmphasis,
     ExportTextCombineInlineOffset,

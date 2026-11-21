@@ -198,7 +198,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if fragment.paint.is_ellipsis {
+        if fragment.ViewTextItemFacts().0 {
             return false;
         }
         let style = fragment
@@ -245,7 +245,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 let text_fit_scale = if fragment.paint.svg_text.is_some() {
                     1.0
                 } else {
-                    fragment.paint.text_fit_scale
+                    fragment.ViewTextItemFacts().1
                 };
                 (
                     run.font_size * text_fit_scale,
@@ -417,7 +417,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                             decoration_text_fit_scale: if fragment.paint.svg_text.is_some() {
                                 1.0
                             } else {
-                                fragment.paint.text_fit_scale
+                                fragment.ViewTextItemFacts().1
                             },
                             decoration_ink_runs: if skip_ink != ETextDecorationSkipInk::kNone {
                                 std::sync::Arc::clone(&glyph_runs)

@@ -467,3 +467,54 @@ pub(super) fn ExportListMarkerSymbol(item: &FragmentItem, paint: &mut PaintPrope
     }
     panic!("symbol list marker has no list-item ancestor");
 }
+
+/// Text-item paint facts read from the FragmentItem as Chromium's
+/// TextFragmentPainter reads them (stage 3 of the borrowed-view boundary):
+/// (is_ellipsis, text_fit_scale, list_marker_symbol, list_marker_inside,
+/// text_combine_inline_offset). `None` for items that are not text.
+pub(crate) fn LiveTextItemFacts(
+    item: &FragmentItem,
+) -> Option<(bool, f64, Option<crate::internal::layout_input::ListStyleType>, bool, f64)> {
+    if !matches!(item.Type(), ItemType::kText | ItemType::kGeneratedText) {
+        return None;
+    }
+    let text_fit_scale = if item.IsSvgText() {
+        1.0
+    } else {
+        f64::from(item.GetTextFitScale())
+    };
+    let mut list_marker_symbol = None;
+    let mut list_marker_inside = false;
+    if item.IsSymbolMarker() {
+        let mut object = item.GetLayoutObject();
+        while !object.is_null() {
+            let layout_object = unsafe { &*object };
+            if layout_object.IsLayoutInsideListMarker() {
+                list_marker_inside = true;
+            }
+            let node = layout_object.GetNode();
+            if !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kListItem {
+                list_marker_symbol = Some(crate::style_projection::ReadListStyleType(
+                    unsafe { &*node }.ComputedStyleRef(),
+                ));
+                break;
+            }
+            object = layout_object.Parent();
+        }
+    }
+    let mut text_combine_inline_offset = 0.0;
+    let text_combine = TextCombineForItem(item);
+    if let Some(text_combine) = unsafe { text_combine.as_ref() } {
+        if let Some(scale_x) = text_combine.ScaleXForInline() {
+            text_combine_inline_offset =
+                Number(LayoutUnit::from_f32(text_combine.ComputeInlineSpacing() / scale_x));
+        }
+    }
+    Some((
+        item.IsEllipsis(),
+        text_fit_scale,
+        list_marker_symbol,
+        list_marker_inside,
+        text_combine_inline_offset,
+    ))
+}

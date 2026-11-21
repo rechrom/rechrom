@@ -768,6 +768,10 @@ pub trait ResidentBoxGeometry {
     /// Box-fragment geometry facts (inline box, hit-test overflow clip,
     /// scrolled content offset, self visual overflow) from the resident box.
     fn ViewBoxGeometryFacts(&self) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>);
+    /// Text-item facts (ellipsis, text-fit scale, list-marker symbol and
+    /// inside flag, text-combine inline offset) from the resident item.
+    fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64);
+    fn ViewIsLineBreak(&self) -> bool;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -838,6 +842,40 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64) {
+        let stored = (
+            self.paint.is_ellipsis,
+            self.paint.text_fit_scale,
+            self.paint.list_marker_symbol,
+            self.paint.list_marker_inside,
+            self.paint.text_combine_inline_offset,
+        );
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items
+                    .Items()
+                    .get(index)
+                    .and_then(crate::internal::boundary::layout_boundary::LiveTextItemFacts)
+                    .unwrap_or(stored)
+            }
+            _ => stored,
+        }
+    }
+
+    fn ViewIsLineBreak(&self) -> bool {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items
+                    .Items()
+                    .get(index)
+                    .map_or(self.paint.is_line_break, |item| item.IsText() && item.IsLineBreak())
+            }
+            _ => self.paint.is_line_break,
+        }
+    }
+
     fn ViewBoxGeometryFacts(&self) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>) {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => crate::internal::boundary::layout_boundary::LiveBoxGeometryFacts(

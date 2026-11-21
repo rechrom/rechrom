@@ -368,7 +368,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
-            if fragment.paint.is_line_break {
+            if fragment.ViewIsLineBreak() {
                 backplates.AddLineBreak();
             } else {
                 backplates.AddTextRect(PaintRect {
@@ -665,7 +665,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         };
         // PaintText performs the source HasSelection exception after resolving
         // the actual selection range. Admit line breaks to that exact check.
-        if fragment.paint.is_line_break {
+        if fragment.ViewIsLineBreak() {
             return true;
         }
         // SVGShapePainter/SVGContainerPainter own SVG geometry culling against
@@ -4146,7 +4146,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .context
             .borrow()
             .HasTextSource(fragment.fragment_instance_id)
-            && fragment.paint.list_marker_symbol.is_none()
+            && fragment.ViewTextItemFacts().2.is_none()
         {
             return;
         }
@@ -4240,7 +4240,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         .and_then(|(range, selects_soft_line_break)| {
             range_rect(range, selects_soft_line_break).map(|rect| (range, rect))
         });
-        let selection = if !text_clip && fragment.paint.list_marker_symbol.is_none() {
+        let selection = if !text_clip && fragment.ViewTextItemFacts().2.is_none() {
             control_selection.or(document_selection)
         } else {
             None
@@ -4254,8 +4254,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let selection_for_bounds = (phase == PaintPhase::kForeground
             && !fragment.paint.IsPrinting()
             && !text_clip
-            && fragment.paint.list_marker_symbol.is_none()
-            && !fragment.paint.is_ellipsis
+            && fragment.ViewTextItemFacts().2.is_none()
+            && !fragment.ViewTextItemFacts().0
             && self.context.borrow().selection_handles_visible)
             .then(|| {
                 let fragment_start = fragment.text_start?;
@@ -4337,7 +4337,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             height: item_visual_rect.height,
         };
         if !paint_info.IntersectsCullRect(local_ink_overflow, self.node.paint_offset)
-            && !(fragment.paint.is_line_break && selection.is_some())
+            && !(fragment.ViewIsLineBreak() && selection.is_some())
         {
             return;
         }
@@ -4431,7 +4431,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // background the scaled font's space width (inline_cursor.cc:529-537).
         // Do not manufacture glyphs or decorations for it; retain the real
         // selection background before leaving the text-proper path.
-        if glyph_runs.is_empty() && fragment.paint.list_marker_symbol.is_none() {
+        if glyph_runs.is_empty() && fragment.ViewTextItemFacts().2.is_none() {
             if let Some(rect) = selection_rect {
                 append_selection_background(rect);
             }
@@ -4457,7 +4457,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             concat.transform = RootSpaceTextTransform(self.node);
             self.context.borrow_mut().Append(concat, self.node);
         }
-        if let Some(symbol) = fragment.paint.list_marker_symbol {
+        if let Some(symbol) = fragment.ViewTextItemFacts().2 {
             if glyph_runs.is_empty() {
                 panic!("symbol list marker has no shaped run");
             }
@@ -4466,7 +4466,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let bullet_width = (two_thirds_ascent + 1) / 2;
             let marker_top = 3 * (ascent - two_thirds_ascent) / 2;
             let unsnapped_x = self.node.paint_offset.x
-                + if fragment.paint.list_marker_inside {
+                + if fragment.ViewTextItemFacts().3 {
                     0.0
                 } else {
                     1.0
@@ -4516,7 +4516,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let apply_text_fit = svg.is_none() && fragment.paint.text_fit_scale != 1.0;
+        let apply_text_fit = svg.is_none() && fragment.ViewTextItemFacts().1 != 1.0;
         let mut text_fit_origin = TextPaintOrigin(self.node);
         if let Some(run) = glyph_runs.first() {
             // text_fragment_painter.cc:531-542 constructs text_origin at the
@@ -4529,7 +4529,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.paint.text_fit_scale,
+                fragment.ViewTextItemFacts().1,
                 text_fit_origin,
                 true,
             );
@@ -4547,7 +4547,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let color = InvertColorIfNeeded(
                     style,
                     color,
-                    if fragment.paint.list_marker_symbol.is_some() {
+                    if fragment.ViewTextItemFacts().2.is_some() {
                         ElementRole::kListSymbol
                     } else {
                         ElementRole::kForeground
@@ -4569,7 +4569,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 let rect = PaintRect {
                     x: self.node.paint_offset.x
-                        + fragment.paint.text_combine_inline_offset
+                        + fragment.ViewTextItemFacts().4
                         + shadow_offset.x,
                     y: self.node.paint_offset.y + shadow_offset.y,
                     width: fragment.ViewSize().width,
@@ -4657,7 +4657,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     && (fragment.paint.text_glyph_ink.is_some()
                         || fragment.ViewSelfInkOverflow().is_some())
                     && !fragment.paint.IsTextCombine()
-                    && fragment.paint.text_combine_inline_offset == 0.0
+                    && fragment.ViewTextItemFacts().4 == 0.0
                     && input_run.writing_mode == WritingMode::kHorizontalTb
                     && !is_shadow
                     && !stroke_glyphs
@@ -4724,7 +4724,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
             }
             let rect = PaintRect {
-                x: self.node.paint_offset.x + fragment.paint.text_combine_inline_offset,
+                x: self.node.paint_offset.x + fragment.ViewTextItemFacts().4,
                 y: self.node.paint_offset.y,
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
@@ -4952,7 +4952,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.paint.text_fit_scale,
+                fragment.ViewTextItemFacts().1,
                 text_fit_origin,
                 false,
             );
@@ -4967,7 +4967,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     true,
                 );
@@ -5012,7 +5012,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     false,
                 );
@@ -5033,7 +5033,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.paint.text_fit_scale,
+                fragment.ViewTextItemFacts().1,
                 text_fit_origin,
                 true,
             );
@@ -5062,7 +5062,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     false,
                 );
@@ -5082,7 +5082,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     true,
                 );
@@ -5169,7 +5169,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     false,
                 );
@@ -5180,7 +5180,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     true,
                 );
@@ -5191,7 +5191,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 self.context,
                 self.node,
                 phase,
-                fragment.paint.text_fit_scale,
+                fragment.ViewTextItemFacts().1,
                 text_fit_origin,
                 false,
             );
@@ -5271,7 +5271,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     true,
                 );
@@ -5284,7 +5284,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     self.context,
                     self.node,
                     phase,
-                    fragment.paint.text_fit_scale,
+                    fragment.ViewTextItemFacts().1,
                     text_fit_origin,
                     false,
                 );
@@ -8080,7 +8080,7 @@ pub(crate) fn TextPaintOrigin(node: &PaintTreeNode<'_>) -> Offset {
         origin.x += svg.glyph_origin.x;
         origin.y += svg.glyph_origin.y;
     }
-    origin.x += fragment.paint.text_combine_inline_offset;
+    origin.x += fragment.ViewTextItemFacts().4;
     origin
 }
 
