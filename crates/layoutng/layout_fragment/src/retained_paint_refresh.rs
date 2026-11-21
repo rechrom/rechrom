@@ -177,20 +177,9 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.paint_layer_contents_visual_rect = current.paint_layer_contents_visual_rect;
             node.paint.paint_layer_filter_reference_box = current.paint_layer_filter_reference_box;
             node.paint.paint_layer_filter_viewport = current.paint_layer_filter_viewport;
-            node.paint.paint_layer_is_in_top_or_view_transition_layer =
-                current.paint_layer_is_in_top_or_view_transition_layer;
-            node.paint.paint_layer_is_direct_layout_view_child =
-                current.paint_layer_is_direct_layout_view_child;
-            node.paint.paint_layer_can_contain_absolute_position_objects =
-                current.paint_layer_can_contain_absolute_position_objects;
-            node.paint.paint_layer_can_contain_fixed_position_objects =
-                current.paint_layer_can_contain_fixed_position_objects;
-            node.paint.paint_layer_has_overlay_overflow_controls =
-                current.paint_layer_has_overlay_overflow_controls;
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
-            node.paint.background_paint_location = current.background_paint_location;
             node.paint.background_fill_layer_count = current.background_fill_layer_count;
             node.paint.has_background = current.has_background;
             node.paint.background_any_local_attachment_image =

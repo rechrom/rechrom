@@ -879,7 +879,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // animated reuse check after delegating to ImagePainter::Paint, even
         // when that painter emits no image drawing. Retain the exact paint
         // entry fact for the document-owned UseCounter coordinator.
-        if fragment.paint.replaced_is_image {
+        if fragment.paint.ReplacedIsImage() {
             if let Some(image_id) = fragment.paint.style.image_resource_id {
                 self.context.borrow_mut().RecordPaintedLayoutImage(image_id);
             }
@@ -1035,7 +1035,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // drawing cache. Background, border, shadow and theme decisions
             // must therefore stay coupled to the same PaintInfo flags.
             let mut decoration_data = BoxDecorationData::new(self.node, paint_info);
-            if !fragment.paint.background_paint_location.PaintsBorderBox()
+            if !fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
                 || composites_fixed_background
             {
                 decoration_data = decoration_data.WithoutBackground();
@@ -1113,7 +1113,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             drop(background_recorder);
             drop(cache_skipper);
-            if fragment.paint.background_paint_location.PaintsBorderBox() {
+            if fragment.paint.BackgroundPaintLocation().PaintsBorderBox() {
                 let painting_contents = paint_info.IsPaintingBackgroundInContentsSpace();
                 let paint_rect = if fragment.paint.IsLayoutView() {
                     ViewBackgroundRect(self.node, painting_contents)
@@ -1173,7 +1173,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .PaintOverflowControls(paint_info);
             }
             if !theme_owns_decoration {
-                let paints_contents = fragment.paint.background_paint_location.PaintsContents();
+                let paints_contents = fragment.paint.BackgroundPaintLocation().PaintsContents();
                 if paints_contents || fragment.paint.scrolls_overflow {
                     let _contents_properties =
                         crate::scoped_paint_state::ScopedBoxContentsPaintState::new(
@@ -1306,7 +1306,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // ring follows LayoutReplaced's ordinary outline contribution.
         if phase == PaintPhase::kOutline
             && is_visible
-            && fragment.paint.replaced_is_image
+            && fragment.paint.ReplacedIsImage()
             && fragment.paint.establishes_paint_state
         {
             self.PaintAreaElementFocusRing();
@@ -5702,7 +5702,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .image_resource_id
             .and_then(|id| FindAvailableReplacedImage(self.node, id).map(|image| (id, image)))
         else {
-            if !fragment.paint.replaced_is_image {
+            if !fragment.paint.ReplacedIsImage() {
                 return;
             }
             // cpp: core/paint/image_painter.cc:130-132. A selection drag
@@ -5717,7 +5717,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // canvas/video/embedded content.
             // cpp: core/paint/image_painter.cc:121-136,184-195
             if let Some(outline_rect) = MissingImagePlaceholderRect(
-                fragment.paint.replaced_is_image,
+                fragment.paint.ReplacedIsImage(),
                 content_box,
                 self.node.PixelSnappedRect(&content_box),
             ) {
@@ -6606,7 +6606,7 @@ fn UsesCompositedFixedBackground(node: &PaintTreeNode<'_>) -> bool {
         && !fragment.paint.background_transfers_to_view
         && !node.fixed_background_acts_as_scroll
         && node.fixed_background_properties.is_some()
-        && fragment.paint.background_paint_location.PaintsBorderBox()
+        && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
         && background_images.len() == 1
         && background_images[0].attachment == BackgroundAttachment::kFixed
         && (background_images[0].shader.is_some() || background_images[0].resource_id != 0)

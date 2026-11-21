@@ -410,11 +410,11 @@ fn BackgroundUsesContentBox(fragment: &FragmentPaintData) -> bool {
 }
 
 fn BackgroundPaintsInContentsSpace(fragment: &FragmentPaintData) -> bool {
-    HasEffectiveBackground(fragment) && fragment.paint.background_paint_location.PaintsContents()
+    HasEffectiveBackground(fragment) && fragment.paint.BackgroundPaintLocation().PaintsContents()
 }
 
 fn BackgroundPaintsInBorderBoxSpace(fragment: &FragmentPaintData) -> bool {
-    HasEffectiveBackground(fragment) && fragment.paint.background_paint_location.PaintsBorderBox()
+    HasEffectiveBackground(fragment) && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
 }
 
 fn BackgroundGeometryDependsOnScrollableOverflowRect(fragment: &FragmentPaintData) -> bool {

@@ -301,26 +301,10 @@ pub(super) fn ExportProperties(
             output.scrollable_overflow = Some(ExportInkRect(
                 unsafe { &*layout_box }.ScrollableOverflowRect(),
             ));
-            output.background_paint_location =
-                match unsafe { &*layout_box }.GetBackgroundPaintLocation() {
-                    crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
-                        BackgroundPaintLocation::BorderBox
-                    }
-                    crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
-                        BackgroundPaintLocation::Contents
-                    }
-                    crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
-                        BackgroundPaintLocation::Both
-                    }
-                    value => panic!("invalid source background paint location {value}"),
-                };
             // Preserve the LayoutBox virtual override rather than calling only
             // the DisplayItemClient base default (layout_box.cc:4099-4108).
             output.display_item_raster_effect_outset =
                 unsafe { &*layout_box }.VisualRectOutsetForRasterEffects();
-            if unsafe { &*layout_box }.HasCSSClip() {
-                output.css_clip = Some(ExportInkRect(unsafe { &*layout_box }.CSSClipRect()));
-            }
             let layout_view = DynamicTo::<LayoutView>(object);
             if !layout_view.is_null() {
                 output.previous_view_background_rect = Some(ExportInkRect(
@@ -406,18 +390,6 @@ pub(super) fn ExportProperties(
                 // z-index stacking contexts, and containment/perspective can form
                 // contexts without an equivalent field in the public projection.
                 let layout_object = unsafe { &*object };
-                output.paint_layer_is_in_top_or_view_transition_layer =
-                    layout_object.IsInTopOrViewTransitionLayer();
-                let layout_parent = layout_object.Parent();
-                output.paint_layer_is_direct_layout_view_child =
-                    !layout_parent.is_null() && unsafe { &*layout_parent }.IsLayoutView();
-                output.paint_layer_can_contain_absolute_position_objects =
-                    layout_object.CanContainAbsolutePositionObjects();
-                output.paint_layer_can_contain_fixed_position_objects =
-                    layout_object.CanContainFixedPositionObjects();
-                let scrollable_area = unsafe { &*box_model }.GetScrollableArea();
-                output.paint_layer_has_overlay_overflow_controls = !scrollable_area.is_null()
-                    && unsafe { &*scrollable_area }.HasOverlayOverflowControls();
 
                 // Source: core/paint/paint_layer_stacking_node.cc:187-254.
                 // Export the exact comparison projection used by
@@ -504,7 +476,6 @@ pub(super) fn ExportProperties(
     // fields here: generated ImageContentData has no HTML-image flag, while
     // other LayoutReplaced subclasses (for example canvas) are not images.
     // cpp: core/layout/layout_image.h:135-138
-    output.replaced_is_image = unsafe { &*object }.IsLayoutImage();
     if purpose == LayoutUpdateKind::Paint {
         let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object);
         if !replaced.is_null() {

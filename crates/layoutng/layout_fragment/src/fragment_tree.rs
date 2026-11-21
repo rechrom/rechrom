@@ -1348,6 +1348,85 @@ impl PaintProperties {
     // Stage 2 of the export removal: LayoutObject facts read live (Chromium
     // PrePaint/Paint read them from the LayoutObject); the stored copy is
     // only the detached-fixture fallback.
+    pub fn ReplacedIsImage(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::IsLayoutImage)
+            .SourceCheckedOr(self.replaced_is_image, "replaced_is_image")
+    }
+
+    pub fn PaintLayerIsInTopOrViewTransitionLayer(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !Self::PaintLayerOfObject(object as *const LayoutObject as *mut LayoutObject)
+                    .is_null()
+                    && object.IsInTopOrViewTransitionLayer()
+            })
+            .SourceCheckedOr(self.paint_layer_is_in_top_or_view_transition_layer, "paint_layer_is_in_top_or_view_transition_layer")
+    }
+
+    pub fn PaintLayerIsDirectLayoutViewChild(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !Self::PaintLayerOfObject(object as *const LayoutObject as *mut LayoutObject)
+                    .is_null()
+                    && unsafe { object.Parent().as_ref() }.is_some_and(LayoutObject::IsLayoutView)
+            })
+            .SourceCheckedOr(self.paint_layer_is_direct_layout_view_child, "paint_layer_is_direct_layout_view_child")
+    }
+
+    pub fn PaintLayerCanContainAbsolutePositionObjects(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !Self::PaintLayerOfObject(object as *const LayoutObject as *mut LayoutObject)
+                    .is_null()
+                    && object.CanContainAbsolutePositionObjects()
+            })
+            .SourceCheckedOr(self.paint_layer_can_contain_absolute_position_objects, "paint_layer_can_contain_absolute_position_objects")
+    }
+
+    pub fn PaintLayerCanContainFixedPositionObjects(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !Self::PaintLayerOfObject(object as *const LayoutObject as *mut LayoutObject)
+                    .is_null()
+                    && object.CanContainFixedPositionObjects()
+            })
+            .SourceCheckedOr(self.paint_layer_can_contain_fixed_position_objects, "paint_layer_can_contain_fixed_position_objects")
+    }
+
+    pub fn PaintLayerHasOverlayOverflowControls(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                !Self::PaintLayerOfObject(object as *const LayoutObject as *mut LayoutObject)
+                    .is_null()
+                    && unsafe {
+                        (&*foundation::DynamicTo::<LayoutBoxModelObject>(object))
+                            .GetScrollableArea()
+                            .as_ref()
+                    }
+                    .is_some_and(|area| area.HasOverlayOverflowControls())
+            })
+            .SourceCheckedOr(self.paint_layer_has_overlay_overflow_controls, "paint_layer_has_overlay_overflow_controls")
+    }
+
+    pub fn BackgroundPaintLocation(&self) -> BackgroundPaintLocation {
+        self.SourceObject()
+            .and_then(|object| {
+                unsafe { foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref() }
+                    .map(crate::internal::boundary::layout_boundary::LiveBackgroundPaintLocation)
+            })
+            .SourceCheckedOr(self.background_paint_location, "background_paint_location")
+    }
+
+    pub fn CssClip(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .and_then(|object| {
+                unsafe { foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref() }
+                    .map(crate::internal::boundary::layout_boundary::LiveCssClip)
+            })
+            .SourceCheckedOr(self.css_clip, "css_clip")
+    }
+
     pub fn VisibleToHitTesting(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::VisibleToHitTesting)

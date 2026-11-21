@@ -374,7 +374,7 @@ impl std::ops::DerefMut for ResidentFragment {
 }
 
 fn RetainImagePaintedRect(current: &FragmentPaintData, previous: Option<&FragmentPaintData>) {
-    if !current.paint.replaced_is_image {
+    if !current.paint.ReplacedIsImage() {
         return;
     }
     let previous = previous.filter(|previous| {

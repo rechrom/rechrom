@@ -810,7 +810,7 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
                 let independently_recorded =
                     fragment.paint.CanCompositeBackgroundAttachmentFixed()
                         && !node.fixed_background_acts_as_scroll
-                        && fragment.paint.background_paint_location.PaintsBorderBox()
+                        && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
                         && background_images.len() == 1
                         && (layer.shader.is_some() || layer.resource_id != 0);
                 !node.fixed_background_acts_as_scroll && !independently_recorded

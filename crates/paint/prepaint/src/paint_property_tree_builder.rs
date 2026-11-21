@@ -248,16 +248,16 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         node.is_z_order_list_visible = facts.is_z_order_list_visible;
         node.is_in_top_or_view_transition_layer = fragment
             .paint
-            .paint_layer_is_in_top_or_view_transition_layer;
-        node.is_direct_layout_view_child = fragment.paint.paint_layer_is_direct_layout_view_child;
+            .PaintLayerIsInTopOrViewTransitionLayer();
+        node.is_direct_layout_view_child = fragment.paint.PaintLayerIsDirectLayoutViewChild();
         node.can_contain_absolute_position_objects = fragment
             .paint
-            .paint_layer_can_contain_absolute_position_objects;
+            .PaintLayerCanContainAbsolutePositionObjects();
         node.can_contain_fixed_position_objects = fragment
             .paint
-            .paint_layer_can_contain_fixed_position_objects;
+            .PaintLayerCanContainFixedPositionObjects();
         node.has_overlay_overflow_controls =
-            fragment.paint.paint_layer_has_overlay_overflow_controls;
+            fragment.paint.PaintLayerHasOverlayOverflowControls();
         node.paint_layer_order_parent_unique_id = fragment.paint.paint_layer_order_parent_unique_id;
         node.paint_layer_order = fragment.paint.paint_layer_order;
 
@@ -963,7 +963,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // Unlike overflow clipping, the legacy positioned-box clip applies to
         // the box's own background as well as all descendants.
         if establishes {
-            if let Some(css_clip) = fragment.paint.css_clip {
+            if let Some(css_clip) = fragment.paint.CssClip() {
                 let local = node.PixelSnappedRect(&PaintRect {
                     x: node.paint_offset.x + css_clip.offset.x,
                     y: node.paint_offset.y + css_clip.offset.y,

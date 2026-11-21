@@ -334,6 +334,35 @@ pub(crate) fn RefreshCompatiblePaintCache(cache: &mut LayoutBoundaryCache) {
     layout_fragment_paint_cache_refresh::refresh_compatible_paint_cache(cache)
 }
 
+/// Live LayoutBox paint facts for PaintProperties getters (stage 2 of the
+/// Layout -> Paint export removal): the same conversions ExportProperties
+/// used to snapshot.
+pub(crate) fn LiveBackgroundPaintLocation(
+    layout_box: &crate::internal::layout_box::LayoutBox,
+) -> layout_fragment::fragment_tree::BackgroundPaintLocation {
+    use layout_fragment::fragment_tree::BackgroundPaintLocation;
+    match layout_box.GetBackgroundPaintLocation() {
+        crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
+            BackgroundPaintLocation::BorderBox
+        }
+        crate::internal::layout_object::kBackgroundPaintInContentsSpace => {
+            BackgroundPaintLocation::Contents
+        }
+        crate::internal::layout_object::kBackgroundPaintInBothSpaces => {
+            BackgroundPaintLocation::Both
+        }
+        value => panic!("invalid source background paint location {value}"),
+    }
+}
+
+pub(crate) fn LiveCssClip(
+    layout_box: &crate::internal::layout_box::LayoutBox,
+) -> Option<FragmentPaintRect> {
+    layout_box
+        .HasCSSClip()
+        .then(|| ExportInkRect(layout_box.CSSClipRect()))
+}
+
 pub(crate) fn EnsureBoundaryStyleIndices(cache: &mut LayoutBoundaryCache) {
     layout_fragment_paint_cache_refresh::ensure_style_indices(cache)
 }
