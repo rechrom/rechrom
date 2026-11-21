@@ -355,26 +355,11 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
     while index < nodes.len() {
         let fragment = nodes[index].fragment;
         let logical_id = fragment.paint.LogicalParentNodeId();
-        let logical_parent =
-            if let Some(instance) = fragment.paint.logical_parent_fragment_instance_id {
-                // Hand-built fixtures name the occurrence directly.
-                let exact = *instances
-                    .get(&instance)
-                    .expect("logical_parent_fragment_instance_id does not name a Fragment");
-                if let Some(id) = logical_id {
-                    assert_eq!(
-                        nodes[exact].fragment.ViewNodeId(), id,
-                        "logical parent node id and fragment instance id disagree"
-                    );
-                }
-                Some(exact)
-            } else if let Some(occurrence) = resolved[index] {
-                Some(occurrence)
-            } else {
-                logical_id
-                    .and_then(|id| source_nodes.get(&id))
-                    .and_then(|candidates| LogicalParentOccurrence(nodes, index, candidates))
-            };
+        let logical_parent = resolved[index].or_else(|| {
+            logical_id
+                .and_then(|id| source_nodes.get(&id))
+                .and_then(|candidates| LogicalParentOccurrence(nodes, index, candidates))
+        });
         let is_out_of_flow = matches!(
             fragment.paint.Position(),
             Position::kAbsolute | Position::kFixed
@@ -537,14 +522,10 @@ fn CollectFragmentClientRectsFromSource(
         &mut nodes,
         &mut inline,
     );
-    if nodes.iter().any(|node| {
-        node.fragment.paint.LogicalParentNodeId().is_some()
-            || node
-                .fragment
-                .paint
-                .logical_parent_fragment_instance_id
-                .is_some()
-    }) {
+    if nodes
+        .iter()
+        .any(|node| node.fragment.paint.LogicalParentNodeId().is_some())
+    {
         RestoreLogicalOutOfFlowParents(&mut nodes);
     }
     RestoreLogicalSiblingOrder(&mut nodes);

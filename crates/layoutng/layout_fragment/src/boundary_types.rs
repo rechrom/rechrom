@@ -493,20 +493,6 @@ impl PrePaintInvalidation {
     }
 }
 
-#[derive(Clone, Default, PartialEq)]
-pub struct InlineGeometryRect {
-    pub container_fragment_instance_id: u64,
-    pub rect: FragmentPaintRect,
-}
-
-#[derive(Clone, Default, PartialEq)]
-pub struct InlineGeometry {
-    pub node_id: u64,
-    pub effective_zoom: f32,
-    pub local_bounds: FragmentPaintRect,
-    pub rects: Vec<InlineGeometryRect>,
-}
-
 /// Shared immutable paint payload. The payload itself stays generic so the
 /// fragment owner can retain and share it without importing LayoutNG's
 /// concrete style and property graph.
@@ -563,7 +549,6 @@ impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
 // cpp: layoutng_fragment_tree/fragment_tree.h:303-322
 #[derive(Clone)]
 pub struct FragmentPaintData<Paint> {
-    pub inline_geometry: Vec<InlineGeometry>,
     pub pre_paint_revision: u64,
     pub pre_paint_subtree_revision: u64,
     pub pre_paint_owner_retained: bool,
@@ -645,7 +630,6 @@ impl<Paint> FragmentPaintData<Paint> {
 
     pub fn with_paint_handle(paint: PaintPropertiesHandle<Paint>) -> Self {
         Self {
-            inline_geometry: Vec::new(),
             pre_paint_revision: 0,
             pre_paint_subtree_revision: 0,
             pre_paint_owner_retained: false,
@@ -671,7 +655,6 @@ impl<Paint> FragmentPaintData<Paint> {
     /// Paint payload and lifecycle revisions stay in place; source-fragment
     /// geometry is rewritten by the publication walk that follows.
     pub fn prepare_for_publication(&mut self) {
-        self.inline_geometry.clear();
         self.fragmentainer_instance_id = 0;
         self.node_id = 0;
         self.kind = FragmentKind::kBox;

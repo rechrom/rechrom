@@ -199,7 +199,6 @@ pub(super) fn populate_layout_result_paint_data(
             &[
                 ("subtrees", paint_state_owners.replay_stats[0] as f64),
                 ("slots", paint_state_owners.replay_stats[1] as f64),
-                ("check_mismatches", paint_state_owners.replay_stats[2] as f64),
                 ("recorded", paint_state_owners.replay_next.entries.len() as f64),
             ],
         );

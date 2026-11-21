@@ -3,6 +3,7 @@
 mod test_thread;
 
 use browser::page::Page;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::internal::{
     layout_input::FontFace, layout_object::LayoutObject,
@@ -272,8 +273,8 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
 
 fn first_svg_data(
     node: PaintFragmentCursor<'_>,
-) -> Option<&layoutng_assembly::fragment_tree::SvgTextPaintData> {
-    if let Some(svg) = node.PaintData().paint.svg_text.as_deref() {
+) -> Option<std::sync::Arc<layoutng_assembly::fragment_tree::SvgTextPaintData>> {
+    if let Some(svg) = node.PaintData().ViewSvgText() {
         return Some(svg);
     }
     node.Children()

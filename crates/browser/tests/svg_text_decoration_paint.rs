@@ -5,6 +5,7 @@
 mod test_thread;
 
 use browser::page::Page;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::{
     internal::layout_input::{FontFace, NodeKind},
     layout_engine::PaintFragmentCursor,
@@ -37,7 +38,7 @@ impl URLLoader for FixtureLoader {
 
 fn find_svg_text(fragment: PaintFragmentCursor<'_>) -> Option<PaintFragmentCursor<'_>> {
     let paint = fragment.PaintData();
-    if paint.paint.SourceKind() == NodeKind::kText && paint.paint.svg_text.is_some() {
+    if paint.paint.SourceKind() == NodeKind::kText && paint.ViewSvgText().is_some() {
         return Some(fragment);
     }
     fragment.Children().into_iter().find_map(find_svg_text)

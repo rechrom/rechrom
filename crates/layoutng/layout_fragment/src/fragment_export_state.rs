@@ -96,8 +96,8 @@ pub(super) struct FragmentOwners {
     /// Finished entries that do not qualify; an ancestor qualifies only if
     /// none were finished inside its subtree.
     pub(super) replay_blocked: usize,
-    /// Diagnostics: replayed subtrees / slots, check-mode mismatches.
-    pub(super) replay_stats: [usize; 3],
+    /// Diagnostics: replayed subtrees / slots.
+    pub(super) replay_stats: [usize; 2],
     /// Diagnostics: why a box slot does not qualify (first reason).
     pub(super) replay_reasons: [usize; 8],
 }

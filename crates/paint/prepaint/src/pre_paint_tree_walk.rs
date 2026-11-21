@@ -3887,43 +3887,24 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
             .as_deref()
             .expect("PrePaint node must own a fragment");
         let logical_id = fragment.paint.LogicalParentNodeId();
-        let logical_instance_id = fragment.paint.logical_parent_fragment_instance_id;
-        let logical_parent = if let Some(logical_instance_id) = logical_instance_id {
-            // Hand-built fixtures name the occurrence directly.
-            let Some(&exact) = fragment_instances.get(&logical_instance_id) else {
-                panic!("logical_parent_fragment_instance_id does not name a Fragment");
-            };
-            if let Some(logical_id) = logical_id {
-                let logical_parent_fragment = unsafe { &*exact }
-                    .fragment
-                    .as_deref()
-                    .expect("PrePaint node must own a fragment");
-                if logical_parent_fragment.node_id != logical_id {
-                    panic!("logical parent node id and fragment instance id disagree");
-                }
-            }
-            Some(exact)
+        let position = fragment.paint.Position();
+        let is_out_of_flow = position == Position::kAbsolute || position == Position::kFixed;
+        let logical_parent = if is_out_of_flow {
+            logical_id.and_then(|logical_id| {
+                ResolveLogicalParentOccurrence(
+                    child_pointer,
+                    fragment,
+                    logical_id,
+                    physical_ancestors,
+                    fragment_instances,
+                )
+            })
         } else {
-            let position = fragment.paint.Position();
-            if position == Position::kAbsolute || position == Position::kFixed {
-                logical_id.and_then(|logical_id| {
-                    ResolveLogicalParentOccurrence(
-                        child_pointer,
-                        fragment,
-                        logical_id,
-                        physical_ancestors,
-                        fragment_instances,
-                    )
-                })
-            } else {
-                None
-            }
+            None
         };
         let logical_parent_is_physical_ancestor = logical_parent.is_some_and(|pointer| {
             physical_ancestors.contains(&(pointer as *const PaintTreeNode<'a>))
         });
-        let position = fragment.paint.Position();
-        let is_out_of_flow = position == Position::kAbsolute || position == Position::kFixed;
         if is_out_of_flow
             && logical_id.is_some()
             && !logical_parent_is_physical_ancestor
@@ -4713,7 +4694,6 @@ struct PrePaintPrevious {
     outline_alpha: f32,
     position: i32,
     logical_parent_node_id: Option<u64>,
-    logical_parent_fragment_instance_id: Option<u64>,
     logical_tree_order: u64,
     /// DisplayItemClient ids compared by SameClientDirectory.
     clients: ClientIds,
@@ -4750,7 +4730,6 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         outline_alpha,
         position: p.Position() as i32,
         logical_parent_node_id: p.LogicalParentNodeId(),
-        logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.LogicalTreeOrder(),
         clients: ClientDirectoryIds(f),
     }
@@ -4761,7 +4740,6 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
 /// fragment's scalar fields. CSSOM inline rectangles are not paint inputs.
 fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
     let mut snapshot = FragmentPaintData {
-        inline_geometry: Vec::new(),
         // Document resources are read from the document, never the slot.
         resources: None,
         paint: f.paint.clone(),
@@ -5668,8 +5646,6 @@ fn SamePreviousPhaseInputs(recorded: &PrePaintPrevious, current: &PrePaintPrevio
 fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPrevious) -> bool {
     recorded.position == current.position
         && recorded.logical_parent_node_id == current.logical_parent_node_id
-        && recorded.logical_parent_fragment_instance_id
-            == current.logical_parent_fragment_instance_id
         && recorded.logical_tree_order == current.logical_tree_order
 }
 
@@ -8140,16 +8116,6 @@ impl PrePaintTreeWalk {
                     f.paint
                         .selection_client_invalidation_reason
                         .replace(PaintInvalidationReason::kNone);
-                    f.paint.selection_client_is_just_created.set(false);
-                }
-                if f.paint.PaintLayerClientId() == id
-                    && f.paint.paint_layer_client_is_cacheable
-                    && !f.paint.HasLivePaintLayerClient()
-                {
-                    f.paint
-                        .paint_layer_client_invalidation_reason
-                        .replace(PaintInvalidationReason::kNone);
-                    f.paint.paint_layer_client_is_just_created.set(false);
                 }
                 let live_scroll_client = f.paint.HasLiveScrollClient(id);
                 let scroll_matches = !live_scroll_client

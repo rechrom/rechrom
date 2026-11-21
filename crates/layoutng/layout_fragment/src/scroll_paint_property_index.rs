@@ -60,29 +60,7 @@ impl ScrollPaintPropertyIndex {
         reuse: Option<Self>,
         replay: &[PopulationReplayEntry],
     ) -> Self {
-        let checked = super::layout_fragment_fragment_paint_population::ReplayCheckEnabled()
-            .then(|| Self::new_from(root, fragments, cached_objects.clone(), None, None));
-        let index = Self::new_from(root, fragments, cached_objects, reuse, Some(replay));
-        if let Some(walked) = checked {
-            let same = walked.fragments.len() == index.fragments.len()
-                && walked.fragments.iter().zip(&index.fragments).all(|(a, b)| {
-                    a.fragment == b.fragment
-                        && a.source_id == b.source_id
-                        && walked.path_components[a.path_start..a.path_start + a.path_len]
-                            == index.path_components[b.path_start..b.path_start + b.path_len]
-                })
-                && walked.sticky_fragments == index.sticky_fragments;
-            browser_tracing::instant(
-                "layout",
-                "layout_fragment.ScrollIndexCheck",
-                &[
-                    ("fragments", index.fragments.len() as f64),
-                    ("walked", walked.fragments.len() as f64),
-                    ("mismatch", (!same) as u8 as f64),
-                ],
-            );
-        }
-        index
+        Self::new_from(root, fragments, cached_objects, reuse, Some(replay))
     }
 
     fn new_from(

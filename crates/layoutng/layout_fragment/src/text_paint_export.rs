@@ -431,43 +431,6 @@ pub(crate) fn ExportTextPaintBaseline(item: &FragmentItem) -> Option<f64> {
     item.IsText().then(|| ResolveTextPaintBaseline(item))
 }
 
-pub(super) fn ExportTextCombineInlineOffset(item: &FragmentItem, paint: &mut PaintProperties) {
-    let text_combine = TextCombineForItem(item);
-    if text_combine.is_null() {
-        return;
-    }
-    let text_combine_ref = unsafe { &*text_combine };
-    if let Some(scale_x) = text_combine_ref.ScaleXForInline() {
-        // layout_text_combine.cc:168-176. Spacing precedes the wrapper's scale
-        // transform, hence the division by scale_x.
-        paint.text_combine_inline_offset = Number(LayoutUnit::from_f32(
-            text_combine_ref.ComputeInlineSpacing() / scale_x,
-        ));
-    }
-}
-
-pub(super) fn ExportListMarkerSymbol(item: &FragmentItem, paint: &mut PaintProperties) {
-    if !item.IsSymbolMarker() {
-        return;
-    }
-    let mut object = item.GetLayoutObject();
-    while !object.is_null() {
-        let layout_object = unsafe { &*object };
-        if layout_object.IsLayoutInsideListMarker() {
-            paint.list_marker_inside = true;
-        }
-        let node = layout_object.GetNode();
-        if !node.is_null() && unsafe { &*node }.InputKind() == NodeKind::kListItem {
-            paint.list_marker_symbol = Some(crate::style_projection::ReadListStyleType(
-                unsafe { &*node }.ComputedStyleRef(),
-            ));
-            return;
-        }
-        object = layout_object.Parent();
-    }
-    panic!("symbol list marker has no list-item ancestor");
-}
-
 /// Text-item paint facts read from the FragmentItem as Chromium's
 /// TextFragmentPainter reads them (stage 3 of the borrowed-view boundary):
 /// (is_ellipsis, text_fit_scale, list_marker_symbol, list_marker_inside,
