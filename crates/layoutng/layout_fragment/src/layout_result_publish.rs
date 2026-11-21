@@ -254,7 +254,6 @@ pub(super) fn populate_layout_result_paint_data(
         && paint_state_owners.prior_fragment_instance_ids.is_empty();
     paint_state.FinishPublication(topology_retained);
     trace.set("topology_retained", topology_retained as u8 as f64);
-    let source = crate::layout_engine::PaintFragmentCursor::FromHandle(&handle);
     // Logical (LayoutObject-tree) parents of out-of-flow occurrences are
     // resolved by PrePaint and the client-rect walk from their own trees
     // (stage 5 of the export removal), not per publication here.
@@ -263,17 +262,6 @@ pub(super) fn populate_layout_result_paint_data(
     trace.set(
         "payload_copies_logical_parents",
         (copies_after_parents - copies_after_population) as f64,
-    );
-    if purpose == LayoutUpdateKind::Paint {
-        let _phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::PopulateGlobalPaintData,
-        );
-        ExportCanvasBackground(root, source);
-        ExportGlobalMainThreadScrollFacts(root, objects, source);
-    }
-    trace.set(
-        "payload_copies_global",
-        (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed) - copies_after_parents) as f64,
     );
     cache.styles = paint_state_owners.exported_styles;
     cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;

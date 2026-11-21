@@ -1,9 +1,10 @@
-//! Document-global paint facts read from the resident source tree.
+//! Document-global paint facts read live from the resident source tree.
 //!
-//! Canvas background selection (ViewPainter / BackgroundTransfersToView) is
-//! a live read of the root and body fragments. Paginated document
-//! backgrounds publish only their LayoutView-global facts, and the
-//! fixed-background scroll requirement retains a fragment-qualified frame.
+//! Canvas background selection (ViewPainter / BackgroundTransfersToView),
+//! the document background painted on paginated pages and their
+//! LayoutView-global positioning facts are read at paint time through a
+//! fragment's LayoutObject View(), as Chromium's painters read the LayoutView
+//! and document element. Nothing here is published into per-fragment slots.
 
 #![allow(non_snake_case)]
 
@@ -56,7 +57,10 @@ fn SelectedFragmentBackground<'a>(
         style: &data.paint.style,
         effective_zoom: data.paint.effective_zoom,
         document_element_node_id: 0,
-        previous_document_element_geometry: data.paint.previous_box_geometry,
+        // LayoutBox::PreviousSize() and the saved previous content box and
+        // scrollable overflow (box_paint_invalidator.cc ComputeViewBackground-
+        // Invalidation reads them from the root box).
+        previous_document_element_geometry: data.paint.PreviousBoxGeometry(),
         document_element_paint_offset: Offset::default(),
         document_element_size: size,
         document_element_border: border,
@@ -166,120 +170,67 @@ pub(crate) fn CanvasBackgroundForRoot<'a>(
     })
 }
 
-/// Publish the LayoutView-global background facts that are still retained:
-/// - `view_background_invalidation` on the root slot. BoxPaintInvalidator
-///   compares the previous slot's selection with the current one, so the
-///   value captured at publication must survive into the next lifecycle.
-/// - On paginated page border boxes / page containers: LayoutView::StyleRef()
-///   and the root's positioning size, paint offset and fixed attachment
-///   (view_painter.cc:397-402). The page box types and the fragment-local
-///   page geometry are read live through ResidentBoxGeometry.
-/// The painted canvas background and BackgroundTransfersToView are read live
-/// (PaintFragmentCursor::CanvasBackground, PaintProperties).
-#[inline(never)]
-pub(super) fn ExportCanvasBackground(
-    root_object: &LayoutObject,
-    output: crate::layout_engine::PaintFragmentCursor<'_>,
-) {
-    let Some(root_geometry) = RootFragmentBackground(root_object, output) else {
-        return;
-    };
-    unsafe fn publish_page_document_style(
-        cursor: crate::layout_engine::PaintFragmentCursor<'_>,
-        style: &PaintStyle,
-        positioning_size: Size,
-        root_element_paint_offset: Offset,
-        border: Edges,
-        padding: Edges,
-        has_background_fixed_to_viewport: bool,
-    ) {
-        let children = cursor.Children();
-        let input = unsafe { cursor.PaintDataMut() };
-        if input.IsPageBorderBox() {
-            input.paint.page_document_background_style = Some(style.clone());
-            input.paint.page_document_background_geometry =
-                Some(crate::fragment_tree::PageBackgroundPaintData {
-                    positioning_size,
-                    positioning_area_offset: Offset::default(),
-                    border,
-                    padding,
-                    has_background_fixed_to_viewport,
-                });
-        }
-        if input.IsPageContainer() {
-            input.paint.page_container_background_geometry =
-                Some(crate::fragment_tree::PageContainerBackgroundPaintData {
-                    positioning_size,
-                    root_element_paint_offset,
-                    has_background_fixed_to_viewport,
-                    ..Default::default()
-                });
-        }
-        for child in children {
-            unsafe {
-                publish_page_document_style(
-                    child,
-                    style,
-                    positioning_size,
-                    root_element_paint_offset,
-                    border,
-                    padding,
-                    has_background_fixed_to_viewport,
-                )
-            };
-        }
-    }
-    // kPageContainer / kPageBorderBox fragments exist only below a paginated
-    // root (PhysicalBoxFragment::IsPaginatedRoot); an ordinary screen layout
-    // has none, so do not walk every fragment looking for them.
-    if output.IsPaginatedRoot() {
-        let style = root_geometry.style.clone();
-        let positioning_size = root_geometry.document_element_size;
-        unsafe {
-            publish_page_document_style(
-                output,
-                &style,
-                positioning_size,
-                RootElementPaintOffset(root_object),
-                output.Borders(),
-                output.Padding(),
-                output.paint.IsBackgroundAttachmentFixedObject(),
-            )
-        };
-    }
-    let view_background = ViewBackgroundForRoot(root_object, output)
-        .map(|canvas| canvas.MapStyle(|style: &PaintStyle| style.clone()));
-    unsafe { output.PaintDataMut() }
-        .paint
-        .view_background_invalidation = view_background;
+/// The document element's own background facts for an arbitrary fragment of
+/// the result, reached through its LayoutObject's View(): LayoutView::StyleRef()
+/// as a kPageBorderBox paints it (BoxFragmentPainter, document canvas on each
+/// page). `output` is any cursor of the same result.
+pub(crate) fn DocumentElementBackgroundForObject<'a>(
+    object: &'a LayoutObject,
+    output: crate::layout_engine::PaintFragmentCursor<'a>,
+) -> Option<CanvasBackgroundPaintView<'a>> {
+    let view = unsafe { (object.View() as *const LayoutObject).as_ref() }?;
+    RootFragmentBackground(view, output)
 }
 
-#[inline(never)]
-pub(super) fn ExportGlobalMainThreadScrollFacts(
-    root: &LayoutObject,
-    objects: &[*mut LayoutObject],
-    output: crate::layout_engine::PaintFragmentCursor<'_>,
-) {
-    if !root.IsLayoutView() {
-        return;
+/// LayoutView-global BoxBackgroundPaintContext facts of a paginated document
+/// background (view_painter.cc:397-402): the document element's positioning
+/// size and borders/padding, its first fragment's paint offset, and whether
+/// it has a background fixed to the viewport. Read live from the LayoutView
+/// of `object` and its resident root fragment; the page-local link and page
+/// area offsets are read by ResidentBoxGeometry from the page fragment.
+pub(crate) fn PageBackgroundViewFacts(
+    object: &LayoutObject,
+) -> Option<(crate::fragment_tree::PageBackgroundPaintData, Offset)> {
+    let view = unsafe { (object.View() as *const LayoutObject).as_ref() }?;
+    if !view.IsDocumentElement() {
+        return None;
     }
-    unsafe { output.PaintDataMut() }
-        .paint
-        .requires_main_thread_scrolling_for_background_attachment_fixed =
-        Some(objects.iter().any(|object| {
-            let object = unsafe { &**object };
-            if !object.IsBackgroundAttachmentFixedObject() {
-                return false;
+    let root_box = unsafe { DynamicTo::<LayoutBox>(view as *const LayoutObject).as_ref() }?;
+    if root_box.PhysicalFragmentCount() == 0 {
+        return None;
+    }
+    let fragment = unsafe { &*root_box.GetPhysicalFragment(0) };
+    // The root slot's stitched decoration size, else its border-box size.
+    let positioning_size = ExportStitchedDecorationData(fragment).map_or_else(
+        || {
+            let size = fragment.Size();
+            Size {
+                width: size.width.ToDouble(),
+                height: size.height.ToDouble(),
             }
-            let model = DynamicTo::<LayoutBoxModelObject>(object as *const LayoutObject);
-            debug_assert!(!model.is_null());
-            debug_assert!(!unsafe { &*model }.BackgroundTransfersToViewDefault());
-            if object.IsLayoutView()
-                && object.GetBackgroundPaintLocation()
-                    == crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace
-            {
-                return false;
-            }
-            !object.CanCompositeBackgroundAttachmentFixed()
-        }));
+        },
+        |decoration| decoration.size,
+    );
+    let border = fragment.Borders();
+    let padding = fragment.Padding();
+    Some((
+        crate::fragment_tree::PageBackgroundPaintData {
+            positioning_size,
+            positioning_area_offset: Offset::default(),
+            border: Edges {
+                top: border.top.ToDouble(),
+                right: border.right.ToDouble(),
+                bottom: border.bottom.ToDouble(),
+                left: border.left.ToDouble(),
+            },
+            padding: Edges {
+                top: padding.top.ToDouble(),
+                right: padding.right.ToDouble(),
+                bottom: padding.bottom.ToDouble(),
+                left: padding.left.ToDouble(),
+            },
+            has_background_fixed_to_viewport: view.IsBackgroundAttachmentFixedObject(),
+        },
+        RootElementPaintOffset(view),
+    ))
 }

@@ -277,9 +277,19 @@ pub(crate) fn BackgroundForPainting(
     )
 }
 
-fn BackgroundStyleForPainting(fragment: &FragmentPaintData) -> Option<&PaintStyle> {
+/// document.GetLayoutView()->StyleRef() for a kPageBorderBox (the document
+/// background painted on each page), else the fragment's own style. The
+/// document element's style is read live through the fragment's View();
+/// hand-built fixtures without a source cursor keep the stored projection.
+fn BackgroundStyleForPainting<'n>(
+    node: &'n PaintTreeNode<'_>,
+    fragment: &'n FragmentPaintData,
+) -> Option<&'n PaintStyle> {
     if fragment.IsPageBorderBox() {
-        fragment.paint.page_document_background_style.as_ref()
+        match node.SourceCursor() {
+            Some(cursor) => cursor.DocumentElementBackground().map(|root| root.style),
+            None => fragment.paint.page_document_background_style.as_ref(),
+        }
     } else {
         Some(&fragment.paint.style)
     }
@@ -2114,7 +2124,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
-        let Some(style) = BackgroundStyleForPainting(fragment) else {
+        let Some(style) = BackgroundStyleForPainting(self.node, fragment) else {
             return;
         };
         let background_images = style.background_images();
@@ -8367,7 +8377,7 @@ mod background_attachment_tests {
         assert_ne!(background.color, anonymous_page_color);
 
         fragment.paint.page_document_background_style = None;
-        assert!(BackgroundStyleForPainting(&fragment).is_none());
+        assert!(BackgroundStyleForPainting(&PaintTreeNode::default(), &fragment).is_none());
     }
 
     #[test]

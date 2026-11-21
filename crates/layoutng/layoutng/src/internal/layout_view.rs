@@ -205,6 +205,11 @@ pub struct LayoutView {
     >,
     pending_snap_target_notifications_:
         std::cell::RefCell<Vec<super::layout_scrollable_area::NativeLayoutSnapPlan>>,
+    // LocalFrameView::background_attachment_fixed_objects_
+    // (core/frame/local_frame_view.h), keyed by the retained LayoutObject
+    // identity; maintained by LayoutObject::SetIsBackgroundAttachmentFixedObject.
+    background_attachment_fixed_objects_:
+        std::cell::RefCell<std::collections::HashMap<usize, Member<LayoutObject>>>,
 }
 
 // cpp: layoutng/internal/layout_view.h:437-442
@@ -270,6 +275,7 @@ impl LayoutView {
             pending_snap_updates_: Default::default(),
             pending_perform_snap_: Default::default(),
             pending_snap_target_notifications_: Default::default(),
+            background_attachment_fixed_objects_: Default::default(),
         };
         view.SetRuntimeClass(super::layout_object::LayoutObjectClass::View);
         view.SetInline(false);
@@ -312,7 +318,48 @@ impl LayoutView {
         for area in self.pending_perform_snap_.borrow().values() {
             visitor.Trace(area);
         }
+        for object in self.background_attachment_fixed_objects_.borrow().values() {
+            visitor.Trace(object);
+        }
         self.base_.Trace(visitor);
+    }
+
+    // Source: LocalFrameView::AddBackgroundAttachmentFixedObject /
+    // RemoveBackgroundAttachmentFixedObject (core/frame/local_frame_view.cc).
+    pub fn AddBackgroundAttachmentFixedObject(&self, object: &LayoutObject) {
+        let pointer = object as *const LayoutObject as *mut LayoutObject;
+        self.background_attachment_fixed_objects_
+            .borrow_mut()
+            .insert(pointer as usize, Member::from_ptr(pointer));
+    }
+
+    pub fn RemoveBackgroundAttachmentFixedObject(&self, object: &LayoutObject) {
+        self.background_attachment_fixed_objects_
+            .borrow_mut()
+            .remove(&(object as *const LayoutObject as usize));
+    }
+
+    /// Source: LocalFrameView::RequiresMainThreadScrollingForBackgroundAttachmentFixed
+    /// (core/frame/local_frame_view.cc:1504-1527), read live from the
+    /// view-owned fixed-background object set when PrePaint asks for it.
+    pub fn RequiresMainThreadScrollingForBackgroundAttachmentFixed(&self) -> bool {
+        self.background_attachment_fixed_objects_
+            .borrow()
+            .values()
+            .any(|object| {
+                let object = unsafe { &*object.Get() };
+                debug_assert!(object.IsBackgroundAttachmentFixedObject());
+                let model = DynamicTo::<LayoutBoxModelObject>(object as *const LayoutObject);
+                debug_assert!(!model.is_null());
+                debug_assert!(!unsafe { &*model }.BackgroundTransfersToViewDefault());
+                if object.IsLayoutView()
+                    && object.GetBackgroundPaintLocation()
+                        == super::layout_object::kBackgroundPaintInBorderBoxSpace
+                {
+                    return false;
+                }
+                !object.CanCompositeBackgroundAttachmentFixed()
+            })
     }
 
     // cpp: layoutng/internal/layout_view_layout.cc:194-202

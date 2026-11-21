@@ -213,11 +213,9 @@ use layout_fragment_fragment_paint_population::{
 };
 #[path = "../../../../layout_fragment/src/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
-use layout_fragment_global_paint_export::{
-    ExportCanvasBackground, ExportGlobalMainThreadScrollFacts,
-};
 pub(crate) use layout_fragment_global_paint_export::{
-    CanvasBackgroundForRoot, ViewBackgroundForRoot,
+    CanvasBackgroundForRoot, DocumentElementBackgroundForObject, PageBackgroundViewFacts,
+    ViewBackgroundForRoot,
 };
 #[path = "../../../../layout_fragment/src/inline_fragment_paint_policy.rs"]
 mod layout_fragment_inline_fragment_paint_policy;

@@ -5137,8 +5137,6 @@ mod package_contract_tests {
             "InvalidateInkOverflow",
             "unsafe fn refresh",
             "ExportPaintProperties",
-            "ExportCanvasBackground",
-            "ExportGlobalMainThreadScrollFacts",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -9771,7 +9769,6 @@ mod package_contract_tests {
             "TracePhase::PopulateLayoutResultPaintData",
             "TracePhase::PopulateFragmentPaintData",
             "TracePhase::ResolveLogicalParents",
-            "TracePhase::PopulateGlobalPaintData",
             "FragmentOwners",
             "LayoutResultHandle::FromLayoutResult",
         ] {
@@ -10358,11 +10355,9 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layout_fragment/src/global_paint_export.rs"))
                 .expect("read source global paint owner");
         for owned_policy in [
-            "pub(super) fn ExportCanvasBackground",
-            "pub(super) fn ExportGlobalMainThreadScrollFacts",
             "pub(crate) fn ViewBackgroundForRoot",
-            "view_background_invalidation",
-            "requires_main_thread_scrolling_for_background_attachment_fixed",
+            "pub(crate) fn DocumentElementBackgroundForObject",
+            "pub(crate) fn PageBackgroundViewFacts",
         ] {
             assert!(
                 global.contains(owned_policy),
