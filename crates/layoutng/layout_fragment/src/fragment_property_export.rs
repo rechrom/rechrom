@@ -319,14 +319,6 @@ pub(super) fn ExportProperties(
     let projected_style_identity =
         style_resources as *const crate::internal::layout_input::StyleResourceData as usize;
     output.logical_tree_order = source_entry.logical_tree_order;
-    let mut parent = unsafe { &*object }.Parent();
-    while !parent.is_null() {
-        if let Some(parent_source) = sources.get(&(parent as *const LayoutObject)) {
-            output.logical_parent_node_id = Some(unsafe { &*parent_source.node }.InputId());
-            break;
-        }
-        parent = unsafe { &*parent }.Parent();
-    }
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
@@ -927,4 +919,20 @@ pub(crate) fn LiveRasterEffectOutset(
         };
     }
     unsafe { &*(object_ptr as *const DisplayItemClient) }.VisualRectOutsetForRasterEffects()
+}
+
+/// The source Node id of the nearest LayoutObject ancestor that has a Node:
+/// the logical (LayoutObject-tree) parent PrePaint and the client-rect walk
+/// reparent out-of-flow occurrences under.
+pub(crate) fn LiveLogicalParentNodeId(object: &LayoutObject) -> Option<u64> {
+    // Anonymous objects have no logical position of their own.
+    LiveSourceNode(object)?;
+    let mut parent = object.Parent();
+    while let Some(current) = unsafe { parent.as_ref() } {
+        if let Some(node) = LiveSourceNode(current) {
+            return Some(node.InputId());
+        }
+        parent = current.Parent();
+    }
+    None
 }

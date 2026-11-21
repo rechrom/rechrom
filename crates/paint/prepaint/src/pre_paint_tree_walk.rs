@@ -3799,6 +3799,51 @@ struct DetachedPaintNode<'a> {
     node: Box<PaintTreeNode<'a>>,
 }
 
+/// The occurrence of an out-of-flow child's logical parent LayoutObject:
+/// the nearest physical ancestor occurrence of it that establishes paint
+/// state, else its only such occurrence (preferring the child's
+/// fragmentainer). Chromium's PrePaintTreeWalk reaches the containing
+/// LayoutObject through its context stack; Rechrom's walk follows physical
+/// fragments, so PrePaint resolves the occurrence here instead of the Layout
+/// export resolving every slot each publication.
+fn ResolveLogicalParentOccurrence<'a>(
+    child: *const PaintTreeNode<'a>,
+    fragment: &FragmentPaintData,
+    logical_id: u64,
+    physical_ancestors: &[*const PaintTreeNode<'a>],
+    fragment_instances: &HashMap<u64, *mut PaintTreeNode<'a>>,
+) -> Option<*mut PaintTreeNode<'a>> {
+    let establishes = |node: &PaintTreeNode<'a>| {
+        node.fragment.as_deref().is_some_and(|candidate| {
+            candidate.node_id == logical_id
+                && candidate.paint.HasSource()
+                && candidate.paint.establishes_paint_state
+        })
+    };
+    for &ancestor in physical_ancestors.iter().rev() {
+        let node = unsafe { &*ancestor };
+        if node.fragment.as_deref().is_some_and(|candidate| {
+            candidate.node_id == logical_id && candidate.paint.establishes_paint_state
+        }) {
+            return Some(ancestor as *mut PaintTreeNode<'a>);
+        }
+    }
+    let unique = |same_fragmentainer: bool| {
+        let mut matches = fragment_instances.values().copied().filter(|&candidate| {
+            let node = unsafe { &*candidate };
+            candidate as *const PaintTreeNode<'a> != child
+                && establishes(node)
+                && (!same_fragmentainer
+                    || node.fragment.as_deref().is_some_and(|candidate| {
+                        candidate.fragmentainer_instance_id == fragment.fragmentainer_instance_id
+                    }))
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    };
+    unique(true).or_else(|| unique(false))
+}
+
 fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
     parent: &mut PaintTreeNode<'a>,
     fragment_instances: &HashMap<u64, *mut PaintTreeNode<'a>>,
@@ -3809,13 +3854,15 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
     let mut index = 0;
     while index < parent.children.len() {
         let child = parent.children[index].as_mut();
+        let child_pointer = child as *const PaintTreeNode<'a>;
         let fragment = child
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        let logical_id = fragment.paint.logical_parent_node_id;
+        let logical_id = fragment.paint.LogicalParentNodeId();
         let logical_instance_id = fragment.paint.logical_parent_fragment_instance_id;
         let logical_parent = if let Some(logical_instance_id) = logical_instance_id {
+            // Hand-built fixtures name the occurrence directly.
             let Some(&exact) = fragment_instances.get(&logical_instance_id) else {
                 panic!("logical_parent_fragment_instance_id does not name a Fragment");
             };
@@ -3830,7 +3877,20 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
             }
             Some(exact)
         } else {
-            None
+            let position = fragment.paint.Position();
+            if position == Position::kAbsolute || position == Position::kFixed {
+                logical_id.and_then(|logical_id| {
+                    ResolveLogicalParentOccurrence(
+                        child_pointer,
+                        fragment,
+                        logical_id,
+                        physical_ancestors,
+                        fragment_instances,
+                    )
+                })
+            } else {
+                None
+            }
         };
         let logical_parent_is_physical_ancestor = logical_parent.is_some_and(|pointer| {
             physical_ancestors.contains(&(pointer as *const PaintTreeNode<'a>))
@@ -4669,7 +4729,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         outline_width,
         outline_alpha,
         position: p.Position() as i32,
-        logical_parent_node_id: p.logical_parent_node_id,
+        logical_parent_node_id: p.LogicalParentNodeId(),
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.logical_tree_order,
         clients: ClientDirectoryIds(p),

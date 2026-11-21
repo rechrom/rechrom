@@ -10376,9 +10376,7 @@ mod package_contract_tests {
         )
         .expect("read source fragment relationship owner");
         for owned_policy in [
-            "pub(super) fn ResolveLogicalParentOccurrences",
             "pub(super) fn PopulateInlineStitchedDecorations",
-            "logical_parent_fragment_instance_id",
             "StitchedDecorationData",
         ] {
             assert!(

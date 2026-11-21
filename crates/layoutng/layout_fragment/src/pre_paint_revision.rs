@@ -707,7 +707,7 @@ impl Input {
                 text_start: *text_start,
                 text_end: *text_end,
                 text_paint_timing_non_whitespace: *text_paint_timing_non_whitespace,
-                logical_parent_node_id: node.paint.logical_parent_node_id,
+                logical_parent_node_id: node.paint.LogicalParentNodeId(),
                 logical_parent_fragment_instance_id: node.paint.logical_parent_fragment_instance_id,
                 logical_tree_order: node.paint.logical_tree_order,
             }),
@@ -727,7 +727,7 @@ fn snapshot_identity_equal(a: &InputSnapshot, b: &FragmentPaintData) -> bool {
         && a.text_start == b.text_start
         && a.text_end == b.text_end
         && a.text_paint_timing_non_whitespace == b.text_paint_timing_non_whitespace
-        && a.logical_parent_node_id == b.paint.logical_parent_node_id
+        && a.logical_parent_node_id == b.paint.LogicalParentNodeId()
         && a.logical_parent_fragment_instance_id == b.paint.logical_parent_fragment_instance_id
         && a.logical_tree_order == b.paint.logical_tree_order
 }

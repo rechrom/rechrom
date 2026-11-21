@@ -154,7 +154,7 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveScrollableOverflow, LiveTrackedElementSubRects, LiveFocusedImageMapArea,
     LiveImageDecodingMode, LiveSourceKind, LiveSvgViewBoxIsEmpty, LiveTextControlHost,
     LiveVideoFrameResourceId, LivePreviousBoxGeometry, LiveViewBackgroundRect,
-    LivePreviousViewBackgroundRect, LiveRasterEffectOutset,
+    LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,
@@ -198,7 +198,7 @@ use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
 #[path = "../../../../layout_fragment/src/fragment_paint_population.rs"]
 mod layout_fragment_fragment_paint_population;
 use layout_fragment_fragment_paint_population::{
-    PopulatePhysicalFragmentPaintData, ReplayCheckEnabled, ResolveLogicalParentsFromReplay,
+    PopulatePhysicalFragmentPaintData, ReplayCheckEnabled,
 };
 #[path = "../../../../layout_fragment/src/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
@@ -217,7 +217,6 @@ use layout_fragment_scrollbar_thumb_geometry::SetScrollbarThumb;
 mod layout_fragment_fragment_relationship_export;
 use layout_fragment_fragment_relationship_export::{
     PopulateInlineStitchedDecorations, PopulateInlineStitchedDecorationsFromReplay,
-    ResolveLogicalParentOccurrences,
 };
 #[path = "../../../../layout_fragment/src/sticky_paint_export.rs"]
 mod layout_fragment_sticky_paint_export;

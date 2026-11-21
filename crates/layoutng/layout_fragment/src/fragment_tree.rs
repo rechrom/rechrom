@@ -1881,6 +1881,13 @@ impl PaintProperties {
             )
     }
 
+    /// The source Node id of the LayoutObject's nearest ancestor with a Node.
+    pub fn LogicalParentNodeId(&self) -> Option<u64> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveLogicalParentNodeId)
+            .SourceCheckedOr(self.logical_parent_node_id, "logical_parent_node_id")
+    }
+
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
         self.live_style_facts = live;
     }

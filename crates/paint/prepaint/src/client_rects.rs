@@ -277,6 +277,42 @@ fn LogicalParentOccurrence(
     smallest
 }
 
+/// The occurrence of `index`'s logical parent LayoutObject: the nearest
+/// physical ancestor occurrence of that object which establishes paint state,
+/// else its only occurrence (preferring the same fragmentainer). Chromium's
+/// PrePaintTreeWalk reaches the same containing LayoutObject through its
+/// context stack; Rechrom walks physical fragments, so it resolves it here.
+fn ResolveLogicalParentOccurrence(
+    nodes: &[GeometryNode<'_>],
+    index: usize,
+    source_nodes: &HashMap<u64, Vec<usize>>,
+) -> Option<usize> {
+    let parent_node_id = nodes[index].fragment.paint.LogicalParentNodeId()?;
+    let mut ancestor = nodes[index].parent;
+    while ancestor != NONE && ancestor < nodes.len() {
+        let fragment = nodes[ancestor].fragment;
+        if fragment.node_id == parent_node_id && fragment.paint.establishes_paint_state {
+            return Some(ancestor);
+        }
+        if ancestor == 0 {
+            break;
+        }
+        ancestor = nodes[ancestor].parent;
+    }
+    let candidates = source_nodes.get(&parent_node_id)?;
+    let unique = |same_fragmentainer: bool| {
+        let mut matches = candidates.iter().copied().filter(|&candidate| {
+            candidate != index
+                && (!same_fragmentainer
+                    || nodes[candidate].fragment.fragmentainer_instance_id
+                        == nodes[index].fragment.fragmentainer_instance_id)
+        });
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    };
+    unique(true).or_else(|| unique(false))
+}
+
 fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
     let mut source_nodes: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut instances = HashMap::new();
@@ -300,13 +336,21 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
                 .push(index);
         }
     }
+    // Resolve every occurrence against the physical tree before any node is
+    // moved: the containing LayoutObject's occurrence on the physical
+    // ancestor chain, else its only occurrence (stage 5 of the export removal;
+    // the Layout export no longer resolves these per publication).
+    let resolved: Vec<Option<usize>> = (0..nodes.len())
+        .map(|index| ResolveLogicalParentOccurrence(nodes, index, &source_nodes))
+        .collect();
     let mut detached = Vec::new();
     let mut index = 1;
     while index < nodes.len() {
         let fragment = nodes[index].fragment;
-        let logical_id = fragment.paint.logical_parent_node_id;
+        let logical_id = fragment.paint.LogicalParentNodeId();
         let logical_parent =
             if let Some(instance) = fragment.paint.logical_parent_fragment_instance_id {
+                // Hand-built fixtures name the occurrence directly.
                 let exact = *instances
                     .get(&instance)
                     .expect("logical_parent_fragment_instance_id does not name a Fragment");
@@ -317,6 +361,8 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
                     );
                 }
                 Some(exact)
+            } else if let Some(occurrence) = resolved[index] {
+                Some(occurrence)
             } else {
                 logical_id
                     .and_then(|id| source_nodes.get(&id))
@@ -485,7 +531,7 @@ fn CollectFragmentClientRectsFromSource(
         &mut inline,
     );
     if nodes.iter().any(|node| {
-        node.fragment.paint.logical_parent_node_id.is_some()
+        node.fragment.paint.LogicalParentNodeId().is_some()
             || node
                 .fragment
                 .paint

@@ -250,35 +250,9 @@ pub(super) fn populate_layout_result_paint_data(
     paint_state.FinishPublication(topology_retained);
     trace.set("topology_retained", topology_retained as u8 as f64);
     let source = crate::layout_engine::PaintFragmentCursor::FromHandle(&handle);
-    {
-        let _phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::ResolveLogicalParents,
-        );
-        if purpose == LayoutUpdateKind::Paint && ReplayCheckEnabled() {
-            // Check mode: the list resolution must equal the cursor walk.
-            let predicted =
-                ResolveLogicalParentsFromReplay(&paint_state_owners.replay_next.entries, false);
-            ResolveLogicalParentOccurrences(source);
-            let mismatches = predicted
-                .iter()
-                .filter(|(slot, resolved)| {
-                    unsafe { &*(*slot as *const FragmentPaintData) }
-                        .paint
-                        .logical_parent_fragment_instance_id
-                        != *resolved
-                })
-                .count();
-            browser_tracing::instant(
-                "layout",
-                "layout_fragment.LogicalParentCheck",
-                &[("checked", predicted.len() as f64), ("mismatches", mismatches as f64)],
-            );
-        } else if purpose == LayoutUpdateKind::Paint {
-            ResolveLogicalParentsFromReplay(&paint_state_owners.replay_next.entries, true);
-        } else {
-            ResolveLogicalParentOccurrences(source);
-        }
-    }
+    // Logical (LayoutObject-tree) parents of out-of-flow occurrences are
+    // resolved by PrePaint and the client-rect walk from their own trees
+    // (stage 5 of the export removal), not per publication here.
     let copies_after_parents =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
     trace.set(
