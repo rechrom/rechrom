@@ -5179,8 +5179,6 @@ mod package_contract_tests {
             "pub(super) fn VisitMutablePaintInputs",
             "pub(super) fn UpdatePrePaintInputs",
             "reference_viewport",
-            "FlatPrePaintInput",
-            "tracker.update_flat",
         ] {
             assert!(
                 owner.contains(owned_policy),

@@ -14,7 +14,6 @@ pub use layout_fragment_boundary::{
 
 #[path = "pre_paint_revision.rs"]
 pub mod pre_paint_revision;
-pub use pre_paint_revision::SamePrePaintInput;
 
 pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 use foundation::{LayoutOffset as Offset, LayoutSize as Size};

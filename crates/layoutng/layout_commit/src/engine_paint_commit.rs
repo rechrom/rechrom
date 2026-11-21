@@ -53,9 +53,10 @@ impl layout_commit::PaintCommitBackend for PaintCommit<'_, '_> {
 
     #[inline(never)]
     fn CommitPrePaintInputs(&mut self, commit: &PaintClientCommit) {
-        self.engine
-            .pre_paint_inputs_
-            .CommitClients(commit.UsedClients().iter().copied());
+        // Chromium's PaintController commit validates the used clients on the
+        // LayoutObjects themselves; PrePaint certification keeps no copied
+        // client lifecycle to mirror.
+        let _ = commit;
     }
 
     #[inline(never)]
