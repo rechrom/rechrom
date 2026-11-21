@@ -642,10 +642,10 @@ fn PopulateInlineItemLocalPaintData(
                     ExportMathMLPaintData(box_fragment, &mut output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportFrameSetPaintData(box_fragment, &mut output.paint);
+                    output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportFieldsetPaintData(box_fragment, &mut output.paint);
+                    output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
                     ExportColumnRulePaintData(box_fragment, &mut output.paint);
@@ -1392,10 +1392,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         ExportMathMLPaintData(box_fragment, &mut output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportFrameSetPaintData(box_fragment, &mut output.paint);
+        output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportFieldsetPaintData(box_fragment, &mut output.paint);
+        output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportColumnRulePaintData(box_fragment, &mut output.paint);

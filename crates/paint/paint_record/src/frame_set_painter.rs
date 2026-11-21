@@ -156,7 +156,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         if info.phase != PaintPhase::kForeground
-            || fragment.paint.frame_set.is_none()
+            || fragment.ViewFrameSet().is_none()
             || self.node.children.is_empty()
         {
             return;
@@ -174,7 +174,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
                 height: fragment.ViewSize().height,
             },
         );
-        let data = fragment.paint.frame_set.as_ref().unwrap();
+        let data = fragment.ViewFrameSet().unwrap();
         if data.border_thickness <= 0.0 {
             return;
         }

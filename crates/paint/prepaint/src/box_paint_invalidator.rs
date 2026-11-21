@@ -266,7 +266,7 @@ impl BoxPaintInvalidator {
             return PaintInvalidationReason::kLayout;
         }
 
-        if fragment.paint.frame_set.is_some() {
+        if fragment.ViewFrameSet().is_some() {
             return PaintInvalidationReason::kLayout;
         }
 

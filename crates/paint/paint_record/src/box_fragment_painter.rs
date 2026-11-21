@@ -1075,7 +1075,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // independent of whether PaintController moved the previous
             // BoxDecorationBackground record into this artifact.
             let theme_owns_decoration = decoration_data.HasAppearance();
-            let is_fieldset = fragment.paint.fieldset.is_some();
+            let is_fieldset = fragment.ViewFieldset().is_some();
             if !cached_box_decoration
                 && theme_owns_decoration
                 && decoration_data.ShouldPaintShadow()

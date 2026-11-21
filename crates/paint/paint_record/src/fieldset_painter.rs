@@ -42,7 +42,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             width: fragment.ViewSize().width,
             height: fragment.ViewSize().height,
         };
-        let Some(fieldset) = fragment.paint.fieldset.as_ref() else {
+        let Some(fieldset) = fragment.ViewFieldset() else {
             return rect;
         };
         let outsets = &fieldset.border_outsets;
@@ -180,7 +180,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.fieldset.as_ref() else {
+        let Some(data) = fragment.ViewFieldset() else {
             return false;
         };
         if !data.has_legend {

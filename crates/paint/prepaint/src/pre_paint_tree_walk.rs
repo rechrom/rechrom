@@ -3292,7 +3292,7 @@ fn MaskBox(
             width: table.grid_size.width,
             height: table.grid_size.height,
         };
-    } else if let Some(fieldset) = paint.fieldset.as_ref() {
+    } else if let Some(fieldset) = fragment.ViewFieldset() {
         // FieldsetPainter::PaintMask contracts the paint rect by the same
         // legend-derived outsets used for its decoration background. Resolve
         // CSS mask-origin/mask-clip against that contracted border box while

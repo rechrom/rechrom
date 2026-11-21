@@ -778,6 +778,10 @@ pub trait ResidentBoxGeometry {
     /// Whether the fragment is hidden for paint; an inline item's
     /// FragmentItem::IsHiddenForPaint() or a disabled SVG viewport.
     fn ViewHidden(&self) -> bool;
+    /// FrameSet / fieldset paint data computed from the resident box
+    /// fragment (its FrameSetLayoutData, legend cutout).
+    fn ViewFrameSet(&self) -> Option<Arc<FrameSetPaintData>>;
+    fn ViewFieldset(&self) -> Option<Arc<FieldsetPaintData>>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -848,6 +852,26 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewFrameSet(&self) -> Option<Arc<FrameSetPaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportFrameSetPaintData(
+                box_fragment,
+                &self.paint,
+            ),
+            None => self.paint.frame_set.clone(),
+        }
+    }
+
+    fn ViewFieldset(&self) -> Option<Arc<FieldsetPaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportFieldsetPaintData(
+                box_fragment,
+                &self.paint,
+            ),
+            None => self.paint.fieldset.clone(),
+        }
+    }
+
     fn ViewDisplayItemFragment(&self) -> u32 {
         match self.resident_owner {
             layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {

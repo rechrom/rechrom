@@ -194,16 +194,16 @@ pub(super) fn ExportMathMLPaintData(
     paint.mathml = Some(Arc::new(data));
 }
 
-pub(super) fn ExportFrameSetPaintData(
+pub(crate) fn ExportFrameSetPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
+    paint: &PaintProperties,
+) -> Option<Arc<FrameSetPaintData>> {
     if paint.SourceKind() != NodeKind::kFrameSet {
-        return;
+        return None;
     }
     let source = box_fragment.GetFrameSetLayoutData();
     if source.is_null() {
-        return;
+        return None;
     }
     let source = unsafe { &*source };
     let mut data = FrameSetPaintData::default();
@@ -221,15 +221,15 @@ pub(super) fn ExportFrameSetPaintData(
         .extend(source.row_allow_border.iter().copied());
     data.border_thickness = source.border_thickness as f64;
     data.has_border_color = source.has_border_color;
-    paint.frame_set = Some(Arc::new(data));
+    Some(Arc::new(data))
 }
 
-pub(super) fn ExportFieldsetPaintData(
+pub(crate) fn ExportFieldsetPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
+    paint: &PaintProperties,
+) -> Option<Arc<FieldsetPaintData>> {
     if paint.SourceKind() != NodeKind::kFieldset {
-        return;
+        return None;
     }
     let mut data = FieldsetPaintData::default();
     let mut legend_border_box = PhysicalRect::default();
@@ -315,7 +315,7 @@ pub(super) fn ExportFieldsetPaintData(
         width: Number(cutout.size.width),
         height: Number(cutout.size.height),
     };
-    paint.fieldset = Some(Arc::new(data));
+    Some(Arc::new(data))
 }
 
 #[inline(never)]
