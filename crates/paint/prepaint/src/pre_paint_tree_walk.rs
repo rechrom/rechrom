@@ -4067,7 +4067,7 @@ fn FirstLogicalTreeOrder(node: &PaintTreeNode<'_>) -> u64 {
         .as_deref()
         .expect("PrePaint node must own a fragment")
         .paint
-        .logical_tree_order;
+        .LogicalTreeOrder();
     if order != 0 {
         return order;
     }
@@ -4257,24 +4257,24 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
             .as_deref_mut()
             .expect("PrePaint node must own a fragment");
         let paint = &fragment.paint;
-        let style_changed = paint.style.auto_dark_mode_paused != inherited_paused;
+        let style_changed = paint.style.auto_dark_mode_paused() != inherited_paused;
         // A live-source selection style is resolved in Paint and takes the
         // originating style's pause (PaintProperties::SelectionPaintStyle).
         let selection_changed = paint.style.Source().is_none()
-            && paint.selection_style.auto_dark_mode_paused != inherited_paused;
+            && paint.selection_style.auto_dark_mode_paused() != inherited_paused;
         let decoration_changed = paint
             .svg_text_decoration_style
             .as_ref()
-            .is_some_and(|style| style.auto_dark_mode_paused != inherited_paused);
+            .is_some_and(|style| style.auto_dark_mode_paused() != inherited_paused);
         if style_changed {
-            fragment.paint.style.auto_dark_mode_paused = inherited_paused;
+            fragment.paint.style.SetAutoDarkModePaused(inherited_paused);
         }
         if selection_changed {
-            fragment.paint.selection_style.auto_dark_mode_paused = inherited_paused;
+            fragment.paint.selection_style.SetAutoDarkModePaused(inherited_paused);
         }
         if decoration_changed {
             if let Some(style) = &mut fragment.paint.svg_text_decoration_style {
-                style.auto_dark_mode_paused = inherited_paused;
+                style.SetAutoDarkModePaused(inherited_paused);
             }
         }
     }
@@ -4751,7 +4751,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         position: p.Position() as i32,
         logical_parent_node_id: p.LogicalParentNodeId(),
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
-        logical_tree_order: p.logical_tree_order,
+        logical_tree_order: p.LogicalTreeOrder(),
         clients: ClientDirectoryIds(f),
     }
 }
@@ -5757,7 +5757,7 @@ fn CanRefreshInvalidationOnlySource(
     let recorded = &RecordOf(previous);
     SamePreviousPhaseInputs(recorded, current)
         && recorded.offset == new.offset
-        && recorded.content_size == new.content_size
+        && recorded.content_size == new.ViewContentSize()
         && SamePreviousLogicalPosition(recorded, current)
 }
 

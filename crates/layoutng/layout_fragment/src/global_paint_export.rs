@@ -46,9 +46,7 @@ fn SelectedFragmentBackground<'a>(
 ) -> CanvasBackgroundPaintView<'a> {
     let data = cursor.PaintData();
     let size = data
-        .paint
-        .stitched_decoration
-        .as_ref()
+        .ViewStitchedDecoration()
         .map_or(data.size, |decoration| decoration.size);
     let border = data.Borders();
     let padding = data.Padding();
