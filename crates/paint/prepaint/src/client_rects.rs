@@ -71,6 +71,7 @@ fn Gather<'a>(
     let delta = FlatToWorldSpaceOffset(transforms, &property_world).unwrap_or_default();
     let geometry = ResolveFragmentGeometry(
         &fragment,
+        fragment.0.ViewOffsetInContainer(),
         parent_offset,
         paint_space_origin,
         transforms,
@@ -163,7 +164,12 @@ fn Gather<'a>(
             )
         } else {
             let origin =
-                ResolveChildGeometryOrigin(&child, child_origin, geometry.paint_space_origin);
+                ResolveChildGeometryOrigin(
+                    &child,
+                    child.0.ViewOffsetInContainer(),
+                    child_origin,
+                    geometry.paint_space_origin,
+                );
             Gather(
                 child,
                 origin,

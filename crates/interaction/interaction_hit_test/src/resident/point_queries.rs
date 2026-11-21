@@ -89,12 +89,15 @@ fn LayoutPoint(fragments: ResidentFragmentSource<'_>, point: Offset) -> Offset {
 // Map a root-space point through the exact same transform and scroll state as paint.
 fn LocalPoint(
     fragment: &FragmentPaintData,
+    // The fragment's offset in its paint-tree parent
+    // (PaintFragmentCursor::ViewOffsetInContainer).
+    link_offset: Offset,
     point: Offset,
     parent: Offset,
 ) -> Option<(Offset, Offset)> {
     let absolute = Offset {
-        x: parent.x + fragment.offset.x,
-        y: parent.y + fragment.offset.y,
+        x: parent.x + link_offset.x,
+        y: parent.y + link_offset.y,
     };
     let mut point = point;
     // Match ResolveFragmentGeometry's local paint-property order. Only the
@@ -320,7 +323,8 @@ fn HitGeometry(
     {
         return None;
     }
-    let (point, absolute) = LocalPoint(fragment, point, parent)?;
+    let (point, absolute) =
+        LocalPoint(fragment, fragment.Cursor().ViewOffsetInContainer(), point, parent)?;
     if fragment.ViewKind() == layoutng_assembly::fragment_tree::FragmentKind::kLine {
         if let Some(overflow) = fragment.ViewInkOverflow() {
             let left = absolute.x + overflow.offset.x;
@@ -498,8 +502,8 @@ fn SelfHitTarget<'f>(
             node_id: child.node_id,
             fragment: child.Cursor(),
             local_point: Offset {
-                x: point.x - absolute.x - child.offset.x,
-                y: point.y - absolute.y - child.offset.y,
+                x: point.x - absolute.x - child.Cursor().ViewOffsetInContainer().x,
+                y: point.y - absolute.y - child.Cursor().ViewOffsetInContainer().y,
             },
             overflow_controls: false,
             frame_view_scrollbar: false,

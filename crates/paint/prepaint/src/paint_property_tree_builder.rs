@@ -30,6 +30,9 @@ fn NeedsCssBlendEffect(
 pub(super) struct PaintPropertyTreeBuilder<'a> {
     walk: &'a mut PrePaintTreeWalk,
     previous_paint_result: paint_model::PaintResult,
+    // The node's offset in its paint-tree parent from its source cursor;
+    // fixtures without a cursor use their recorded offset.
+    link_offset: Option<Offset>,
 }
 
 impl<'a> PaintPropertyTreeBuilder<'a> {
@@ -37,6 +40,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         Self {
             walk,
             previous_paint_result: paint_model::PaintResult::kMayBeClippedByCullRect,
+            link_offset: None,
         }
     }
 
@@ -45,6 +49,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         previous_paint_result: paint_model::PaintResult,
     ) -> Self {
         self.previous_paint_result = previous_paint_result;
+        self
+    }
+
+    pub(super) fn with_link_offset(mut self, link_offset: Offset) -> Self {
+        self.link_offset = Some(link_offset);
         self
     }
 
@@ -123,6 +132,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 .unwrap_or_default();
         let mut geometry = ResolveFragmentGeometry(
             fragment,
+            self.link_offset.unwrap_or(fragment.offset),
             parent_offset,
             paint_space_origin,
             &mut transforms,

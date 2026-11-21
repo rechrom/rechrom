@@ -906,8 +906,10 @@ impl<'a> PaintFragmentCursor<'a> {
         }
     }
 
-    /// The offset of a physical fragment in its parent (the child link) or
-    /// of an inline item in its container fragment.
+    /// The fragment's offset in its paint-tree parent: a physical
+    /// fragment's child-link offset, or an inline item's offset from its
+    /// parent item (from the container fragment for a top-level item), as
+    /// FragmentChildren records it.
     pub fn ViewOffsetInContainer(self) -> foundation::LayoutOffset {
         let offset = self.source.Offset();
         foundation::LayoutOffset {

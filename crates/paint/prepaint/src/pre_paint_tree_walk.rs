@@ -1388,6 +1388,9 @@ fn CanPropagateSubpixelAccumulation(
 
 pub fn ResolveFragmentGeometry(
     fragment: &FragmentPaintData,
+    // The fragment's offset in its paint-tree parent
+    // (PaintFragmentCursor::ViewOffsetInContainer).
+    link_offset: Offset,
     parent_offset: Offset,
     mut paint_space_origin: Offset,
     transforms: &mut Vec<TransformMatrix>,
@@ -1395,8 +1398,8 @@ pub fn ResolveFragmentGeometry(
     inherited_directly_composited_subpixel_delta: Offset,
 ) -> FragmentGeometry {
     let absolute_offset = Offset {
-        x: parent_offset.x + fragment.offset.x,
-        y: parent_offset.y + fragment.offset.y,
+        x: parent_offset.x + link_offset.x,
+        y: parent_offset.y + link_offset.y,
     };
     let mut geometry = FragmentGeometry {
         absolute_offset,
@@ -1613,6 +1616,8 @@ pub fn ChildGeometryOrigin(fragment: &FragmentPaintData, absolute_offset: Offset
 
 pub fn ResolveChildGeometryOrigin(
     child: &FragmentPaintData,
+    // The child's offset in this parent (PaintFragmentCursor::ViewOffsetInContainer).
+    child_link_offset: Offset,
     child_origin: Offset,
     paint_space_origin: Offset,
 ) -> Offset {
@@ -1627,8 +1632,8 @@ pub fn ResolveChildGeometryOrigin(
             // coordinates. Chromium resets the paint offset after installing
             // ReplacedContentTransform, so descendants start at the snapped
             // content origin instead of reintroducing the root's residual.
-            x: paint_space_origin.x - child.offset.x,
-            y: paint_space_origin.y - child.offset.y,
+            x: paint_space_origin.x - child_link_offset.x,
+            y: paint_space_origin.y - child_link_offset.y,
         }
     } else {
         child_origin
@@ -4689,7 +4694,7 @@ struct PrePaintPrevious {
     clients: ClientIds,
 }
 
-fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
+fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPrevious {
     let p = &f.paint;
     let (visible, outline_style, outline_width, outline_alpha) = p.style.PhaseStyleValues();
     let phase_flags = u32::from(p.HasSource())
@@ -4710,7 +4715,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         display_item_client_id: p.DisplayItemClientId(),
         display_item_fragment: p.display_item_fragment,
         size: f.ViewSize(),
-        offset: f.offset,
+        offset: link_offset,
         content_size: f.ViewContentSize(),
         phase_flags,
         floating: p.Floating() as i32,
@@ -6282,7 +6287,8 @@ impl PrePaintTreeWalk {
         // the borrowed sidecar pointer has to move to the new owner.
         // The values this lifecycle compares and then records on the slot
         // (PrePaintPreviousOf), computed once per visited node.
-        let current_record = PrePaintPreviousOf(&fragment);
+        let current_record =
+            PrePaintPreviousOf(&fragment, fragment.Cursor().ViewOffsetInContainer());
         let previous_display_item_client_id =
             previous.as_ref().map(|node| RecordOf(node).display_item_client_id);
         // The previous lifecycle's fragment, as the retained node recorded
@@ -6433,6 +6439,7 @@ impl PrePaintTreeWalk {
         } else {
             let mut built = PaintPropertyTreeBuilder::new(self)
                 .with_previous_paint_result(old_previous_paint_result)
+                .with_link_offset(fragment.Cursor().ViewOffsetInContainer())
                 .BuildNode(
                     &fragment,
                     inherited.offset,
@@ -7182,7 +7189,11 @@ impl PrePaintTreeWalk {
         });
     }
 
-    fn ContextForChild(&self, child: &FragmentPaintData, base: &ChildContext) -> InheritedContext {
+    fn ContextForChild(
+        &self,
+        child: &PaintFragmentSource<'_>,
+        base: &ChildContext,
+    ) -> InheritedContext {
         // cpp: paint_property_tree_builder.cc:4519-4532.
         if child.paint.IsSVGHiddenContainer() {
             return InheritedContext {
@@ -7242,7 +7253,12 @@ impl PrePaintTreeWalk {
         InheritedContext {
             inside_blocking_wheel_event_handler: base.inside_blocking_wheel_event_handler,
             blocking_wheel_event_handler_changed: base.blocking_wheel_event_handler_changed,
-            offset: ResolveChildGeometryOrigin(child, base.origin, base.paint_space),
+            offset: ResolveChildGeometryOrigin(
+                child,
+                child.Cursor().ViewOffsetInContainer(),
+                base.origin,
+                base.paint_space,
+            ),
             paint_space: base.paint_space,
             clip: base.clip,
             cull: base.cull,
@@ -8676,6 +8692,7 @@ mod tests {
         let mut transforms = Vec::new();
         let geometry = ResolveFragmentGeometry(
             &fragment,
+            fragment.offset,
             Offset::default(),
             Offset::default(),
             &mut transforms,
@@ -8702,6 +8719,7 @@ mod tests {
         let mut transforms = Vec::new();
         let geometry = ResolveFragmentGeometry(
             &fragment,
+            fragment.offset,
             Offset { x: 0.3, y: 0.0 },
             Offset::default(),
             &mut transforms,
@@ -8847,6 +8865,7 @@ mod tests {
         let mut transforms = Vec::new();
         let geometry = ResolveFragmentGeometry(
             &fragment,
+            fragment.offset,
             Offset { x: 0.25, y: 0.0 },
             Offset::default(),
             &mut transforms,
@@ -8862,6 +8881,7 @@ mod tests {
         transforms.clear();
         let geometry = ResolveFragmentGeometry(
             &fragment,
+            fragment.offset,
             Offset { x: -0.5, y: 0.0 },
             Offset::default(),
             &mut transforms,
@@ -8898,6 +8918,7 @@ mod tests {
         let mut transforms = Vec::new();
         let geometry = ResolveFragmentGeometry(
             &fragment,
+            fragment.offset,
             Offset::default(),
             Offset::default(),
             &mut transforms,
