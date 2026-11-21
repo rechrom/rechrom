@@ -174,7 +174,7 @@ impl PrePaintTreeWalk {
                     let node = unsafe { &*pointer };
                     node.is_paint_layer
                         && node.fragment.as_deref().is_some_and(|fragment| {
-                            fragment.paint.paint_layer_client_id == layer_client_id
+                            fragment.paint.PaintLayerClientId() == layer_client_id
                         })
                 })?
         };

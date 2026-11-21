@@ -2038,7 +2038,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             children: ChildContext {
                 inside_blocking_wheel_event_handler: fragment
                     .paint
-                    .inside_blocking_wheel_event_handler,
+                    .InsideBlockingWheelEventHandler(),
                 blocking_wheel_event_handler_changed: false,
                 origin: child_origin,
                 paint_space: if has_scroll_translation {

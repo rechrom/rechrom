@@ -1015,7 +1015,7 @@ impl PaintEngine {
             .ResidentHitTest(child)?
             .Fragment()
             .paint
-            .paint_layer_client_id;
+            .PaintLayerClientId();
         let all = crate::resident_hit_test::ResidentLayerSelection {
             negative_z: true,
             normal_flow: true,

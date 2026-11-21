@@ -16,7 +16,7 @@ fn dump_word_fragments(fragment: PaintFragmentCursor<'_>, word_ids: &[u64]) {
             data.node_id,
             data.paint.SourceKind(),
             data.offset,
-            data.paint.paint_layer_client_id,
+            data.paint.PaintLayerClientId(),
             data.paint.PaintLayerIsSelfPainting(),
             data.paint.style.has_transform_payload(),
             data.paint.establishes_paint_state,

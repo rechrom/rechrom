@@ -1045,11 +1045,26 @@ impl PaintProperties {
     }
 
     fn LivePaintLayerClient(&self) -> Option<&DisplayItemClient> {
-        if self.paint_layer_client_id == 0 {
-            return None;
-        }
-        let layer = self.SourcePaintLayer()?;
-        (layer.Id() == self.paint_layer_client_id).then(|| layer.DisplayItemClient())
+        self.SourcePaintLayer().map(|layer| layer.DisplayItemClient())
+    }
+
+    /// The source PaintLayer's DisplayItemClient id, 0 without a layer
+    /// (cpp: core/paint/paint_layer.h:168-171).
+    pub fn PaintLayerClientId(&self) -> u64 {
+        self.SourceObject()
+            .map(|_| self.SourcePaintLayer().map_or(0, |layer| layer.Id()))
+            .SourceCheckedOr(self.paint_layer_client_id, "paint_layer_client_id")
+    }
+
+    /// LayoutObject::InsideBlockingWheelEventHandler(), which PrePaint
+    /// updates on the LayoutObject (paint_property_tree_builder.cc).
+    pub fn InsideBlockingWheelEventHandler(&self) -> bool {
+        self.SourceObject()
+            .map(LayoutObject::InsideBlockingWheelEventHandler)
+            .SourceCheckedOr(
+                self.inside_blocking_wheel_event_handler,
+                "inside_blocking_wheel_event_handler",
+            )
     }
 
     fn ClientState(
@@ -1183,7 +1198,7 @@ impl PaintProperties {
             .is_some()
     }
     pub fn UpdateInsideBlockingWheelEventHandler(&mut self, inside: bool) -> bool {
-        let changed = self.inside_blocking_wheel_event_handler != inside;
+        let changed = self.InsideBlockingWheelEventHandler() != inside;
         let object = self.SourceObjectPointer();
         if let Some(object) = unsafe { object.as_mut() } {
             object.UpdateInsideBlockingWheelEventHandler(inside);

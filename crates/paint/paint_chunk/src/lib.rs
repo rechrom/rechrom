@@ -51,7 +51,7 @@ impl DisplayItemClientInfo {
     }
 
     pub fn from_paint_layer(fragment: &FragmentPaintData) -> Option<Self> {
-        (fragment.paint.paint_layer_client_id != 0).then(|| {
+        (fragment.paint.PaintLayerClientId() != 0).then(|| {
             let state = fragment.paint.PaintLayerClientState();
             Self {
                 invalidation_reason: state.invalidation_reason,

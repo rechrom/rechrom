@@ -28,7 +28,7 @@ pub fn ClassifyFragmentPaintLayer(
     if fragment.paint.PaintLayerStateIsAuthoritative() {
         let is_paint_layer = fragment.kind == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
-            && fragment.paint.paint_layer_client_id != 0
+            && fragment.paint.PaintLayerClientId() != 0
             && fragment.paint.PaintLayerIsSelfPainting();
         return PaintLayerClassification {
             is_paint_layer,
@@ -76,7 +76,7 @@ pub fn ClassifyFragmentPaintLayer(
             }));
     // A source PaintLayer is authoritative when the bridge exported one.
     // Borrowed line/text fragments never become independent layer owners.
-    if fragment.paint.paint_layer_client_id != 0 {
+    if fragment.paint.PaintLayerClientId() != 0 {
         is_paint_layer = fragment.kind == FragmentKind::kBox
             && establishes
             && fragment.paint.PaintLayerIsSelfPainting();
@@ -98,7 +98,7 @@ pub fn ClassifyFragmentPaintLayer(
                     || style.has_mask_images()
                     || style.has_mask_box_image()
             }));
-    if fragment.paint.paint_layer_client_id != 0 && is_paint_layer {
+    if fragment.paint.PaintLayerClientId() != 0 && is_paint_layer {
         is_stacking_context = is_root || fragment.paint.PaintLayerIsStackingContext();
         stacking_level = fragment.paint.PaintLayerStackingLevel();
     }

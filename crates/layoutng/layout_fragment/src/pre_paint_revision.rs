@@ -367,7 +367,7 @@ impl PrePaintRevisionTracker {
                 paint.selection_client_is_just_created.set(false);
             }
             if committed(
-                paint.paint_layer_client_id,
+                paint.PaintLayerClientId(),
                 paint.paint_layer_client_is_cacheable,
             ) {
                 paint.paint_layer_client_invalidation_reason =
@@ -788,7 +788,7 @@ fn owner_ids(paint: &PaintProperties) -> [u64; 7] {
     let mut ids = [
         paint.display_item_client_id,
         paint.selection_client_id,
-        paint.paint_layer_client_id,
+        paint.PaintLayerClientId(),
         0,
         0,
         0,

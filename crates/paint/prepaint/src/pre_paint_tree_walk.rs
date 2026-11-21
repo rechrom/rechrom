@@ -1169,7 +1169,7 @@ pub struct FragmentGeometry {
 // LayoutView branch remains unsupported until the frame-tree relationship is
 // an explicit Layout boundary fact.
 fn NeedsIsolationNodes(fragment: &FragmentPaintData) -> bool {
-    fragment.paint.paint_layer_client_id != 0
+    fragment.paint.PaintLayerClientId() != 0
         && (fragment.paint.ShouldApplyPaintContainment()
             || (fragment.paint.ShouldApplyStyleContainment()
                 && fragment.paint.ShouldApplyLayoutContainment()))
@@ -1294,7 +1294,7 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
         || fragment.paint.NeedsAnchorPositionScrollAdjustment()
         || fragment.paint.scrollbars.is_some()
         || fragment.paint.SourceKind() == NodeKind::kSvgRoot
-        || (fragment.paint.paint_layer_client_id != 0
+        || (fragment.paint.PaintLayerClientId() != 0
             && (HasReferenceFilterOrReflection(style) || style.has_backdrop_filters()))
         || fragment.paint.FixedToView()
     {
@@ -1349,7 +1349,7 @@ fn CanPropagateSubpixelAccumulation(
     fragment: &FragmentPaintData,
     style: &PaintStyle,
 ) -> (bool, bool) {
-    if fragment.paint.paint_layer_client_id == 0 {
+    if fragment.paint.PaintLayerClientId() == 0 {
         return (true, true);
     }
     let direct = CompositingReasonFinder::DirectReasonsForPaintProperties(fragment);
@@ -5587,7 +5587,7 @@ fn SamePreviousLogicalPosition(recorded: &PrePaintPrevious, current: &PrePaintPr
 fn ClientDirectoryIds(paint: &layoutng_assembly::fragment_tree::PaintProperties) -> ClientIds {
     ClientIds {
         display_item: paint.display_item_client_id,
-        paint_layer: paint.paint_layer_client_id,
+        paint_layer: paint.PaintLayerClientId(),
         scrollbars: paint.scrollbars.as_ref().map(|bars| {
             (
                 bars.corner_client_id,
@@ -6101,13 +6101,13 @@ impl PrePaintTreeWalk {
             || if should_update {
                 has_handler
             } else {
-                fragment.paint.inside_blocking_wheel_event_handler
+                fragment.paint.InsideBlockingWheelEventHandler()
             };
         let mut resident = ResidentFragment::FromSource(&fragment);
         // The payload is shared copy-on-write with the previous publication.
         // Its stored bit and the LayoutObject's are written together (and an
         // export copies the object's), so an equal bit needs no update.
-        let blocking_wheel_changed = resident.paint.inside_blocking_wheel_event_handler != inside
+        let blocking_wheel_changed = resident.paint.InsideBlockingWheelEventHandler() != inside
             && resident.paint.UpdateInsideBlockingWheelEventHandler(inside);
         if inherited.blocking_wheel_event_handler_changed || blocking_wheel_changed {
             resident.paint.InvalidatePaintForHitTest();
@@ -7569,7 +7569,7 @@ impl PrePaintTreeWalk {
                 };
                 add(f.paint.display_item_client_id);
                 add(f.paint.selection_client_id);
-                add(f.paint.paint_layer_client_id);
+                add(f.paint.PaintLayerClientId());
                 if let Some(scroll) = &f.paint.scroll_container {
                     add(scroll.scrolling_background_client_id);
                 }
@@ -8029,7 +8029,7 @@ impl PrePaintTreeWalk {
                         .replace(PaintInvalidationReason::kNone);
                     f.paint.selection_client_is_just_created.set(false);
                 }
-                if f.paint.paint_layer_client_id == id
+                if f.paint.PaintLayerClientId() == id
                     && f.paint.paint_layer_client_is_cacheable
                     && !f.paint.HasLivePaintLayerClient()
                 {

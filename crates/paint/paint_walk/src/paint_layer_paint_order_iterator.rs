@@ -344,7 +344,7 @@ pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
             .as_deref()
             .unwrap()
             .paint
-            .paint_layer_client_id;
+            .PaintLayerClientId();
         // Fragmented instances retain one source PaintLayer client. Preserve
         // every selected control in source paint order when those aliases meet;
         // HashMap iteration or replacing one instance would lose controls.

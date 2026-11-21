@@ -968,7 +968,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let records_background_hit_test = !fragment.paint.IsLayoutView()
                 || paint_info.IsPaintingBackgroundInContentsSpace()
                 || fragment.paint.EffectiveAllowedTouchAction() != foundation::TouchAction::kAuto
-                || fragment.paint.inside_blocking_wheel_event_handler
+                || fragment.paint.InsideBlockingWheelEventHandler()
                 || fragment.paint.style.pointer_events_none()
                 || self
                     .context

@@ -184,7 +184,7 @@ fn svg_no_layer_keeps_sibling_paint_order_and_old_frames() {
             let f = fragment(&page, name);
             assert!(f.paint.paint_layer_state_is_authoritative);
             assert_eq!(
-                f.paint.paint_layer_client_id, 0,
+                f.paint.PaintLayerClientId(), 0,
                 "SVG descendant has no native layer"
             );
             assert!(
@@ -238,7 +238,7 @@ fn svg_mask_is_owned_by_the_svg_paint_scope_without_a_css_layer() {
         let masked = fragment(&page, "masked");
         assert!(native(&page, "masked").IsSVGChild());
         assert!(masked.paint.paint_layer_state_is_authoritative);
-        assert_eq!(masked.paint.paint_layer_client_id, 0);
+        assert_eq!(masked.paint.PaintLayerClientId(), 0);
         assert!(!masked.paint.style.mask_images.is_empty());
         let classification = paint::paint_order::ClassifyFragmentPaintLayer(masked, false, false);
         assert!(!classification.is_paint_layer);

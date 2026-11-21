@@ -151,8 +151,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.BindSourceObject(object);
             // ExportPaintProperties has made the object ready for invalidation.
             node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
-            node.paint.inside_blocking_wheel_event_handler =
-                current.inside_blocking_wheel_event_handler;
             node.paint.style = current.style;
             node.paint.form_control = current.form_control;
             // FragmentData identity is owned by this retained physical
@@ -164,7 +162,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.display_item_client_owner_node_id =
                 current.display_item_client_owner_node_id;
             node.paint.selection_client_id = current.selection_client_id;
-            node.paint.paint_layer_client_id = current.paint_layer_client_id;
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;

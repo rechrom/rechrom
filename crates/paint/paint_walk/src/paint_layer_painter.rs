@@ -424,7 +424,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             } else {
                 if let Some(cached_result) = SubsequenceRecorder::UseCachedSubsequenceIfPossible(
                     self.context,
-                    fragment.paint.paint_layer_client_id,
+                    fragment.paint.PaintLayerClientId(),
                     client,
                     debug.clone(),
                 ) {
@@ -434,7 +434,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             }
             Some(SubsequenceRecorder::new(
                 self.context,
-                fragment.paint.paint_layer_client_id,
+                fragment.paint.PaintLayerClientId(),
                 debug,
             ))
         } else {

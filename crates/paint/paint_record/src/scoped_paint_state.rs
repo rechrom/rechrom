@@ -79,7 +79,7 @@ fn UpdatePreviousPaintResultForContents(node: &PaintTreeNode<'_>) {
     };
     if !fragment.paint.IsLayoutBox()
         || !fragment.paint.PaintLayerStateIsAuthoritative()
-        || fragment.paint.paint_layer_client_id == 0
+        || fragment.paint.PaintLayerClientId() == 0
         || node.previous_paint_result.get() != PaintResult::kFullyPainted
     {
         return;

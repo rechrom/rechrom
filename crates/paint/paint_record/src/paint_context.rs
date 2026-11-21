@@ -1015,7 +1015,7 @@ impl<'o> PaintContext<'o> {
             client,
             rect,
             fragment.paint.EffectiveAllowedTouchAction(),
-            fragment.paint.inside_blocking_wheel_event_handler,
+            fragment.paint.InsideBlockingWheelEventHandler(),
             opaqueness,
         );
     }
@@ -1897,10 +1897,10 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         let fragment = node.fragment.as_deref().expect("paint layer fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
-        if fragment.paint.paint_layer_client_id != 0 {
+        if fragment.paint.PaintLayerClientId() != 0 {
             borrowed.update_chunk_id_and_properties_raw(
                 DisplayItemId {
-                    client_id: fragment.paint.paint_layer_client_id,
+                    client_id: fragment.paint.PaintLayerClientId(),
                     r#type: item_type,
                     fragment: fragment.paint.display_item_fragment,
                 },
@@ -1944,7 +1944,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             .clone();
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
-        let layer_client = fragment.paint.paint_layer_client_id;
+        let layer_client = fragment.paint.PaintLayerClientId();
         let (client_id, client) = if layer_client != 0 {
             (
                 layer_client,

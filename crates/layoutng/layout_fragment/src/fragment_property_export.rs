@@ -143,8 +143,6 @@ pub(super) fn ExportProperties(
         return output;
     }
     output.BindSourceObject(object);
-    let object_ref = unsafe { &*object };
-    output.inside_blocking_wheel_event_handler = object_ref.InsideBlockingWheelEventHandler();
     if purpose == LayoutUpdateKind::Paint {
         // Source: paint_invalidator.cc:222. LayoutBox uses this point to
         // promote a delayed full invalidation once it intersects the visible
@@ -243,7 +241,6 @@ pub(super) fn ExportProperties(
             let layer = unsafe { &*box_model }.Layer();
             if !layer.is_null() {
                 let layer = unsafe { &*layer };
-                output.paint_layer_client_id = layer.Id();
                 // These decisions belong to source Layout/PaintLayer setup. In
                 // particular, style adjustment makes static flex/grid items with
                 // z-index stacking contexts, and containment/perspective can form
