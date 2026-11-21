@@ -173,12 +173,10 @@ use layout_fragment_text_paint_export::{
 };
 #[path = "../../../../layout_fragment/src/fragment_geometry_export.rs"]
 mod layout_fragment_fragment_geometry_export;
-use layout_fragment_fragment_geometry_export::{
-    ExportBoxPaintGeometry, ExportContentSize, ExportSelfOutlineGeometry,
-};
+use layout_fragment_fragment_geometry_export::{ExportBoxPaintGeometry, ExportContentSize};
 pub(crate) use layout_fragment_fragment_geometry_export::{
     ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer,
-    LiveScrollGeometry,
+    ExportSelfOutlineGeometry, LiveScrollGeometry,
 };
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;

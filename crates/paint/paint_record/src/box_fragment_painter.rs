@@ -5916,7 +5916,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let style = &fragment.paint.style;
         let outline_color =
             InvertColorIfNeeded(style, style.outline_color(), ElementRole::kBackground);
-        let self_outline = fragment.paint.self_outline.as_ref();
+        let self_outline_data = fragment.ViewSelfOutline();
+        let self_outline = self_outline_data.as_ref();
         let exported_outline_rects = if self.node.outline_rects.is_empty() {
             self_outline
                 .map(|outline| {

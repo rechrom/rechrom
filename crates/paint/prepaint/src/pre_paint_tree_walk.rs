@@ -4175,7 +4175,7 @@ fn PrepareSelfOutlineRects(node: &mut PaintTreeNode<'_>) {
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
-    if let Some(outline) = fragment.paint.self_outline.as_ref() {
+    if let Some(outline) = fragment.ViewSelfOutline() {
         node.outline_rects
             .extend(outline.rects.iter().map(|rect| PaintRect {
                 x: node.paint_offset.x + rect.offset.x,

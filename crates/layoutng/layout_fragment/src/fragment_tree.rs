@@ -799,6 +799,8 @@ pub trait ResidentBoxGeometry {
     fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool);
     /// Overflow-control paint data from the resident box's scrollable area.
     fn ViewScrollbars(&self) -> Option<Arc<ScrollbarPaintData>>;
+    /// The resident box's self outline rects (AddSelfOutlineRects).
+    fn ViewSelfOutline(&self) -> Option<SelfOutlinePaintData>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -869,6 +871,16 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewSelfOutline(&self) -> Option<SelfOutlinePaintData> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportSelfOutlineGeometry(
+                box_fragment,
+                box_fragment.Style(),
+            ),
+            None => self.paint.self_outline.clone(),
+        }
+    }
+
     fn ViewScrollbars(&self) -> Option<Arc<ScrollbarPaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

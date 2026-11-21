@@ -161,14 +161,12 @@ fn ExportStitchedDecorationData(
 /// available. Paint cannot reconstruct descendant/anchor outline rects from
 /// the flattened fragment tree.
 #[inline(never)]
-pub(super) fn ExportSelfOutlineGeometry(
+pub(crate) fn ExportSelfOutlineGeometry(
     box_fragment: &PhysicalBoxFragment,
     style_to_use: &StyleComputedStyle,
-    paint: &mut PaintProperties,
-) {
+) -> Option<SelfOutlinePaintData> {
     if !style_to_use.HasOutline() {
-        paint.self_outline = None;
-        return;
+        return None;
     }
 
     let mut collector = VectorOutlineRectCollector::default();
@@ -179,7 +177,7 @@ pub(super) fn ExportSelfOutlineGeometry(
         &mut collector,
         Some(&mut info),
     );
-    paint.self_outline = Some(SelfOutlinePaintData {
+    Some(SelfOutlinePaintData {
         rects: collector
             .TakeRects()
             .into_iter()
@@ -196,7 +194,7 @@ pub(super) fn ExportSelfOutlineGeometry(
             .collect(),
         width: f64::from(info.width),
         offset: f64::from(info.offset),
-    });
+    })
 }
 
 #[inline(never)]
