@@ -428,9 +428,9 @@ fn PopulateInlineItemLocalPaintData(
             &mut output.paint,
         );
     }
-    if purpose == LayoutUpdateKind::Paint {
-        ExportInlineInkOverflow(item, &mut output.paint);
-    }
+    // Ink overflow is read live from the FragmentItem
+    // (ResidentBoxGeometry::ViewInkOverflows / ViewTextGlyphInk); the layer
+    // visual-overflow recalc computes it before PrePaint.
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {
             output.kind = if item.Type() == ItemType::kText {

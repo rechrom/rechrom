@@ -191,8 +191,8 @@ pub struct PaintProperties {
     /// read through DisplayItemClientDebugName, never written by population.
     pub display_item_client_debug_name: std::sync::Arc<str>,
     pub paint_layer_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
-    // None means source ink overflow has not been computed. Never substitute
-    // a frame rect here: text glyphs and decorations can extend outside it.
+    // Detached fixtures only: resident fragments and items read ink overflow
+    // live (ResidentBoxGeometry::ViewInkOverflows). None means unset.
     pub self_ink_overflow: Option<FragmentPaintRect>,
     pub contents_ink_overflow: Option<FragmentPaintRect>,
     pub ink_overflow: Option<FragmentPaintRect>,
@@ -205,9 +205,6 @@ pub struct PaintProperties {
     /// than an individual mask layer's clip box: Chromium uses LayersClipMax
     /// and includes mask-box-image outsets when building MaskClip.
     pub css_mask_bounding_box: Option<FragmentPaintRect>,
-    // Baseline-adjusted, writing-mode converted glyph bounds. This remains
-    // available when full text decoration/emphasis overflow is not implemented.
-    pub text_glyph_ink: Option<FragmentPaintRect>,
     /// FragmentItem::ComputeTextBoundsRectForHitTest() in item-local
     /// coordinates for ordinary point-event hit testing. SVG text uses its
     /// transformed quad path and therefore leaves this unset.
@@ -591,7 +588,6 @@ impl Default for PaintProperties {
             ink_overflow: None,
             filtered_ink_overflow: None,
             css_mask_bounding_box: None,
-            text_glyph_ink: None,
             text_hit_test_bounds: None,
             box_self_visual_overflow: None,
             self_outline: None,
@@ -777,8 +773,13 @@ pub trait ResidentBoxGeometry {
     /// Borrowed-view fragment kind from the resident owner's type.
     fn ViewKind(&self) -> FragmentKind;
     /// Borrowed-view ink overflow (self, contents, ink, filtered), read
-    /// from the resident fragment or item.
+    /// from the resident fragment or item. Only detached fixtures read the
+    /// stored values.
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4];
+    /// A resident text item's shaped glyph ink in item-local physical
+    /// coordinates (the glyph stage of InkOverflow::ComputeTextInkOverflow,
+    /// ink_overflow.cc:439-489). `None` for other owners.
+    fn ViewTextGlyphInk(&self) -> Option<FragmentPaintRect>;
     /// Box-fragment geometry facts (inline box, hit-test overflow clip,
     /// scrolled content offset, self visual overflow) from the resident box.
     fn ViewBoxGeometryFacts(&self) -> (bool, Option<FragmentPaintRect>, Offset, Option<FragmentPaintRect>);
@@ -1480,29 +1481,31 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4] {
         use layout_fragment_boundary::ResidentFragmentOwner;
-        let stored = [
-            self.paint.self_ink_overflow,
-            self.paint.contents_ink_overflow,
-            self.paint.ink_overflow,
-            self.paint.filtered_ink_overflow,
-        ];
         match self.resident_owner {
-            ResidentFragmentOwner::None => stored,
-            ResidentFragmentOwner::Physical(_) => match self.ResidentBoxFragment() {
-                Some(box_fragment) => {
-                    crate::internal::boundary::layout_boundary::LiveBoxInkOverflow(box_fragment)
-                }
-                None => stored,
-            },
+            ResidentFragmentOwner::None => [
+                self.paint.self_ink_overflow,
+                self.paint.contents_ink_overflow,
+                self.paint.ink_overflow,
+                self.paint.filtered_ink_overflow,
+            ],
+            // A physical line box owns no ink overflow; its line item does
+            // (FragmentItem kLine, fragment_item.cc:1052-1076).
+            ResidentFragmentOwner::Physical(_) => self
+                .ResidentBoxFragment()
+                .map_or([None; 4], crate::internal::boundary::layout_boundary::LiveBoxInkOverflow),
             ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items
                     .Items()
                     .get(index)
-                    .and_then(crate::internal::boundary::layout_boundary::LiveItemInkOverflow)
-                    .unwrap_or(stored)
+                    .map_or([None; 4], crate::internal::boundary::layout_boundary::LiveItemInkOverflow)
             }
         }
+    }
+
+    fn ViewTextGlyphInk(&self) -> Option<FragmentPaintRect> {
+        let (item, items) = self.ResidentTextItem()?;
+        crate::internal::boundary::layout_boundary::LiveTextGlyphInk(item, items)
     }
 
     fn ViewKind(&self) -> FragmentKind {

@@ -490,7 +490,7 @@ impl RetainedScrollPaintState {
                     f.ViewInkOverflow()
                         .or(f.ViewSelfInkOverflow())
                         .or(f.ViewBoxSelfVisualOverflow())
-                        .or(f.paint.text_glyph_ink)
+                        .or_else(|| f.ViewTextGlyphInk())
                 })
                 .flatten()
                 .map(|rect| PaintRect {
