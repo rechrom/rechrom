@@ -235,12 +235,7 @@ pub(super) fn ExportBoxPaintGeometry(
     // Borders, padding and included sides are read from this resident
     // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
     // read PhysicalBoxFragment directly; they are not copied here.
-    paint.box_decoration_break =
-        if box_fragment.Style().BoxDecorationBreak() == EBoxDecorationBreak::kClone {
-            BoxDecorationBreak::kClone
-        } else {
-            BoxDecorationBreak::kSlice
-        };
+    paint.box_decoration_break = LiveBoxDecorationBreak(box_fragment);
     paint.stitched_decoration = ExportStitchedDecorationData(box_fragment);
 }
 
@@ -512,4 +507,14 @@ pub(crate) fn LiveScrollGeometry(layout_box: &LayoutBox) -> (Size, Option<Size>,
         scroll_size = Size::default();
     }
     (scroll_size, client_size, scrolls_overflow)
+}
+
+/// The box's computed box-decoration-break, as BoxPainterBase and
+/// NinePieceImageGrid read it from the fragment's ComputedStyle.
+pub(crate) fn LiveBoxDecorationBreak(box_fragment: &PhysicalBoxFragment) -> BoxDecorationBreak {
+    if box_fragment.Style().BoxDecorationBreak() == EBoxDecorationBreak::kClone {
+        BoxDecorationBreak::kClone
+    } else {
+        BoxDecorationBreak::kSlice
+    }
 }

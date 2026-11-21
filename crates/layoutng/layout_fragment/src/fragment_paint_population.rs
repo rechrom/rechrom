@@ -1412,7 +1412,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.paint.gap_rules = ExportGapRulePaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);
+        output.paint.collapsed_table = ExportCollapsedTablePaintData(box_fragment);
     }
     paint_state_owners.population_stats.RecordLocal(local_timing);
     let mut descendant_changed = false;

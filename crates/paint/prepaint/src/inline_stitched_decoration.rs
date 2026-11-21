@@ -28,7 +28,7 @@ fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
         && input.paint.HasSource()
         && input.paint.establishes_paint_state
         && input.paint.Display() == Display::kInline
-        && input.paint.box_decoration_break == BoxDecorationBreak::kSlice)
+        && input.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice)
         .then_some((input.node_id, input.fragmentainer_instance_id))
 }
 

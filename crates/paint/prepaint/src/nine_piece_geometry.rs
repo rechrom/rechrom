@@ -115,7 +115,7 @@ impl NinePieceImageGeometry {
             height: fragment.ViewSize().height,
         };
         if fragment.paint.Display() == Display::kInline
-            && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
+            && fragment.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice
             && fragment.paint.stitched_decoration.is_some()
         {
             let stitched = fragment.paint.stitched_decoration.as_ref().unwrap();

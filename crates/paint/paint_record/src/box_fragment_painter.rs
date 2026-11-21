@@ -380,7 +380,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
             }
             return;
         }
-        if fragment.paint.painted_atomically {
+        if fragment.ViewPaintedAtomically() {
             return;
         }
         for child in &node.children {
@@ -904,7 +904,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let phase = paint_info.phase;
         let is_visible = IsVisibleToPaint(fragment);
         if phase == PaintPhase::kForcedColorsModeBackplate {
-            if fragment.paint.is_inline_formatting_context && fragment.paint.InForcedColorsMode() {
+            if fragment.ViewIsInlineFormattingContext() && fragment.paint.InForcedColorsMode() {
                 self.PaintBackplate();
             }
             return;
@@ -1458,7 +1458,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if matches!(
             paint_info.phase,
             PaintPhase::kDescendantBlockBackgroundsOnly | PaintPhase::kBlockBackground
-        ) && fragment.paint.collapsed_table.is_some()
+        ) && fragment.ViewCollapsedTable().is_some()
         {
             TablePainter::new(self.node, self.context).PaintCollapsedBorders(paint_info);
         }
@@ -4028,7 +4028,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let paint = &fragment.paint;
-        if paint.has_collapsed_borders {
+        if fragment.ViewHasCollapsedBorders() {
             return;
         }
         if NinePieceImagePainter::Paint(self.node, self.context, phase) {
@@ -7239,7 +7239,7 @@ fn ResolveBackgroundDestinationRects(
         || node.paint_layer_is_fragmented
         || paint.style.border_shape_unsupported
         || paint.style.has_border_image()
-        || paint.has_collapsed_borders;
+        || fragment.ViewHasCollapsedBorders();
 
     if layer.clip == BackgroundBox::kNoClip
         || UsedBackgroundGeometryBox(layer.clip) != BackgroundBox::kBorderBox

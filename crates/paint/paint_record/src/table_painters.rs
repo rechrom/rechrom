@@ -990,7 +990,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             positioning.y += columns_rect.y;
             for cell in &cells {
                 let cell_fragment = cell.fragment.as_deref().expect("table cell has a fragment");
-                let Some(cell_column) = cell_fragment.paint.table_cell_column else {
+                let Some(cell_column) = cell_fragment.ViewTableCellColumn() else {
                     continue;
                 };
                 if cell_column < column.start_column
@@ -1024,9 +1024,10 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(borders) = fragment.paint.collapsed_table.as_ref() else {
+        let Some(borders_data) = fragment.ViewCollapsedTable() else {
             return;
         };
+        let borders = &*borders_data;
         if borders.edges_per_row == 0
             || borders.edges.is_empty()
             || borders.columns.is_empty()

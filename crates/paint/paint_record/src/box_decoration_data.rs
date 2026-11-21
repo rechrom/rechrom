@@ -49,7 +49,7 @@ impl BoxDecorationData {
             && !paint_info.ShouldSkipBackground();
         let border = IncludedBorderEdges(fragment);
         let widths = [border.top, border.right, border.bottom, border.left];
-        let has_non_collapsed_border_decoration = !fragment.paint.has_collapsed_borders
+        let has_non_collapsed_border_decoration = !fragment.ViewHasCollapsedBorders()
             && (style.has_border_image()
                 || widths.iter().enumerate().any(|(edge, width)| {
                     *width > 0.0

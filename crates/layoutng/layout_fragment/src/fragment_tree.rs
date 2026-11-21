@@ -805,6 +805,20 @@ pub trait ResidentBoxGeometry {
     fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges>;
     /// Table grid, column rect and column geometry of the resident table box.
     fn ViewTable(&self) -> Option<Arc<TablePaintData>>;
+    /// Collapsed-border geometry of the resident table box.
+    fn ViewCollapsedTable(&self) -> Option<Arc<CollapsedTablePaintData>>;
+    /// PhysicalFragment::IsPaintedAtomically of the resident box.
+    fn ViewPaintedAtomically(&self) -> bool;
+    /// PhysicalFragment::HasCollapsedBorders of the resident box.
+    fn ViewHasCollapsedBorders(&self) -> bool;
+    /// PhysicalBoxFragment::IsInlineFormattingContext of the resident box.
+    fn ViewIsInlineFormattingContext(&self) -> bool;
+    /// CanPaintMultipleFragments for the resident box.
+    fn ViewCanPaintMultipleFragments(&self) -> bool;
+    /// The table cell's column index (PhysicalBoxFragment::TableCellColumnIndex).
+    fn ViewTableCellColumn(&self) -> Option<usize>;
+    /// The resident box's computed box-decoration-break.
+    fn ViewBoxDecorationBreak(&self) -> BoxDecorationBreak;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -875,6 +889,65 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewCollapsedTable(&self) -> Option<Arc<CollapsedTablePaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::ExportCollapsedTablePaintData(
+                    box_fragment,
+                )
+            }
+            None => self.paint.collapsed_table.clone(),
+        }
+    }
+
+    fn ViewPaintedAtomically(&self) -> bool {
+        self.ResidentBoxFragment()
+            .map_or(self.paint.painted_atomically, |box_fragment| {
+                box_fragment.IsPaintedAtomically()
+            })
+    }
+
+    fn ViewHasCollapsedBorders(&self) -> bool {
+        self.ResidentBoxFragment()
+            .map_or(self.paint.has_collapsed_borders, |box_fragment| {
+                box_fragment.HasCollapsedBorders()
+            })
+    }
+
+    fn ViewIsInlineFormattingContext(&self) -> bool {
+        self.ResidentBoxFragment()
+            .map_or(self.paint.is_inline_formatting_context, |box_fragment| {
+                box_fragment.IsInlineFormattingContext()
+            })
+    }
+
+    fn ViewCanPaintMultipleFragments(&self) -> bool {
+        self.ResidentBoxFragment()
+            .map_or(self.paint.can_paint_multiple_fragments, |box_fragment| {
+                crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
+                    box_fragment,
+                )
+            })
+    }
+
+    fn ViewTableCellColumn(&self) -> Option<usize> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => box_fragment
+                .IsTableCell()
+                .then(|| box_fragment.TableCellColumnIndex() as usize),
+            None => self.paint.table_cell_column,
+        }
+    }
+
+    fn ViewBoxDecorationBreak(&self) -> BoxDecorationBreak {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveBoxDecorationBreak(box_fragment)
+            }
+            None => self.paint.box_decoration_break,
+        }
+    }
+
     fn ViewTable(&self) -> Option<Arc<TablePaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

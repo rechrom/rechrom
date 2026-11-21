@@ -43,22 +43,20 @@ fn IsEndTableRowFragmented(section: &PhysicalBoxFragment) -> bool {
 }
 
 #[inline(never)]
-pub(super) fn ExportCollapsedTablePaintData(
+pub(crate) fn ExportCollapsedTablePaintData(
     box_fragment: &PhysicalBoxFragment,
-    _style_sources: &StyleSourceMap,
-    paint: &mut PaintPropertiesHandle,
-) {
+) -> Option<Arc<CollapsedTablePaintData>> {
     if !box_fragment.IsTable() {
-        return;
+        return None;
     }
     let borders = box_fragment.TableCollapsedBorders();
     if borders.is_null() || !unsafe { &*borders }.IsCollapsed() {
-        return;
+        return None;
     }
     let borders = unsafe { &*borders };
     let geometry = box_fragment.TableCollapsedBordersGeometry();
     if geometry.is_null() {
-        return;
+        return None;
     }
     let geometry = unsafe { &*geometry };
 
@@ -131,5 +129,5 @@ pub(super) fn ExportCollapsedTablePaintData(
         output.end_row_fragmented = IsEndTableRowFragmented(section);
         data.sections.push(output);
     }
-    paint.collapsed_table = Some(Arc::new(data));
+    Some(Arc::new(data))
 }

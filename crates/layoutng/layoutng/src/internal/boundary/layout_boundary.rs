@@ -176,7 +176,7 @@ mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::{ExportBoxPaintGeometry, ExportContentSize};
 pub(crate) use layout_fragment_fragment_geometry_export::{
     ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer,
-    ExportSelfOutlineGeometry, LiveScrollGeometry,
+    ExportSelfOutlineGeometry, LiveBoxDecorationBreak, LiveScrollGeometry,
 };
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
@@ -191,7 +191,7 @@ pub(crate) use layout_fragment_specialized_paint_export::{
 };
 #[path = "../../../../layout_fragment/src/collapsed_table_paint_export.rs"]
 mod layout_fragment_collapsed_table_paint_export;
-use layout_fragment_collapsed_table_paint_export::ExportCollapsedTablePaintData;
+pub(crate) use layout_fragment_collapsed_table_paint_export::ExportCollapsedTablePaintData;
 #[path = "../../../../layout_fragment/src/fragment_export_state.rs"]
 pub(crate) mod layout_fragment_fragment_export_state;
 use layout_fragment_fragment_export_state::{FragmentOwners, PopulateSVGChildPaintData};

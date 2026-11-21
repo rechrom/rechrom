@@ -617,7 +617,7 @@ fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
         layoutng_assembly::fragment_tree::FragmentKind::kText
             | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             | layoutng_assembly::fragment_tree::FragmentKind::kLine
-    ) || fragment.paint.is_layout_inline
+    ) || fragment.paint.IsLayoutInline()
         || fragment.ViewIsInlineBox()
         || fragment.ViewReplacedContent().is_some()
         || IsSvgHitObject(fragment.paint.SourceKind())
@@ -661,7 +661,7 @@ fn HitTestNormalFlowPhase<'f>(
                 continue;
             }
             let child_is_float = child.paint.Floating() != FloatSide::kNone;
-            let child_is_atomic = child.paint.painted_atomically;
+            let child_is_atomic = child.ViewPaintedAtomically();
             let (child_point, child_parent) = if child.paint.FixedToView() {
                 (root_point, Offset::default())
             } else {

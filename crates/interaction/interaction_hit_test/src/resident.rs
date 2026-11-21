@@ -1003,7 +1003,7 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
         !self.Native().GetLayoutBoxWithBlockFragments().is_null()
     }
     fn CanPaintMultipleFragments(&self) -> bool {
-        self.cursor.paint.can_paint_multiple_fragments
+        self.cursor.ViewCanPaintMultipleFragments()
     }
     fn CalculateClipRects(
         &self,
