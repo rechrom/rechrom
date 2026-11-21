@@ -4,7 +4,9 @@
 //! directory is valid for one completed layout and owns neither source objects
 //! nor fragments; it only provides package-attributed targeted refresh.
 
-use super::layout_fragment_scroll_paint_property_refresh::refresh_fragment_scroll_paint_properties;
+use super::layout_fragment_scroll_paint_property_refresh::{
+    refresh_fragment_pre_paint_invalidation, refresh_fragment_scroll_paint_properties,
+};
 use super::{
     FragmentPaintData, InputId, LayoutObject, LayoutResultHandle, Position, UpdateStickyOffsets,
 };
@@ -191,6 +193,7 @@ impl ScrollPaintPropertyIndex {
         UpdateStickyOffsets(self.sticky_objects.iter().copied(), true);
         let mut changed_fragments = 0usize;
         let mut refreshed_sources = HashSet::new();
+        let mut republished_ancestors = HashSet::new();
         for entry in entries {
             let entry = &self.fragments[entry];
             let path = &self.path_components[entry.path_start..entry.path_start + entry.path_len];
@@ -198,6 +201,19 @@ impl ScrollPaintPropertyIndex {
                 unsafe { &mut *entry.fragment },
                 &self.sources,
             );
+            // The refreshed object republished its own dirty-bit snapshot.
+            // Its ancestors carry DescendantNeedsPaintPropertyUpdate from the
+            // scroll/sticky SetNeedsPaintPropertyUpdate propagation; publish
+            // each ancestor slot once (core/paint/
+            // paint_layer_scrollable_area.cc:2417-2440).
+            for &ancestor in &path[..path.len().saturating_sub(1)] {
+                if republished_ancestors.insert(ancestor) {
+                    refresh_fragment_pre_paint_invalidation(
+                        unsafe { &mut *ancestor },
+                        &self.sources,
+                    );
+                }
+            }
             if own_changed {
                 changed_fragments += 1;
                 refreshed_sources.insert(entry.source_id);

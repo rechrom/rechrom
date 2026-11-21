@@ -85,19 +85,15 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
     let old_sticky_constraint = fragment.paint.sticky_constraint;
     let old_scrollbars = fragment.paint.scrollbars.clone();
     if fragment.paint.HasSource() {
-        let direct = fragment.paint.SourceObjectPointer();
-        let object = if direct.is_null() {
-            fragment
-                .paint
-                .logical_tree_order
-                .checked_sub(1)
-                .and_then(|order| usize::try_from(order).ok())
-                .and_then(|index| sources.get(index).copied())
-                .unwrap_or(std::ptr::null_mut())
-        } else {
-            direct
-        };
+        let object = scroll_refresh_source_object(fragment, sources);
         if !object.is_null() {
+            // PaintLayerScrollableArea::UpdateScrollOffset and
+            // InvalidatePaintForStickyDescendants set NeedsPaintPropertyUpdate
+            // on the scroller and its sticky descendants
+            // (core/paint/paint_layer_scrollable_area.cc:2417-2440). PrePaint
+            // reads those LayoutObject bits, so republish this fragment's
+            // snapshot of them together with the refreshed scroll inputs.
+            fragment.pre_paint_invalidation = ExportPrePaintInvalidation(object);
             let node = unsafe { &*object }.GetNode();
             if !node.is_null() && unsafe { &*node }.IsElementNode() {
                 let element = unsafe { &*(node as *const Element) };
@@ -168,4 +164,42 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
         || old_sticky != fragment.paint.sticky_offset
         || old_sticky_constraint != fragment.paint.sticky_constraint
         || old_scrollbars != fragment.paint.scrollbars
+}
+
+/// The source LayoutObject of a retained fragment: its bound owner, or the
+/// dense one-based preorder source id export assigned.
+fn scroll_refresh_source_object(
+    fragment: &FragmentPaintData,
+    sources: &[*mut LayoutObject],
+) -> *mut LayoutObject {
+    let direct = fragment.paint.SourceObjectPointer();
+    if !direct.is_null() {
+        return direct;
+    }
+    fragment
+        .paint
+        .logical_tree_order
+        .checked_sub(1)
+        .and_then(|order| usize::try_from(order).ok())
+        .and_then(|index| sources.get(index).copied())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Republish one retained fragment's snapshot of its source object's
+/// PrePaint dirty bits. Scroll and sticky updates set NeedsPaintPropertyUpdate
+/// on the changed object and DescendantNeedsPaintPropertyUpdate on its
+/// ancestors (LayoutObject::SetNeedsPaintPropertyUpdate, core/layout/
+/// layout_object.h); ancestor fragments on a targeted refresh path expose
+/// those descendant bits through this.
+pub(super) fn refresh_fragment_pre_paint_invalidation(
+    fragment: &mut FragmentPaintData,
+    sources: &[*mut LayoutObject],
+) {
+    if !fragment.paint.HasSource() {
+        return;
+    }
+    let object = scroll_refresh_source_object(fragment, sources);
+    if !object.is_null() {
+        fragment.pre_paint_invalidation = ExportPrePaintInvalidation(object);
+    }
 }

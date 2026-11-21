@@ -1274,6 +1274,22 @@ fn geometry_equal(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     a.offset == b.offset && a.size == b.size && a.content_size == b.content_size
 }
 
+/// Owner liveness without revisions. Chromium never proves "same owner" at
+/// the Layout boundary: a new LayoutObject (or scrollbar/scroll-background
+/// client) is a new DisplayItemClient whose IsJustCreated() stays true until
+/// PaintController::CommitNewDisplayItems validates it
+/// (platform/graphics/paint/display_item_client.h, paint_controller.cc), and
+/// a new LayoutObject starts with should_check_for_paint_invalidation_,
+/// should_check_layout_for_paint_invalidation_, needs_paint_property_update_
+/// and their descendant bits set (core/layout/layout_object.h:3841-3853
+/// bitfield initializers). PrePaint can therefore decide owner liveness itself:
+/// a fragment whose client ids (`owner_ids`, read from the recorded
+/// display_item_client_id, selection, paint-layer, scrolling-background and
+/// scrollbar clients) report `is_just_created` is new and is visited, while a
+/// client that is not just created was validated by an earlier committed
+/// paint and its LayoutObject dirty bits are authoritative. The id identity
+/// check in `retain_owners` only guards against a recycled allocation, which
+/// DisplayItemClient::Id's process-unique token already excludes.
 fn just_created(paint: &PaintProperties) -> bool {
     paint.DisplayItemClientState().is_just_created
         || paint.SelectionClientState().is_just_created

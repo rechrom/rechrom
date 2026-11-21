@@ -38,6 +38,7 @@ mod layout_fragment_paint_input;
 mod layout_fragment_scroll_input;
 #[path = "../../../layout_invalidation/src/input_invalidation.rs"]
 mod layout_invalidation_input_updates;
+pub(crate) use layout_invalidation_input_updates::PaintResourceFacts;
 #[path = "../../../layout_invalidation/src/managed_input_admission.rs"]
 mod layout_invalidation_managed_input_admission;
 #[path = "../../../layout_invalidation/src/managed_object_update.rs"]
@@ -609,6 +610,17 @@ impl LayoutObjectTree {
         images: &[super::layout_input::PaintImage],
     ) -> usize {
         layout_invalidation_input_updates::invalidate_document_image_clients(self, images)
+    }
+
+    /// Deliver the paint-client invalidations (ImageChanged, canvas DidDraw,
+    /// base background, viewport and paint-environment changes) for the
+    /// difference between two immutable document paint-resource catalogs.
+    pub(crate) fn InvalidatePaintResourceClients(
+        &mut self,
+        before: &PaintResourceFacts<'_>,
+        after: &PaintResourceFacts<'_>,
+    ) -> usize {
+        layout_invalidation_input_updates::invalidate_paint_resource_clients(self, before, after)
     }
 
     /// Synchronize ordinary scroll paint metadata while retaining geometry,

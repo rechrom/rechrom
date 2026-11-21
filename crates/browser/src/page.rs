@@ -7028,6 +7028,7 @@ impl Page {
             node: &mut FragmentPaintData,
             resources: &Arc<PaintResources>,
             catalogs: &mut std::collections::HashMap<*const PaintResources, bool>,
+            replaced: &mut Vec<Arc<PaintResources>>,
         ) -> bool {
             // Fragment-local paint inputs share one immutable catalog. Compare
             // each distinct prior catalog once, preserving resource identity
@@ -7036,9 +7037,13 @@ impl Page {
                 if Arc::ptr_eq(previous, resources) {
                     return false;
                 }
-                *catalogs
-                    .entry(Arc::as_ptr(previous))
-                    .or_insert_with(|| previous.as_ref() != resources.as_ref())
+                *catalogs.entry(Arc::as_ptr(previous)).or_insert_with(|| {
+                    let changed = previous.as_ref() != resources.as_ref();
+                    if changed {
+                        replaced.push(previous.clone());
+                    }
+                    changed
+                })
             });
             if changed {
                 node.resources = Some(resources.clone());
@@ -7115,11 +7120,24 @@ impl Page {
             });
             let mut trace = browser_tracing::span("resource", "Page.BindPaintResources");
             let mut catalogs = std::collections::HashMap::new();
+            let mut replaced = Vec::new();
             let mut rebound = false;
             output.VisitPaintInputsMut(|input| {
-                rebound |= install_resources(input, &resources, &mut catalogs)
+                rebound |= install_resources(input, &resources, &mut catalogs, &mut replaced)
             });
             trace.set("compared_catalogs", catalogs.len() as f64);
+            drop(constraints);
+            // ImageResourceObserver::ImageChanged and the frame-view resource
+            // notifications reach their LayoutObjects; the caller's
+            // RefreshOutputPrePaintInputs exports the resulting dirty bits.
+            if !replaced.is_empty() {
+                let clients = self
+                    .state
+                    .layout_engine
+                    .borrow_mut()
+                    .NotifyPaintResourcesChanged(&replaced, &resources);
+                trace.set("invalidated_clients", clients as f64);
+            }
             return Ok(rebound);
         }
     }
@@ -7184,8 +7202,19 @@ impl Page {
             should_clear_document_background: self.state.should_clear_document_background.get(),
             viewport: constraints.viewport,
         });
-        fn install(node: &mut FragmentPaintData, resources: &Arc<PaintResources>) -> bool {
+        fn install(
+            node: &mut FragmentPaintData,
+            resources: &Arc<PaintResources>,
+            replaced: &mut Vec<Arc<PaintResources>>,
+        ) -> bool {
             let rebound = node.resources.as_deref() != Some(resources.as_ref());
+            if rebound {
+                if let Some(previous) = &node.resources {
+                    if !replaced.iter().any(|known| Arc::ptr_eq(known, previous)) {
+                        replaced.push(previous.clone());
+                    }
+                }
+            }
             node.resources = Some(resources.clone());
             rebound
         }
@@ -7195,7 +7224,17 @@ impl Page {
         // catalog and re-record once so the immutable artifact publishes the
         // exact record named by its display items.
         let mut rebound = false;
-        output.VisitPaintInputsMut(|input| rebound |= install(input, &resources));
+        let mut replaced = Vec::new();
+        output.VisitPaintInputsMut(|input| rebound |= install(input, &resources, &mut replaced));
+        drop(constraints);
+        // Deliver the catalog change to its LayoutObject clients before the
+        // caller republishes PrePaint inputs (RefreshOutputPrePaintInputs).
+        if !replaced.is_empty() {
+            self.state
+                .layout_engine
+                .borrow_mut()
+                .NotifyPaintResourcesChanged(&replaced, &resources);
+        }
         Ok(changed || rebound)
     }
 
