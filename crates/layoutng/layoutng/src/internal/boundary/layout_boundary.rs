@@ -157,10 +157,10 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
     LiveBoxInkOverflow, LiveItemInkOverflow, LiveBoxGeometryFacts,
-    LiveSvgPaintGeometry, LiveSvgViewBox,
+    LiveSvgPaintGeometry, LiveSvgViewBox, LiveTextHitTestBounds, PropertyFragmentUniqueId,
 };
 use layout_fragment_fragment_property_export::{
-    ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,
+    ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,
 };
 #[path = "../../../../layout_fragment/src/text_paint_export.rs"]
 mod layout_fragment_text_paint_export;

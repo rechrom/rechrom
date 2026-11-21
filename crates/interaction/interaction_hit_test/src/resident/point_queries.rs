@@ -337,7 +337,7 @@ fn HitGeometry(
             return None;
         }
     }
-    let hit_bounds = fragment.paint.text_hit_test_bounds.unwrap_or(
+    let hit_bounds = fragment.ViewTextHitTestBounds().unwrap_or(
         layoutng_assembly::fragment_tree::FragmentPaintRect {
             offset: Offset::default(),
             size: fragment.ViewSize(),

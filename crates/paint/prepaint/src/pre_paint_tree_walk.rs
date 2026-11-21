@@ -162,9 +162,9 @@ fn TransformCompositorState(
         _ => None,
     };
     if let Some(ns) = ns {
-        if fragment.paint.property_fragment_unique_id != 0 {
+        if fragment.ViewPropertyFragmentUniqueId() != 0 {
             value.compositor_element_id = CompositorElementIdFromUniqueObjectId(
-                fragment.paint.property_fragment_unique_id,
+                fragment.ViewPropertyFragmentUniqueId(),
                 ns,
             );
         }
@@ -287,7 +287,7 @@ fn EffectCompositorState(
     let mut value = paint_model::paint_property_tree::EffectCompositorState::default();
     value.is_in_tainted_subtree = is_in_tainted_subtree;
     value.is_in_drawable_canvas_subtree = is_in_drawable_canvas_subtree;
-    if fragment.paint.property_fragment_unique_id != 0 {
+    if fragment.ViewPropertyFragmentUniqueId() != 0 {
         let namespace = match role {
             PaintPropertyRole::Filter => Ns::kEffectFilter,
             PaintPropertyRole::Mask => Ns::kEffectMask,
@@ -300,12 +300,12 @@ fn EffectCompositorState(
             }
         };
         value.compositor_element_id = CompositorElementIdFromUniqueObjectId(
-            fragment.paint.property_fragment_unique_id,
+            fragment.ViewPropertyFragmentUniqueId(),
             namespace,
         );
         if backdrop_mask {
             value.backdrop_mask_element_id = CompositorElementIdFromUniqueObjectId(
-                fragment.paint.property_fragment_unique_id,
+                fragment.ViewPropertyFragmentUniqueId(),
                 Ns::kEffectMask,
             );
         }

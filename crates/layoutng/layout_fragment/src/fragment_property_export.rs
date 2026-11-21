@@ -40,7 +40,7 @@ pub(super) fn ExportPaintProperties(
 // first fragment. This distinction is observable for fragmented boxes: each
 // FragmentData owns a different UniqueObjectId while all fragments share the
 // same LayoutObject.
-pub(super) fn PropertyFragmentUniqueId(
+pub(crate) fn PropertyFragmentUniqueId(
     object: *const LayoutObject,
     fragment_data: *mut FragmentData,
 ) -> u64 {
@@ -1039,4 +1039,36 @@ pub(crate) fn LiveBoxGeometryFacts(
         scrolled,
         self_visual_overflow,
     )
+}
+
+/// Source: core/paint/box_fragment_painter.cc:2492-2510 and
+/// fragment_item.cc:1090-1109. A text item's point-test rectangle relative to
+/// the item: LayoutTextCombine's compressed bounds when present, otherwise
+/// FragmentItem's pixel-snapped ordinary bounds.
+pub(crate) fn LiveTextHitTestBounds(item: &FragmentItem) -> Option<FragmentPaintRect> {
+    if !item.IsText() || item.IsSvgText() {
+        return None;
+    }
+    let object = item.GetLayoutObject();
+    let text_combine = if object.is_null() {
+        std::ptr::null_mut()
+    } else {
+        DynamicTo::<LayoutTextCombine>(unsafe { &*object }.Parent())
+    };
+    let mut bounds = if text_combine.is_null() {
+        item.ComputeTextBoundsRectForHitTest(PhysicalOffset::default(), false)
+    } else {
+        unsafe { &*text_combine }.ComputeTextBoundsRectForHitTest(item, &PhysicalOffset::default())
+    };
+    bounds.offset -= item.RectInContainerFragment().offset;
+    Some(FragmentPaintRect {
+        offset: Offset {
+            x: Number(bounds.offset.left),
+            y: Number(bounds.offset.top),
+        },
+        size: Size {
+            width: Number(bounds.size.width),
+            height: Number(bounds.size.height),
+        },
+    })
 }

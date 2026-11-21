@@ -424,7 +424,7 @@ fn ShouldInvalidateGapDecorations(
     let Some(previous_rules) = previous.and_then(|old| old.paint.gap_rules.as_ref()) else {
         return false;
     };
-    fragment.paint.gap_rules.as_ref() != Some(previous_rules)
+    fragment.ViewGapRules().as_ref() != Some(previous_rules)
 }
 
 fn RepeatRule(layer: &BackgroundImageLayer, horizontal: bool) -> BackgroundRepeatRule {

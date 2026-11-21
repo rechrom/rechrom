@@ -460,34 +460,8 @@ fn PopulateInlineItemLocalPaintData(
         width: Number(rect.size.width),
         height: Number(rect.size.height),
     };
-    if purpose == LayoutUpdateKind::Paint && item.IsText() && !item.IsSvgText() {
-        // Source: core/paint/box_fragment_painter.cc:2492-2510 and
-        // fragment_item.cc:1090-1109. Preserve LayoutTextCombine's compressed
-        // bounds when present; otherwise use FragmentItem's pixel-snapped
-        // ordinary point-test rectangle. Export it relative to this resident
-        // item because interaction already owns the accumulated parent offset.
-        let text_combine = if object.is_null() {
-            std::ptr::null_mut()
-        } else {
-            DynamicTo::<LayoutTextCombine>(unsafe { &*object }.Parent())
-        };
-        let mut bounds = if text_combine.is_null() {
-            item.ComputeTextBoundsRectForHitTest(PhysicalOffset::default(), false)
-        } else {
-            unsafe { &*text_combine }
-                .ComputeTextBoundsRectForHitTest(item, &PhysicalOffset::default())
-        };
-        bounds.offset -= rect.offset;
-        output.paint.text_hit_test_bounds = Some(FragmentPaintRect {
-            offset: Offset {
-                x: Number(bounds.offset.left),
-                y: Number(bounds.offset.top),
-            },
-            size: Size {
-                width: Number(bounds.size.width),
-                height: Number(bounds.size.height),
-            },
-        });
+    if purpose == LayoutUpdateKind::Paint {
+        output.paint.text_hit_test_bounds = LiveTextHitTestBounds(item);
     }
     {
         output.content_size = output.size;

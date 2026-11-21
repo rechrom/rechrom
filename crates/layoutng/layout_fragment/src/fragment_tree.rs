@@ -805,6 +805,11 @@ pub trait ResidentBoxGeometry {
     fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges>;
     /// Table grid, column rect and column geometry of the resident table box.
     fn ViewTable(&self) -> Option<Arc<TablePaintData>>;
+    /// FragmentData::UniqueId of the owner's property fragment (the box
+    /// fragment's FragmentData, else the object's first fragment).
+    fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// A text item's point-test bounds relative to the item.
+    fn ViewTextHitTestBounds(&self) -> Option<FragmentPaintRect>;
     /// Collapsed-border geometry of the resident table box.
     fn ViewCollapsedTable(&self) -> Option<Arc<CollapsedTablePaintData>>;
     /// PhysicalFragment::IsPaintedAtomically of the resident box.
@@ -889,6 +894,40 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewPropertyFragmentUniqueId(&self) -> u64 {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        let object = self.paint.SourceObjectPointer();
+        if object.is_null() || matches!(self.resident_owner, ResidentFragmentOwner::None) {
+            return self.paint.property_fragment_unique_id;
+        }
+        let fragment_data = match self.resident_owner {
+            ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                if fragment.IsBox() {
+                    fragment.GetFragmentData().cast_mut()
+                } else {
+                    std::ptr::null_mut()
+                }
+            }
+            _ => std::ptr::null_mut(),
+        };
+        crate::internal::boundary::layout_boundary::PropertyFragmentUniqueId(object, fragment_data)
+    }
+
+    fn ViewTextHitTestBounds(&self) -> Option<FragmentPaintRect> {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items
+                    .Items()
+                    .get(index)
+                    .and_then(crate::internal::boundary::layout_boundary::LiveTextHitTestBounds)
+            }
+            _ => self.paint.text_hit_test_bounds,
+        }
+    }
+
     fn ViewCollapsedTable(&self) -> Option<Arc<CollapsedTablePaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {
