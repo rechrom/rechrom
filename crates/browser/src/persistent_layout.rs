@@ -464,7 +464,7 @@ mod tests {
                 ),
                 Some(ScrollLayoutUpdate::RefreshedLayout)
             ));
-            assert_eq!(fragment(&fragments, id).paint.scroll_offset, offset);
+            assert_eq!(fragment(&fragments, id).paint.ScrollOffset(), offset);
             assert_eq!(
                 fragment(&fragments, id).paint_cull_scroll_offset,
                 Some(offset),
@@ -600,7 +600,7 @@ mod tests {
                     cached(object),
                     "scroller geometry remains valid"
                 );
-                assert_eq!(fragment(&fragments, id).paint.scroll_offset, offset);
+                assert_eq!(fragment(&fragments, id).paint.ScrollOffset(), offset);
                 let node = unsafe { &*object }.GetNode();
                 let element = foundation::DynamicTo::<Element>(node);
                 assert_eq!(
@@ -663,7 +663,7 @@ mod tests {
                     &UserInteractionState::default(),
                     &cs,
                 );
-                assert_eq!(fragment(&after, id).paint.scroll_offset, offset);
+                assert_eq!(fragment(&after, id).paint.ScrollOffset(), offset);
             }
         });
     }
@@ -740,7 +740,7 @@ mod tests {
                             "scroll must retain box geometry: {placement}, root={root_scroll}"
                         );
                         assert_eq!(
-                            fragment(&persistent, scroller_id).paint.scroll_offset,
+                            fragment(&persistent, scroller_id).paint.ScrollOffset(),
                             offset
                         );
                         let mut fresh_engine = LayoutEngine::new(&assembly);

@@ -1919,6 +1919,12 @@ impl PaintProperties {
         }
     }
 
+    pub fn ScrollOffset(&self) -> Offset {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveScrollOffset)
+            .SourceCheckedOr(self.scroll_offset, "scroll_offset")
+    }
+
     /// PaintLayerStackingNode's flex/grid `order` comparison inputs: the
     /// shared parent's UniqueObjectId and the order value.
     pub fn PaintLayerOrder(&self) -> (Option<u64>, i32) {

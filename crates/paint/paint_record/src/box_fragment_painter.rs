@@ -10953,7 +10953,7 @@ mod background_attachment_tests {
             compositor_element_id: Default::default(),
             scrollable_axes: [true, true],
             scroll_origin: Offset::default(),
-            scroll_position: local_fragment.paint.scroll_offset,
+            scroll_position: local_fragment.paint.ScrollOffset(),
             background_needs_repaint_on_scroll: None,
             prefers_non_composited_scrolling: None,
             scroll_snap_type: None,

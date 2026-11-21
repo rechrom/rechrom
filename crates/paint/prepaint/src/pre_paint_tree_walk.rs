@@ -1605,11 +1605,11 @@ fn TextCombineTransform(data: &TextCombinePaintData, paint_offset: Offset) -> Tr
 
 pub fn ChildGeometryOrigin(fragment: &FragmentPaintData, absolute_offset: Offset) -> Offset {
     if fragment.paint.establishes_paint_state
-        && (fragment.paint.scroll_offset.x != 0.0 || fragment.paint.scroll_offset.y != 0.0)
+        && (fragment.paint.ScrollOffset().x != 0.0 || fragment.paint.ScrollOffset().y != 0.0)
     {
         Offset {
-            x: absolute_offset.x - fragment.paint.scroll_offset.x,
-            y: absolute_offset.y - fragment.paint.scroll_offset.y,
+            x: absolute_offset.x - fragment.paint.ScrollOffset().x,
+            y: absolute_offset.y - fragment.paint.ScrollOffset().y,
         }
     } else {
         absolute_offset
@@ -10096,7 +10096,7 @@ mod tests {
                     compositor_element_id: Default::default(),
                     scrollable_axes: [true, true],
                     scroll_origin: Offset::default(),
-                    scroll_position: fragment.paint.scroll_offset,
+                    scroll_position: fragment.paint.ScrollOffset(),
                     background_needs_repaint_on_scroll: Some(false),
                     prefers_non_composited_scrolling: Some(prefers_non_composited),
                     scroll_snap_type: Some(Default::default()),

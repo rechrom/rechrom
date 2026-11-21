@@ -127,7 +127,7 @@ fn numeric_window_scroll_updates_source_viewport_geometry_and_events() {
             page.RunTask().unwrap();
         }
         assert_eq!(
-            old.paint.scroll_offset,
+            old.paint.ScrollOffset(),
             layoutng_assembly::internal::layout_input::Offset::default()
         );
         check(&mut page, "if(order.join(',')!=='call,microtask,completion')throw Error('task completion order');if(JSON.stringify(events)!=='[\"document\",\"window\"]')throw Error('coalesced scroll events '+JSON.stringify(events)); window.scrollTo(100,250);");

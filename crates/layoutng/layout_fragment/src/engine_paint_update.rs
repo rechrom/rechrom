@@ -212,7 +212,7 @@ impl EnginePaintUpdate for LayoutEngine {
             if fragment.paint.scroll_container.is_some()
                 && (changed.is_empty() || changed.contains(&fragment.node_id))
             {
-                let origin = Some(fragment.paint.scroll_offset);
+                let origin = Some(fragment.paint.ScrollOffset());
                 if fragment.paint_cull_scroll_offset != origin {
                     fragment.paint_cull_scroll_offset = origin;
                     committed += 1;

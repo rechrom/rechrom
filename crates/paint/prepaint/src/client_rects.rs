@@ -95,8 +95,8 @@ fn Gather<'a>(
         child_property_world = MultiplyTransforms(
             &child_property_world,
             &TranslationTransform(
-                -fragment.paint.scroll_offset.x,
-                -fragment.paint.scroll_offset.y,
+                -fragment.paint.ScrollOffset().x,
+                -fragment.paint.ScrollOffset().y,
             ),
         );
     }

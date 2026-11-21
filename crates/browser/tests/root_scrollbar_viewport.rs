@@ -604,11 +604,11 @@ fn canvas_scroll_and_fixed_layers_keep_clip_parity_after_scroll() {
                 })
                 .unwrap();
                 assert!(retained.PtrEq(&page.CurrentFrame().unwrap().fragments));
-                assert_eq!(root_paint(&retained).paint.scroll_offset.y, 80.0);
+                assert_eq!(root_paint(&retained).paint.ScrollOffset().y, 80.0);
                 assert_eq!(
                     root_paint(&page.CurrentFrame().unwrap().fragments)
                         .paint
-                        .scroll_offset
+                        .ScrollOffset()
                         .y,
                     80.0
                 );
@@ -702,7 +702,7 @@ fn fixed_control_root_clip_tracks_scrollbar_mutation_resize_and_scroll() {
         assert_eq!(
             root_paint(&page.CurrentFrame().unwrap().fragments)
                 .paint
-                .scroll_offset
+                .ScrollOffset()
                 .y,
             80.0
         );

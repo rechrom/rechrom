@@ -746,7 +746,7 @@ mod tests {
             compositor_element_id: Default::default(),
             scrollable_axes: [true, true],
             scroll_origin: Offset::default(),
-            scroll_position: fragment.paint.scroll_offset,
+            scroll_position: fragment.paint.ScrollOffset(),
             background_needs_repaint_on_scroll: Some(false),
             prefers_non_composited_scrolling: Some(false),
             scroll_snap_type: Some(Default::default()),

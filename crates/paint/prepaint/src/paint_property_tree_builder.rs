@@ -1815,7 +1815,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         // scroller's local coordinate space; the ScrollTranslation property
         // alone moves them. Baking the offset into child geometry and also
         // publishing the property applies every committed scroll twice.
-        let geometry_scroll = fragment.paint.scroll_offset;
+        let geometry_scroll = fragment.paint.ScrollOffset();
         // Source: paint_property_tree_builder.cc:3516-3561,3769-3799.
         // ScrollTranslation uses ScrollPosition (ScrollOrigin + offset), then
         // the child paint offset gains ScrollOrigin. The two origin terms

@@ -10565,7 +10565,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
         assert!(page.CurrentFrame().unwrap().sequence > before);
         fn scroll_offset(fragment: PaintFragmentCursor<'_>, id: u64) -> Option<Offset> {
             if fragment.node_id == id {
-                return Some(fragment.paint.scroll_offset);
+                return Some(fragment.paint.ScrollOffset());
             }
             fragment
                 .Children()

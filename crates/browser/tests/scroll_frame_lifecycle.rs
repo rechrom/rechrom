@@ -129,7 +129,7 @@ fn root_scroll_state(
         if node.paint.scroll_size.height > node.size.height
             && node.paint_cull_scroll_offset.is_some()
         {
-            return Some((node.paint.scroll_offset, node.paint_cull_scroll_offset));
+            return Some((node.paint.ScrollOffset(), node.paint_cull_scroll_offset));
         }
         node.Children().find_map(find)
     }

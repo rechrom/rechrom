@@ -912,3 +912,25 @@ pub(crate) fn LiveFormControl(
         None
     }
 }
+
+/// The scroll offset PaintPropertyTreeBuilder applies: the source element's
+/// current, already-clamped offset; generated scroll owners without a source
+/// Node read their own PaintLayerScrollableArea.
+pub(crate) fn LiveScrollOffset(object: &LayoutObject) -> Offset {
+    match LiveElementInputData(object) {
+        Some(Some(data)) => data.scroll_offset,
+        Some(None) => Offset::default(),
+        None => {
+            let layout_box = DynamicTo::<LayoutBox>(object as *const LayoutObject);
+            let area = unsafe { layout_box.as_ref() }
+                .map_or(std::ptr::null_mut(), |box_| box_.GetScrollableArea());
+            unsafe { area.as_ref() }.map_or(Offset::default(), |area| {
+                let current = area.GetScrollOffset();
+                Offset {
+                    x: current.x() as f64,
+                    y: current.y() as f64,
+                }
+            })
+        }
+    }
+}

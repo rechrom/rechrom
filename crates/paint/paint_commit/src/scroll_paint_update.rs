@@ -759,7 +759,7 @@ fn collect_current_fragments<'a>(
                 .paint
                 .scroll_container
                 .as_ref()
-                .map_or(f.paint.scroll_offset, |scroll| scroll.scroll_position);
+                .map_or(f.paint.ScrollOffset(), |scroll| scroll.scroll_position);
             if dirty_offsets
                 .insert(owner, scroll_position)
                 .is_some_and(|old| old != scroll_position)
