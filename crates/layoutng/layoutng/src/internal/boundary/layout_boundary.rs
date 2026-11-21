@@ -156,7 +156,7 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveVideoFrameResourceId, LivePreviousBoxGeometry, LiveViewBackgroundRect,
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
-    LiveBoxInkOverflow, LiveItemInkOverflow, LiveBoxGeometryFacts,
+    LiveBoxInkOverflow, LiveItemInkOverflow, LiveTextGlyphInk, LiveBoxGeometryFacts,
     LiveSvgPaintGeometry, LiveSvgTextDecorationStyle, LiveSvgViewBox, LiveTextHitTestBounds,
     PropertyFragmentUniqueId, ResolvePendingPaintStyle,
 };
@@ -197,7 +197,7 @@ pub(crate) mod layout_fragment_fragment_export_state;
 use layout_fragment_fragment_export_state::{FragmentOwners, PopulateSVGChildPaintData};
 #[path = "../../../../layout_fragment/src/ink_overflow_export.rs"]
 mod layout_fragment_ink_overflow_export;
-use layout_fragment_ink_overflow_export::{ExportInkRect, ExportInlineInkOverflow};
+use layout_fragment_ink_overflow_export::ExportInkRect;
 #[path = "../../../../layout_fragment/src/nine_piece_image_export.rs"]
 mod layout_fragment_nine_piece_image_export;
 use layout_fragment_nine_piece_image_export::ExportNinePieceImages;

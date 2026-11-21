@@ -4639,13 +4639,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 }
                 // cc::PaintOp::GetBounds(DrawTextBlobOp) consumes blob ink,
                 // independently of the containing decoration record's bound.
-                // Layout supplied real shaped glyph ink even when decoration
-                // overflow still requires the retained-layout bridge into the
-                // Paint-owned InlinePaintContext. Keep that proof only for the
-                // ordinary untransformed fill path.
+                // The resident FragmentItem supplies its ink overflow (or its
+                // shaped glyph ink). Keep that proof only for the ordinary
+                // untransformed fill path.
                 if svg.is_none()
-                    && (fragment.paint.text_glyph_ink.is_some()
-                        || fragment.ViewSelfInkOverflow().is_some())
+                    && (fragment.ViewSelfInkOverflow().is_some()
+                        || fragment.ViewTextGlyphInk().is_some())
                     && !fragment.paint.IsTextCombine()
                     && fragment.ViewTextItemFacts().4 == 0.0
                     && input_run.writing_mode == WritingMode::kHorizontalTb
@@ -6546,15 +6545,15 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
             height: rect.size.height,
         });
     }
-    // Preserve real glyph overhangs while the decoration/marker branch still
-    // needs the retained-layout bridge into the Paint-owned InlinePaintContext.
+    // Without FragmentItem ink overflow, unite the resident item's shaped
+    // glyph ink (ResidentBoxGeometry::ViewTextGlyphInk).
     let mut rect = PaintRect {
         x: paint_offset.x,
         y: paint_offset.y,
         width: fragment.ViewSize().width,
         height: fragment.ViewSize().height,
     };
-    if let Some(glyph) = fragment.paint.text_glyph_ink {
+    if let Some(glyph) = fragment.ViewTextGlyphInk() {
         rect.union(PaintRect {
             x: paint_offset.x + glyph.offset.x,
             y: paint_offset.y + glyph.offset.y,

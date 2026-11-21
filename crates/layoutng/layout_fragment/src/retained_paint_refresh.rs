@@ -51,54 +51,6 @@ pub(super) fn refresh_retained_paint_inputs(
         }
         object = current.NextInPreOrder(root_ptr);
     }
-    // FragmentItem::RecalcInkOverflow keeps shaping resident when decorations
-    // change. Invalidate the existing items, then use the same boundary ink
-    // export as ordinary layout. Unsupported decoration overflow remains
-    // explicitly unset; never publish the old plain-text rect as current ink.
-    let mut ink_items: HashMap<(u64, u32), *const FragmentItem> = HashMap::new();
-    let mut ink_clients = HashSet::new();
-    for &object in &objects {
-        if inline_ink_changes.contains(&InputId(unsafe { &*object })) {
-            let mut ancestor = object;
-            while !ancestor.is_null() {
-                ink_clients.insert(unsafe { &*(ancestor as *const DisplayItemClient) }.Id() as u64);
-                ancestor = unsafe { &*ancestor }.Parent();
-            }
-        }
-        let box_ = DynamicTo::<LayoutBox>(object);
-        let Some(box_) = (unsafe { box_.as_ref() }) else {
-            continue;
-        };
-        for index in 0..box_.PhysicalFragmentCount() {
-            let fragment = box_.GetPhysicalFragment(index);
-            let Some(fragment) = (unsafe { fragment.as_ref() }) else {
-                continue;
-            };
-            let Some(items) = (unsafe { fragment.Items().as_ref() }) else {
-                continue;
-            };
-            for item in items.Items() {
-                let source = item.GetLayoutObject();
-                if source.is_null()
-                    || !item.IsText()
-                    || !inline_ink_changes.contains(&InputId(unsafe { &*source }))
-                {
-                    continue;
-                }
-                let client = unsafe { &*(source as *const DisplayItemClient) }.Id() as u64;
-                let key = (client, item.FragmentId());
-                if ink_items
-                    .insert(key, item)
-                    .is_some_and(|old| !std::ptr::eq(old, item))
-                {
-                    return false;
-                }
-            }
-        }
-    }
-    for &item in ink_items.values() {
-        unsafe { &*item }.InvalidateInkOverflow();
-    }
     fn validate(
         node: crate::layout_engine::PaintFragmentCursor<'_>,
         clients: &HashMap<u64, *mut LayoutObject>,
@@ -117,24 +69,28 @@ pub(super) fn refresh_retained_paint_inputs(
     if !validate(fragments, &clients) {
         return false;
     }
+    // Source: core/layout/layout_object.cc:2289-2302 (InvalidateVisualOverflow,
+    // reached from LayoutObject::SetStyle when
+    // StyleDifference::NeedsRecomputeVisualOverflow()). A decoration change
+    // keeps shaping resident: invalidate the text's FragmentItem ink overflow
+    // and mark its painting layer. PaintLayer::UpdateDescendantDependentFlags
+    // (paint_layer.cc:386-514), run immediately before PrePaint, recomputes it
+    // through RecalcVisualOverflow and FragmentItem::RecalcInkOverflow
+    // (fragment_item.cc:946-1078) before any painter reads it.
+    for &object in &objects {
+        if inline_ink_changes.contains(&InputId(unsafe { &*object })) {
+            unsafe { &mut *object }.InvalidateVisualOverflow();
+        }
+    }
     unsafe fn refresh(
         cursor: crate::layout_engine::PaintFragmentCursor<'_>,
         clients: &HashMap<u64, *mut LayoutObject>,
         sources: &SourceMap,
         styles: &StyleSourceMap,
-        ink_clients: &HashSet<u64>,
-        ink_items: &HashMap<(u64, u32), *const FragmentItem>,
     ) {
         let children = cursor.Children();
         let node = unsafe { cursor.PaintDataMut() };
         node.paint.background_is_known_to_be_obscured = false;
-        if ink_clients.contains(&node.paint.DisplayItemClientId()) {
-            // Ancestor contents ink depends on the invalidated text item.
-            // Keep that proof unavailable until the source overflow owner
-            // completes it, as ExportBoxInkOverflow does for unset ink.
-            node.paint.contents_ink_overflow = None;
-            node.paint.ink_overflow = None;
-        }
         if let Some(&object) = clients.get(&node.paint.DisplayItemClientId()) {
             let resources = cursor
                 .DocumentResources()
@@ -161,27 +117,10 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.background_any_layer_uses_content_box =
                 current.background_any_layer_uses_content_box;
         }
-        if let Some(&item) = ink_items.get(&(
-            node.paint.DisplayItemClientId(),
-            node.ViewDisplayItemFragment(),
-        )) {
-            node.paint.self_ink_overflow = None;
-            node.paint.ink_overflow = None;
-            ExportInlineInkOverflow(unsafe { &*item }, &mut node.paint);
-        }
         for child in children {
-            unsafe { refresh(child, clients, sources, styles, ink_clients, ink_items) };
+            unsafe { refresh(child, clients, sources, styles) };
         }
     }
-    unsafe {
-        refresh(
-            fragments,
-            &clients,
-            &sources,
-            &style_sources,
-            &ink_clients,
-            &ink_items,
-        )
-    };
+    unsafe { refresh(fragments, &clients, &sources, &style_sources) };
     true
 }

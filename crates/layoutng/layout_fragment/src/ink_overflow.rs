@@ -615,6 +615,25 @@ impl InkOverflow {
         self.SetSelf(type_, ink_overflow, &unscaled_size)
     }
 
+    // Source: core/layout/ink_overflow.cc:445-456, the glyph stage of
+    // ComputeTextInkOverflow: shaped glyph ink bounds moved from the
+    // alphabetic baseline to the item's logical top, inflated by half the
+    // text stroke. Logical coordinates of the text item.
+    pub fn ComputeTextGlyphInkOverflow(
+        used_font: &UsedFont,
+        text_info: &TextFragmentPaintInfo,
+        style: &ComputedStyle,
+    ) -> LogicalRect {
+        let text_ink_bounds = used_font.TextInkBounds(text_info);
+        let mut ink_overflow = LogicalRect::EnclosingRect(&text_ink_bounds);
+        ink_overflow.offset.block_offset += used_font.FixedAscent();
+        let stroke_width = style.TextStrokeWidth();
+        if stroke_width != 0.0 {
+            ink_overflow.Inflate(LayoutUnit::FromFloatCeil(stroke_width / 2.0));
+        }
+        ink_overflow
+    }
+
     // Source: core/layout/ink_overflow.cc:439-489. The Paint-owned
     // TextDecorationInfo sources are compiled once at the reciprocal assembly
     // boundary, so this Layout owner consumes their exact geometry and the
@@ -628,15 +647,8 @@ impl InkOverflow {
     ) -> Option<PhysicalRect> {
         let item = unsafe { &*cursor.CurrentItem() };
         let used_font = item.GetUsedFont();
-        let text_ink_bounds = used_font.TextInkBounds(text_info);
-        let mut ink_overflow = LogicalRect::EnclosingRect(&text_ink_bounds);
+        let mut ink_overflow = Self::ComputeTextGlyphInkOverflow(&used_font, text_info, style);
         let writing_mode = style.GetWritingMode();
-
-        ink_overflow.offset.block_offset += used_font.FixedAscent();
-        let stroke_width = style.TextStrokeWidth();
-        if stroke_width != 0.0 {
-            ink_overflow.Inflate(LayoutUnit::FromFloatCeil(stroke_width / 2.0));
-        }
 
         let decoration_rect = ComputeDecorationOverflow(
             cursor,

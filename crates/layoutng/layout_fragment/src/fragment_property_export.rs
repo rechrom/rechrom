@@ -1049,20 +1049,52 @@ pub(crate) fn LiveBoxInkOverflow(fragment: &PhysicalBoxFragment) -> [Option<Frag
     ]
 }
 
-/// An inline item's ink overflow, or `None` when the item's overflow was
-/// never computed (population's plain-text fallback stays stored).
-pub(crate) fn LiveItemInkOverflow(item: &FragmentItem) -> Option<[Option<FragmentPaintRect>; 4]> {
+/// An inline item's ink overflow (FragmentItem::SelfInkOverflowRect /
+/// InkOverflowRect). Chromium never paints an item whose ink overflow is
+/// uncomputed: PaintLayer::UpdateDescendantDependentFlags runs
+/// RecalcVisualOverflow before PrePaint (paint_layer.cc:386-514), and the
+/// layout lifecycle marks the painting layer whenever ink is invalidated.
+pub(crate) fn LiveItemInkOverflow(item: &FragmentItem) -> [Option<FragmentPaintRect>; 4] {
     if let Some(box_fragment) = unsafe { item.BoxFragment().as_ref() } {
-        return Some(LiveBoxInkOverflow(box_fragment));
+        return LiveBoxInkOverflow(box_fragment);
     }
-    item.IsInkOverflowComputed().then(|| {
-        [
-            Some(ExportInkRect(item.SelfInkOverflowRect())),
-            None,
-            Some(ExportInkRect(item.InkOverflowRect())),
-            None,
-        ]
-    })
+    [
+        Some(ExportInkRect(item.SelfInkOverflowRect())),
+        None,
+        Some(ExportInkRect(item.InkOverflowRect())),
+        None,
+    ]
+}
+
+/// A text item's shaped glyph ink in item-local physical coordinates: the
+/// glyph stage of InkOverflow::ComputeTextInkOverflow (ink_overflow.cc:
+/// 439-489), without decoration, emphasis or shadow overflow. `None` for SVG
+/// text, symbol markers and items without a ShapeResult.
+pub(crate) fn LiveTextGlyphInk(
+    item: &FragmentItem,
+    items: &layout_fragment::fragment_items::FragmentItems,
+) -> Option<FragmentPaintRect> {
+    if !item.IsText() || item.IsSvgText() || item.IsSymbolMarker() {
+        return None;
+    }
+    let text_info = item.TextPaintInfo(items);
+    if text_info.shape_result.is_null() {
+        return None;
+    }
+    let style = item.Style();
+    let logical = crate::internal::ink_overflow::InkOverflow::ComputeTextGlyphInkOverflow(
+        &item.GetUsedFont(),
+        &text_info,
+        style,
+    );
+    let converter = WritingModeConverter::new(
+        foundation::WritingDirectionMode::new(
+            style.GetWritingMode(),
+            foundation::TextDirection::kLtr,
+        ),
+        item.Size(),
+    );
+    Some(ExportInkRect(converter.ToPhysicalRect(logical)))
 }
 
 /// Box-fragment geometry facts Chromium's box painter and hit testing read

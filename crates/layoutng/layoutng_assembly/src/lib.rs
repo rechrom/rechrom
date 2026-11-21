@@ -5125,8 +5125,7 @@ mod package_contract_tests {
         for owned_policy in [
             "#[inline(never)]",
             "pub(super) fn refresh_retained_paint_inputs",
-            "let mut ink_items",
-            "InvalidateInkOverflow",
+            "InvalidateVisualOverflow()",
             "unsafe fn refresh",
             "ExportPaintProperties",
         ] {
@@ -10232,25 +10231,21 @@ mod package_contract_tests {
 
         let ink = std::fs::read_to_string(root.join("layout_fragment/src/ink_overflow_export.rs"))
             .expect("read source ink-overflow owner");
-        for owned_policy in [
-            "pub(super) fn ExportInkRect",
-            "pub(super) fn ExportInlineInkOverflow",
-            "ComputeInkBounds",
+        assert!(
+            ink.contains("pub(super) fn ExportInkRect"),
+            "layout_fragment source ink export lost ExportInkRect"
+        );
+        for removed_policy in [
+            "fn ExportBoxInkOverflow",
+            "fn ExportInlineInkOverflow",
             "text_glyph_ink",
+            "self_ink_overflow",
         ] {
             assert!(
-                ink.contains(owned_policy),
-                "layout_fragment source ink export lost {owned_policy}"
+                !ink.contains(removed_policy),
+                "ink overflow must be read live from the resident fragment, not stored by {removed_policy}"
             );
         }
-        assert!(
-            ink.matches("#[inline(never)]").count() >= 1,
-            "inline ink export must retain its sampling frame"
-        );
-        assert!(
-            !ink.contains("paint.style.box_shadows") && !ink.contains("paint.style.outline_width"),
-            "visual overflow must come from the source overflow owner, not style reconstruction"
-        );
 
         let images =
             std::fs::read_to_string(root.join("layout_fragment/src/nine_piece_image_export.rs"))
