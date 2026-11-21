@@ -2944,7 +2944,7 @@ impl PaintProperties {
     pub fn LogicalTreeOrder(&self) -> u64 {
         self.SourceObject()
             .map(LayoutObject::LogicalTreeOrder)
-            .SourceCheckedOr(self.logical_tree_order, "logical_tree_order")
+            .unwrap_or(self.logical_tree_order)
     }
 
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
