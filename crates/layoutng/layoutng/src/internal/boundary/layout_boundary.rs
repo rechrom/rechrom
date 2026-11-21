@@ -169,10 +169,7 @@ pub(crate) use layout_fragment_text_paint_export::{
     BuildPaintGlyphRuns, ExportTextPaintBaseline, LiveFirstLineDecorationRect, LiveTextItemFacts,
     LiveTextLineGeometry, LiveTextLineSnapDelta,
 };
-use layout_fragment_text_paint_export::{
-    ExportListMarkerSymbol, ExportShapeResult, ExportTextCombineEmphasis,
-    ExportTextCombineInlineOffset,
-};
+use layout_fragment_text_paint_export::{ExportShapeResult, ExportTextCombineEmphasis};
 #[path = "../../../../layout_fragment/src/fragment_geometry_export.rs"]
 mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::{ExportBoxPaintGeometry, ExportContentSize};
@@ -200,17 +197,13 @@ pub(crate) mod layout_fragment_fragment_export_state;
 use layout_fragment_fragment_export_state::{FragmentOwners, PopulateSVGChildPaintData};
 #[path = "../../../../layout_fragment/src/ink_overflow_export.rs"]
 mod layout_fragment_ink_overflow_export;
-use layout_fragment_ink_overflow_export::{
-    ExportBoxInkOverflow, ExportInkRect, ExportInlineInkOverflow,
-};
+use layout_fragment_ink_overflow_export::{ExportInkRect, ExportInlineInkOverflow};
 #[path = "../../../../layout_fragment/src/nine_piece_image_export.rs"]
 mod layout_fragment_nine_piece_image_export;
 use layout_fragment_nine_piece_image_export::ExportNinePieceImages;
 #[path = "../../../../layout_fragment/src/fragment_paint_population.rs"]
 mod layout_fragment_fragment_paint_population;
-use layout_fragment_fragment_paint_population::{
-    PopulatePhysicalFragmentPaintData, ReplayCheckEnabled,
-};
+use layout_fragment_fragment_paint_population::PopulatePhysicalFragmentPaintData;
 #[path = "../../../../layout_fragment/src/global_paint_export.rs"]
 mod layout_fragment_global_paint_export;
 use layout_fragment_global_paint_export::{

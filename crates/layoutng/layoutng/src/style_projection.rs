@@ -88,22 +88,6 @@ impl<'a> StyleResourceBindings<'a> {
         }
     }
 
-    pub(crate) fn FromPaint(
-        paint: &'a PaintStyleData,
-        svg_clip_resources: &'a crate::internal::paint_input::SvgClipResourceBinding,
-    ) -> Self {
-        Self {
-            svg_filter_graphs: &paint.svg_filter_graphs,
-            svg_clip_resources,
-            svg_mask_resource: &paint.svg_mask_resource,
-            svg_pattern_content_target: None,
-            svg_fill_server: &paint.svg_fill_server,
-            svg_stroke_server: &paint.svg_stroke_server,
-            svg_markers: &paint.svg_markers,
-            replaced_image_shader: &paint.replaced_image_shader,
-        }
-    }
-
     pub(crate) fn ToData(
         &self,
         image_resource_id: Option<u64>,

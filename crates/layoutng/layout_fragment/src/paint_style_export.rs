@@ -1785,18 +1785,6 @@ pub(crate) fn ExportStyleWithInputResources(
     )
 }
 
-#[inline(never)]
-pub(crate) fn ExportStyleWithProjectedSvg(
-    style: &ComputedStyle,
-    image_resource_id: Option<u64>,
-    projected: &PaintStyleData,
-    clip_resources: &crate::internal::paint_input::SvgClipResourceBinding,
-) -> crate::internal::layout_input::PaintStyle {
-    let resources =
-        crate::style_projection::StyleResourceBindings::FromPaint(projected, clip_resources);
-    ExportStyleWithResourceBindings(style, image_resource_id, &resources, clip_resources)
-}
-
 /// Motion-path is resolved against the actual containing LayoutBox, so its
 /// final matrix cannot be reconstructed from ComputedStyle alone at the
 /// immutable Layout -> Paint boundary. Preserve only UpdateOffset's matrix;

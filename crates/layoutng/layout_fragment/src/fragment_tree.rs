@@ -1989,15 +1989,7 @@ impl PaintProperties {
     }
 
     pub fn HasSource(&self) -> bool {
-        let live = self.SourceObject().is_some();
-        if live && !self.has_source && PaintSourceCheckEnabled() {
-            browser_tracing::instant(
-                "layout",
-                "layout_fragment.PaintSourceMismatch",
-                &[("has_source", 1.0)],
-            );
-        }
-        live || self.has_source
+        self.SourceObject().is_some() || self.has_source
     }
 
     // Source: platform/graphics/paint/display_item_client.h:58-88 and
@@ -2030,7 +2022,7 @@ impl PaintProperties {
     pub fn PaintLayerClientId(&self) -> u64 {
         self.SourceObject()
             .map(|_| self.SourcePaintLayer().map_or(0, |layer| layer.Id()))
-            .SourceCheckedOr(self.paint_layer_client_id, "paint_layer_client_id")
+            .unwrap_or(self.paint_layer_client_id)
     }
 
     /// LayoutObject::InsideBlockingWheelEventHandler(), which PrePaint
@@ -2038,10 +2030,7 @@ impl PaintProperties {
     pub fn InsideBlockingWheelEventHandler(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::InsideBlockingWheelEventHandler)
-            .SourceCheckedOr(
-                self.inside_blocking_wheel_event_handler,
-                "inside_blocking_wheel_event_handler",
-            )
+            .unwrap_or(self.inside_blocking_wheel_event_handler)
     }
 
     fn ClientState(
@@ -2205,35 +2194,35 @@ impl PaintProperties {
     pub fn IsLayoutView(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutView)
-            .SourceCheckedOr(self.is_layout_view, "is_layout_view")
+            .unwrap_or(self.is_layout_view)
     }
 
     pub fn IsGlobalRootScroller(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsGlobalRootScroller)
-            .SourceCheckedOr(self.is_layout_view, "is_layout_view")
+            .unwrap_or(self.is_layout_view)
     }
 
     pub fn NeedsLayout(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::NeedsLayout)
-            .SourceCheckedOr(self.needs_layout, "needs_layout")
+            .unwrap_or(self.needs_layout)
     }
 
     pub fn IsInclusiveDescendantOfUnboundedElement(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsInclusiveDescendantOfUnboundedElement)
-            .SourceCheckedOr(self.is_inclusive_descendant_of_unbounded_element, "is_inclusive_descendant_of_unbounded_element")
+            .unwrap_or(self.is_inclusive_descendant_of_unbounded_element)
     }
 
     pub fn IsPrinting(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsPrintingForLayout)
-            .SourceCheckedOr(self.is_printing, "is_printing")
+            .unwrap_or(self.is_printing)
     }
 
     pub fn ShouldPrintBackgrounds(&self) -> bool {
         self.SourceObject().map(LayoutObject::ShouldPrintBackgroundsForLayout)
-            .SourceCheckedOr(self.should_print_backgrounds, "should_print_backgrounds")
+            .unwrap_or(self.should_print_backgrounds)
     }
 
     pub fn CanvasDrawElementEnabled(&self) -> bool {
@@ -2241,7 +2230,7 @@ impl PaintProperties {
             .map(|object| {
                 object.CanvasDrawElementEnabledForLayout()
             })
-            .SourceCheckedOr(self.canvas_draw_element_enabled, "canvas_draw_element_enabled")
+            .unwrap_or(self.canvas_draw_element_enabled)
     }
 
     /// Source NeedsElementCanvasTransform, paint_property_tree_builder.cc:592-608.
@@ -2283,33 +2272,33 @@ impl PaintProperties {
     pub fn IsInCanvasSubtree(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsInCanvasSubtree)
-            .SourceCheckedOr(self.is_in_canvas_subtree, "is_in_canvas_subtree")
+            .unwrap_or(self.is_in_canvas_subtree)
     }
 
     pub fn IsOverscrollAreaParent(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsOverscrollAreaParent)
-            .SourceCheckedOr(self.is_overscroll_area_parent, "is_overscroll_area_parent")
+            .unwrap_or(self.is_overscroll_area_parent)
     }
 
     pub fn IsOverscrollContainer(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsOverscrollContainer)
-            .SourceCheckedOr(self.is_overscroll_container, "is_overscroll_container")
+            .unwrap_or(self.is_overscroll_container)
     }
 
     pub fn ChildLayoutBlockedByDisplayLock(&self) -> bool {
         self.SourceObject().map(LayoutObject::ChildLayoutBlockedByDisplayLock)
-            .SourceCheckedOr(self.child_layout_blocked_by_display_lock, "child_layout_blocked_by_display_lock")
+            .unwrap_or(self.child_layout_blocked_by_display_lock)
     }
 
     pub fn ChildPaintBlockedByDisplayLock(&self) -> bool {
         self.SourceObject().map(LayoutObject::ChildPaintBlockedByDisplayLock)
-            .SourceCheckedOr(self.child_paint_blocked_by_display_lock, "child_paint_blocked_by_display_lock")
+            .unwrap_or(self.child_paint_blocked_by_display_lock)
     }
 
     pub fn IsFragmentLessBox(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsFragmentLessBox)
-            .SourceCheckedOr(self.is_fragment_less_box, "is_fragment_less_box")
+            .unwrap_or(self.is_fragment_less_box)
     }
 
     pub fn AdditionalCompositingReasons(&self) -> foundation::CompositingReasons {
@@ -2321,7 +2310,7 @@ impl PaintProperties {
                     foundation::CompositingReasons::new()
                 }
             })
-            .SourceCheckedOr(self.additional_compositing_reasons, "additional_compositing_reasons")
+            .unwrap_or(self.additional_compositing_reasons)
     }
 
     pub fn InForcedColorsMode(&self) -> bool {
@@ -2329,18 +2318,18 @@ impl PaintProperties {
             .map(|object| {
                 object.StyleRef().InForcedColorsMode()
             })
-            .SourceCheckedOr(self.in_forced_colors_mode, "in_forced_colors_mode")
+            .unwrap_or(self.in_forced_colors_mode)
     }
 
     pub fn IsBackgroundAttachmentFixedObject(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsBackgroundAttachmentFixedObject)
-            .SourceCheckedOr(self.is_background_attachment_fixed_object, "is_background_attachment_fixed_object")
+            .unwrap_or(self.is_background_attachment_fixed_object)
     }
 
     pub fn IsBoxModelObject(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsBoxModelObject)
-            .SourceCheckedOr(self.is_box_model_object, "is_box_model_object")
+            .unwrap_or(self.is_box_model_object)
     }
 
     // Stage 2 of the export removal: LayoutObject facts read live (Chromium
@@ -2349,7 +2338,7 @@ impl PaintProperties {
     pub fn ReplacedIsImage(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutImage)
-            .SourceCheckedOr(self.replaced_is_image, "replaced_is_image")
+            .unwrap_or(self.replaced_is_image)
     }
 
     pub fn PaintLayerIsInTopOrViewTransitionLayer(&self) -> bool {
@@ -2359,7 +2348,7 @@ impl PaintProperties {
                     .is_null()
                     && object.IsInTopOrViewTransitionLayer()
             })
-            .SourceCheckedOr(self.paint_layer_is_in_top_or_view_transition_layer, "paint_layer_is_in_top_or_view_transition_layer")
+            .unwrap_or(self.paint_layer_is_in_top_or_view_transition_layer)
     }
 
     pub fn PaintLayerIsDirectLayoutViewChild(&self) -> bool {
@@ -2369,7 +2358,7 @@ impl PaintProperties {
                     .is_null()
                     && unsafe { object.Parent().as_ref() }.is_some_and(LayoutObject::IsLayoutView)
             })
-            .SourceCheckedOr(self.paint_layer_is_direct_layout_view_child, "paint_layer_is_direct_layout_view_child")
+            .unwrap_or(self.paint_layer_is_direct_layout_view_child)
     }
 
     pub fn PaintLayerCanContainAbsolutePositionObjects(&self) -> bool {
@@ -2379,7 +2368,7 @@ impl PaintProperties {
                     .is_null()
                     && object.CanContainAbsolutePositionObjects()
             })
-            .SourceCheckedOr(self.paint_layer_can_contain_absolute_position_objects, "paint_layer_can_contain_absolute_position_objects")
+            .unwrap_or(self.paint_layer_can_contain_absolute_position_objects)
     }
 
     pub fn PaintLayerCanContainFixedPositionObjects(&self) -> bool {
@@ -2389,7 +2378,7 @@ impl PaintProperties {
                     .is_null()
                     && object.CanContainFixedPositionObjects()
             })
-            .SourceCheckedOr(self.paint_layer_can_contain_fixed_position_objects, "paint_layer_can_contain_fixed_position_objects")
+            .unwrap_or(self.paint_layer_can_contain_fixed_position_objects)
     }
 
     pub fn PaintLayerHasOverlayOverflowControls(&self) -> bool {
@@ -2404,7 +2393,7 @@ impl PaintProperties {
                     }
                     .is_some_and(|area| area.HasOverlayOverflowControls())
             })
-            .SourceCheckedOr(self.paint_layer_has_overlay_overflow_controls, "paint_layer_has_overlay_overflow_controls")
+            .unwrap_or(self.paint_layer_has_overlay_overflow_controls)
     }
 
     pub fn BackgroundPaintLocation(&self) -> BackgroundPaintLocation {
@@ -2413,7 +2402,7 @@ impl PaintProperties {
                 unsafe { foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref() }
                     .map(crate::internal::boundary::layout_boundary::LiveBackgroundPaintLocation)
             })
-            .SourceCheckedOr(self.background_paint_location, "background_paint_location")
+            .unwrap_or(self.background_paint_location)
     }
 
     pub fn CssClip(&self) -> Option<FragmentPaintRect> {
@@ -2422,31 +2411,31 @@ impl PaintProperties {
                 unsafe { foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref() }
                     .map(crate::internal::boundary::layout_boundary::LiveCssClip)
             })
-            .SourceCheckedOr(self.css_clip, "css_clip")
+            .unwrap_or(self.css_clip)
     }
 
     pub fn VisibleToHitTesting(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::VisibleToHitTesting)
-            .SourceCheckedOr(self.visible_to_hit_testing, "visible_to_hit_testing")
+            .unwrap_or(self.visible_to_hit_testing)
     }
 
     pub fn IsSelected(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsSelected)
-            .SourceCheckedOr(self.is_selected, "is_selected")
+            .unwrap_or(self.is_selected)
     }
 
     pub fn EffectiveAllowedTouchAction(&self) -> foundation::TouchAction {
         self.SourceObject()
             .map(LayoutObject::EffectiveAllowedTouchAction)
-            .SourceCheckedOr(self.effective_allowed_touch_action, "effective_allowed_touch_action")
+            .unwrap_or(self.effective_allowed_touch_action)
     }
 
     pub fn BackgroundIsKnownToBeObscured(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::BackgroundIsKnownToBeObscured)
-            .SourceCheckedOr(self.background_is_known_to_be_obscured, "background_is_known_to_be_obscured")
+            .unwrap_or(self.background_is_known_to_be_obscured)
     }
 
     /// LayoutBoxModelObject::BackgroundTransfersToView()
@@ -2464,25 +2453,25 @@ impl PaintProperties {
                     && object.ShouldApplyRootBackgroundBehaviorForLayout()
                     && unsafe { &*model }.BackgroundTransfersToViewDefault()
             })
-            .SourceCheckedOr(self.background_transfers_to_view, "background_transfers_to_view")
+            .unwrap_or(self.background_transfers_to_view)
     }
 
     pub fn IsSVGChild(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsSVGChild)
-            .SourceCheckedOr(self.is_svg_child, "is_svg_child")
+            .unwrap_or(self.is_svg_child)
     }
 
     pub fn IsSVGHiddenContainer(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsSVGHiddenContainer)
-            .SourceCheckedOr(self.svg_hidden_container, "svg_hidden_container")
+            .unwrap_or(self.svg_hidden_container)
     }
 
     pub fn SVGDescendantMayHaveTransformRelatedOperations(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::SVGDescendantMayHaveTransformRelatedOperations)
-            .SourceCheckedOr(self.svg_descendant_may_have_transform_related_operations, "svg_descendant_may_have_transform_related_operations")
+            .unwrap_or(self.svg_descendant_may_have_transform_related_operations)
     }
 
     pub fn BackgroundShouldAlwaysBeClipped(&self) -> bool {
@@ -2491,7 +2480,7 @@ impl PaintProperties {
                 let box_ = foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object);
                 !box_.is_null() && unsafe { &*box_ }.BackgroundShouldAlwaysBeClipped()
             })
-            .SourceCheckedOr(self.background_should_always_be_clipped, "background_should_always_be_clipped")
+            .unwrap_or(self.background_should_always_be_clipped)
     }
 
     pub fn CanCompositeBackgroundAttachmentFixed(&self) -> bool {
@@ -2500,20 +2489,20 @@ impl PaintProperties {
                 !foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).is_null()
                     && object.CanCompositeBackgroundAttachmentFixed()
             })
-            .SourceCheckedOr(self.can_composite_background_attachment_fixed, "can_composite_background_attachment_fixed")
+            .unwrap_or(self.can_composite_background_attachment_fixed)
     }
 
     pub fn IsLayoutBox(&self) -> bool {
         self.SourceObject().map(|object| {
             !foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).is_null()
         })
-            .SourceCheckedOr(self.is_layout_box, "is_layout_box")
+            .unwrap_or(self.is_layout_box)
     }
 
     pub fn IsLayoutInline(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutInline)
-            .SourceCheckedOr(self.is_layout_inline, "is_layout_inline")
+            .unwrap_or(self.is_layout_inline)
     }
 
     pub fn ShouldApplyPaintContainment(&self) -> bool {
@@ -2521,7 +2510,7 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyPaintContainment()
             })
-            .SourceCheckedOr(self.should_apply_paint_containment, "should_apply_paint_containment")
+            .unwrap_or(self.should_apply_paint_containment)
     }
 
     pub fn ShouldApplyStyleContainment(&self) -> bool {
@@ -2529,7 +2518,7 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyStyleContainment()
             })
-            .SourceCheckedOr(self.should_apply_style_containment, "should_apply_style_containment")
+            .unwrap_or(self.should_apply_style_containment)
     }
 
     pub fn ShouldApplyLayoutContainment(&self) -> bool {
@@ -2537,29 +2526,29 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyLayoutContainment()
             })
-            .SourceCheckedOr(self.should_apply_layout_containment, "should_apply_layout_containment")
+            .unwrap_or(self.should_apply_layout_containment)
     }
 
     pub fn ShouldClipOverflowAlongEitherAxis(&self) -> bool {
         self.SourceObject().map(LayoutObject::ShouldClipOverflowAlongEitherAxis)
-            .SourceCheckedOr(self.should_clip_overflow_along_either_axis, "should_clip_overflow_along_either_axis")
+            .unwrap_or(self.should_clip_overflow_along_either_axis)
     }
 
     pub fn ShouldClipOverflowAlongBothAxes(&self) -> bool {
         self.SourceObject().map(LayoutObject::ShouldClipOverflowAlongBothAxis)
-            .SourceCheckedOr(self.should_clip_overflow_along_both_axes, "should_clip_overflow_along_both_axes")
+            .unwrap_or(self.should_clip_overflow_along_both_axes)
     }
 
     pub fn IsLayoutBlock(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutBlock)
-            .SourceCheckedOr(self.is_layout_block, "is_layout_block")
+            .unwrap_or(self.is_layout_block)
     }
 
     pub fn IsLayoutBlockFlow(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutBlockFlow)
-            .SourceCheckedOr(self.is_layout_block_flow, "is_layout_block_flow")
+            .unwrap_or(self.is_layout_block_flow)
     }
 
     /// Every live PaintLayer fact PrePaint reads per visit, resolved through
@@ -2574,33 +2563,33 @@ impl PaintProperties {
             is_self_painting: layer.map(|layer| {
                 layer.IsSelfPaintingLayer()
             })
-            .SourceCheckedOr(self.paint_layer_is_self_painting, "paint_layer_is_self_painting"),
+            .unwrap_or(self.paint_layer_is_self_painting),
             invisible_for_position_visibility: layer.map(PaintLayer::InvisibleForPositionVisibility)
-            .SourceCheckedOr(self.paint_layer_invisible_for_position_visibility, "paint_layer_invisible_for_position_visibility"),
+            .unwrap_or(self.paint_layer_invisible_for_position_visibility),
             has_ancestor_invisible_for_position_visibility: layer.map(PaintLayer::HasAncestorInvisibleForPositionVisibility)
-            .SourceCheckedOr(self.paint_layer_has_ancestor_invisible_for_position_visibility, "paint_layer_has_ancestor_invisible_for_position_visibility"),
+            .unwrap_or(self.paint_layer_has_ancestor_invisible_for_position_visibility),
             has_visible_content: layer.map(|layer| {
                 layer.HasVisibleContent()
             })
-            .SourceCheckedOr(self.paint_layer_has_visible_content, "paint_layer_has_visible_content"),
+            .unwrap_or(self.paint_layer_has_visible_content),
             has_self_painting_layer_descendant: layer.map(PaintLayer::HasSelfPaintingLayerDescendant)
-            .SourceCheckedOr(self.paint_layer_has_self_painting_layer_descendant, "paint_layer_has_self_painting_layer_descendant"),
+            .unwrap_or(self.paint_layer_has_self_painting_layer_descendant),
             is_under_svg_hidden_container: layer.map(PaintLayer::IsUnderSVGHiddenContainer)
-            .SourceCheckedOr(self.paint_layer_is_under_svg_hidden_container, "paint_layer_is_under_svg_hidden_container"),
+            .unwrap_or(self.paint_layer_is_under_svg_hidden_container),
             supports_subsequence_caching: layer.map(PaintLayer::SupportsSubsequenceCaching)
-            .SourceCheckedOr(self.paint_layer_supports_subsequence_caching, "paint_layer_supports_subsequence_caching"),
+            .unwrap_or(self.paint_layer_supports_subsequence_caching),
             self_or_descendant_needs_repaint: layer.map(PaintLayer::SelfOrDescendantNeedsRepaint)
-            .SourceCheckedOr(self.paint_layer_self_or_descendant_needs_repaint, "paint_layer_self_or_descendant_needs_repaint"),
+            .unwrap_or(self.paint_layer_self_or_descendant_needs_repaint),
             is_fragmented: layer.map(|layer| {
                 layer.GetLayoutObject().IsFragmented()
             })
-            .SourceCheckedOr(self.paint_layer_is_fragmented, "paint_layer_is_fragmented"),
+            .unwrap_or(self.paint_layer_is_fragmented),
             known_to_clip_subtree_to_padding_box: layer.map(PaintLayer::KnownToClipSubtreeToPaddingBox)
-            .SourceCheckedOr(self.paint_layer_known_to_clip_subtree_to_padding_box, "paint_layer_known_to_clip_subtree_to_padding_box"),
+            .unwrap_or(self.paint_layer_known_to_clip_subtree_to_padding_box),
             child_paint_blocked_by_display_lock: object.map(LayoutObject::ChildPaintBlockedByDisplayLock)
-            .SourceCheckedOr(self.child_paint_blocked_by_display_lock, "child_paint_blocked_by_display_lock"),
+            .unwrap_or(self.child_paint_blocked_by_display_lock),
             is_z_order_list_visible: layer.map(PaintLayer::IsZOrderListVisible)
-            .SourceCheckedOr(self.paint_layer_is_z_order_list_visible, "paint_layer_is_z_order_list_visible"),
+            .unwrap_or(self.paint_layer_is_z_order_list_visible),
         }
     }
 
@@ -2613,17 +2602,17 @@ impl PaintProperties {
             .map(|layer| {
                 layer.IsSelfPaintingLayer()
             })
-            .SourceCheckedOr(self.paint_layer_is_self_painting, "paint_layer_is_self_painting")
+            .unwrap_or(self.paint_layer_is_self_painting)
     }
 
     pub fn PaintLayerInvisibleForPositionVisibility(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::InvisibleForPositionVisibility)
-            .SourceCheckedOr(self.paint_layer_invisible_for_position_visibility, "paint_layer_invisible_for_position_visibility")
+            .unwrap_or(self.paint_layer_invisible_for_position_visibility)
     }
 
     pub fn PaintLayerHasAncestorInvisibleForPositionVisibility(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasAncestorInvisibleForPositionVisibility)
-            .SourceCheckedOr(self.paint_layer_has_ancestor_invisible_for_position_visibility, "paint_layer_has_ancestor_invisible_for_position_visibility")
+            .unwrap_or(self.paint_layer_has_ancestor_invisible_for_position_visibility)
     }
 
     pub fn PaintLayerHasVisibleContent(&self) -> bool {
@@ -2631,32 +2620,32 @@ impl PaintProperties {
             .map(|layer| {
                 layer.HasVisibleContent()
             })
-            .SourceCheckedOr(self.paint_layer_has_visible_content, "paint_layer_has_visible_content")
+            .unwrap_or(self.paint_layer_has_visible_content)
     }
 
     pub fn PaintLayerHasSelfPaintingLayerDescendant(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasSelfPaintingLayerDescendant)
-            .SourceCheckedOr(self.paint_layer_has_self_painting_layer_descendant, "paint_layer_has_self_painting_layer_descendant")
+            .unwrap_or(self.paint_layer_has_self_painting_layer_descendant)
     }
 
     pub fn PaintLayerHasNonIsolatedDescendantWithBlendMode(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasNonIsolatedDescendantWithBlendMode)
-            .SourceCheckedOr(self.paint_layer_has_non_isolated_descendant_with_blend_mode, "paint_layer_has_non_isolated_descendant_with_blend_mode")
+            .unwrap_or(self.paint_layer_has_non_isolated_descendant_with_blend_mode)
     }
 
     pub fn PaintLayerIsUnderSvgHiddenContainer(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::IsUnderSVGHiddenContainer)
-            .SourceCheckedOr(self.paint_layer_is_under_svg_hidden_container, "paint_layer_is_under_svg_hidden_container")
+            .unwrap_or(self.paint_layer_is_under_svg_hidden_container)
     }
 
     pub fn PaintLayerSupportsSubsequenceCaching(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::SupportsSubsequenceCaching)
-            .SourceCheckedOr(self.paint_layer_supports_subsequence_caching, "paint_layer_supports_subsequence_caching")
+            .unwrap_or(self.paint_layer_supports_subsequence_caching)
     }
 
     pub fn PaintLayerSelfOrDescendantNeedsRepaint(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::SelfOrDescendantNeedsRepaint)
-            .SourceCheckedOr(self.paint_layer_self_or_descendant_needs_repaint, "paint_layer_self_or_descendant_needs_repaint")
+            .unwrap_or(self.paint_layer_self_or_descendant_needs_repaint)
     }
 
     pub fn PaintLayerIsFragmented(&self) -> bool {
@@ -2664,12 +2653,12 @@ impl PaintProperties {
             .map(|layer| {
                 layer.GetLayoutObject().IsFragmented()
             })
-            .SourceCheckedOr(self.paint_layer_is_fragmented, "paint_layer_is_fragmented")
+            .unwrap_or(self.paint_layer_is_fragmented)
     }
 
     pub fn PaintLayerKnownToClipSubtreeToPaddingBox(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::KnownToClipSubtreeToPaddingBox)
-            .SourceCheckedOr(self.paint_layer_known_to_clip_subtree_to_padding_box, "paint_layer_known_to_clip_subtree_to_padding_box")
+            .unwrap_or(self.paint_layer_known_to_clip_subtree_to_padding_box)
     }
 
     pub fn PaintLayerIsStackingContext(&self) -> bool {
@@ -2677,13 +2666,13 @@ impl PaintProperties {
             .map(|object| {
                 object.IsStackingContext()
             })
-            .SourceCheckedOr(self.paint_layer_is_stacking_context, "paint_layer_is_stacking_context")
+            .unwrap_or(self.paint_layer_is_stacking_context)
     }
 
     pub fn PaintLayerIsStacked(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsStacked)
-            .SourceCheckedOr(self.paint_layer_is_stacked, "paint_layer_is_stacked")
+            .unwrap_or(self.paint_layer_is_stacked)
     }
 
     pub fn PaintLayerStackingLevel(&self) -> i32 {
@@ -2691,12 +2680,12 @@ impl PaintProperties {
             .map(|object| {
                 object.StyleRef().EffectiveZIndex()
             })
-            .SourceCheckedOr(self.paint_layer_stacking_level, "paint_layer_stacking_level")
+            .unwrap_or(self.paint_layer_stacking_level)
     }
 
     pub fn PaintLayerIsZOrderListVisible(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::IsZOrderListVisible)
-            .SourceCheckedOr(self.paint_layer_is_z_order_list_visible, "paint_layer_is_z_order_list_visible")
+            .unwrap_or(self.paint_layer_is_z_order_list_visible)
     }
     pub fn CanPaintFragmentOccurrence(&self) -> bool {
         self.is_first_for_node || self.can_paint_multiple_fragments
@@ -2709,13 +2698,13 @@ impl PaintProperties {
     pub fn CssMaskBoundingBox(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveCssMaskBoundingBox)
-            .SourceCheckedOr(self.css_mask_bounding_box, "css_mask_bounding_box")
+            .unwrap_or(self.css_mask_bounding_box)
     }
 
     pub fn ScrollableOverflow(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveScrollableOverflow)
-            .SourceCheckedOr(self.scrollable_overflow, "scrollable_overflow")
+            .unwrap_or(self.scrollable_overflow)
     }
 
     pub fn PaintLayerFirstFragmentVisualRect(&self) -> Option<FragmentPaintRect> {
@@ -2725,10 +2714,7 @@ impl PaintProperties {
                     crate::internal::boundary::layout_boundary::LivePaintLayerFirstFragmentVisualRect,
                 )
             })
-            .SourceCheckedOr(
-                self.paint_layer_first_fragment_visual_rect,
-                "paint_layer_first_fragment_visual_rect",
-            )
+            .unwrap_or(self.paint_layer_first_fragment_visual_rect)
     }
 
     pub fn PaintLayerContentsVisualRect(&self) -> Option<FragmentPaintRect> {
@@ -2738,10 +2724,7 @@ impl PaintProperties {
                     crate::internal::boundary::layout_boundary::LivePaintLayerContentsVisualRect,
                 )
             })
-            .SourceCheckedOr(
-                self.paint_layer_contents_visual_rect,
-                "paint_layer_contents_visual_rect",
-            )
+            .unwrap_or(self.paint_layer_contents_visual_rect)
     }
 
     pub fn PaintLayerFilterReferenceBox(&self) -> Option<FragmentPaintRect> {
@@ -2751,10 +2734,7 @@ impl PaintProperties {
                     crate::internal::boundary::layout_boundary::LivePaintLayerFilterReferenceBox,
                 )
             })
-            .SourceCheckedOr(
-                self.paint_layer_filter_reference_box,
-                "paint_layer_filter_reference_box",
-            )
+            .unwrap_or(self.paint_layer_filter_reference_box)
     }
 
     pub fn PaintLayerFilterViewport(&self) -> Option<Size> {
@@ -2764,28 +2744,25 @@ impl PaintProperties {
                     crate::internal::boundary::layout_boundary::LivePaintLayerFilterViewport,
                 )
             })
-            .SourceCheckedOr(self.paint_layer_filter_viewport, "paint_layer_filter_viewport")
+            .unwrap_or(self.paint_layer_filter_viewport)
     }
 
     pub fn ReplacedSelectionState(&self) -> SelectionState {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveReplacedSelectionState)
-            .SourceCheckedOr(self.replaced_selection_state, "replaced_selection_state")
+            .unwrap_or(self.replaced_selection_state)
     }
 
     pub fn ReplacedLocalSelectionVisualRect(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveReplacedLocalSelectionVisualRect)
-            .SourceCheckedOr(
-                self.replaced_local_selection_visual_rect,
-                "replaced_local_selection_visual_rect",
-            )
+            .unwrap_or(self.replaced_local_selection_visual_rect)
     }
 
     pub fn RegionCaptureCropId(&self) -> Option<[u64; 2]> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveRegionCaptureCropId)
-            .SourceCheckedOr(self.region_capture_crop_id, "region_capture_crop_id")
+            .unwrap_or(self.region_capture_crop_id)
     }
 
     pub fn TrackedElementSubRects(
@@ -2806,19 +2783,19 @@ impl PaintProperties {
     pub fn SourceKind(&self) -> NodeKind {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveSourceKind)
-            .SourceCheckedOr(self.source_kind, "source_kind")
+            .unwrap_or(self.source_kind)
     }
 
     pub fn ImageDecodingMode(&self) -> image_resource::ImageDecodingMode {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveImageDecodingMode)
-            .SourceCheckedOr(self.image_decoding_mode, "image_decoding_mode")
+            .unwrap_or(self.image_decoding_mode)
     }
 
     pub fn VideoFrameResourceId(&self) -> Option<image_resource::ImageId> {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveVideoFrameResourceId)
-            .SourceCheckedOr(self.video_frame_resource_id, "video_frame_resource_id")
+            .unwrap_or(self.video_frame_resource_id)
     }
 
     pub fn FocusedImageMapArea(&self) -> Option<&FocusedImageMapArea> {
@@ -2834,13 +2811,13 @@ impl PaintProperties {
     pub fn SvgViewBoxIsEmpty(&self) -> bool {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveSvgViewBoxIsEmpty)
-            .SourceCheckedOr(self.svg_view_box_is_empty, "svg_view_box_is_empty")
+            .unwrap_or(self.svg_view_box_is_empty)
     }
 
     pub fn TextControlHost(&self) -> Option<u64> {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveTextControlHost)
-            .SourceCheckedOr(self.text_control_host, "text_control_host")
+            .unwrap_or(self.text_control_host)
     }
 
     // Previous-frame geometry is Chromium's LayoutBox / LayoutView state,
@@ -2849,31 +2826,25 @@ impl PaintProperties {
     pub fn PreviousBoxGeometry(&self) -> Option<PreviousBoxGeometry> {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LivePreviousBoxGeometry)
-            .SourceCheckedOr(self.previous_box_geometry, "previous_box_geometry")
+            .unwrap_or(self.previous_box_geometry)
     }
 
     pub fn ViewBackgroundRect(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveViewBackgroundRect)
-            .SourceCheckedOr(self.view_background_rect, "view_background_rect")
+            .unwrap_or(self.view_background_rect)
     }
 
     pub fn PreviousViewBackgroundRect(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LivePreviousViewBackgroundRect)
-            .SourceCheckedOr(
-                self.previous_view_background_rect,
-                "previous_view_background_rect",
-            )
+            .unwrap_or(self.previous_view_background_rect)
     }
 
     pub fn DisplayItemRasterEffectOutset(&self) -> RasterEffectOutset {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveRasterEffectOutset)
-            .SourceCheckedOr(
-                self.display_item_raster_effect_outset,
-                "display_item_raster_effect_outset",
-            )
+            .unwrap_or(self.display_item_raster_effect_outset)
     }
 
     // DisplayItemClient identity. Chromium's PaintController and PrePaint
@@ -2885,16 +2856,13 @@ impl PaintProperties {
             .map(|object| {
                 unsafe { &*(object as *const LayoutObject as *const DisplayItemClient) }.Id() as u64
             })
-            .SourceCheckedOr(self.display_item_client_id, "display_item_client_id")
+            .unwrap_or(self.display_item_client_id)
     }
 
     pub fn DisplayItemClientOwnerNodeId(&self) -> i32 {
         self.SourceObject()
             .map(|object| object.OwnerNodeIdDefault())
-            .SourceCheckedOr(
-                self.display_item_client_owner_node_id,
-                "display_item_client_owner_node_id",
-            )
+            .unwrap_or(self.display_item_client_owner_node_id)
     }
 
     pub fn SelectionClientId(&self) -> u64 {
@@ -2907,7 +2875,7 @@ impl PaintProperties {
                     .and_then(|text| unsafe { text.GetSelectionDisplayItemClient().as_ref() })
                     .map_or(0, |client| client.Id() as u64)
             })
-            .SourceCheckedOr(self.selection_client_id, "selection_client_id")
+            .unwrap_or(self.selection_client_id)
     }
 
     /// The control element's theme-painting inputs, built from the source
@@ -3019,7 +2987,7 @@ impl PaintProperties {
     pub fn ScrollOffset(&self) -> Offset {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveScrollOffset)
-            .SourceCheckedOr(self.scroll_offset, "scroll_offset")
+            .unwrap_or(self.scroll_offset)
     }
 
     /// PaintLayerStackingNode's flex/grid `order` comparison inputs: the
@@ -3027,17 +2995,14 @@ impl PaintProperties {
     pub fn PaintLayerOrder(&self) -> (Option<u64>, i32) {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LivePaintLayerOrder)
-            .SourceCheckedOr(
-                (self.paint_layer_order_parent_unique_id, self.paint_layer_order),
-                "paint_layer_order",
-            )
+            .unwrap_or((self.paint_layer_order_parent_unique_id, self.paint_layer_order))
     }
 
     /// The source Node id of the LayoutObject's nearest ancestor with a Node.
     pub fn LogicalParentNodeId(&self) -> Option<u64> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveLogicalParentNodeId)
-            .SourceCheckedOr(self.logical_parent_node_id, "logical_parent_node_id")
+            .unwrap_or(self.logical_parent_node_id)
     }
 
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
@@ -3067,55 +3032,55 @@ impl PaintProperties {
     pub fn Margin(&self) -> Edges {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleMargin)
-            .SourceCheckedOr(self.margin, "margin")
+            .unwrap_or(self.margin)
     }
 
     pub fn BorderStyles(&self) -> [BorderLineStyle; 4] {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleBorderStyles)
-            .SourceCheckedOr(self.border_styles, "border_styles")
+            .unwrap_or(self.border_styles)
     }
 
     pub fn Display(&self) -> Display {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleDisplay)
-            .SourceCheckedOr(self.display, "display")
+            .unwrap_or(self.display)
     }
 
     pub fn Position(&self) -> Position {
         self.FactStyle()
             .map(crate::style_projection::FragmentStylePosition)
-            .SourceCheckedOr(self.position, "position")
+            .unwrap_or(self.position)
     }
 
     pub fn Floating(&self) -> FloatSide {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleFloating)
-            .SourceCheckedOr(self.floating, "floating")
+            .unwrap_or(self.floating)
     }
 
     pub fn WritingMode(&self) -> WritingMode {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleWritingMode)
-            .SourceCheckedOr(self.writing_mode, "writing_mode")
+            .unwrap_or(self.writing_mode)
     }
 
     pub fn Direction(&self) -> TextDirection {
         self.FactStyle()
             .map(crate::style_projection::FragmentStyleDirection)
-            .SourceCheckedOr(self.direction, "direction")
+            .unwrap_or(self.direction)
     }
 
     pub fn OverflowX(&self) -> Overflow {
         self.FactStyle()
             .map(|style| crate::style_projection::FragmentStyleOverflow(style.OverflowX()))
-            .SourceCheckedOr(self.overflow_x, "overflow_x")
+            .unwrap_or(self.overflow_x)
     }
 
     pub fn OverflowY(&self) -> Overflow {
         self.FactStyle()
             .map(|style| crate::style_projection::FragmentStyleOverflow(style.OverflowY()))
-            .SourceCheckedOr(self.overflow_y, "overflow_y")
+            .unwrap_or(self.overflow_y)
     }
 
     pub fn OverscrollBehaviorX(&self) -> OverscrollBehavior {
@@ -3125,7 +3090,7 @@ impl PaintProperties {
                     style.OverscrollBehaviorX(),
                 )
             })
-            .SourceCheckedOr(self.overscroll_behavior_x, "overscroll_behavior_x")
+            .unwrap_or(self.overscroll_behavior_x)
     }
 
     pub fn OverscrollBehaviorY(&self) -> OverscrollBehavior {
@@ -3135,65 +3100,56 @@ impl PaintProperties {
                     style.OverscrollBehaviorY(),
                 )
             })
-            .SourceCheckedOr(self.overscroll_behavior_y, "overscroll_behavior_y")
+            .unwrap_or(self.overscroll_behavior_y)
     }
 
     // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
     pub fn PreventScrollAxisLocking(&self) -> bool {
         self.FactStyle()
             .map(|style| style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone)
-            .SourceCheckedOr(self.prevent_scroll_axis_locking, "prevent_scroll_axis_locking")
+            .unwrap_or(self.prevent_scroll_axis_locking)
     }
 
     pub fn EffectiveZoom(&self) -> f32 {
         self.FactStyle()
             .map(|style| style.EffectiveZoom())
-            .SourceCheckedOr(self.effective_zoom, "effective_zoom")
+            .unwrap_or(self.effective_zoom)
     }
 
     pub fn HasBackground(&self) -> bool {
         self.FactStyle()
             .map(|style| style.HasBackground())
-            .SourceCheckedOr(self.has_background, "has_background")
+            .unwrap_or(self.has_background)
     }
 
     pub fn BackgroundFillLayerCount(&self) -> usize {
         self.FactStyle()
             .map(crate::internal::boundary::paint_style_export::BackgroundFillLayerCount)
-            .SourceCheckedOr(self.background_fill_layer_count, "background_fill_layer_count")
+            .unwrap_or(self.background_fill_layer_count)
     }
 
     pub fn BackgroundAnyLocalAttachmentImage(&self) -> bool {
         self.FactStyle()
             .map(|style| style.BackgroundLayers().AnyLayerHasLocalAttachmentImage())
-            .SourceCheckedOr(
-                self.background_any_local_attachment_image,
-                "background_any_local_attachment_image",
-            )
+            .unwrap_or(self.background_any_local_attachment_image)
     }
 
     pub fn BackgroundAnyDefaultAttachmentImage(&self) -> bool {
         self.FactStyle()
             .map(|style| style.BackgroundLayers().AnyLayerHasDefaultAttachmentImage())
-            .SourceCheckedOr(
-                self.background_any_default_attachment_image,
-                "background_any_default_attachment_image",
-            )
+            .unwrap_or(self.background_any_default_attachment_image)
     }
 
     pub fn BackgroundAnyLayerUsesContentBox(&self) -> bool {
         self.FactStyle()
             .map(|style| style.BackgroundLayers().AnyLayerUsesContentBox())
-            .SourceCheckedOr(
-                self.background_any_layer_uses_content_box,
-                "background_any_layer_uses_content_box",
-            )
+            .unwrap_or(self.background_any_layer_uses_content_box)
     }
 
     pub fn FixedToView(&self) -> bool {
         self.live_style_facts
             .then(|| self.FactLayoutBox().is_some_and(|box_| box_.IsFixedToView(std::ptr::null())))
-            .SourceCheckedOr(self.fixed_to_view, "fixed_to_view")
+            .unwrap_or(self.fixed_to_view)
     }
 
     pub fn NeedsAnchorPositionScrollAdjustment(&self) -> bool {
@@ -3202,10 +3158,7 @@ impl PaintProperties {
                 self.FactLayoutBox()
                     .is_some_and(|box_| box_.NeedsAnchorPositionScrollAdjustment())
             })
-            .SourceCheckedOr(
-                self.needs_anchor_position_scroll_adjustment,
-                "needs_anchor_position_scroll_adjustment",
-            )
+            .unwrap_or(self.needs_anchor_position_scroll_adjustment)
     }
 
     // C++ chained assignment evaluates the right-hand assignment first.
@@ -3214,38 +3167,4 @@ impl PaintProperties {
         self.overflow_y = value;
         self.overflow_x = value;
     }
-}
-
-/// Stage-0 check harness for the Layout -> Paint export removal. With
-/// RECHROM_PAINT_SOURCE_CHECK set, every PaintProperties getter that reads its
-/// live LayoutObject / PaintLayer also compares the exported copy and emits a
-/// `layout_fragment.PaintSourceMismatch` instant naming the field on a
-/// difference. The live value is always returned; fixtures without a source
-/// keep the exported copy.
-pub(crate) trait SourceCheckedOr<T> {
-    fn SourceCheckedOr(self, stored: T, field: &'static str) -> T;
-}
-
-impl<T: PartialEq> SourceCheckedOr<T> for Option<T> {
-    #[inline]
-    fn SourceCheckedOr(self, stored: T, field: &'static str) -> T {
-        match self {
-            None => stored,
-            Some(live) => {
-                if PaintSourceCheckEnabled() && live != stored {
-                    browser_tracing::instant(
-                        "layout",
-                        "layout_fragment.PaintSourceMismatch",
-                        &[(field, 1.0)],
-                    );
-                }
-                live
-            }
-        }
-    }
-}
-
-pub(crate) fn PaintSourceCheckEnabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_PAINT_SOURCE_CHECK").is_some())
 }

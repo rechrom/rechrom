@@ -601,12 +601,6 @@ fn PopulateInlineItemPaintData(
     )
 }
 
-
-pub(super) fn ReplayCheckEnabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("RECHROM_EXPORT_REPLAY_CHECK").is_some())
-}
-
 fn ReplayOwnerMatches(slot: &FragmentPaintData, owner: PopulationReplayOwner) -> bool {
     match owner {
         PopulationReplayOwner::Physical(fragment) => {
@@ -736,88 +730,6 @@ fn ReplaySubtree(
     owners.replay_stats[0] += 1;
     owners.replay_stats[1] += entries.len();
     changed.iter().any(|c| *c)
-}
-
-/// Check mode: the slot state replay would leave, captured before the
-/// population walk rebuilds it.
-fn ReplayCheckSnapshot(
-    entries: &[PopulationReplayEntry],
-    paint_state: &crate::layout_engine::LayoutPaintState,
-) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>> {
-    entries
-        .iter()
-        .map(|entry| {
-            let slot = paint_state.ResidentFragment(entry.instance)?;
-            Some((
-                slot.paint.clone(),
-                (
-                    slot.node_id,
-                    slot.offset,
-                    slot.size,
-                    slot.content_size,
-                    slot.fragmentainer_instance_id,
-                    slot.text_start,
-                    slot.text_end,
-                    slot.text_paint_timing_non_whitespace,
-                    slot.kind,
-                    slot.pre_paint_revision,
-                    slot.pre_paint_subtree_revision,
-                ),
-                slot.pre_paint_invalidation,
-            ))
-        })
-        .collect()
-}
-
-/// Check mode: compare what the population walk produced with the replay
-/// prediction; returns the number of mismatching slots.
-fn ReplayCheckCompare(
-    entries: &[PopulationReplayEntry],
-    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>>,
-    paint_state: &crate::layout_engine::LayoutPaintState,
-) -> usize {
-    let mut mismatches = 0;
-    for (entry, before) in entries.iter().zip(before) {
-        let (Some(slot), Some((mut paint, fields, invalidation))) =
-            (paint_state.ResidentFragment(entry.instance), before)
-        else {
-            mismatches += 1;
-            continue;
-        };
-        update_paint!(paint, establishes_paint_state, slot.paint.establishes_paint_state);
-        update_paint!(paint, logical_tree_order, slot.paint.logical_tree_order);
-        let now = (
-            slot.node_id,
-            slot.offset,
-            slot.size,
-            slot.content_size,
-            slot.fragmentainer_instance_id,
-            slot.text_start,
-            slot.text_end,
-            slot.text_paint_timing_non_whitespace,
-            slot.kind,
-            slot.pre_paint_revision,
-            slot.pre_paint_subtree_revision,
-        );
-        if paint != slot.paint || fields != now || invalidation != slot.pre_paint_invalidation {
-            mismatches += 1;
-            if mismatches == 1 {
-                browser_tracing::instant_with_text(
-                    "layout",
-                    "layout_fragment.ReplayMismatch",
-                    &format!(
-                        "instance {} paint {} fields {} invalidation {}",
-                        entry.instance,
-                        paint != slot.paint,
-                        fields != now,
-                        invalidation != slot.pre_paint_invalidation
-                    ),
-                    &[],
-                );
-            }
-        }
-    }
-    mismatches
 }
 
 pub(super) fn PopulatePhysicalFragmentPaintData(
@@ -1111,25 +1023,20 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         None
     };
     let mut replayed = false;
-    let mut check: Option<(usize, usize, Vec<_>)> = None;
     if let Some(index) = previous_subtree {
         let previous = std::mem::take(&mut paint_state_owners.replay_previous);
         let len = previous.entries[index].len;
         let range = &previous.entries[index + 1..index + len];
         if !range.is_empty() && ReplayValid(range, resources, paint_state, paint_state_owners) {
-            if ReplayCheckEnabled() {
-                check = Some((index + 1, index + len, ReplayCheckSnapshot(range, paint_state)));
-            } else {
-                descendant_changed = ReplaySubtree(
-                    range,
-                    sources,
-                    resources,
-                    paint_state,
-                    paint_state_owners,
-                    next_fragment_instance_id,
-                );
-                replayed = true;
-            }
+            descendant_changed = ReplaySubtree(
+                range,
+                sources,
+                resources,
+                paint_state,
+                paint_state_owners,
+                next_fragment_instance_id,
+            );
+            replayed = true;
         }
         paint_state_owners.replay_previous = previous;
     }
@@ -1192,14 +1099,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             next_fragment_instance_id,
             next_fragmentainer_instance_id,
         );
-    }
-    if let Some((start, end, before)) = check {
-        let previous = std::mem::take(&mut paint_state_owners.replay_previous);
-        let mismatches = ReplayCheckCompare(&previous.entries[start..end], before, paint_state);
-        paint_state_owners.replay_stats[2] += mismatches;
-        paint_state_owners.replay_stats[0] += 1;
-        paint_state_owners.replay_stats[1] += end - start;
-        paint_state_owners.replay_previous = previous;
     }
     paint_state_owners.finish_replay_entry(replay_begin);
     paint_state_owners.certify(slot, descendant_changed)
