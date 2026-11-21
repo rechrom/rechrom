@@ -10183,7 +10183,6 @@ mod package_contract_tests {
                 .expect("read source fragment export-state owner");
         for owned_policy in [
             "pub(super) struct FragmentOwners",
-            "pub(super) fn fragment_instance",
             "pub(super) fn PopulateSVGChildPaintData",
         ] {
             assert!(

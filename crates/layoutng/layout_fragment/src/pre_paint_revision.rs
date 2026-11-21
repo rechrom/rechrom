@@ -99,7 +99,6 @@ impl PrePaintRevisionTracker {
         node: &mut FragmentPaintData,
         descendant_changed: bool,
     ) -> bool {
-        assert_ne!(node.fragment_instance_id, 0);
         let update = self
             .production_update
             .as_mut()

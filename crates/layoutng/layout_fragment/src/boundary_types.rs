@@ -567,7 +567,12 @@ pub struct FragmentPaintData<Paint> {
     pub pre_paint_revision: u64,
     pub pre_paint_subtree_revision: u64,
     pub pre_paint_owner_retained: bool,
+    /// Fixture-only occurrence identity for hand-built slots without a
+    /// resident owner. Production reads it live from the owner
+    /// (ResidentBoxGeometry::ViewFragmentInstanceId); nothing writes it.
     pub fragment_instance_id: u64,
+    /// Fixture-only enclosing fragmentainer of a hand-built slot. Production
+    /// walks carry it as traversal context (ViewOwnFragmentainerInstanceId).
     pub fragmentainer_instance_id: u64,
     pub node_id: u64,
     pub kind: FragmentKind,

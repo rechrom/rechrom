@@ -102,7 +102,7 @@ pub struct RetainedScrollPaintState {
 fn fragment_identity(f: &FragmentPaintData) -> (u64, u64, u64, u32) {
     (
         f.ViewNodeId(),
-        f.fragment_instance_id,
+        f.ViewFragmentInstanceId(),
         f.paint.DisplayItemClientId(),
         f.ViewDisplayItemFragment(),
     )
@@ -249,7 +249,7 @@ fn identity(node: &PaintTreeNode<'_>) -> (u64, u64, u64, u32) {
         .expect("PrePaint owns a real fragment");
     (
         f.ViewNodeId(),
-        f.fragment_instance_id,
+        f.ViewFragmentInstanceId(),
         f.paint.DisplayItemClientId(),
         f.ViewDisplayItemFragment(),
     )
@@ -637,7 +637,7 @@ fn collect_current_fragments<'a>(
             eprintln!(
                 "scroll-paint-reject stage=missing-fragment node_id={} fragment_instance_id={} client_id={} fragment={}",
                 f.ViewNodeId(),
-                f.fragment_instance_id,
+                f.ViewFragmentInstanceId(),
                 f.paint.DisplayItemClientId(),
                 f.ViewDisplayItemFragment()
             );
@@ -648,7 +648,7 @@ fn collect_current_fragments<'a>(
             &[
                 ("stage", 1.0),
                 ("node_id", f.ViewNodeId() as f64),
-                ("fragment_instance_id", f.fragment_instance_id as f64),
+                ("fragment_instance_id", f.ViewFragmentInstanceId() as f64),
                 (
                     "display_item_client_id",
                     f.paint.DisplayItemClientId() as f64,

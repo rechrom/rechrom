@@ -425,6 +425,10 @@ pub struct PaintTreeNode<'a> {
     /// The ScopedDisplayItemFragment this node paints in: traversal state the
     /// PrePaint walk derives from the paint parent (see DisplayItemFragment).
     display_item_fragment: Option<u32>,
+    /// The fragmentainer (column / page area) this node is inside: traversal
+    /// state the walk derives from the paint parent, as PrePaintTreeWalk
+    /// carries `fragmentainer_idx` (see FragmentainerInstanceId).
+    fragmentainer_instance_id: Option<u64>,
     cache: Option<NodeCache>,
     pub absolute_offset: Offset,
     pub paint_offset: Offset,
@@ -617,6 +621,7 @@ impl<'a> PaintTreeNode<'a> {
             source_lifetime: std::marker::PhantomData,
             physical_index: 0,
             display_item_fragment: None,
+            fragmentainer_instance_id: None,
             cache: None,
             absolute_offset: Offset::default(),
             paint_offset: Offset::default(),
@@ -753,6 +758,21 @@ impl PaintTreeNode<'_> {
                 .fragment
                 .as_deref()
                 .map_or(0, |fragment| fragment.ViewDisplayItemFragment()),
+        }
+    }
+
+    /// The fragmentainer identity this node is inside (0 outside any): a
+    /// column or page area is its own (fragment_tree::FragmentainerInstanceId),
+    /// everything else inherits its paint parent's. The PrePaint walk records
+    /// it per node; hand-built nodes outside a walk read the fragment's own.
+    pub fn FragmentainerInstanceId(&self) -> u64 {
+        match self.fragmentainer_instance_id {
+            Some(fragmentainer) => fragmentainer,
+            None => self
+                .fragment
+                .as_deref()
+                .and_then(|fragment| fragment.ViewOwnFragmentainerInstanceId())
+                .unwrap_or(0),
         }
     }
 
@@ -1047,6 +1067,10 @@ pub struct PrePaintTreeWalk {
     /// core/paint/paint_layer_painter.cc:776-778). Set by the parent before
     /// each child visit; `None` outside a walk.
     display_item_fragment_scope: Option<u32>,
+    /// The fragmentainer identity of the node UpdateNode is visiting
+    /// (PrePaintTreeWalk's `fragmentainer_idx`; 0 outside any). Set by the
+    /// parent before each child visit; `None` outside a walk.
+    fragmentainer_scope: Option<u64>,
     completed_local_frame_prepaint: HashSet<u64>,
     // Source: core/paint/paint_property_tree_builder.cc:4692-4701.
     requires_main_thread_for_background_attachment_fixed: Option<bool>,
@@ -1096,6 +1120,7 @@ impl Default for PrePaintTreeWalk {
             local_frame_sources_changed: false,
             local_frame_depth: 0,
             display_item_fragment_scope: None,
+            fragmentainer_scope: None,
             completed_local_frame_prepaint: HashSet::new(),
             requires_main_thread_for_background_attachment_fixed: None,
             view_background_geometry_changed: false,
@@ -3836,9 +3861,9 @@ fn GatherFragmentInstances<'a>(
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
-    if fragment.fragment_instance_id != 0 {
+    if fragment.ViewFragmentInstanceId() != 0 {
         if fragment_instances
-            .insert(fragment.fragment_instance_id, node_pointer)
+            .insert(fragment.ViewFragmentInstanceId(), node_pointer)
             .is_some()
         {
             panic!("FragmentTree contains duplicate fragment_instance_id values");
@@ -3863,7 +3888,6 @@ struct DetachedPaintNode<'a> {
 /// export resolving every slot each publication.
 fn ResolveLogicalParentOccurrence<'a>(
     child: *const PaintTreeNode<'a>,
-    fragment: &FragmentPaintData,
     logical_id: u64,
     physical_ancestors: &[*const PaintTreeNode<'a>],
     fragment_instances: &HashMap<u64, *mut PaintTreeNode<'a>>,
@@ -3883,15 +3907,14 @@ fn ResolveLogicalParentOccurrence<'a>(
             return Some(ancestor as *mut PaintTreeNode<'a>);
         }
     }
+    // The enclosing fragmentainer is the walk's context of each node.
+    let child_fragmentainer = unsafe { &*child }.FragmentainerInstanceId();
     let unique = |same_fragmentainer: bool| {
         let mut matches = fragment_instances.values().copied().filter(|&candidate| {
             let node = unsafe { &*candidate };
             candidate as *const PaintTreeNode<'a> != child
                 && establishes(node)
-                && (!same_fragmentainer
-                    || node.fragment.as_deref().is_some_and(|candidate| {
-                        candidate.fragmentainer_instance_id == fragment.fragmentainer_instance_id
-                    }))
+                && (!same_fragmentainer || node.FragmentainerInstanceId() == child_fragmentainer)
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -3937,7 +3960,6 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
                 logical_id.and_then(|logical_id| {
                     ResolveLogicalParentOccurrence(
                         child_pointer,
-                        fragment,
                         logical_id,
                         physical_ancestors,
                         fragment_instances,
@@ -4219,7 +4241,7 @@ fn GatherInlineOutlineGroups<'a>(
         && fragment.paint.style.outline_color().alpha > 0.0
     {
         groups
-            .entry((fragment.ViewNodeId(), fragment.fragmentainer_instance_id))
+            .entry((fragment.ViewNodeId(), node.FragmentainerInstanceId()))
             .or_default()
             .push(node as *mut PaintTreeNode<'a>);
     }
@@ -4638,8 +4660,7 @@ fn PropagateSubsequenceRepaintCounting(
 
 fn SameSourceIdentity(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     a.ViewNodeId() == b.ViewNodeId()
-        && a.fragment_instance_id == b.fragment_instance_id
-        && a.fragmentainer_instance_id == b.fragmentainer_instance_id
+        && a.ViewFragmentInstanceId() == b.ViewFragmentInstanceId()
         && a.ViewKind() == b.ViewKind()
         && a.paint.DisplayItemClientId() == b.paint.DisplayItemClientId()
         && a.ViewDisplayItemFragment() == b.ViewDisplayItemFragment()
@@ -4726,7 +4747,6 @@ struct PrePaintPrevious {
     kind: Option<FragmentKind>,
     node_id: u64,
     fragment_instance_id: u64,
-    fragmentainer_instance_id: u64,
     display_item_client_id: u64,
     display_item_fragment: u32,
     size: foundation::LayoutSize,
@@ -4763,8 +4783,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
     PrePaintPrevious {
         kind: Some(f.ViewKind()),
         node_id: f.ViewNodeId(),
-        fragment_instance_id: f.fragment_instance_id,
-        fragmentainer_instance_id: f.fragmentainer_instance_id,
+        fragment_instance_id: f.ViewFragmentInstanceId(),
         display_item_client_id: p.DisplayItemClientId(),
         display_item_fragment: f.ViewDisplayItemFragment(),
         size: f.ViewSize(),
@@ -4849,6 +4868,7 @@ fn RebindCleanSubtree(node: &mut PaintTreeNode<'static>, source: PaintFragmentSo
 /// paint_layer_painter.cc:776-778).
 fn RefreshInheritedDisplayItemFragments(node: &mut PaintTreeNode<'static>) {
     let scope = node.DisplayItemFragment();
+    let fragmentainer = node.FragmentainerInstanceId();
     let Some(children) = node.cache.as_ref().map(|cache| cache.physical_children.clone()) else {
         return;
     };
@@ -4860,8 +4880,17 @@ fn RefreshInheritedDisplayItemFragments(node: &mut PaintTreeNode<'static>) {
             .as_deref()
             .and_then(|fragment| fragment.ViewOwnDisplayItemFragment())
             .unwrap_or(if child.is_embedded_local_frame_root { 0 } else { scope });
-        if child.display_item_fragment != Some(value) {
+        // The enclosing fragmentainer is inherited the same way.
+        let child_fragmentainer = child
+            .fragment
+            .as_deref()
+            .and_then(|fragment| fragment.ViewOwnFragmentainerInstanceId())
+            .unwrap_or(if child.is_embedded_local_frame_root { 0 } else { fragmentainer });
+        if child.display_item_fragment != Some(value)
+            || child.fragmentainer_instance_id != Some(child_fragmentainer)
+        {
             child.display_item_fragment = Some(value);
+            child.fragmentainer_instance_id = Some(child_fragmentainer);
             RefreshInheritedDisplayItemFragments(child);
         }
     }
@@ -5695,13 +5724,16 @@ fn RecordOf(node: &PaintTreeNode<'_>) -> PrePaintPrevious {
 }
 
 /// SameSourceIdentity of the retained node `previous` (by its record) and
-/// the paired `new` fragment.
+/// the paired `new` fragment. The enclosing fragmentainer is not part of it:
+/// the walk pairs a node only under a parent of the same identity, so the
+/// fragmentainer ancestor (itself identified by owner and break-token
+/// sequence) is already the same, as in PrePaintTreeWalk's
+/// `fragmentainer_idx` context.
 fn SamePreviousSourceIdentity(previous: &PaintTreeNode<'_>, new: &FragmentPaintData) -> bool {
     let recorded = RecordOf(previous);
     recorded.kind == Some(new.ViewKind())
         && recorded.node_id == new.ViewNodeId()
-        && recorded.fragment_instance_id == new.fragment_instance_id
-        && recorded.fragmentainer_instance_id == new.fragmentainer_instance_id
+        && recorded.fragment_instance_id == new.ViewFragmentInstanceId()
         && recorded.display_item_client_id == new.paint.DisplayItemClientId()
         && recorded.display_item_fragment == new.ViewDisplayItemFragment()
 }
@@ -6994,7 +7026,8 @@ impl PrePaintTreeWalk {
         // rect updates.  A newly exposed fragment may be inserted before the
         // retained range, so child position is not object identity.  Preserve
         // the allocation fast path when the sequence is unchanged; otherwise
-        // move resident nodes by the opaque instance id exported by Layout.
+        // move resident nodes by the occurrence identity read live from the
+        // resident fragment (ResidentBoxGeometry::ViewFragmentInstanceId).
         // Hand-built trees use id zero and deliberately retain the positional
         // behavior only while their topology is unchanged.
         let (mut positional_children, mut children_by_instance) = if same_children {
@@ -7020,6 +7053,9 @@ impl PrePaintTreeWalk {
         // This node's ScopedDisplayItemFragment, set by the caller before
         // this visit; no child has been visited yet.
         let display_item_fragment = self.display_item_fragment_scope.unwrap_or(0);
+        // Likewise the fragmentainer this node is inside (PrePaintTreeWalk's
+        // `fragmentainer_idx` context).
+        let fragmentainer = self.fragmentainer_scope.unwrap_or(0);
         let ordinary_children = OrdinaryPaintSourceChildren(fragment).count();
         let mut contains_local_frames = embedded_source.is_some();
         let t_loop = checkpoint();
@@ -7031,10 +7067,15 @@ impl PrePaintTreeWalk {
         {
             let previous = if let Some(children) = positional_children.as_mut() {
                 children.next()
-            } else if child.fragment_instance_id != 0 {
-                children_by_instance.remove(&child.fragment_instance_id)
             } else {
-                None
+                // The child's live occurrence identity (FragmentData /
+                // (client, FragmentId) / fragmentainer), as recorded above.
+                let instance_id = child.ViewFragmentInstanceId();
+                if instance_id != 0 {
+                    children_by_instance.remove(&instance_id)
+                } else {
+                    None
+                }
             };
             let is_local_frame = index == ordinary_children && embedded_view.is_some();
             let child_context = if is_local_frame {
@@ -7060,6 +7101,12 @@ impl PrePaintTreeWalk {
                 .ViewOwnDisplayItemFragment()
                 .unwrap_or(if is_local_frame { 0 } else { display_item_fragment });
             self.display_item_fragment_scope = Some(child_display_item_fragment);
+            // A column or page area opens its own fragmentainer; everything
+            // else is inside this node's. An embedded frame starts outside any.
+            let child_fragmentainer = child
+                .ViewOwnFragmentainerInstanceId()
+                .unwrap_or(if is_local_frame { 0 } else { fragmentainer });
+            self.fragmentainer_scope = Some(child_fragmentainer);
             let t_child = checkpoint();
             let mut child_node = self.UpdateNode(
                 child,
@@ -7110,7 +7157,11 @@ impl PrePaintTreeWalk {
                 .display_item_fragment
                 .is_some_and(|old| old != child_display_item_fragment);
             child_node.display_item_fragment = Some(child_display_item_fragment);
-            if scope_changed {
+            let fragmentainer_changed = child_node
+                .fragmentainer_instance_id
+                .is_some_and(|old| old != child_fragmentainer);
+            child_node.fragmentainer_instance_id = Some(child_fragmentainer);
+            if scope_changed || fragmentainer_changed {
                 RefreshInheritedDisplayItemFragments(&mut child_node);
             }
             let cache = child_node.cache.as_ref().unwrap();
@@ -7616,6 +7667,9 @@ impl PrePaintTreeWalk {
         // walk starts at 0.
         let root_display_item_fragment = root.ViewOwnDisplayItemFragment().unwrap_or(0);
         self.display_item_fragment_scope = Some(root_display_item_fragment);
+        // The document root is inside no fragmentainer unless it is one.
+        let root_fragmentainer = root.ViewOwnFragmentainerInstanceId().unwrap_or(0);
+        self.fragmentainer_scope = Some(root_fragmentainer);
         let mut tree = self.UpdateNode(
             root,
             context,
@@ -7624,10 +7678,15 @@ impl PrePaintTreeWalk {
             force,
         );
         self.display_item_fragment_scope = None;
+        self.fragmentainer_scope = None;
         let scope_changed = tree
             .display_item_fragment
-            .is_some_and(|old| old != root_display_item_fragment);
+            .is_some_and(|old| old != root_display_item_fragment)
+            || tree
+                .fragmentainer_instance_id
+                .is_some_and(|old| old != root_fragmentainer);
         tree.display_item_fragment = Some(root_display_item_fragment);
+        tree.fragmentainer_instance_id = Some(root_fragmentainer);
         if scope_changed {
             RefreshInheritedDisplayItemFragments(&mut tree);
         }

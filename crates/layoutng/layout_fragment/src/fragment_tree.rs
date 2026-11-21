@@ -851,6 +851,12 @@ pub trait ResidentBoxGeometry {
     /// `InlineItemInstanceId`). A detached fixture without a resident owner
     /// keeps its recorded `fragment_instance_id`.
     fn ViewFragmentInstanceId(&self) -> u64;
+    /// The fragmentainer identity this fragment opens for its descendants (a
+    /// column or page area: `FragmentainerInstanceId`), else `None`; every
+    /// other fragment is inside the fragmentainer its paint-tree walk
+    /// carries, as PrePaintTreeWalk carries `fragmentainer_idx`. A detached
+    /// fixture returns its recorded nonzero `fragmentainer_instance_id`.
+    fn ViewOwnFragmentainerInstanceId(&self) -> Option<u64>;
     /// Whether this occurrence applies the box fragment's own paint state
     /// (its FragmentData properties, decorations and layer): every box
     /// fragment and every kBox inline item with a box fragment. Boxes reached
@@ -1033,10 +1039,42 @@ fn LiveNinePieceImage(
 //     (box_fragment_painter.cc:398-403).
 // FragmentData ids and DisplayItemClient ids are NewUniqueObjectId counters
 // (high bit clear); derived ids set bit 63 so the spaces never meet.
+//
+// Three occurrences have no unique Chromium pair, because Chromium never
+// needs one for them (it keys paint state by FragmentData and display items
+// additionally by type), and are disambiguated here:
+//   * a line-clamp ellipsis item owned by the container itself, which
+//     FinalizeAfterLayout skips (fragment_items.cc:181-185) and so leaves at
+//     FragmentId 0, and any item of an IFC that FinalizeAfterLayout has not
+//     numbered (every item still at 0): an item at FragmentId 0 that is not
+//     its object's first item (LayoutObject::FirstInlineFragmentItemIndex,
+//     set by the same FinalizeAfterLayout) mixes in its item index in the
+//     whole IFC, which is unique and stays stable while earlier items keep
+//     their count;
+//   * the last fragmentainer of a fragmentation context (no break token, so
+//     no SequenceNumber) and a fragmentainer without an owner client: several
+//     of them can share an owner (one per nested outer fragment, page areas),
+//     so they key by their immutable PhysicalBoxFragment, like a line box;
+//   * a line box fragment, or a fragment without a LayoutObject or
+//     FragmentData: no Chromium paint identity, keyed by its immutable
+//     PhysicalFragment so its slot is retained exactly while LayoutNG reuses
+//     that fragment.
 const DERIVED_INSTANCE_ID_BIT: u64 = 1 << 63;
 const FRAGMENTAINER_INSTANCE_ID_BIT: u64 = 1 << 62;
 const HASHED_INSTANCE_ID_BIT: u64 = 1 << 61;
 const PACKED_CLIENT_LIMIT: u64 = 1 << 29;
+/// Salts that separate the hashed sub-spaces from the (client, fragment) one.
+const ITEM_INDEX_SALT: u64 = 0x1_0000_0000;
+const OWNER_ADDRESS_SALT: u64 = 0x2_0000_0000;
+
+/// splitmix64 finalizer over a pair, tagged into the hashed derived space.
+fn HashedInstanceId(kind: u64, a: u64, b: u64) -> u64 {
+    let mut z = a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    DERIVED_INSTANCE_ID_BIT | kind | HASHED_INSTANCE_ID_BIT | (z & (HASHED_INSTANCE_ID_BIT - 1))
+}
 
 /// Pack (client, fragment) exactly while the client id fits 29 bits; beyond
 /// that (after half a billion process-wide object ids) mix it into the
@@ -1050,12 +1088,19 @@ fn DerivedFragmentInstanceId(client: u64, fragmentainer: bool, fragment: u32) ->
     if client < PACKED_CLIENT_LIMIT {
         return DERIVED_INSTANCE_ID_BIT | kind | (client << 32) | u64::from(fragment);
     }
-    // splitmix64 finalizer over the pair.
-    let mut z = client.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ u64::from(fragment);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    DERIVED_INSTANCE_ID_BIT | kind | HASHED_INSTANCE_ID_BIT | (z & (HASHED_INSTANCE_ID_BIT - 1))
+    HashedInstanceId(kind, client, u64::from(fragment))
+}
+
+/// Whether a live fragment identity is a box fragment's FragmentData::UniqueId
+/// (rather than a derived inline-item, fragmentainer or fragment-keyed id).
+pub fn IsFragmentDataInstanceId(id: u64) -> bool {
+    id != 0 && id & DERIVED_INSTANCE_ID_BIT == 0
+}
+
+/// Identity of an occurrence without a Chromium pair, keyed by its immutable
+/// resident owner's address.
+fn OwnerAddressInstanceId(kind: u64, address: usize) -> u64 {
+    HashedInstanceId(kind, address as u64, OWNER_ADDRESS_SALT)
 }
 
 fn ClientInstanceId(object: *const LayoutObject) -> Option<u64> {
@@ -1064,7 +1109,8 @@ fn ClientInstanceId(object: *const LayoutObject) -> Option<u64> {
 
 /// Identity of a fragmentainer box (column or page area): its owner's
 /// DisplayItemClient and the display-item fragment BoxFragmentPainter
-/// scopes it with (break token SequenceNumber + 1, 0 for the last one).
+/// scopes it with (break token SequenceNumber + 1). The last fragmentainer
+/// (no break token) and an owner-less one key by their fragment instead.
 /// Descendants are inside this fragmentainer only through the tree walk
 /// (Chromium's PrePaintTreeWalk `fragmentainer_idx`); a walk propagates it.
 pub fn FragmentainerInstanceId(
@@ -1073,20 +1119,23 @@ pub fn FragmentainerInstanceId(
     debug_assert!(fragment.IsFragmentainerBox());
     // A fragmentainer is not a CSS box, so GetLayoutObject() hides the
     // fragmentation-context owner it was laid out for.
-    let client = ClientInstanceId(fragment.layout_object_ptr()).unwrap_or(0);
+    let client = ClientInstanceId(fragment.layout_object_ptr());
     let token = fragment.GetBreakToken();
-    let sequence = if token.is_null() {
-        0
-    } else {
-        unsafe { &*token }.SequenceNumber() + 1
-    };
-    DerivedFragmentInstanceId(client, true, sequence)
+    match client {
+        Some(client) if !token.is_null() => {
+            DerivedFragmentInstanceId(client, true, unsafe { &*token }.SequenceNumber() + 1)
+        }
+        _ => OwnerAddressInstanceId(
+            FRAGMENTAINER_INSTANCE_ID_BIT,
+            fragment as *const crate::physical_box_fragment::PhysicalBoxFragment as usize,
+        ),
+    }
 }
 
 /// Identity of a resident physical fragment: FragmentData::UniqueId of a CSS
 /// box (its own FragmentData, else its object's first fragment), the
-/// fragmentainer identity of a column/page area, and 0 for a line box
-/// fragment, which owns no Chromium paint identity.
+/// fragmentainer identity of a column/page area, and the fragment's own
+/// address for a line box or a fragment with no FragmentData. Never 0.
 pub fn PhysicalFragmentInstanceId(fragment: &crate::physical_fragment::PhysicalFragment) -> u64 {
     if fragment.IsFragmentainerBox() {
         return FragmentainerInstanceId(unsafe {
@@ -1095,24 +1144,58 @@ pub fn PhysicalFragmentInstanceId(fragment: &crate::physical_fragment::PhysicalF
         });
     }
     let object = fragment.GetLayoutObject();
-    if object.is_null() {
-        return 0;
-    }
-    let fragment_data = if fragment.IsBox() {
-        fragment.GetFragmentData().cast_mut()
+    let id = if object.is_null() || fragment.IsLineBox() {
+        0
     } else {
-        std::ptr::null_mut()
+        let fragment_data = if fragment.IsBox() {
+            fragment.GetFragmentData().cast_mut()
+        } else {
+            std::ptr::null_mut()
+        };
+        crate::internal::boundary::layout_boundary::PropertyFragmentUniqueId(object, fragment_data)
     };
-    crate::internal::boundary::layout_boundary::PropertyFragmentUniqueId(object, fragment_data)
+    if id != 0 {
+        return id;
+    }
+    OwnerAddressInstanceId(
+        0,
+        fragment as *const crate::physical_fragment::PhysicalFragment as usize,
+    )
 }
 
-/// Identity of a resident inline item: (DisplayItemClient id,
-/// FragmentItem::FragmentId()). Stable across relayout while the object
-/// keeps the same fragment sequence number, independent of the item's index,
-/// text offsets or container FragmentData.
-pub fn InlineItemInstanceId(item: &crate::fragment_item::FragmentItem) -> u64 {
-    ClientInstanceId(item.GetLayoutObject())
-        .map_or(0, |client| DerivedFragmentInstanceId(client, false, item.FragmentId()))
+/// Identity of the resident inline item `items.Items()[index]`:
+/// (DisplayItemClient id, FragmentItem::FragmentId()). Stable across relayout
+/// while the object keeps the same fragment sequence number, independent of
+/// the item's text offsets or container FragmentData. An item at FragmentId
+/// 0 that is not its object's first item (container-owned line-clamp
+/// ellipsis, unfinalized IFC) mixes in its IFC item index instead. Never 0.
+pub fn InlineItemInstanceId(
+    items: &crate::fragment_items::FragmentItems,
+    index: usize,
+) -> u64 {
+    let Some(item) = items.Items().get(index) else {
+        return OwnerAddressInstanceId(0, items as *const _ as usize ^ index);
+    };
+    let object = item.GetLayoutObject();
+    let Some(client) = ClientInstanceId(object) else {
+        return OwnerAddressInstanceId(0, item as *const _ as usize);
+    };
+    let fragment = item.UncheckedFragmentId();
+    // FinalizeAfterLayout numbers lines from kInitialLineFragmentId and
+    // records the 1-based IFC index of the item it numbers 0
+    // (fragment_items.cc:167-225).
+    let ifc_index = items.SizeOfEarlierFragments() as usize + index;
+    let numbered = if item.Type() == crate::fragment_item::ItemType::kLine {
+        fragment >= crate::fragment_item::FragmentItem::kInitialLineFragmentId
+    } else {
+        fragment != 0
+            || (!item.IsEllipsis()
+                && unsafe { &*object }.FirstInlineFragmentItemIndex() == ifc_index + 1)
+    };
+    if numbered {
+        return DerivedFragmentInstanceId(client, false, fragment);
+    }
+    HashedInstanceId(0, client, ITEM_INDEX_SALT | ifc_index as u64)
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
@@ -1271,8 +1354,29 @@ impl ResidentBoxGeometry for FragmentPaintData {
             }),
             ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
-                items.Items().get(index).map_or(0, InlineItemInstanceId)
+                InlineItemInstanceId(items, index)
             }
+        }
+    }
+
+    fn ViewOwnFragmentainerInstanceId(&self) -> Option<u64> {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            // Detached fixtures record the enclosing fragmentainer directly.
+            ResidentFragmentOwner::None => {
+                (self.fragmentainer_instance_id != 0).then_some(self.fragmentainer_instance_id)
+            }
+            ResidentFragmentOwner::Physical(address) => {
+                let fragment =
+                    unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
+                fragment.IsFragmentainerBox().then(|| {
+                    FragmentainerInstanceId(unsafe {
+                        &*(fragment as *const crate::physical_fragment::PhysicalFragment
+                            as *const crate::physical_box_fragment::PhysicalBoxFragment)
+                    })
+                })
+            }
+            ResidentFragmentOwner::InlineItem { .. } => None,
         }
     }
 

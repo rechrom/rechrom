@@ -46,12 +46,9 @@ pub(super) fn populate_layout_result_paint_data(
             .unwrap_or_else(crate::layout_engine::LayoutPaintState::New)
     };
     paint_state.BeginPublication();
-    let prior_fragment_instance_ids = if result_changed {
+    if result_changed {
         cache.fragment_identity_result = result_identity;
-        std::mem::take(&mut cache.fragment_instance_ids)
-    } else {
-        LayoutBoundaryHashMap::default()
-    };
+    }
     if cache.objects.is_empty() {
         let _phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::IndexObjects,
@@ -108,8 +105,6 @@ pub(super) fn populate_layout_result_paint_data(
         unsafe { LayoutResultHandle::FromLayoutResultWithPaintState(result, paint_state.clone()) };
     let mut paint_state_owners = FragmentOwners {
         exported_styles: Some(cache.styles.Key()),
-        fragment_instance_ids: std::mem::take(&mut cache.fragment_instance_ids),
-        prior_fragment_instance_ids,
         replay_previous: if purpose == LayoutUpdateKind::Paint {
             std::mem::take(&mut cache.population_replay)
         } else {
@@ -117,8 +112,6 @@ pub(super) fn populate_layout_result_paint_data(
         },
         ..FragmentOwners::default()
     };
-    let mut next_fragment_instance_id = cache.next_fragment_instance_id.max(1);
-    let mut next_fragmentainer_instance_id = 1;
     if purpose == LayoutUpdateKind::Paint {
         // Source: core/frame/local_frame_view.cc:3034 and
         // core/paint/paint_layer.cc:386-514. Chromium updates descendant
@@ -159,9 +152,6 @@ pub(super) fn populate_layout_result_paint_data(
             &paint_state,
             &mut paint_state_owners,
             0,
-            0,
-            &mut next_fragment_instance_id,
-            &mut next_fragmentainer_instance_id,
         );
         // The enclosing span's bounded field slots are full; LayoutNG cache
         // reuse accounting belongs to this population phase.
@@ -249,9 +239,10 @@ pub(super) fn populate_layout_result_paint_data(
         "sidecar_store_ms",
         paint_state_owners.population_stats.sidecar_store_ns as f64 / 1_000_000.0,
     );
-    let topology_retained = retained_paint_state
-        && paint_state_owners.new_fragment_instances == 0
-        && paint_state_owners.prior_fragment_instance_ids.is_empty();
+    // The same LayoutResult republished every occurrence onto a slot it
+    // already had: no live identity appeared (and none can disappear while
+    // the fragments are unchanged).
+    let topology_retained = retained_paint_state && paint_state_owners.new_fragment_instances == 0;
     paint_state.FinishPublication(topology_retained);
     trace.set("topology_retained", topology_retained as u8 as f64);
     let source = crate::layout_engine::PaintFragmentCursor::FromHandle(&handle);
@@ -275,11 +266,9 @@ pub(super) fn populate_layout_result_paint_data(
         "payload_copies_global",
         (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed) - copies_after_parents) as f64,
     );
-    cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
     if purpose == LayoutUpdateKind::Paint {
         cache.population_replay = std::mem::take(&mut paint_state_owners.replay_next);
     }
-    cache.next_fragment_instance_id = next_fragment_instance_id;
     cache.fragment_paint_state = Some(paint_state);
     handle
 }
