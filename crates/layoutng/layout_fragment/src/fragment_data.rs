@@ -1,4 +1,6 @@
+use std::cell::{Cell, UnsafeCell};
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 use layoutng::internal::paint_layer::PaintLayer;
 
@@ -60,10 +62,79 @@ impl FragmentDataRareData {
     }
 }
 
+/// Which owner and publication last brought a FragmentPaintSidecar up to
+/// date. `owner` is the opaque address pair of the resident fragment or
+/// FragmentItem occurrence ((0, 0) before the first binding); `publication`
+/// and `resource_epoch` are process-unique serials issued by the Layout
+/// boundary, so bindings made through successive LayoutResults compare
+/// directly.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct FragmentPaintBinding {
+    pub publication: u64,
+    pub resource_epoch: u64,
+    pub owner: (usize, usize),
+    /// Whether the binding knew the occurrence's display-item fragment scope.
+    pub scope_known: bool,
+}
+
+/// Rust-only Paint sidecar of one fragment occurrence, attached to the
+/// FragmentData Chromium keeps that occurrence's paint state on
+/// (core/paint/fragment_data.h; PhysicalBoxFragment::GetFragmentData(),
+/// physical_box_fragment.cc). Chromium stores PaintOffset and
+/// ObjectPaintProperties on FragmentData itself; Rechrom's PrePaint/Paint
+/// boundary keeps its derived per-fragment values (FragmentPaintData)
+/// beside them. The value is reference counted only so a LayoutResultHandle
+/// lease can keep the sidecar of a FragmentData removed by
+/// FragmentDataList::Shrink alive while PrePaint still borrows it; its
+/// ordinary lifetime is the FragmentData's, i.e. the LayoutObject's.
+pub struct FragmentPaintSidecar {
+    data: UnsafeCell<crate::fragment_tree::FragmentPaintData>,
+    binding: Cell<FragmentPaintBinding>,
+}
+
+#[allow(non_snake_case)]
+impl FragmentPaintSidecar {
+    pub fn New() -> Rc<Self> {
+        Rc::new(Self {
+            data: UnsafeCell::new(Default::default()),
+            binding: Cell::new(FragmentPaintBinding::default()),
+        })
+    }
+
+    /// The canonical sidecar value. Callers uphold the PrePaint/Paint
+    /// single-writer discipline of PaintFragmentCursor::PaintDataMut.
+    pub fn Data(&self) -> *mut crate::fragment_tree::FragmentPaintData {
+        self.data.get()
+    }
+
+    pub fn Binding(&self) -> FragmentPaintBinding {
+        self.binding.get()
+    }
+
+    pub fn SetBinding(&self, binding: FragmentPaintBinding) {
+        self.binding.set(binding);
+    }
+}
+
+type KeyedPaintSidecars = foundation::TrustedIdentityHashMap<u64, Rc<FragmentPaintSidecar>>;
+
 // cpp: core/paint/fragment_data.h:28-30,239-244
 pub struct FragmentData {
     pub(crate) paint_offset_: PhysicalOffset,
     pub(crate) rare_data_: Member<FragmentDataRareData>,
+    // Rust-only: the Paint sidecar of the box fragment this entry belongs to
+    // (on the first entry also that of a non-box fragment of the object).
+    paint_sidecar_: UnsafeCell<Option<Rc<FragmentPaintSidecar>>>,
+    // Rust-only, first entry only: the sidecars of the object's FragmentItem
+    // occurrences and of the fragmentainers it establishes, keyed by the
+    // occurrence's Chromium identity within the object ((DisplayItemClient,
+    // FragmentItem::FragmentId) / (owner, break-token sequence); see
+    // fragment_tree::InlineItemInstanceId / FragmentainerInstanceId). A
+    // FragmentId is unique per object across all of its inline containers,
+    // so the per-object table is exact without choosing a container entry.
+    // The first entry is never removed by FragmentDataList::Shrink, so the
+    // table lives exactly as long as the LayoutObject.
+    keyed_paint_sidecars_: UnsafeCell<Option<Box<KeyedPaintSidecars>>>,
     #[cfg(debug_assertions)]
     is_first_: bool,
 }
@@ -73,6 +144,8 @@ impl Default for FragmentData {
         Self {
             paint_offset_: PhysicalOffset::default(),
             rare_data_: Member::default(),
+            paint_sidecar_: UnsafeCell::new(None),
+            keyed_paint_sidecars_: UnsafeCell::new(None),
             #[cfg(debug_assertions)]
             is_first_: false,
         }
@@ -198,6 +271,23 @@ impl FragmentData {
     pub fn HasUniqueId(&self) -> bool {
         let rare = self.rare_data_.Get();
         !rare.is_null() && unsafe { &*rare }.unique_id != 0
+    }
+
+    /// Rust-only: this entry's own fragment Paint sidecar, created on first
+    /// access. The owning reference is stable for the FragmentData's life.
+    pub fn OwnPaintSidecar(&self) -> &Rc<FragmentPaintSidecar> {
+        unsafe { &mut *self.paint_sidecar_.get() }.get_or_insert_with(FragmentPaintSidecar::New)
+    }
+
+    /// Rust-only, first entry: the Paint sidecar of the object's occurrence
+    /// `key` (see `keyed_paint_sidecars_`), created on first access. The
+    /// returned reference is valid until the next insertion into this
+    /// table; the sidecar it names stays put.
+    pub fn KeyedPaintSidecar(&self, key: u64) -> &Rc<FragmentPaintSidecar> {
+        unsafe { &mut *self.keyed_paint_sidecars_.get() }
+            .get_or_insert_with(Default::default)
+            .entry(key)
+            .or_insert_with(FragmentPaintSidecar::New)
     }
 
     // cpp: core/paint/fragment_data.h:187-189

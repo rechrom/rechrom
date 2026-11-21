@@ -347,8 +347,8 @@ impl std::ops::Deref for ResidentFragment {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Borrowed(pointer) => {
-                // The pointer comes from LayoutPaintState's stable boxed
-                // sidecar. A PaintFragmentLease is retained for every tree
+                // The pointer names the stable sidecar on its owner's
+                // FragmentData. A PaintFragmentLease is retained for every tree
                 // that can reach it.
                 unsafe { &**pointer }
             }
@@ -361,8 +361,8 @@ impl std::ops::DerefMut for ResidentFragment {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Borrowed(pointer) => {
-                // FragmentPaintData is allocated inside
-                // LayoutPaintState::UnsafeCell; PrePaint is the single
+                // FragmentPaintData lives in the owner FragmentData's
+                // sidecar UnsafeCell; PrePaint is the single
                 // lifecycle writer while this lease is active.
                 unsafe { &mut *(*pointer as *mut FragmentPaintData) }
             }

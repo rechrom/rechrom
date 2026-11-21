@@ -2499,6 +2499,14 @@ impl LayoutObject {
         unsafe { &*self.fragment_.Get() }
     }
 
+    /// Rust-only: the FragmentData list carrying this object's fragment Paint
+    /// sidecars. Readable after Destroy too: a retained LayoutResult's
+    /// fragments still reach the object through their Member edges, so its
+    /// managed memory (and this list) lives until no such result remains.
+    pub(crate) fn PaintSidecarFragments(&self) -> &FragmentDataList {
+        unsafe { &*self.fragment_.Get() }
+    }
+
     // cpp: layoutng/internal/layout_object_fragment_data.cc:67-70
     pub fn IsFragmented(&self) -> bool {
         self.CheckIsNotDestroyed();
