@@ -6722,6 +6722,7 @@ impl PrePaintTreeWalk {
             let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
                 let mut background = BoxPaintInvalidator::ComputeBackgroundInvalidation(
                     &fragment,
+                    Some(fragment.Cursor()),
                     PreviousFragment(old_fragment),
                     invalidation_context,
                 );
@@ -7339,7 +7340,7 @@ impl PrePaintTreeWalk {
         }
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
-            .requires_main_thread_scrolling_for_background_attachment_fixed;
+            .RequiresMainThreadScrollingForBackgroundAttachmentFixed();
         // Chromium clears changed bits on the persistent Paint property-node
         // identities after PaintArtifactCompositor consumes the artifact.
         // The compositor adapter does the same through ClearChangedToRoot().

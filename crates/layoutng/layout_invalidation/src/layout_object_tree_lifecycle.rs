@@ -83,5 +83,8 @@ pub(super) fn LayoutObjectWillBeDestroyed(object: &mut LayoutObject) {
     if let Some(view) = unsafe { view.as_ref() } {
         view.RemovePendingTransformUpdate(object);
         view.RemovePendingOpacityUpdate(object);
+        if object.IsBackgroundAttachmentFixedObject() {
+            view.RemoveBackgroundAttachmentFixedObject(object);
+        }
     }
 }

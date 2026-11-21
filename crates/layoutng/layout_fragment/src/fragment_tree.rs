@@ -173,8 +173,9 @@ pub struct PaintProperties {
     /// arbitrary ancestor reconstructed from the flattened paint tree.
     pub is_inline_formatting_context: bool,
     pub in_forced_colors_mode: bool,
-    /// Source: core/frame/local_frame_view.cc:1504-1527. Published only by the
-    /// actual LayoutView after querying source fixed-background membership.
+    /// Fixture-only: production reads
+    /// PaintProperties::RequiresMainThreadScrollingForBackgroundAttachmentFixed
+    /// live from the LayoutView (local_frame_view.cc:1504-1527).
     pub requires_main_thread_scrolling_for_background_attachment_fixed: Option<bool>,
     /// PaintController snapshots the client's actual reason when appending an
     /// item (paint_controller.cc:531-545). None is an unexported external input.
@@ -350,23 +351,20 @@ pub struct PaintProperties {
     /// foreground opacity is known; Paint uses the retained decision instead
     /// of re-running replaced-content coverage analysis.
     pub background_is_known_to_be_obscured: bool,
-    /// LayoutView::StyleRef() projected onto each page border box. Chromium
-    /// paints the document background there instead of the anonymous page
-    /// fragment's own style. None means that no laid-out document element was
-    /// available, in which case the page border box paints no background.
+    /// Fixture-only LayoutView::StyleRef() for a page border box. Production
+    /// Paint reads it live through PaintFragmentCursor::DocumentElementBackground().
     pub page_document_background_style: Option<PaintStyle>,
-    /// Page geometry: the global paint pass stores only the LayoutView-global
-    /// facts; ResidentBoxGeometry::Page*BackgroundGeometry() completes them
-    /// from the resident page fragment (fixtures keep the whole stored value).
+    /// Fixture-only page geometry. Production reads it live through
+    /// ResidentBoxGeometry::Page*BackgroundGeometry() from the page fragment
+    /// and its LayoutView.
     pub page_document_background_geometry: Option<PageBackgroundPaintData>,
     pub page_container_background_geometry: Option<PageContainerBackgroundPaintData>,
     /// Detached-fixture canvas background. Production Paint reads the live
     /// selection through PaintFragmentCursor::CanvasBackground().
     pub canvas_background: Option<CanvasBackgroundPaintData>,
-    /// Root-element geometry/style retained even when the canvas background is
-    /// transparent, for LayoutView background invalidation. Captured at
-    /// publication because BoxPaintInvalidator compares it with the previous
-    /// slot's value.
+    /// Fixture-only LayoutView background invalidation selection. Production
+    /// PrePaint reads PaintFragmentCursor::ViewBackground() live and compares
+    /// it with the root box's saved previous geometry.
     pub view_background_invalidation: Option<CanvasBackgroundPaintData>,
     pub background_paint_location: BackgroundPaintLocation,
     /// Number of source FillLayers, including image:none slots omitted from
@@ -786,12 +784,23 @@ pub trait ResidentBoxGeometry {
     /// border-box link offset and its borders/padding are read from the
     /// resident fragment (view_painter.cc:397-402, GetPageBorderBoxLink);
     /// the LayoutView-global positioning size, root paint offset and fixed
-    /// attachment fact stay published by the global paint pass.
+    /// attachment fact are read live through the fragment's View().
     fn PageContainerBackgroundGeometry(&self) -> Option<PageContainerBackgroundPaintData>;
     /// BoxBackgroundPaintContext geometry of a page border box. The page
     /// area's OffsetFromRootFragmentationContext() is read from the resident
-    /// fragment; the LayoutView-global facts stay published (see above).
+    /// fragment; the LayoutView-global facts are read live (see above).
     fn PageDocumentBackgroundGeometry(&self) -> Option<PageBackgroundPaintData>;
+}
+
+/// The LayoutView-global facts of a paginated page background (positioning
+/// size, borders/padding, root paint offset, fixed attachment;
+/// view_painter.cc:397-402), read live through the page fragment's
+/// LayoutObject View() rather than published into each page slot.
+fn PageViewBackgroundFacts(
+    fragment: &crate::physical_box_fragment::PhysicalBoxFragment,
+) -> Option<(PageBackgroundPaintData, Offset)> {
+    let object = unsafe { fragment.GetLayoutObject().as_ref() }?;
+    crate::internal::boundary::layout_boundary::PageBackgroundViewFacts(object)
 }
 
 // Chromium: core/paint/box_fragment_painter.cc:102-127 and
@@ -1632,7 +1641,15 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 bottom: padding.bottom.ToDouble(),
                 left: padding.left.ToDouble(),
             },
-            ..self.paint.page_container_background_geometry.unwrap_or_default()
+            ..PageViewBackgroundFacts(fragment)
+                .map(|(document, root_element_paint_offset)| PageContainerBackgroundPaintData {
+                    positioning_size: document.positioning_size,
+                    root_element_paint_offset,
+                    has_background_fixed_to_viewport: document
+                        .has_background_fixed_to_viewport,
+                    ..Default::default()
+                })
+                .unwrap_or_default()
         })
     }
 
@@ -1663,7 +1680,9 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 x: offset.left.ToDouble(),
                 y: offset.top.ToDouble(),
             },
-            ..self.paint.page_document_background_geometry.unwrap_or_default()
+            ..PageViewBackgroundFacts(fragment)
+                .map(|(document, _)| document)
+                .unwrap_or_default()
         })
     }
 }
@@ -2193,6 +2212,23 @@ impl PaintProperties {
     pub fn IsBackgroundAttachmentFixedObject(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsBackgroundAttachmentFixedObject)
             .unwrap_or(false)
+    }
+
+    /// Source: LocalFrameView::RequiresMainThreadScrollingForBackgroundAttachmentFixed
+    /// (core/frame/local_frame_view.cc:1504-1527), read live from the
+    /// LayoutView that owns the fixed-background object set. None for any
+    /// other source object; hand-built fixtures keep the stored value.
+    pub fn RequiresMainThreadScrollingForBackgroundAttachmentFixed(&self) -> Option<bool> {
+        match self.SourceObject() {
+            Some(object) => unsafe {
+                foundation::DynamicTo::<layoutng::internal::layout_view::LayoutView>(
+                    object as *const LayoutObject,
+                )
+                .as_ref()
+            }
+            .map(|view| view.RequiresMainThreadScrollingForBackgroundAttachmentFixed()),
+            None => self.requires_main_thread_scrolling_for_background_attachment_fixed,
+        }
     }
 
     pub fn IsBoxModelObject(&self) -> bool {

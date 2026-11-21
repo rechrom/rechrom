@@ -10,6 +10,7 @@ use foundation::{
 };
 use layoutng_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect, PreviousBoxGeometry};
 use layoutng_assembly::internal::layout_input::{Offset, Size};
+use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use layoutng_assembly::internal::paint_input::{
     BackgroundBox, BackgroundImageLayer, BackgroundRepeat, BackgroundRepeatRule, BackgroundSizeMode,
 };
@@ -35,8 +36,12 @@ pub struct BackgroundInvalidation {
 impl BoxPaintInvalidator {
     /// Source: `box_paint_invalidator.cc:321-374`, plus the directly
     /// representable LayoutView branches at lines 253-319.
+    /// `source` is the fragment's resident cursor; the LayoutView reads its
+    /// canvas background selection live through it. Hand-built fixtures pass
+    /// None and keep their stored selection.
     pub fn ComputeBackgroundInvalidation(
         fragment: &FragmentPaintData,
+        source: Option<PaintFragmentCursor<'_>>,
         previous: Option<&FragmentPaintData>,
         context: PaintInvalidatorContext,
     ) -> BackgroundInvalidation {
@@ -84,7 +89,8 @@ impl BoxPaintInvalidator {
         }
 
         if fragment.paint.IsLayoutView() {
-            let view_kind = ComputeViewBackgroundInvalidation(fragment, previous, context);
+            let view_kind =
+                ComputeViewBackgroundInvalidation(fragment, source, previous, context);
             result.kind = result.kind.max(view_kind);
         }
         result
@@ -308,6 +314,7 @@ fn SelfVisualOverflow(fragment: &FragmentPaintData) -> FragmentPaintRect {
 
 fn ComputeViewBackgroundInvalidation(
     fragment: &FragmentPaintData,
+    source: Option<PaintFragmentCursor<'_>>,
     previous: Option<&FragmentPaintData>,
     context: PaintInvalidatorContext,
 ) -> BackgroundInvalidationType {
@@ -333,7 +340,18 @@ fn ComputeViewBackgroundInvalidation(
         return BackgroundInvalidationType::Full;
     }
 
-    if let Some(new) = fragment.paint.view_background_invalidation.as_ref() {
+    // The canvas background selection and root element geometry, read live
+    // from the LayoutView (box_paint_invalidator.cc ComputeViewBackground-
+    // Invalidation reads the document element's LayoutBox).
+    let view_background = match source {
+        Some(cursor) => cursor.ViewBackground(),
+        None => fragment
+            .paint
+            .view_background_invalidation
+            .as_ref()
+            .map(|view| view.AsRef()),
+    };
+    if let Some(new) = view_background.as_ref() {
         let previous_view =
             previous.and_then(|old| old.paint.view_background_invalidation.as_ref());
         let old_geometry = new.previous_document_element_geometry.or_else(|| {
@@ -680,6 +698,7 @@ mod tests {
         assert_eq!(
             BoxPaintInvalidator::ComputeBackgroundInvalidation(
                 &current,
+                None,
                 Some(&previous),
                 PaintInvalidatorContext::default(),
             ),
@@ -698,6 +717,7 @@ mod tests {
         assert_eq!(
             BoxPaintInvalidator::ComputeBackgroundInvalidation(
                 &current,
+                None,
                 Some(&previous),
                 PaintInvalidatorContext::default(),
             )
@@ -722,6 +742,7 @@ mod tests {
         assert_eq!(
             BoxPaintInvalidator::ComputeBackgroundInvalidation(
                 &current,
+                None,
                 Some(&previous),
                 PaintInvalidatorContext::default(),
             ),
@@ -813,6 +834,7 @@ mod tests {
         assert_eq!(
             BoxPaintInvalidator::ComputeBackgroundInvalidation(
                 &current,
+                None,
                 Some(&old),
                 PaintInvalidatorContext::default(),
             )

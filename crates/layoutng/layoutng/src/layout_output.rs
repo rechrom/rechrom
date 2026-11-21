@@ -777,6 +777,17 @@ impl<'a> PaintFragmentCursor<'a> {
         crate::internal::boundary::layout_boundary::ViewBackgroundForRoot(object, self)
     }
 
+    /// The document element's own background facts, reached from any fragment
+    /// through its LayoutObject's View(): document.GetLayoutView()->StyleRef()
+    /// as BoxFragmentPainter paints it for a kPageBorderBox. The style is the
+    /// root fragment's PaintStyle projection, borrowed.
+    pub fn DocumentElementBackground(
+        self,
+    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+        let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
+        crate::internal::boundary::layout_boundary::DocumentElementBackgroundForObject(object, self)
+    }
+
     /// Enter the source fragment graph through the opaque owner supplied by
     /// the standalone `layout_fragment` package. Concrete type recovery stays
     /// inside the LayoutNG assembly adapter.

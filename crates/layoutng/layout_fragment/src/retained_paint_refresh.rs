@@ -128,8 +128,6 @@ pub(super) fn refresh_retained_paint_inputs(
         let children = cursor.Children();
         let node = unsafe { cursor.PaintDataMut() };
         node.paint.background_is_known_to_be_obscured = false;
-        node.paint.page_document_background_style = None;
-        node.paint.view_background_invalidation = None;
         if ink_clients.contains(&node.paint.DisplayItemClientId()) {
             // Ancestor contents ink depends on the invalidated text item.
             // Keep that proof unavailable until the source overflow owner
@@ -185,7 +183,5 @@ pub(super) fn refresh_retained_paint_inputs(
             &ink_items,
         )
     };
-    ExportCanvasBackground(root, fragments);
-    ExportGlobalMainThreadScrollFacts(root, &objects, fragments);
     true
 }
