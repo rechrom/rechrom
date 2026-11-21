@@ -39,6 +39,23 @@ pub struct PaintClientState {
 }
 use layoutng::internal::selection_state::SelectionState;
 
+/// Opaque reference to a resident source LayoutObject that PrePaint retains
+/// only until the end of its current walk: PaintInvalidator's
+/// `pending_delayed_paint_invalidations_` (core/paint/paint_invalidator.h).
+/// The LayoutObject tree keeps the object live for the synchronous walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrePaintSourceObject(*mut LayoutObject);
+
+impl PrePaintSourceObject {
+    /// PaintInvalidator::ProcessPendingDelayedPaintInvalidations
+    /// (core/paint/paint_invalidator.cc:291-294).
+    pub fn SetShouldDelayFullPaintInvalidation(self) {
+        unsafe { &mut *self.0 }
+            .GetMutableForPainting()
+            .SetShouldDelayFullPaintInvalidation();
+    }
+}
+
 // The C++ definitions are public API; all layoutng::* names above retain their
 // owner in the later layoutng crate. The Cargo cycle needs an interface split.
 
@@ -2084,12 +2101,12 @@ impl PaintProperties {
     /// for hand-built projections without a live source; callers then use
     /// the slot's `pre_paint_invalidation` snapshot.
     ///
-    /// Rechrom clears these bits in the paint client commit
-    /// (LayoutObject::ClearPaintFlags from layout_commit's client_commit.rs)
-    /// rather than inside the PrePaint walk as Chromium does
-    /// (pre_paint_tree_walk.cc:107). A clean result therefore means
-    /// "unchanged since the last full paint commit", not "since the last
-    /// PrePaint walk".
+    /// PrePaintTreeWalk clears these bits on every object it visits
+    /// (ClearSourcePaintFlags; pre_paint_tree_walk.cc:1584-1585), so a clean
+    /// result means "unchanged since the last PrePaint walk that visited this
+    /// object", as in Chromium. Bits set by a path that updates paint state
+    /// without a walk (the retained scroll property update, the direct
+    /// composited-animation update) stay set until the next walk.
     pub fn LivePrePaintInvalidation(&self) -> Option<PrePaintInvalidation> {
         let object = self.SourceObjectPointer();
         if object.is_null() {
@@ -2131,6 +2148,125 @@ impl PaintProperties {
             return;
         }
         unsafe { &mut *layer }.UpdateDescendantDependentFlags();
+    }
+
+    /// The bound source LayoutObject as an opaque PrePaint handle, for
+    /// PaintInvalidator's pending delayed list (paint_invalidator.h
+    /// pending_delayed_paint_invalidations_). `None` for detached fixtures.
+    pub fn PrePaintSourceObject(&self) -> Option<PrePaintSourceObject> {
+        let object = self.SourceObjectPointer();
+        (!object.is_null()).then_some(PrePaintSourceObject(object))
+    }
+
+    /// BoxPaintInvalidator::SavePreviousBoxGeometriesIfNeeded
+    /// (core/paint/box_paint_invalidator.cc:416-427,429-463,512-537) and the
+    /// LayoutView half of ComputeViewBackgroundInvalidation
+    /// (box_paint_invalidator.cc:254-260), on the bound source LayoutBox.
+    /// PrePaint calls this at the end of the object's paint invalidation,
+    /// after every invalidator has read the previous geometry ("This is for
+    /// the next invalidatePaintIfNeeded so must be at the end").
+    pub fn SaveSourcePreviousBoxGeometries(&self) {
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return;
+        }
+        let layout_box = foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object);
+        if layout_box.is_null() {
+            return;
+        }
+        let box_ = unsafe { &mut *layout_box };
+        let style = box_.StyleRef();
+        // box_paint_invalidator.cc:429-445 NeedsToSavePreviousContentBoxRect.
+        let save_content = box_.IsLayoutReplaced()
+            || ((style.BackgroundLayers().AnyLayerUsesContentBox()
+                || style.MaskLayers().AnyLayerUsesContentBox())
+                && box_.PhysicalContentBoxRect().size != box_.StitchedSize());
+        // box_paint_invalidator.cc:447-463 NeedsToSavePreviousOverflowData.
+        let save_overflow = box_.HasVisualOverflow()
+            || box_.HasScrollableOverflow()
+            || ((style.BackgroundLayers().AnyLayerHasLocalAttachmentImage()
+                || box_.GetBackgroundPaintLocation()
+                    != crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace
+                || box_.IsDocumentElement())
+                && box_.ScrollableOverflowRect() != box_.PhysicalBorderBoxRect());
+        let mut mutable = box_.GetMutableForPainting();
+        mutable.SavePreviousSize();
+        if save_overflow {
+            mutable.SavePreviousOverflowData();
+        } else {
+            mutable.ClearPreviousOverflowData();
+        }
+        if save_content {
+            mutable.SavePreviousContentBoxRect();
+        } else {
+            mutable.ClearPreviousContentBoxRect();
+        }
+        let view = foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(object);
+        if !view.is_null() {
+            let view = unsafe { &*view };
+            view.SetPreviousBackgroundRect(view.BackgroundRect());
+        }
+    }
+
+    /// ObjectPaintInvalidatorWithContext::ComputePaintInvalidationReason's
+    /// LayoutObject::UpdatePreviousVisibilityVisible
+    /// (core/paint/object_paint_invalidator.cc:49-53). PrePaint computed the
+    /// reason from the slot's snapshot of the previous value; record the
+    /// current visibility for the next walk.
+    pub fn UpdateSourcePreviousVisibilityVisible(&self) {
+        let object = self.SourceObjectPointer();
+        if !object.is_null() {
+            unsafe { &mut *object }
+                .GetMutableForPainting()
+                .UpdatePreviousVisibilityVisible();
+        }
+    }
+
+    /// LayoutObject::ClearPaintFlags for the bound source object after
+    /// PrePaintTreeWalk::Walk visited it and its children
+    /// (core/paint/pre_paint_tree_walk.cc:1584-1585;
+    /// core/layout/layout_object.cc:5142-5161,5191-5204).
+    ///
+    /// Chromium's walk follows the LayoutObject tree, so it also reaches the
+    /// inline-level objects that own no fragment: collapsed text is cleared
+    /// directly (pre_paint_tree_walk.cc:1265-1279) and culled inlines are
+    /// entered through their containing block's items
+    /// (pre_paint_tree_walk.cc:1282-1300). Rechrom walks fragments, which do
+    /// not represent those objects, so a visited block container clears them
+    /// here, after its fragment children were walked. Leaving them marked
+    /// would stop a later descendant mark at the stale ancestor
+    /// (MarkContainerChainForPaintInvalidation) and hide it from PrePaint.
+    pub fn ClearSourcePaintFlags(&self) {
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return;
+        }
+        let object = unsafe { &mut *object };
+        object.ClearPaintFlags();
+        if object.ChildPrePaintBlockedByDisplayLock()
+            || !object.IsLayoutBlockFlow()
+            || !object.ChildrenInline()
+        {
+            return;
+        }
+        fn clear_fragmentless_inline_children(parent: &LayoutObject) {
+            let mut child = parent.SlowFirstChild();
+            while let Some(current) = unsafe { child.as_mut() } {
+                child = current.NextSibling();
+                // Boxes, atomic inlines included, are visited through their
+                // own fragments.
+                if current.IsBox() {
+                    continue;
+                }
+                if !current.HasInlineFragments() {
+                    current.ClearPaintFlags();
+                }
+                if current.IsLayoutInline() && !current.ChildPrePaintBlockedByDisplayLock() {
+                    clear_fragmentless_inline_children(current);
+                }
+            }
+        }
+        clear_fragmentless_inline_children(object);
     }
 
     /// DisplayItemClient::DebugName() of the bound source LayoutObject

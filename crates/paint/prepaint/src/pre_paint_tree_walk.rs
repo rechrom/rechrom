@@ -1109,6 +1109,10 @@ pub struct PrePaintTreeWalk {
     /// SamePaintResourcesFor results of this pass by (recorded, current,
     /// usage); the Arcs keep both keys alive for the pass.
     resource_memo: Vec<(Arc<PaintResources>, Arc<PaintResources>, u8, bool)>,
+    /// Walks that visited objects (and so cleared their paint flags), and
+    /// that count when Paint last recorded an artifact.
+    consuming_walks: u64,
+    recorded_consuming_walks: u64,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1151,6 +1155,8 @@ impl Default for PrePaintTreeWalk {
             walk_generation: 0,
             revision_generation: 0,
             resource_memo: Vec::new(),
+            consuming_walks: 0,
+            recorded_consuming_walks: 0,
         }
     }
 }
@@ -7022,6 +7028,17 @@ impl PrePaintTreeWalk {
             }
         };
         let t_built = checkpoint();
+        // Source: cull_rect_updater.cc:67-89 (SetFragmentContentsCullRect,
+        // reached from UpdateForSelf at :393-431) and
+        // paint_layer_scrollable_area.cc:1919-1920 (DidUpdateCullRect). When
+        // this update produced a new contents cull rect, record on the
+        // PaintLayerScrollableArea the scroll position it was computed for;
+        // HasScrolledEnough (cull_rect_updater.cc:193-206) measures from it.
+        if old_contents_cull_rect.is_none_or(|old| old != node.cull_rect) {
+            fragment
+                .paint
+                .SetLastCullRectUpdateScrollPosition(fragment.paint.ScrollOffset());
+        }
         self.stats.profile_build_ns += ProfileNs(t_admitted, t_built);
         if profile
             && retained_before
@@ -7110,6 +7127,10 @@ impl PrePaintTreeWalk {
                 node.paint_offset,
                 invalidation_context,
             );
+            // Source: object_paint_invalidator.cc:49-53. The reason above read
+            // the previous visibility from the slot snapshot; save the current
+            // one on the LayoutObject for the next walk.
+            fragment.paint.UpdateSourcePreviousVisibilityVisible();
             let reason = if fragment.ViewKind() == FragmentKind::kBox {
                 if fragment.paint.Display() == Display::kTableCell {
                     TableCellPaintInvalidator::ComputePaintInvalidationReason(
@@ -7150,6 +7171,12 @@ impl PrePaintTreeWalk {
                 BoxPaintInvalidator::InvalidateBackground(resident_fragment, background, reason)
             });
             ObjectPaintInvalidator::InvalidatePaintWithComputedReason(resident_fragment, reason);
+            // Source: box_paint_invalidator.cc:416-427. Every invalidator of
+            // this object has read the previous box geometry; save the
+            // current one for the next walk ("must be at the end").
+            if fragment.ViewKind() == FragmentKind::kBox {
+                resident_fragment.paint.SaveSourcePreviousBoxGeometries();
+            }
             self.paint_invalidator
                 .TrackPendingDelayedPaintInvalidation(resident_fragment);
             // PaintInvalidator.cc:278-285. Visibility:hidden clients still
@@ -7253,6 +7280,10 @@ impl PrePaintTreeWalk {
             cache.nodes = nodes;
             cache.physical_children = physical_children;
             self.stats.profile_children_setup_ns += ProfileNs(t_invalidated, checkpoint());
+            // Source: pre_paint_tree_walk.cc:1517-1531,1584-1585. The child
+            // walk is blocked, but this object was visited; ClearPaintFlags
+            // keeps the descendant bits of a display-locked object.
+            fragment.paint.ClearSourcePaintFlags();
             return node;
         }
         // Chromium's locked subtree keeps pointers to resident LayoutObjects.
@@ -7475,6 +7506,12 @@ impl PrePaintTreeWalk {
         cache.physical_children = physical_children;
         cache.contains_local_frames = contains_local_frames;
         self.stats.profile_tail_ns += ProfileNs(t_looped, checkpoint());
+        // Source: pre_paint_tree_walk.cc:1584-1585. Clear the flags this
+        // visit consumed after the children were walked. PrePaint read them
+        // from the slot's snapshot, so a second walk in the same lifecycle
+        // still sees this publication's inputs; LayoutObject bits now mean
+        // "changed since the last PrePaint", as in Chromium.
+        fragment.paint.ClearSourcePaintFlags();
         node
     }
 
@@ -7945,6 +7982,8 @@ impl PrePaintTreeWalk {
         // The document root is inside no fragmentainer unless it is one.
         let root_fragmentainer = root.ViewOwnFragmentainerInstanceId().unwrap_or(0);
         self.fragmentainer_scope = Some(root_fragmentainer);
+        // This walk visits objects and clears their paint flags.
+        self.consuming_walks = self.consuming_walks.wrapping_add(1);
         let mut tree = self.UpdateNode(
             root,
             context,
@@ -7952,6 +7991,11 @@ impl PrePaintTreeWalk {
             previous,
             force,
         );
+        // Source: pre_paint_tree_walk.cc:106-107. Each visited object's flags
+        // were cleared in its UpdateNode; schedule the delayed targets for
+        // the next pass.
+        self.paint_invalidator
+            .ProcessPendingDelayedPaintInvalidations();
         self.display_item_fragment_scope = None;
         self.fragmentainer_scope = None;
         let scope_changed = tree
@@ -8398,9 +8442,25 @@ impl PrePaintTreeWalk {
     }
 
     /// Objects whose full invalidation remains delayed after this PrePaint
-    /// pass. Layout consumes this at the source commit boundary.
+    /// pass. The walk has already re-armed them on their LayoutObjects.
     pub fn PendingDelayedPaintInvalidations(&self) -> &HashSet<u64> {
         self.paint_invalidator.PendingDelayedPaintInvalidations()
+    }
+
+    /// Record that Paint recorded an artifact from the current PrePaint
+    /// state. See `PrePaintConsumedSinceRecording`.
+    pub fn MarkPrePaintRecorded(&mut self) {
+        self.recorded_consuming_walks = self.consuming_walks;
+    }
+
+    /// Whether a PrePaint walk visited (and therefore cleared the paint
+    /// flags of) any object since the last recorded Paint. A walk consumes
+    /// LayoutObject dirty bits (pre_paint_tree_walk.cc:1584-1585), so after
+    /// a PrePaint-only lifecycle (hit-test preparation, a composited
+    /// animation fallback) clean bits no longer prove that the published
+    /// artifact reflects the source: it was recorded before that walk.
+    pub fn PrePaintConsumedSinceRecording(&self) -> bool {
+        self.consuming_walks != self.recorded_consuming_walks
     }
 
     /// Return the compositor element ids created by the completed PrePaint

@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason};
-use layoutng_assembly::fragment_tree::FragmentPaintData;
+use layoutng_assembly::fragment_tree::{FragmentPaintData, PrePaintSourceObject};
 use layoutng_assembly::internal::layout_input::{Display, Offset};
 
 /// Source: `paint_invalidator.h:20-72`.
@@ -42,12 +42,17 @@ impl PaintInvalidatorContext {
 /// Source: `paint_invalidator.h:82-110`.
 #[derive(Default)]
 pub struct PaintInvalidator {
+    /// Client identities of `pending_delayed_paint_invalidations_`; they
+    /// de-duplicate the fragments of one object.
     pending_delayed_paint_invalidations: HashSet<u64>,
+    /// The source LayoutObjects of those clients, re-armed after the walk.
+    pending_delayed_sources: Vec<PrePaintSourceObject>,
 }
 
 impl PaintInvalidator {
     pub(crate) fn BeginPass(&mut self) {
         self.pending_delayed_paint_invalidations.clear();
+        self.pending_delayed_sources.clear();
     }
 
     /// Source: `paint_invalidator.cc:55-75`. When the complete movement is the
@@ -125,15 +130,30 @@ impl PaintInvalidator {
                 || reason == PaintInvalidationReason::kJustCreated)
             && fragment.paint.DisplayItemClientId() != 0
         {
-            self.pending_delayed_paint_invalidations
-                .insert(fragment.paint.DisplayItemClientId());
+            if self
+                .pending_delayed_paint_invalidations
+                .insert(fragment.paint.DisplayItemClientId())
+            {
+                if let Some(source) = fragment.paint.PrePaintSourceObject() {
+                    self.pending_delayed_sources.push(source);
+                }
+            }
         }
     }
 
-    /// Source: `paint_invalidator.cc:291-294`. The reciprocal Layout commit
-    /// applies these IDs to their source LayoutObjects after Paint succeeds.
+    /// Client identities scheduled by this pass for a delayed invalidation.
     pub fn PendingDelayedPaintInvalidations(&self) -> &HashSet<u64> {
         &self.pending_delayed_paint_invalidations
+    }
+
+    /// Source: `paint_invalidator.cc:291-294`, called by
+    /// PrePaintTreeWalk::WalkTree right after the walk
+    /// (`pre_paint_tree_walk.cc:106-107`): the walk has cleared each visited
+    /// object's flags, so re-arm the delayed targets for the next pass.
+    pub(crate) fn ProcessPendingDelayedPaintInvalidations(&mut self) {
+        for source in self.pending_delayed_sources.drain(..) {
+            source.SetShouldDelayFullPaintInvalidation();
+        }
     }
 }
 

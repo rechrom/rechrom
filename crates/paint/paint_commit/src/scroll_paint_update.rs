@@ -93,9 +93,11 @@ pub struct RetainedScrollPaintState {
     has_scroll_dependent_background: bool,
     /// PaintArtifact::recording_revision this state describes: the full
     /// Paint it was captured after, advanced by this path's own updates.
-    /// The dirty-bit proof in collect_current_fragments is only valid since
-    /// that paint's client commit cleared the LayoutObject paint flags, so a
-    /// later full Paint (a new recording) requires a fresh capture.
+    /// The capture derives its coverage from that recording (which clients
+    /// drew, and the retained PrePaint nodes Paint recorded them from), so a
+    /// later full Paint (a new recording) requires a fresh capture. This is
+    /// independent of the dirty-bit proof, which PrePaintTreeWalk guards
+    /// separately (PrePaintConsumedSinceRecording).
     recording_revision: u64,
 }
 
@@ -686,15 +688,16 @@ fn collect_current_fragments<'a>(
     // the PrePaint subtree-walk reasons). Read them live from the bound
     // source LayoutObject; hand-built fixtures keep the slot snapshot.
     //
-    // Rechrom clears those bits only at the full paint client commit
-    // (LayoutObject::ClearPaintFlags in layout_commit's client_commit.rs),
-    // never on this retained path's CommitRetainedPaint. The state compared
-    // here is captured after the latest full Paint (its recording_revision
-    // forces a recapture after any later one), so any bit set since then (including this path's own scroll refresh,
-    // PaintLayerScrollableArea::UpdateScrollOffset ->
-    // SetNeedsPaintPropertyUpdate) is still visible and reports a change.
-    // Bits left over from a PrePaint-only lifecycle are over-reported, which
-    // only takes the ordinary PrePaint/Paint path.
+    // PrePaintTreeWalk clears those bits on every object it visits
+    // (pre_paint_tree_walk.cc:1584-1585), never this retained path, which
+    // runs no walk. A clean bit therefore proves "unchanged since the last
+    // PrePaint"; TryUpdateScrollPropertiesWithPrePaint admits this proof
+    // only while that PrePaint is the one the artifact was recorded from
+    // (PrePaintConsumedSinceRecording), and the captured state is retaken
+    // after every recording. Any bit set since then (including this
+    // path's own scroll refresh, PaintLayerScrollableArea::
+    // UpdateScrollOffset -> SetNeedsPaintPropertyUpdate, which stays set
+    // until the next walk) is visible and reports a change.
     let invalidation = f
         .paint
         .LivePrePaintInvalidation()
@@ -923,13 +926,26 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     if artifact.caret.is_some_and(|caret| caret.visible) {
         return Err(CaretNeedsPaint);
     }
+    // PrePaintTreeWalk clears the LayoutObject paint flags it consumes
+    // (pre_paint_tree_walk.cc:1584-1585). After a PrePaint-only walk (hit-test
+    // preparation, a composited-animation fallback) the resident PrePaint
+    // tree may describe changes this artifact never recorded while their
+    // bits read clean, so the live dirty-bit proof below would accept them.
+    // Only the ordinary Paint can bring the recording up to that walk.
+    if prepaint.PrePaintConsumedSinceRecording() {
+        if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
+            eprintln!("scroll-paint-reject stage=prepaint-after-recording");
+        }
+        return Err(FragmentChanged);
+    }
     {
         let _trace = browser_tracing::span("prepaint", "ScrollPaint.CaptureRetainedState");
         // PaintEngine keeps the state across full Paints that did not need a
-        // PrePaint post-walk. The live dirty-bit proof below only covers
-        // changes since the latest full paint commit, so a state captured
-        // before that paint must be recaptured from the current resident
-        // tree and artifact.
+        // PrePaint post-walk. The state's coverage is derived from the
+        // recording it was captured after (its drawing clients and the
+        // retained PrePaint nodes Paint recorded from), so a state captured
+        // before the latest full Paint must be recaptured from the current
+        // resident tree and artifact.
         let stale = retained_scroll_state
             .as_ref()
             .is_some_and(|state| state.recording_revision != artifact.recording_revision);

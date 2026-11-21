@@ -491,6 +491,28 @@ impl PrePaintInvalidation {
             || self.subtree_should_check_for_paint_invalidation
             || self.subtree_should_do_full_paint_invalidation
     }
+
+    /// The part of `own()` that only a PrePaint walk consumes into the state
+    /// a resident hit test reads: layout geometry
+    /// (ShouldCheckLayoutForPaintInvalidation) and the blocking wheel-handler
+    /// region (the kBlockingWheelEventHandler subtree-walk reason).
+    ///
+    /// The other `own()` bits are not evidence of a stale resident node:
+    /// the paint-invalidation bits never change hit-test state, container
+    /// chains keep a bare ShouldCheckForPaintInvalidation across a walk for
+    /// delayed invalidations (PaintInvalidator::
+    /// ProcessPendingDelayedPaintInvalidations), and NeedsPaintPropertyUpdate
+    /// stays set after the retained scroll and direct composited-animation
+    /// updates, which write the resident property nodes without a walk.
+    pub fn own_hit_test_inputs(self) -> bool {
+        self.blocking_wheel_event_handler_changed || self.should_check_layout_for_paint_invalidation
+    }
+
+    /// The descendant aggregate of `own_hit_test_inputs()`.
+    pub fn descendant_hit_test_inputs(self) -> bool {
+        self.descendant_blocking_wheel_event_handler_changed
+            || self.descendant_should_check_layout_for_paint_invalidation
+    }
 }
 
 /// Shared immutable paint payload. The payload itself stays generic so the

@@ -143,24 +143,15 @@ pub struct ResidentPaintHitTest<'a> {
 /// after LocalFrameView::UpdateLifecycleToPrePaintClean
 /// (core/frame/local_frame_view.cc; DocumentLifecycle::kPrePaintClean,
 /// core/dom/document_lifecycle.h), and then trust them without any
-/// per-object freshness test: PrePaintTreeWalk consumed and cleared every
-/// LayoutObject dirty bit (pre_paint_tree_walk.cc:107). Freshness is that
-/// lifecycle gate, which Rechrom's callers hold (LayoutViewHitTestQuery
-/// checks IsPrePaintClean and the prepared revision; Page pointer geometry
-/// runs PrePaint below PrePaintClean). This lookup only proves owner
-/// identity: the same resident sidecar slot (checked by the caller) and
-/// the same PhysicalFragment / FragmentItem and LayoutObject the walk
-/// visited. A relayout that replaces the fragment therefore rejects the
-/// resident node; any other relayout is caught by the lifecycle gate.
-///
-/// The LayoutObject dirty bits are deliberately not consulted here: Rechrom
-/// clears them only at the full paint client commit
-/// (LayoutObject::ClearPaintFlags from layout_commit's client_commit.rs), so
-/// after a PrePaint-only lifecycle (PaintEngine::PrePaintWithLifecycle, the
-/// hit-test preparation path) the walked objects still carry the bits the
-/// walk consumed, and LayoutView itself carries container-chain
-/// ShouldCheckForPaintInvalidation. Rejecting on them would make every hit
-/// test between a DOM change and the next paint fail.
+/// per-object freshness test: PrePaintTreeWalk consumed and cleared the
+/// LayoutObject dirty bits of every object it visited
+/// (pre_paint_tree_walk.cc:1584-1585). Freshness is that lifecycle gate,
+/// which Rechrom's callers hold (LayoutViewHitTestQuery checks
+/// IsPrePaintClean and the prepared revision; Page pointer geometry runs
+/// PrePaint below PrePaintClean). This lookup proves owner identity: the
+/// same resident sidecar slot (checked by the caller) and the same
+/// PhysicalFragment / FragmentItem and LayoutObject the walk visited. A
+/// relayout that replaces the fragment therefore rejects the resident node.
 fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, query: PaintFragmentCursor<'_>) -> bool {
     // Hand-built fixture nodes have no source cursor; the exact sidecar slot
     // identity checked by the caller is their only owner.
@@ -183,6 +174,24 @@ fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, query: PaintFragmentCursor<'_
         ) => std::ptr::eq(walked, query),
         _ => false,
     }
+}
+
+/// Whether the walked object changed what a hit test reads after the
+/// PrePaint walk that produced its resident node.
+///
+/// PrePaint clears each visited object's flags (pre_paint_tree_walk.cc:
+/// 1584-1585; PaintProperties::ClearSourcePaintFlags), so a live bit means a
+/// mutation since that walk: a stale node even when the lifecycle gate was
+/// not rewound. Only the bits that nothing but a walk turns into hit-test
+/// state are checked (PrePaintInvalidation::own_hit_test_inputs, which also
+/// documents the excluded paint-invalidation, delayed-invalidation and
+/// directly applied property-update bits). Hand-built fixtures have no live
+/// source.
+fn ChangedSinceWalk(fragment: &FragmentPaintData) -> bool {
+    fragment
+        .paint
+        .LivePrePaintInvalidation()
+        .is_some_and(|bits| bits.own_hit_test_inputs())
 }
 
 impl PrePaintTreeWalk {
@@ -217,7 +226,7 @@ impl PrePaintTreeWalk {
             {
                 continue;
             }
-            if !WalkedSameSourceOwner(node, query) {
+            if !WalkedSameSourceOwner(node, query) || ChangedSinceWalk(source) {
                 return None;
             }
             return Some(ResidentPaintHitTest {
@@ -266,8 +275,9 @@ impl PrePaintTreeWalk {
             // the queried fragment, so there is no queried owner to compare;
             // it must have been visited by the PrePaint walk that produced
             // this resident tree (presence of its walk cache, not a revision
-            // comparison). Freshness is the caller's PrePaintClean gate.
-            if node.RecordedRevisions().is_none() {
+            // comparison) and not changed since (ChangedSinceWalk). Otherwise
+            // freshness is the caller's PrePaintClean gate.
+            if node.RecordedRevisions().is_none() || ChangedSinceWalk(fragment) {
                 return None;
             }
             return Some(ResidentPaintHitTest {

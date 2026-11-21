@@ -1306,6 +1306,9 @@ impl PaintEngine {
             prepared,
         );
         result.canvas_document = document;
+        // This recording consumed every PrePaint walk so far; the retained
+        // scroll path may again trust the live dirty bits against it.
+        self.pre_paint.MarkPrePaintRecorded();
         if self.pre_paint.stats.post_walk || self.retained_scroll_state.is_none() {
             self.retained_scroll_state = None;
             self.retained_scroll_state_initialized = false;
@@ -1447,12 +1450,7 @@ impl PaintEngine {
                 .GetPaintArtifact()
                 .expect("committed Paint result")
                 .clone(),
-            layoutng_assembly::layout_engine::PaintClientCommit::FromClientSetAndDelayedInvalidations(
-                clients,
-                self.pre_paint
-                    .PendingDelayedPaintInvalidations()
-                    .clone(),
-            ),
+            layoutng_assembly::layout_engine::PaintClientCommit::FromClientSet(clients),
         )
     }
 

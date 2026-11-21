@@ -56,11 +56,22 @@ impl PagePointerGeometryProvider {
                 .GetLayoutResult()
                 .and_then(PaintFragmentCursor::TryFromHandle)
                 .is_some_and(|fragments| {
-                    state
-                        .paint_engine
-                        .borrow()
-                        .ResidentHitTest(fragments)
-                        .is_some()
+                    // PrePaint clears the flags of every object it visits
+                    // (pre_paint_tree_walk.cc:1584-1585), so a descendant
+                    // hit-test bit left on the LayoutView means a resident
+                    // node below changed its layout or wheel-handler region
+                    // after the last walk. Run PrePaint first, as
+                    // UpdateLifecycleToPrePaintClean would.
+                    !fragments
+                        .PaintData()
+                        .paint
+                        .LivePrePaintInvalidation()
+                        .is_some_and(|bits| bits.descendant_hit_test_inputs())
+                        && state
+                            .paint_engine
+                            .borrow()
+                            .ResidentHitTest(fragments)
+                            .is_some()
                 })
         };
         // LayoutView::HitTest updates the same LocalFrameView lifecycle to
