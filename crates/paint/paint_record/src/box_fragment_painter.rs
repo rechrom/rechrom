@@ -4197,7 +4197,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 return None;
             }
             let (start, end) = selection.Ordered();
-            let order = fragment.paint.logical_tree_order;
+            let order = fragment.paint.LogicalTreeOrder();
             if order < start.tree_order || order > end.tree_order {
                 return None;
             }
@@ -4261,7 +4261,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         return None;
                     }
                     let (start, end) = selection.Ordered();
-                    let order = fragment.paint.logical_tree_order;
+                    let order = fragment.paint.LogicalTreeOrder();
                     let state = if order == start.tree_order && order == end.tree_order {
                         SelectionState::kStartAndEnd
                     } else if order == start.tree_order {

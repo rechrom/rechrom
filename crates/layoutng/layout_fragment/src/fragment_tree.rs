@@ -3040,6 +3040,17 @@ impl PaintProperties {
             .SourceCheckedOr(self.logical_parent_node_id, "logical_parent_node_id")
     }
 
+    /// The source LayoutObject's resident document-order position: the
+    /// 1-based preorder index among LayoutObjects with a Node, maintained on
+    /// the object by the layout boundary object index after each topology
+    /// mutation (LayoutObject::LogicalTreeOrder). 0 when the source has no
+    /// Node. Hand-built fixtures without a live source keep the stored value.
+    pub fn LogicalTreeOrder(&self) -> u64 {
+        self.SourceObject()
+            .map(LayoutObject::LogicalTreeOrder)
+            .SourceCheckedOr(self.logical_tree_order, "logical_tree_order")
+    }
+
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
         self.live_style_facts = live;
     }

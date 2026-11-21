@@ -38,13 +38,17 @@ pub(crate) fn ensure_layout_boundary_object_index(
             source_objects.push(object);
             let input_node = unsafe { &*node };
             logical_order += 1;
-            cache
+            let source = cache
                 .sources
                 .entry(object)
                 .or_insert(LayoutBoundarySourceEntry {
                     node,
                     logical_tree_order: logical_order,
                 });
+            // Publish the resident document-order position on the object
+            // itself; PaintProperties::LogicalTreeOrder() reads it through
+            // the bound source LayoutObject instead of a per-slot copy.
+            current.SetLogicalTreeOrder(source.logical_tree_order);
             cache.style_sources.entry(current.StyleRef()).or_insert(
                 LayoutBoundaryStyleSourceEntry {
                     resources: input_node.InputStyleResources(),
@@ -61,6 +65,8 @@ pub(crate) fn ensure_layout_boundary_object_index(
                     },
                 );
             }
+        } else {
+            current.SetLogicalTreeOrder(0);
         }
         if current.StyleRef().HasStickyConstrainedPosition() {
             sticky_objects.push(object);

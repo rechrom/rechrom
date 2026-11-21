@@ -569,6 +569,14 @@ pub struct LayoutObject {
     previous_: Member<LayoutObject>,
     next_: Member<LayoutObject>,
     fragment_: Member<FragmentDataList>,
+    // Rechrom's resident document-order position: the 1-based preorder index
+    // among LayoutObjects with a Node (0 for anonymous objects, or before the
+    // first index build). Chromium compares positions directly through the
+    // LayoutObject/Node graph; Rechrom's selection endpoints and paint
+    // sibling ordering carry this dense index, so the layout boundary object
+    // index writes it here on every rebuild after a topology mutation instead
+    // of copying it into each FragmentData slot.
+    logical_tree_order_: Cell<u64>,
     #[cfg(debug_assertions)]
     is_destroyed_: bool,
 }
@@ -2439,6 +2447,7 @@ impl LayoutObject {
             previous_: Member::default(),
             next_: Member::default(),
             fragment_: Member::from_ptr(fragment),
+            logical_tree_order_: Cell::new(0),
             #[cfg(debug_assertions)]
             is_destroyed_: false,
         }
@@ -2582,6 +2591,17 @@ impl LayoutObject {
     pub fn ToPositionedStateCurrentStyle(&self) -> PositionedState {
         self.CheckIsNotDestroyed();
         self.ToPositionedState(self.StyleRef().GetPosition())
+    }
+
+    /// The resident document-order position written by the layout boundary
+    /// object index (see `logical_tree_order_`): 1-based preorder among
+    /// LayoutObjects with a Node, 0 for an object without one.
+    pub fn LogicalTreeOrder(&self) -> u64 {
+        self.logical_tree_order_.get()
+    }
+
+    pub(crate) fn SetLogicalTreeOrder(&self, order: u64) {
+        self.logical_tree_order_.set(order);
     }
 
     // cpp: layoutng/internal/layout_object.h:358-375
