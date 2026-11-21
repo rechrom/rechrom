@@ -195,8 +195,8 @@ impl EnginePaintUpdate for LayoutEngine {
             let children = cursor.Children();
             let fragment = &*cursor;
             let mut committed = 0;
-            if (changed.is_empty() || changed.contains(&fragment.node_id))
-                && fragment.ViewScrollContainer().is_some()
+            if fragment.ViewScrollContainer().is_some()
+                && (changed.is_empty() || changed.contains(&fragment.ViewNodeId()))
                 && fragment
                     .paint
                     .SetLastCullRectUpdateScrollPosition(fragment.paint.ScrollOffset())

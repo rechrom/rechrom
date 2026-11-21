@@ -549,7 +549,12 @@ impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
 // cpp: layoutng_fragment_tree/fragment_tree.h:303-322
 #[derive(Clone)]
 pub struct FragmentPaintData<Paint> {
+    /// Fixture-only occurrence identity for hand-built slots without a
+    /// resident owner. Production reads it live from the owner
+    /// (ResidentBoxGeometry::ViewFragmentInstanceId); nothing writes it.
     pub fragment_instance_id: u64,
+    /// Fixture-only enclosing fragmentainer of a hand-built slot. Production
+    /// walks carry it as traversal context (ViewOwnFragmentainerInstanceId).
     pub fragmentainer_instance_id: u64,
     pub node_id: u64,
     pub kind: FragmentKind,

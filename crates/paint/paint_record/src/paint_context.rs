@@ -447,7 +447,7 @@ impl<'o> PaintContext<'o> {
                 layoutng_assembly::fragment_tree::FragmentKind::kText
                     | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             ) {
-                output.insert(cursor.fragment_instance_id, cursor);
+                output.insert(cursor.FragmentInstanceId(), cursor);
             }
             for child in cursor.Children() {
                 collect(child, output);
@@ -500,7 +500,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id: fragment.paint.DisplayItemClientId(),
             r#type: item_type,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         self.UseCachedDrawingWithClient(
             id,
@@ -603,7 +603,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        item.fragment_instance_id = fragment.fragment_instance_id;
+        item.fragment_instance_id = fragment.ViewFragmentInstanceId();
         // Blink records save/restore/clip inside PaintRecords, not as drawing
         // DisplayItems. They must neither consume a pending scope ID nor create
         // a fallback identity. The existing flat replay ABI retains the ops.
@@ -618,7 +618,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id: fragment.paint.DisplayItemClientId(),
             r#type: DisplayItemIdType::PaintPhaseToDrawingType(item.phase),
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         let client = self.ApplyCacheSkipping(DisplayItemClientInfo::from_fragment(fragment));
         self.output.RecordDebugInfoWith(
@@ -696,7 +696,7 @@ impl<'o> PaintContext<'o> {
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: item_type,
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo::from_fragment(fragment),
             visual_rect,
@@ -952,7 +952,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id: fragment.paint.DisplayItemClientId(),
             r#type: DisplayItemIdType::kScrollHitTest,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         let client = DisplayItemClientInfo::from_fragment(fragment);
         self.output.RecordDebugInfoWith(
@@ -1009,7 +1009,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kHitTest,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfoWith(
@@ -1060,7 +1060,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kRegionCapture,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfoWith(
@@ -1145,7 +1145,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kTrackedElement,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
             self.output.RecordDebugInfoWith(
@@ -1181,7 +1181,7 @@ impl<'o> PaintContext<'o> {
         let id = DisplayItemId {
             client_id,
             r#type: DisplayItemIdType::kResizerScrollHitTest,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: node.DisplayItemFragment(),
         };
         let mut data = crate::paint_engine::PaintHitTestData::default();
         data.scroll_hit_test_rect = rect;
@@ -1258,7 +1258,7 @@ impl<'o> PaintContext<'o> {
                 DisplayItemId {
                     client_id: fragment.paint.DisplayItemClientId(),
                     r#type: item_type,
-                    fragment: fragment.ViewDisplayItemFragment(),
+                    fragment: node.DisplayItemFragment(),
                 },
                 DisplayItemClientInfo::from_fragment(fragment),
                 node.properties.nodes.clone(),
@@ -1815,7 +1815,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         caret: crate::paint_engine::CaretPosition,
         node: &PaintTreeNode<'_>,
     ) -> Self {
-        let fragment = node.fragment.as_deref().expect("drag caret fragment");
+        node.fragment.as_deref().expect("drag caret fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         let mut properties = previous.clone();
@@ -1824,7 +1824,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemId {
                 client_id: caret.display_item_client_id,
                 r#type: DisplayItemIdType::kDragCaret,
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,
@@ -1842,7 +1842,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
         node: &PaintTreeNode<'_>,
     ) -> Self {
         use crate::paint_property_tree::EffectPaintPropertyNode;
-        let fragment = node.fragment.as_deref().expect("caret fragment");
+        node.fragment.as_deref().expect("caret fragment");
         let mut borrowed = context.borrow_mut();
         let previous = borrowed.chunk_properties();
         let mut properties = previous.clone();
@@ -1886,7 +1886,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemId {
                 client_id: caret.display_item_client_id,
                 r#type: DisplayItemIdType::kCaret,
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,
@@ -1911,7 +1911,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 DisplayItemId {
                     client_id: fragment.paint.PaintLayerClientId(),
                     r#type: item_type,
-                    fragment: fragment.ViewDisplayItemFragment(),
+                    fragment: node.DisplayItemFragment(),
                 },
                 {
                         let state = fragment.paint.PaintLayerClientState();
@@ -1978,7 +1978,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemId {
                 client_id,
                 r#type: item_type,
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             client,
             properties,
@@ -1998,7 +1998,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToClipType(phase),
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo::from_fragment(fragment),
             node.contents_properties.nodes.clone(),
@@ -2037,7 +2037,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
             DisplayItemId {
                 client_id: fragment.paint.DisplayItemClientId(),
                 r#type: DisplayItemIdType::PaintPhaseToDrawingType(phase),
-                fragment: fragment.ViewDisplayItemFragment(),
+                fragment: node.DisplayItemFragment(),
             },
             DisplayItemClientInfo::from_fragment(fragment),
             properties,

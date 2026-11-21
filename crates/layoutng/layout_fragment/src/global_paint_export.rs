@@ -84,7 +84,7 @@ fn SourceFragment<'a>(
     output: crate::layout_engine::PaintFragmentCursor<'a>,
     object: &'a LayoutObject,
 ) -> Option<crate::layout_engine::PaintFragmentCursor<'a>> {
-    if output.node_id == InputId(object) && output.paint.HasSource() {
+    if output.ViewNodeId() == InputId(object) && output.paint.HasSource() {
         return Some(output);
     }
     output

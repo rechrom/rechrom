@@ -72,13 +72,10 @@ pub(super) struct FragmentOwners {
     pub(super) paint: LayoutBoundaryHashSet<*const PhysicalBoxFragment>,
     pub(super) instances: LayoutBoundaryHashMap<*const PhysicalBoxFragment, u64>,
     pub(super) exported_styles: ExportedStyleCache,
-    pub(super) fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
-    // Exact source identities from the preceding LayoutResult. LayoutNG may
-    // carry immutable child fragments into a replacement root result during
-    // constraint-only layout. Reuse their FragmentData identity while pruning
-    // every source pointer not visited by the new result.
-    pub(super) prior_fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
     pub(super) retained_resource_compatibility: LayoutBoundaryHashMap<usize, bool>,
+    /// Occurrences whose live identity had no resident slot yet (a new
+    /// FragmentData or inline item occurrence); LayoutPaintState::Bind
+    /// reports it, no identity map is kept.
     pub(super) new_fragment_instances: usize,
     pub(super) population_stats: PaintPopulationStats,
     /// GetOrCreateFragmentData's per-object inline-container progression for
@@ -102,15 +99,6 @@ impl FragmentOwners {
         self.paint.insert(source)
     }
 
-    /// The instance `key` resolves to in this publication, without
-    /// claiming it (see fragment_instance).
-    pub(super) fn peek_instance(&self, key: &FragmentIdentityKey) -> Option<u64> {
-        self.fragment_instance_ids
-            .get(key)
-            .or_else(|| self.prior_fragment_instance_ids.get(key))
-            .copied()
-    }
-
     /// Start recording a bound slot (finish_replay_entry closes it).
     pub(super) fn begin_replay_entry(&mut self, entry: PopulationReplayEntry) -> (usize, usize) {
         let index = self.replay_next.entries.len();
@@ -132,32 +120,6 @@ impl FragmentOwners {
         let instance = entry.instance;
         self.replay_next.index.insert(instance, index);
     }
-
-    pub(super) fn fragment_instance(
-        &mut self,
-        key: FragmentIdentityKey,
-        next_fragment_instance_id: &mut u64,
-    ) -> u64 {
-        if let Some(instance) = self.fragment_instance_ids.get(&key) {
-            return *instance;
-        }
-        let instance = if let Some(instance) = self.prior_fragment_instance_ids.remove(&key) {
-            instance
-        } else {
-            self.new_fragment_instances += 1;
-            // Chromium identifies a box fragment by its FragmentData
-            // (FragmentData::UniqueId); use that id itself. Inline items and
-            // fallback fragments draw from the same process-wide
-            // NewUniqueObjectId space, so the two never collide.
-            let _ = next_fragment_instance_id;
-            match &key {
-                FragmentIdentityKey::FragmentData(id) => *id,
-                _ => foundation::NewUniqueObjectId(),
-            }
-        };
-        self.fragment_instance_ids.insert(key, instance);
-        instance
-    }
 }
 
 #[inline(never)]
@@ -169,10 +131,7 @@ pub(super) fn PopulateSVGChildPaintData(
     purpose: LayoutUpdateKind,
     paint_state: &crate::layout_engine::LayoutPaintState,
     paint_state_owners: &mut FragmentOwners,
-    fragmentainer_instance_id: u64,
     display_item_fragment: u32,
-    next_fragment_instance_id: &mut u64,
-    next_fragmentainer_instance_id: &mut u64,
 ) {
     let Some(owner) = (unsafe { object.as_ref() }) else {
         return;
@@ -195,10 +154,7 @@ pub(super) fn PopulateSVGChildPaintData(
                     purpose,
                     paint_state,
                     paint_state_owners,
-                    fragmentainer_instance_id,
                     display_item_fragment,
-                    next_fragment_instance_id,
-                    next_fragmentainer_instance_id,
                 );
             }
         }
@@ -230,8 +186,8 @@ pub(crate) struct PopulationReplayEntry {
     pub(crate) owner: PopulationReplayOwner,
     /// The bound slot (a stable, shared FragmentPaintData allocation).
     pub(crate) slot: usize,
+    /// The live identity the slot was bound under (LayoutPaintState::Bind).
     pub(crate) instance: u64,
-    pub(crate) key: FragmentIdentityKey,
     pub(crate) object: *const LayoutObject,
     pub(crate) effective_style: *const StyleComputedStyle,
     /// Box fragment registered as establishing paint state.

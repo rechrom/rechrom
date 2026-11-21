@@ -130,7 +130,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
                 let id = DisplayItemId {
                     client_id: fragment.paint.DisplayItemClientId(),
                     r#type: DisplayItemIdType::kForeignLayerCanvas,
-                    fragment: fragment.ViewDisplayItemFragment(),
+                    fragment: self.node.DisplayItemFragment(),
                 };
                 RecordForeignLayer(
                     &mut self.context.borrow_mut(),

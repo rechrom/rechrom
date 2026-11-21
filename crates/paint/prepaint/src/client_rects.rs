@@ -25,6 +25,9 @@ struct GeometryNode<'a> {
     last_child: usize,
     next_sibling: usize,
     physical_subtree_end: usize,
+    /// The fragmentainer this node is inside (0 outside any), carried by the
+    /// walk as PrePaintTreeWalk carries `fragmentainer_idx`.
+    fragmentainer: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -64,9 +67,14 @@ fn Gather<'a>(
     transforms: &mut Vec<TransformMatrix>,
     property_world: TransformMatrix,
     parent: usize,
+    fragmentainer: u64,
     nodes: &mut Vec<GeometryNode<'a>>,
     inline: &mut InlineRectMapper<'a>,
 ) -> usize {
+    // A column or page area opens its own fragmentainer; descendants inherit.
+    let fragmentainer = fragment
+        .ViewOwnFragmentainerInstanceId()
+        .unwrap_or(fragmentainer);
     let inherited = transforms.len();
     let delta = FlatToWorldSpaceOffset(transforms, &property_world).unwrap_or_default();
     let geometry = ResolveFragmentGeometry(
@@ -126,6 +134,7 @@ fn Gather<'a>(
         last_child: NONE,
         next_sibling: NONE,
         physical_subtree_end: 0,
+        fragmentainer,
     });
     let child_origin = ChildGeometryOrigin(&fragment, geometry.absolute_offset);
     let svg_view_box = SvgViewBoxTransform(&fragment);
@@ -134,7 +143,12 @@ fn Gather<'a>(
         transforms.push(matrix);
         child_property_world = MultiplyTransforms(&child_property_world, &matrix);
     }
-    if let Some(rects) = inline.by_container.get(&fragment.fragment_instance_id) {
+    let container_rects = if inline.by_container.is_empty() {
+        None
+    } else {
+        inline.by_container.get(&fragment.ViewFragmentInstanceId())
+    };
+    if let Some(rects) = container_rects {
         for &(id, index, rect) in rects {
             inline.rects.get_mut(&id).unwrap()[index] = MapRectToRoot(
                 PaintRect {
@@ -159,6 +173,7 @@ fn Gather<'a>(
                 &mut Vec::new(),
                 TransformMatrix::default(),
                 index,
+                fragmentainer,
                 nodes,
                 inline,
             )
@@ -177,6 +192,7 @@ fn Gather<'a>(
                 transforms,
                 child_property_world,
                 index,
+                fragmentainer,
                 nodes,
                 inline,
             )
@@ -251,14 +267,14 @@ fn LogicalParentOccurrence(
     child: usize,
     candidates: &[usize],
 ) -> Option<usize> {
-    let fragmentainer = nodes[child].fragment.fragmentainer_instance_id;
+    let fragmentainer = nodes[child].fragmentainer;
     let same_fragmentainer = candidates
         .iter()
-        .any(|&index| nodes[index].fragment.fragmentainer_instance_id == fragmentainer);
+        .any(|&index| nodes[index].fragmentainer == fragmentainer);
     let mut smallest = None;
     for &candidate in candidates {
         if same_fragmentainer
-            && nodes[candidate].fragment.fragmentainer_instance_id != fragmentainer
+            && nodes[candidate].fragmentainer != fragmentainer
         {
             continue;
         }
@@ -270,8 +286,9 @@ fn LogicalParentOccurrence(
                 let precedes = if distance != previous_distance {
                     distance < previous_distance
                 } else {
-                    nodes[candidate].fragment.fragment_instance_id
-                        < nodes[previous].fragment.fragment_instance_id
+                    // Equal distance: the earlier occurrence in the physical
+                    // walk (preorder index, i.e. fragment tree order) wins.
+                    candidate < previous
                 };
                 if precedes {
                     candidate
@@ -311,8 +328,8 @@ fn ResolveLogicalParentOccurrence(
         let mut matches = candidates.iter().copied().filter(|&candidate| {
             candidate != index
                 && (!same_fragmentainer
-                    || nodes[candidate].fragment.fragmentainer_instance_id
-                        == nodes[index].fragment.fragmentainer_instance_id)
+                    || nodes[candidate].fragmentainer
+                        == nodes[index].fragmentainer)
         });
         let first = matches.next()?;
         matches.next().is_none().then_some(first)
@@ -325,10 +342,11 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
     let mut instances = HashMap::new();
     for (index, node) in nodes.iter().enumerate() {
         let fragment = node.fragment;
-        if fragment.fragment_instance_id != 0 {
+        let instance = fragment.ViewFragmentInstanceId();
+        if instance != 0 {
             assert!(
                 instances
-                    .insert(fragment.fragment_instance_id, index)
+                    .insert(instance, index)
                     .is_none(),
                 "FragmentTree contains duplicate fragment_instance_id values"
             );
@@ -519,6 +537,7 @@ fn CollectFragmentClientRectsFromSource(
         &mut Vec::new(),
         TransformMatrix::default(),
         NONE,
+        0,
         &mut nodes,
         &mut inline,
     );

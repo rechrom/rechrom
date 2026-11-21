@@ -5,7 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use layoutng_assembly::{
-    fragment_tree::FragmentPaintData,
+    fragment_tree::{FragmentPaintData, ResidentBoxGeometry as _},
     internal::layout_input::{FontFace, Offset},
 };
 use std::{cell::RefCell, io, rc::Rc};
@@ -391,8 +391,8 @@ fn ordinary_list_content_keeps_ids_across_fragmentainers() {
         let columns = &column_fragments(&page).children;
         assert_eq!(columns.len(), 2);
         assert_ne!(
-            columns[0].fragmentainer_instance_id,
-            columns[1].fragmentainer_instance_id
+            columns[0].ViewOwnFragmentainerInstanceId(),
+            columns[1].ViewOwnFragmentainerInstanceId()
         );
     });
 }

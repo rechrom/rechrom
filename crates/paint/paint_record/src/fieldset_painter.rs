@@ -235,7 +235,7 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
                     .fragment
                     .as_deref()
                     .expect("paint tree node has a fragment")
-                    .node_id,
+                    .ViewNodeId(),
                 ..Default::default()
             },
             self.node,

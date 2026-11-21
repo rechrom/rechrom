@@ -22,7 +22,10 @@ use layoutng_assembly::internal::layout_input::{
 };
 use layoutng_assembly::layout_engine::PaintFragmentCursor;
 
-fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
+/// `fragmentainer` is the identity of the enclosing column/page area, carried
+/// by the walk the way PrePaintTreeWalk carries `fragmentainer_idx`
+/// (pre_paint_tree_walk.cc); 0 outside fragmentation.
+fn StitchCandidate(input: &FragmentPaintData, fragmentainer: u64) -> Option<(u64, u64)> {
     let node_id = input.ViewNodeId();
     (node_id != 0
         && input.ViewKind() == FragmentKind::kBox
@@ -30,17 +33,19 @@ fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
         && input.ViewEstablishesPaintState()
         && input.paint.Display() == Display::kInline
         && input.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice)
-        .then_some((node_id, input.fragmentainer_instance_id))
+        .then_some((node_id, fragmentainer))
 }
 
 /// Resolve the stitched strip of every sliced inline box under `root`.
 pub(crate) fn PopulateInlineStitchedDecorations(root: PaintFragmentCursor<'_>) {
     fn collect<'a>(
         cursor: PaintFragmentCursor<'a>,
+        fragmentainer: u64,
         groups: &mut HashMap<(u64, u64), Vec<PaintFragmentCursor<'a>>>,
         order: &mut Vec<(u64, u64)>,
     ) {
-        if let Some(key) = StitchCandidate(cursor.PaintData()) {
+        let fragmentainer = cursor.FragmentainerInstanceId().unwrap_or(fragmentainer);
+        if let Some(key) = StitchCandidate(cursor.PaintData(), fragmentainer) {
             let group = groups.entry(key).or_default();
             if group.is_empty() {
                 order.push(key);
@@ -48,12 +53,12 @@ pub(crate) fn PopulateInlineStitchedDecorations(root: PaintFragmentCursor<'_>) {
             group.push(cursor);
         }
         for child in cursor.Children() {
-            collect(child, groups, order);
+            collect(child, fragmentainer, groups, order);
         }
     }
     let mut groups = HashMap::new();
     let mut order = Vec::new();
-    collect(root, &mut groups, &mut order);
+    collect(root, 0, &mut groups, &mut order);
     for key in order {
         let fragments = &groups[&key];
         if fragments.len() < 2 {

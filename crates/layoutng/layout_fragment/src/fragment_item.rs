@@ -790,6 +790,13 @@ impl FragmentItem {
         self.fragment_id_.get()
     }
 
+    /// FragmentId without the line-item check: a line of an IFC that
+    /// FragmentItems::FinalizeAfterLayout has not numbered is still below
+    /// kInitialLineFragmentId. Only the live fragment identity reads this.
+    pub(crate) fn UncheckedFragmentId(&self) -> u32 {
+        self.fragment_id_.get()
+    }
+
     pub fn SetFragmentId(&self, id: u32) {
         debug_assert!(self.Type() != ItemType::kLine || id >= Self::kInitialLineFragmentId);
         self.fragment_id_.set(id);

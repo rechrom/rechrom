@@ -220,7 +220,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     } else {
                         DisplayItemIdType::kScrollbarVertical
                     },
-                    fragment: fragment.ViewDisplayItemFragment(),
+                    fragment: self.node.DisplayItemFragment(),
                 },
                 {
                     let state = fragment.paint.ScrollClientState(
@@ -366,7 +366,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                 DisplayItemId {
                     client_id: data.corner_client_id,
                     r#type: DisplayItemIdType::kScrollCorner,
-                    fragment: fragment.ViewDisplayItemFragment(),
+                    fragment: self.node.DisplayItemFragment(),
                 },
                 {
                     let state = fragment.paint.ScrollClientState(
@@ -424,7 +424,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
         let id = DisplayItemId {
             client_id: data.corner_client_id,
             r#type: DisplayItemIdType::kResizer,
-            fragment: fragment.ViewDisplayItemFragment(),
+            fragment: self.node.DisplayItemFragment(),
         };
         let client = {
             let state = fragment.paint.ScrollClientState(

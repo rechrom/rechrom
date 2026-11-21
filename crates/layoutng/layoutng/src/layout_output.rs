@@ -217,6 +217,24 @@ enum PaintFragmentOwner {
     Inline(*const layout_fragment::fragment_items::FragmentItems, usize),
 }
 
+impl PaintFragmentOwner {
+    /// The live identity of this resident owner, computed from the owner
+    /// itself on every query (no publication census or identity map). Never
+    /// 0: an owner without a Chromium identity pair (a line box fragment, an
+    /// unnumbered or container-owned inline item, the last fragmentainer)
+    /// falls back to a key derived from the owner itself.
+    fn InstanceId(self) -> u64 {
+        match self {
+            Self::Physical(fragment) => {
+                layout_fragment::fragment_tree::PhysicalFragmentInstanceId(unsafe { &*fragment })
+            }
+            Self::Inline(items, index) => {
+                layout_fragment::fragment_tree::InlineItemInstanceId(unsafe { &*items }, index)
+            }
+        }
+    }
+}
+
 /// Mutable Paint state attached to Chromium's resident fragment identities.
 /// A replacement LayoutResult rebinds its source owners to these stable slots;
 /// geometry and child topology remain canonical and are always read through
@@ -258,6 +276,8 @@ struct PaintFragmentSlot {
 /// Result of binding a fragment owner to its stable Paint slot.
 pub(crate) struct PaintSlotBinding {
     pub(crate) data: *mut FragmentPaintData,
+    /// The owner's live identity the slot is keyed by.
+    pub(crate) instance: u64,
     pub(crate) retained: bool,
     /// The slot was last published from this exact immutable fragment owner.
     pub(crate) same_owner: bool,
@@ -362,7 +382,12 @@ impl LayoutPaintState {
             .map(|slot| unsafe { &*slot.data.get() })
     }
 
-    fn Bind(&self, owner: PaintFragmentOwner, instance: u64) -> PaintSlotBinding {
+    /// Bind `owner` to the slot of its live identity (PaintFragmentOwner::
+    /// InstanceId): the same FragmentData / (client, FragmentId) occurrence
+    /// rebinds the slot it last published, whichever immutable fragment of a
+    /// replacement LayoutResult now carries it.
+    fn Bind(&self, owner: PaintFragmentOwner) -> PaintSlotBinding {
+        let instance = owner.InstanceId();
         assert_ne!(instance, 0, "paint fragment has no stable identity");
         let publication = self.publication.get();
         let inputs = unsafe { &mut *self.inputs.get() };
@@ -373,6 +398,7 @@ impl LayoutPaintState {
             (
                 PaintSlotBinding {
                     data: current.data.get(),
+                    instance,
                     retained: true,
                     same_owner,
                 },
@@ -389,6 +415,7 @@ impl LayoutPaintState {
             (
                 PaintSlotBinding {
                     data: pointer,
+                    instance,
                     retained: false,
                     same_owner: false,
                 },
@@ -410,9 +437,9 @@ impl LayoutPaintState {
         binding
     }
 
-    pub(crate) fn BindPhysical(&self, fragment: &PhysicalFragment, instance: u64) -> PaintSlotBinding {
+    pub(crate) fn BindPhysical(&self, fragment: &PhysicalFragment) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Physical(fragment as *const PhysicalFragment);
-        let binding = self.Bind(owner, instance);
+        let binding = self.Bind(owner);
         unsafe { &mut *binding.data }.resident_owner =
             layout_fragment_boundary::ResidentFragmentOwner::Physical(
                 fragment as *const PhysicalFragment as usize,
@@ -424,10 +451,9 @@ impl LayoutPaintState {
         &self,
         items: &layout_fragment::fragment_items::FragmentItems,
         index: usize,
-        instance: u64,
     ) -> PaintSlotBinding {
         let owner = PaintFragmentOwner::Inline(items as *const _, index);
-        let binding = self.Bind(owner, instance);
+        let binding = self.Bind(owner);
         unsafe { &mut *binding.data }.resident_owner =
             layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
                 items: items as *const _ as usize,
@@ -996,6 +1022,33 @@ impl<'a> PaintFragmentCursor<'a> {
     /// The LayoutObject behind the fragment, if any.
     pub fn ViewLayoutObject(self) -> Option<&'a LayoutObject> {
         unsafe { self.source.GetLayoutObject().as_ref() }
+    }
+
+    /// Chromium identity of this occurrence, computed from the resident
+    /// owner without a publication census: FragmentData::UniqueId for a box
+    /// fragment (ensured on demand), (DisplayItemClient, FragmentItem::
+    /// FragmentId) for an inline item, (owner client, break-token sequence)
+    /// for a fragmentainer, the immutable fragment itself for a line box or
+    /// the other cases without a Chromium pair (see
+    /// `fragment_tree::PhysicalFragmentInstanceId` / `InlineItemInstanceId`).
+    /// This is the key LayoutPaintState binds the occurrence's slot by.
+    pub fn FragmentInstanceId(self) -> u64 {
+        self.source.PaintOwner().InstanceId()
+    }
+
+    /// The identity of the fragmentainer this cursor itself is (a column or
+    /// page area), else None. Descendants inherit the nearest one through
+    /// the walk that reaches them, as PrePaintTreeWalk carries
+    /// `fragmentainer_idx` (pre_paint_tree_walk.cc).
+    pub fn FragmentainerInstanceId(self) -> Option<u64> {
+        match self.source {
+            FragmentCursor::Physical { fragment, .. } if fragment.IsFragmentainerBox() => {
+                Some(layout_fragment::fragment_tree::FragmentainerInstanceId(
+                    unsafe { &*(fragment as *const PhysicalFragment as *const PhysicalBoxFragment) },
+                ))
+            }
+            _ => None,
+        }
     }
 
     pub fn PaintData(self) -> &'a FragmentPaintData {

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::layout_boundary_support::{
-    FragmentIdentityKey, LayoutBoundaryCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet,
+    LayoutBoundaryCache, LayoutBoundaryHashMap, LayoutBoundaryHashSet,
     LayoutBoundarySourceEntry, LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
 };
 use std::cell::UnsafeCell;
