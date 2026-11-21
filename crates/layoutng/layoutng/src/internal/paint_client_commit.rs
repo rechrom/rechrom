@@ -14,14 +14,8 @@ impl LayoutObjectTree {
     pub fn CommitPaintClientState(
         &self,
         used_clients: &HashSet<u64>,
-        pending_delayed_paint_invalidations: &HashSet<u64>,
         fragments: &mut LayoutResultHandle,
     ) {
-        crate::layout_commit_package::commit_paint_client_state(
-            self,
-            used_clients,
-            pending_delayed_paint_invalidations,
-            fragments,
-        )
+        crate::layout_commit_package::commit_paint_client_state(self, used_clients, fragments)
     }
 }

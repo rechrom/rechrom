@@ -16,37 +16,23 @@ pub enum LayoutUpdateKind {
 }
 
 /// Opaque client set produced by Paint after its artifact is complete.
-/// Layout consumes it to advance source DisplayItemClient state.
+/// Layout consumes it to advance source DisplayItemClient state. Delayed
+/// full paint invalidations are re-armed by PrePaint itself at the end of
+/// its walk (paint_invalidator.cc:291-294), so the commit carries none.
 #[derive(Clone)]
 pub struct PaintClientCommit {
     used_clients: Arc<HashSet<u64>>,
-    pending_delayed_paint_invalidations: Arc<HashSet<u64>>,
 }
 
 impl PaintClientCommit {
     pub fn FromClientSet(used_clients: HashSet<u64>) -> Self {
         Self {
             used_clients: Arc::new(used_clients),
-            pending_delayed_paint_invalidations: Arc::new(HashSet::new()),
-        }
-    }
-
-    pub fn FromClientSetAndDelayedInvalidations(
-        used_clients: HashSet<u64>,
-        pending_delayed_paint_invalidations: HashSet<u64>,
-    ) -> Self {
-        Self {
-            used_clients: Arc::new(used_clients),
-            pending_delayed_paint_invalidations: Arc::new(pending_delayed_paint_invalidations),
         }
     }
 
     pub fn UsedClients(&self) -> &HashSet<u64> {
         &self.used_clients
-    }
-
-    pub fn PendingDelayedPaintInvalidations(&self) -> &HashSet<u64> {
-        &self.pending_delayed_paint_invalidations
     }
 }
 
@@ -295,19 +281,6 @@ mod tests {
         assert_eq!(
             backend.steps,
             ["auxiliary", "source", "prepaint", "publish"]
-        );
-    }
-
-    #[test]
-    fn paint_client_commit_keeps_delayed_invalidations_separate_from_used_clients() {
-        let commit = PaintClientCommit::FromClientSetAndDelayedInvalidations(
-            HashSet::from([17]),
-            HashSet::from([29]),
-        );
-        assert_eq!(commit.UsedClients(), &HashSet::from([17]));
-        assert_eq!(
-            commit.PendingDelayedPaintInvalidations(),
-            &HashSet::from([29])
         );
     }
 }

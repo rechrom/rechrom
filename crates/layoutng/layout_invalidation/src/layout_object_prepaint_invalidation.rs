@@ -133,9 +133,9 @@ impl LayoutObject {
             self.SetShouldCheckForPaintInvalidationWithoutLayoutChange();
         }
         // Chromium's FrameView schedules the following document cycle here.
-        // Rechrom's package boundary carries the retained delayed bit through
-        // PaintInvalidator and client_commit; that commit re-arms this
-        // object after ClearPaintFlags(), which is the host scheduling signal.
+        // PrePaint re-arms delayed objects after its walk has cleared their
+        // flags (PaintInvalidator::ProcessPendingDelayedPaintInvalidations);
+        // the re-armed bits are the host scheduling signal.
     }
 
     // cpp: layoutng/internal/layout_object.h:2963-2963

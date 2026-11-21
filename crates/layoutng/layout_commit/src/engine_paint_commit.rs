@@ -33,11 +33,7 @@ impl layout_commit::PaintCommitBackend for PaintCommit<'_, '_> {
     fn CommitClients(&mut self, commit: &PaintClientCommit, layout: &mut LayoutPaintOutput) {
         let _scope = self.engine.NativeScrollPassScope();
         if let Some(tree) = &self.engine.tree_ {
-            tree.CommitPaintClientState(
-                commit.UsedClients(),
-                commit.PendingDelayedPaintInvalidations(),
-                &mut layout.fragments,
-            );
+            tree.CommitPaintClientState(commit.UsedClients(), &mut layout.fragments);
             // LocalFrameView::PaintTree clears only the source dirty paths
             // after completed paint; display-locked subtrees retain theirs.
             if let Some(layer) = unsafe { tree.Root().PaintingLayerDefault().as_mut() } {
