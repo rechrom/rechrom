@@ -6,7 +6,10 @@
 
 use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::PhysicalOffset;
-use layoutng_assembly::{fragment_tree::FragmentPaintData, layout_engine::PaintFragmentCursor};
+use layoutng_assembly::{
+    fragment_tree::FragmentPaintData,
+    layout_engine::{FragmentCursor, PaintFragmentCursor},
+};
 use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey, PaintPropertyNodeStore,
@@ -134,6 +137,54 @@ pub struct ResidentPaintHitTest<'a> {
     slots: &'a PaintPropertyNodeStore,
 }
 
+/// Whether `node` was walked for exactly the live Layout owner `query` names.
+///
+/// Chromium hit tests read committed FragmentData/ObjectPaintProperties only
+/// after LocalFrameView::UpdateLifecycleToPrePaintClean
+/// (core/frame/local_frame_view.cc; DocumentLifecycle::kPrePaintClean,
+/// core/dom/document_lifecycle.h), and then trust them without any
+/// per-object freshness test: PrePaintTreeWalk consumed and cleared every
+/// LayoutObject dirty bit (pre_paint_tree_walk.cc:107). Freshness is that
+/// lifecycle gate, which Rechrom's callers hold (LayoutViewHitTestQuery
+/// checks IsPrePaintClean and the prepared revision; Page pointer geometry
+/// runs PrePaint below PrePaintClean). This lookup only proves owner
+/// identity: the same resident sidecar slot (checked by the caller) and
+/// the same PhysicalFragment / FragmentItem and LayoutObject the walk
+/// visited. A relayout that replaces the fragment therefore rejects the
+/// resident node; any other relayout is caught by the lifecycle gate.
+///
+/// The LayoutObject dirty bits are deliberately not consulted here: Rechrom
+/// clears them only at the full paint client commit
+/// (LayoutObject::ClearPaintFlags from layout_commit's client_commit.rs), so
+/// after a PrePaint-only lifecycle (PaintEngine::PrePaintWithLifecycle, the
+/// hit-test preparation path) the walked objects still carry the bits the
+/// walk consumed, and LayoutView itself carries container-chain
+/// ShouldCheckForPaintInvalidation. Rejecting on them would make every hit
+/// test between a DOM change and the next paint fail.
+fn WalkedSameSourceOwner(node: &PaintTreeNode<'_>, query: PaintFragmentCursor<'_>) -> bool {
+    // Hand-built fixture nodes have no source cursor; the exact sidecar slot
+    // identity checked by the caller is their only owner.
+    let Some(walked) = node.SourceCursor() else {
+        return true;
+    };
+    // Compare owner addresses only; the walked cursor is never dereferenced,
+    // since it may name a fragment a later Layout publication replaced. The
+    // PhysicalFragment / FragmentItem owner determines its LayoutObject.
+    // Container offsets are not compared: call-scoped cursors rebound with
+    // ForPhysicalFragment carry no link offset, unlike the walk's traversal.
+    match (walked.Cursor(), query.Cursor()) {
+        (
+            FragmentCursor::Physical { fragment: walked, .. },
+            FragmentCursor::Physical { fragment: query, .. },
+        ) => std::ptr::eq(walked, query),
+        (
+            FragmentCursor::Inline { item: walked, .. },
+            FragmentCursor::Inline { item: query, .. },
+        ) => std::ptr::eq(walked, query),
+        _ => false,
+    }
+}
+
 impl PrePaintTreeWalk {
     /// Internal Paint assembly port. The facade uses this only to run the
     /// canonical PaintWalk stacking collector; it never exports this owner.
@@ -150,6 +201,7 @@ impl PrePaintTreeWalk {
         &self,
         source: PaintFragmentCursor<'_>,
     ) -> Option<ResidentPaintHitTest<'_>> {
+        let query = source;
         let source = source.PaintData();
         let candidates = self
             .client_nodes
@@ -165,9 +217,7 @@ impl PrePaintTreeWalk {
             {
                 continue;
             }
-            if node.RecordedRevisions()
-                != Some((source.pre_paint_revision, source.pre_paint_subtree_revision))
-            {
+            if !WalkedSameSourceOwner(node, query) {
                 return None;
             }
             return Some(ResidentPaintHitTest {
@@ -181,8 +231,8 @@ impl PrePaintTreeWalk {
     /// Resolve a source PaintLayer for an inline replaced fragment. LayoutNG
     /// keeps the FragmentItem and its linked PhysicalFragment as distinct
     /// paint sidecars even though both name the same DisplayItemClient and
-    /// LayoutObject. Use the existing client directory and verify object plus
-    /// revisions; this neither walks nor duplicates the resident paint tree.
+    /// LayoutObject. Use the existing client directory and verify the object
+    /// identity; this neither walks nor duplicates the resident paint tree.
     pub fn ResidentLayerHitTest(
         &self,
         source: PaintFragmentCursor<'_>,
@@ -212,12 +262,12 @@ impl PrePaintTreeWalk {
             {
                 continue;
             }
-            if node.RecordedRevisions()
-                != Some((
-                    fragment.pre_paint_revision,
-                    fragment.pre_paint_subtree_revision,
-                ))
-            {
+            // The layer node is found through its LayoutObject, not through
+            // the queried fragment, so there is no queried owner to compare;
+            // it must have been visited by the PrePaint walk that produced
+            // this resident tree (presence of its walk cache, not a revision
+            // comparison). Freshness is the caller's PrePaintClean gate.
+            if node.RecordedRevisions().is_none() {
                 return None;
             }
             return Some(ResidentPaintHitTest {
