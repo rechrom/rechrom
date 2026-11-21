@@ -79,7 +79,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
         // DOM-node placeholder rather than embedding a potentially accelerated
         // child snapshot. PaintArtifactCompositor resolves it recursively when
         // the parent canvas requests its child PaintRecord.
-        if fragment.paint.is_in_canvas_subtree {
+        if fragment.paint.IsInCanvasSubtree() {
             let item_type = DisplayItemIdType::PaintPhaseToDrawingType(paint_info.phase);
             if DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, item_type) {
                 return;

@@ -849,7 +849,7 @@ mod tests {
                         f.size,
                         f.offset,
                         f.paint.style.background_color,
-                        f.paint.has_source,
+                        f.paint.HasSource(),
                         f.paint.establishes_paint_state
                     );
                 }

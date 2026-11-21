@@ -101,14 +101,14 @@ fn LocalPoint(
     // paint-state owner contributes these transforms; text/line fragments can
     // borrow its style without establishing another transform node.
     if fragment.paint.establishes_paint_state
-        && fragment.paint.has_source
+        && fragment.paint.HasSource()
         && fragment.paint.position == layoutng_assembly::internal::layout_input::Position::kSticky
     {
         point.x -= fragment.paint.sticky_offset.x;
         point.y -= fragment.paint.sticky_offset.y;
     }
     if fragment.paint.establishes_paint_state
-        && fragment.paint.has_source
+        && fragment.paint.HasSource()
         && fragment.paint.style.transform.is_some()
     {
         let transform = fragment.paint.style.transform.as_ref().unwrap();
@@ -364,7 +364,7 @@ fn HitGeometry(
     }
     // BoxFragmentPainter::NodeAtPoint: rectangular overflow, display lock and
     // the inner contoured border suppress descendants, not the box's own hit.
-    let children_clipped = fragment.paint.child_paint_blocked_by_display_lock
+    let children_clipped = fragment.paint.ChildPaintBlockedByDisplayLock()
         || outside_overflow_clip
         || (fragment.paint.hit_test_overflow_clip.is_some()
             && !InnerBorderContains(query, fragment, point, absolute));
@@ -433,7 +433,7 @@ fn ScrollbarHitTarget<'f>(
             y: point.y - absolute.y,
         },
         overflow_controls: true,
-        frame_view_scrollbar: native_scrollbar.is_some() && fragment.paint.is_layout_view,
+        frame_view_scrollbar: native_scrollbar.is_some() && fragment.paint.IsLayoutView(),
         native_scrollbar,
     })
 }
@@ -467,7 +467,7 @@ fn ViewHitTarget<'f>(
     document: &dyn DocumentFacts,
     fragment: ResidentFragmentSource<'f>,
 ) -> Option<ResidentFragmentSource<'f>> {
-    if !fragment.paint.is_layout_view {
+    if !fragment.paint.IsLayoutView() {
         return None;
     }
     let element_id = document.DocumentElementNodeId()?;
@@ -530,7 +530,7 @@ struct HitLayer<'a> {
 }
 
 fn ChildrenAreFlexOrGridItems(fragment: &FragmentPaintData) -> bool {
-    fragment.paint.has_source
+    fragment.paint.HasSource()
         && matches!(
             fragment.paint.display,
             Display::kFlex | Display::kGrid | Display::kGridLanes
@@ -828,7 +828,7 @@ fn HitTestStackingContext<'f>(
     // positive-stacked group first, then normal flow, then negative stacked.
     layers.sort_by_key(|layer| {
         let c = layer.classification;
-        if layer.fragment.paint.is_overscroll_area_parent {
+        if layer.fragment.paint.IsOverscrollAreaParent() {
             (3, 0)
         } else if !c.is_stacked {
             (1, 0)
@@ -845,7 +845,7 @@ fn HitTestStackingContext<'f>(
         layers[negative_count..].partition_point(|layer| !layer.classification.is_stacked);
     let positive_start = negative_count + normal_count;
     let overscroll_start =
-        layers.partition_point(|layer| !layer.fragment.paint.is_overscroll_area_parent);
+        layers.partition_point(|layer| !layer.fragment.paint.IsOverscrollAreaParent());
     // Paint appends overscroll-area parents in reverse chaining order, so the
     // inverse hit-test walk consumes this stored group forward.
     for layer in &layers[overscroll_start..] {

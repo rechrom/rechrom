@@ -998,7 +998,15 @@ impl PaintProperties {
     }
 
     pub fn HasSource(&self) -> bool {
-        self.SourceObject().is_some() || self.has_source
+        let live = self.SourceObject().is_some();
+        if live && !self.has_source && PaintSourceCheckEnabled() {
+            browser_tracing::instant(
+                "layout",
+                "layout_fragment.PaintSourceMismatch",
+                &[("has_source", 1.0)],
+            );
+        }
+        live || self.has_source
     }
 
     // Source: platform/graphics/paint/display_item_client.h:58-88 and
