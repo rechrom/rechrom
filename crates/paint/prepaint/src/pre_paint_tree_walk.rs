@@ -1430,7 +1430,7 @@ pub fn ResolveFragmentGeometry(
             || fragment.paint.sticky_offset.x != 0.0
             || fragment.paint.sticky_offset.y != 0.0);
     let has_paint_offset_translation = NeedsPaintOffsetTranslation(fragment, style);
-    let text_combine = fragment.paint.text_combine.as_ref();
+    let text_combine = fragment.paint.TextCombine();
     if establishes
         && (has_paint_offset_translation
             || text_combine.is_some()
@@ -1559,7 +1559,7 @@ pub fn ResolveFragmentGeometry(
         {
             transforms.push(local_transform);
         }
-        if let Some(text_combine) = text_combine {
+        if let Some(text_combine) = &text_combine {
             transforms.push(TextCombineTransform(text_combine, geometry.paint_offset));
         }
     }

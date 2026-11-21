@@ -798,7 +798,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let unscaled_text_combine_caret = node.applies_transform
-            && fragment.paint.text_combine.is_some()
+            && fragment.paint.IsTextCombine()
             && paint_info.context.borrow().caret.is_some();
         if paint_info.phase == PaintPhase::kForeground
             && fragment.paint.HasSource()
@@ -819,7 +819,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .borrow()
                     .drag_caret
                     .and_then(|state| state.native.map(|native| native.shape)),
-                node.applies_transform && fragment.paint.text_combine.is_some(),
+                node.applies_transform && fragment.paint.IsTextCombine(),
             )
         {
             crate::caret_display_item_client::PaintDragCaret(node, paint_info.context);
@@ -834,7 +834,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && node
                 .fragment
                 .as_deref()
-                .is_some_and(|fragment| fragment.paint.text_combine.is_some())
+                .is_some_and(|fragment| fragment.paint.IsTextCombine())
         {
             crate::paint_context::ScopedPaintChunkProperties::text_combine_parent(
                 paint_info.context,
@@ -867,7 +867,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.style.border_shape_unsupported() {
             panic!("unsupported CSS border-shape paint path");
         }
-        let text_combine = fragment.paint.text_combine.is_some();
+        let text_combine = fragment.paint.IsTextCombine();
         if fragment.paint.IsSVGHiddenContainer()
             || (!fragment.paint.HasSource() && !text_combine)
             || fragment.paint.hidden
@@ -1416,14 +1416,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let has_source = fragment.paint.HasSource();
-        let text_combine = fragment.paint.text_combine.is_some();
+        let text_combine = fragment.paint.IsTextCombine();
         if (!has_source && !text_combine) || !IsVisibleToPaint(fragment) {
             return;
         }
         // Chromium: box_fragment_painter.cc:785-793. Bar and underscore
         // carets are recorded after descendant text.
         let caret_was_painted_before_text_combine = self.node.applies_transform
-            && fragment.paint.text_combine.is_some()
+            && fragment.paint.IsTextCombine()
             && self.context.borrow().caret.is_some();
         if has_source
             && paint_info.phase == PaintPhase::kForeground
@@ -1441,7 +1441,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .borrow()
                     .drag_caret
                     .and_then(|state| state.native.map(|native| native.shape)),
-                self.node.applies_transform && fragment.paint.text_combine.is_some(),
+                self.node.applies_transform && fragment.paint.IsTextCombine(),
             )
         {
             crate::caret_display_item_client::PaintDragCaret(self.node, self.context);
@@ -4656,7 +4656,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 if svg.is_none()
                     && (fragment.paint.text_glyph_ink.is_some()
                         || fragment.paint.self_ink_overflow.is_some())
-                    && fragment.paint.text_combine.is_none()
+                    && !fragment.paint.IsTextCombine()
                     && fragment.paint.text_combine_inline_offset == 0.0
                     && input_run.writing_mode == WritingMode::kHorizontalTb
                     && !is_shadow
@@ -5319,9 +5319,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(emphasis) = fragment
-            .paint
-            .text_combine
+        let text_combine = fragment.paint.TextCombine();
+        let Some(emphasis) = text_combine
             .as_ref()
             .and_then(|combine| combine.emphasis.as_ref())
         else {

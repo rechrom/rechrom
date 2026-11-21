@@ -257,7 +257,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 )
             })
             .or_else(|| {
-                fragment.paint.text_combine.as_ref().map(|combine| {
+                fragment.paint.TextCombine().map(|combine| {
                     (
                         combine.font_size,
                         combine.text_top_offset,

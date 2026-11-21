@@ -188,31 +188,6 @@ pub(super) fn ExportProperties(
             crate::internal::boundary::paint_style_export::ExportGeometryStyle(parent_style)
         };
         output.writing_mode = PublicWritingMode(parent_style.GetWritingMode());
-        let scale_x = text_combine.ScaleXForInline().map(f64::from);
-        let inline_spacing =
-            scale_x.map_or(0.0, |_| f64::from(text_combine.ComputeInlineSpacing()));
-        let wrapper_font = unsafe { &*text_combine.StyleRef().GetFont() };
-        let primary_font = wrapper_font.PrimaryFont();
-        let text_top_offset = if primary_font.is_null() {
-            0.0
-        } else {
-            let primary_font = unsafe { &*primary_font };
-            Number(LayoutUnit::from_f32(
-                primary_font.GetFontMetrics().FloatAscent() - primary_font.InternalLeading() / 2.0,
-            ))
-        };
-        output.text_combine = Some(layout_fragment::fragment_tree::TextCombinePaintData {
-            scale_x,
-            inline_spacing,
-            text_top_offset,
-            synthetic_oblique: text_combine.UsingSyntheticOblique(),
-            font_size: unsafe { &*parent_style.GetFont() }
-                .GetFontDescription()
-                .ComputedSize() as f64,
-            emphasis: (purpose == LayoutUpdateKind::Paint)
-                .then(|| ExportTextCombineEmphasis(parent_style))
-                .flatten(),
-        });
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
     let Some(source_entry) = sources.get(&object) else {
@@ -933,4 +908,38 @@ pub(crate) fn LiveScrollOffset(object: &LayoutObject) -> Offset {
             })
         }
     }
+}
+
+/// TextCombinePainter's inputs for an anonymous LayoutTextCombine: the
+/// compressed-text scale and spacing, and the parent inline's emphasis and
+/// font size, which it paints after restoring the transform
+/// (core/paint/text_combine_painter.cc:35-48).
+pub(crate) fn LiveTextCombine(
+    object: &LayoutObject,
+) -> Option<layout_fragment::fragment_tree::TextCombinePaintData> {
+    let text_combine =
+        unsafe { DynamicTo::<LayoutTextCombine>(object as *const LayoutObject).as_ref() }?;
+    let parent_style = unsafe { &*text_combine.Parent() }.StyleRef();
+    let scale_x = text_combine.ScaleXForInline().map(f64::from);
+    let inline_spacing = scale_x.map_or(0.0, |_| f64::from(text_combine.ComputeInlineSpacing()));
+    let wrapper_font = unsafe { &*text_combine.StyleRef().GetFont() };
+    let primary_font = wrapper_font.PrimaryFont();
+    let text_top_offset = if primary_font.is_null() {
+        0.0
+    } else {
+        let primary_font = unsafe { &*primary_font };
+        Number(LayoutUnit::from_f32(
+            primary_font.GetFontMetrics().FloatAscent() - primary_font.InternalLeading() / 2.0,
+        ))
+    };
+    Some(layout_fragment::fragment_tree::TextCombinePaintData {
+        scale_x,
+        inline_spacing,
+        text_top_offset,
+        synthetic_oblique: text_combine.UsingSyntheticOblique(),
+        font_size: unsafe { &*parent_style.GetFont() }
+            .GetFontDescription()
+            .ComputedSize() as f64,
+        emphasis: ExportTextCombineEmphasis(parent_style),
+    })
 }

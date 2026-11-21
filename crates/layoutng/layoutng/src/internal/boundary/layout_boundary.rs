@@ -155,7 +155,7 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveImageDecodingMode, LiveSourceKind, LiveSvgViewBoxIsEmpty, LiveTextControlHost,
     LiveVideoFrameResourceId, LivePreviousBoxGeometry, LiveViewBackgroundRect,
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
-    LivePaintLayerOrder, LiveFormControl, LiveScrollOffset,
+    LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,

@@ -1919,6 +1919,24 @@ impl PaintProperties {
         }
     }
 
+    /// Whether the source is an anonymous LayoutTextCombine wrapper.
+    pub fn IsTextCombine(&self) -> bool {
+        match self.SourceObject() {
+            Some(object) => !foundation::DynamicTo::<
+                layoutng::internal::layout_text_combine::LayoutTextCombine,
+            >(object as *const LayoutObject)
+            .is_null(),
+            None => self.text_combine.is_some(),
+        }
+    }
+
+    pub fn TextCombine(&self) -> Option<TextCombinePaintData> {
+        match self.SourceObject() {
+            Some(object) => crate::internal::boundary::layout_boundary::LiveTextCombine(object),
+            None => self.text_combine.clone(),
+        }
+    }
+
     pub fn ScrollOffset(&self) -> Offset {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveScrollOffset)

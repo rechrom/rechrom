@@ -106,7 +106,7 @@ pub(super) fn refresh_retained_paint_inputs(
         if clients.contains_key(&node.paint.DisplayItemClientId())
             && (node.paint.has_collapsed_borders
                 || node.paint.svg_text.is_some()
-                || node.paint.text_combine.is_some())
+                || node.paint.IsTextCombine())
         {
             return false;
         }

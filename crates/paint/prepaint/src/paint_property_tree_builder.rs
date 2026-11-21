@@ -304,7 +304,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 // it is not claimed to match LocalToSVGParentTransform fully.
                 source_roles.push(PaintPropertyRole::SvgLocalTransform);
             }
-            if fragment.paint.text_combine.is_some() {
+            if fragment.paint.IsTextCombine() {
                 source_roles.push(PaintPropertyRole::TextCombineTransform);
             }
             debug_assert_eq!(source_roles.len(), node.local_transforms.len());

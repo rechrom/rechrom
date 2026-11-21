@@ -1278,7 +1278,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.establishes_paint_state
-            || (!fragment.paint.HasSource() && fragment.paint.text_combine.is_none())
+            || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
         {
             return;
         }
@@ -1720,7 +1720,7 @@ impl<'o> PaintContext<'o> {
             .as_deref()
             .expect("PrePaint node must own a fragment");
         if !fragment.paint.establishes_paint_state
-            || (!fragment.paint.HasSource() && fragment.paint.text_combine.is_none())
+            || (!fragment.paint.HasSource() && !fragment.paint.IsTextCombine())
         {
             return;
         }

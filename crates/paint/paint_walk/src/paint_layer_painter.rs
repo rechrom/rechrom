@@ -795,7 +795,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             && node
                 .fragment
                 .as_deref()
-                .is_some_and(|fragment| fragment.paint.text_combine.is_some())
+                .is_some_and(|fragment| fragment.paint.IsTextCombine())
             && self.context.borrow().caret.is_some();
         if unscaled_text_combine_caret {
             self.context.borrow_mut().EndGeometry(node);
@@ -919,7 +919,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             && node
                 .fragment
                 .as_deref()
-                .is_some_and(|fragment| fragment.paint.text_combine.is_some());
+                .is_some_and(|fragment| fragment.paint.IsTextCombine());
         if restore_text_combine {
             // BoxFragmentPainter restores the text-combine CTM before
             // TextCombinePainter draws the parent's decorations/emphasis.
