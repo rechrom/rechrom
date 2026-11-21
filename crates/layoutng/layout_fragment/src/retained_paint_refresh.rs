@@ -147,6 +147,7 @@ pub(super) fn refresh_retained_paint_inputs(
                 .expect("completed fragment has resources");
             let current =
                 ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
+            let live_style_facts = current.LiveStyleFacts();
             node.paint.BindSourceObject(object);
             // ExportPaintProperties has made the object ready for invalidation.
             node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
@@ -180,7 +181,9 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
-            node.paint.background_fill_layer_count = current.background_fill_layer_count;
+            node.paint.BindLiveStyleFacts(live_style_facts);
+            node.paint.background_fill_layer_count =
+                current.background_fill_layer_count;
             node.paint.has_background = current.has_background;
             node.paint.background_any_local_attachment_image =
                 current.background_any_local_attachment_image;

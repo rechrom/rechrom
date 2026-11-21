@@ -392,7 +392,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         let height = decoration.height;
         let size = Size { width, height };
         let outer_radii = ResolveCornerRadii(&style.style, sides, size, Edges::default());
-        let first_style = style.border_styles[0];
+        let first_style = style.BorderStyles()[0];
         let same_colors = alpha_mask
             || (style.style.border_colors()[0] == style.style.border_colors()[1]
                 && style.style.border_colors()[0] == style.style.border_colors()[2]
@@ -404,9 +404,9 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
             && widths[1] == widths[0]
             && widths[2] == widths[0]
             && widths[3] == widths[0]
-            && style.border_styles[1] == first_style
-            && style.border_styles[2] == first_style
-            && style.border_styles[3] == first_style
+            && style.BorderStyles()[1] == first_style
+            && style.BorderStyles()[2] == first_style
+            && style.BorderStyles()[3] == first_style
             && same_colors
             && border_has_alpha(0);
         if uniform_rounded_double {
@@ -478,9 +478,9 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
             && widths[1] == widths[0]
             && widths[2] == widths[0]
             && widths[3] == widths[0]
-            && style.border_styles[1] == first_style
-            && style.border_styles[2] == first_style
-            && style.border_styles[3] == first_style
+            && style.BorderStyles()[1] == first_style
+            && style.BorderStyles()[2] == first_style
+            && style.BorderStyles()[3] == first_style
             && same_colors
             && border_has_alpha(0);
         if uniform_rounded_dash {
@@ -544,7 +544,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         let solid_rounded_ring = sides.HasAllSides()
             && outer_radii.HasRadius()
             && style
-                .border_styles
+                .BorderStyles()
                 .iter()
                 .all(|line| *line == BorderLineStyle::kSolid)
             && same_colors
@@ -620,7 +620,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         }
         let mut rounded_solid_edges = outer_radii.HasRadius();
         for (edge, width) in widths.iter().enumerate() {
-            if *width > 0.0 && style.border_styles[edge] != BorderLineStyle::kSolid {
+            if *width > 0.0 && style.BorderStyles()[edge] != BorderLineStyle::kSolid {
                 rounded_solid_edges = false;
             }
         }
@@ -704,7 +704,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                     let adjacent_renders = |adjacent: usize| {
                         widths[adjacent] > 0.0
                             && !matches!(
-                                style.border_styles[adjacent],
+                                style.BorderStyles()[adjacent],
                                 BorderLineStyle::kNone | BorderLineStyle::kHidden
                             )
                             && border_has_alpha(adjacent)
@@ -856,7 +856,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                 for (edge, width) in widths.iter().enumerate() {
                     if *width <= 0.0
                         || matches!(
-                            style.border_styles[edge],
+                            style.BorderStyles()[edge],
                             BorderLineStyle::kNone | BorderLineStyle::kHidden
                         )
                         || !border_has_alpha(edge)
@@ -876,7 +876,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
                         BorderEdgeClip(fragment.node_id, phase, &edge_polygons[edge], false),
                         self.node,
                     );
-                    let line_style = style.border_styles[edge];
+                    let line_style = style.BorderStyles()[edge];
                     let color = border_color(edge);
                     if matches!(
                         line_style,
@@ -1014,7 +1014,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         for (edge, edge_width) in widths.iter().enumerate() {
             if *edge_width <= 0.0
                 || matches!(
-                    style.border_styles[edge],
+                    style.BorderStyles()[edge],
                     BorderLineStyle::kNone | BorderLineStyle::kHidden
                 )
                 || !border_has_alpha(edge)
@@ -1024,7 +1024,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
             if !IsVisible(self.node, &rects[edge]) {
                 continue;
             }
-            let line_style = style.border_styles[edge];
+            let line_style = style.BorderStyles()[edge];
             if matches!(
                 line_style,
                 BorderLineStyle::kDashed | BorderLineStyle::kDotted
@@ -1179,7 +1179,7 @@ impl<'n, 'f, 'c, 'o> BoxBorderPainter<'n, 'f, 'c, 'o> {
         let one_pixel_solid_border = sides.HasAllSides()
             && widths.iter().all(|width| *width == 1.0)
             && style
-                .border_styles
+                .BorderStyles()
                 .iter()
                 .all(|line| *line == BorderLineStyle::kSolid)
             && (alpha_mask

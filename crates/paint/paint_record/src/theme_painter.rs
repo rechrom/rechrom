@@ -576,8 +576,8 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
             | AppearanceValue::kBaseSelect => {
                 paint_focus();
                 paint_frame(face, (minimum * 0.18).min(4.0));
-                let vertical = fragment.paint.writing_mode != WritingMode::kHorizontalTb;
-                let reverse = fragment.paint.direction == TextDirection::kRtl;
+                let vertical = fragment.paint.WritingMode() != WritingMode::kHorizontalTb;
+                let reverse = fragment.paint.Direction() == TextDirection::kRtl;
                 let length = (minimum * 0.18).max(3.0);
                 let width = (minimum * 0.07).max(1.0);
                 if !vertical {
@@ -634,7 +634,7 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
                 true
             }
             AppearanceValue::kSliderHorizontal | AppearanceValue::kSliderVertical => {
-                let vertical = IsVertical(control.appearance, fragment.paint.writing_mode);
+                let vertical = IsVertical(control.appearance, fragment.paint.WritingMode());
                 let thickness = (minimum * 0.24).max(3.0);
                 let track = if vertical {
                     PaintRect {
@@ -670,7 +670,7 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
             }
             AppearanceValue::kInnerSpinButton => {
                 paint_frame(face, 2.0);
-                let vertical = fragment.paint.writing_mode != WritingMode::kHorizontalTb;
+                let vertical = fragment.paint.WritingMode() != WritingMode::kHorizontalTb;
                 if !vertical {
                     let mid = box_rect.y + box_rect.height * 0.5;
                     canvas.Line(
@@ -752,9 +752,9 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
                 paint_frame(disabled_fill, radius);
                 let ratio = control.value_ratio.unwrap_or(0.0).clamp(0.0, 1.0);
                 let mut value = Inset(box_rect, one * 2.0);
-                if fragment.paint.writing_mode == WritingMode::kHorizontalTb {
+                if fragment.paint.WritingMode() == WritingMode::kHorizontalTb {
                     value.width *= ratio;
-                    if fragment.paint.direction == TextDirection::kRtl {
+                    if fragment.paint.Direction() == TextDirection::kRtl {
                         value.x = box_rect.x + box_rect.width - one * 2.0 - value.width;
                     }
                 } else {

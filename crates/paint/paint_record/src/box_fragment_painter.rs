@@ -119,7 +119,7 @@ fn IsVisibleToPaint(fragment: &FragmentPaintData) -> bool {
     }
     fragment.paint.style.visible()
         || matches!(
-            fragment.paint.display,
+            fragment.paint.Display(),
             Display::kTableSection
                 | Display::kTableHeaderGroup
                 | Display::kTableFooterGroup
@@ -625,7 +625,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .expect("box hit-test metadata requires a fragment");
         if paint_info.ShouldOmitCompositingInfo()
             || !fragment.paint.style.visible()
-            || !ShouldRecordHitTestData(fragment.paint.display)
+            || !ShouldRecordHitTestData(fragment.paint.Display())
         {
             return;
         }
@@ -691,7 +691,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // FragmentItems keep the full-rectangle admission below.
         if fragment.kind == FragmentKind::kLine {
             let cull = paint_info.GetCullRect();
-            return match fragment.paint.writing_mode {
+            return match fragment.paint.WritingMode() {
                 layoutng_assembly::internal::layout_input::WritingMode::kHorizontalTb => {
                     let y = node.paint_offset.y + rect.offset.y;
                     cull.IntersectsVerticalRange(y, y + rect.size.height)
@@ -1203,7 +1203,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
             && is_visible
             && fragment.kind == FragmentKind::kBox
-            && ShouldRecordHitTestData(fragment.paint.display)
+            && ShouldRecordHitTestData(fragment.paint.Display())
             && fragment.paint.scroll_container.is_some()
             && ShouldRecordScrollHitTestDataForPaint(
                 paint_info.ShouldOmitCompositingInfo(),
@@ -1684,7 +1684,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .as_deref()
                     .expect("paint tree node has a fragment")
                     .paint
-                    .display
+                    .Display()
                     == Display::kTableCell
                 {
                     cells.push(child);
@@ -1865,7 +1865,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         }
 
         if matches!(
-            fragment.paint.display,
+            fragment.paint.Display(),
             Display::kTableSection
                 | Display::kTableHeaderGroup
                 | Display::kTableFooterGroup
@@ -2462,7 +2462,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             true,
             false,
             style,
-            fragment.paint.effective_zoom,
+            fragment.paint.EffectiveZoom(),
             Some((rect, rect)),
             true,
         );
@@ -2656,7 +2656,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 true,
                 false,
                 style,
-                fragment.paint.effective_zoom,
+                fragment.paint.EffectiveZoom(),
                 Some((positioning, rect)),
                 true,
             );
@@ -3108,7 +3108,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     false,
                     false,
                     style,
-                    fragment.paint.effective_zoom,
+                    fragment.paint.EffectiveZoom(),
                     Some((positioning, border_rect)),
                     true,
                 );
@@ -3120,7 +3120,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     false,
                     false,
                     style,
-                    fragment.paint.effective_zoom,
+                    fragment.paint.EffectiveZoom(),
                     Some((positioning, clip)),
                     true,
                 );
@@ -3521,7 +3521,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // Chromium's kTextClip block-child traversal excludes floating
         // descendants, including self-painting floating layers
         // (box_fragment_painter.cc:1160-1180).
-        if fragment.paint.floating != FloatSide::kNone {
+        if fragment.paint.Floating() != FloatSide::kNone {
             return;
         }
         {
@@ -3587,7 +3587,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             already_clipped,
             apply_border_bleed_avoidance,
             &fragment.paint.style,
-            fragment.paint.effective_zoom,
+            fragment.paint.EffectiveZoom(),
             None,
             false,
         );
@@ -4058,7 +4058,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let mut has_paintable_border = false;
         for (edge, width) in widths.into_iter().enumerate() {
             has_paintable_border |= width > 0.0
-                && paint.border_styles[edge] != BorderLineStyle::kNone
+                && paint.BorderStyles()[edge] != BorderLineStyle::kNone
                 && paint.style.border_colors()[edge].alpha > 0.0;
         }
         if !has_paintable_border {
@@ -4392,8 +4392,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 state,
                 self.node.PixelSnappedRect(&rect),
                 self.context,
-                fragment.paint.direction,
-                fragment.paint.writing_mode,
+                fragment.paint.Direction(),
+                fragment.paint.WritingMode(),
             )
         });
         let cached = visual_rect.is_some_and(|_| {
@@ -5370,10 +5370,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 glyphs: Arc::clone(&run.glyphs),
                 ..Default::default()
             };
-            if fragment.paint.writing_mode != WritingMode::kHorizontalTb {
+            if fragment.paint.WritingMode() != WritingMode::kHorizontalTb {
                 item.transform = TextWritingModeTransform(
                     self.node,
-                    fragment.paint.writing_mode,
+                    fragment.paint.WritingMode(),
                     self.node.paint_offset,
                 );
             }
@@ -5406,7 +5406,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 width: fragment.size.width,
                 height: fragment.size.height,
             },
-            fragment.paint.effective_zoom as f64,
+            fragment.paint.EffectiveZoom() as f64,
         );
         if path.is_empty() {
             return;
@@ -5529,8 +5529,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 fragment.paint.replaced_selection_state,
                 selection_rect,
                 self.context,
-                fragment.paint.direction,
-                fragment.paint.writing_mode,
+                fragment.paint.Direction(),
+                fragment.paint.WritingMode(),
             )
         });
         if DrawingRecorder::UseCachedDrawingIfPossible(
@@ -5795,7 +5795,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 width: destination.width,
                 height: destination.height,
             },
-            f64::from(style.effective_zoom),
+            f64::from(style.EffectiveZoom()),
             fragment.resources.as_deref(),
             (!style.style.color_scheme_flags_is_normal())
                 .then_some(u8::from(style.style.used_dark_color_scheme())),
@@ -7247,7 +7247,7 @@ fn ResolveBackgroundDestinationRects(
     let disallow_border_derived_adjustment = attachment == BackgroundAttachment::kFixed
         || has_geometry_override
         || !paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
-        || paint.display == Display::kTableCell
+        || paint.Display() == Display::kTableCell
         || paint.is_page_container
         || paint.is_page_border_box
         || paint.stitched_decoration.is_some()
@@ -7269,15 +7269,15 @@ fn ResolveBackgroundDestinationRects(
     let sides = &fragment.BorderSides();
     let colors = paint.style.border_colors();
     let obscures = [
-        BorderEdgeObscuresBackground(sides.top, border.top, colors[0], paint.border_styles[0]),
-        BorderEdgeObscuresBackground(sides.right, border.right, colors[1], paint.border_styles[1]),
+        BorderEdgeObscuresBackground(sides.top, border.top, colors[0], paint.BorderStyles()[0]),
+        BorderEdgeObscuresBackground(sides.right, border.right, colors[1], paint.BorderStyles()[1]),
         BorderEdgeObscuresBackground(
             sides.bottom,
             border.bottom,
             colors[2],
-            paint.border_styles[2],
+            paint.BorderStyles()[2],
         ),
-        BorderEdgeObscuresBackground(sides.left, border.left, colors[3], paint.border_styles[3]),
+        BorderEdgeObscuresBackground(sides.left, border.left, colors[3], paint.BorderStyles()[3]),
     ];
 
     if obscures[0] {
@@ -7692,7 +7692,7 @@ fn BackgroundBleedInset(node: &PaintTreeNode<'_>) -> Option<Edges> {
     let widths = [border.top, border.right, border.bottom, border.left];
     let mut fraction = 0.5;
     for (edge, width) in widths.into_iter().enumerate() {
-        let border_style = fragment.paint.border_styles[edge];
+        let border_style = fragment.paint.BorderStyles()[edge];
         if width <= 0.0
             || style.border_colors()[edge].alpha < 1.0
             || border_style == BorderLineStyle::kNone

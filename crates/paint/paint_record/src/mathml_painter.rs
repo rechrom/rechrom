@@ -168,7 +168,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if fragment.paint.direction == TextDirection::kLtr {
+        if fragment.paint.Direction() == TextDirection::kLtr {
             logical_offset
         } else {
             fragment.size.width - logical_offset - inner_width
@@ -246,7 +246,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             - fragment.Borders().right
             - fragment.Padding().left
             - fragment.Padding().right;
-        let ltr = paint.direction == TextDirection::kLtr;
+        let ltr = paint.Direction() == TextDirection::kLtr;
         let mut x = self.LogicalToPhysicalX(0.0, math.operator_inline_size)
             + fragment.Borders().left
             + fragment.Padding().left;

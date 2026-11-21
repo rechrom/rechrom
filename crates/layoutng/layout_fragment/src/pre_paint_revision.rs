@@ -844,6 +844,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
     // Exhaustive field binding prevents a new paint output from being omitted.
     let PaintProperties {
         source_object_address: _,
+        live_style_facts,
         property_fragment_unique_id,
         is_first_for_node,
         can_paint_multiple_fragments,
@@ -1169,6 +1170,7 @@ fn paint_equal(a: &PaintProperties, b: &PaintProperties) -> bool {
         && video_frame_resource_id == &b.video_frame_resource_id
         && image_decoding_mode == &b.image_decoding_mode
         && focused_image_map_area == &b.focused_image_map_area
+        && live_style_facts == &b.live_style_facts
         && effective_zoom == &b.effective_zoom
         && style == &b.style
         && selection_style == &b.selection_style

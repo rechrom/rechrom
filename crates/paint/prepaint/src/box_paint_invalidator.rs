@@ -52,7 +52,7 @@ impl BoxPaintInvalidator {
         } else if HasEffectiveBackground(fragment) {
             let old_size = previous_geometry.map(|old| old.size).unwrap_or_default();
             let new_size = StitchedSize(fragment);
-            if fragment.paint.background_any_default_attachment_image
+            if fragment.paint.BackgroundAnyDefaultAttachmentImage()
                 && ShouldFullyInvalidateFillLayersOnSizeChange(fragment, old_size, new_size)
             {
                 result.kind = BackgroundInvalidationType::Full;
@@ -402,11 +402,11 @@ fn ComputeViewBackgroundInvalidation(
 
 fn HasEffectiveBackground(fragment: &FragmentPaintData) -> bool {
     fragment.paint.IsLayoutView()
-        || (fragment.paint.has_background && !fragment.paint.background_transfers_to_view)
+        || (fragment.paint.HasBackground() && !fragment.paint.background_transfers_to_view)
 }
 
 fn BackgroundUsesContentBox(fragment: &FragmentPaintData) -> bool {
-    fragment.paint.background_any_layer_uses_content_box
+    fragment.paint.BackgroundAnyLayerUsesContentBox()
 }
 
 fn BackgroundPaintsInContentsSpace(fragment: &FragmentPaintData) -> bool {
@@ -418,7 +418,7 @@ fn BackgroundPaintsInBorderBoxSpace(fragment: &FragmentPaintData) -> bool {
 }
 
 fn BackgroundGeometryDependsOnScrollableOverflowRect(fragment: &FragmentPaintData) -> bool {
-    HasEffectiveBackground(fragment) && fragment.paint.background_any_local_attachment_image
+    HasEffectiveBackground(fragment) && fragment.paint.BackgroundAnyLocalAttachmentImage()
 }
 
 /// Source: `box_paint_invalidator.cc:467-510,530-534`. The immutable Paint
@@ -519,7 +519,7 @@ fn ShouldFullyInvalidateFillLayersOnSizeChange(
 ) -> bool {
     let layers = fragment.paint.style.background_images();
     ShouldFullyInvalidateBackgroundLayersOnSizeChange(
-        fragment.paint.background_fill_layer_count,
+        fragment.paint.BackgroundFillLayerCount(),
         &layers,
         old_size,
         new_size,

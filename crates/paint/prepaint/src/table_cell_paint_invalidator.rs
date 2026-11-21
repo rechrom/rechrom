@@ -66,13 +66,13 @@ impl TableCellPaintInvalidator {
     }
 
     pub fn ContainerPaintsCellGeometry(container: &FragmentPaintData) -> bool {
-        match container.paint.display {
+        match container.paint.Display() {
             Display::kTableRow
             | Display::kTableSection
             | Display::kTableHeaderGroup
-            | Display::kTableFooterGroup => container.paint.has_background,
+            | Display::kTableFooterGroup => container.paint.HasBackground(),
             Display::kTable | Display::kInlineTable => {
-                container.paint.has_background
+                container.paint.HasBackground()
                     || container.paint.has_collapsed_borders
                     || container.paint.table.as_ref().is_some_and(|table| {
                         table.columns.iter().any(|column| {
@@ -90,7 +90,7 @@ impl TableCellPaintInvalidator {
     /// ancestor; the table is the last container in Chromium's source order.
     pub fn InvalidateAncestorAndPropagate(container: &mut FragmentPaintData) -> bool {
         let propagate = !matches!(
-            container.paint.display,
+            container.paint.Display(),
             Display::kTable | Display::kInlineTable
         );
         if Self::ContainerPaintsCellGeometry(container) {

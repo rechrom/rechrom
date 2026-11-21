@@ -108,6 +108,11 @@ pub struct PaintProperties {
     // Production getters below read object facts through this identity rather
     // than copying them into the fragment boundary.
     source_object_address: usize,
+    // Source: Chromium painters and PaintPropertyTreeBuilder read these
+    // facts from LayoutObject::StyleRef() (e.g. paint_property_tree_builder.cc
+    // OverflowClip/Scroll nodes, box_painter_base.cc backgrounds). True when
+    // `style` is that live ComputedStyle; the stored copies are fixture-only.
+    live_style_facts: bool,
     /// Chromium LayoutObject dirty bits consumed by Chromium's
     /// PrePaintTreeWalk. They are lifecycle facts, not drawing inputs: the
     /// layout boundary snapshots them before Paint and clears them only after
@@ -532,6 +537,7 @@ impl Default for PaintProperties {
         static EMPTY_GLYPH_RUNS: OnceLock<Arc<Vec<PaintGlyphRun>>> = OnceLock::new();
         Self {
             source_object_address: 0,
+            live_style_facts: false,
             property_fragment_unique_id: 0,
             is_first_for_node: true,
             can_paint_multiple_fragments: true,
@@ -1684,6 +1690,174 @@ impl PaintProperties {
     }
     pub fn CanPaintFragmentOccurrence(&self) -> bool {
         self.is_first_for_node || self.can_paint_multiple_fragments
+    }
+
+    pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
+        self.live_style_facts = live;
+    }
+
+    pub(crate) fn LiveStyleFacts(&self) -> bool {
+        self.live_style_facts
+    }
+
+    /// The fragment's effective ComputedStyle (LayoutObject::StyleRef(), or
+    /// the ::first-line style for first-line fragments) when the facts below
+    /// were projected from it.
+    fn FactStyle(&self) -> Option<&layoutng_style::style::computed_style::ComputedStyle> {
+        self.live_style_facts.then(|| self.style.Source()).flatten()
+    }
+
+    fn FactLayoutBox(&self) -> Option<&layoutng::internal::layout_box::LayoutBox> {
+        if !self.live_style_facts {
+            return None;
+        }
+        self.SourceObject().map(|object| unsafe {
+            foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref()
+        })?
+    }
+
+    pub fn Margin(&self) -> Edges {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleMargin)
+            .SourceCheckedOr(self.margin, "margin")
+    }
+
+    pub fn BorderStyles(&self) -> [BorderLineStyle; 4] {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleBorderStyles)
+            .SourceCheckedOr(self.border_styles, "border_styles")
+    }
+
+    pub fn Display(&self) -> Display {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleDisplay)
+            .SourceCheckedOr(self.display, "display")
+    }
+
+    pub fn Position(&self) -> Position {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStylePosition)
+            .SourceCheckedOr(self.position, "position")
+    }
+
+    pub fn Floating(&self) -> FloatSide {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleFloating)
+            .SourceCheckedOr(self.floating, "floating")
+    }
+
+    pub fn WritingMode(&self) -> WritingMode {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleWritingMode)
+            .SourceCheckedOr(self.writing_mode, "writing_mode")
+    }
+
+    pub fn Direction(&self) -> TextDirection {
+        self.FactStyle()
+            .map(crate::style_projection::FragmentStyleDirection)
+            .SourceCheckedOr(self.direction, "direction")
+    }
+
+    pub fn OverflowX(&self) -> Overflow {
+        self.FactStyle()
+            .map(|style| crate::style_projection::FragmentStyleOverflow(style.OverflowX()))
+            .SourceCheckedOr(self.overflow_x, "overflow_x")
+    }
+
+    pub fn OverflowY(&self) -> Overflow {
+        self.FactStyle()
+            .map(|style| crate::style_projection::FragmentStyleOverflow(style.OverflowY()))
+            .SourceCheckedOr(self.overflow_y, "overflow_y")
+    }
+
+    pub fn OverscrollBehaviorX(&self) -> OverscrollBehavior {
+        self.FactStyle()
+            .map(|style| {
+                crate::internal::boundary::layout_boundary::LiveOverscrollBehavior(
+                    style.OverscrollBehaviorX(),
+                )
+            })
+            .SourceCheckedOr(self.overscroll_behavior_x, "overscroll_behavior_x")
+    }
+
+    pub fn OverscrollBehaviorY(&self) -> OverscrollBehavior {
+        self.FactStyle()
+            .map(|style| {
+                crate::internal::boundary::layout_boundary::LiveOverscrollBehavior(
+                    style.OverscrollBehaviorY(),
+                )
+            })
+            .SourceCheckedOr(self.overscroll_behavior_y, "overscroll_behavior_y")
+    }
+
+    // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
+    pub fn PreventScrollAxisLocking(&self) -> bool {
+        self.FactStyle()
+            .map(|style| style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone)
+            .SourceCheckedOr(self.prevent_scroll_axis_locking, "prevent_scroll_axis_locking")
+    }
+
+    pub fn EffectiveZoom(&self) -> f32 {
+        self.FactStyle()
+            .map(|style| style.EffectiveZoom())
+            .SourceCheckedOr(self.effective_zoom, "effective_zoom")
+    }
+
+    pub fn HasBackground(&self) -> bool {
+        self.FactStyle()
+            .map(|style| style.HasBackground())
+            .SourceCheckedOr(self.has_background, "has_background")
+    }
+
+    pub fn BackgroundFillLayerCount(&self) -> usize {
+        self.FactStyle()
+            .map(crate::internal::boundary::paint_style_export::BackgroundFillLayerCount)
+            .SourceCheckedOr(self.background_fill_layer_count, "background_fill_layer_count")
+    }
+
+    pub fn BackgroundAnyLocalAttachmentImage(&self) -> bool {
+        self.FactStyle()
+            .map(|style| style.BackgroundLayers().AnyLayerHasLocalAttachmentImage())
+            .SourceCheckedOr(
+                self.background_any_local_attachment_image,
+                "background_any_local_attachment_image",
+            )
+    }
+
+    pub fn BackgroundAnyDefaultAttachmentImage(&self) -> bool {
+        self.FactStyle()
+            .map(|style| style.BackgroundLayers().AnyLayerHasDefaultAttachmentImage())
+            .SourceCheckedOr(
+                self.background_any_default_attachment_image,
+                "background_any_default_attachment_image",
+            )
+    }
+
+    pub fn BackgroundAnyLayerUsesContentBox(&self) -> bool {
+        self.FactStyle()
+            .map(|style| style.BackgroundLayers().AnyLayerUsesContentBox())
+            .SourceCheckedOr(
+                self.background_any_layer_uses_content_box,
+                "background_any_layer_uses_content_box",
+            )
+    }
+
+    pub fn FixedToView(&self) -> bool {
+        self.live_style_facts
+            .then(|| self.FactLayoutBox().is_some_and(|box_| box_.IsFixedToView(std::ptr::null())))
+            .SourceCheckedOr(self.fixed_to_view, "fixed_to_view")
+    }
+
+    pub fn NeedsAnchorPositionScrollAdjustment(&self) -> bool {
+        self.live_style_facts
+            .then(|| {
+                self.FactLayoutBox()
+                    .is_some_and(|box_| box_.NeedsAnchorPositionScrollAdjustment())
+            })
+            .SourceCheckedOr(
+                self.needs_anchor_position_scroll_adjustment,
+                "needs_anchor_position_scroll_adjustment",
+            )
     }
 
     // C++ chained assignment evaluates the right-hand assignment first.

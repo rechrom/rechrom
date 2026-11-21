@@ -502,18 +502,6 @@ pub(super) fn ExportProperties(
     } else {
         crate::style_projection::ReadFragmentStyleFacts(layout_style)
     };
-    output.effective_zoom = layout_style.EffectiveZoom();
-    if purpose == LayoutUpdateKind::Paint {
-        output.background_fill_layer_count =
-            crate::internal::boundary::paint_style_export::BackgroundFillLayerCount(layout_style);
-        output.has_background = layout_style.HasBackground();
-        let background_layers = layout_style.BackgroundLayers();
-        output.background_any_local_attachment_image =
-            background_layers.AnyLayerHasLocalAttachmentImage();
-        output.background_any_default_attachment_image =
-            background_layers.AnyLayerHasDefaultAttachmentImage();
-        output.background_any_layer_uses_content_box = background_layers.AnyLayerUsesContentBox();
-    }
     let exported_style_key = (
         layout_style as *const StyleComputedStyle as usize,
         projected_style_identity,
@@ -646,35 +634,60 @@ pub(super) fn ExportProperties(
         output.svg_text_decoration_style =
             ExportSvgTextDecorationStyle(object, sources, style_sources, effective_style);
     }
-    output.margin = style_facts.margin;
     output.border = style_facts.border;
-    output.border_styles = style_facts.border_styles;
     output.padding = style_facts.padding;
-    output.display = style_facts.display;
-    output.position = style_facts.position;
-    output.fixed_to_view =
-        !layout_box.is_null() && unsafe { &*layout_box }.IsFixedToView(std::ptr::null());
-    output.needs_anchor_position_scroll_adjustment =
-        !layout_box.is_null() && unsafe { &*layout_box }.NeedsAnchorPositionScrollAdjustment();
-    output.floating = style_facts.floating;
-    ExportStickyPaintProperties(object, &mut output);
-    output.writing_mode = style_facts.writing_mode;
-    output.direction = style_facts.direction;
-    output.overflow_x = style_facts.overflow_x;
-    output.overflow_y = style_facts.overflow_y;
-    let export_overscroll = |behavior| match behavior {
-        EOverscrollBehavior::kAuto => crate::internal::layout_input::OverscrollBehavior::kAuto,
-        EOverscrollBehavior::kContain => {
-            crate::internal::layout_input::OverscrollBehavior::kContain
+    // Chromium's PrePaint and painters read these from the LayoutObject's
+    // ComputedStyle and LayoutBox (e.g. paint_property_tree_builder.cc
+    // UpdateOverflowClip/UpdateScrollAndScrollTranslation, box_painter_base.cc
+    // PaintFillLayers). PaintProperties reads them through `style` when it is
+    // this live ComputedStyle and stores copies only otherwise.
+    let live_style_facts = output
+        .style
+        .Source()
+        .is_some_and(|style| std::ptr::eq(style, layout_style));
+    output.BindLiveStyleFacts(live_style_facts);
+    if !live_style_facts {
+        output.effective_zoom = layout_style.EffectiveZoom();
+        if purpose == LayoutUpdateKind::Paint {
+            output.background_fill_layer_count =
+                crate::internal::boundary::paint_style_export::BackgroundFillLayerCount(
+                    layout_style,
+                );
+            output.has_background = layout_style.HasBackground();
+            let background_layers = layout_style.BackgroundLayers();
+            output.background_any_local_attachment_image =
+                background_layers.AnyLayerHasLocalAttachmentImage();
+            output.background_any_default_attachment_image =
+                background_layers.AnyLayerHasDefaultAttachmentImage();
+            output.background_any_layer_uses_content_box =
+                background_layers.AnyLayerUsesContentBox();
         }
-        EOverscrollBehavior::kNone => crate::internal::layout_input::OverscrollBehavior::kNone,
-        EOverscrollBehavior::kChain => crate::internal::layout_input::OverscrollBehavior::kChain,
-    };
-    output.overscroll_behavior_x = export_overscroll(layout_style.OverscrollBehaviorX());
-    output.overscroll_behavior_y = export_overscroll(layout_style.OverscrollBehaviorY());
-    // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
-    output.prevent_scroll_axis_locking =
-        layout_style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone;
+        output.margin = style_facts.margin;
+        output.border_styles = style_facts.border_styles;
+        output.display = style_facts.display;
+        output.position = style_facts.position;
+        output.fixed_to_view =
+            !layout_box.is_null() && unsafe { &*layout_box }.IsFixedToView(std::ptr::null());
+        output.needs_anchor_position_scroll_adjustment = !layout_box.is_null()
+            && unsafe { &*layout_box }.NeedsAnchorPositionScrollAdjustment();
+        output.floating = style_facts.floating;
+        output.writing_mode = style_facts.writing_mode;
+        output.direction = style_facts.direction;
+        output.overflow_x = style_facts.overflow_x;
+        output.overflow_y = style_facts.overflow_y;
+        output.overscroll_behavior_x =
+            crate::internal::boundary::layout_boundary::LiveOverscrollBehavior(
+                layout_style.OverscrollBehaviorX(),
+            );
+        output.overscroll_behavior_y =
+            crate::internal::boundary::layout_boundary::LiveOverscrollBehavior(
+                layout_style.OverscrollBehaviorY(),
+            );
+        // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
+        output.prevent_scroll_axis_locking =
+            layout_style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone;
+    }
+    ExportStickyPaintProperties(object, &mut output);
     let element_data = if source.IsElementNode() {
         unsafe { &*(source as *const Node as *const Element) }
             .InputElementData()

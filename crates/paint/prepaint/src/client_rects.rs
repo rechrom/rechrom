@@ -146,7 +146,7 @@ fn Gather<'a>(
         }
     }
     for child in fragment.Children() {
-        let child_index = if child.paint.fixed_to_view {
+        let child_index = if child.paint.FixedToView() {
             // Match PrePaint's LayoutView fixed-position context. Client rects
             // are viewport-relative and therefore must not inherit document
             // scroll geometry either.
@@ -323,7 +323,7 @@ fn RestoreLogicalOutOfFlowParents(nodes: &mut [GeometryNode<'_>]) {
                     .and_then(|candidates| LogicalParentOccurrence(nodes, index, candidates))
             };
         let is_out_of_flow = matches!(
-            fragment.paint.position,
+            fragment.paint.Position(),
             Position::kAbsolute | Position::kFixed
         );
         if let Some(logical) = logical_parent.filter(|&logical| {

@@ -1291,12 +1291,12 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
         || fragment.paint.sticky_constraint.is_some()
         || fragment.paint.sticky_offset.x != 0.0
         || fragment.paint.sticky_offset.y != 0.0
-        || fragment.paint.needs_anchor_position_scroll_adjustment
+        || fragment.paint.NeedsAnchorPositionScrollAdjustment()
         || fragment.paint.scrollbars.is_some()
         || fragment.paint.source_kind == NodeKind::kSvgRoot
         || (fragment.paint.paint_layer_client_id != 0
             && (HasReferenceFilterOrReflection(style) || style.has_backdrop_filters()))
-        || fragment.paint.fixed_to_view
+        || fragment.paint.FixedToView()
     {
         return true;
     }
@@ -1413,7 +1413,7 @@ pub fn ResolveFragmentGeometry(
     let style: Option<&PaintStyle> = fragment.paint.HasSource().then_some(&fragment.paint.style);
     let establishes = fragment.paint.establishes_paint_state;
     let position = if fragment.paint.HasSource() {
-        fragment.paint.position
+        fragment.paint.Position()
     } else {
         Position::kStatic
     };
@@ -3200,12 +3200,15 @@ fn ClipPathReferenceRect(
             width: fragment.content_size.width,
             height: fragment.content_size.height,
         },
-        ClipPathReferenceBox::kMarginBox => PaintRect {
-            x: border_box.x - paint.margin.left,
-            y: border_box.y - paint.margin.top,
-            width: border_box.width + paint.margin.left + paint.margin.right,
-            height: border_box.height + paint.margin.top + paint.margin.bottom,
-        },
+        ClipPathReferenceBox::kMarginBox => {
+            let margin = paint.Margin();
+            PaintRect {
+                x: border_box.x - margin.left,
+                y: border_box.y - margin.top,
+                width: border_box.width + margin.left + margin.right,
+                height: border_box.height + margin.top + margin.bottom,
+            }
+        }
         ClipPathReferenceBox::kHalfBorderBox => PaintRect {
             x: border_box.x + border.left * 0.5,
             y: border_box.y + border.top * 0.5,
@@ -3260,7 +3263,7 @@ fn GeometryBoxClipPathRadii(
     if reference_box == ClipPathReferenceBox::kMarginBox {
         return Ok(OutsetCornerRadiiWithCorrection(
             radii,
-            fragment.paint.margin,
+            fragment.paint.Margin(),
             fragment.size,
         ));
     }
@@ -3551,7 +3554,7 @@ fn ResolveMaskLayers(
                         let zoom = if IsSvgEffectChild(fragment.paint.source_kind) {
                             1.0
                         } else {
-                            f64::from(fragment.paint.effective_zoom)
+                            f64::from(fragment.paint.EffectiveZoom())
                         };
                         let (region, shader) = crate::paint_shader_resolver::ResolveLocalSvgMask(
                             graph,
@@ -3652,7 +3655,7 @@ fn ResolveMaskLayers(
             &positioning,
             image,
             image_orientation,
-            f64::from(fragment.paint.effective_zoom),
+            f64::from(fragment.paint.EffectiveZoom()),
         );
         let tile_geometry = ResolveBackgroundTile(&layer.image, &positioning, tile_size);
         let tile = if layer.image.shader.is_some()
@@ -3692,7 +3695,7 @@ fn ResolveMaskLayers(
                         width: tile.width,
                         height: tile.height,
                     },
-                    f64::from(fragment.paint.effective_zoom),
+                    f64::from(fragment.paint.EffectiveZoom()),
                     fragment.resources.as_deref(),
                     (!fragment.paint.style.color_scheme_flags_is_normal())
                         .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
@@ -3832,7 +3835,7 @@ fn DetachLogicallyReparentedOutOfFlowNodes<'a>(
         let logical_parent_is_physical_ancestor = logical_parent.is_some_and(|pointer| {
             physical_ancestors.contains(&(pointer as *const PaintTreeNode<'a>))
         });
-        let position = fragment.paint.position;
+        let position = fragment.paint.Position();
         let is_out_of_flow = position == Position::kAbsolute || position == Position::kFixed;
         if is_out_of_flow
             && logical_id.is_some()
@@ -4094,7 +4097,7 @@ fn GatherInlineOutlineGroups<'a>(
         && fragment.kind == FragmentKind::kBox
         && fragment.paint.HasSource()
         && fragment.paint.establishes_paint_state
-        && fragment.paint.display == Display::kInline
+        && fragment.paint.Display() == Display::kInline
         && fragment.paint.style.visible()
         && fragment.paint.style.outline_width() > 0.0
         && fragment.paint.style.outline_style() != BorderLineStyle::kNone
@@ -4226,7 +4229,7 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
     // current-painting-layer boundary: a self-painting child owns its phase
     // flags and must not make the ancestor layer visit empty phases.
     node.needs_float_phase =
-        fragment.paint.HasSource() && fragment.paint.floating != FloatSide::kNone;
+        fragment.paint.HasSource() && fragment.paint.Floating() != FloatSide::kNone;
     let style = &fragment.paint.style;
     node.needs_outline_phase = !node.is_paint_layer
         && (fragment.paint.focused_image_map_area.is_some()
@@ -4571,14 +4574,14 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
     let phase = |f: &FragmentPaintData| {
         (
             f.paint.HasSource(),
-            f.paint.floating,
+            f.paint.Floating(),
             f.paint
                 .form_control
                 .as_ref()
                 .is_some_and(|control| control.auto_focus_ring),
             f.paint.focused_image_map_area.is_some(),
             f.paint.scrollbars.is_some(),
-            f.paint.display,
+            f.paint.Display(),
             f.paint.establishes_paint_state,
             f.paint.IsSVGHiddenContainer(),
             f.paint.style.visible(),
@@ -4660,12 +4663,12 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         offset: f.offset,
         content_size: f.content_size,
         phase_flags,
-        floating: p.floating as i32,
-        display: p.display as i32,
+        floating: p.Floating() as i32,
+        display: p.Display() as i32,
         outline_style: outline_style as i32,
         outline_width,
         outline_alpha,
-        position: p.position as i32,
+        position: p.Position() as i32,
         logical_parent_node_id: p.logical_parent_node_id,
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.logical_tree_order,
@@ -6630,7 +6633,7 @@ impl PrePaintTreeWalk {
             old_paint_offset,
             node.paint_offset,
         );
-        node.table_cell_geometry_changed = fragment.paint.display == Display::kTableCell
+        node.table_cell_geometry_changed = fragment.paint.Display() == Display::kTableCell
             && should_run_invalidation
             && TableCellPaintInvalidator::CellGeometryChanged(
                 &fragment,
@@ -6662,7 +6665,7 @@ impl PrePaintTreeWalk {
                 invalidation_context,
             );
             let reason = if fragment.kind == FragmentKind::kBox {
-                if fragment.paint.display == Display::kTableCell {
+                if fragment.paint.Display() == Display::kTableCell {
                     TableCellPaintInvalidator::ComputePaintInvalidationReason(
                         &fragment,
                         PreviousFragment(old_fragment),
@@ -7153,7 +7156,7 @@ impl PrePaintTreeWalk {
                 flex_or_grid_item: false,
             };
         }
-        if child.paint.fixed_to_view && child.paint.establishes_paint_state {
+        if child.paint.FixedToView() && child.paint.establishes_paint_state {
             // Blink switches fixed-to-view descendants to the LayoutView's
             // fixed-position context. Its transform is above document scroll,
             // but its clip still excludes classic root scrollbar gutters.

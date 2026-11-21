@@ -880,47 +880,76 @@ pub(crate) struct FragmentStyleFacts {
 }
 
 pub(crate) fn ReadFragmentStyleFacts(style: &ComputedStyle) -> FragmentStyleFacts {
-    use crate::internal::layout_input::{
-        Display as D, FloatSide as F, Overflow as O, Position as P,
-    };
     let zoom = style.EffectiveZoom();
     let edge = |value: &Length| ProjectUnzoomedLength(value, zoom).pixels.unwrap_or(0.0);
-    let border = |value: foundation::EBorderStyle| {
-        crate::internal::boundary::paint_style_export::BorderStyle(value)
-    };
-    let overflow = |value| match value {
-        foundation::EOverflow::kVisible => O::kVisible,
-        foundation::EOverflow::kHidden => O::kHidden,
-        foundation::EOverflow::kScroll => O::kScroll,
-        foundation::EOverflow::kAuto | foundation::EOverflow::kOverlay => O::kAuto,
-        foundation::EOverflow::kClip => O::kClip,
-    };
     FragmentStyleFacts {
-        margin: crate::internal::layout_input::Edges {
-            top: edge(style.MarginTop()),
-            right: edge(style.MarginRight()),
-            bottom: edge(style.MarginBottom()),
-            left: edge(style.MarginLeft()),
-        },
+        margin: FragmentStyleMargin(style),
         border: crate::internal::layout_input::Edges {
             top: f64::from(style.BorderTopWidth()) / f64::from(zoom),
             right: f64::from(style.BorderRightWidth()) / f64::from(zoom),
             bottom: f64::from(style.BorderBottomWidth()) / f64::from(zoom),
             left: f64::from(style.BorderLeftWidth()) / f64::from(zoom),
         },
-        border_styles: [
-            border(style.BorderTopStyle()),
-            border(style.BorderRightStyle()),
-            border(style.BorderBottomStyle()),
-            border(style.BorderLeftStyle()),
-        ],
+        border_styles: FragmentStyleBorderStyles(style),
         padding: crate::internal::layout_input::Edges {
             top: edge(style.PaddingTop()),
             right: edge(style.PaddingRight()),
             bottom: edge(style.PaddingBottom()),
             left: edge(style.PaddingLeft()),
         },
-        display: match style.Display() {
+        display: FragmentStyleDisplay(style),
+        position: FragmentStylePosition(style),
+        floating: FragmentStyleFloating(style),
+        writing_mode: FragmentStyleWritingMode(style),
+        direction: FragmentStyleDirection(style),
+        overflow_x: FragmentStyleOverflow(style.OverflowX()),
+        overflow_y: FragmentStyleOverflow(style.OverflowY()),
+    }
+}
+
+// Per-fact projections shared by the export above and by the live
+// PaintProperties getters (stage 2 of the Layout -> Paint export removal).
+pub(crate) fn FragmentStyleMargin(style: &ComputedStyle) -> crate::internal::layout_input::Edges {
+    let zoom = style.EffectiveZoom();
+    let edge = |value: &Length| ProjectUnzoomedLength(value, zoom).pixels.unwrap_or(0.0);
+    crate::internal::layout_input::Edges {
+        top: edge(style.MarginTop()),
+        right: edge(style.MarginRight()),
+        bottom: edge(style.MarginBottom()),
+        left: edge(style.MarginLeft()),
+    }
+}
+
+pub(crate) fn FragmentStyleBorderStyles(
+    style: &ComputedStyle,
+) -> [crate::internal::layout_input::BorderLineStyle; 4] {
+    let border = |value: foundation::EBorderStyle| {
+        crate::internal::boundary::paint_style_export::BorderStyle(value)
+    };
+    [
+        border(style.BorderTopStyle()),
+        border(style.BorderRightStyle()),
+        border(style.BorderBottomStyle()),
+        border(style.BorderLeftStyle()),
+    ]
+}
+
+pub(crate) fn FragmentStyleOverflow(
+    value: foundation::EOverflow,
+) -> crate::internal::layout_input::Overflow {
+    use crate::internal::layout_input::Overflow as O;
+    match value {
+        foundation::EOverflow::kVisible => O::kVisible,
+        foundation::EOverflow::kHidden => O::kHidden,
+        foundation::EOverflow::kScroll => O::kScroll,
+        foundation::EOverflow::kAuto | foundation::EOverflow::kOverlay => O::kAuto,
+        foundation::EOverflow::kClip => O::kClip,
+    }
+}
+
+pub(crate) fn FragmentStyleDisplay(style: &ComputedStyle) -> crate::internal::layout_input::Display {
+    use crate::internal::layout_input::Display as D;
+    match style.Display() {
             EDisplay::kInline => D::kInline,
             EDisplay::kBlock => D::kBlock,
             EDisplay::kInlineBlock => D::kInlineBlock,
@@ -951,38 +980,57 @@ pub(crate) fn ReadFragmentStyleFacts(style: &ComputedStyle) -> FragmentStyleFact
             EDisplay::kGridLanes | EDisplay::kInlineGridLanes => D::kGridLanes,
             EDisplay::kLayoutCustom | EDisplay::kInlineLayoutCustom => D::kCustom,
             EDisplay::kNone | EDisplay::kContents => D::kInline,
-        },
-        position: match style.GetPosition() {
-            foundation::EPosition::kStatic => P::kStatic,
-            foundation::EPosition::kRelative => P::kRelative,
-            foundation::EPosition::kAbsolute => P::kAbsolute,
-            foundation::EPosition::kFixed => P::kFixed,
-            foundation::EPosition::kSticky => P::kSticky,
-        },
-        floating: match style.Floating() {
-            foundation::EFloat::kNone => F::kNone,
-            foundation::EFloat::kLeft => F::kLeft,
-            foundation::EFloat::kRight => F::kRight,
-            foundation::EFloat::kInlineStart => F::kInlineStart,
-            foundation::EFloat::kInlineEnd => F::kInlineEnd,
-        },
-        writing_mode: match style.GetWritingMode() {
-            foundation::WritingMode::kHorizontalTb => {
-                crate::internal::layout_input::WritingMode::kHorizontalTb
-            }
-            foundation::WritingMode::kVerticalRl | foundation::WritingMode::kSidewaysRl => {
-                crate::internal::layout_input::WritingMode::kVerticalRl
-            }
-            foundation::WritingMode::kVerticalLr | foundation::WritingMode::kSidewaysLr => {
-                crate::internal::layout_input::WritingMode::kVerticalLr
-            }
-        },
-        direction: match style.Direction() {
-            foundation::TextDirection::kLtr => crate::internal::layout_input::TextDirection::kLtr,
-            foundation::TextDirection::kRtl => crate::internal::layout_input::TextDirection::kRtl,
-        },
-        overflow_x: overflow(style.OverflowX()),
-        overflow_y: overflow(style.OverflowY()),
+    }
+}
+
+pub(crate) fn FragmentStylePosition(
+    style: &ComputedStyle,
+) -> crate::internal::layout_input::Position {
+    use crate::internal::layout_input::Position as P;
+    match style.GetPosition() {
+        foundation::EPosition::kStatic => P::kStatic,
+        foundation::EPosition::kRelative => P::kRelative,
+        foundation::EPosition::kAbsolute => P::kAbsolute,
+        foundation::EPosition::kFixed => P::kFixed,
+        foundation::EPosition::kSticky => P::kSticky,
+    }
+}
+
+pub(crate) fn FragmentStyleFloating(
+    style: &ComputedStyle,
+) -> crate::internal::layout_input::FloatSide {
+    use crate::internal::layout_input::FloatSide as F;
+    match style.Floating() {
+        foundation::EFloat::kNone => F::kNone,
+        foundation::EFloat::kLeft => F::kLeft,
+        foundation::EFloat::kRight => F::kRight,
+        foundation::EFloat::kInlineStart => F::kInlineStart,
+        foundation::EFloat::kInlineEnd => F::kInlineEnd,
+    }
+}
+
+pub(crate) fn FragmentStyleWritingMode(
+    style: &ComputedStyle,
+) -> crate::internal::layout_input::WritingMode {
+    use crate::internal::layout_input::WritingMode as W;
+    match style.GetWritingMode() {
+        foundation::WritingMode::kHorizontalTb => W::kHorizontalTb,
+        foundation::WritingMode::kVerticalRl | foundation::WritingMode::kSidewaysRl => {
+            W::kVerticalRl
+        }
+        foundation::WritingMode::kVerticalLr | foundation::WritingMode::kSidewaysLr => {
+            W::kVerticalLr
+        }
+    }
+}
+
+pub(crate) fn FragmentStyleDirection(
+    style: &ComputedStyle,
+) -> crate::internal::layout_input::TextDirection {
+    use crate::internal::layout_input::TextDirection as T;
+    match style.Direction() {
+        foundation::TextDirection::kLtr => T::kLtr,
+        foundation::TextDirection::kRtl => T::kRtl,
     }
 }
 

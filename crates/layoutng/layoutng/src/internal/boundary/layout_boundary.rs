@@ -355,6 +355,18 @@ pub(crate) fn LiveBackgroundPaintLocation(
     }
 }
 
+pub(crate) fn LiveOverscrollBehavior(
+    behavior: EOverscrollBehavior,
+) -> crate::internal::layout_input::OverscrollBehavior {
+    use crate::internal::layout_input::OverscrollBehavior;
+    match behavior {
+        EOverscrollBehavior::kAuto => OverscrollBehavior::kAuto,
+        EOverscrollBehavior::kContain => OverscrollBehavior::kContain,
+        EOverscrollBehavior::kNone => OverscrollBehavior::kNone,
+        EOverscrollBehavior::kChain => OverscrollBehavior::kChain,
+    }
+}
+
 pub(crate) fn LiveCssClip(
     layout_box: &crate::internal::layout_box::LayoutBox,
 ) -> Option<FragmentPaintRect> {

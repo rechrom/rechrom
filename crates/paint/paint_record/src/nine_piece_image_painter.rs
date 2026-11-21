@@ -320,7 +320,7 @@ impl NinePieceImagePainter {
             width: fragment.size.width,
             height: fragment.size.height,
         };
-        if fragment.paint.display == Display::kInline
+        if fragment.paint.Display() == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
             && fragment.paint.stitched_decoration.is_some()
         {
@@ -427,7 +427,7 @@ impl NinePieceImagePainter {
             return true;
         }
         let outsets = &border_image.outsets;
-        let sliced_inline_strip = fragment.paint.display == Display::kInline
+        let sliced_inline_strip = fragment.paint.Display() == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
             && fragment.paint.stitched_decoration.is_some();
         let area = node.PixelSnappedRect(&reference_rect.map_or_else(
@@ -442,7 +442,7 @@ impl NinePieceImagePainter {
         {
             return true;
         }
-        let effective_zoom = f64::from(fragment.paint.effective_zoom);
+        let effective_zoom = f64::from(fragment.paint.EffectiveZoom());
         let image_resolution_scale = border_image.image_resolution_scale;
         if !image_resolution_scale.is_finite() || image_resolution_scale <= 0.0 {
             panic!("border image resolution scale must be finite and positive");

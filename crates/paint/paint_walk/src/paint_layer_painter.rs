@@ -30,7 +30,7 @@ fn IsFloat(node: &PaintTreeNode<'_>) -> bool {
         .fragment
         .as_deref()
         .expect("PrePaint node must own a fragment");
-    fragment.paint.HasSource() && fragment.paint.floating != FloatSide::kNone
+    fragment.paint.HasSource() && fragment.paint.Floating() != FloatSide::kNone
 }
 
 // Source: core/paint/paint_layer_painter.cc:167-190.

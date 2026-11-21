@@ -263,7 +263,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                         combine.text_top_offset,
                         combine.text_top_offset,
                         None,
-                        fragment.paint.writing_mode,
+                        fragment.paint.WritingMode(),
                     )
                 })
             });
@@ -331,7 +331,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 let auto_thickness = font_size / 10.0;
                 let used_thickness = if spelling_or_grammar {
                     f64::from(CurrentSpellingGrammarThickness(
-                        fragment.paint.effective_zoom,
+                        fragment.paint.EffectiveZoom(),
                     ))
                 } else {
                     ResolveExportedDecorationThickness(
@@ -343,7 +343,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 };
                 let (resolved_style, marker_antialias, marker_wave) = if spelling_or_grammar {
                     let (style, antialias, wave) =
-                        CurrentSpellingGrammarLineStyle(fragment.paint.effective_zoom);
+                        CurrentSpellingGrammarLineStyle(fragment.paint.EffectiveZoom());
                     let style = match style {
                         StrokeStyle::kSolidStroke => TextDecorationStyle::kSolid,
                         StrokeStyle::kDottedStroke => TextDecorationStyle::kDotted,

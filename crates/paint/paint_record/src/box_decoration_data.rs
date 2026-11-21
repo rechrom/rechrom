@@ -39,7 +39,7 @@ impl BoxDecorationData {
                 AppearanceValue::kNone | AppearanceValue::kAuto
             )
         });
-        let has_background = fragment.paint.has_background
+        let has_background = fragment.paint.HasBackground()
             || fragment.paint.is_page_border_box
             || style.background_color().alpha > 0.0
             || style.has_background_images()
@@ -54,7 +54,7 @@ impl BoxDecorationData {
                 || widths.iter().enumerate().any(|(edge, width)| {
                     *width > 0.0
                         && !matches!(
-                            fragment.paint.border_styles[edge],
+                            fragment.paint.BorderStyles()[edge],
                             BorderLineStyle::kNone | BorderLineStyle::kHidden
                         )
                 }));
@@ -161,7 +161,7 @@ impl BoxDecorationData {
             *width > 0.0
                 && style.border_colors()[edge].alpha >= 1.0
                 && !matches!(
-                    fragment.paint.border_styles[edge],
+                    fragment.paint.BorderStyles()[edge],
                     BorderLineStyle::kNone
                         | BorderLineStyle::kHidden
                         | BorderLineStyle::kDotted

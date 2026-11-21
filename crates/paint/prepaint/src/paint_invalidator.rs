@@ -80,7 +80,7 @@ impl PaintInvalidator {
     ) -> bool {
         if fragment.paint.IsSVGHiddenContainer()
             || matches!(
-                fragment.paint.display,
+                fragment.paint.Display(),
                 Display::kTableColumn | Display::kTableColumnGroup
             )
         {

@@ -113,7 +113,7 @@ impl NinePieceImageGeometry {
             width: fragment.size.width,
             height: fragment.size.height,
         };
-        if fragment.paint.display == Display::kInline
+        if fragment.paint.Display() == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
             && fragment.paint.stitched_decoration.is_some()
         {
@@ -198,7 +198,7 @@ impl NinePieceImageGeometry {
         {
             return Vec::new();
         }
-        let effective_zoom = f64::from(fragment.paint.effective_zoom);
+        let effective_zoom = f64::from(fragment.paint.EffectiveZoom());
         let document_image_container_key = fetched.and_then(|resource| {
             ResolveDocumentImageContainerKey(
                 resource,

@@ -16,7 +16,7 @@ pub(super) fn ExportStickyPaintProperties(
 ) {
     output.sticky_offset = Offset::default();
     output.sticky_constraint = None;
-    if output.position == Position::kSticky {
+    if output.Position() == Position::kSticky {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
         if !box_model.is_null() {
             let box_model = unsafe { &*box_model };

@@ -570,7 +570,7 @@ fn PaintColumnStyle(
             positioning,
             image,
             image_orientation,
-            f64::from(table_fragment.paint.effective_zoom),
+            f64::from(table_fragment.paint.EffectiveZoom()),
         );
         let resolved = ResolveBackgroundTile(layer, positioning, tile_size);
         let tile = resolved.tile_rect;
@@ -593,7 +593,7 @@ fn PaintColumnStyle(
                     width: tile.width,
                     height: tile.height,
                 },
-                f64::from(table_fragment.paint.effective_zoom),
+                f64::from(table_fragment.paint.EffectiveZoom()),
                 table_fragment.resources.as_deref(),
                 (!style.color_scheme_flags_is_normal())
                     .then_some(u8::from(style.used_dark_color_scheme())),
@@ -775,7 +775,7 @@ fn DrawEdge(
         .as_deref()
         .expect("paint tree node has a fragment");
     let horizontal =
-        edge.IsInlineAxis() == (fragment.paint.writing_mode == WritingMode::kHorizontalTb);
+        edge.IsInlineAxis() == (fragment.paint.WritingMode() == WritingMode::kHorizontalTb);
     let style = edge.BorderStyle();
     let color = InvertColorIfNeeded(
         &fragment.paint.style,
@@ -932,7 +932,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                     .as_deref()
                     .expect("table child has a fragment")
                     .paint
-                    .display
+                    .Display()
                     == Display::kTableCell
                 {
                     cells.push(child);
@@ -967,7 +967,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             size: data.columns_size,
             ..Default::default()
         };
-        let logical_block_size = if fragment.paint.writing_mode == WritingMode::kHorizontalTb {
+        let logical_block_size = if fragment.paint.WritingMode() == WritingMode::kHorizontalTb {
             columns_rect.height
         } else {
             columns_rect.width
@@ -982,8 +982,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                 column.inline_size,
                 logical_block_size,
                 &converter_space,
-                fragment.paint.writing_mode,
-                fragment.paint.direction,
+                fragment.paint.WritingMode(),
+                fragment.paint.Direction(),
             );
             positioning.x += columns_rect.x;
             positioning.y += columns_rect.y;
@@ -1183,8 +1183,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                     inline_size,
                     block_size,
                     section,
-                    fragment.paint.writing_mode,
-                    fragment.paint.direction,
+                    fragment.paint.WritingMode(),
+                    fragment.paint.Direction(),
                 );
                 rect.x += self.node.paint_offset.x + section.offset.x;
                 rect.y += self.node.paint_offset.y + section.offset.y;

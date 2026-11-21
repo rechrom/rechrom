@@ -188,7 +188,7 @@ pub(super) fn ExportMathMLPaintData(
         source.operator_shape_result_view.Get(),
         box_fragment.Style().ComputedFontSize() as f64,
         baseline,
-        paint.writing_mode,
+        paint.WritingMode(),
         &mut data.operator_glyph_runs,
     );
     paint.mathml = Some(Arc::new(data));

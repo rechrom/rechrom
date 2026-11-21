@@ -226,7 +226,7 @@ impl CompositingReasonFinder {
         if fragment.paint.sticky_constraint.is_some() {
             reasons.Put(CompositingReason::kStickyPosition);
         }
-        if fragment.paint.needs_anchor_position_scroll_adjustment {
+        if fragment.paint.NeedsAnchorPositionScrollAdjustment() {
             reasons.Put(CompositingReason::kAnchorPosition);
         }
         if style.has_backdrop_filters() {

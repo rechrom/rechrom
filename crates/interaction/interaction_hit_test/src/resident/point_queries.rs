@@ -102,7 +102,7 @@ fn LocalPoint(
     // borrow its style without establishing another transform node.
     if fragment.paint.establishes_paint_state
         && fragment.paint.HasSource()
-        && fragment.paint.position == layoutng_assembly::internal::layout_input::Position::kSticky
+        && fragment.paint.Position() == layoutng_assembly::internal::layout_input::Position::kSticky
     {
         point.x -= fragment.paint.sticky_offset.x;
         point.y -= fragment.paint.sticky_offset.y;
@@ -452,7 +452,7 @@ fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
         return fragment.paint.style.pointer_events_bounding_box;
     }
     !matches!(
-        fragment.paint.display,
+        fragment.paint.Display(),
         Display::kTableRow
             | Display::kTableSection
             | Display::kTableHeaderGroup
@@ -532,7 +532,7 @@ struct HitLayer<'a> {
 fn ChildrenAreFlexOrGridItems(fragment: &FragmentPaintData) -> bool {
     fragment.paint.HasSource()
         && matches!(
-            fragment.paint.display,
+            fragment.paint.Display(),
             Display::kFlex | Display::kGrid | Display::kGridLanes
         )
 }
@@ -559,7 +559,7 @@ fn CollectHitLayers<'a>(
     }
     let children_are_flex_or_grid_items = ChildrenAreFlexOrGridItems(&fragment);
     for child in fragment.Children() {
-        let (child_point, child_parent) = if child.paint.fixed_to_view {
+        let (child_point, child_parent) = if child.paint.FixedToView() {
             (root_point, Offset::default())
         } else {
             (point, ChildOrigin(&fragment, absolute))
@@ -662,9 +662,9 @@ fn HitTestNormalFlowPhase<'f>(
             {
                 continue;
             }
-            let child_is_float = child.paint.floating != FloatSide::kNone;
+            let child_is_float = child.paint.Floating() != FloatSide::kNone;
             let child_is_atomic = child.paint.painted_atomically;
-            let (child_point, child_parent) = if child.paint.fixed_to_view {
+            let (child_point, child_parent) = if child.paint.FixedToView() {
                 (root_point, Offset::default())
             } else {
                 (point, ChildOrigin(&fragment, absolute))
@@ -959,7 +959,7 @@ pub fn TextPositionAtPoint<'a>(
             return;
         }
         for child in fragment.Children().into_iter().rev() {
-            let (child_point, child_parent) = if child.paint.fixed_to_view {
+            let (child_point, child_parent) = if child.paint.FixedToView() {
                 (root_point, Offset::default())
             } else {
                 (point, ChildOrigin(&fragment, absolute))

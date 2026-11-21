@@ -6896,7 +6896,7 @@ impl Page {
             if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
                 if let Some(index) = document.FindNodeById(node.node_id) {
                     if document.AllowsResponsiveImageAutoSizes(index) {
-                        let zoom = node.paint.effective_zoom.max(f32::MIN_POSITIVE);
+                        let zoom = node.paint.EffectiveZoom().max(f32::MIN_POSITIVE);
                         let width = (node.content_size.width as f32 / zoom).round() as f64;
                         output.push((index, width));
                     }
@@ -6994,7 +6994,7 @@ impl Page {
                     .find(|image| image.id == id)
                     .filter(|image| image.IsDocumentImage())
                 {
-                    let zoom = f64::from(node.paint.effective_zoom).max(f64::MIN_POSITIVE);
+                    let zoom = f64::from(node.paint.EffectiveZoom()).max(f64::MIN_POSITIVE);
                     let width = (replaced.size.width / zoom).round().max(1.0) as u32;
                     let height = (replaced.size.height / zoom).round().max(1.0) as u32;
                     let mut key =

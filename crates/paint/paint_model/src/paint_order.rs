@@ -45,7 +45,7 @@ pub fn ClassifyFragmentPaintLayer(
     let style = fragment.paint.HasSource().then_some(&fragment.paint.style);
     let establishes = fragment.paint.establishes_paint_state;
     let position = if fragment.paint.HasSource() {
-        fragment.paint.position
+        fragment.paint.Position()
     } else {
         Position::kStatic
     };

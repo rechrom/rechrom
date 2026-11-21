@@ -98,7 +98,7 @@ impl<'n, 'f> HighestLayers<'n, 'f> {
             .as_deref()
             .expect("PrePaint node must own a fragment")
             .paint
-            .position
+            .Position()
         {
             Position::kAbsolute => LayerType::AbsolutePosition,
             Position::kFixed => LayerType::FixedPosition,

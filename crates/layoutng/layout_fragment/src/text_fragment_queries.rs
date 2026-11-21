@@ -14,7 +14,7 @@ pub(super) fn paint_glyph_runs(
     item.IsText().then(|| {
         crate::internal::boundary::layout_boundary::BuildPaintGlyphRuns(
             item,
-            cursor.PaintData().paint.writing_mode,
+            cursor.PaintData().paint.WritingMode(),
         )
     })
 }

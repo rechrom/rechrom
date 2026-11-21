@@ -61,7 +61,7 @@ impl OverriddenCullRectScope {
         // remain distinct from the logical/stacking traversal parent.
         let mut context = context.clone();
         if !starting {
-            match fragment.paint.position {
+            match fragment.paint.Position() {
                 Position::kAbsolute => context.current = context.absolute.clone(),
                 Position::kFixed => context.current = context.fixed.clone(),
                 _ => {}
@@ -92,7 +92,7 @@ impl OverriddenCullRectScope {
             let mut local_state = node.properties.nodes.clone();
             // source.cc:454-486: a viewport-fixed paint-offset translation
             // uses the viewport clip, ignoring movable non-container clips.
-            if fragment.paint.position == Position::kFixed
+            if fragment.paint.Position() == Position::kFixed
                 && node
                     .paint_offset_translation
                     .as_ref()

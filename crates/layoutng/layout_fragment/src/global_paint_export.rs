@@ -67,7 +67,7 @@ pub(super) fn ExportCanvasBackground(
                 .map_or(cursor.size, |decoration| decoration.size);
             return Some(CanvasBackgroundPaintData {
                 style: cursor.paint.style.clone(),
-                effective_zoom: cursor.paint.effective_zoom,
+                effective_zoom: cursor.paint.EffectiveZoom(),
                 document_element_node_id: 0,
                 previous_document_element_geometry: cursor.paint.previous_box_geometry,
                 document_element_paint_offset: Offset::default(),
@@ -83,13 +83,9 @@ pub(super) fn ExportCanvasBackground(
                 },
                 document_element_scrollable_overflow: cursor.paint.scrollable_overflow,
                 document_element_has_transform: false,
-                background_fill_layer_count: cursor.paint.background_fill_layer_count,
-                background_any_local_attachment_image: cursor
-                    .paint
-                    .background_any_local_attachment_image,
-                background_any_layer_uses_content_box: cursor
-                    .paint
-                    .background_any_layer_uses_content_box,
+                background_fill_layer_count: cursor.paint.BackgroundFillLayerCount(),
+                background_any_local_attachment_image: cursor.paint.BackgroundAnyLocalAttachmentImage(),
+                background_any_layer_uses_content_box: cursor.paint.BackgroundAnyLayerUsesContentBox(),
             });
         }
         cursor

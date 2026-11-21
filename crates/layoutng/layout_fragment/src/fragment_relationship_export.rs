@@ -96,7 +96,7 @@ fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
         && input.kind == FragmentKind::kBox
         && input.paint.HasSource()
         && input.paint.establishes_paint_state
-        && input.paint.display == Display::kInline
+        && input.paint.Display() == Display::kInline
         && input.paint.box_decoration_break == BoxDecorationBreak::kSlice)
         .then_some((input.node_id, input.fragmentainer_instance_id))
 }
@@ -163,7 +163,7 @@ fn StitchGroups(groups: HashMap<(u64, u64), Vec<*mut FragmentPaintData>>) {
             continue;
         }
         let first = unsafe { &*fragments[0] };
-        let horizontal = first.paint.writing_mode == WritingMode::kHorizontalTb;
+        let horizontal = first.paint.WritingMode() == WritingMode::kHorizontalTb;
         let total_inline_size: f64 = fragments
             .iter()
             .map(|fragment| {
@@ -183,7 +183,7 @@ fn StitchGroups(groups: HashMap<(u64, u64), Vec<*mut FragmentPaintData>>) {
             } else {
                 fragment.size.height
             };
-            let offset = if fragment.paint.direction == TextDirection::kLtr {
+            let offset = if fragment.paint.Direction() == TextDirection::kLtr {
                 before
             } else {
                 total_inline_size - before - inline_size

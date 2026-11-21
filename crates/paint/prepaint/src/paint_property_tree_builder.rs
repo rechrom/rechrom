@@ -218,7 +218,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 1.0
             };
         let position = if fragment.paint.HasSource() {
-            fragment.paint.position
+            fragment.paint.Position()
         } else {
             Position::kStatic
         };
@@ -436,7 +436,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     geometry_mapper_cache: Default::default(),
                     scroll_parent_scroll_translation: if *role
                         == PaintPropertyRole::PaintOffsetTranslation
-                        && fragment.paint.fixed_to_view
+                        && fragment.paint.FixedToView()
                     {
                         self.walk
                             .root_fixed_position
@@ -608,7 +608,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             graph,
                             reference,
                             clip_path_paint_offset,
-                            f64::from(fragment.paint.effective_zoom),
+                            f64::from(fragment.paint.EffectiveZoom()),
                             svg_effect_child,
                             clip_path.reference_viewport,
                             fragment
@@ -650,7 +650,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                                 height: reference.height,
                             },
                             if svg_effect_child {
-                                1.0 / f64::from(fragment.paint.effective_zoom)
+                                1.0 / f64::from(fragment.paint.EffectiveZoom())
                                     .max(f64::MIN_POSITIVE)
                             } else {
                                 1.0
@@ -772,7 +772,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
                 1.0
             } else {
-                f64::from(fragment.paint.effective_zoom)
+                f64::from(fragment.paint.EffectiveZoom())
             };
             let inverse_filter_scale = 1.0 / filter_reference_scale.max(f64::MIN_POSITIVE);
             // Sources: paint_layer.cc:2606-2611 and
@@ -1053,7 +1053,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let filter_reference_scale = if IsSvgEffectChild(fragment.paint.source_kind) {
                 1.0
             } else {
-                f64::from(fragment.paint.effective_zoom)
+                f64::from(fragment.paint.EffectiveZoom())
             };
             let inverse_filter_scale = 1.0 / filter_reference_scale.max(f64::MIN_POSITIVE);
             // Sources: paint_layer.cc:2575-2589 and
@@ -1604,7 +1604,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                                 paint_model::paint_property_tree::PaintCompositedScrollingPreference::Default
                             };
                         state.prevent_scroll_axis_locking =
-                            fragment.paint.prevent_scroll_axis_locking;
+                            fragment.paint.PreventScrollAxisLocking();
                         // Source: core/paint/paint_property_tree_builder.cc:3436-3439.
                         if self
                             .walk
@@ -1614,8 +1614,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             state.main_thread_repaint_reasons |= 1;
                         }
                         state.overscroll_behavior = [
-                            fragment.paint.overscroll_behavior_x,
-                            fragment.paint.overscroll_behavior_y,
+                            fragment.paint.OverscrollBehaviorX(),
+                            fragment.paint.OverscrollBehaviorY(),
                         ];
                         if let Some(scroll) = fragment.paint.scroll_container.as_ref() {
                             state.compositor_element_id = scroll.compositor_element_id;
@@ -1703,7 +1703,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         .map_or_else(
                             || {
                                 matches!(
-                                    fragment.paint.overflow_x,
+                                    fragment.paint.OverflowX(),
                                     Overflow::kScroll | Overflow::kAuto
                                 )
                             },
@@ -1712,7 +1712,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     user_scrollable_vertical: fragment.paint.scroll_container.as_ref().map_or_else(
                         || {
                             matches!(
-                                fragment.paint.overflow_y,
+                                fragment.paint.OverflowY(),
                                 Overflow::kScroll | Overflow::kAuto
                             )
                         },
@@ -1839,7 +1839,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         }
         let children_are_flex_or_grid_items = fragment.paint.HasSource()
             && matches!(
-                fragment.paint.display,
+                fragment.paint.Display(),
                 Display::kFlex
                     | Display::kInlineFlex
                     | Display::kGrid

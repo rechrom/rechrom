@@ -264,7 +264,7 @@ impl ScrollPaintPropertyIndex {
             logical_tree_order: fragment.paint.logical_tree_order,
         });
         self.by_source_id.entry(source_id).or_default().push(entry);
-        if fragment.paint.position == Position::kSticky {
+        if fragment.paint.Position() == Position::kSticky {
             self.sticky_fragments.push(entry);
         }
     }
