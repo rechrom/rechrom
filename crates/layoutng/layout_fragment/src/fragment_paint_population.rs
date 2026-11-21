@@ -319,7 +319,6 @@ fn PopulateInlineItemLocalPaintData(
                 output.kind,
                 output.offset,
                 output.size,
-                output.content_size,
                 output.text_start,
                 output.text_end,
                 output.text_paint_timing_non_whitespace,
@@ -373,7 +372,6 @@ fn PopulateInlineItemLocalPaintData(
         kind,
         offset,
         size,
-        content_size,
         text_start,
         text_end,
         text_paint_timing_non_whitespace,
@@ -382,7 +380,6 @@ fn PopulateInlineItemLocalPaintData(
         output.kind = kind;
         output.offset = offset;
         output.size = size;
-        output.content_size = content_size;
         output.text_start = text_start;
         output.text_end = text_end;
         output.text_paint_timing_non_whitespace = text_paint_timing_non_whitespace;
@@ -407,9 +404,7 @@ fn PopulateInlineItemLocalPaintData(
         width: Number(rect.size.width),
         height: Number(rect.size.height),
     };
-    {
-        output.content_size = output.size;
-    }
+    // The content size is read live (ResidentBoxGeometry::ViewContentSize).
     // Box fragments with a live style resolve nine-piece images in Paint
     // (ResidentBoxGeometry::BorderImage); only detached projections store them.
     if purpose == LayoutUpdateKind::Paint
@@ -423,7 +418,15 @@ fn PopulateInlineItemLocalPaintData(
             unsafe { &*effective_style }
         };
         let borders = output.Borders();
-        ExportNinePieceImages(style, output.size, resources, borders, &mut output.paint);
+        let stitched_size = output.ViewStitchedDecoration().map(|stitched| stitched.size);
+        ExportNinePieceImages(
+            style,
+            output.size,
+            stitched_size,
+            resources,
+            borders,
+            &mut output.paint,
+        );
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportInlineInkOverflow(item, &mut output.paint);
@@ -467,9 +470,6 @@ fn PopulateInlineItemLocalPaintData(
                     .instances
                     .entry(box_fragment as *const PhysicalBoxFragment)
                     .or_insert(output.fragment_instance_id);
-                {
-                    output.content_size = ExportContentSize(box_fragment);
-                }
                 if item.DescendantsCount() <= 1 {
                     let nested_items = box_fragment.Items();
                     for child in box_fragment.Children() {
@@ -747,7 +747,7 @@ fn ReplaySubtree(
 fn ReplayCheckSnapshot(
     entries: &[PopulationReplayEntry],
     paint_state: &crate::layout_engine::LayoutPaintState,
-) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>> {
+) -> Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>> {
     entries
         .iter()
         .map(|entry| {
@@ -758,7 +758,6 @@ fn ReplayCheckSnapshot(
                     slot.node_id,
                     slot.offset,
                     slot.size,
-                    slot.content_size,
                     slot.fragmentainer_instance_id,
                     slot.text_start,
                     slot.text_end,
@@ -777,7 +776,7 @@ fn ReplayCheckSnapshot(
 /// prediction; returns the number of mismatching slots.
 fn ReplayCheckCompare(
     entries: &[PopulationReplayEntry],
-    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>>,
+    before: Vec<Option<(PaintPropertiesHandle, (u64, Offset, Size, u64, Option<u32>, Option<u32>, bool, FragmentKind, u64, u64), PrePaintInvalidation)>>,
     paint_state: &crate::layout_engine::LayoutPaintState,
 ) -> usize {
     let mut mismatches = 0;
@@ -794,7 +793,6 @@ fn ReplayCheckCompare(
             slot.node_id,
             slot.offset,
             slot.size,
-            slot.content_size,
             slot.fragmentainer_instance_id,
             slot.text_start,
             slot.text_end,
@@ -927,15 +925,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     // and resources proven by RetainedPaintProperties) is therefore still
     // current; publication-relative and source-object facts are re-derived.
     let reuse_fragment_geometry = retained_invalidation.is_some() && binding.same_owner;
-    let mut retained_content_size = None;
     if let Some(invalidation) = retained_invalidation {
         assert!(
             slot_retained,
             "retained paint properties have no resident slot"
         );
-        if reuse_fragment_geometry {
-            retained_content_size = Some(output.content_size);
-        }
         output.prepare_for_publication();
         output.pre_paint_invalidation = invalidation;
         RefreshRetainedTreeOrder(object, sources, output);
@@ -983,12 +977,8 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         width: Number(fragment.Size().width),
         height: Number(fragment.Size().height),
     };
-    {
-        output.content_size = output.size;
-    }
-    {
-        output.fragmentainer_instance_id = fragmentainer_instance_id;
-    }
+    // The content size is read live (ResidentBoxGeometry::ViewContentSize).
+    output.fragmentainer_instance_id = fragmentainer_instance_id;
     if !fragment.IsBox() {
         paint_state_owners.population_stats.RecordLocal(local_timing);
         paint_state_owners.replay_next.entries[replay_begin.0].replayable = reuse_fragment_geometry
@@ -1014,7 +1004,15 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 unsafe { &*effective_style }
             };
             let borders = output.Borders();
-            ExportNinePieceImages(style, output.size, resources, borders, &mut output.paint);
+            let stitched_size = output.ViewStitchedDecoration().map(|stitched| stitched.size);
+            ExportNinePieceImages(
+                style,
+                output.size,
+                stitched_size,
+                resources,
+                borders,
+                &mut output.paint,
+            );
         }
     }
     if box_fragment.IsFragmentainerBox() {
@@ -1062,10 +1060,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     paint_state_owners.replay_next.entries[replay_begin.0].paint_state_owner =
         Some(box_fragment as *const PhysicalBoxFragment);
     update_paint!(output.paint, establishes_paint_state, establishes_paint_state);
-    output.content_size = match retained_content_size {
-        Some(size) if reuse_fragment_geometry => size,
-        _ => ExportContentSize(box_fragment),
-    };
     paint_state_owners.population_stats.RecordLocal(local_timing);
     let mut descendant_changed = false;
     // Self qualification: a retained, same-owner, clean slot with no state

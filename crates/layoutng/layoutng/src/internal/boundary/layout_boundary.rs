@@ -175,7 +175,7 @@ use layout_fragment_text_paint_export::{
 };
 #[path = "../../../../layout_fragment/src/fragment_geometry_export.rs"]
 mod layout_fragment_fragment_geometry_export;
-use layout_fragment_fragment_geometry_export::{ExportBoxPaintGeometry, ExportContentSize};
+use layout_fragment_fragment_geometry_export::ExportBoxPaintGeometry;
 pub(crate) use layout_fragment_fragment_geometry_export::{
     ExportReplacedContentPaintData, ExportSvgTextPaintData, LiveScrollContainer,
     ExportSelfOutlineGeometry, ExportStitchedDecorationData, LiveBoxDecorationBreak,
