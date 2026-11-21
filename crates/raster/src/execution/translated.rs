@@ -1086,15 +1086,46 @@ impl font_engine::FontBackend for SkiaFontBackend {
         synthetic_bold: bool,
         synthetic_italic: bool,
     ) -> font_engine::FontBackendGlyphMetrics {
+        // Source: skia/ext/skia_text_metrics.cc SkFontGetBoundsForGlyph.
+        // Chromium measures ink bounds from the glyph outline only on Apple
+        // platforms (and caches them there, SimpleFontData::BoundsForGlyph);
+        // elsewhere it reads the strike's cached glyph bounds and rounds them
+        // out for non-subpixel fonts. Building an outline per query made every
+        // ink-overflow recalculation of SVG text rebuild glyph paths.
         let font = self.Font(size, synthetic_bold, synthetic_italic);
-        let advance = unsafe { font.getWidth(glyph) }.expect("Skia glyph width must be available");
-        let bounds = unsafe { font.getPath(glyph) }
-            .expect("Skia glyph path query must succeed")
-            .map(|path| *path.getBounds())
-            .unwrap_or_else(|| {
-                unsafe { font.getGlyphBounds(glyph, None) }
-                    .expect("Skia bitmap glyph bounds must be available")
-            });
+        #[cfg(target_vendor = "apple")]
+        let (advance, bounds) = {
+            let advance =
+                unsafe { font.getWidth(glyph) }.expect("Skia glyph width must be available");
+            let bounds = unsafe { font.getPath(glyph) }
+                .expect("Skia glyph path query must succeed")
+                .map(|path| *path.getBounds())
+                .unwrap_or_else(|| {
+                    unsafe { font.getGlyphBounds(glyph, None) }
+                        .expect("Skia bitmap glyph bounds must be available")
+                });
+            (advance, bounds)
+        };
+        #[cfg(not(target_vendor = "apple"))]
+        let (advance, bounds) = {
+            let mut advance = 0.0;
+            let mut bounds = skia::src::core::SkRect::SkRect::MakeEmpty();
+            unsafe {
+                font.getWidthsBounds(
+                    &[glyph],
+                    std::slice::from_mut(&mut advance),
+                    std::slice::from_mut(&mut bounds),
+                    None,
+                )
+            }
+            .expect("Skia glyph metrics must be available");
+            if !font.isSubpixel() {
+                let mut rounded = bounds;
+                bounds.roundOutRectTo(&mut rounded);
+                bounds = rounded;
+            }
+            (advance, bounds)
+        };
         font_engine::FontBackendGlyphMetrics {
             x: bounds.fLeft,
             y: bounds.fTop,
