@@ -28,7 +28,6 @@ struct FragmentEntry {
 
 pub(crate) struct ScrollPaintPropertyIndex {
     root: *mut LayoutObject,
-    sources: Arc<Vec<*mut LayoutObject>>,
     // Preorder is required for nested sticky constraints, just as in the full
     // refresh. Include anonymous source sticky objects even without an output.
     sticky_objects: Arc<Vec<*mut LayoutObject>>,
@@ -94,25 +93,25 @@ impl ScrollPaintPropertyIndex {
         replay: Option<&[PopulationReplayEntry]>,
     ) -> Self {
         let root = root as *mut LayoutObject;
-        let (sources, sticky_objects) = cached_objects.unwrap_or_else(|| {
-            let mut sources = Vec::new();
-            let mut sticky_objects = Vec::new();
-            let mut object = root;
-            while !object.is_null() {
-                let current = unsafe { &*object };
-                if !current.GetNode().is_null() {
-                    sources.push(object);
+        // Fragments name their source through the bound LayoutObject, so only
+        // the cached sticky list is needed from the boundary object index.
+        let sticky_objects = match cached_objects {
+            Some((_, sticky_objects)) => sticky_objects,
+            None => {
+                let mut sticky_objects = Vec::new();
+                let mut object = root;
+                while !object.is_null() {
+                    let current = unsafe { &*object };
+                    if current.StyleRef().HasStickyConstrainedPosition() {
+                        sticky_objects.push(object);
+                    }
+                    object = current.NextInPreOrder(root);
                 }
-                if current.StyleRef().HasStickyConstrainedPosition() {
-                    sticky_objects.push(object);
-                }
-                object = current.NextInPreOrder(root);
+                Arc::new(sticky_objects)
             }
-            (Arc::new(sources), Arc::new(sticky_objects))
-        });
+        };
         let mut index = reuse.unwrap_or_else(|| Self {
             root,
-            sources: Arc::new(Vec::new()),
             sticky_objects: Arc::new(Vec::new()),
             fragments: Vec::new(),
             path_components: Vec::new(),
@@ -120,7 +119,6 @@ impl ScrollPaintPropertyIndex {
             sticky_fragments: Vec::new(),
         });
         index.root = root;
-        index.sources = sources;
         index.sticky_objects = sticky_objects;
         index.fragments.clear();
         index.path_components.clear();
@@ -182,7 +180,7 @@ impl ScrollPaintPropertyIndex {
             let fragment = unsafe { &*entry.fragment };
             if !fragment.paint.HasSource()
                 || fragment.ViewNodeId() != entry.node_id
-                || fragment.paint.logical_tree_order != entry.logical_tree_order
+                || fragment.paint.LogicalTreeOrder() != entry.logical_tree_order
             {
                 return false;
             }
@@ -198,10 +196,8 @@ impl ScrollPaintPropertyIndex {
         for entry in entries {
             let entry = &self.fragments[entry];
             let path = &self.path_components[entry.path_start..entry.path_start + entry.path_len];
-            let own_changed = refresh_fragment_scroll_paint_properties(
-                unsafe { &mut *entry.fragment },
-                &self.sources,
-            );
+            let own_changed =
+                refresh_fragment_scroll_paint_properties(unsafe { &mut *entry.fragment });
             // The refreshed object republished its own dirty-bit snapshot.
             // Its ancestors carry DescendantNeedsPaintPropertyUpdate from the
             // scroll/sticky SetNeedsPaintPropertyUpdate propagation; publish
@@ -209,10 +205,7 @@ impl ScrollPaintPropertyIndex {
             // paint_layer_scrollable_area.cc:2417-2440).
             for &ancestor in &path[..path.len().saturating_sub(1)] {
                 if republished_ancestors.insert(ancestor) {
-                    refresh_fragment_pre_paint_invalidation(
-                        unsafe { &mut *ancestor },
-                        &self.sources,
-                    );
+                    refresh_fragment_pre_paint_invalidation(unsafe { &mut *ancestor });
                 }
             }
             if own_changed {
@@ -245,18 +238,9 @@ impl ScrollPaintPropertyIndex {
         if !fragment.paint.HasSource() {
             return;
         }
-        let direct = fragment.paint.SourceObjectPointer();
-        let object = if direct.is_null() {
-            fragment
-                .paint
-                .logical_tree_order
-                .checked_sub(1)
-                .and_then(|order| usize::try_from(order).ok())
-                .and_then(|order| self.sources.get(order).copied())
-                .unwrap_or(std::ptr::null_mut())
-        } else {
-            direct
-        };
+        // Population binds every sourced slot to its LayoutObject; HasSource()
+        // reads that binding, so the bound owner is the source object.
+        let object = fragment.paint.SourceObjectPointer();
         if object.is_null() {
             return;
         }
@@ -278,7 +262,7 @@ impl ScrollPaintPropertyIndex {
             fragment: input,
             node_id: fragment.ViewNodeId(),
             source_id,
-            logical_tree_order: fragment.paint.logical_tree_order,
+            logical_tree_order: fragment.paint.LogicalTreeOrder(),
         });
         self.by_source_id.entry(source_id).or_default().push(entry);
         if fragment.paint.Position() == Position::kSticky {

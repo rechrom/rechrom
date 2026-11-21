@@ -8594,7 +8594,7 @@ impl Page {
                 output: &mut HashMap<u64, Membership>,
             ) {
                 let (start, end) = selection.Ordered();
-                let order = fragment.paint.logical_tree_order;
+                let order = fragment.paint.LogicalTreeOrder();
                 if matches!(
                     fragment.ViewKind(),
                     FragmentKind::kText | FragmentKind::kGeneratedText

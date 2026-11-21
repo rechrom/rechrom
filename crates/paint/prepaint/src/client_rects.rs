@@ -202,7 +202,7 @@ fn AppendChild(nodes: &mut [GeometryNode<'_>], parent: usize, child: usize) {
 }
 
 fn FirstLogicalTreeOrder(nodes: &[GeometryNode<'_>], index: usize) -> u64 {
-    let order = nodes[index].fragment.paint.logical_tree_order;
+    let order = nodes[index].fragment.paint.LogicalTreeOrder();
     if order != 0 {
         return order;
     }
@@ -450,7 +450,7 @@ fn PrepareOrder(
         }
         child = nodes[child].next_sibling;
     }
-    let own = nodes[index].fragment.paint.logical_tree_order;
+    let own = nodes[index].fragment.paint.LogicalTreeOrder();
     orders[index] = if own != 0 {
         own
     } else if first != u64::MAX {
@@ -465,7 +465,7 @@ fn PrepareOrder(
 fn RestoreLogicalSiblingOrder(nodes: &mut [GeometryNode<'_>]) {
     if !nodes
         .iter()
-        .any(|node| node.fragment.paint.logical_tree_order != 0)
+        .any(|node| node.fragment.paint.LogicalTreeOrder() != 0)
     {
         return;
     }

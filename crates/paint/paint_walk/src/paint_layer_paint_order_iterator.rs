@@ -324,7 +324,7 @@ pub(crate) fn CollectPaintLayerChildren<'n, 'f>(
                 .as_deref()
                 .expect("PrePaint node must own a fragment")
                 .paint
-                .logical_tree_order
+                .LogicalTreeOrder()
         });
     collector
         .entries
