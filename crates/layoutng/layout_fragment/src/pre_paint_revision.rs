@@ -292,9 +292,8 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
         || fixed_background;
     let images = paint.replaced_is_image
         || paint.VideoFrameResourceId().is_some()
-        || paint
-            .replaced_content
-            .as_ref()
+        || fragment
+            .ViewReplacedContent()
             .is_some_and(|content| content.is_canvas)
         || style_images
         || fragment.ResidentBoxFragment().is_some_and(|box_fragment| box_fragment.IsTable())

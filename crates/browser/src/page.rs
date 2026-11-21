@@ -6894,7 +6894,7 @@ impl Page {
             node: PaintFragmentCursor<'_>,
             output: &mut Vec<(usize, f64)>,
         ) {
-            if node.kind == FragmentKind::kBox && node.paint.replaced_content.is_some() {
+            if node.kind == FragmentKind::kBox && node.ViewReplacedContent().is_some() {
                 if let Some(index) = document.FindNodeById(node.node_id) {
                     if document.AllowsResponsiveImageAutoSizes(index) {
                         let zoom = node.paint.EffectiveZoom().max(f32::MIN_POSITIVE);
@@ -6988,7 +6988,7 @@ impl Page {
         ) {
             if let (Some(id), Some(replaced)) = (
                 node.paint.style.image_resource_id,
-                node.paint.replaced_content.as_ref(),
+                node.ViewReplacedContent().as_ref(),
             ) {
                 if let Some(image) = images
                     .iter()

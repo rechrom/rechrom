@@ -169,11 +169,6 @@ pub(super) fn refresh_retained_paint_inputs(
                 current.background_any_default_attachment_image;
             node.paint.background_any_layer_uses_content_box =
                 current.background_any_layer_uses_content_box;
-            if unsafe { &*object }.IsVideo() {
-                node.paint.replaced_content = Some(ExportReplacedContentPaintData(
-                    object.cast::<LayoutReplaced>(),
-                ));
-            }
         }
         if let Some(&item) = ink_items.get(&(
             node.paint.DisplayItemClientId(),

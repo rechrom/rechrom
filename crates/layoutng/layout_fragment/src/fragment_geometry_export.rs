@@ -222,10 +222,6 @@ pub(super) fn ExportBoxPaintGeometry(
                 }
             };
         }
-        let replaced = DynamicTo::<LayoutReplaced>(box_fragment.GetLayoutObject());
-        if !replaced.is_null() {
-            paint.replaced_content = Some(ExportReplacedContentPaintData(replaced));
-        }
     }
     // Borders, padding and included sides are read from this resident
     // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
