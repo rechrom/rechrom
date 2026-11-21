@@ -4138,8 +4138,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             blue: 0.0,
             alpha: 1.0,
         };
-        let svg = fragment.paint.svg_text.as_ref();
-        if svg.is_some_and(|svg| svg.hidden) {
+        let svg = fragment.ViewSvgText();
+        if svg.as_ref().is_some_and(|svg| svg.hidden) {
             return;
         }
         if !self
@@ -4437,7 +4437,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             }
             return;
         }
-        let apply_svg_transform = svg.is_some_and(|svg| svg.has_transform);
+        let apply_svg_transform = svg.as_ref().is_some_and(|svg| svg.has_transform);
         if apply_svg_transform {
             self.context.borrow_mut().Append(
                 DisplayItem {
@@ -6536,7 +6536,7 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .expect("paint tree node has a fragment");
     // core/paint/text_fragment_painter.cc:422-431. Layout owns the parent SVG
     // visual bound, already including glyph transforms, stroke and shadow.
-    if let Some(svg) = &fragment.paint.svg_text {
+    if let Some(svg) = fragment.ViewSvgText() {
         return node.EnclosingRect(PaintRect {
             x: node.paint_offset.x + svg.visual_rect.offset.x,
             y: node.paint_offset.y + svg.visual_rect.offset.y,
@@ -8044,7 +8044,7 @@ fn RootSpaceTextTransform(node: &PaintTreeNode<'_>) -> TransformMatrix {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let Some(svg) = fragment.paint.svg_text.as_ref() else {
+    let Some(svg) = fragment.ViewSvgText() else {
         return TransformMatrix::default();
     };
     if !svg.has_transform {
@@ -8075,7 +8075,7 @@ pub(crate) fn TextPaintOrigin(node: &PaintTreeNode<'_>) -> Offset {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    if let Some(svg) = fragment.paint.svg_text.as_ref() {
+    if let Some(svg) = fragment.ViewSvgText() {
         origin.x += svg.glyph_origin.x;
         origin.y += svg.glyph_origin.y;
     }

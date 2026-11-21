@@ -29,14 +29,13 @@ fn FragmentLocalAffineTransform(
 }
 
 #[inline(never)]
-pub(super) fn ExportSvgTextPaintData(
+pub(crate) fn ExportSvgTextPaintData(
     item: &FragmentItem,
     fragment_rect: PhysicalRect,
-    paint: &mut PaintProperties,
-) {
+) -> Option<Arc<SvgTextPaintData>> {
     let svg = item.GetSvgFragmentData();
     if svg.is_null() {
-        return;
+        return None;
     }
     let svg = unsafe { &*svg };
     let scaling_factor = item.SvgScalingFactor();
@@ -46,11 +45,10 @@ pub(super) fn ExportSvgTextPaintData(
     // fragment's pre-textPath box (core/paint/text_fragment_painter.cc:422-431).
     let parent = unsafe { &*item.GetLayoutObject() }.Parent();
     assert!(!parent.is_null());
-    let algorithms = LayoutPassScope::Algorithms();
-    let visual_rect =
-        unsafe { algorithms.as_ref() }
-            .and_then(|algorithms| algorithms.svg_support.text_visual_rect)
-            .expect("SVG text visual bounds query is not installed")(unsafe { &*parent });
+    // The SVG queries stay callable after the pass (ResidentSvgSupport).
+    let visual_rect = LayoutPassScope::ResidentSvgSupport()
+        .text_visual_rect
+        .expect("SVG text visual bounds query is not installed")(unsafe { &*parent });
     let mut output = SvgTextPaintData {
         visual_rect: FragmentPaintRect {
             offset: Offset {
@@ -77,7 +75,7 @@ pub(super) fn ExportSvgTextPaintData(
     output.has_transform = scaling_factor != 1.0 || !transform.IsIdentity();
     output.local_transform = FragmentLocalAffineTransform(&transform, fragment_rect.offset);
     output.hidden = item.IsHiddenForPaint();
-    paint.svg_text = Some(Arc::new(output));
+    Some(Arc::new(output))
 }
 
 fn ExportStitchedDecorationData(

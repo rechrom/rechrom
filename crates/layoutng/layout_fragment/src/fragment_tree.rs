@@ -788,6 +788,8 @@ pub trait ResidentBoxGeometry {
     /// MathML paint data and first baseline from the resident box fragment.
     fn ViewMathML(&self) -> Option<Arc<MathMLPaintData>>;
     fn ViewFirstBaseline(&self) -> Option<f64>;
+    /// SVG text paint data computed from the resident inline item.
+    fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -858,6 +860,22 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>> {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                match items.Items().get(index) {
+                    Some(item) => crate::internal::boundary::layout_boundary::ExportSvgTextPaintData(
+                        item,
+                        *item.RectInContainerFragment(),
+                    ),
+                    None => self.paint.svg_text.clone(),
+                }
+            }
+            _ => self.paint.svg_text.clone(),
+        }
+    }
+
     fn ViewMathML(&self) -> Option<Arc<MathMLPaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

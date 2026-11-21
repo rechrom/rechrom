@@ -175,8 +175,9 @@ use layout_fragment_text_paint_export::{
 mod layout_fragment_fragment_geometry_export;
 use layout_fragment_fragment_geometry_export::{
     ExportBoxPaintGeometry, ExportContentSize, ExportReplacedContentPaintData,
-    ExportSelfOutlineGeometry, ExportSvgTextPaintData,
+    ExportSelfOutlineGeometry,
 };
+pub(crate) use layout_fragment_fragment_geometry_export::ExportSvgTextPaintData;
 #[path = "../../../../layout_fragment/src/scrollbar_paint_export.rs"]
 mod layout_fragment_scrollbar_paint_export;
 use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;

@@ -511,7 +511,7 @@ fn PopulateInlineItemLocalPaintData(
         ExportInlineInkOverflow(item, &mut output.paint);
     }
     {
-        ExportSvgTextPaintData(item, rect, &mut output.paint);
+        output.paint.svg_text = ExportSvgTextPaintData(item, rect);
     }
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {

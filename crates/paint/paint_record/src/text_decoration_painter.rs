@@ -142,7 +142,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         self.clip_rect = self.selection_rect.map(|rect| {
-            if fragment.paint.svg_text.is_some() {
+            if fragment.ViewSvgText().is_some() {
                 let relative = LineRelativeRect::EnclosingRect(&gfx::RectF::new(
                     gfx::PointF::new(rect.x as f32, rect.y as f32),
                     gfx::SizeF::new(rect.width as f32, rect.height as f32),
@@ -242,7 +242,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         let metrics = glyph_runs
             .first()
             .map(|run| {
-                let text_fit_scale = if fragment.paint.svg_text.is_some() {
+                let text_fit_scale = if fragment.ViewSvgText().is_some() {
                     1.0
                 } else {
                     fragment.ViewTextItemFacts().1
@@ -338,7 +338,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                         decoration,
                         font_size,
                         from_font_thickness,
-                        fragment.paint.svg_text.is_some(),
+                        fragment.ViewSvgText().is_some(),
                     )
                 };
                 let (resolved_style, marker_antialias, marker_wave) = if spelling_or_grammar {
@@ -414,7 +414,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                             skip_ink,
                             decoration_ink_baseline: y + baseline,
                             decoration_text_origin: origin,
-                            decoration_text_fit_scale: if fragment.paint.svg_text.is_some() {
+                            decoration_text_fit_scale: if fragment.ViewSvgText().is_some() {
                                 1.0
                             } else {
                                 fragment.ViewTextItemFacts().1
@@ -980,7 +980,7 @@ fn TextPaintSize(node: &PaintTreeNode<'_>) -> Size {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    if let Some(svg) = fragment.paint.svg_text.as_ref() {
+    if let Some(svg) = fragment.ViewSvgText() {
         return svg.untransformed_size;
     }
     fragment.ViewSize()
