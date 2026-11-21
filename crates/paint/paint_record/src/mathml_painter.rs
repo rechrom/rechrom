@@ -43,13 +43,12 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
     // cpp: paint/mathml_painter.h:23
     // cpp: paint/mathml_painter.cc:164-188
     pub fn Paint(&self, info: &PaintInfo<'c, 'o>) {
-        let paint = &self
+        let fragment = self
             .node
             .fragment
             .as_deref()
-            .expect("paint tree node has a fragment")
-            .paint;
-        let Some(math) = paint.mathml.as_ref() else {
+            .expect("paint tree node has a fragment");
+        let Some(math) = fragment.ViewMathML() else {
             return;
         };
         // MathMLPainter::Paint (.cc:170) records the whole math decoration,
@@ -135,11 +134,10 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let paint = &fragment.paint;
-        let math = paint
-            .mathml
-            .as_ref()
+        let math = fragment
+            .ViewMathML()
             .expect("fraction requires MathML paint data");
-        let Some(first_baseline) = paint.first_baseline else {
+        let Some(first_baseline) = fragment.ViewFirstBaseline() else {
             return;
         };
         if math.rule_thickness <= 0.0 {
@@ -184,9 +182,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let math = fragment
-            .paint
-            .mathml
-            .as_ref()
+            .ViewMathML()
             .expect("operator requires MathML paint data");
         let color = InvertColorIfNeeded(
             &fragment.paint.style,
@@ -237,9 +233,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let paint = &fragment.paint;
-        let math = paint
-            .mathml
-            .as_ref()
+        let math = fragment
+            .ViewMathML()
             .expect("operator requires MathML paint data");
         let content_width = fragment.ViewSize().width
             - fragment.Borders().left
@@ -269,9 +264,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         let paint = &fragment.paint;
-        let math = paint
-            .mathml
-            .as_ref()
+        let math = fragment
+            .ViewMathML()
             .expect("radical requires MathML paint data");
         let mut base_width = 0.0;
         let mut base_ascent = 0.0;
@@ -280,10 +274,10 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                 .fragment
                 .as_deref()
                 .expect("radical base has a fragment");
-            base_width = base.size.width;
-            base_ascent = base.paint.first_baseline.unwrap_or(base.size.height);
+            base_width = base.ViewSize().width;
+            base_ascent = base.ViewFirstBaseline().unwrap_or(base.ViewSize().height);
         }
-        let baseline = paint.first_baseline.unwrap_or(fragment.ViewSize().height);
+        let baseline = fragment.ViewFirstBaseline().unwrap_or(fragment.ViewSize().height);
         let block_offset =
             baseline - math.vertical_gap - (base_ascent + math.radical_margin_inline_start);
         let inline_offset =

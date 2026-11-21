@@ -639,7 +639,11 @@ fn PopulateInlineItemLocalPaintData(
                     output.content_size = ExportContentSize(box_fragment);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportMathMLPaintData(box_fragment, &mut output.paint);
+                    let first_baseline = LiveFirstBaseline(box_fragment);
+                    if first_baseline.is_some() && output.paint.first_baseline != first_baseline {
+                        output.paint.first_baseline = first_baseline;
+                    }
+                    output.paint.mathml = ExportMathMLPaintData(box_fragment, &output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
                     output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);
@@ -1389,7 +1393,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         _ => ExportContentSize(box_fragment),
     };
     if purpose == LayoutUpdateKind::Paint {
-        ExportMathMLPaintData(box_fragment, &mut output.paint);
+        let first_baseline = LiveFirstBaseline(box_fragment);
+        if first_baseline.is_some() && output.paint.first_baseline != first_baseline {
+            output.paint.first_baseline = first_baseline;
+        }
+        output.paint.mathml = ExportMathMLPaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
         output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);

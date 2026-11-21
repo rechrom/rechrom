@@ -109,27 +109,18 @@ pub(super) fn ExportTablePaintData(
     paint.table = Some(Arc::new(data));
 }
 
-pub(super) fn ExportMathMLPaintData(
+pub(crate) fn ExportMathMLPaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
-    if let Some(baseline) = box_fragment.FirstBaseline() {
-        let baseline = Some(Number(baseline));
-        if paint.first_baseline != baseline {
-            paint.first_baseline = baseline;
-        }
-    }
+    paint: &PaintProperties,
+) -> Option<Arc<MathMLPaintData>> {
     if !box_fragment.HasExtraMathMLPainting() {
-        return;
+        return None;
     }
 
     let mut data = MathMLPaintData::default();
-    let algorithms = LayoutPassScope::Algorithms();
-    let math = if algorithms.is_null() {
-        None
-    } else {
-        Some(&unsafe { &*algorithms }.mathml_support)
-    };
+    // The MathML queries stay callable after the pass (ResidentMathMLSupport).
+    let support = LayoutPassScope::ResidentMathMLSupport();
+    let math = Some(&support);
     if box_fragment.IsMathMLFraction() {
         let Some((axis_height, fraction_rule_thickness)) =
             math.and_then(|support| Some((support.axis_height?, support.fraction_rule_thickness?)))
@@ -141,8 +132,7 @@ pub(super) fn ExportMathMLPaintData(
         data.kind = MathMLPaintKind::kFraction;
         data.axis_height = Number(axis_height(box_fragment.Style()));
         data.rule_thickness = Number(fraction_rule_thickness(box_fragment.Style()));
-        paint.mathml = Some(Arc::new(data));
-        return;
+        return Some(Arc::new(data));
     }
 
     let source = box_fragment.GetMathMLPaintInfo();
@@ -191,7 +181,13 @@ pub(super) fn ExportMathMLPaintData(
         paint.WritingMode(),
         &mut data.operator_glyph_runs,
     );
-    paint.mathml = Some(Arc::new(data));
+    Some(Arc::new(data))
+}
+
+/// The box fragment's first baseline (PhysicalBoxFragment::FirstBaseline),
+/// which MathMLPainter aligns operators and scripts to.
+pub(crate) fn LiveFirstBaseline(box_fragment: &PhysicalBoxFragment) -> Option<f64> {
+    box_fragment.FirstBaseline().map(Number)
 }
 
 pub(crate) fn ExportFrameSetPaintData(

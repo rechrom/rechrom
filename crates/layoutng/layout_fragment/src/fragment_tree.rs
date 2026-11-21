@@ -785,6 +785,9 @@ pub trait ResidentBoxGeometry {
     /// Column rules / gap rules computed from the resident box's gap geometry.
     fn ViewColumnRules(&self) -> Option<Arc<ColumnRulePaintData>>;
     fn ViewGapRules(&self) -> Option<Arc<GapRulePaintData>>;
+    /// MathML paint data and first baseline from the resident box fragment.
+    fn ViewMathML(&self) -> Option<Arc<MathMLPaintData>>;
+    fn ViewFirstBaseline(&self) -> Option<f64>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -855,6 +858,25 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewMathML(&self) -> Option<Arc<MathMLPaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::ExportMathMLPaintData(box_fragment, &self.paint)
+            }
+            None => self.paint.mathml.clone(),
+        }
+    }
+
+    fn ViewFirstBaseline(&self) -> Option<f64> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::LiveFirstBaseline(box_fragment)
+                    .or(self.paint.first_baseline)
+            }
+            None => self.paint.first_baseline,
+        }
+    }
+
     fn ViewColumnRules(&self) -> Option<Arc<ColumnRulePaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportColumnRulePaintData(

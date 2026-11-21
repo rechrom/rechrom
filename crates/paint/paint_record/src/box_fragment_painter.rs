@@ -719,7 +719,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let parent_is_mathml_operator = parent
             .fragment
             .as_deref()
-            .and_then(|fragment| fragment.paint.mathml.as_ref())
+            .and_then(|fragment| fragment.ViewMathML())
             .is_some_and(|math| {
                 math.kind == layoutng_assembly::fragment_tree::MathMLPaintKind::kOperator
             });
@@ -1243,7 +1243,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             self.PaintText(paint_info);
         }
-        if phase == PaintPhase::kForeground && is_visible && fragment.paint.mathml.is_some() {
+        if phase == PaintPhase::kForeground && is_visible && fragment.ViewMathML().is_some() {
             MathMLPainter::new(self.node, self.context).Paint(paint_info);
         }
         if phase == PaintPhase::kForeground && is_visible && fragment.paint.SvgShape().is_some() {

@@ -2,7 +2,9 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use super::layout_algorithm_set::{FloatLayoutSupport, LayoutAlgorithmSet, SvgLayoutSupport};
+use super::layout_algorithm_set::{
+    FloatLayoutSupport, LayoutAlgorithmSet, MathMLSupport, SvgLayoutSupport,
+};
 use super::layout_object_factory_set::LayoutObjectFactorySet;
 use foundation::UnsupportedLayout;
 
@@ -61,6 +63,9 @@ thread_local! {
     // PrePaint and Paint (same document thread, after the pass) can ask them
     // as Chromium's painters read LayoutSVGShape / LayoutSVGRoot members.
     static RESIDENT_SVG_SUPPORT: Cell<SvgLayoutSupport> = Cell::new(SvgLayoutSupport::default());
+    // Likewise the MathML queries (operator metrics, fraction rule) that
+    // MathMLPainter's data reads from the stored MathMLPaintInfo.
+    static RESIDENT_MATHML_SUPPORT: Cell<MathMLSupport> = Cell::new(MathMLSupport::default());
 }
 
 // cpp: layoutng/internal/layout_pass_scope.h:38-61
@@ -93,6 +98,8 @@ impl LayoutPassScope {
             ALGORITHMS.with(|current| current.set(algorithms));
             let svg_support = unsafe { &*algorithms }.svg_support;
             RESIDENT_SVG_SUPPORT.with(|resident| resident.set(svg_support));
+            let mathml_support = unsafe { &*algorithms }.mathml_support;
+            RESIDENT_MATHML_SUPPORT.with(|resident| resident.set(mathml_support));
         }
         Self {
             previous_algorithms_: previous_algorithms,
@@ -111,6 +118,16 @@ impl LayoutPassScope {
 
     /// The SVG layout queries for post-layout readers: the active pass's
     /// set, else the last one a pass installed on this thread.
+    /// The MathML queries for post-layout readers (see ResidentSvgSupport).
+    pub fn ResidentMathMLSupport() -> MathMLSupport {
+        let algorithms = Self::Algorithms();
+        if algorithms.is_null() {
+            RESIDENT_MATHML_SUPPORT.with(Cell::get)
+        } else {
+            unsafe { &*algorithms }.mathml_support
+        }
+    }
+
     pub fn ResidentSvgSupport() -> SvgLayoutSupport {
         let algorithms = Self::Algorithms();
         if algorithms.is_null() {

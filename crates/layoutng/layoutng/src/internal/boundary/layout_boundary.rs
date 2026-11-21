@@ -182,12 +182,10 @@ mod layout_fragment_scrollbar_paint_export;
 use layout_fragment_scrollbar_paint_export::ExportScrollbarPaintData;
 #[path = "../../../../layout_fragment/src/specialized_paint_export.rs"]
 mod layout_fragment_specialized_paint_export;
-use layout_fragment_specialized_paint_export::{
-    ExportMathMLPaintData, ExportOverflowClipMargin, ExportTablePaintData,
-};
+use layout_fragment_specialized_paint_export::{ExportOverflowClipMargin, ExportTablePaintData};
 pub(crate) use layout_fragment_specialized_paint_export::{
     ExportColumnRulePaintData, ExportFieldsetPaintData, ExportFrameSetPaintData,
-    ExportGapRulePaintData,
+    ExportGapRulePaintData, ExportMathMLPaintData, LiveFirstBaseline,
 };
 #[path = "../../../../layout_fragment/src/collapsed_table_paint_export.rs"]
 mod layout_fragment_collapsed_table_paint_export;
