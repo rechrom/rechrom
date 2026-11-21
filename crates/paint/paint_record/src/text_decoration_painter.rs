@@ -457,14 +457,14 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                                     let shader = if let Some(context) = &context_paint {
                                         crate::svg_context_paints::ResolveShader(
                                             context,
-                                            fragment.resources.as_deref(),
+                                            self.node.DocumentResources().map(|resources| &**resources),
                                             self.privacy_preserving,
                                         )
                                         .expect("admitted SVG decoration context server")
                                     } else {
                                         ResolvePaintShader(
                                             server,
-                                            fragment.resources.as_deref(),
+                                            self.node.DocumentResources().map(|resources| &**resources),
                                             Offset {
                                                 x: line.x,
                                                 y: line.y,

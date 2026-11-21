@@ -537,10 +537,11 @@ pub struct FragmentPaintData<Paint> {
     /// Exact TextPainter paint-timing admission for this source substring.
     /// Glyph ids cannot reconstruct CSS text whitespace after shaping.
     pub text_paint_timing_non_whitespace: bool,
-    /// Document paint resources of the publication that wrote this slot.
-    /// Kept beside the per-publication geometry, outside the shared
-    /// copy-on-write payload: a replacement viewport or resource set must
-    /// not deep-copy every retained PaintProperties.
+    /// Fixture-only document paint resources for hand-built slots that have
+    /// no source result. Production never writes or reads this: Chromium
+    /// reads these values from the Document / LocalFrame / LocalFrameView,
+    /// and Rechrom holds them once per result (`PaintFragmentCursor::
+    /// DocumentResources`, `PaintTreeNode::DocumentResources`).
     pub resources: Option<Arc<PaintResources>>,
     /// Chromium LayoutObject dirty bits snapshotted for this publication
     /// and consumed by PrePaintTreeWalk. Lifecycle state, kept beside the

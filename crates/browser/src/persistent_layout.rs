@@ -328,7 +328,11 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
         id: u64,
         offset: layoutng_assembly::internal::layout_input::Offset,
     ) -> bool {
-        node.node_id == id && paint::CullRectUpdater::HasScrolledEnough(&node, offset)
+        node.node_id == id && paint::CullRectUpdater::HasScrolledEnough(
+                &node,
+                node.DocumentResources().map(|resources| &**resources),
+                offset,
+            )
             || node
                 .Children()
                 .into_iter()

@@ -991,9 +991,8 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         })?;
     drop(property_trace);
     let artifact_to_device_scale = fragments
-        
-        .resources
-        .as_ref()
+        .Cursor()
+        .DocumentResources()
         .map_or(1.0, |resources| resources.ArtifactToDeviceScale());
     if !artifact_to_device_scale.is_finite() || artifact_to_device_scale <= 0.0 {
         return Err(UnsupportedTransform);

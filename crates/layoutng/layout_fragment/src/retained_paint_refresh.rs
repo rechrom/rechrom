@@ -141,11 +141,9 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.ink_overflow = None;
         }
         if let Some(&object) = clients.get(&node.paint.DisplayItemClientId()) {
-            let resources = node
-                
-                .resources
-                .as_ref()
-                .expect("completed fragment has resources");
+            let resources = cursor
+                .DocumentResources()
+                .expect("completed fragment has document resources");
             let current =
                 ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
             let live_style_facts = current.LiveStyleFacts();

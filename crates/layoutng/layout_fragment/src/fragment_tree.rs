@@ -884,11 +884,18 @@ pub trait ResidentBoxGeometry {
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
     /// The border-image of a box fragment, resolved from its live style,
-    /// size, borders and the publication's image resources
-    /// (NinePieceImagePainter reads the fragment being painted).
-    fn BorderImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
+    /// size, borders and the document's image resources
+    /// (NinePieceImagePainter reads the fragment being painted and its
+    /// Document's ImageResourceContent).
+    fn BorderImage(
+        &self,
+        resources: Option<&PaintResources>,
+    ) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
     /// The -webkit-mask-box-image of a box fragment (see BorderImage).
-    fn MaskBoxImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
+    fn MaskBoxImage(
+        &self,
+        resources: Option<&PaintResources>,
+    ) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
     /// The resident fragment's own ComputedStyle as a projection-free
     /// PaintStyle view: PhysicalFragment::Style() or FragmentItem::Style(),
     /// both LayoutObject::EffectiveStyle(StyleVariant()), so a fragment that
@@ -930,6 +937,7 @@ fn IsHiddenForPaintIncludingInlineItem(fragment: &crate::physical_fragment::Phys
 /// Text, line and source-less fragments never paint nine-piece images.
 fn LiveNinePieceImage(
     fragment: &FragmentPaintData,
+    resources: Option<&PaintResources>,
     image: impl FnOnce(&layoutng_style::style::computed_style::ComputedStyle)
         -> &layoutng_style::style::nine_piece_image::NinePieceImage,
 ) -> Option<Option<crate::internal::paint_input::NinePieceImagePaint>> {
@@ -941,14 +949,7 @@ fn LiveNinePieceImage(
     let resource_id = unsafe { source.GetImage().as_ref() }.and_then(
         crate::internal::boundary::paint_style_export::FetchedNinePieceImageResourceId,
     );
-    let resource = resource_id.and_then(|id| {
-        fragment
-            .resources
-            .as_ref()?
-            .images
-            .iter()
-            .find(|image| image.id == id)
-    });
+    let resource = resource_id.and_then(|id| resources?.images.iter().find(|image| image.id == id));
     Some(
         crate::internal::boundary::paint_style_export::ExportNinePieceImageForFragment(
             style,
@@ -1635,13 +1636,19 @@ impl ResidentBoxGeometry for FragmentPaintData {
         }
     }
 
-    fn BorderImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint> {
-        LiveNinePieceImage(self, |style| style.BorderImage())
+    fn BorderImage(
+        &self,
+        resources: Option<&PaintResources>,
+    ) -> Option<crate::internal::paint_input::NinePieceImagePaint> {
+        LiveNinePieceImage(self, resources, |style| style.BorderImage())
             .unwrap_or_else(|| self.paint.style.border_image.clone())
     }
 
-    fn MaskBoxImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint> {
-        LiveNinePieceImage(self, |style| style.MaskBoxImage())
+    fn MaskBoxImage(
+        &self,
+        resources: Option<&PaintResources>,
+    ) -> Option<crate::internal::paint_input::NinePieceImagePaint> {
+        LiveNinePieceImage(self, resources, |style| style.MaskBoxImage())
             .unwrap_or_else(|| self.paint.style.mask_box_image.clone())
     }
 

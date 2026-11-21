@@ -144,6 +144,7 @@ pub(super) fn populate_layout_result_paint_data(
     };
     if let Some(tracker) = paint_state_owners.certification.as_mut() {
         tracker.BeginProductionUpdate();
+        tracker.SetProductionDocumentResources(Some(Arc::clone(&resources)));
     }
     {
         let mut phase = layout_fragment_boundary::trace::span(
@@ -223,6 +224,11 @@ pub(super) fn populate_layout_result_paint_data(
         tracker.FinishProductionUpdate();
         cache.pre_paint_certification = Some(tracker);
     }
+    // Population compared the resident slots against the document resources
+    // they were last painted with; the result now paints with these. They
+    // are the Document / LocalFrameView values Chromium reads, held once per
+    // result rather than on every fragment slot.
+    paint_state.SetDocumentResources(resources);
     let copies_after_population =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
     trace.set(

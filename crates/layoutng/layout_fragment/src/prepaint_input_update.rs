@@ -97,6 +97,8 @@ pub(super) fn UpdatePrePaintInputs(
         tracker.ObserveProductionNode(unsafe { cursor.PaintDataMut() }, descendant_changed)
     }
     tracker.BeginProductionUpdate();
-    certify(PaintFragmentCursor::FromHandle(fragments), tracker);
+    let root = PaintFragmentCursor::FromHandle(fragments);
+    tracker.SetProductionDocumentResources(root.DocumentResources().cloned());
+    certify(root, tracker);
     tracker.FinishProductionUpdate();
 }

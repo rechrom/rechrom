@@ -7025,28 +7025,6 @@ impl Page {
                 );
             }
         }
-        fn install_resources(
-            node: &mut FragmentPaintData,
-            resources: &Arc<PaintResources>,
-            catalogs: &mut std::collections::HashMap<*const PaintResources, bool>,
-        ) -> bool {
-            // Fragment-local paint inputs share one immutable catalog. Compare
-            // each distinct prior catalog once, preserving resource identity
-            // when it is current, as ImageResourceContent/Font retain theirs.
-            let changed = node.resources.as_ref().is_none_or(|previous| {
-                if Arc::ptr_eq(previous, resources) {
-                    return false;
-                }
-                *catalogs
-                    .entry(Arc::as_ptr(previous))
-                    .or_insert_with(|| previous.as_ref() != resources.as_ref())
-            });
-            if changed {
-                node.resources = Some(resources.clone());
-            }
-            changed
-        }
-
         let preferred_color_scheme = match self.state.preferred_color_scheme.get() {
             PreferredColorScheme::kDark => 1,
             _ => 0,
@@ -7115,12 +7093,10 @@ impl Page {
                 viewport: constraints.viewport,
             });
             let mut trace = browser_tracing::span("resource", "Page.BindPaintResources");
-            let mut catalogs = std::collections::HashMap::new();
-            let mut rebound = false;
-            output.VisitPaintInputsMut(|input| {
-                rebound |= install_resources(input, &resources, &mut catalogs)
-            });
-            trace.set("compared_catalogs", catalogs.len() as f64);
+            // The document's catalog is held once by the Layout output, as
+            // ImageResourceContent/Font retain their identity when current.
+            let rebound = output.SetDocumentResources(resources);
+            trace.set("rebound", rebound as u8 as f64);
             return Ok(rebound);
         }
     }
@@ -7185,18 +7161,12 @@ impl Page {
             should_clear_document_background: self.state.should_clear_document_background.get(),
             viewport: constraints.viewport,
         });
-        fn install(node: &mut FragmentPaintData, resources: &Arc<PaintResources>) -> bool {
-            let rebound = node.resources.as_deref() != Some(resources.as_ref());
-            node.resources = Some(resources.clone());
-            rebound
-        }
         // Retained fragment-local Paint data can still point at the catalog
         // from before an earlier container mutation. Even when the requested
         // variant is already present in Page's current catalog, bind that
         // catalog and re-record once so the immutable artifact publishes the
         // exact record named by its display items.
-        let mut rebound = false;
-        output.VisitPaintInputsMut(|input| rebound |= install(input, &resources));
+        let rebound = output.SetDocumentResources(resources);
         Ok(changed || rebound)
     }
 

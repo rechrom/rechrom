@@ -253,8 +253,10 @@ impl BoxPaintInvalidator {
             .as_ref()
             .is_some_and(|radii| radii.HasRadius())
             || style.border_radius != 0.0
+            // The resource id and generated shader do not depend on the
+            // document image catalog (only the resolved slices do).
             || fragment
-                .BorderImage()
+                .BorderImage(None)
                 .is_some_and(|image| image.resource_id != 0 || image.shader.is_some())
         {
             return PaintInvalidationReason::kLayout;

@@ -12,7 +12,7 @@ pub type FlatTransforms = Arc<[TransformMatrix]>;
 use foundation::{PaintInvalidationReason, TrustedIdentityHashMap as HashMap};
 
 use layoutng_assembly::fragment_tree::{
-    FragmentKind, FragmentPaintData, TextCombinePaintData,
+    FragmentKind, FragmentPaintData, PaintResources, TextCombinePaintData,
 };
 use layoutng_assembly::internal::layout_input::PaintStyle;
 use layoutng_assembly::internal::layout_input::{
@@ -733,6 +733,19 @@ impl PaintTreeNode<'_> {
     pub fn SourceCursor(&self) -> Option<PaintFragmentCursor<'_>> {
         self.source_cursor
     }
+
+    /// The paint resources of the document this node's fragment belongs to
+    /// (Chromium reads them from the LayoutObject's Document / LocalFrameView).
+    /// Production nodes resolve them through their source result; hand-built
+    /// fixture nodes without a source keep their fixture value.
+    pub fn DocumentResources(
+        &self,
+    ) -> Option<&Arc<layoutng_assembly::fragment_tree::PaintResources>> {
+        match self.source_cursor {
+            Some(cursor) => cursor.DocumentResources(),
+            None => self.fragment.as_deref()?.resources.as_ref(),
+        }
+    }
     pub fn SvgResourceNode(&self, client: u64) -> Option<&PaintTreeNode<'static>> {
         let pointer = *self.svg_resource_nodes.as_ref()?.get(&client)?;
         // Directory rebuilt whenever topology changes; root owns every box.
@@ -740,6 +753,19 @@ impl PaintTreeNode<'_> {
     }
     pub fn SetFragment(&mut self, source: &FragmentPaintData) {
         self.fragment = Some(ResidentFragment::FromSource(source));
+    }
+
+    /// Rebind a retained node to its replacement source: the sidecar slot and
+    /// the cursor through which it reads its document's paint resources.
+    pub(crate) fn BindSource(&mut self, source: PaintFragmentSource<'_>) {
+        self.fragment = Some(ResidentFragment::FromSource(&source));
+        // Same opaque retained lifetime as ResidentFragment; the caller keeps
+        // this result's PaintFragmentLease until replacement has been rebound.
+        self.source_cursor = Some(unsafe {
+            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(
+                source.Cursor(),
+            )
+        });
     }
 
     #[doc(hidden)]
@@ -1964,7 +1990,7 @@ fn ResolveFilterImages(
                 continue;
             };
             let Some(id) = *resource_id else { continue };
-            let Some(resources) = fragment.resources.as_ref() else {
+            let Some(resources) = node.DocumentResources() else {
                 graph
                     .unsupported
                     .get_or_insert("feImage bitmap has no PaintResources".into());
@@ -3486,8 +3512,8 @@ fn UsedMaskGeometryBox(box_type: BackgroundBox) -> BackgroundBox {
     }
 }
 
-fn FindMaskImage(fragment: &FragmentPaintData, id: u64) -> &PaintImage {
-    let Some(resources) = fragment.resources.as_ref() else {
+fn FindMaskImage(resources: Option<&PaintResources>, id: u64) -> &PaintImage {
+    let Some(resources) = resources else {
         panic!("mask paint has no PaintResources");
     };
     let images = &resources.images;
@@ -3509,6 +3535,7 @@ fn FindMaskImage(fragment: &FragmentPaintData, id: u64) -> &PaintImage {
 
 fn ResolveMaskLayers(
     fragment: &FragmentPaintData,
+    resources: Option<&PaintResources>,
     absolute_offset: Offset,
     property_space_delta: Offset,
     pixel_snap_scale: f64,
@@ -3562,7 +3589,7 @@ fn ResolveMaskLayers(
                             absolute_offset,
                             zoom,
                             viewport,
-                            fragment.resources.as_deref(),
+                            resources,
                         );
                         resolved.clip_rect = region;
                         resolved.tile_rect = region;
@@ -3639,7 +3666,7 @@ fn ResolveMaskLayers(
         };
         let image =
             if layer.image_state == PaintMaskImageState::kReady && layer.image.shader.is_none() {
-                Some(FindMaskImage(fragment, layer.image.resource_id))
+                Some(FindMaskImage(resources, layer.image.resource_id))
             } else {
                 None
             };
@@ -3696,7 +3723,7 @@ fn ResolveMaskLayers(
                         height: tile.height,
                     },
                     f64::from(fragment.paint.EffectiveZoom()),
-                    fragment.resources.as_deref(),
+                    resources,
                     (!fragment.paint.style.color_scheme_flags_is_normal())
                         .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
                 )
@@ -3748,7 +3775,7 @@ fn ResolveMaskLayers(
         if let Some(shader) = layer.image.shader.as_deref() {
             resolved.paint_shader = Some(ResolvePaintShader(
                 shader,
-                fragment.resources.as_deref(),
+                resources,
                 Offset {
                     x: tile.x,
                     y: tile.y,
@@ -4211,10 +4238,8 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
                 width: fragment.ViewSize().width,
                 height: fragment.ViewSize().height,
             });
-            let layout_zoom = fragment
-                
-                .resources
-                .as_deref()
+            let layout_zoom = node
+                .DocumentResources()
                 .map_or(1.0, |resources| resources.layout_zoom_factor)
                 .max(f64::MIN_POSITIVE);
             snapped.width / layout_zoom > MAX_IMAGE_LENGTH
@@ -4737,7 +4762,8 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
 fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
     let mut snapshot = FragmentPaintData {
         inline_geometry: Vec::new(),
-        resources: f.resources.clone(),
+        // Document resources are read from the document, never the slot.
+        resources: None,
         paint: f.paint.clone(),
         certified: Default::default(),
         ..*f
@@ -5305,7 +5331,9 @@ fn RebaseRetainedNode(
     let (self_cull_rect, cull_rect) = if infinite.use_infinite {
         (None, None)
     } else {
-        let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(fragment);
+        let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(
+            node.DocumentResources().map(|resources| &**resources),
+        );
         let (self_cull, _) = CullRectUpdater::ComputeFragmentCullRect(
             inherited.cull,
             Some(node.self_cull_rect),
@@ -5737,8 +5765,8 @@ fn CanRefreshInvalidationOnlySource(
 // paint property nodes live in LocalFrame::LayoutZoomFactor coordinates.
 // Keeping the conversion at the PrePaint boundary also lets CSSOM and media
 // queries continue to consume the unscaled host viewport.
-fn ArtifactViewport(root: &FragmentPaintData) -> Option<PaintRect> {
-    root.resources.as_ref().and_then(|resources| {
+fn ArtifactViewport(resources: Option<&PaintResources>) -> Option<PaintRect> {
+    resources.and_then(|resources| {
         let viewport = resources.viewport?;
         let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
         Some(PaintRect {
@@ -6399,7 +6427,7 @@ impl PrePaintTreeWalk {
             let t_shift = checkpoint();
             self.stats.shifted_nodes += 1;
             let mut node = previous.take().unwrap();
-            node.fragment = Some(ResidentFragment::FromSource(&fragment));
+            node.BindSource(fragment);
             if ShiftRetainedNode(
                 &mut node,
                 delta,
@@ -6430,7 +6458,7 @@ impl PrePaintTreeWalk {
             let mut node = previous.take().unwrap();
             if self.source_owner_changed {
                 self.stats.rebound_nodes += 1;
-                node.fragment = Some(ResidentFragment::FromSource(&fragment));
+                node.BindSource(fragment);
             }
             node
         } else if invalidation_only {
@@ -6440,7 +6468,7 @@ impl PrePaintTreeWalk {
             // PaintTreeNode solely to rediscover the same property geometry.
             self.stats.invalidation_only_nodes += 1;
             let mut node = previous.take().unwrap();
-            node.fragment = Some(ResidentFragment::FromSource(&fragment));
+            node.BindSource(fragment);
             let cache = node.cache.as_mut().unwrap();
             cache.inherited = inherited.clone();
             cache.revision = fragment.pre_paint_revision;
@@ -6449,6 +6477,7 @@ impl PrePaintTreeWalk {
             let mut built = PaintPropertyTreeBuilder::new(self)
                 .with_previous_paint_result(old_previous_paint_result)
                 .with_link_offset(fragment.Cursor().ViewOffsetInContainer())
+                .with_source_cursor(fragment.Cursor())
                 .BuildNode(
                     &fragment,
                     inherited.offset,
@@ -7351,7 +7380,7 @@ impl PrePaintTreeWalk {
         // ancestor restored from an older pass.
         self.prior_property_keys
             .extend(std::mem::take(&mut self.property_keys));
-        let viewport = ArtifactViewport(&root);
+        let viewport = ArtifactViewport(root.Cursor().DocumentResources().map(|resources| &**resources));
         let environment_changed = viewport != self.viewport;
         if environment_changed || (viewport.is_some() && self.viewport_properties.clip_id == 0) {
             self.viewport = viewport;
@@ -10331,6 +10360,7 @@ mod tests {
 
         let resolved = ResolveMaskLayers(
             &fragment,
+            fragment.resources.as_deref(),
             Offset { x: 10.0, y: 20.0 },
             Offset::default(),
             1.0,
@@ -10391,6 +10421,7 @@ mod tests {
 
         let resolved = ResolveMaskLayers(
             &fragment,
+            fragment.resources.as_deref(),
             Offset::default(),
             Offset::default(),
             1.0,
@@ -10423,6 +10454,7 @@ mod tests {
 
         let resolved = ResolveMaskLayers(
             &fragment,
+            fragment.resources.as_deref(),
             Offset {
                 x: 534.328125,
                 y: 145.4375,
@@ -10557,6 +10589,7 @@ mod tests {
 
         let resolved = ResolveMaskLayers(
             &fragment,
+            fragment.resources.as_deref(),
             Offset { x: 20.0, y: 30.0 },
             Offset::default(),
             1.0,
@@ -10629,6 +10662,7 @@ mod tests {
 
         let resolved = ResolveMaskLayers(
             &fragment,
+            fragment.resources.as_deref(),
             Offset { x: 20.0, y: 30.0 },
             Offset::default(),
             1.0,

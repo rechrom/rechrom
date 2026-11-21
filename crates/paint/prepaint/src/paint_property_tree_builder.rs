@@ -33,6 +33,9 @@ pub(super) struct PaintPropertyTreeBuilder<'a> {
     // The node's offset in its paint-tree parent from its source cursor;
     // fixtures without a cursor use their recorded offset.
     link_offset: Option<Offset>,
+    // The node's source cursor, through which it reads its document's paint
+    // resources while it is built; fixtures without a cursor keep theirs.
+    source_cursor: Option<PaintFragmentCursor<'static>>,
 }
 
 impl<'a> PaintPropertyTreeBuilder<'a> {
@@ -41,6 +44,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             walk,
             previous_paint_result: paint_model::PaintResult::kMayBeClippedByCullRect,
             link_offset: None,
+            source_cursor: None,
         }
     }
 
@@ -54,6 +58,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
 
     pub(super) fn with_link_offset(mut self, link_offset: Offset) -> Self {
         self.link_offset = Some(link_offset);
+        self
+    }
+
+    pub(super) fn with_source_cursor(mut self, cursor: PaintFragmentCursor<'_>) -> Self {
+        // Same opaque retained lifetime as the node's ResidentFragment: the
+        // caller keeps this result's PaintFragmentLease while the node lives.
+        self.source_cursor = Some(unsafe {
+            std::mem::transmute::<PaintFragmentCursor<'_>, PaintFragmentCursor<'static>>(cursor)
+        });
         self
     }
 
@@ -116,6 +129,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         };
         let mut node = PaintTreeNode::WithProperties(parent_properties.clone());
         node.SetFragment(fragment);
+        node.source_cursor = self.source_cursor;
+        // The Document / LocalFrameView paint resources (device scale, fonts,
+        // images) this object paints with; shared by every fragment.
+        let document_resources = match self.source_cursor {
+            Some(cursor) => cursor.DocumentResources(),
+            None => fragment.resources.as_ref(),
+        };
         node.is_root = is_root;
         let local_establishes_fixed_background_containing_block = !is_root
             && fragment.ViewEstablishesPaintState()
@@ -169,10 +189,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
         }
         node.directly_composited_container_paint_offset_subpixel_delta =
             geometry.directly_composited_container_paint_offset_subpixel_delta;
-        node.pixel_snap_scale = fragment
-            
-            .resources
-            .as_ref()
+        node.pixel_snap_scale = document_resources
             .map_or(1.0, |resources| resources.ArtifactToDeviceScale())
             .max(f64::MIN_POSITIVE);
         node.clip = parent_clip;
@@ -541,6 +558,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             if !authored_mask_images.is_empty() {
                 node.mask_layers = ResolveMaskLayers(
                     fragment,
+                    document_resources.map(|resources| &**resources),
                     node.paint_offset,
                     property_space_delta,
                     node.pixel_snap_scale,
@@ -620,10 +638,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             f64::from(fragment.paint.EffectiveZoom()),
                             svg_effect_child,
                             clip_path.reference_viewport,
-                            fragment
-                                
-                                .resources
-                                .as_ref()
+                            document_resources
                                 .map_or(&[], |resources| resources.fonts.as_slice()),
                             &mut node.clip_path_error,
                             &mut node.local_clip_path,
@@ -1996,7 +2011,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             node.cull_rect = None;
             node.self_cull_rect = None;
         } else {
-            let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(fragment);
+            let expansion_ratio = crate::cull_rect_updater::ExpansionRatio(document_resources.map(|resources| &**resources));
             let (self_cull_rect, _) = CullRectUpdater::ComputeFragmentCullRect(
                 parent_cull_rect,
                 old_self_cull_rect,

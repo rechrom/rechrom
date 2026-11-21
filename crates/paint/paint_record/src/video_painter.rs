@@ -118,10 +118,9 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         let Some(resource_id) = fragment.paint.VideoFrameResourceId() else {
             return;
         };
-        let Some(frame) = fragment
-            
-            .resources
-            .as_deref()
+        let Some(frame) = self
+            .node
+            .DocumentResources()
             .and_then(|resources| {
                 resources
                     .images

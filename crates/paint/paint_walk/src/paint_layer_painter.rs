@@ -257,7 +257,7 @@ fn ShouldCreateSubsequence(
         if let (Some(last_bounds), Some(visual_rect), Some(resources)) = (
             context.borrow().LastChunkBounds(),
             fragment.paint.PaintLayerFirstFragmentVisualRect(),
-            fragment.resources.as_deref(),
+            layer.DocumentResources(),
         ) {
             let visual_rect = PaintRect {
                 x: visual_rect.offset.x,

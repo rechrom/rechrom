@@ -12,7 +12,7 @@
 //! absent rather than being approximated here.
 
 use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::fragment_tree::FragmentPaintData;
+use layoutng_assembly::fragment_tree::{FragmentPaintData, PaintResources};
 use layoutng_assembly::internal::layout_input::Offset;
 use paint_model::cull_rect::{ApplyScrollExpansion, IsSmallScroller, LocalPixelDistanceToExpand};
 use paint_model::paint_property_tree::PropertyTreeState;
@@ -22,12 +22,10 @@ use paint_model::{CullRect, PaintRect, PaintResult};
 ///
 /// The pinned desktop feature defaults use a DPR coefficient of one, so the
 /// source expression `1 + (dpr - 1) * coefficient` reduces to DPR.
+/// The device scale is LocalFrame::DevicePixelRatio, a document fact.
 #[inline]
-pub fn ExpansionRatio(fragment: &FragmentPaintData) -> f64 {
-    fragment
-        
-        .resources
-        .as_ref()
+pub fn ExpansionRatio(resources: Option<&PaintResources>) -> f64 {
+    resources
         .map_or(1.0, |resources| resources.device_pixel_ratio)
         .max(f64::MIN_POSITIVE)
 }
@@ -63,8 +61,12 @@ fn CanExpandForScroll(fragment: &FragmentPaintData) -> bool {
 
 /// Source: `cull_rect.cc:48-68,75-103` with the pinned feature defaults.
 #[inline]
-pub fn PixelDistanceToExpand(fragment: &FragmentPaintData, root_scroller: bool) -> f64 {
-    let ratio = ExpansionRatio(fragment);
+pub fn PixelDistanceToExpand(
+    fragment: &FragmentPaintData,
+    resources: Option<&PaintResources>,
+    root_scroller: bool,
+) -> f64 {
+    let ratio = ExpansionRatio(resources);
     LocalPixelDistanceToExpand(
         IsSmallScroller(ContainerRect(fragment), root_scroller, ratio),
         ratio,
@@ -76,13 +78,17 @@ pub fn PixelDistanceToExpand(fragment: &FragmentPaintData, root_scroller: bool) 
 ///
 /// Source: `cull_rect_updater.cc:193-206` and `cull_rect.cc:507-530`.
 #[inline]
-pub fn HasScrolledEnough(fragment: &FragmentPaintData, current: Offset) -> bool {
+pub fn HasScrolledEnough(
+    fragment: &FragmentPaintData,
+    resources: Option<&PaintResources>,
+    current: Offset,
+) -> bool {
     let Some(origin) = fragment.paint_cull_scroll_offset else {
         return false;
     };
     let container = ContainerRect(fragment);
     let contents = ContentsRect(fragment);
-    let ratio = ExpansionRatio(fragment);
+    let ratio = ExpansionRatio(resources);
     let small = IsSmallScroller(container, fragment.paint.IsLayoutView(), ratio);
     let can_expand = CanExpandForScroll(fragment);
     let old = if can_expand {
@@ -199,8 +205,12 @@ impl CullRectUpdater {
     /// Keeping this on the updater prevents the browser package from owning a
     /// second, divergent cull-refresh rule.
     #[inline]
-    pub fn HasScrolledEnough(fragment: &FragmentPaintData, current: Offset) -> bool {
-        HasScrolledEnough(fragment, current)
+    pub fn HasScrolledEnough(
+        fragment: &FragmentPaintData,
+        resources: Option<&PaintResources>,
+        current: Offset,
+    ) -> bool {
+        HasScrolledEnough(fragment, resources, current)
     }
 
     /// Source: `cull_rect_updater.cc:437-519`.

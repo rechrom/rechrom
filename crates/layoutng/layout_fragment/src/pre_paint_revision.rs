@@ -40,6 +40,8 @@ struct ProductionUpdate {
     previous_owners: HashMap<u64, LiveOwner>,
     next_owners: HashMap<u64, LiveOwner>,
     resource_matches: HashMap<(usize, usize, u8), bool>,
+    /// The document paint resources the observed fragments paint with.
+    document_resources: Option<Arc<PaintResources>>,
     stats: PrePaintRevisionStats,
 }
 
@@ -78,8 +80,18 @@ impl PrePaintRevisionTracker {
             previous_owners: std::mem::take(&mut self.owners),
             next_owners,
             resource_matches: HashMap::default(),
+            document_resources: None,
             stats: PrePaintRevisionStats::default(),
         });
+    }
+
+    /// The document paint resources of the begun production walk (Chromium's
+    /// Document / LocalFrameView state; every fragment shares them).
+    pub fn SetProductionDocumentResources(&mut self, resources: Option<Arc<PaintResources>>) {
+        self.production_update
+            .as_mut()
+            .expect("production revision update has not begun")
+            .document_resources = resources;
     }
 
     pub fn ObserveProductionNode(
@@ -129,7 +141,7 @@ impl PrePaintRevisionTracker {
             .map(|old| {
                 let resources = resources_equal(
                     &old.resources,
-                    &node.resources,
+                    &update.document_resources,
                     &mut update.resource_matches,
                     old.resource_usage | paint_resource_usage(node),
                 );
@@ -176,7 +188,7 @@ impl PrePaintRevisionTracker {
         };
         let (resources, resource_usage) = match old {
             Some(old) if self_same => (old.resources, old.resource_usage),
-            _ => (node.resources.clone(), paint_resource_usage(node)),
+            _ => (update.document_resources.clone(), paint_resource_usage(node)),
         };
         node.certified = layout_fragment_boundary::CertifiedPrePaintInput {
             epoch,
@@ -213,7 +225,7 @@ impl PrePaintRevisionTracker {
             && node.certified.size == node.size
             && resources_equal(
                 &node.certified.resources,
-                &node.resources,
+                &update.document_resources,
                 &mut update.resource_matches,
                 node.certified.resource_usage,
             );

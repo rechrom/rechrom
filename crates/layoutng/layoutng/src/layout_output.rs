@@ -236,6 +236,12 @@ pub(crate) struct LayoutPaintState {
     >,
     publication: Cell<u64>,
     generation: Cell<u64>,
+    /// The document's paint resources (fonts, images, canvases, device scale,
+    /// layout zoom, base background, viewport) for this result. Chromium
+    /// reads these from the Document / LocalFrame / LocalFrameView / Settings
+    /// that own the painted LayoutObjects, never from a per-fragment copy, so
+    /// every fragment of the result shares this one value.
+    document_resources: UnsafeCell<Option<Arc<layout_fragment::fragment_tree::PaintResources>>>,
 }
 
 struct PaintFragmentSlot {
@@ -264,7 +270,33 @@ impl LayoutPaintState {
             owners: UnsafeCell::new(Default::default()),
             publication: Cell::new(0),
             generation: Cell::new(1),
+            document_resources: UnsafeCell::new(None),
         })
+    }
+
+    /// The document paint resources this result's fragments paint with.
+    pub(crate) fn DocumentResources(
+        &self,
+    ) -> Option<&Arc<layout_fragment::fragment_tree::PaintResources>> {
+        unsafe { &*self.document_resources.get() }.as_ref()
+    }
+
+    /// Install the document's current paint resources. Returns whether the
+    /// value differs from the previously installed one; a pointer-equal or
+    /// value-equal catalog keeps its identity, as ImageResourceContent and
+    /// Font keep theirs.
+    pub(crate) fn SetDocumentResources(
+        &self,
+        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+    ) -> bool {
+        let slot = unsafe { &mut *self.document_resources.get() };
+        let changed = slot.as_ref().is_none_or(|previous| {
+            !Arc::ptr_eq(previous, &resources) && previous.as_ref() != resources.as_ref()
+        });
+        if changed {
+            *slot = Some(resources);
+        }
+        changed
     }
 
     /// Seed a replacement LayoutResult's state with the previous result's
@@ -285,6 +317,10 @@ impl LayoutPaintState {
             slot.publication = 0;
         }
         *unsafe { &mut *self.inputs.get() } = moved;
+        // The seeded slots were last painted with the previous result's
+        // document resources; population compares against them before the
+        // replacement installs its own.
+        *unsafe { &mut *self.document_resources.get() } = previous.DocumentResources().cloned();
     }
 
     pub(crate) fn BeginPublication(&self) {
@@ -939,6 +975,16 @@ impl<'a> PaintFragmentCursor<'a> {
 
     pub(crate) fn PaintDataOption(self) -> Option<&'a FragmentPaintData> {
         self.state?.Get(self.source.PaintOwner())
+    }
+
+    /// The paint resources of the document this fragment belongs to. Chromium
+    /// reads them from the fragment's Document / LocalFrameView, not from the
+    /// fragment. Each result carries its own document's value, so a cursor
+    /// into an embedded LocalFrame's result sees that frame's resources.
+    pub fn DocumentResources(
+        self,
+    ) -> Option<&'a Arc<layout_fragment::fragment_tree::PaintResources>> {
+        self.state?.DocumentResources()
     }
 
     /// Build the final immutable glyph payload from the canonical

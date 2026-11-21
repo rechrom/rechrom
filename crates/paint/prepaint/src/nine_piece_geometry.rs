@@ -71,11 +71,7 @@ fn ComputeTileParameters(
 
 // cpp: paint/nine_piece_image_painter.cc:50-68
 fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("paint tree node has a fragment");
-    let Some(resources) = fragment.resources.as_ref() else {
+    let Some(resources) = node.DocumentResources() else {
         return None;
     };
     let found = resources.images.iter().find(|image| image.id == id)?;
@@ -208,7 +204,7 @@ impl NinePieceImageGeometry {
                     height: source_size.height / image.image_resolution_scale * effective_zoom,
                 },
                 effective_zoom,
-                fragment.resources.as_deref(),
+                node.DocumentResources().map(|resources| &**resources),
                 (!fragment.paint.style.color_scheme_flags_is_normal())
                     .then_some(u8::from(fragment.paint.style.used_dark_color_scheme())),
             )
@@ -216,7 +212,7 @@ impl NinePieceImageGeometry {
         let shader = image.shader.as_ref().map(|shader| {
             ResolvePaintShader(
                 shader,
-                fragment.resources.as_deref(),
+                node.DocumentResources().map(|resources| &**resources),
                 Offset::default(),
                 Some(source_size),
             )

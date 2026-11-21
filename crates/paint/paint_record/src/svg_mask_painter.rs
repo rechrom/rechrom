@@ -44,10 +44,7 @@ impl SVGMaskPainter {
         }
         ApplyMaskLayerImageAutoDarkMode(
             &fragment.paint.style,
-            fragment
-                
-                .resources
-                .as_deref()
+            node.DocumentResources()
                 .map_or(1.0, |resources| resources.layout_zoom_factor),
             &mut mask_layers,
         );
