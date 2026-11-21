@@ -2084,8 +2084,13 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 flex_or_grid_items: children_are_flex_or_grid_items,
                 svg: svg_view_box,
             },
-            revision: fragment.pre_paint_revision,
-            subtree_revision: fragment.pre_paint_subtree_revision,
+            // A built node is a new PrePaint generation; UpdateNode records
+            // its resources and the subtree revision after its children.
+            revision: self.walk.revision_generation,
+            subtree_revision: self.walk.revision_generation,
+            resources: None,
+            resource_usage: 0,
+            subtree_resource_usage: 0,
             record: Default::default(),
             previous_fragment: None,
             raw_properties: node.properties.clone(),
