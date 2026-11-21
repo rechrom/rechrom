@@ -103,7 +103,7 @@ fn LocalPoint(
     // Match ResolveFragmentGeometry's local paint-property order. Only the
     // paint-state owner contributes these transforms; text/line fragments can
     // borrow its style without establishing another transform node.
-    if fragment.paint.establishes_paint_state
+    if fragment.ViewEstablishesPaintState()
         && fragment.paint.HasSource()
         && fragment.paint.Position() == layoutng_assembly::internal::layout_input::Position::kSticky
     {
@@ -114,7 +114,7 @@ fn LocalPoint(
     // (PhysicalFragment::Style()), as PaintPropertyTreeBuilder reads it.
     // The projected PaintStyleData fields are never filled for managed
     // production styles, so reading them dropped every CSS transform here.
-    let transform_style = (fragment.paint.establishes_paint_state && fragment.paint.HasSource())
+    let transform_style = (fragment.ViewEstablishesPaintState() && fragment.paint.HasSource())
         .then(|| fragment.ViewStyle())
         .and_then(|style| style.transform().map(|transform| (style, transform)));
     if let Some((style, transform)) = transform_style {
@@ -132,7 +132,7 @@ fn LocalPoint(
         );
         point = paint::geometry_mapper::MapPointWithTransform(point, &matrix, true)?;
     }
-    if fragment.paint.establishes_paint_state {
+    if fragment.ViewEstablishesPaintState() {
         if let Some(transform) = fragment
             .paint
             .SvgShape()
@@ -144,7 +144,7 @@ fn LocalPoint(
     Some((point, absolute))
 }
 fn ChildOrigin(fragment: &FragmentPaintData, absolute: Offset) -> Offset {
-    if fragment.paint.establishes_paint_state {
+    if fragment.ViewEstablishesPaintState() {
         Offset {
             x: absolute.x - fragment.ViewScrolledContentOffset().x,
             y: absolute.y - fragment.ViewScrolledContentOffset().y,
