@@ -158,7 +158,7 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
     LiveBoxInkOverflow, LiveItemInkOverflow, LiveBoxGeometryFacts,
     LiveSvgPaintGeometry, LiveSvgTextDecorationStyle, LiveSvgViewBox, LiveTextHitTestBounds,
-    PropertyFragmentUniqueId,
+    PropertyFragmentUniqueId, ResolvePendingPaintStyle,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,

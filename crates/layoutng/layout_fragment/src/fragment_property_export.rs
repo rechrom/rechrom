@@ -145,7 +145,7 @@ pub(super) fn ExportProperties(
     effective_style: *const StyleComputedStyle,
     resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
-    mut exported_styles: Option<&mut ExportedStyleCache>,
+    exported_styles: ExportedStyleCache,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
     if object.is_null() {
@@ -202,8 +202,6 @@ pub(super) fn ExportProperties(
             style_resources = unsafe { &*effective_source.resources };
         }
     }
-    let projected_style_identity =
-        style_resources as *const crate::internal::layout_input::StyleResourceData as usize;
     output.logical_tree_order = source_entry.logical_tree_order;
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
@@ -211,102 +209,25 @@ pub(super) fn ExportProperties(
         unsafe { &*effective_style }
     };
     let style_facts = crate::style_projection::ReadFragmentStyleFacts(layout_style);
-    let exported_style_key = (
-        layout_style as *const StyleComputedStyle as usize,
-        projected_style_identity,
-    );
-    let cached_style = exported_styles
-        .as_deref()
-        .and_then(|styles| styles.get(&exported_style_key))
-        .cloned();
     if purpose == LayoutUpdateKind::Layout {
         output.style =
             crate::internal::boundary::paint_style_export::ExportGeometryStyle(layout_style);
-    } else if let Some(style) = cached_style {
-        output.style = style;
+        ApplyResolvedOffsetTransform(object, layout_style, &mut output.style);
+    } else if layout_style.HasOffset() {
+        // The motion-path offset is resolved against the LayoutBox geometry
+        // this publication certifies; it is never deferred past it.
+        output.style =
+            ResolveFragmentPaintStyle(object, layout_style, style_resources, exported_styles);
     } else {
-        output.style = crate::internal::boundary::paint_style_export::ExportStyleWithInputResources(
-            layout_style,
-            style_resources,
-        );
-        if let Some(target) = output
-            .style
-            .clip_path
-            .as_ref()
-            .and_then(|clip| clip.reference_target_id)
-        {
-            // Reuse the source SVG viewport query at the existing Layout boundary.
-            // The resource can live under a different nested SVG from its client.
-            let resource = sources.iter().find_map(|(&object, entry)| {
-                (unsafe { &*entry.node }.InputId() == target
-                    && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceClipper)
-                    .then_some(object)
-            });
-            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-            let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
-            if let (Some(resource), Some(resolve)) = (resource, resolve) {
-                let size = resolve(unsafe { &*resource });
-                output.style.clip_path.as_mut().unwrap().reference_viewport = Some(Size {
-                    width: f64::from(size.width()),
-                    height: f64::from(size.height()),
-                });
-            } else {
-                // Connected ID targets without an attached source resource are
-                // unavailable (for example a display:none ancestor).
-                output.style.clip_path = None;
-            }
-        }
-        for reference in &mut output.style.svg_mask_bindings {
-            let Some(target) = reference.target_id else {
-                continue;
-            };
-            let resource = sources.iter().find_map(|(&object, entry)| {
-                (unsafe { &*entry.node }.InputId() == target
-                    && unsafe { &*entry.node }.InputKind() == NodeKind::kSvgResourceMasker)
-                    .then_some(object)
-            });
-            let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
-            let resolve = unsafe { algorithms.as_ref() }.and_then(|a| a.svg_support.viewport_size);
-            if let (Some(resource), Some(resolve)) = (resource, resolve) {
-                let size = resolve(unsafe { &*resource });
-                reference.viewport = Some(Size {
-                    width: f64::from(size.width()),
-                    height: f64::from(size.height()),
-                });
-            } else {
-                reference.graph = None;
-            }
-        }
-        // Layout-dependent transforms are resolved below per object. Every
-        // other style payload is immutable and can be shared by all physical
-        // and inline fragments that reference the same source/projected pair.
-        if !layout_style.HasOffset() {
-            if let Some(styles) = exported_styles.as_deref_mut() {
-                styles.insert(exported_style_key, output.style.clone());
-            }
-        }
-    }
-    if layout_style.HasOffset() && !layout_box.is_null() {
-        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-        if !box_model.is_null() {
-            let layout_box = unsafe { &*layout_box };
-            let reference_box =
-                crate::internal::transform_utils::ComputeReferenceBoxForLayoutBox(layout_box);
-            let mut offset = foundation::gfx::Transform::default();
-            layout_style.ApplyTransformPhysicalRect(
-                &mut offset,
-                Some(layout_box),
-                &reference_box,
-                ApplyTransformOperations::kExcludeTransformOperations,
-                ApplyTransformOrigin::kExcludeTransformOrigin,
-                ApplyMotionPath::kIncludeMotionPath,
-                ApplyIndependentTransformProperties::kExcludeIndependentTransformProperties,
-            );
-            crate::internal::boundary::paint_style_export::SetResolvedOffsetTransform(
-                &mut output.style,
-                offset,
-            );
-        }
+        // Population records only the projection's identity: the effective
+        // ComputedStyle and its StyleResourceData. The values resolve through
+        // ResolveFragmentPaintStyle on their first read.
+        output.style = PaintStyle::FromPending(crate::internal::layout_input::PendingPaintStyle {
+            style: layout_style as *const StyleComputedStyle as usize,
+            object: object as usize,
+            resources: RetainStyleResources(style_resources),
+            cache: exported_styles,
+        });
     }
     // Chromium resolves the ::selection painting style and decoration
     // (HighlightStyleUtils::HighlightPaintingStyle, SelectionTextDecoration)
@@ -373,6 +294,177 @@ pub(super) fn ExportProperties(
         return output;
     }
     output
+}
+
+/// A counted handle on the StyleResourceData paired with a fragment's
+/// effective ComputedStyle, so a pending projection resolves against exactly
+/// the resources population saw.
+fn RetainStyleResources(
+    resources: &crate::internal::layout_input::StyleResourceData,
+) -> Arc<crate::internal::layout_input::StyleResourceData> {
+    let pointer = resources as *const crate::internal::layout_input::StyleResourceData;
+    // SAFETY: StyleResourceData reaches the Layout boundary only through
+    // Node::InputStyleResources / InputFirstLineStyleResources (directly or
+    // via LayoutBoundaryCache::style_sources), both views into a live
+    // Arc<StyleResourceData> owned by the node's input data.
+    unsafe {
+        Arc::increment_strong_count(pointer);
+        Arc::from_raw(pointer)
+    }
+}
+
+/// The live LayoutObject of the SVG resource element `target` of `kind`, in
+/// the LayoutObject tree containing `object`. The resource can live under a
+/// different nested SVG from its client.
+fn FindSvgResourceObject(
+    object: *const LayoutObject,
+    target: u64,
+    kind: NodeKind,
+) -> *const LayoutObject {
+    let mut root = object.cast_mut();
+    loop {
+        let parent = unsafe { &*root }.Parent();
+        if parent.is_null() {
+            break;
+        }
+        root = parent;
+    }
+    let mut current = root;
+    while !current.is_null() {
+        let candidate = unsafe { &*current };
+        let node = candidate.GetNode();
+        if !node.is_null()
+            && unsafe { &*node }.InputId() == target
+            && unsafe { &*node }.InputKind() == kind
+        {
+            return current;
+        }
+        current = candidate.NextInPreOrder(root);
+    }
+    std::ptr::null()
+}
+
+/// Motion-path is resolved against the actual containing LayoutBox, so its
+/// final matrix cannot be reconstructed from ComputedStyle alone
+/// (SetResolvedOffsetTransform).
+fn ApplyResolvedOffsetTransform(
+    object: *const LayoutObject,
+    layout_style: &StyleComputedStyle,
+    style: &mut PaintStyle,
+) {
+    if !layout_style.HasOffset() {
+        return;
+    }
+    let layout_box = DynamicTo::<LayoutBox>(object);
+    if layout_box.is_null() || DynamicTo::<LayoutBoxModelObject>(object).is_null() {
+        return;
+    }
+    let layout_box = unsafe { &*layout_box };
+    let reference_box = crate::internal::transform_utils::ComputeReferenceBoxForLayoutBox(layout_box);
+    let mut offset = foundation::gfx::Transform::default();
+    layout_style.ApplyTransformPhysicalRect(
+        &mut offset,
+        Some(layout_box),
+        &reference_box,
+        ApplyTransformOperations::kExcludeTransformOperations,
+        ApplyTransformOrigin::kExcludeTransformOrigin,
+        ApplyMotionPath::kIncludeMotionPath,
+        ApplyIndependentTransformProperties::kExcludeIndependentTransformProperties,
+    );
+    crate::internal::boundary::paint_style_export::SetResolvedOffsetTransform(style, offset);
+}
+
+/// The Paint projection of a fragment's effective ComputedStyle and the
+/// StyleResourceData paired with it: the identity-keyed cache lookup, the
+/// export, the SVG clip-path / mask resource viewports and the motion-path
+/// offset transform. Population resolves through this directly only for an
+/// offset style; every other fragment PaintStyle resolves through it on its
+/// first projected-value read (ResolvePendingPaintStyle).
+#[inline(never)]
+pub(crate) fn ResolveFragmentPaintStyle(
+    object: *const LayoutObject,
+    layout_style: &StyleComputedStyle,
+    style_resources: &crate::internal::layout_input::StyleResourceData,
+    cache: ExportedStyleCache,
+) -> PaintStyle {
+    let key = (
+        layout_style as *const StyleComputedStyle as usize,
+        style_resources as *const crate::internal::layout_input::StyleResourceData as usize,
+    );
+    if let Some(data) =
+        cache.and_then(|cache| crate::layout_boundary_support::LookupExportedStyle(cache, key))
+    {
+        // Only offset-free projections are memoized.
+        return PaintStyle::FromSourceData(layout_style, data);
+    }
+    let mut style = crate::internal::boundary::paint_style_export::ExportStyleWithInputResources(
+        layout_style,
+        style_resources,
+    );
+    let viewport_size = crate::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
+        .viewport_size;
+    if let Some(target) = style
+        .clip_path
+        .as_ref()
+        .and_then(|clip| clip.reference_target_id)
+    {
+        let resource = FindSvgResourceObject(object, target, NodeKind::kSvgResourceClipper);
+        if let (false, Some(resolve)) = (resource.is_null(), viewport_size) {
+            let size = resolve(unsafe { &*resource });
+            style.clip_path.as_mut().unwrap().reference_viewport = Some(Size {
+                width: f64::from(size.width()),
+                height: f64::from(size.height()),
+            });
+        } else {
+            // Connected ID targets without an attached source resource are
+            // unavailable (for example a display:none ancestor).
+            style.clip_path = None;
+        }
+    }
+    if style
+        .svg_mask_bindings
+        .iter()
+        .any(|reference| reference.target_id.is_some())
+    {
+        for reference in &mut style.svg_mask_bindings {
+            let Some(target) = reference.target_id else {
+                continue;
+            };
+            let resource = FindSvgResourceObject(object, target, NodeKind::kSvgResourceMasker);
+            if let (false, Some(resolve)) = (resource.is_null(), viewport_size) {
+                let size = resolve(unsafe { &*resource });
+                reference.viewport = Some(Size {
+                    width: f64::from(size.width()),
+                    height: f64::from(size.height()),
+                });
+            } else {
+                reference.graph = None;
+            }
+        }
+    }
+    if layout_style.HasOffset() {
+        // Layout-dependent: resolved per object, never shared.
+        ApplyResolvedOffsetTransform(object, layout_style, &mut style);
+    } else if let Some(cache) = cache {
+        // Every other style payload is immutable and shared by all physical
+        // and inline fragments referencing the same source/resources pair.
+        crate::layout_boundary_support::StoreExportedStyle(cache, key, style.SharedData());
+    }
+    style
+}
+
+/// Resolve a fragment PaintStyle recorded by population, on its first read.
+pub(crate) fn ResolvePendingPaintStyle(
+    pending: &crate::internal::layout_input::PendingPaintStyle,
+) -> Arc<crate::internal::paint_input::PaintStyleData> {
+    let layout_style = unsafe { &*(pending.style as *const StyleComputedStyle) };
+    ResolveFragmentPaintStyle(
+        pending.object as *const LayoutObject,
+        layout_style,
+        &pending.resources,
+        pending.cache,
+    )
+    .SharedData()
 }
 
 #[cfg(test)]

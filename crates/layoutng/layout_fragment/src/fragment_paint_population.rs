@@ -342,7 +342,7 @@ fn PopulateInlineItemLocalPaintData(
             effective_style,
             resources,
             purpose,
-            Some(&mut paint_state_owners.exported_styles),
+            paint_state_owners.exported_styles,
         );
         if let Some(started) = export_started {
             paint_state_owners.population_stats.property_export_ns = paint_state_owners
@@ -943,7 +943,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             effective_style,
             resources,
             purpose,
-            Some(&mut paint_state_owners.exported_styles),
+            paint_state_owners.exported_styles,
         );
         if let Some(started) = export_started {
             paint_state_owners.population_stats.property_export_ns = paint_state_owners

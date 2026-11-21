@@ -1879,7 +1879,7 @@ impl PaintProperties {
             crate::internal::boundary::layout_boundary::ExportSelectionPaintStyle(source);
         // PrePaint applies the inherited auto-dark pause to the originating
         // style; the selection layer follows the same node state.
-        let paused = self.style.auto_dark_mode_paused;
+        let paused = self.style.auto_dark_mode_paused();
         if style.auto_dark_mode_paused != paused {
             style.auto_dark_mode_paused = paused;
         }
@@ -1921,7 +1921,7 @@ impl PaintProperties {
         )?;
         // PrePaint applies the inherited auto-dark pause to this node's
         // originating style; the decorating style follows the same node state.
-        style.auto_dark_mode_paused = self.style.auto_dark_mode_paused;
+        style.auto_dark_mode_paused = self.style.auto_dark_mode_paused();
         Some(std::borrow::Cow::Owned(style))
     }
 }
