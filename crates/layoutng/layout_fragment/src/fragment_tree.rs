@@ -808,6 +808,10 @@ pub trait ResidentBoxGeometry {
     /// FragmentData::UniqueId of the owner's property fragment (the box
     /// fragment's FragmentData, else the object's first fragment).
     fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// Stitched decoration geometry: computed from the resident block box
+    /// across its LayoutBox fragments; inline boxes keep PrePaint's stitched
+    /// inline geometry (InlineBoxFragmentPainter).
+    fn ViewStitchedDecoration(&self) -> Option<StitchedDecorationData>;
     /// LayoutImage::MutableForPainting::UpdatePaintedRect on the live
     /// LayoutImage; true when the painted rect changed.
     fn UpdateImagePaintedRect(&self, rect: FragmentPaintRect) -> bool;
@@ -903,6 +907,17 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewStitchedDecoration(&self) -> Option<StitchedDecorationData> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) if !box_fragment.IsInlineBox() => {
+                crate::internal::boundary::layout_boundary::ExportStitchedDecorationData(
+                    box_fragment,
+                )
+            }
+            _ => self.paint.stitched_decoration.clone(),
+        }
+    }
+
     fn UpdateImagePaintedRect(&self, rect: FragmentPaintRect) -> bool {
         if let Some(object) = self.paint.SourceObject().filter(|object| object.IsLayoutImage()) {
             let image = unsafe {

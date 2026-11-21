@@ -322,9 +322,9 @@ impl NinePieceImagePainter {
         };
         if fragment.paint.Display() == Display::kInline
             && fragment.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice
-            && fragment.paint.stitched_decoration.is_some()
+            && fragment.ViewStitchedDecoration().is_some()
         {
-            let stitched = fragment.paint.stitched_decoration.as_ref().unwrap();
+            let stitched = fragment.ViewStitchedDecoration().unwrap();
             decoration_area = PaintRect {
                 x: node.paint_offset.x + stitched.fragment_origin.x - stitched.fragment_offset.x,
                 y: node.paint_offset.y + stitched.fragment_origin.y - stitched.fragment_offset.y,
@@ -429,7 +429,7 @@ impl NinePieceImagePainter {
         let outsets = &border_image.outsets;
         let sliced_inline_strip = fragment.paint.Display() == Display::kInline
             && fragment.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice
-            && fragment.paint.stitched_decoration.is_some();
+            && fragment.ViewStitchedDecoration().is_some();
         let area = node.PixelSnappedRect(&reference_rect.map_or_else(
             || Self::Bounds(node, border_image),
             |rect| Self::BoundsWithin(rect, border_image),

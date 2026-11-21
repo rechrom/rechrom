@@ -1903,8 +1903,7 @@ fn ResolveFilterImages(
             let reference = NinePieceImageGeometry::ReflectionReferenceRect(node);
             let stitched_origin =
                 fragment
-                    .paint
-                    .stitched_decoration
+                    .ViewStitchedDecoration()
                     .as_ref()
                     .map_or(node.paint_offset, |stitched| Offset {
                         x: node.paint_offset.x + stitched.fragment_origin.x
@@ -3327,7 +3326,7 @@ fn MaskPositioningBox(
     box_type: BackgroundBox,
 ) -> PaintRect {
     let box_type = UsedMaskGeometryBox(box_type);
-    let Some(stitched) = fragment.paint.stitched_decoration.as_ref() else {
+    let Some(stitched) = fragment.ViewStitchedDecoration() else {
         return MaskBox(fragment, absolute_offset, box_type);
     };
     let paint = &fragment.paint;

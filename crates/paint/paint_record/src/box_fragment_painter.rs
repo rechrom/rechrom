@@ -7230,7 +7230,7 @@ fn ResolveBackgroundDestinationRects(
         || paint.Display() == Display::kTableCell
         || paint.is_page_container
         || paint.is_page_border_box
-        || paint.stitched_decoration.is_some()
+        || fragment.ViewStitchedDecoration().is_some()
         || node.paint_layer_is_fragmented
         || paint.style.border_shape_unsupported
         || paint.style.has_border_image()
@@ -7562,7 +7562,8 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
         }
         return ContractPaintRect(rect, page.padding);
     }
-    let Some(stitched) = paint.stitched_decoration.as_ref() else {
+    let stitched_data = fragment.ViewStitchedDecoration();
+    let Some(stitched) = stitched_data.as_ref() else {
         return BackgroundBoxRect(node, box_type);
     };
     let mut rect = PaintRect {

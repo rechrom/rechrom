@@ -78,7 +78,7 @@ pub(crate) fn ExportSvgTextPaintData(
     Some(Arc::new(output))
 }
 
-fn ExportStitchedDecorationData(
+pub(crate) fn ExportStitchedDecorationData(
     box_fragment: &PhysicalBoxFragment,
 ) -> Option<StitchedDecorationData> {
     let object = box_fragment.GetLayoutObject();

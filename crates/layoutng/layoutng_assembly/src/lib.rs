@@ -10006,7 +10006,7 @@ mod package_contract_tests {
                 .expect("read source fragment geometry-export owner");
         for owned_policy in [
             "fn FragmentLocalAffineTransform",
-            "pub(super) fn ExportSvgTextPaintData",
+            "fn ExportSvgTextPaintData",
             "fn ExportStitchedDecorationData",
             "pub(super) fn ExportBoxPaintGeometry",
             "pub(super) fn ExportContentSize",

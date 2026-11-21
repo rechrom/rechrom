@@ -562,8 +562,7 @@ fn PhysicalContentBoxSignature(fragment: &FragmentPaintData) -> (Offset, Size) {
 
 fn StitchedSize(fragment: &FragmentPaintData) -> Size {
     fragment
-        .paint
-        .stitched_decoration
+        .ViewStitchedDecoration()
         .as_ref()
         .map_or(fragment.ViewSize(), |decoration| decoration.size)
 }

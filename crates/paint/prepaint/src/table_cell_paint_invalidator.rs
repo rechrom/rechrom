@@ -103,8 +103,7 @@ impl TableCellPaintInvalidator {
 
 fn StitchedSize(fragment: &FragmentPaintData) -> layoutng_assembly::internal::layout_input::Size {
     fragment
-        .paint
-        .stitched_decoration
+        .ViewStitchedDecoration()
         .as_ref()
         .map_or(fragment.ViewSize(), |decoration| decoration.size)
 }
