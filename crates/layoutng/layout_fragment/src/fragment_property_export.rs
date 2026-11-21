@@ -30,7 +30,6 @@ pub(super) fn ExportPaintProperties(
         resources,
         LayoutUpdateKind::Paint,
         None,
-        None,
     )
 }
 
