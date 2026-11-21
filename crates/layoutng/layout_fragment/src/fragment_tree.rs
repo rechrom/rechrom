@@ -386,7 +386,8 @@ pub struct PaintProperties {
     /// HighlightStyleUtils::HighlightPaintingStyle for ::selection. This is a
     /// distinct immutable text-paint input: selection backgrounds, glyphs,
     /// shadows and decorations must not be reconstructed from hard-coded
-    /// colors in Paint.
+    /// colors in Paint. Read through SelectionPaintStyle(), which resolves it
+    /// from the live source; stored only for detached fixtures.
     pub selection_style: PaintStyle,
     /// LayoutReplaced::GetSelectionState and LocalSelectionVisualRect.  The
     /// latter may aggregate multiple inline fragment items, so Paint must not
@@ -398,11 +399,13 @@ pub struct PaintProperties {
     pub replaced_local_selection_visual_rect: Option<FragmentPaintRect>,
     /// HighlightStyleUtils::SelectionTextDecoration result. Paint compares its
     /// line set with each originating decoration before applying the selection
-    /// phase color; it must not reconstruct highlight inheritance.
+    /// phase color; it must not reconstruct highlight inheritance. Read
+    /// through SelectionTextDecoration(); stored only for detached fixtures.
     pub selection_text_decoration: Option<TextDecorationPaint>,
     /// TextPainter::SvgTextPaintState::TextDecorationObject() style.  SVG text
     /// decorations use the fill/stroke of the first ancestor that declares the
-    /// decoration, which can differ from the leaf text's own style.
+    /// decoration, which can differ from the leaf text's own style. Read
+    /// through SvgTextDecorationStyle(); stored only for detached fixtures.
     pub svg_text_decoration_style: Option<PaintStyle>,
     /// True for an element whose CSS background is painted by the root canvas
     /// painter. Borders, shadows and outlines remain ordinary box decoration.
@@ -1867,6 +1870,27 @@ impl PaintProperties {
             }
             None => self.selection_text_decoration.clone(),
         }
+    }
+
+    /// Source: core/paint/text_painter.cc:743-787. The style of the first
+    /// ancestor declaring the decoration (its ::first-line style for
+    /// first-line fragments), resolved from the live LayoutObject tree while
+    /// painting. Projections without a live source keep the stored value.
+    pub fn SvgTextDecorationStyle(&self) -> Option<std::borrow::Cow<'_, PaintStyle>> {
+        let Some(object) = self.SourceObject() else {
+            return self
+                .svg_text_decoration_style
+                .as_ref()
+                .map(std::borrow::Cow::Borrowed);
+        };
+        let mut style = crate::internal::boundary::layout_boundary::LiveSvgTextDecorationStyle(
+            object,
+            self.FactStyle().unwrap_or_else(|| object.StyleRef()),
+        )?;
+        // PrePaint applies the inherited auto-dark pause to this node's
+        // originating style; the decorating style follows the same node state.
+        style.auto_dark_mode_paused = self.style.auto_dark_mode_paused;
+        Some(std::borrow::Cow::Owned(style))
     }
 }
 

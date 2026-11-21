@@ -140,7 +140,7 @@ pub(crate) use layout_fragment_fragment_export_support::{
     ExportAppliedTextDecoration, ExportSelectionPaintStyle, ExportSelectionTextDecoration,
 };
 use layout_fragment_fragment_export_support::{
-    ExportAppliedTextDecorations, ExportedSelectionStyleCache, ExportedStyleCache,
+    ExportAppliedTextDecorations, ExportedStyleCache,
     InputId,
     Number, PublicWritingMode, SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
 };
@@ -157,7 +157,8 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LivePreviousViewBackgroundRect, LiveRasterEffectOutset, LiveLogicalParentNodeId,
     LivePaintLayerOrder, LiveFormControl, LiveScrollOffset, LiveTextCombine, LiveSvgShape,
     LiveBoxInkOverflow, LiveItemInkOverflow, LiveBoxGeometryFacts,
-    LiveSvgPaintGeometry, LiveSvgViewBox, LiveTextHitTestBounds, PropertyFragmentUniqueId,
+    LiveSvgPaintGeometry, LiveSvgTextDecorationStyle, LiveSvgViewBox, LiveTextHitTestBounds,
+    PropertyFragmentUniqueId,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties,

@@ -201,10 +201,9 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         if fragment.ViewTextItemFacts().0 {
             return false;
         }
-        let style = fragment
-            .paint
-            .svg_text_decoration_style
-            .as_ref()
+        let svg_decoration_style = fragment.paint.SvgTextDecorationStyle();
+        let style = svg_decoration_style
+            .as_deref()
             .unwrap_or(&fragment.paint.style);
         let has_line = |decoration: &TextDecorationPaint| {
             if line_through {
@@ -285,8 +284,8 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         let y = decoration_rect.LineOver().ToDouble();
         let inline_size = decoration_rect.InlineSize().ToDouble();
         let block_size = decoration_rect.BlockSize().ToDouble();
-        let svg_decoration_style: Option<&PaintStyle> =
-            fragment.paint.svg_text_decoration_style.as_ref();
+        let svg_decoration_style_owner = fragment.paint.SvgTextDecorationStyle();
+        let svg_decoration_style: Option<&PaintStyle> = svg_decoration_style_owner.as_deref();
         let paint_decoration =
             |decoration: &TextDecorationPaint, shadow_filters: Option<&[PaintShadow]>| {
                 let spelling_or_grammar = decoration.spelling_error || decoration.grammar_error;
