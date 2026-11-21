@@ -117,6 +117,20 @@ impl LayoutBoundaryCache {
         self.style_indices_stale = false;
     }
 
+    /// A tree update that only updated existing objects in place (no object
+    /// created, removed or moved) keeps the document-order object graph:
+    /// keep the object and source indices, drop what is keyed by or derived
+    /// from replaced styles and node facts (as a compatible style
+    /// replacement does), and rebuild the style indices on their next read.
+    pub fn ClearUpdatedObjects(&mut self) {
+        if self.objects.is_empty() {
+            return;
+        }
+        self.styles.clear();
+        self.debug_names.clear();
+        self.style_indices_stale = true;
+    }
+
     pub fn Clear(&mut self) {
         self.styles.clear();
         self.debug_names.clear();

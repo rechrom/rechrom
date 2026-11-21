@@ -330,8 +330,14 @@ impl EngineMutation for LayoutEngine {
                         || stats.removed != 0
                         || stats.moved != 0
                     {
+                        let topology_changed =
+                            stats.created != 0 || stats.removed != 0 || stats.moved != 0;
                         retain_invalidated_layout_result(self);
-                        self.boundary_cache_.ClearTopology();
+                        if topology_changed {
+                            self.boundary_cache_.ClearTopology();
+                        } else {
+                            self.boundary_cache_.ClearUpdatedObjects();
+                        }
                         self.tree_facts_ = None;
                         self.tree_relations_dirty_ = true;
                         self.targeted_font_objects_ = None;
