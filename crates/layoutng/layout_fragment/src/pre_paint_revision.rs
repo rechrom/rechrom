@@ -284,6 +284,27 @@ impl PrePaintRevisionTracker {
 
 }
 
+/// The document paint resources a fragment's painters read (viewport,
+/// fonts, images), as a usage mask for SamePaintResourcesFor. PrePaint
+/// records it on its retained node; it changes only with the fragment's own
+/// style or content, which the source dirty bits already report.
+pub fn PaintResourceUsage(fragment: &FragmentPaintData) -> u8 {
+    paint_resource_usage(fragment)
+}
+
+/// Whether two document paint-resource values paint the same for a fragment
+/// with `usage` (PaintResourceUsage). Uncached; callers memoize per pass.
+pub fn SamePaintResourcesFor(a: &Arc<PaintResources>, b: &Arc<PaintResources>, usage: u8) -> bool {
+    Arc::ptr_eq(a, b) || resources_equal_for_usage(a, b, usage)
+}
+
+/// Whether any live DisplayItemClient of the fragment (object, selection,
+/// PaintLayer, scrolling background, scroll corner and scrollbars) is still
+/// marked just created.
+pub fn HasJustCreatedClient(fragment: &FragmentPaintData) -> bool {
+    just_created(fragment)
+}
+
 const RESOURCE_VIEWPORT: u8 = 1 << 0;
 const RESOURCE_FONTS: u8 = 1 << 1;
 const RESOURCE_IMAGES: u8 = 1 << 2;
@@ -429,7 +450,13 @@ fn resources_equal(
         return true;
     }
     let key = (Arc::as_ptr(a) as usize, Arc::as_ptr(b) as usize, usage);
-    *matches.entry(key).or_insert_with(|| {
+    *matches
+        .entry(key)
+        .or_insert_with(|| resources_equal_for_usage(a, b, usage))
+}
+
+fn resources_equal_for_usage(a: &PaintResources, b: &PaintResources, usage: u8) -> bool {
+    {
         // These are immutable resource-provider identities, not the catalog
         // allocation rebuilt by every export. New storage conservatively dirties.
         let PaintResources {
@@ -443,7 +470,7 @@ fn resources_equal(
             paints_opaque_base_background,
             should_clear_document_background,
             viewport,
-        } = &**a;
+        } = a;
         *device_pixel_ratio == b.device_pixel_ratio
             && *preferred_color_scheme == b.preferred_color_scheme
             && *layout_zoom_factor == b.layout_zoom_factor
@@ -469,7 +496,7 @@ fn resources_equal(
                     && images.iter().zip(&b.images).all(|(a, b)| a == b)
                     && canvases.len() == b.canvases.len()
                     && canvases.iter().zip(&b.canvases).all(|(a, b)| a == b)))
-    })
+    }
 }
 
 #[cfg(test)]

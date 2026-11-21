@@ -719,11 +719,14 @@ impl PaintTreeNode<'_> {
             .map(|cache| cache.physical_children.as_slice())
     }
 
-    /// Revisions certified when this resident PrePaint node was built.
-    /// The attached source fragment is borrowed and scroll refresh mutates it
-    /// in place before Paint runs, so its live revision is already the new
-    /// value. Retained-paint validation must compare against this resident
-    /// baseline, matching Blink's retained FragmentData/ObjectPaintProperties.
+    /// PrePaint-owned (revision, subtree revision) of this resident node:
+    /// the revision changes whenever PrePaint rebuilds, shifts or refreshes
+    /// the node and is kept while it is reused; the subtree revision also
+    /// changes with any descendant's. Values are process-unique per pass,
+    /// unrelated to Layout's fragment revisions, so a consumer compares two
+    /// recorded values of the same node (Blink's retained FragmentData /
+    /// ObjectPaintProperties identity), never a recorded value with a
+    /// source fragment's.
     pub fn RecordedRevisions(&self) -> Option<(u64, u64)> {
         self.cache
             .as_ref()
@@ -907,8 +910,20 @@ struct RootFixedPositionContext {
 struct NodeCache {
     inherited: InheritedContext,
     children: ChildContext,
+    /// PrePaint-owned generations (PrePaintTreeWalk::revision_generation):
+    /// `revision` changes whenever this node is rebuilt, shifted or
+    /// refreshed for invalidation only, and is kept while it is reused;
+    /// `subtree_revision` also changes when any descendant's does. Zero is
+    /// a pending child walk (DisplayLockContext::SetNeedsPrePaintSubtreeWalk).
     revision: u64,
     subtree_revision: u64,
+    /// The document paint resources this node was last proven against, and
+    /// the resource usage (pre_paint_revision::PaintResourceUsage) of this
+    /// node and of its whole subtree. Every node of the subtree paints the
+    /// same under `resources` as under the value it was built with.
+    resources: Option<Arc<PaintResources>>,
+    resource_usage: u8,
+    subtree_resource_usage: u8,
     /// The values this node compared, recorded after its comparisons; the
     /// next lifecycle compares the paired fragment against them.
     record: PrePaintPrevious,
@@ -1040,6 +1055,13 @@ pub struct PrePaintTreeWalk {
     pub(crate) client_nodes: HashMap<u64, Vec<*mut PaintTreeNode<'static>>>,
     resident_nodes: Vec<*mut PaintTreeNode<'static>>,
     walk_generation: u64,
+    /// This pass's PrePaint revision generation (NodeCache::revision): a
+    /// process-unique nonzero value, so a node whose revision equals it
+    /// changed in this pass.
+    revision_generation: u64,
+    /// SamePaintResourcesFor results of this pass by (recorded, current,
+    /// usage); the Arcs keep both keys alive for the pass.
+    resource_memo: Vec<(Arc<PaintResources>, Arc<PaintResources>, u8, bool)>,
 }
 
 impl Default for PrePaintTreeWalk {
@@ -1080,6 +1102,8 @@ impl Default for PrePaintTreeWalk {
             client_nodes: HashMap::default(),
             resident_nodes: Vec::new(),
             walk_generation: 0,
+            revision_generation: 0,
+            resource_memo: Vec::new(),
         }
     }
 }
@@ -4627,18 +4651,16 @@ fn CanRetainDisplayLockedChildren(
     child_pre_paint_blocked_by_display_lock && !source_owner_changed
 }
 
-fn RequiresFullSourceWalk(
-    source_owner_changed: bool,
-    retained_tree_valid: bool,
-    root_revision: u64,
-) -> bool {
+fn RequiresFullSourceWalk(source_owner_changed: bool, retained_tree_valid: bool) -> bool {
     // Chromium retains LayoutObject/FragmentData owners across PrePaint. A
     // replacement LayoutResult in Rechrom owns a different sidecar allocation,
     // so no retained raw FragmentPaintData pointer may cross this boundary.
     // Rebuild while the preceding lease is still alive. UpdateNode then visits
     // old/new nodes in lockstep once: O(n), without a recursive compatibility
     // proof at every descendant.
-    source_owner_changed || !retained_tree_valid || root_revision == 0
+    // Retained-node admission reads only the live dirty bits and PrePaint's
+    // own records (UpdateNode), so no Layout certification gates it.
+    source_owner_changed || !retained_tree_valid
 }
 
 // LayoutSVGHiddenContainer::Paint is a subtree boundary. Preserve its
@@ -6161,6 +6183,136 @@ impl PrePaintTreeWalk {
             }
     }
 
+    /// The first rule by which the retained `node` cannot stand for
+    /// `fragment`'s own PrePaint state, or None. Source:
+    /// pre_paint_tree_walk.cc:418-437 visits an object for its own dirty
+    /// bits (PrePaintInvalidation::own, read live from the LayoutObject).
+    /// Chromium also keeps, on the same LayoutObject/FragmentData, values
+    /// that change without dirtying this object; PrePaint compares its own
+    /// records of them: the link offset (a parent's relayout moves a
+    /// cache-hit child), the size, the source identity, the live
+    /// DisplayItemClients, and the document resources the object paints
+    /// with. Index: 0 own bits, 1 offset, 2 size, 3 identity, 4 owners,
+    /// 5 resources.
+    fn RetainedSelfChange(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        fragment: PaintFragmentSource<'_>,
+    ) -> Option<usize> {
+        let Some(cache) = node.cache.as_ref() else {
+            return Some(3);
+        };
+        let f: &FragmentPaintData = &fragment;
+        if f.pre_paint_invalidation.own() {
+            return Some(0);
+        }
+        if cache.record.offset != fragment.Cursor().ViewOffsetInContainer() {
+            return Some(1);
+        }
+        if cache.record.size != f.ViewSize() {
+            return Some(2);
+        }
+        if !SamePreviousSourceIdentity(node, f) {
+            return Some(3);
+        }
+        // Recorded client ids name the same live clients; a client the
+        // record does not cover must not be newly created unless Layout
+        // observed its owner token as retained.
+        if !SameClientDirectory(node, f)
+            || (!f.pre_paint_owner_retained
+                && layoutng_assembly::fragment_tree::pre_paint_revision::HasJustCreatedClient(f))
+        {
+            return Some(4);
+        }
+        let usage = || {
+            cache.resource_usage
+                | layoutng_assembly::fragment_tree::pre_paint_revision::PaintResourceUsage(f)
+        };
+        if !self.SameDocumentResources(
+            cache.resources.as_ref(),
+            fragment.Cursor().DocumentResources(),
+            usage,
+        ) {
+            return Some(5);
+        }
+        None
+    }
+
+    /// The first rule by which `node`'s retained descendants cannot stand
+    /// for `fragment`'s, or None; RetainedSelfChange must already hold.
+    /// Source: pre_paint_tree_walk.cc:418-437 descends for descendant dirty
+    /// bits; a display-locked child walk left pending (subtree revision 0)
+    /// and the document resources of the whole subtree are the remaining
+    /// inputs. Index: 6 descendant bits, 7 pending child walk, 8 resources.
+    fn RetainedDescendantChange(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        fragment: PaintFragmentSource<'_>,
+    ) -> Option<usize> {
+        let Some(cache) = node.cache.as_ref() else {
+            return Some(7);
+        };
+        if fragment.pre_paint_invalidation.descendants() {
+            return Some(6);
+        }
+        if cache.subtree_revision == 0 {
+            return Some(7);
+        }
+        if !self.SameDocumentResources(
+            cache.resources.as_ref(),
+            fragment.Cursor().DocumentResources(),
+            || cache.subtree_resource_usage,
+        ) {
+            return Some(8);
+        }
+        None
+    }
+
+    fn RetainedSelfUnchanged(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        fragment: PaintFragmentSource<'_>,
+    ) -> bool {
+        self.RetainedSelfChange(node, fragment).is_none()
+    }
+
+    fn RetainedDescendantsUnchanged(
+        &mut self,
+        node: &PaintTreeNode<'_>,
+        fragment: PaintFragmentSource<'_>,
+    ) -> bool {
+        self.RetainedDescendantChange(node, fragment).is_none()
+    }
+
+    /// Whether a fragment last proven against `recorded` document paint
+    /// resources paints the same under `current`, for its resource `usage`
+    /// (evaluated only when the two values are different allocations).
+    fn SameDocumentResources(
+        &mut self,
+        recorded: Option<&Arc<PaintResources>>,
+        current: Option<&Arc<PaintResources>>,
+        usage: impl FnOnce() -> u8,
+    ) -> bool {
+        let (recorded, current) = match (recorded, current) {
+            (None, None) => return true,
+            (Some(a), Some(b)) if Arc::ptr_eq(a, b) => return true,
+            (Some(a), Some(b)) => (a, b),
+            _ => return false,
+        };
+        let usage = usage();
+        if let Some(&(_, _, _, same)) = self.resource_memo.iter().find(|(a, b, u, _)| {
+            *u == usage && Arc::ptr_eq(a, recorded) && Arc::ptr_eq(b, current)
+        }) {
+            return same;
+        }
+        let same = layoutng_assembly::fragment_tree::pre_paint_revision::SamePaintResourcesFor(
+            recorded, current, usage,
+        );
+        self.resource_memo
+            .push((recorded.clone(), current.clone(), usage, same));
+        same
+    }
+
     fn UpdateNode(
         &mut self,
         fragment: PaintFragmentSource<'_>,
@@ -6257,20 +6409,33 @@ impl PrePaintTreeWalk {
         self.stats.retained_context_nodes += retained_context as usize;
         self.stats.retained_geometry_covered_nodes += retained_geometry_covered as usize;
         self.stats.invalidation_nodes += should_run_invalidation as usize;
-        let subtree_revision_matches = fragment.pre_paint_subtree_revision != 0
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().unwrap().subtree_revision == fragment.pre_paint_subtree_revision
-            });
-        let self_revision_matches = fragment.pre_paint_revision != 0
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().unwrap().revision == fragment.pre_paint_revision
-            });
+        // PrePaint's own admission (RetainedSelfChange /
+        // RetainedDescendantChange): the live dirty bits plus this node's
+        // records, never a Layout-certified revision.
+        let self_change = previous
+            .as_deref()
+            .map(|node| self.RetainedSelfChange(node, fragment));
+        let self_unchanged = self_change == Some(None);
+        let descendant_change = if self_unchanged {
+            previous
+                .as_deref()
+                .and_then(|node| self.RetainedDescendantChange(node, fragment))
+        } else {
+            None
+        };
+        let subtree_unchanged = self_unchanged && descendant_change.is_none();
+        if let Some(Some(rule)) = self_change {
+            self.stats.admission_rejects[rule] += 1;
+        }
+        if let Some(rule) = descendant_change {
+            self.stats.admission_rejects[rule] += 1;
+        }
         // A replacement source owner forces this complete walk. Clean-subtree
         // admission is therefore available only while the resident sidecar
         // itself remains the owner of every raw FragmentPaintData pointer.
         let source_tree_compatible = !self.source_owner_changed;
-        self.stats.subtree_revision_matches += subtree_revision_matches as usize;
-        self.stats.self_revision_matches += self_revision_matches as usize;
+        self.stats.self_unchanged_nodes += self_unchanged as usize;
+        self.stats.subtree_unchanged_nodes += subtree_unchanged as usize;
         self.stats.source_tree_compatible_nodes += source_tree_compatible as usize;
         let subtree_clean = !self
             .local_frame_views
@@ -6280,8 +6445,7 @@ impl PrePaintTreeWalk {
                 .is_none_or(|node| !node.cache.as_ref().unwrap().contains_local_frames)
             && (same_context || retained_geometry_covered)
             && !should_run_invalidation
-            && !fragment.pre_paint_invalidation.descendants()
-            && subtree_revision_matches
+            && subtree_unchanged
             // A replacement LayoutResult republishes the same stable sidecar
             // slots; a clean subtree whose source topology is unchanged only
             // needs its two owner references moved (RebindCleanSubtree).
@@ -6339,13 +6503,13 @@ impl PrePaintTreeWalk {
         let old_fragment = old_snapshot
             .as_ref()
             .map(|fragment| fragment as *const FragmentPaintData);
-        let self_clean = (same_context || retained_geometry_covered)
-            && self_revision_matches
-            && (!self.source_owner_changed
-                || previous.as_ref().is_some_and(|node| {
-                    SamePreviousSourceIdentity(node, &fragment)
-                        && SameClientDirectory(node, &fragment)
-                }));
+        // self_unchanged already proves the source identity and client
+        // directory that a replacement owner's rebind requires.
+        let self_clean = (same_context || retained_geometry_covered) && self_unchanged;
+        let previous_resource_usage = previous
+            .as_ref()
+            .and_then(|node| node.cache.as_ref())
+            .map(|cache| cache.resource_usage);
         // Both the invalidation-only and same-geometry proofs compare the old
         // sidecar's style projection with the new one. After a replacement
         // LayoutResult the old projection may reference a ComputedStyle that
@@ -6370,7 +6534,7 @@ impl PrePaintTreeWalk {
         // UpdateForObjectLocation path updates just PaintOffset).
         let shift_check = self.shift_check;
         let mut rebased_own_states = None;
-        let shift_delta = if !self_clean && !invalidation_only && !force && self_revision_matches {
+        let shift_delta = if !self_clean && !invalidation_only && !force && self_unchanged {
             previous.as_ref().and_then(|node| {
                 let cache = node.cache.as_ref()?;
                 if (self.source_owner_changed
@@ -6397,7 +6561,7 @@ impl PrePaintTreeWalk {
             let reason = match previous.as_ref().and_then(|node| node.cache.as_ref().map(|c| (node, c))) {
                 None => 0,
                 _ if force => 0,
-                _ if !self_revision_matches => 1,
+                _ if !self_unchanged => 1,
                 Some((_, cache))
                     if !(cache.own_keys.is_empty() || RebasableOwnEffect(cache, &inherited)) =>
                 {
@@ -6451,6 +6615,8 @@ impl PrePaintTreeWalk {
                     .should_check_for_paint_invalidation = true;
             }
             self.needs_post_update = true;
+            // Shifted geometry is a new PrePaint state of this node.
+            node.cache.as_mut().unwrap().revision = self.revision_generation;
             self.stats.shift_branch_ns += ProfileNs(t_shift, checkpoint());
             node
         } else if self_clean {
@@ -6471,7 +6637,7 @@ impl PrePaintTreeWalk {
             node.BindSource(fragment);
             let cache = node.cache.as_mut().unwrap();
             cache.inherited = inherited.clone();
-            cache.revision = fragment.pre_paint_revision;
+            cache.revision = self.revision_generation;
             node
         } else {
             let mut built = PaintPropertyTreeBuilder::new(self)
@@ -6720,7 +6886,22 @@ impl PrePaintTreeWalk {
             PreviousFragment(old_fragment),
             previous_display_item_client_id,
         );
-        node.cache.as_mut().unwrap().inherited = inherited.clone();
+        {
+            // This node is now proven (RetainedSelfChange) or rebuilt
+            // against the current document resources. Its usage follows its
+            // own inputs, so an unchanged node keeps the recorded one.
+            let resources = fragment.Cursor().DocumentResources().cloned();
+            let usage = match previous_resource_usage {
+                Some(usage) if self_unchanged => usage,
+                _ => layoutng_assembly::fragment_tree::pre_paint_revision::PaintResourceUsage(
+                    &fragment,
+                ),
+            };
+            let cache = node.cache.as_mut().unwrap();
+            cache.inherited = inherited.clone();
+            cache.resources = resources;
+            cache.resource_usage = usage;
+        }
         // Chromium runs invalidation after property construction. The initial
         // admission above is only a clean-subtree proof: UpdateForObjectLocation
         // may have dirtied a previously clean object through an ancestor move.
@@ -6856,6 +7037,16 @@ impl PrePaintTreeWalk {
         if inherited.root {
             self.CaptureRootFixedPositionContext(&base, &node);
         }
+        // This node's comparisons are complete: record the values the next
+        // lifecycle compares against (RetainedSelfChange reads them), also
+        // for a display-locked node whose children are retained below.
+        // Children record theirs in their own UpdateNode, after the identity
+        // check below has read them.
+        let snapshot = node.fragment.as_deref().map(PreviousFragmentSnapshot);
+        if let Some(cache) = node.cache.as_mut() {
+            cache.record = current_record;
+            cache.previous_fragment = snapshot;
+        }
         // Source: core/paint/pre_paint_tree_walk.cc:1517-1535.
         // Display locking blocks only the child walk. WalkInternal has already
         // updated this object, so retain its resident children exactly as they
@@ -6873,6 +7064,7 @@ impl PrePaintTreeWalk {
         ) {
             let mut keys = own_keys;
             let mut nodes = 1;
+            let mut subtree_resource_usage = node.cache.as_ref().unwrap().resource_usage;
             for child in &node.children {
                 let child_cache = child
                     .cache
@@ -6880,6 +7072,7 @@ impl PrePaintTreeWalk {
                     .expect("resident child has builder state");
                 keys.extend(child_cache.subtree_keys.iter().copied());
                 nodes += child_cache.nodes;
+                subtree_resource_usage |= child_cache.subtree_resource_usage;
             }
             self.property_keys.extend(keys.iter().copied());
             self.stats.reused_nodes += nodes.saturating_sub(1);
@@ -6891,6 +7084,7 @@ impl PrePaintTreeWalk {
                 .collect();
             let cache = node.cache.as_mut().unwrap();
             cache.subtree_revision = 0;
+            cache.subtree_resource_usage = subtree_resource_usage;
             cache.subtree_keys = keys;
             cache.nodes = nodes;
             cache.physical_children = physical_children;
@@ -6918,14 +7112,6 @@ impl PrePaintTreeWalk {
         // isolation. Reuse the existing piercing `force` channel for the
         // descendants; the current node has already been rebuilt above.
         let force_descendants = force || FilterTaintChanged(was_filter_origin_tainted, &node);
-        // This node's comparisons are complete: record the values the next
-        // lifecycle compares against. Children record theirs in their own
-        // UpdateNode, after the identity check below has read them.
-        let snapshot = node.fragment.as_deref().map(PreviousFragmentSnapshot);
-        if let Some(cache) = node.cache.as_mut() {
-            cache.record = current_record;
-            cache.previous_fragment = snapshot;
-        }
         let same_children = old_children.len()
             == OrdinaryPaintSourceChildren(fragment).count()
                 + usize::from(embedded_source.is_some())
@@ -7056,18 +7242,35 @@ impl PrePaintTreeWalk {
             .iter_mut()
             .map(|child| &mut **child as *mut _)
             .collect();
-        let child_walk_pending = node.children.iter().any(|child| {
-            child
-                .cache
-                .as_ref()
-                .is_some_and(|cache| cache.subtree_revision == 0)
-        });
+        let generation = self.revision_generation;
+        let mut child_walk_pending = false;
+        let mut child_changed = false;
+        let mut subtree_resource_usage = node.cache.as_ref().unwrap().resource_usage;
+        for child in &node.children {
+            let cache = child.cache.as_ref().expect("resident child has builder state");
+            child_walk_pending |= cache.subtree_revision == 0;
+            // Generations are process-unique: a child subtree that changed
+            // in this pass carries exactly this pass's generation.
+            child_changed |= cache.subtree_revision == generation;
+            subtree_resource_usage |= cache.subtree_resource_usage;
+        }
         let cache = node.cache.as_mut().unwrap();
+        // PrePaint's subtree revision: kept while this node and every child
+        // subtree were kept and the child list is the same; otherwise this
+        // pass's generation. Zero keeps a pending child walk visible to the
+        // ancestors' admission.
         cache.subtree_revision = if child_walk_pending {
             0
+        } else if same_children
+            && !child_changed
+            && cache.revision != generation
+            && cache.subtree_revision != 0
+        {
+            cache.subtree_revision
         } else {
-            fragment.pre_paint_subtree_revision
+            generation
         };
+        cache.subtree_resource_usage = subtree_resource_usage;
         cache.subtree_keys = keys;
         cache.nodes = nodes;
         cache.physical_children = physical_children;
@@ -7376,6 +7579,12 @@ impl PrePaintTreeWalk {
             .walk_generation
             .checked_add(1)
             .expect("PrePaint pass exhausted");
+        // Process-unique, so no retained node of any walk already holds it.
+        static PRE_PAINT_REVISION: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        self.revision_generation =
+            PRE_PAINT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        self.resource_memo.clear();
         self.reset_owners.clear();
         // Retained raw builder states can survive more than one incremental
         // pass. Keep every temporary label still reachable from those states;
@@ -7493,30 +7702,30 @@ impl PrePaintTreeWalk {
         // raw references into the preceding sidecar, so Chromium's in-place
         // FragmentData update cannot be emulated by identity-only rebinding.
         // Force one linear old/new walk before releasing that preceding lease.
-        let force = RequiresFullSourceWalk(
-            source_owner_changed,
-            self.retained_tree_valid,
-            root.pre_paint_revision,
-        );
+        let force = RequiresFullSourceWalk(source_owner_changed, self.retained_tree_valid);
+        // Source: pre_paint_tree_walk.cc:418-437. With no dirty bit on the
+        // LayoutView and none below it, no object requires PrePaint. This is
+        // UpdateNode's clean-subtree admission applied to the root.
         let entirely_clean = self.local_frame_views.is_empty()
             && self.retained_local_frame_leases.is_empty()
             && !force
-            && !root.pre_paint_invalidation.own()
-            && !root.pre_paint_invalidation.descendants()
-            && root.pre_paint_subtree_revision != 0
-            && previous.as_ref().is_some_and(|node| {
-                node.cache.as_ref().is_some_and(|cache| {
-                    cache.subtree_revision == root.pre_paint_subtree_revision
-                        && self.SameContext(&cache.inherited, &context)
-                })
+            && previous.as_deref().is_some_and(|node| {
+                node.cache
+                    .as_ref()
+                    .is_some_and(|cache| self.SameContext(&cache.inherited, &context))
+                    && self.RetainedSelfUnchanged(node, root)
+                    && self.RetainedDescendantsUnchanged(node, root)
             });
         if entirely_clean {
             let tree = previous.unwrap();
             let cache = tree.cache.as_ref().unwrap();
             self.stats.reused_nodes = cache.nodes;
             self.stats.skipped_subtrees = 1;
+            self.stats.self_unchanged_nodes = 1;
+            self.stats.subtree_unchanged_nodes = 1;
             self.property_keys
                 .extend(cache.subtree_keys.iter().copied());
+            self.resource_memo.clear();
             return tree;
         }
         // Chromium's FragmentData outlives a relayout, so PrePaint visits only
@@ -7528,7 +7737,6 @@ impl PrePaintTreeWalk {
         let rebind = force
             && source_owner_changed
             && self.retained_tree_valid
-            && root.pre_paint_revision != 0
             && previous.is_some();
         self.stats.rebind_walk = rebind;
         let force = force && !rebind;
@@ -7612,14 +7820,39 @@ impl PrePaintTreeWalk {
                 "retained_covered",
                 self.stats.retained_geometry_covered_nodes as f64,
             );
+            // Retained nodes admitted (or rejected) by each rule of the
+            // dirty-bit admission (UpdateNode).
+            admission.set("self_unchanged", self.stats.self_unchanged_nodes as f64);
             admission.set(
-                "subtree_revision_matches",
-                self.stats.subtree_revision_matches as f64,
+                "subtree_unchanged",
+                self.stats.subtree_unchanged_nodes as f64,
+            );
+            admission.set("reject_own_bits", self.stats.admission_rejects[0] as f64);
+            admission.set("reject_offset", self.stats.admission_rejects[1] as f64);
+            admission.set("reject_size", self.stats.admission_rejects[2] as f64);
+            admission.set("reject_identity", self.stats.admission_rejects[3] as f64);
+            admission.set("reject_owners", self.stats.admission_rejects[4] as f64);
+            admission.set("reject_resources", self.stats.admission_rejects[5] as f64);
+            admission.set(
+                "reject_descendant_bits",
+                self.stats.admission_rejects[6] as f64,
             );
             admission.set(
-                "self_revision_matches",
-                self.stats.self_revision_matches as f64,
+                "reject_pending_child_walk",
+                self.stats.admission_rejects[7] as f64,
             );
+            admission.set(
+                "reject_subtree_resources",
+                self.stats.admission_rejects[8] as f64,
+            );
+            // What the admitted nodes became.
+            admission.set("skipped_subtrees", self.stats.skipped_subtrees as f64);
+            admission.set("shifted", self.stats.shifted_nodes as f64);
+            admission.set(
+                "invalidation_only",
+                self.stats.invalidation_only_nodes as f64,
+            );
+            self.resource_memo.clear();
             admission.set(
                 "source_tree_compatible",
                 self.stats.source_tree_compatible_nodes as f64,
@@ -8401,7 +8634,7 @@ mod tests {
         let mut resident_source: Option<Box<FragmentPaintData>> = None;
         let mut resident_node: Option<Box<PaintTreeNode<'static>>> = None;
         for revision in [1, 2, 3, u64::MAX] {
-            assert!(RequiresFullSourceWalk(true, true, revision));
+            assert!(RequiresFullSourceWalk(true, true));
 
             let mut source = Box::new(FragmentPaintData::default());
             source.paint.has_source = true;
@@ -8457,9 +8690,8 @@ mod tests {
             );
             assert!(SamePhaseInputs(current, current));
         }
-        assert!(!RequiresFullSourceWalk(false, true, 1));
-        assert!(RequiresFullSourceWalk(false, false, 1));
-        assert!(RequiresFullSourceWalk(false, true, 0));
+        assert!(!RequiresFullSourceWalk(false, true));
+        assert!(RequiresFullSourceWalk(false, false));
     }
 
     #[test]
