@@ -7025,33 +7025,6 @@ impl Page {
                 );
             }
         }
-        fn install_resources(
-            node: &mut FragmentPaintData,
-            resources: &Arc<PaintResources>,
-            catalogs: &mut std::collections::HashMap<*const PaintResources, bool>,
-            replaced: &mut Vec<Arc<PaintResources>>,
-        ) -> bool {
-            // Fragment-local paint inputs share one immutable catalog. Compare
-            // each distinct prior catalog once, preserving resource identity
-            // when it is current, as ImageResourceContent/Font retain theirs.
-            let changed = node.resources.as_ref().is_none_or(|previous| {
-                if Arc::ptr_eq(previous, resources) {
-                    return false;
-                }
-                *catalogs.entry(Arc::as_ptr(previous)).or_insert_with(|| {
-                    let changed = previous.as_ref() != resources.as_ref();
-                    if changed {
-                        replaced.push(previous.clone());
-                    }
-                    changed
-                })
-            });
-            if changed {
-                node.resources = Some(resources.clone());
-            }
-            changed
-        }
-
         let preferred_color_scheme = match self.state.preferred_color_scheme.get() {
             PreferredColorScheme::kDark => 1,
             _ => 0,
@@ -7120,23 +7093,21 @@ impl Page {
                 viewport: constraints.viewport,
             });
             let mut trace = browser_tracing::span("resource", "Page.BindPaintResources");
-            let mut catalogs = std::collections::HashMap::new();
-            let mut replaced = Vec::new();
-            let mut rebound = false;
-            output.VisitPaintInputsMut(|input| {
-                rebound |= install_resources(input, &resources, &mut catalogs, &mut replaced)
-            });
-            trace.set("compared_catalogs", catalogs.len() as f64);
+            // The document's catalog is held once by the Layout output, as
+            // ImageResourceContent/Font retain their identity when current.
+            let previous = output.DocumentResources().cloned();
+            let rebound = output.SetDocumentResources(resources.clone());
+            trace.set("rebound", rebound as u8 as f64);
             drop(constraints);
             // ImageResourceObserver::ImageChanged and the frame-view resource
             // notifications reach their LayoutObjects; the caller's
             // RefreshOutputPrePaintInputs exports the resulting dirty bits.
-            if !replaced.is_empty() {
+            if let Some(previous) = previous.filter(|_| rebound) {
                 let clients = self
                     .state
                     .layout_engine
                     .borrow_mut()
-                    .NotifyPaintResourcesChanged(&replaced, &resources);
+                    .NotifyPaintResourcesChanged(&[previous], &resources);
                 trace.set("invalidated_clients", clients as f64);
             }
             return Ok(rebound);
@@ -7203,38 +7174,21 @@ impl Page {
             should_clear_document_background: self.state.should_clear_document_background.get(),
             viewport: constraints.viewport,
         });
-        fn install(
-            node: &mut FragmentPaintData,
-            resources: &Arc<PaintResources>,
-            replaced: &mut Vec<Arc<PaintResources>>,
-        ) -> bool {
-            let rebound = node.resources.as_deref() != Some(resources.as_ref());
-            if rebound {
-                if let Some(previous) = &node.resources {
-                    if !replaced.iter().any(|known| Arc::ptr_eq(known, previous)) {
-                        replaced.push(previous.clone());
-                    }
-                }
-            }
-            node.resources = Some(resources.clone());
-            rebound
-        }
         // Retained fragment-local Paint data can still point at the catalog
         // from before an earlier container mutation. Even when the requested
         // variant is already present in Page's current catalog, bind that
         // catalog and re-record once so the immutable artifact publishes the
         // exact record named by its display items.
-        let mut rebound = false;
-        let mut replaced = Vec::new();
-        output.VisitPaintInputsMut(|input| rebound |= install(input, &resources, &mut replaced));
+        let previous = output.DocumentResources().cloned();
+        let rebound = output.SetDocumentResources(resources.clone());
         drop(constraints);
         // Deliver the catalog change to its LayoutObject clients before the
         // caller republishes PrePaint inputs (RefreshOutputPrePaintInputs).
-        if !replaced.is_empty() {
+        if let Some(previous) = previous.filter(|_| rebound) {
             self.state
                 .layout_engine
                 .borrow_mut()
-                .NotifyPaintResourcesChanged(&replaced, &resources);
+                .NotifyPaintResourcesChanged(&[previous], &resources);
         }
         Ok(changed || rebound)
     }

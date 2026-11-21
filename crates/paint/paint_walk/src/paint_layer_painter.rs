@@ -257,7 +257,7 @@ fn ShouldCreateSubsequence(
         if let (Some(last_bounds), Some(visual_rect), Some(resources)) = (
             context.borrow().LastChunkBounds(),
             fragment.paint.PaintLayerFirstFragmentVisualRect(),
-            fragment.resources.as_deref(),
+            layer.DocumentResources(),
         ) {
             let visual_rect = PaintRect {
                 x: visual_rect.offset.x,
@@ -415,10 +415,12 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
                 .expect("subsequence PaintLayer fragment");
             let client = DisplayItemClientInfo::from_paint_layer(fragment)
                 .expect("subsequence requires a source PaintLayer client");
-            let debug = Some((
-                fragment.paint.DisplayItemClientOwnerNodeId(),
-                fragment.paint.display_item_client_debug_name.clone(),
-            ));
+            let debug = self.context.borrow().DebugInfoEnabled().then(|| {
+                (
+                    fragment.paint.DisplayItemClientOwnerNodeId(),
+                    fragment.paint.DisplayItemClientDebugName(),
+                )
+            });
             self.context.borrow_mut().walk_metrics.subsequence_layers += 1;
             if self.layer.self_or_descendant_needs_repaint {
                 self.context.borrow_mut().walk_metrics.subsequence_needs_repaint += 1;

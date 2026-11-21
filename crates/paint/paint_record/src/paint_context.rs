@@ -505,10 +505,12 @@ impl<'o> PaintContext<'o> {
         self.UseCachedDrawingWithClient(
             id,
             DisplayItemClientInfo::from_fragment(fragment),
-            Some((
-                fragment.paint.DisplayItemClientOwnerNodeId(),
-                fragment.paint.display_item_client_debug_name.clone(),
-            )),
+            self.output.DebugInfoEnabled().then(|| {
+                (
+                    fragment.paint.DisplayItemClientOwnerNodeId(),
+                    fragment.paint.DisplayItemClientDebugName(),
+                )
+            }),
         )
     }
 
@@ -619,9 +621,9 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.ViewDisplayItemFragment(),
         };
         let client = self.ApplyCacheSkipping(DisplayItemClientInfo::from_fragment(fragment));
-        self.output.RecordDebugInfo(
+        self.output.RecordDebugInfoWith(
             id.client_id as usize,
-            fragment.paint.display_item_client_debug_name.clone(),
+            || fragment.paint.DisplayItemClientDebugName(),
             fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         let (visual_rect, visual_rect_is_accurate) = TightenVisualRect(
@@ -685,9 +687,9 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        self.output.RecordDebugInfo(
+        self.output.RecordDebugInfoWith(
             fragment.paint.DisplayItemClientId() as usize,
-            fragment.paint.display_item_client_debug_name.clone(),
+            || fragment.paint.DisplayItemClientDebugName(),
             fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         self.BeginDrawingRecorderWithClient(
@@ -707,14 +709,20 @@ impl<'o> PaintContext<'o> {
         }
     }
 
+    /// Whether client debug names are recorded (PaintDebugInfoEnabled); a
+    /// caller builds a DebugName only when this holds.
+    pub fn DebugInfoEnabled(&self) -> bool {
+        self.output.DebugInfoEnabled()
+    }
+
     pub fn RegisterAuxiliaryClient(
         &mut self,
         id: u64,
         owner_node_id: i32,
-        debug_name: std::sync::Arc<str>,
+        debug_name: impl FnOnce() -> std::sync::Arc<str>,
     ) {
         self.output
-            .RecordDebugInfo(id as usize, debug_name, owner_node_id);
+            .RecordDebugInfoWith(id as usize, debug_name, owner_node_id);
     }
 
     pub fn BeginDrawingRecorderWithClient(
@@ -947,9 +955,9 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.ViewDisplayItemFragment(),
         };
         let client = DisplayItemClientInfo::from_fragment(fragment);
-        self.output.RecordDebugInfo(
+        self.output.RecordDebugInfoWith(
             id.client_id as usize,
-            fragment.paint.display_item_client_debug_name.clone(),
+            || fragment.paint.DisplayItemClientDebugName(),
             fragment.paint.DisplayItemClientOwnerNodeId(),
         );
         self.paint_controller.RecordScrollHitTestData(
@@ -1004,9 +1012,9 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.ViewDisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
-            self.output.RecordDebugInfo(
+            self.output.RecordDebugInfoWith(
                 id.client_id as usize,
-                fragment.paint.display_item_client_debug_name.clone(),
+                || fragment.paint.DisplayItemClientDebugName(),
                 fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }
@@ -1055,9 +1063,9 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.ViewDisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
-            self.output.RecordDebugInfo(
+            self.output.RecordDebugInfoWith(
                 id.client_id as usize,
-                fragment.paint.display_item_client_debug_name.clone(),
+                || fragment.paint.DisplayItemClientDebugName(),
                 fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }
@@ -1140,9 +1148,9 @@ impl<'o> PaintContext<'o> {
             fragment: fragment.ViewDisplayItemFragment(),
         };
         if client_id == fragment.paint.DisplayItemClientId() {
-            self.output.RecordDebugInfo(
+            self.output.RecordDebugInfoWith(
                 id.client_id as usize,
-                fragment.paint.display_item_client_debug_name.clone(),
+                || fragment.paint.DisplayItemClientDebugName(),
                 fragment.paint.DisplayItemClientOwnerNodeId(),
             );
         }

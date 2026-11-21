@@ -45,7 +45,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
             .ViewReplacedContent()
             .expect("LayoutHTMLCanvas must publish replaced-content geometry");
         debug_assert!(replaced.is_canvas);
-        let resource = fragment.resources.as_deref().and_then(|resources| {
+        let resource = self.node.DocumentResources().and_then(|resources| {
             resources
                 .canvases
                 .iter()

@@ -144,9 +144,7 @@ fn HitTestAtResidentWithFlags<'a>(
         return Err(ResidentCursorError::LayerIdentityMismatch);
     }
     let zoom = fragments
-        
-        .resources
-        .as_ref()
+        .DocumentResources()
         .map_or(1.0, |resources| resources.layout_zoom_factor)
         .max(f64::MIN_POSITIVE);
     let point = PhysicalOffset::new(
@@ -177,9 +175,7 @@ pub fn CursorAtResident<'a>(
 ) -> Result<Option<crate::cursor::Cursor>, ResidentCursorError> {
     let result = HitTestAtResident(document, point, paint_engine, fragments, resolver)?;
     let zoom = fragments
-        
-        .resources
-        .as_ref()
+        .DocumentResources()
         .map_or(1.0, |resources| resources.layout_zoom_factor)
         .max(f64::MIN_POSITIVE);
     let location = ResidentCursorLocation(foundation::PhysicalOffset::new(
@@ -1754,9 +1750,7 @@ fn QueryPreparedResident(
         let result = nodes.CursorResult(&result)?;
         let zoom = query
             .fragments
-            
-            .resources
-            .as_ref()
+            .DocumentResources()
             .map_or(1.0, |resources| resources.layout_zoom_factor)
             .max(f64::MIN_POSITIVE);
         Ok(PreparedQueryResult::Cursor(PreparedResidentCursorHit {

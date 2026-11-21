@@ -108,7 +108,6 @@ pub(super) fn populate_layout_result_paint_data(
         unsafe { LayoutResultHandle::FromLayoutResultWithPaintState(result, paint_state.clone()) };
     let mut paint_state_owners = FragmentOwners {
         exported_styles: std::mem::take(&mut cache.styles),
-        debug_names: std::mem::take(&mut cache.debug_names),
         fragment_instance_ids: std::mem::take(&mut cache.fragment_instance_ids),
         prior_fragment_instance_ids,
         replay_previous: if purpose == LayoutUpdateKind::Paint {
@@ -144,6 +143,7 @@ pub(super) fn populate_layout_result_paint_data(
     };
     if let Some(tracker) = paint_state_owners.certification.as_mut() {
         tracker.BeginProductionUpdate();
+        tracker.SetProductionDocumentResources(Some(Arc::clone(&resources)));
     }
     {
         let mut phase = layout_fragment_boundary::trace::span(
@@ -223,6 +223,11 @@ pub(super) fn populate_layout_result_paint_data(
         tracker.FinishProductionUpdate();
         cache.pre_paint_certification = Some(tracker);
     }
+    // Population compared the resident slots against the document resources
+    // they were last painted with; the result now paints with these. They
+    // are the Document / LocalFrameView values Chromium reads, held once per
+    // result rather than on every fragment slot.
+    paint_state.SetDocumentResources(resources);
     let copies_after_population =
         layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed);
     trace.set(
@@ -271,7 +276,6 @@ pub(super) fn populate_layout_result_paint_data(
         (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed) - copies_after_parents) as f64,
     );
     cache.styles = paint_state_owners.exported_styles;
-    cache.debug_names = paint_state_owners.debug_names;
     cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
     if purpose == LayoutUpdateKind::Paint {
         cache.population_replay = std::mem::take(&mut paint_state_owners.replay_next);

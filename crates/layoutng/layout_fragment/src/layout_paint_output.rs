@@ -13,9 +13,7 @@ pub(super) fn paint_cull_rect_has_scrolled_enough(
     fn changed(cursor: PaintFragmentCursor<'_>, id: u64, offset: Offset) -> bool {
         const CHANGED_ENOUGH_DISTANCE: f64 = 512.0;
         let expansion_ratio = cursor
-            
-            .resources
-            .as_ref()
+            .DocumentResources()
             .map_or(1.0, |resources| resources.device_pixel_ratio)
             .max(f64::MIN_POSITIVE);
         let threshold = CHANGED_ENOUGH_DISTANCE * expansion_ratio;

@@ -106,8 +106,10 @@ fn RetainedPaintProperties(
         }
         invalidation
     };
-    let previous = paint_state.ResidentFragment(instance)?.resources.as_ref();
-    RetainedResourcesAreCompatible(previous, resources, owners).then_some(invalidation)
+    paint_state.ResidentFragment(instance)?;
+    // Every resident slot was last painted with the document resources its
+    // publication (or a later Page resource update) installed on the state.
+    RetainedResourcesAreCompatible(paint_state.DocumentResources(), resources, owners).then_some(invalidation)
 }
 
 // Chromium reads tree order directly from its resident LayoutObject graph.
@@ -357,7 +359,6 @@ fn PopulateInlineItemLocalPaintData(
         );
         output.prepare_for_publication();
         output.pre_paint_invalidation = invalidation;
-        output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
@@ -371,7 +372,6 @@ fn PopulateInlineItemLocalPaintData(
             purpose,
             Some(&mut paint_state_owners.exported_styles),
             Some(&mut paint_state_owners.exported_selection_styles),
-            Some(&mut paint_state_owners.debug_names),
         );
         if let Some(started) = export_started {
             paint_state_owners.population_stats.property_export_ns = paint_state_owners
@@ -385,7 +385,6 @@ fn PopulateInlineItemLocalPaintData(
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
         output.certified = certified;
-        output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
             output.pre_paint_invalidation = ExportPrePaintInvalidation(object);
@@ -750,9 +749,11 @@ fn ReplayValid(
     paint_state: &crate::layout_engine::LayoutPaintState,
     owners: &mut FragmentOwners,
 ) -> bool {
-    let _ = paint_state;
-    // Most slots share one previous resource set; prove it once.
-    let mut compatible_previous: Option<usize> = None;
+    // Every slot shares the document resources the previous publication
+    // installed; prove them once.
+    if !RetainedResourcesAreCompatible(paint_state.DocumentResources(), resources, owners) {
+        return false;
+    }
     for entry in entries {
         if !entry.replayable || owners.peek_instance(&entry.key) != Some(entry.instance) {
             return false;
@@ -778,13 +779,6 @@ fn ReplayValid(
             {
                 return false;
             }
-        }
-        let previous = slot.resources.as_ref().map_or(0, |r| Arc::as_ptr(r) as usize);
-        if compatible_previous != Some(previous) {
-            if !RetainedResourcesAreCompatible(slot.resources.as_ref(), resources, owners) {
-                return false;
-            }
-            compatible_previous = Some(previous);
         }
     }
     true
@@ -834,7 +828,6 @@ fn ReplaySubtree(
             matches!(entry.owner, PopulationReplayOwner::Physical(_)),
         );
         let output = unsafe { &mut *binding.data };
-        output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(entry.object, sources, output);
         if let Some(fragment) = entry.paint_state_owner {
             let establishes = owners.insert(fragment, instance);
@@ -1072,7 +1065,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         }
         output.prepare_for_publication();
         output.pre_paint_invalidation = invalidation;
-        output.resources = Some(Arc::clone(resources));
         RefreshRetainedTreeOrder(object, sources, output);
     } else {
         let export_started = browser_tracing::enabled().then(std::time::Instant::now);
@@ -1086,7 +1078,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             purpose,
             Some(&mut paint_state_owners.exported_styles),
             Some(&mut paint_state_owners.exported_selection_styles),
-            Some(&mut paint_state_owners.debug_names),
         );
         if let Some(started) = export_started {
             paint_state_owners.population_stats.property_export_ns = paint_state_owners
@@ -1100,7 +1091,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         *output = FragmentPaintData::new(properties);
         output.resident_owner = resident_owner;
         output.certified = certified;
-        output.resources = Some(Arc::clone(resources));
         if purpose == LayoutUpdateKind::Paint && !object.is_null() {
             // ExportProperties has made the object ready for invalidation.
             output.pre_paint_invalidation = ExportPrePaintInvalidation(object);

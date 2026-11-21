@@ -262,6 +262,26 @@ impl LayoutPaintOutput {
         layout_fragment_layout_paint_output::paint_cull_rect_has_scrolled_enough(self, id, offset)
     }
 
+    /// The document paint resources this output's fragments paint with.
+    pub fn DocumentResources(
+        &self,
+    ) -> Option<&Arc<layout_fragment::fragment_tree::PaintResources>> {
+        self.PaintCursor().DocumentResources()
+    }
+
+    /// Install the document's current paint resources on this output, as
+    /// Document / LocalFrameView state changes without a relayout. Returns
+    /// whether they differ from the resources the output painted with.
+    pub fn SetDocumentResources(
+        &mut self,
+        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+    ) -> bool {
+        self.fragments
+            .PaintState::<LayoutPaintState>()
+            .expect("layout paint output has no paint state")
+            .SetDocumentResources(resources)
+    }
+
     pub fn VisitPaintInputsMut(&mut self, visitor: impl FnMut(&mut FragmentPaintData)) {
         layout_fragment_layout_paint_output::visit_paint_inputs_mut(self, visitor)
     }

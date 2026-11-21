@@ -666,7 +666,7 @@ fn RecordPaint(
     crate::performance::PaintPerformanceSnapshot,
 ) {
     let mut trace = browser_tracing::span("paint", "Paint.RecordPaint");
-    ValidateReplayResources(fragments.resources.as_deref());
+    ValidateReplayResources(fragments.Cursor().DocumentResources().map(|resources| &**resources));
     let paint_tree = if let Some(prepared) = prepared {
         assert!(
             prepared.source.PtrEq(&source_lease),
@@ -693,13 +693,13 @@ fn RecordPaint(
     let mut output = PaintRecording::default();
     output.property_trees = Some(pre_paint.PublishedTrees());
     output.compositor_viewport = pre_paint.ExportCompositorViewport(&fragments);
-    output.resources = fragments.resources.clone();
+    output.resources = fragments.Cursor().DocumentResources().cloned();
     // Same-Page LocalFrames record into this controller. Their immutable
     // resource identities therefore enter its single artifact catalog too;
     // encoded pixels, decoded frames and font bytes remain shared owners.
     for view in pre_paint.LocalFrameViews() {
         let root = view.Root();
-        let Some(resources) = root.resources.as_ref() else {
+        let Some(resources) = root.DocumentResources() else {
             continue;
         };
         ValidateReplayResources(Some(resources));

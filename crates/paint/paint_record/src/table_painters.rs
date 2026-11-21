@@ -450,11 +450,7 @@ fn IsVisible(node: &PaintTreeNode<'_>, rect: &PaintRect) -> bool {
 
 // cpp: paint/table_painters.cc:292-309
 fn FindImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
-    let fragment = node
-        .fragment
-        .as_deref()
-        .expect("paint tree node has a fragment");
-    let resources = fragment.resources.as_ref()?;
+    let resources = node.DocumentResources()?;
     let found = resources.images.iter().find(|image| image.id == id)?;
     if found.width == 0
         || found.height == 0
@@ -595,7 +591,7 @@ fn PaintColumnStyle(
                     height: tile.height,
                 },
                 f64::from(table_fragment.paint.EffectiveZoom()),
-                table_fragment.resources.as_deref(),
+                table_node.DocumentResources().map(|resources| &**resources),
                 (!style.color_scheme_flags_is_normal())
                     .then_some(u8::from(style.used_dark_color_scheme())),
             )
@@ -626,13 +622,7 @@ fn PaintColumnStyle(
             };
             item.paint_shader = Some(ResolvePaintShader(
                 shader,
-                table_node
-                    .fragment
-                    .as_deref()
-                    .expect("table node has a fragment")
-                    
-                    .resources
-                    .as_deref(),
+                table_node.DocumentResources().map(|resources| &**resources),
                 Offset {
                     x: tile.x,
                     y: tile.y,
@@ -655,10 +645,8 @@ fn PaintColumnStyle(
             };
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 style,
-                table_fragment
-                    
-                    .resources
-                    .as_deref()
+                table_node
+                    .DocumentResources()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),
                 *cell_clip,
                 source_rect,
@@ -701,10 +689,8 @@ fn PaintColumnStyle(
             };
             let use_dark_mode_for_image = GetImageAutoDarkMode(
                 style,
-                table_fragment
-                    
-                    .resources
-                    .as_deref()
+                table_node
+                    .DocumentResources()
                     .map_or(1.0, |resources| resources.layout_zoom_factor),
                 tile,
                 source_rect,

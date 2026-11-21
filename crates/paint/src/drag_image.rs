@@ -83,7 +83,7 @@ impl PaintEngine {
                 });
                 let source = root.SourceCursor().expect("retained Layout paint source");
                 let mut output = PaintRecording::default();
-                output.resources = source.resources.clone();
+                output.resources = source.DocumentResources().cloned();
                 let mut paint_context = PaintContext::WithEditing(&mut output, editing);
                 paint_context.BindForeignLayers(foreign_layers);
                 // Same original borrowed text sources and SVG resource directory as

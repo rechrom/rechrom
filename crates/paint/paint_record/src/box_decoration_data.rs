@@ -189,7 +189,8 @@ impl BoxDecorationData {
             .as_deref()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
-        let border_image = fragment.BorderImage();
+        let border_image =
+            fragment.BorderImage(node.DocumentResources().map(|resources| &**resources));
         let has_border_image = border_image.is_some();
         let has_border_radius = BackgroundRadii(node, BackgroundBox::kBorderBox).HasRadius();
 

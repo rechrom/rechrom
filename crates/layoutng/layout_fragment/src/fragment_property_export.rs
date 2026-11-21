@@ -31,7 +31,6 @@ pub(super) fn ExportPaintProperties(
         LayoutUpdateKind::Paint,
         None,
         None,
-        None,
     )
 }
 
@@ -136,7 +135,6 @@ pub(super) fn ExportProperties(
     purpose: LayoutUpdateKind,
     mut exported_styles: Option<&mut ExportedStyleCache>,
     mut exported_selection_styles: Option<&mut ExportedSelectionStyleCache>,
-    mut debug_names: Option<&mut DebugNameCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
     if object.is_null() {
@@ -151,15 +149,8 @@ pub(super) fn ExportProperties(
             .GetMutableForPainting()
             .EnsureIsReadyForPaintInvalidation();
         output.property_fragment_unique_id = PropertyFragmentUniqueId(object, fragment_data);
-        output.display_item_client_debug_name = if let Some(cache) = debug_names.as_deref_mut() {
-            Arc::clone(
-                cache
-                    .entry(object)
-                    .or_insert_with(|| Arc::from(unsafe { &*object }.DebugName().Utf8())),
-            )
-        } else {
-            Arc::from(unsafe { &*object }.DebugName().Utf8())
-        };
+        // DisplayItemClient::DebugName() is read from the bound source object
+        // on demand (PaintProperties::DisplayItemClientDebugName).
     }
     let text_combine = DynamicTo::<LayoutTextCombine>(object);
     if !text_combine.is_null() {

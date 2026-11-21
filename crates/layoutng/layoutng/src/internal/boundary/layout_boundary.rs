@@ -140,7 +140,7 @@ pub(crate) use layout_fragment_fragment_export_support::{
     ExportAppliedTextDecoration, ExportSelectionPaintStyle, ExportSelectionTextDecoration,
 };
 use layout_fragment_fragment_export_support::{
-    DebugNameCache, ExportAppliedTextDecorations, ExportedSelectionStyleCache, ExportedStyleCache,
+    ExportAppliedTextDecorations, ExportedSelectionStyleCache, ExportedStyleCache,
     InputId,
     Number, PublicWritingMode, SourceEntry, SourceMap, StyleSourceEntry, StyleSourceMap,
 };
