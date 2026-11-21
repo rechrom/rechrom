@@ -5280,7 +5280,7 @@ mod package_contract_tests {
             "fn changed(cursor: PaintFragmentCursor",
             "fn visit_paint_inputs_mut",
             "unsafe fn visit(",
-            "paint_cull_scroll_offset",
+            "LastCullRectUpdateScrollPosition",
             "PaintDataMut",
         ] {
             assert!(

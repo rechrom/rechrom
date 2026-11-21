@@ -333,6 +333,13 @@ pub struct PaintLayerScrollableArea {
     snapped_query_target_ids_: Option<scroll_snap::scroll_snap_data::TargetSnapAreaElementIds>,
     snap_target_removal_pending_: bool,
     registered_view_: foundation::WeakMember<super::super::layout_view::LayoutView>,
+    // Source: core/paint/paint_layer_scrollable_area.h
+    // (last_cull_rect_update_scroll_position_). The scroll position the
+    // contents CullRect was last computed for; CullRectUpdater compares the
+    // current offset against it (cull_rect_updater.cc:193-206). Paint-owned
+    // cull bookkeeping on the scroll owner, never on a layout export. `None`
+    // until the first paint publication or scroll commit records it.
+    last_cull_rect_update_scroll_position_: Cell<Option<(f64, f64)>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -391,6 +398,7 @@ impl PaintLayerScrollableArea {
             snapped_query_target_ids_: None,
             snap_target_removal_pending_: false,
             registered_view_: foundation::WeakMember::default(),
+            last_cull_rect_update_scroll_position_: Cell::new(None),
         };
         // Source: core/paint/paint_layer_scrollable_area.cc:170-176.
         let element = DynamicTo::<Element>(box_.GetNode());
@@ -610,6 +618,21 @@ impl PaintLayerScrollableArea {
 
     pub fn GetScrollOffset(&self) -> ScrollOffset {
         self.scroll_offset_
+    }
+
+    /// Source: core/paint/paint_layer_scrollable_area.h
+    /// (LastCullRectUpdateScrollPosition). Kept in the f64 units Paint reads
+    /// scroll offsets in; `None` before the first record.
+    pub fn LastCullRectUpdateScrollPosition(&self) -> Option<(f64, f64)> {
+        self.last_cull_rect_update_scroll_position_.get()
+    }
+
+    /// Source: core/paint/paint_layer_scrollable_area.h
+    /// (SetLastCullRectUpdateScrollPosition). Returns whether it changed.
+    pub fn SetLastCullRectUpdateScrollPosition(&self, position: (f64, f64)) -> bool {
+        let changed = self.last_cull_rect_update_scroll_position_.get() != Some(position);
+        self.last_cull_rect_update_scroll_position_.set(Some(position));
+        changed
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:1399-1413.

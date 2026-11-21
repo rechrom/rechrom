@@ -192,25 +192,25 @@ impl EnginePaintUpdate for LayoutEngine {
         }
 
         // Source: core/paint/cull_rect_updater.cc:67-89,193-206.
-        // Chromium retains the FragmentData graph and commits the scroll
-        // position used by the new contents CullRect. The Layout boundary must
-        // do the same: republishing the complete LayoutResult here would create
-        // a second, non-source fragment-projection lifecycle.
+        // Chromium commits the scroll position used by the new contents
+        // CullRect on the PaintLayerScrollableArea
+        // (SetLastCullRectUpdateScrollPosition). Republishing the complete
+        // LayoutResult here would create a second, non-source
+        // fragment-projection lifecycle.
         unsafe fn commit_scroll_origins(
             cursor: PaintFragmentCursor<'_>,
             changed: &HashSet<u64>,
         ) -> usize {
             let children = cursor.Children();
-            let fragment = unsafe { cursor.PaintDataMut() };
+            let fragment = &*cursor;
             let mut committed = 0;
-            if fragment.ViewScrollContainer().is_some()
-                && (changed.is_empty() || changed.contains(&fragment.node_id))
+            if (changed.is_empty() || changed.contains(&fragment.node_id))
+                && fragment.ViewScrollContainer().is_some()
+                && fragment
+                    .paint
+                    .SetLastCullRectUpdateScrollPosition(fragment.paint.ScrollOffset())
             {
-                let origin = Some(fragment.paint.ScrollOffset());
-                if fragment.paint_cull_scroll_offset != origin {
-                    fragment.paint_cull_scroll_offset = origin;
-                    committed += 1;
-                }
+                committed += 1;
             }
             for child in children {
                 committed += unsafe { commit_scroll_origins(child, changed) };

@@ -202,27 +202,9 @@ pub(super) fn ExportBoxPaintGeometry(
     box_fragment: &PhysicalBoxFragment,
     paint: &mut PaintProperties,
 ) {
-    let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
-    if !layout_box.is_null() {
-        let layout_box = unsafe { &*layout_box };
-        let object = unsafe { &*box_fragment.GetLayoutObject() };
-
-        // The element input is the source tree's current, already-clamped
-        // offset and is also used by the retained scroll-property refresh.
-        // Generated scroll owners without element input read their local area.
-        let area = layout_box.GetScrollableArea();
-        if !paint.has_source {
-            paint.scroll_offset = if area.is_null() {
-                Offset::default()
-            } else {
-                let current = unsafe { &*area }.GetScrollOffset();
-                Offset {
-                    x: current.x() as f64,
-                    y: current.y() as f64,
-                }
-            };
-        }
-    }
+    // The scroll offset is read live from the bound source LayoutObject
+    // (PaintProperties::ScrollOffset -> LiveScrollOffset: the element's
+    // committed input, else its PaintLayerScrollableArea); it is not copied.
     // Borders, padding and included sides are read from this resident
     // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
     // read PhysicalBoxFragment directly; they are not copied here.
