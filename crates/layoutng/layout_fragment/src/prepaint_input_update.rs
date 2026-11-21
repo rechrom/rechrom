@@ -94,7 +94,29 @@ pub(super) fn UpdatePrePaintInputs(
             .Children()
             .into_iter()
             .fold(false, |changed, child| certify(child, tracker) || changed);
-        tracker.ObserveProductionNode(unsafe { cursor.PaintDataMut() }, descendant_changed)
+        let cursor_source = cursor.Cursor().GetLayoutObject() as *const LayoutObject;
+        let data = unsafe { cursor.PaintDataMut() };
+        // Host notifications delivered after population (resource catalog
+        // rebinding, event-handler registry changes) set Chromium dirty bits
+        // on the resident LayoutObjects. Republish this fragment's snapshot
+        // of those bits so PrePaint reads the current lifecycle state, as
+        // PrePaintTreeWalk reads LayoutObject flags directly
+        // (core/paint/pre_paint_tree_walk.cc:418-436).
+        let direct = data.paint.SourceObjectPointer() as *const LayoutObject;
+        let source = if !direct.is_null() {
+            direct
+        } else if data.paint.HasSource() {
+            cursor_source
+        } else {
+            std::ptr::null()
+        };
+        if !source.is_null() {
+            data.pre_paint_invalidation =
+                crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(
+                    source,
+                );
+        }
+        tracker.ObserveProductionNode(data, descendant_changed)
     }
     tracker.BeginProductionUpdate();
     certify(PaintFragmentCursor::FromHandle(fragments), tracker);

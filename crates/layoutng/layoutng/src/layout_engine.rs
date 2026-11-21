@@ -1018,6 +1018,36 @@ impl LayoutEngine {
         invalidated
     }
 
+    /// Deliver the resource-observer notifications for a document
+    /// paint-resource catalog that the host installed on resident fragments
+    /// after population (document-image container fulfillment, catalog
+    /// rebinding). Each `previous` catalog is one distinct catalog the
+    /// fragments carried before. The caller republishes PrePaint inputs with
+    /// RefreshOutputPrePaintInputs, which exports the new dirty bits.
+    pub fn NotifyPaintResourcesChanged(
+        &mut self,
+        previous: &[Arc<layout_fragment::fragment_tree::PaintResources>],
+        current: &layout_fragment::fragment_tree::PaintResources,
+    ) -> usize {
+        let _scope = LayoutPassScope::new(&self.algorithms_, &self.objects_);
+        let Some(tree) = self.tree_.as_mut() else {
+            return 0;
+        };
+        let current =
+            crate::internal::layout_object_builder::PaintResourceFacts::FromPaintResources(current);
+        previous
+            .iter()
+            .map(|previous| {
+                tree.InvalidatePaintResourceClients(
+                    &crate::internal::layout_object_builder::PaintResourceFacts::FromPaintResources(
+                        previous,
+                    ),
+                    &current,
+                )
+            })
+            .sum()
+    }
+
     /// The latest successful source layout result. Reading it does not clone
     /// source fragments or run layout.
     pub fn GetLayoutResult(&self) -> Option<&LayoutResultHandle> {

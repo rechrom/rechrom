@@ -182,6 +182,24 @@ impl EngineMutation for LayoutEngine {
                         trace.set("document_image_clients", invalidated as f64);
                     }
                 }
+                // Resource notifications (ImageResourceObserver::ImageChanged,
+                // canvas DidDraw, frame-view viewport/environment changes)
+                // reach their LayoutObjects before Layout and fragment-local
+                // Paint data population export PrePaint's dirty bits.
+                if let Some(tree) = self.tree_.as_mut() {
+                    let _scope = crate::internal::layout_pass_scope::LayoutPassScope::new(
+                        &self.algorithms_,
+                        &self.objects_,
+                    );
+                    tree.InvalidatePaintResourceClients(
+                        &crate::internal::layout_object_builder::PaintResourceFacts::FromConstraintSpace(
+                            &self.constraints_,
+                        ),
+                        &crate::internal::layout_object_builder::PaintResourceFacts::FromConstraintSpace(
+                            space,
+                        ),
+                    );
+                }
                 self.shape_image_inputs_dirty_ |=
                     !SameShapeImageCatalog(&self.constraints_.images, &space.images);
                 self.document_image_container_dirty_ |=
