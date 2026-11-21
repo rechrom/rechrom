@@ -398,12 +398,6 @@ fn PopulateInlineItemLocalPaintData(
     // cpp: core/paint/box_fragment_painter.cc:2025-2026,2071-2072
     // cpp: core/paint/inline_box_fragment_painter.cc:63-64
     update_paint!(output.paint, display_item_fragment, item.FragmentId());
-    update_paint!(output.paint, is_line_break, item.IsText() && item.IsLineBreak());
-    update_paint!(
-        output.paint,
-        hidden,
-        item.IsHiddenForPaint() || output.paint.SvgViewport().is_some_and(|v| v.disabled)
-    );
     if let Some((
         kind,
         offset,
@@ -505,16 +499,6 @@ fn PopulateInlineItemLocalPaintData(
             output.text_paint_timing_non_whitespace = !text
                 .text
                 .SubstringContainsOnlyWhitespaceOrEmpty(text.from, text.to);
-            output.paint.is_ellipsis = item.IsEllipsis();
-            output.paint.text_fit_scale = if item.IsSvgText() {
-                1.0
-            } else {
-                f64::from(item.GetTextFitScale())
-            };
-            if purpose == LayoutUpdateKind::Paint {
-                ExportListMarkerSymbol(item, &mut output.paint);
-                ExportTextCombineInlineOffset(item, &mut output.paint);
-            }
         }
         ItemType::kLine => {
             output.kind = FragmentKind::kLine;
