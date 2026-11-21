@@ -314,7 +314,7 @@ fn HitGeometry(
     // canonical fragmentation policy gates both paint and NodeAtPoint; a
     // repeated non-first monolithic fragment cannot contribute descendants or
     // become a hit target through this package's flattened traversal.
-    if fragment.paint.hidden
+    if fragment.ViewHidden()
         || fragment.paint.IsSVGHiddenContainer()
         || !fragment.paint.CanPaintFragmentOccurrence()
     {

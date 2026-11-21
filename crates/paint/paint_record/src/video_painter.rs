@@ -94,7 +94,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
                 let id = DisplayItemId {
                     client_id: fragment.paint.DisplayItemClientId(),
                     r#type: DisplayItemIdType::kForeignLayerVideo,
-                    fragment: fragment.paint.display_item_fragment,
+                    fragment: fragment.ViewDisplayItemFragment(),
                 };
                 RecordVideoForeignLayer(
                     &mut self.context.borrow_mut(),

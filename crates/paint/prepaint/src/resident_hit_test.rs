@@ -4,6 +4,7 @@
 //! or a mutable owner. Lookup uses the existing DisplayItemClient directory
 //! and verifies source identity; hit testing must prepare lifecycle first.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::PhysicalOffset;
 use layoutng_assembly::{fragment_tree::FragmentPaintData, layout_engine::PaintFragmentCursor};
 use paint_model::{
@@ -365,7 +366,7 @@ impl<'a> ResidentPaintHitTest<'a> {
         PaintPropertyKey {
             owner: PaintPropertyOwner::Fragment {
                 client: fragment.paint.DisplayItemClientId(),
-                fragment: fragment.paint.display_item_fragment,
+                fragment: fragment.ViewDisplayItemFragment(),
             },
             role,
         }

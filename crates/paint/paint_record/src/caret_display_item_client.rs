@@ -144,7 +144,7 @@ fn PaintCaretWithState(
                 } else {
                     DisplayItemIdType::kCaret
                 },
-                fragment: fragment.paint.display_item_fragment,
+                fragment: fragment.ViewDisplayItemFragment(),
             },
             DisplayItemClientInfo {
                 is_cacheable: caret.display_item_client_is_cacheable,

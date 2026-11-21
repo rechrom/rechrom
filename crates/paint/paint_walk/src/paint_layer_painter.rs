@@ -690,8 +690,7 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment")
-            .paint
-            .hidden
+            .ViewHidden()
         {
             self.context.borrow_mut().walk_metrics.skipped_hidden += 1;
             return;

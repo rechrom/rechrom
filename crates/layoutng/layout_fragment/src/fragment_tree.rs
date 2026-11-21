@@ -772,6 +772,12 @@ pub trait ResidentBoxGeometry {
     /// inside flag, text-combine inline offset) from the resident item.
     fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64);
     fn ViewIsLineBreak(&self) -> bool;
+    /// The active ScopedDisplayItemFragment value; an inline item's
+    /// FragmentItem::FragmentId().
+    fn ViewDisplayItemFragment(&self) -> u32;
+    /// Whether the fragment is hidden for paint; an inline item's
+    /// FragmentItem::IsHiddenForPaint() or a disabled SVG viewport.
+    fn ViewHidden(&self) -> bool;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -842,6 +848,32 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewDisplayItemFragment(&self) -> u32 {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items
+                    .Items()
+                    .get(index)
+                    .map_or(self.paint.display_item_fragment, |item| item.FragmentId())
+            }
+            _ => self.paint.display_item_fragment,
+        }
+    }
+
+    fn ViewHidden(&self) -> bool {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).map_or(self.paint.hidden, |item| {
+                    item.IsHiddenForPaint()
+                        || self.paint.SvgViewport().is_some_and(|viewport| viewport.disabled)
+                })
+            }
+            _ => self.paint.hidden,
+        }
+    }
+
     fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64) {
         let stored = (
             self.paint.is_ellipsis,

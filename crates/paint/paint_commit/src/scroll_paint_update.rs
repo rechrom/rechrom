@@ -100,7 +100,7 @@ fn fragment_identity(f: &FragmentPaintData) -> (u64, u64, u64, u32) {
         f.ViewNodeId(),
         f.fragment_instance_id,
         f.paint.DisplayItemClientId(),
-        f.paint.display_item_fragment,
+        f.ViewDisplayItemFragment(),
     )
 }
 
@@ -247,7 +247,7 @@ fn identity(node: &PaintTreeNode<'_>) -> (u64, u64, u64, u32) {
         f.ViewNodeId(),
         f.fragment_instance_id,
         f.paint.DisplayItemClientId(),
-        f.paint.display_item_fragment,
+        f.ViewDisplayItemFragment(),
     )
 }
 
@@ -473,10 +473,10 @@ impl RetainedScrollPaintState {
             if fragment_indices.insert(identity, fragments.len()).is_some() {
                 return None;
             }
-            let paintable = f.paint.HasSource() && f.paint.style.visible() && !f.paint.hidden;
+            let paintable = f.paint.HasSource() && f.paint.style.visible() && !f.ViewHidden();
             let was_recorded = recorded_clients.contains(&(
                 f.paint.DisplayItemClientId(),
-                f.paint.display_item_fragment,
+                f.ViewDisplayItemFragment(),
             ));
             let unrecorded_visual_rect = (paintable && !was_recorded)
                 .then(|| {
@@ -632,7 +632,7 @@ fn collect_current_fragments<'a>(
                 f.ViewNodeId(),
                 f.fragment_instance_id,
                 f.paint.DisplayItemClientId(),
-                f.paint.display_item_fragment
+                f.ViewDisplayItemFragment()
             );
         }
         browser_tracing::instant(
@@ -727,7 +727,7 @@ fn collect_current_fragments<'a>(
     if f.paint.DisplayItemClientId() != 0 {
         let owner = PaintPropertyOwner::Fragment {
             client: f.paint.DisplayItemClientId(),
-            fragment: f.paint.display_item_fragment,
+            fragment: f.ViewDisplayItemFragment(),
         };
         // ScrollTranslation and StickyTranslation are property values. Layout
         // can refresh them while retaining the fragment's geometry revision,
@@ -1157,7 +1157,7 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
         let Some(f) = f else {
             continue;
         };
-        if f.paint.scrollbars.is_none() || f.paint.hidden {
+        if f.paint.scrollbars.is_none() || f.ViewHidden() {
             continue;
         }
         let geometry = old.controls.as_ref().ok_or(ScrollbarChanged)?;

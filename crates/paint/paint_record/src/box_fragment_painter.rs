@@ -114,7 +114,7 @@ fn PaintsSelfOutlineAfterChildren(phase: PaintPhase) -> bool {
 // distinct from CSS visibility. Hidden table parts still supply their
 // background to visible cells.
 fn IsVisibleToPaint(fragment: &FragmentPaintData) -> bool {
-    if fragment.paint.hidden {
+    if fragment.ViewHidden() {
         return false;
     }
     fragment.paint.style.visible()
@@ -362,7 +362,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
         if node.is_paint_layer {
             return;
         }
-        if !fragment.paint.hidden
+        if !fragment.ViewHidden()
             && matches!(
                 fragment.ViewKind(),
                 FragmentKind::kText | FragmentKind::kGeneratedText
@@ -870,7 +870,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let text_combine = fragment.paint.IsTextCombine();
         if fragment.paint.IsSVGHiddenContainer()
             || (!fragment.paint.HasSource() && !text_combine)
-            || fragment.paint.hidden
+            || fragment.ViewHidden()
             || !fragment.paint.CanPaintFragmentOccurrence()
         {
             return;
@@ -3033,7 +3033,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 r#type: DisplayItemIdType::PaintPhaseToClipType(
                     PaintPhase::kSelfBlockBackgroundOnly,
                 ),
-                fragment: fragment.paint.display_item_fragment,
+                fragment: fragment.ViewDisplayItemFragment(),
             },
             client,
             visual_rect,
@@ -3515,7 +3515,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let Some(fragment) = node.fragment.as_deref() else {
             return;
         };
-        if fragment.paint.hidden {
+        if fragment.ViewHidden() {
             return;
         }
         // Chromium's kTextClip block-child traversal excludes floating
@@ -4381,7 +4381,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     DisplayItemId {
                         client_id: fragment.paint.SelectionClientId(),
                         r#type: drawing_type,
-                        fragment: fragment.paint.display_item_fragment,
+                        fragment: fragment.ViewDisplayItemFragment(),
                     },
                     client,
                 )
@@ -6695,8 +6695,7 @@ fn CanvasBackgroundDisplayItemId(
         client_id: fragment.paint.DisplayItemClientId(),
         r#type: item_type,
         fragment: fragment
-            .paint
-            .display_item_fragment
+            .ViewDisplayItemFragment()
             .checked_add(occurrence)
             .expect("canvas display item fragment must fit u32"),
     }

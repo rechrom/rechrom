@@ -37,7 +37,7 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("inline box paint requires a fragment");
-        if !fragment.paint.style.visible() || fragment.paint.hidden {
+        if !fragment.paint.style.visible() || fragment.ViewHidden() {
             return;
         }
 
@@ -109,7 +109,7 @@ impl<'n, 'f, 'c, 'o> LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
         // exact border-box contribution as well.
         box_painter.RecordRegionCaptureAndTrackedElementData();
         if fragment.paint.first_line_decoration_rect.is_none()
-            || fragment.paint.hidden
+            || fragment.ViewHidden()
             || !fragment.paint.style.visible()
         {
             return;

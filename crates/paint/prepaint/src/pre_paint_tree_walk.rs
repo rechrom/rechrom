@@ -7279,7 +7279,7 @@ impl PrePaintTreeWalk {
         }
         let owner = PaintPropertyOwner::Fragment {
             client,
-            fragment: fragment.paint.display_item_fragment,
+            fragment: fragment.ViewDisplayItemFragment(),
         };
         // Chromium client creation is the lifetime boundary, including allocator
         // address reuse. Never infer identity from a recycled pointer alone.
@@ -7716,7 +7716,7 @@ impl PrePaintTreeWalk {
             }
             let owner = PaintPropertyOwner::Fragment {
                 client,
-                fragment: fragment.paint.display_item_fragment,
+                fragment: fragment.ViewDisplayItemFragment(),
             };
 
             let active_transform_roles = [
