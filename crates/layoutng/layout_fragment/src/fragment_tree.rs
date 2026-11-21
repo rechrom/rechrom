@@ -1844,7 +1844,7 @@ impl PaintProperties {
 
     pub fn PreviousBoxGeometry(&self) -> Option<PreviousBoxGeometry> {
         self.SourceObject()
-            .map(crate::internal::boundary::layout_boundary::LivePreviousBoxGeometry)
+            .and_then(crate::internal::boundary::layout_boundary::LivePreviousBoxGeometry)
             .SourceCheckedOr(self.previous_box_geometry, "previous_box_geometry")
     }
 
