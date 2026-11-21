@@ -460,9 +460,6 @@ fn PopulateInlineItemLocalPaintData(
         width: Number(rect.size.width),
         height: Number(rect.size.height),
     };
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.text_hit_test_bounds = LiveTextHitTestBounds(item);
-    }
     {
         output.content_size = output.size;
     }
@@ -483,9 +480,6 @@ fn PopulateInlineItemLocalPaintData(
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportInlineInkOverflow(item, &mut output.paint);
-    }
-    {
-        output.paint.svg_text = ExportSvgTextPaintData(item, rect);
     }
     match item.Type() {
         ItemType::kText | ItemType::kGeneratedText => {
@@ -571,32 +565,12 @@ fn PopulateInlineItemLocalPaintData(
                 {
                     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
                 }
-                if purpose == LayoutUpdateKind::Paint {
-                    let outline_style = if effective_style.is_null() {
-                        box_fragment.Style()
-                    } else {
-                        unsafe { &*effective_style }
-                    };
-                    output.paint.self_outline = ExportSelfOutlineGeometry(box_fragment, outline_style);
-                }
                 if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {
                     output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    output.paint.overflow_clip_margin_outsets = ExportOverflowClipMargin(box_fragment);
-                }
-                if purpose == LayoutUpdateKind::Paint {
                     output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
                 }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.table = ExportTablePaintData(box_fragment);
-                }
-                if box_fragment.IsTableCell() {
-                    output.paint.table_cell_column =
-                        Some(box_fragment.TableCellColumnIndex() as usize);
-                }
-                output.paint.painted_atomically = box_fragment.IsPaintedAtomically();
-                output.paint.has_collapsed_borders = box_fragment.HasCollapsedBorders();
                 let owner_fragment = item.PostLayoutBoxFragment();
                 let owner_fragment = if owner_fragment.is_null() {
                     box_fragment as *const PhysicalBoxFragment
@@ -611,25 +585,6 @@ fn PopulateInlineItemLocalPaintData(
                     .or_insert(output.fragment_instance_id);
                 {
                     output.content_size = ExportContentSize(box_fragment);
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    let first_baseline = LiveFirstBaseline(box_fragment);
-                    if first_baseline.is_some() && output.paint.first_baseline != first_baseline {
-                        output.paint.first_baseline = first_baseline;
-                    }
-                    output.paint.mathml = ExportMathMLPaintData(box_fragment, &output.paint);
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.column_rules = ExportColumnRulePaintData(box_fragment, &output.paint);
-                }
-                if purpose == LayoutUpdateKind::Paint {
-                    output.paint.gap_rules = ExportGapRulePaintData(box_fragment, &output.paint);
                 }
                 if item.DescendantsCount() <= 1 {
                     let nested_items = box_fragment.Items();
@@ -1274,12 +1229,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
                 });
         }
         output.paint.is_paginated_root = box_fragment.IsPaginatedRoot();
-        output.paint.is_inline_formatting_context = box_fragment.IsInlineFormattingContext();
         output.paint.is_first_for_node = box_fragment.IsFirstForNode();
-        output.paint.can_paint_multiple_fragments =
-            crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
-                box_fragment,
-            );
         // Live styles resolve nine-piece images in Paint (BorderImage).
         if purpose == LayoutUpdateKind::Paint
             && !object.is_null()
@@ -1327,15 +1277,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     output.fragmentainer_instance_id = fragmentainer_instance_id;
     if !reuse_fragment_geometry {
         ExportBoxPaintGeometry(box_fragment, &mut output.paint);
-        if purpose == LayoutUpdateKind::Paint {
-            let outline_style = if effective_style.is_null() {
-                box_fragment.Style()
-            } else {
-                unsafe { &*effective_style }
-            };
-            output.paint.self_outline = ExportSelfOutlineGeometry(box_fragment, outline_style);
-            output.paint.overflow_clip_margin_outsets = ExportOverflowClipMargin(box_fragment);
-        }
     }
     if purpose == LayoutUpdateKind::Paint && output.paint.scroll_container.is_some() {
         output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
@@ -1343,18 +1284,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     if purpose == LayoutUpdateKind::Paint {
         output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
     }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.table = ExportTablePaintData(box_fragment);
-    }
-    if box_fragment.IsTableCell() {
-        update_paint!(
-            output.paint,
-            table_cell_column,
-            Some(box_fragment.TableCellColumnIndex() as usize)
-        );
-    }
-    update_paint!(output.paint, painted_atomically, fragment.IsPaintedAtomically());
-    update_paint!(output.paint, has_collapsed_borders, fragment.HasCollapsedBorders());
     let establishes_paint_state = paint_state_owners.insert(
         box_fragment as *const PhysicalBoxFragment,
         output.fragment_instance_id,
@@ -1366,28 +1295,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         Some(size) if reuse_fragment_geometry => size,
         _ => ExportContentSize(box_fragment),
     };
-    if purpose == LayoutUpdateKind::Paint {
-        let first_baseline = LiveFirstBaseline(box_fragment);
-        if first_baseline.is_some() && output.paint.first_baseline != first_baseline {
-            output.paint.first_baseline = first_baseline;
-        }
-        output.paint.mathml = ExportMathMLPaintData(box_fragment, &output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.frame_set = ExportFrameSetPaintData(box_fragment, &output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.column_rules = ExportColumnRulePaintData(box_fragment, &output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.gap_rules = ExportGapRulePaintData(box_fragment, &output.paint);
-    }
-    if purpose == LayoutUpdateKind::Paint {
-        output.paint.collapsed_table = ExportCollapsedTablePaintData(box_fragment);
-    }
     paint_state_owners.population_stats.RecordLocal(local_timing);
     let mut descendant_changed = false;
     // Self qualification: a retained, same-owner, clean slot with no state
@@ -1398,17 +1305,9 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         && !output.pre_paint_invalidation.descendants()
         && output.paint.scroll_container.is_none()
         && output.paint.scrollbars.is_none()
-        && output.paint.table.is_none()
-        && output.paint.table_cell_column.is_none()
-        && !output.paint.has_collapsed_borders
         && !output.paint.is_page_container
         && !output.paint.is_page_border_box
-        && !box_fragment.IsFragmentainerBox()
-        && !box_fragment.HasExtraMathMLPainting()
-        && box_fragment.GetGapGeometry().is_null()
-        && box_fragment.GetFrameSetLayoutData().is_null()
-        && !box_fragment.IsTableCell()
-        && unsafe { object.as_ref() }.is_none_or(|owner| !owner.IsFieldset());
+        && !box_fragment.IsFragmentainerBox();
     paint_state_owners.replay_next.entries[replay_begin.0].replayable = self_replayable;
     if !self_replayable && browser_tracing::enabled() {
         let reasons = [
@@ -1416,9 +1315,9 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             !matches!(identity_key, FragmentIdentityKey::FragmentData(_)),
             output.pre_paint_invalidation.own() || output.pre_paint_invalidation.descendants(),
             output.paint.scroll_container.is_some() || output.paint.scrollbars.is_some(),
-            output.paint.table.is_some() || output.paint.table_cell_column.is_some() || output.paint.has_collapsed_borders || box_fragment.IsTableCell(),
+            false,
             output.paint.is_page_container || output.paint.is_page_border_box || box_fragment.IsFragmentainerBox(),
-            box_fragment.HasExtraMathMLPainting() || !box_fragment.GetGapGeometry().is_null() || !box_fragment.GetFrameSetLayoutData().is_null(),
+            false,
             true,
         ];
         let first = reasons.iter().position(|r| *r).unwrap_or(7);

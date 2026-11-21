@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use super::{FragmentKind, FragmentPaintData, PaintProperties, PaintResources};
+use super::ResidentBoxGeometry as _;
 use foundation::{
     TrustedIdentityHashMap as HashMap,
 };
@@ -296,9 +297,9 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
             .as_ref()
             .is_some_and(|content| content.is_canvas)
         || style_images
-        || paint.table.is_some()
+        || fragment.ResidentBoxFragment().is_some_and(|box_fragment| box_fragment.IsTable())
         || paint.SvgShape().is_some()
-        || paint.svg_text.is_some();
+        || fragment.ViewSvgText().is_some();
     u8::from(viewport) * RESOURCE_VIEWPORT
         | u8::from(!paint.glyph_runs.is_empty()) * RESOURCE_FONTS
         | u8::from(images) * RESOURCE_IMAGES

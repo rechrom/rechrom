@@ -235,7 +235,6 @@ pub(super) fn ExportBoxPaintGeometry(
     // Borders, padding and included sides are read from this resident
     // fragment by Paint (ResidentBoxGeometry), as Chromium's box painters
     // read PhysicalBoxFragment directly; they are not copied here.
-    paint.box_decoration_break = LiveBoxDecorationBreak(box_fragment);
     paint.stitched_decoration = ExportStitchedDecorationData(box_fragment);
 }
 

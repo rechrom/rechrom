@@ -4735,13 +4735,21 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
 /// invalidators: the shared paint payload (an Arc, not a copy) and the
 /// fragment's scalar fields. CSSOM inline rectangles are not paint inputs.
 fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
-    FragmentPaintData {
+    let mut snapshot = FragmentPaintData {
         inline_geometry: Vec::new(),
         resources: f.resources.clone(),
         paint: f.paint.clone(),
         certified: Default::default(),
         ..*f
+    };
+    // Gap rules are read live from the resident box; keep the value this
+    // fragment painted with as the comparison baseline
+    // (ShouldInvalidateGapDecorations).
+    let gap_rules = f.ViewGapRules();
+    if snapshot.paint.gap_rules != gap_rules {
+        snapshot.paint.gap_rules = gap_rules;
     }
+    snapshot
 }
 
 /// The record of a retained node; empty if it has none.

@@ -4,6 +4,7 @@
 //! available while sampling symbols resolve to `layout_fragment`.
 
 use super::*;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 /// Refresh local paint inputs from existing source objects, retaining layout
 /// geometry, shaping, physical fragment identities and resource ownership.
@@ -104,8 +105,8 @@ pub(super) fn refresh_retained_paint_inputs(
         clients: &HashMap<u64, *mut LayoutObject>,
     ) -> bool {
         if clients.contains_key(&node.paint.DisplayItemClientId())
-            && (node.paint.has_collapsed_borders
-                || node.paint.svg_text.is_some()
+            && (node.ViewHasCollapsedBorders()
+                || node.ViewSvgText().is_some()
                 || node.paint.IsTextCombine())
         {
             return false;
