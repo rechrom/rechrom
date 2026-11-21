@@ -75,7 +75,7 @@ pub(super) fn ExportStickyPaintProperties(
                 })
             };
             let constraint = StickyPositionPaintData {
-                owner_client_id: output.display_item_client_id,
+                owner_client_id: output.DisplayItemClientId(),
                 horizontal: export_axis(PhysicalAxis::kHorizontal),
                 vertical: export_axis(PhysicalAxis::kVertical),
             };
