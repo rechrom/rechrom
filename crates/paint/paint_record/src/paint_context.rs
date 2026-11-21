@@ -443,7 +443,7 @@ impl<'o> PaintContext<'o> {
             output: &mut HashMap<u64, PaintFragmentCursor<'a>>,
         ) {
             if matches!(
-                cursor.kind,
+                cursor.ViewKind(),
                 layoutng_assembly::fragment_tree::FragmentKind::kText
                     | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             ) {

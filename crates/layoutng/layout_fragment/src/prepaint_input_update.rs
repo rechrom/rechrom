@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 
 use super::*;
+use crate::fragment_tree::ResidentBoxGeometry as _;
 
 #[inline(never)]
 pub(super) fn UpdateFragmentPaintStyle(
@@ -14,7 +15,7 @@ pub(super) fn UpdateFragmentPaintStyle(
     style: &crate::internal::layout_input::PaintStyle,
     found: &mut bool,
 ) {
-    if fragment.node_id == node_id {
+    if fragment.ViewNodeId() == node_id {
         let mut current = style.clone();
         if let Some(clip) = current
             .clip_path

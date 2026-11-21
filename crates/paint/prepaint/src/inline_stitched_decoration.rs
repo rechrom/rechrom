@@ -23,13 +23,14 @@ use layoutng_assembly::internal::layout_input::{
 use layoutng_assembly::layout_engine::PaintFragmentCursor;
 
 fn StitchCandidate(input: &FragmentPaintData) -> Option<(u64, u64)> {
-    (input.node_id != 0
-        && input.kind == FragmentKind::kBox
+    let node_id = input.ViewNodeId();
+    (node_id != 0
+        && input.ViewKind() == FragmentKind::kBox
         && input.paint.HasSource()
         && input.ViewEstablishesPaintState()
         && input.paint.Display() == Display::kInline
         && input.ViewBoxDecorationBreak() == BoxDecorationBreak::kSlice)
-        .then_some((input.node_id, input.fragmentainer_instance_id))
+        .then_some((node_id, input.fragmentainer_instance_id))
 }
 
 /// Resolve the stitched strip of every sliced inline box under `root`.

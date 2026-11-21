@@ -987,8 +987,8 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
                 let cell_clip = PaintRect {
                     x: cell.paint_offset.x,
                     y: cell.paint_offset.y,
-                    width: cell_fragment.size.width,
-                    height: cell_fragment.size.height,
+                    width: cell_fragment.ViewSize().width,
+                    height: cell_fragment.ViewSize().height,
                 };
                 PaintColumnStyle(
                     self.node,
