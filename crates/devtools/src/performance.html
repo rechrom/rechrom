@@ -40,7 +40,7 @@ const waits=new Set(['InputOwnerQueue','InputQueue','InputDispatch','InputToPres
 const caPhases=new Map([['CAPreCommitHandler','CA Pre'],['CAPostCommitHandler','CA Post'],['CARootPreCommitHandler','CA Pre'],['CARootPostCommitHandler','CA Post']]);
 const passive=e=>caPhases.has(e.name)||e.name==='WindowServerFrame';
 const eventLabel=e=>caPhases.get(e.name)||e.name;
-const fullWork=new Set(['LayoutEngine.Layout','LayoutEngine.RunLayout','LayoutEngine.NativeLayout','LayoutEngine.RunNativeLayoutWithoutPublication','LayoutEngine.PopulatePaintData','LayoutEngine.AlgorithmDispatch','layout_commit.PopulatePaintData','Paint.RecordPaint','PaintLayerPainter.Paint','PaintEngine.Paint']);
+const fullWork=new Set(['LayoutEngine.Layout','LayoutEngine.RunLayout','LayoutEngine.NativeLayout','LayoutEngine.RunNativeLayoutWithoutPublication','LayoutEngine.PublishPaintData','LayoutEngine.AlgorithmDispatch','layout_commit.PublishPaintData','Paint.RecordPaint','PaintLayerPainter.Paint','PaintEngine.Paint']);
 const layoutOwnerPattern=/^layout_(?:invalidation|reuse|fragment|commit|algo_[a-z_]+)$/,performanceOwner=e=>{const prefix=e.name.split('.',1)[0];return layoutOwnerPattern.test(prefix)?prefix:e.category;};
 function updateOwnerFilter(events){const select=$('owner'),current=select.value,owners=[...new Set(events.map(performanceOwner).filter(owner=>layoutOwnerPattern.test(owner)))].sort(),all=document.createElement('option');all.value='';all.textContent='All packages';select.replaceChildren(all,...owners.map(owner=>{const option=document.createElement('option');option.value=owner;option.textContent=owner;return option;}));if(owners.includes(current))select.value=current;}
 function error(e){$('error').textContent=String(e.message||e);$('error').style.display='block';}

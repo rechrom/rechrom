@@ -9778,7 +9778,7 @@ impl Page {
             .then(|| {
                 let mut layout = self.state.layout_engine.borrow_mut();
                 if animation_paint_nodes.is_empty() {
-                    crate::persistent_layout::PopulatePaintDataWithEngine(
+                    crate::persistent_layout::PublishPaintDataWithEngine(
                         &mut layout,
                         &mut self.state.document.borrow_mut(),
                         &self.state.interaction.borrow(),
@@ -9829,7 +9829,7 @@ impl Page {
             )
         };
         // A paint-only style update resolves at StyleClean, then
-        // PopulatePaintDataWithEngine proves that the resident LayoutResult is
+        // PublishPaintDataWithEngine proves that the resident LayoutResult is
         // still the current geometry and exports its refreshed paint inputs.
         // That successful proof is the retained-geometry equivalent of the
         // LayoutClean transition performed by LayoutWithContainerQueries.

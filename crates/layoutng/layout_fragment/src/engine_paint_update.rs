@@ -5,7 +5,7 @@ use super::*;
 use crate::fragment_tree::ResidentBoxGeometry as _;
 
 pub(super) trait EnginePaintUpdate {
-    fn populate_paint_data(&mut self) -> bool;
+    fn publish_paint_data(&mut self) -> bool;
     fn refresh_targeted_paint_data(&mut self) -> bool;
     fn refresh_targeted_paint_inputs(&mut self) -> bool;
     fn refresh_scroll_cull_data(&mut self, fragments: &mut LayoutResultHandle) -> bool;
@@ -13,9 +13,9 @@ pub(super) trait EnginePaintUpdate {
 
 impl EnginePaintUpdate for LayoutEngine {
     #[inline(never)]
-    fn populate_paint_data(&mut self) -> bool {
+    fn publish_paint_data(&mut self) -> bool {
         let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::PopulatePaintData,
+            layout_fragment_boundary::trace::TracePhase::PublishPaintData,
         );
         if self.tree_.is_none() {
             trace.set("rejected", 1.0);

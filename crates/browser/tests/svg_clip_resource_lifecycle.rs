@@ -892,7 +892,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
                     .any(|decoration| decoration.underline)
         );
         assert!(text.paint.glyph_runs == glyphs);
-        assert!(engine.PopulatePaintData());
+        assert!(engine.PublishPaintData());
         let exported = find_fragment(engine.GetLayoutResult().unwrap(), text_id).unwrap();
         assert!(exported.paint.style == text.paint.style);
         assert_eq!(

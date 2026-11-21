@@ -5208,7 +5208,7 @@ mod package_contract_tests {
                 .expect("read source engine paint-update owner");
         for owned_policy in [
             "trait EnginePaintUpdate",
-            "fn populate_paint_data",
+            "fn publish_paint_data",
             "fn refresh_targeted_paint_data",
             "fn refresh_targeted_paint_inputs",
             "fn refresh_scroll_cull_data",
@@ -5236,14 +5236,14 @@ mod package_contract_tests {
             .expect("read LayoutEngine adapter");
         assert!(
             adapter.contains("layout_fragment/src/engine_paint_update.rs")
-                && adapter.contains("EnginePaintUpdate::populate_paint_data(self)")
+                && adapter.contains("EnginePaintUpdate::publish_paint_data(self)")
                 && adapter.contains("EnginePaintUpdate::refresh_targeted_paint_data(self)")
                 && adapter.contains("EnginePaintUpdate::refresh_targeted_paint_inputs(self)")
                 && adapter.contains("EnginePaintUpdate::refresh_scroll_cull_data(self, fragments)"),
             "LayoutEngine must delegate paint publication and refresh to layout_fragment"
         );
         for leaked_policy in [
-            "TracePhase::PopulatePaintData",
+            "TracePhase::PublishPaintData",
             "TracePhase::RefreshTargetedPaintData",
             "TracePhase::RefreshTargetedPaintInputs",
             "TracePhase::RefreshScrollCullData",
@@ -9755,12 +9755,8 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layout_fragment/src/layout_result_publish.rs"))
                 .expect("read source layout-result publication owner");
         for owned_policy in [
-            "#[inline(never)]",
-            "pub(super) fn populate_layout_result_paint_data",
-            "TracePhase::PopulateLayoutResultPaintData",
-            "TracePhase::PopulateFragmentPaintData",
-            "TracePhase::ResolveLogicalParents",
-            "FragmentOwners",
+            "pub(super) fn install_layout_result_paint_state",
+            "TracePhase::InstallLayoutResultPaintState",
             "LayoutResultHandle::FromLayoutResult",
         ] {
             assert!(
@@ -9774,12 +9770,12 @@ mod package_contract_tests {
                 .expect("read fragment boundary adapter");
         assert!(
             adapter.contains(
-                "layout_fragment_layout_result_publish::populate_layout_result_paint_data"
+                "layout_fragment_layout_result_publish::install_layout_result_paint_state"
             ),
             "fragment boundary must delegate LayoutResult publication to layout_fragment"
         );
         for leaked_policy in [
-            "fn PopulateLayoutResultPaintData(",
+            "fn InstallLayoutResultPaintState(",
             "let mut paint_state_owners = FragmentOwners",
             "TracePhase::PopulateFragmentPaintData",
         ] {
@@ -11930,10 +11926,6 @@ mod package_contract_tests {
         rust_sources(root, &mut sources);
         let fragment_phases = [
             "UpdateStickyOffsets",
-            "PopulateFragmentPaintData",
-            "ResolveLogicalParents",
-            "PopulateGlobalPaintData",
-            "CertifyPaintInputs",
             "BuildScrollIndex",
             "RefreshScrollCullData",
         ];

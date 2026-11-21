@@ -75,7 +75,7 @@ fn phase(category: &str, name: &str) -> Option<usize> {
         "Page.ResolveStyles" => 5,
         "LayoutEngine.TreeUpdate" | "Page.SynchronizeLayoutTree" => 6,
         "Host.MemoryCensus" => 17,
-        "LayoutEngine.PopulatePaintData" | "LayoutEngine.RefreshTargetedPaintData" => 8,
+        "LayoutEngine.PublishPaintData" | "LayoutEngine.RefreshTargetedPaintData" => 8,
         "HeapCollection" => 15,
         "Page.PumpLoading"
         | "Page.ResolveStylesAndLoadResources"
@@ -169,10 +169,10 @@ mod layout_package_phase_tests {
         assert_eq!(phase("layout", "layout_invalidation.PrepareTree"), Some(6));
         assert_eq!(phase("layout", "layout_reuse.SlowLookup"), Some(7));
         assert_eq!(phase("layout", "layout_algo_grid.Layout"), Some(7));
-        assert_eq!(phase("layout", "layout_fragment.ExportTree"), Some(8));
+        assert_eq!(phase("layout", "layout_fragment.PublishFragmentTree"), Some(8));
         assert_eq!(phase("layout", "layout_commit.CommitEnvironment"), Some(8));
         assert_eq!(
-            phase("prepaint", "layout_fragment.CertifyPaintInputs"),
+            phase("prepaint", "layout_fragment.UpdatePrePaintInputs"),
             Some(8)
         );
     }

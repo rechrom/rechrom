@@ -1125,7 +1125,7 @@ pub fn analyze_snapshot(snapshot: &Snapshot) -> Value {
                     | "LayoutEngine.RunLayout"
                     | "LayoutEngine.Layout"
                     | "LayoutEngine.RunLayoutWithoutPublication"
-                    | "LayoutEngine.PopulatePaintData"
+                    | "LayoutEngine.PublishPaintData"
                     | "Paint.RecordPaint"
                     | "PaintLayerPainter.Paint"
                     | "PaintEngine.Paint"

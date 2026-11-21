@@ -4,19 +4,16 @@
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TracePhase {
-    ExportTree,
+    PublishFragmentTree,
     ValidatePaintInput,
-    PopulateLayoutResultPaintData,
+    InstallLayoutResultPaintState,
     IndexObjects,
     RebuildBoundaryObjectIndex,
     UpdateStickyOffsets,
-    PopulateFragmentPaintData,
-    ResolveLogicalParents,
     PaintStyle,
     PaintInput,
-    CertifyPaintInputs,
     BuildScrollIndex,
-    PopulatePaintData,
+    PublishPaintData,
     RefreshTargetedPaintData,
     RefreshTargetedPaintInputs,
     RefreshBoundaryCache,
@@ -31,26 +28,23 @@ pub enum TracePhase {
 impl TracePhase {
     pub const fn category(self) -> &'static str {
         match self {
-            Self::CertifyPaintInputs | Self::UpdatePrePaintInputs => "prepaint",
+            Self::UpdatePrePaintInputs => "prepaint",
             _ => "layout",
         }
     }
 
     pub const fn name(self) -> &'static str {
         match self {
-            Self::ExportTree => "layout_fragment.ExportTree",
+            Self::PublishFragmentTree => "layout_fragment.PublishFragmentTree",
             Self::ValidatePaintInput => "layout_fragment.ValidatePaintInput",
-            Self::PopulateLayoutResultPaintData => "layout_fragment.PopulateLayoutResultPaintData",
+            Self::InstallLayoutResultPaintState => "layout_fragment.InstallLayoutResultPaintState",
             Self::IndexObjects => "layout_fragment.IndexObjects",
             Self::RebuildBoundaryObjectIndex => "layout_fragment.RebuildBoundaryObjectIndex",
             Self::UpdateStickyOffsets => "layout_fragment.UpdateStickyOffsets",
-            Self::PopulateFragmentPaintData => "layout_fragment.PopulateFragmentPaintData",
-            Self::ResolveLogicalParents => "layout_fragment.ResolveLogicalParents",
             Self::PaintStyle => "layout_fragment.PaintStyle",
             Self::PaintInput => "layout_fragment.PaintInput",
-            Self::CertifyPaintInputs => "layout_fragment.CertifyPaintInputs",
             Self::BuildScrollIndex => "layout_fragment.BuildScrollIndex",
-            Self::PopulatePaintData => "layout_fragment.PopulatePaintData",
+            Self::PublishPaintData => "layout_fragment.PublishPaintData",
             Self::RefreshTargetedPaintData => "layout_fragment.RefreshTargetedPaintData",
             Self::RefreshTargetedPaintInputs => "layout_fragment.RefreshTargetedPaintInputs",
             Self::RefreshBoundaryCache => "layout_fragment.RefreshBoundaryCache",
@@ -69,10 +63,10 @@ pub fn span(phase: TracePhase) -> browser_tracing::Span {
     browser_tracing::span(phase.category(), phase.name())
 }
 
-/// Trace export of the canonical source fragment graph at publication time.
+/// Trace publication of the canonical source fragment graph (no fragment walk).
 #[inline(never)]
-pub fn export_tree() -> browser_tracing::Span {
-    span(TracePhase::ExportTree)
+pub fn publish_fragment_tree() -> browser_tracing::Span {
+    span(TracePhase::PublishFragmentTree)
 }
 
 /// Trace a source fragment traversal used to answer CSSOM client rectangles.
@@ -89,21 +83,21 @@ mod tests {
     fn fragment_phases_keep_package_identity_and_lifecycle_category() {
         let _trace_test = crate::TRACE_TEST_LOCK.lock().unwrap();
         let recording = browser_tracing::start(Default::default()).unwrap();
-        drop(span(TracePhase::PopulateFragmentPaintData));
-        drop(span(TracePhase::CertifyPaintInputs));
+        drop(span(TracePhase::InstallLayoutResultPaintState));
+        drop(span(TracePhase::UpdatePrePaintInputs));
         browser_tracing::stop().unwrap();
         let snapshot = browser_tracing::snapshot(Some(recording)).unwrap();
         let export = snapshot
             .spans
             .iter()
-            .find(|trace| trace.name == "layout_fragment.PopulateFragmentPaintData")
-            .expect("fragment export trace");
+            .find(|trace| trace.name == "layout_fragment.InstallLayoutResultPaintState")
+            .expect("paint state installation trace");
         assert_eq!(export.category, "layout");
         let revision = snapshot
             .spans
             .iter()
-            .find(|trace| trace.name == "layout_fragment.CertifyPaintInputs")
-            .expect("fragment certification trace");
+            .find(|trace| trace.name == "layout_fragment.UpdatePrePaintInputs")
+            .expect("PrePaint input refresh trace");
         assert_eq!(revision.category, "prepaint");
     }
 }

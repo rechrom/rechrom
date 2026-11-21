@@ -331,7 +331,7 @@ fn LayoutWithSystemFontsAtStageImpl(
             {
                 layout.FinishLayoutWithoutPaintPublication()
             } else {
-                layout.PopulatePaintData()
+                layout.PublishPaintData()
             };
             if finished {
                 updated = true;

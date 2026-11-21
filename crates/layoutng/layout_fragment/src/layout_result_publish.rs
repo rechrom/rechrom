@@ -13,7 +13,7 @@
 use super::*;
 
 #[inline(never)]
-pub(super) fn populate_layout_result_paint_data(
+pub(super) fn install_layout_result_paint_state(
     root: &mut LayoutObject,
     result: &LayoutResult,
     space: &ConstraintSpace,
@@ -21,7 +21,7 @@ pub(super) fn populate_layout_result_paint_data(
     cache: &mut LayoutBoundaryCache,
 ) -> LayoutResultHandle {
     let mut trace = layout_fragment_boundary::trace::span(
-        layout_fragment_boundary::trace::TracePhase::PopulateLayoutResultPaintData,
+        layout_fragment_boundary::trace::TracePhase::InstallLayoutResultPaintState,
     );
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
     let result_identity = result as *const LayoutResult as usize;

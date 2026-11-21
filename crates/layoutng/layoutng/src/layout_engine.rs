@@ -971,8 +971,8 @@ impl LayoutEngine {
         self.scroll_paint_index_ = Some(index);
     }
 
-    pub fn PopulatePaintData(&mut self) -> bool {
-        EnginePaintUpdate::populate_paint_data(self)
+    pub fn PublishPaintData(&mut self) -> bool {
+        EnginePaintUpdate::publish_paint_data(self)
     }
 
     /// Publish paint-only values already applied to the retained fragment

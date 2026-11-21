@@ -131,7 +131,7 @@ impl<E> LayoutCommitTransaction<E> {
         commit_environment: impl FnOnce(E, &mut C),
     ) -> O {
         let output = {
-            let _phase = layout_fragment::trace::export_tree();
+            let _phase = layout_fragment::trace::publish_fragment_tree();
             export_fragments(context)
         };
         finalize(context);

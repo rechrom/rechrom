@@ -1103,7 +1103,7 @@ TLS scope, and current-resolver contract are colocated in
 - The opaque source result owner and scroll-property revision policy resolve
   to `layout_fragment::LayoutResultHandle` and
   `layout_fragment::revision::*`. The package also owns the
-  `layout_fragment.RevisionUpdate` and `layout_fragment.ExportTree` trace
+  `layout_fragment.RevisionUpdate` and `layout_fragment.PublishFragmentTree` trace
   constructors; commit and assembly adapters only add source traversal work
   and statistics. Revision counters are package-owned and split into a main
   interval plus `RevisionReasonSummary`, so all counters survive the trace

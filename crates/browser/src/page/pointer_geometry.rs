@@ -83,7 +83,7 @@ impl PagePointerGeometryProvider {
             || !resident_hit_test_ready
         {
             let mut layout = state.layout_engine.borrow_mut();
-            let retained = crate::persistent_layout::PopulatePaintDataWithEngine(
+            let retained = crate::persistent_layout::PublishPaintDataWithEngine(
                 &mut layout,
                 &mut state.document.borrow_mut(),
                 &state.interaction.borrow(),
@@ -120,7 +120,7 @@ impl PagePointerGeometryProvider {
                         ))
                         .BlockingWheelTargets(),
                     );
-                // PopulatePaintDataWithEngine drains the pending typed layout
+                // PublishPaintDataWithEngine drains the pending typed layout
                 // mutations before proving that the resident geometry can be
                 // retained. That drain is allowed to schedule layout and
                 // rewind the Document from LayoutClean to StyleClean. Only

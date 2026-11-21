@@ -318,7 +318,7 @@ pub fn PublishLayoutResult(
     space: &ConstraintSpace,
     cache: &mut LayoutBoundaryCache,
 ) -> LayoutResultHandle {
-    layout_fragment_layout_result_publish::populate_layout_result_paint_data(
+    layout_fragment_layout_result_publish::install_layout_result_paint_state(
         root,
         result,
         space,

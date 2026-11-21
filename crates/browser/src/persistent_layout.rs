@@ -201,12 +201,12 @@ pub(crate) fn MeasurementInputsMatch(
 /// from the resident layout result. This is Blink's ordinary paint-only style
 /// lifecycle: style and PrePaint/Paint advance, while layout geometry remains
 /// the previously committed result.
-pub(crate) fn PopulatePaintDataWithEngine(
+pub(crate) fn PublishPaintDataWithEngine(
     engine: &mut LayoutEngine,
     owner: &mut DOM,
     interaction: &UserInteractionState,
 ) -> Option<LayoutResultHandle> {
-    let mut trace = browser_tracing::span("layout", "Page.PopulatePaintDataWithEngine");
+    let mut trace = browser_tracing::span("layout", "Page.PublishPaintDataWithEngine");
     let mut heap_scope = foundation::LayoutHeapScope::new();
     heap_scope.DeferCollection();
     let state = owner.GetDocument().StyleState();
@@ -243,7 +243,7 @@ pub(crate) fn PopulatePaintDataWithEngine(
     }
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     RecordLayoutDetachEffects(engine, owner);
-    if !engine.PopulatePaintData() {
+    if !engine.PublishPaintData() {
         return None;
     }
     heap_scope.DeferCollection();
