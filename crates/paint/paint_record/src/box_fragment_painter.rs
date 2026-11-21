@@ -1582,7 +1582,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(column_rules) = fragment.paint.column_rules.as_ref() else {
+        let Some(column_rules) = fragment.ViewColumnRules() else {
             return;
         };
         if column_rules.rules.is_empty() {
@@ -1633,7 +1633,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(gap_rules) = fragment.paint.gap_rules.as_ref() else {
+        let Some(gap_rules) = fragment.ViewGapRules() else {
             return;
         };
         if DrawingRecorder::UseCachedDrawingIfPossible(

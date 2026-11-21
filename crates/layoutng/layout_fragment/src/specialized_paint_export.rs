@@ -319,21 +319,21 @@ pub(crate) fn ExportFieldsetPaintData(
 }
 
 #[inline(never)]
-pub(super) fn ExportColumnRulePaintData(
+pub(crate) fn ExportColumnRulePaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
+    _paint: &PaintProperties,
+) -> Option<Arc<ColumnRulePaintData>> {
     let geometry = box_fragment.GetGapGeometry();
     if geometry.is_null() || unsafe { &*geometry }.GetContainerType() != ContainerType::kMultiColumn
     {
-        return;
+        return None;
     }
     let geometry = unsafe { &*geometry };
     // The modern gap-decoration painter owns multicolumn rules whenever the
     // style generated gap geometry.  Keep this legacy straight-line payload as
     // a fallback only for fragments that do not use that pipeline.
     if box_fragment.Style().HasGapRule() {
-        return;
+        return None;
     }
     let mut data = ColumnRulePaintData::default();
     let converter = WritingModeConverter::new(
@@ -390,8 +390,9 @@ pub(super) fn ExportColumnRulePaintData(
         });
     }
     if !data.rules.is_empty() {
-        paint.column_rules = Some(Arc::new(data));
+        return Some(Arc::new(data));
     }
+    None
 }
 
 fn ShouldMoveGapRuleStartForward(
@@ -869,13 +870,13 @@ fn ExportGapRuleDirection(
 }
 
 #[inline(never)]
-pub(super) fn ExportGapRulePaintData(
+pub(crate) fn ExportGapRulePaintData(
     box_fragment: &PhysicalBoxFragment,
-    paint: &mut PaintPropertiesHandle,
-) {
+    _paint: &PaintProperties,
+) -> Option<Arc<GapRulePaintData>> {
     let geometry = box_fragment.GetGapGeometry();
     if geometry.is_null() || !box_fragment.Style().HasGapRule() {
-        return;
+        return None;
     }
     let geometry = unsafe { &*geometry };
     let mut data = GapRulePaintData::default();
@@ -896,8 +897,9 @@ pub(super) fn ExportGapRulePaintData(
         has_supported_axis |= ExportGapRuleDirection(box_fragment, geometry, direction, &mut data);
     }
     if has_supported_axis {
-        paint.gap_rules = Some(Arc::new(data));
+        return Some(Arc::new(data));
     }
+    None
 }
 
 pub(super) fn ExportOverflowClipMargin(

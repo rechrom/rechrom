@@ -648,10 +648,10 @@ fn PopulateInlineItemLocalPaintData(
                     output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportColumnRulePaintData(box_fragment, &mut output.paint);
+                    output.paint.column_rules = ExportColumnRulePaintData(box_fragment, &output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportGapRulePaintData(box_fragment, &mut output.paint);
+                    output.paint.gap_rules = ExportGapRulePaintData(box_fragment, &output.paint);
                 }
                 if item.DescendantsCount() <= 1 {
                     let nested_items = box_fragment.Items();
@@ -1398,10 +1398,10 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.paint.fieldset = ExportFieldsetPaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportColumnRulePaintData(box_fragment, &mut output.paint);
+        output.paint.column_rules = ExportColumnRulePaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportGapRulePaintData(box_fragment, &mut output.paint);
+        output.paint.gap_rules = ExportGapRulePaintData(box_fragment, &output.paint);
     }
     if purpose == LayoutUpdateKind::Paint {
         ExportCollapsedTablePaintData(box_fragment, style_sources, &mut output.paint);

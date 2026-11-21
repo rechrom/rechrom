@@ -64,7 +64,7 @@ impl BoxDecorationData {
             !paint_info.IsPaintingBackgroundInContentsSpace() && style.box_shadow_count() != 0;
 
         let should_paint_gap_decorations =
-            fragment.paint.gap_rules.is_some() && !paint_info.ShouldSkipGapDecorations();
+            fragment.ViewGapRules().is_some() && !paint_info.ShouldSkipGapDecorations();
 
         let mut result = Self {
             has_appearance,

@@ -782,6 +782,9 @@ pub trait ResidentBoxGeometry {
     /// fragment (its FrameSetLayoutData, legend cutout).
     fn ViewFrameSet(&self) -> Option<Arc<FrameSetPaintData>>;
     fn ViewFieldset(&self) -> Option<Arc<FieldsetPaintData>>;
+    /// Column rules / gap rules computed from the resident box's gap geometry.
+    fn ViewColumnRules(&self) -> Option<Arc<ColumnRulePaintData>>;
+    fn ViewGapRules(&self) -> Option<Arc<GapRulePaintData>>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -852,6 +855,26 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewColumnRules(&self) -> Option<Arc<ColumnRulePaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportColumnRulePaintData(
+                box_fragment,
+                &self.paint,
+            ),
+            None => self.paint.column_rules.clone(),
+        }
+    }
+
+    fn ViewGapRules(&self) -> Option<Arc<GapRulePaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportGapRulePaintData(
+                box_fragment,
+                &self.paint,
+            ),
+            None => self.paint.gap_rules.clone(),
+        }
+    }
+
     fn ViewFrameSet(&self) -> Option<Arc<FrameSetPaintData>> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => crate::internal::boundary::layout_boundary::ExportFrameSetPaintData(
