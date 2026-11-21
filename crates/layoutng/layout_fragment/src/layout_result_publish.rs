@@ -108,7 +108,6 @@ pub(super) fn populate_layout_result_paint_data(
         unsafe { LayoutResultHandle::FromLayoutResultWithPaintState(result, paint_state.clone()) };
     let mut paint_state_owners = FragmentOwners {
         exported_styles: std::mem::take(&mut cache.styles),
-        debug_names: std::mem::take(&mut cache.debug_names),
         fragment_instance_ids: std::mem::take(&mut cache.fragment_instance_ids),
         prior_fragment_instance_ids,
         replay_previous: if purpose == LayoutUpdateKind::Paint {
@@ -282,7 +281,6 @@ pub(super) fn populate_layout_result_paint_data(
         (layout_fragment_boundary::boundary_types::PAINT_PAYLOAD_COPIES.load(std::sync::atomic::Ordering::Relaxed) - copies_after_parents) as f64,
     );
     cache.styles = paint_state_owners.exported_styles;
-    cache.debug_names = paint_state_owners.debug_names;
     cache.fragment_instance_ids = paint_state_owners.fragment_instance_ids;
     if purpose == LayoutUpdateKind::Paint {
         cache.population_replay = std::mem::take(&mut paint_state_owners.replay_next);

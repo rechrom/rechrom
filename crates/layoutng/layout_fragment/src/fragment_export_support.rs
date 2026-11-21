@@ -171,4 +171,3 @@ pub(super) type ExportedSelectionStyleCache = LayoutBoundaryHashMap<
         crate::style_projection::FragmentStyleFacts,
     ),
 >;
-pub(super) type DebugNameCache = LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>;

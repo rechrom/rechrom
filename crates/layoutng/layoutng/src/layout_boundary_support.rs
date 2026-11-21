@@ -61,7 +61,6 @@ pub(crate) struct LayoutBoundaryStyleSourceEntry {
 #[derive(Default)]
 pub struct LayoutBoundaryCache {
     pub(crate) styles: LayoutBoundaryHashMap<(usize, usize), PaintStyle>,
-    pub(crate) debug_names: LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>,
     pub(crate) objects: Vec<*mut LayoutObject>,
     pub(crate) source_objects: Arc<Vec<*mut LayoutObject>>,
     pub(crate) sticky_objects: Arc<Vec<*mut LayoutObject>>,
@@ -108,7 +107,6 @@ impl LayoutBoundaryCache {
     ///         core/paint/fragment_data.h (FragmentData lives on its object).
     pub fn ClearTopology(&mut self) {
         self.styles.clear();
-        self.debug_names.clear();
         self.objects.clear();
         self.source_objects = Arc::default();
         self.sticky_objects = Arc::default();
@@ -127,13 +125,11 @@ impl LayoutBoundaryCache {
             return;
         }
         self.styles.clear();
-        self.debug_names.clear();
         self.style_indices_stale = true;
     }
 
     pub fn Clear(&mut self) {
         self.styles.clear();
-        self.debug_names.clear();
         self.objects.clear();
         self.source_objects = Arc::default();
         self.sticky_objects = Arc::default();

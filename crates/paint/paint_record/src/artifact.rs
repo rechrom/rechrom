@@ -424,6 +424,27 @@ impl PaintRecording {
         self.client_owner_node_ids.insert(client_id, owner_node_id);
     }
 
+    /// RecordDebugInfo for a client whose DebugName() is computed only when
+    /// paint debug info is enabled, as PaintController::RecordDebugInfo asks
+    /// the DisplayItemClient for its name after the same gate
+    /// (paint_controller.cc:609-611).
+    pub fn RecordDebugInfoWith(
+        &mut self,
+        client_id: usize,
+        name: impl FnOnce() -> Arc<str>,
+        owner_node_id: i32,
+    ) {
+        if !self.debug_info_enabled.0 {
+            return;
+        }
+        self.RecordDebugInfo(client_id, name(), owner_node_id);
+    }
+
+    /// Whether this recording keeps per-client debug names and owner ids.
+    pub fn DebugInfoEnabled(&self) -> bool {
+        self.debug_info_enabled.0
+    }
+
     // Source: paint_artifact.h:63-68; paint_artifact.cc:37-42.
     pub fn ClientDebugName(&self, client_id: usize) -> &str {
         self.client_debug_names

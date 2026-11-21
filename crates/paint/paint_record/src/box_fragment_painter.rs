@@ -2998,10 +2998,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         self.context.borrow_mut().RegisterAuxiliaryClient(
             scroll.scrolling_background_client_id,
             fragment.paint.DisplayItemClientOwnerNodeId(),
-            std::sync::Arc::from(format!(
-                "{} scrolling background",
-                fragment.paint.display_item_client_debug_name
-            )),
+            || {
+                std::sync::Arc::from(format!(
+                    "{} scrolling background",
+                    fragment.paint.DisplayItemClientDebugName()
+                ))
+            },
         );
         let skip_under_invalidation_cache = self
             .context
@@ -4371,17 +4373,18 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         });
         let cached = visual_rect.is_some_and(|_| {
             if let Some((id, client)) = selection_client {
-                self.context.borrow_mut().UseCachedDrawingWithClient(
-                    id,
-                    client,
-                    Some((
+                let debug = self.context.borrow().DebugInfoEnabled().then(|| {
+                    (
                         fragment.paint.DisplayItemClientOwnerNodeId(),
                         Arc::<str>::from(format!(
                             "{} selection",
-                            fragment.paint.display_item_client_debug_name
+                            fragment.paint.DisplayItemClientDebugName()
                         )),
-                    )),
-                )
+                    )
+                });
+                self.context
+                    .borrow_mut()
+                    .UseCachedDrawingWithClient(id, client, debug)
             } else {
                 DrawingRecorder::UseCachedDrawingIfPossible(self.context, self.node, drawing_type)
             }

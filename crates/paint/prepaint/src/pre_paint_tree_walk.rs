@@ -6600,7 +6600,10 @@ impl PrePaintTreeWalk {
                         let name = built
                             .fragment
                             .as_deref()
-                            .map_or("?", |f| &*f.paint.display_item_client_debug_name);
+                            .map_or_else(
+                                || Arc::<str>::from("?"),
+                                |f| f.paint.DisplayItemClientDebugName(),
+                            );
                         browser_tracing::instant_with_text(
                             "prepaint",
                             "PrePaint.ShiftMismatch",

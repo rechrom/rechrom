@@ -180,6 +180,8 @@ pub struct PaintProperties {
     /// PaintController snapshots the client's actual reason when appending an
     /// item (paint_controller.cc:531-545). None is an unexported external input.
     pub display_item_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
+    /// Fixture-only DebugName for payloads without a bound source object;
+    /// read through DisplayItemClientDebugName, never written by population.
     pub display_item_client_debug_name: std::sync::Arc<str>,
     pub paint_layer_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     // None means source ink overflow has not been computed. Never substitute
@@ -1796,6 +1798,18 @@ impl PaintProperties {
             return;
         }
         unsafe { &mut *layer }.UpdateDescendantDependentFlags();
+    }
+
+    /// DisplayItemClient::DebugName() of the bound source LayoutObject
+    /// (platform/graphics/paint/display_item_client.h; LayoutObject::DebugName,
+    /// translated in layoutng/internal/layout_object_core_services.cc:489-499),
+    /// computed on demand as Chromium does. Paint asks only while recording
+    /// paint debug info or tracing. Detached fixtures keep their stored name.
+    pub fn DisplayItemClientDebugName(&self) -> Arc<str> {
+        match self.SourceObject() {
+            Some(object) => Arc::from(object.DebugName().Utf8()),
+            None => Arc::clone(&self.display_item_client_debug_name),
+        }
     }
 
     pub fn HasSource(&self) -> bool {
