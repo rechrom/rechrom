@@ -50,13 +50,11 @@ fn ComputeTableColumnsRect(fragment: &PhysicalBoxFragment) -> PhysicalRect {
 }
 
 #[inline(never)]
-pub(super) fn ExportTablePaintData(
+pub(crate) fn ExportTablePaintData(
     box_fragment: &PhysicalBoxFragment,
-    sources: &SourceMap,
-    paint: &mut PaintPropertiesHandle,
-) {
+) -> Option<Arc<TablePaintData>> {
     if !box_fragment.IsTable() {
-        return;
+        return None;
     }
     let mut data = TablePaintData::default();
     let converter = WritingModeConverter::new(
@@ -90,23 +88,27 @@ pub(super) fn ExportTablePaintData(
             if column_box.is_null() {
                 continue;
             }
-            let Some(source) = sources.get(&(column_box as *const LayoutObject)) else {
+            // The column's DOM node (LayoutObject::GetNode); anonymous
+            // columns have none and are skipped.
+            let node = unsafe { &*column_box }.GetNode();
+            if node.is_null() {
                 continue;
-            };
+            }
+            let node = unsafe { &*node };
             data.columns.push(TablePaintColumn {
                 start_column: geometry.start_column as usize,
                 span: geometry.span as usize,
                 inline_offset: Number(geometry.inline_offset),
                 inline_size: Number(geometry.inline_size),
-                node_id: unsafe { &*source.node }.InputId(),
+                node_id: node.InputId(),
                 style: crate::internal::boundary::paint_style_export::ExportStyleWithInputResources(
                     unsafe { &*column_box }.StyleRef(),
-                    unsafe { &*source.node }.InputStyleResources(),
+                    node.InputStyleResources(),
                 ),
             });
         }
     }
-    paint.table = Some(Arc::new(data));
+    Some(Arc::new(data))
 }
 
 pub(crate) fn ExportMathMLPaintData(

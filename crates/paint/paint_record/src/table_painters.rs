@@ -903,7 +903,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.table.as_ref() else {
+        let Some(data) = fragment.ViewTable() else {
             return PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
@@ -947,7 +947,7 @@ impl<'n, 'f, 'c, 'o> TablePainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(data) = fragment.paint.table.as_ref() else {
+        let Some(data) = fragment.ViewTable() else {
             return;
         };
         if data.columns.is_empty() {

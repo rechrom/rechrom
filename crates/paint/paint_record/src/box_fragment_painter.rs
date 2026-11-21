@@ -1041,7 +1041,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 decoration_data = decoration_data.WithoutBackground();
             }
             let table_checks_column_backgrounds =
-                fragment.paint.table.as_ref().is_some_and(|table| {
+                fragment.ViewTable().is_some_and(|table| {
                     table.columns.iter().any(|column| {
                         column.style.background_color().alpha > 0.0
                             || column.style.has_background_images()
@@ -7121,7 +7121,7 @@ fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
             height: rect.size.height,
         };
     }
-    if fragment.paint.table.is_some() {
+    if fragment.ViewTable().is_some() {
         return TablePainter::DecorationRect(node);
     }
     FieldsetPainter::DecorationRect(node)

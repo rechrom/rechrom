@@ -803,6 +803,8 @@ pub trait ResidentBoxGeometry {
     fn ViewSelfOutline(&self) -> Option<SelfOutlinePaintData>;
     /// overflow-clip-margin outsets of the resident box.
     fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges>;
+    /// Table grid, column rect and column geometry of the resident table box.
+    fn ViewTable(&self) -> Option<Arc<TablePaintData>>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -873,6 +875,15 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewTable(&self) -> Option<Arc<TablePaintData>> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                crate::internal::boundary::layout_boundary::ExportTablePaintData(box_fragment)
+            }
+            None => self.paint.table.clone(),
+        }
+    }
+
     fn ViewOverflowClipMarginOutsets(&self) -> Option<Edges> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {

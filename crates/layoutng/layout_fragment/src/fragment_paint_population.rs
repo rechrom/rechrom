@@ -615,7 +615,7 @@ fn PopulateInlineItemLocalPaintData(
                     output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
                 }
                 if purpose == LayoutUpdateKind::Paint {
-                    ExportTablePaintData(box_fragment, sources, &mut output.paint);
+                    output.paint.table = ExportTablePaintData(box_fragment);
                 }
                 if box_fragment.IsTableCell() {
                     output.paint.table_cell_column =
@@ -1370,7 +1370,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         output.paint.scrollbars = ExportScrollbarPaintData(box_fragment);
     }
     if purpose == LayoutUpdateKind::Paint {
-        ExportTablePaintData(box_fragment, sources, &mut output.paint);
+        output.paint.table = ExportTablePaintData(box_fragment);
     }
     if box_fragment.IsTableCell() {
         update_paint!(

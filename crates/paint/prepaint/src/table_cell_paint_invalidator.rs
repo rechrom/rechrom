@@ -75,7 +75,7 @@ impl TableCellPaintInvalidator {
             Display::kTable | Display::kInlineTable => {
                 container.paint.HasBackground()
                     || container.paint.has_collapsed_borders
-                    || container.paint.table.as_ref().is_some_and(|table| {
+                    || container.ViewTable().is_some_and(|table| {
                         table.columns.iter().any(|column| {
                             column.style.background_color().alpha > 0.0
                                 || column.style.has_background_images()

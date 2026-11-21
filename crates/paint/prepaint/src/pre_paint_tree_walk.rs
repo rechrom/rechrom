@@ -3281,7 +3281,7 @@ fn MaskBox(
         width: fragment.ViewSize().width,
         height: fragment.ViewSize().height,
     };
-    if let Some(table) = paint.table.as_ref() {
+    if let Some(table) = fragment.ViewTable() {
         rect = PaintRect {
             x: absolute_offset.x + table.grid_offset.x,
             y: absolute_offset.y + table.grid_offset.y,
@@ -3447,11 +3447,10 @@ fn MaskClipRadii(fragment: &FragmentPaintData, box_type: BackgroundBox) -> Paint
         inset.bottom += fragment.Padding().bottom;
         inset.left += fragment.Padding().left;
     }
-    let outer_size = paint.table.as_ref().map_or_else(
+    let outer_size = fragment.ViewTable().map_or_else(
         || {
-            paint
-                .fieldset
-                .as_ref()
+            fragment
+                .ViewFieldset()
                 .map_or(fragment.ViewSize(), |fieldset| Size {
                     width: (fragment.ViewSize().width
                         - fieldset.border_outsets.left
