@@ -1907,6 +1907,17 @@ impl PaintProperties {
             .SourceCheckedOr(self.selection_client_id, "selection_client_id")
     }
 
+    /// PaintLayerStackingNode's flex/grid `order` comparison inputs: the
+    /// shared parent's UniqueObjectId and the order value.
+    pub fn PaintLayerOrder(&self) -> (Option<u64>, i32) {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LivePaintLayerOrder)
+            .SourceCheckedOr(
+                (self.paint_layer_order_parent_unique_id, self.paint_layer_order),
+                "paint_layer_order",
+            )
+    }
+
     /// The source Node id of the LayoutObject's nearest ancestor with a Node.
     pub fn LogicalParentNodeId(&self) -> Option<u64> {
         self.SourceObject()

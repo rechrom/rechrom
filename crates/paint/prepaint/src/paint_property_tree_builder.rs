@@ -258,8 +258,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             .PaintLayerCanContainFixedPositionObjects();
         node.has_overlay_overflow_controls =
             fragment.paint.PaintLayerHasOverlayOverflowControls();
-        node.paint_layer_order_parent_unique_id = fragment.paint.paint_layer_order_parent_unique_id;
-        node.paint_layer_order = fragment.paint.paint_layer_order;
+        (node.paint_layer_order_parent_unique_id, node.paint_layer_order) =
+            fragment.paint.PaintLayerOrder();
 
         let mut has_active_transform_animation = false;
         let mut has_non_composited_transform = false;

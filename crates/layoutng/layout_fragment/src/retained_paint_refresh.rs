@@ -159,9 +159,6 @@ pub(super) fn refresh_retained_paint_inputs(
             // FragmentData; do not collapse fragmented boxes back to it.
             node.paint.display_item_client_debug_name =
                 current.display_item_client_debug_name.clone();
-            node.paint.paint_layer_order_parent_unique_id =
-                current.paint_layer_order_parent_unique_id;
-            node.paint.paint_layer_order = current.paint_layer_order;
             node.paint.BindLiveStyleFacts(live_style_facts);
             node.paint.background_fill_layer_count =
                 current.background_fill_layer_count;

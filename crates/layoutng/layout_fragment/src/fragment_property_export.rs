@@ -215,73 +215,6 @@ pub(super) fn ExportProperties(
         });
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
-    if purpose == LayoutUpdateKind::Paint {
-        // A source object with no PaintLayer is a known result, not permission for
-        // Paint to reconstruct a layer from flattened style (notably SVG children).
-        // PaintLayerPainter uses the layer's own client, distinct from this box.
-        // cpp: core/paint/paint_layer_painter.cc:452-454,484-486,730-732
-        let box_model = DynamicTo::<LayoutBoxModelObject>(object);
-        if !box_model.is_null() {
-            let layer = unsafe { &*box_model }.Layer();
-            if !layer.is_null() {
-                let layer = unsafe { &*layer };
-                // These decisions belong to source Layout/PaintLayer setup. In
-                // particular, style adjustment makes static flex/grid items with
-                // z-index stacking contexts, and containment/perspective can form
-                // contexts without an equivalent field in the public projection.
-                let layout_object = unsafe { &*object };
-
-                // Source: core/paint/paint_layer_stacking_node.cc:187-254.
-                // Export the exact comparison projection used by
-                // ForAllChildrenSortedByOrder().
-                let parent = layout_object.Parent();
-                let order_ancestor = if !parent.is_null()
-                    && (unsafe { &*parent }.IsFlexibleBox()
-                        || unsafe { &*parent }.IsLayoutGridOrGridLanes())
-                {
-                    object
-                } else if !parent.is_null() {
-                    let grandparent = unsafe { &*parent }.Parent();
-                    if !grandparent.is_null()
-                        && (unsafe { &*grandparent }.IsFlexibleBox()
-                            || unsafe { &*grandparent }.IsLayoutGridOrGridLanes())
-                    {
-                        parent
-                    } else {
-                        std::ptr::null_mut()
-                    }
-                } else {
-                    std::ptr::null_mut()
-                };
-                if !order_ancestor.is_null() {
-                    let order_parent = unsafe { &*order_ancestor }.Parent();
-                    if !order_parent.is_null() {
-                        // Chromium compares the shared flex/grid parent by
-                        // LayoutObject identity (paint_layer_stacking_node.cc:
-                        // 218-236).  The retained projection carries that
-                        // identity as FragmentData's UniqueObjectId instead,
-                        // so allocate the id on this actual owner before
-                        // reading it.  The parent may not have reached its own
-                        // paint export yet (for example through a display:
-                        // contents wrapper), and UniqueId() deliberately
-                        // assumes EnsureId() has already run.
-                        unsafe { &mut *order_parent }
-                            .GetMutableForPainting()
-                            .EnsureId();
-                        output.paint_layer_order_parent_unique_id =
-                            Some(unsafe { &*order_parent }.UniqueId());
-                        output.paint_layer_order = if order_ancestor == object
-                            && unsafe { &*order_ancestor }.IsOutOfFlowPositioned()
-                        {
-                            0
-                        } else {
-                            unsafe { &*order_ancestor }.StyleRef().Order()
-                        };
-                    }
-                }
-            }
-        }
-    }
     let Some(source_entry) = sources.get(&object) else {
         return output;
     };
@@ -919,4 +852,52 @@ pub(crate) fn LiveLogicalParentNodeId(object: &LayoutObject) -> Option<u64> {
         parent = current.Parent();
     }
     None
+}
+
+/// Source: core/paint/paint_layer_stacking_node.cc:187-254. The exact
+/// comparison projection ForAllChildrenSortedByOrder() uses for a layer
+/// whose LayoutObject (or its parent) is a flex/grid item: the shared
+/// flex/grid parent's identity and the item's `order`. Chromium compares the
+/// parent by LayoutObject identity (cc:218-236); Rechrom carries it as the
+/// FragmentData UniqueObjectId, so the id is allocated on that owner first
+/// (UniqueId() assumes EnsureId() has run).
+pub(crate) fn LivePaintLayerOrder(object: &LayoutObject) -> (Option<u64>, i32) {
+    let object_ptr = object as *const LayoutObject as *mut LayoutObject;
+    let box_model = DynamicTo::<LayoutBoxModelObject>(object_ptr);
+    if box_model.is_null() || unsafe { &*box_model }.Layer().is_null() {
+        return (None, 0);
+    }
+    let parent = object.Parent();
+    let is_flex_or_grid =
+        |candidate: *mut LayoutObject| {
+            let candidate = unsafe { &*candidate };
+            candidate.IsFlexibleBox() || candidate.IsLayoutGridOrGridLanes()
+        };
+    let order_ancestor = if !parent.is_null() && is_flex_or_grid(parent) {
+        object_ptr
+    } else if !parent.is_null() {
+        let grandparent = unsafe { &*parent }.Parent();
+        if !grandparent.is_null() && is_flex_or_grid(grandparent) {
+            parent
+        } else {
+            return (None, 0);
+        }
+    } else {
+        return (None, 0);
+    };
+    let order_parent = unsafe { &*order_ancestor }.Parent();
+    if order_parent.is_null() {
+        return (None, 0);
+    }
+    unsafe { &mut *order_parent }
+        .GetMutableForPainting()
+        .EnsureId();
+    let order = if order_ancestor == object_ptr
+        && unsafe { &*order_ancestor }.IsOutOfFlowPositioned()
+    {
+        0
+    } else {
+        unsafe { &*order_ancestor }.StyleRef().Order()
+    };
+    (Some(unsafe { &*order_parent }.UniqueId()), order)
 }
