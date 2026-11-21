@@ -760,6 +760,8 @@ pub trait ResidentBoxGeometry {
     /// Borrowed-view source Node id: the resident owner's LayoutObject
     /// Node (0 without one, and for an inline line item).
     fn ViewNodeId(&self) -> u64;
+    /// Borrowed-view fragment kind from the resident owner's type.
+    fn ViewKind(&self) -> FragmentKind;
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
@@ -806,6 +808,33 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewKind(&self) -> FragmentKind {
+        use crate::fragment_item::ItemType;
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => self.kind,
+            ResidentFragmentOwner::Physical(address) => {
+                if unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) }
+                    .IsBox()
+                {
+                    FragmentKind::kBox
+                } else {
+                    FragmentKind::kLine
+                }
+            }
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                match items.Items().get(index).map(|item| item.Type()) {
+                    Some(ItemType::kText) => FragmentKind::kText,
+                    Some(ItemType::kGeneratedText) => FragmentKind::kGeneratedText,
+                    Some(ItemType::kLine) => FragmentKind::kLine,
+                    Some(ItemType::kBox) => FragmentKind::kBox,
+                    _ => self.kind,
+                }
+            }
+        }
+    }
+
     fn ViewNodeId(&self) -> u64 {
         use layout_fragment_boundary::ResidentFragmentOwner;
         let object = match self.resident_owner {

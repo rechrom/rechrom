@@ -3,6 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/object_paint_invalidator.{h,cc}`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::PaintInvalidationReason;
 use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
 use layoutng_assembly::internal::layout_input::Offset;
@@ -56,7 +57,7 @@ impl ObjectPaintInvalidator {
             return PaintInvalidationReason::kBackground;
         }
 
-        if fragment.kind == FragmentKind::kBox {
+        if fragment.ViewKind() == FragmentKind::kBox {
             return PaintInvalidationReason::kIncremental;
         }
 

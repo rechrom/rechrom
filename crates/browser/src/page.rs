@@ -8603,7 +8603,7 @@ impl Page {
                 let (start, end) = selection.Ordered();
                 let order = fragment.paint.logical_tree_order;
                 if matches!(
-                    fragment.kind,
+                    fragment.ViewKind(),
                     FragmentKind::kText | FragmentKind::kGeneratedText
                 ) && order >= start.tree_order
                     && order <= end.tree_order

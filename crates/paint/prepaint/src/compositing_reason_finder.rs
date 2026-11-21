@@ -121,9 +121,9 @@ impl CompositingReasonFinder {
         let supports_transform_animation = if is_svg_child {
             !fragment.paint.IsSVGHiddenContainer()
                 && !fragment.paint.IsLayoutInline()
-                && fragment.kind == FragmentKind::kBox
+                && fragment.ViewKind() == FragmentKind::kBox
         } else {
-            fragment.kind == FragmentKind::kBox
+            fragment.ViewKind() == FragmentKind::kBox
         };
         for (enabled, reason) in [
             (

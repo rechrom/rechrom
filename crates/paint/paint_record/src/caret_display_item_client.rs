@@ -56,7 +56,7 @@ fn PaintCaretWithState(
                 .is_some_and(|cursor| native.Matches(cursor))
         });
     if !matches_painter
-        || fragment.kind != FragmentKind::kBox
+        || fragment.ViewKind() != FragmentKind::kBox
         || (caret.native.is_none() && !fragment.paint.establishes_paint_state)
     {
         return;

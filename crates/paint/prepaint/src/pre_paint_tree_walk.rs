@@ -4157,7 +4157,7 @@ fn GatherInlineOutlineGroups<'a>(
         .as_deref()
         .expect("PrePaint node must own a fragment");
     if fragment.ViewNodeId() != 0
-        && fragment.kind == FragmentKind::kBox
+        && fragment.ViewKind() == FragmentKind::kBox
         && fragment.paint.HasSource()
         && fragment.paint.establishes_paint_state
         && fragment.paint.Display() == Display::kInline
@@ -4713,7 +4713,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         | u32::from(p.IsSVGHiddenContainer()) << 5
         | u32::from(visible) << 6;
     PrePaintPrevious {
-        kind: Some(f.kind),
+        kind: Some(f.ViewKind()),
         node_id: f.ViewNodeId(),
         fragment_instance_id: f.fragment_instance_id,
         fragmentainer_instance_id: f.fragmentainer_instance_id,
@@ -6705,7 +6705,7 @@ impl PrePaintTreeWalk {
                 node.paint_offset,
             );
         if should_run_invalidation {
-            let background_invalidation = (fragment.kind == FragmentKind::kBox).then(|| {
+            let background_invalidation = (fragment.ViewKind() == FragmentKind::kBox).then(|| {
                 let mut background = BoxPaintInvalidator::ComputeBackgroundInvalidation(
                     &fragment,
                     PreviousFragment(old_fragment),
@@ -6727,7 +6727,7 @@ impl PrePaintTreeWalk {
                 node.paint_offset,
                 invalidation_context,
             );
-            let reason = if fragment.kind == FragmentKind::kBox {
+            let reason = if fragment.ViewKind() == FragmentKind::kBox {
                 if fragment.paint.Display() == Display::kTableCell {
                     TableCellPaintInvalidator::ComputePaintInvalidationReason(
                         &fragment,

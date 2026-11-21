@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
 use layoutng_assembly::internal::layout_input::{NodeKind, Position};
 use layoutng_assembly::internal::paint_input::PaintBlendMode;
@@ -26,7 +27,7 @@ pub fn ClassifyFragmentPaintLayer(
     // zero client id as unknown would promote transformed or masked SVG
     // siblings above later untransformed ones.
     if fragment.paint.PaintLayerStateIsAuthoritative() {
-        let is_paint_layer = fragment.kind == FragmentKind::kBox
+        let is_paint_layer = fragment.ViewKind() == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
             && fragment.paint.PaintLayerClientId() != 0
             && fragment.paint.PaintLayerIsSelfPainting();
@@ -77,7 +78,7 @@ pub fn ClassifyFragmentPaintLayer(
     // A source PaintLayer is authoritative when the bridge exported one.
     // Borrowed line/text fragments never become independent layer owners.
     if fragment.paint.PaintLayerClientId() != 0 {
-        is_paint_layer = fragment.kind == FragmentKind::kBox
+        is_paint_layer = fragment.ViewKind() == FragmentKind::kBox
             && establishes
             && fragment.paint.PaintLayerIsSelfPainting();
     }

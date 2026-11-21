@@ -282,7 +282,7 @@ fn LineSelfBordersContain(
     point: Offset,
     absolute: Offset,
 ) -> bool {
-    if fragment.kind != layoutng_assembly::fragment_tree::FragmentKind::kLine {
+    if fragment.ViewKind() != layoutng_assembly::fragment_tree::FragmentKind::kLine {
         return true;
     }
     let Some(containing_box) = containing_box else {
@@ -322,7 +322,7 @@ fn HitGeometry(
         return None;
     }
     let (point, absolute) = LocalPoint(fragment, point, parent)?;
-    if fragment.kind == layoutng_assembly::fragment_tree::FragmentKind::kLine {
+    if fragment.ViewKind() == layoutng_assembly::fragment_tree::FragmentKind::kLine {
         if let Some(overflow) = fragment.paint.ink_overflow {
             let left = absolute.x + overflow.offset.x;
             let top = absolute.y + overflow.offset.y;
@@ -442,7 +442,7 @@ fn ScrollbarHitTarget<'f>(
 // targets themselves. Visual-overflow/occlusion testing is a separate request
 // kind and does not enter this event-targeting path.
 fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
-    if fragment.kind == layoutng_assembly::fragment_tree::FragmentKind::kLine
+    if fragment.ViewKind() == layoutng_assembly::fragment_tree::FragmentKind::kLine
         && matches!(fragment.paint.SourceKind(), NodeKind::kSvgText)
     {
         return false;
@@ -614,7 +614,7 @@ fn IsSvgHitObject(kind: NodeKind) -> bool {
 
 fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
     if matches!(
-        fragment.kind,
+        fragment.ViewKind(),
         layoutng_assembly::fragment_tree::FragmentKind::kText
             | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             | layoutng_assembly::fragment_tree::FragmentKind::kLine
@@ -920,7 +920,7 @@ pub fn TextPositionAtPoint<'a>(
             return;
         };
         if matches!(
-            fragment.kind,
+            fragment.ViewKind(),
             layoutng_assembly::fragment_tree::FragmentKind::kText
                 | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
         ) && fragment.paint.TextControlHost().is_none()

@@ -364,7 +364,7 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
         }
         if !fragment.paint.hidden
             && matches!(
-                fragment.kind,
+                fragment.ViewKind(),
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
@@ -689,7 +689,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // may paint outside a line item's inline-direction ink overflow, so a
         // line-box child is culled only in the block direction. Ordinary
         // FragmentItems keep the full-rectangle admission below.
-        if fragment.kind == FragmentKind::kLine {
+        if fragment.ViewKind() == FragmentKind::kLine {
             let cull = paint_info.GetCullRect();
             return match fragment.paint.WritingMode() {
                 layoutng_assembly::internal::layout_input::WritingMode::kHorizontalTb => {
@@ -912,7 +912,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if phase == PaintPhase::kMask {
             if is_visible
                 && matches!(
-                    fragment.kind,
+                    fragment.ViewKind(),
                     FragmentKind::kText | FragmentKind::kGeneratedText
                 )
             {
@@ -928,7 +928,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             phase,
             PaintPhase::kSelectionDragImage | PaintPhase::kTextClip
         ) && matches!(
-            fragment.kind,
+            fragment.ViewKind(),
             FragmentKind::kText | FragmentKind::kGeneratedText
         ) {
             if is_visible {
@@ -940,12 +940,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             return;
         }
         if phase == PaintPhase::kForeground
-            && fragment.kind == FragmentKind::kBox
+            && fragment.ViewKind() == FragmentKind::kBox
             && fragment.paint.box_fragment_is_inline_box
         {
             InlineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
         }
-        if phase == PaintPhase::kForeground && fragment.kind == FragmentKind::kLine {
+        if phase == PaintPhase::kForeground && fragment.ViewKind() == FragmentKind::kLine {
             LineBoxFragmentPainter::new(self.node, self.context).Paint(paint_info, self);
         }
         // SVGContainerPainter paints content/effects/outline, never CSS box
@@ -957,7 +957,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 fragment.paint.SourceKind(),
                 NodeKind::kSvgGroup | NodeKind::kSvgViewportContainer
             )
-            && fragment.kind == FragmentKind::kBox
+            && fragment.ViewKind() == FragmentKind::kBox
             && !fragment.paint.box_fragment_is_inline_box
             && fragment.paint.establishes_paint_state
         {
@@ -1202,7 +1202,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // border box; the payload points at the real contents ScrollTranslation.
         if paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
             && is_visible
-            && fragment.kind == FragmentKind::kBox
+            && fragment.ViewKind() == FragmentKind::kBox
             && ShouldRecordHitTestData(fragment.paint.Display())
             && fragment.paint.scroll_container.is_some()
             && ShouldRecordScrollHitTestDataForPaint(
@@ -1230,14 +1230,14 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let _contents_properties = (matches!(
             phase,
             PaintPhase::kForeground | PaintPhase::kSelectionDragImage
-        ) && fragment.kind == FragmentKind::kBox)
+        ) && fragment.ViewKind() == FragmentKind::kBox)
             .then(|| {
                 crate::scoped_paint_state::ScopedBoxContentsPaintState::new(paint_info, self.node)
             });
         if phase == PaintPhase::kForeground
             && is_visible
             && matches!(
-                fragment.kind,
+                fragment.ViewKind(),
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
@@ -1297,7 +1297,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if PaintsSelfOutlineBeforeChildren(phase)
             && is_visible
             && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
-            && fragment.kind == FragmentKind::kBox
+            && fragment.ViewKind() == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
         {
             self.PaintOutline(phase);
@@ -1449,7 +1449,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if has_source
             && PaintsSelfOutlineAfterChildren(paint_info.phase)
             && !crate::scoped_svg_paint_state::ScopedSVGPaintState::OwnsPaintScope(self.node)
-            && fragment.kind == FragmentKind::kBox
+            && fragment.ViewKind() == FragmentKind::kBox
             && fragment.paint.establishes_paint_state
         {
             self.PaintOutline(PaintPhase::kSelfOutlineOnly);
@@ -3533,7 +3533,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.HasSource()
             && fragment.paint.style.visible()
             && matches!(
-                fragment.kind,
+                fragment.ViewKind(),
                 FragmentKind::kText | FragmentKind::kGeneratedText
             )
         {
