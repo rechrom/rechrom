@@ -938,13 +938,16 @@ fn ReplayValid(
     paint_state: &crate::layout_engine::LayoutPaintState,
     owners: &mut FragmentOwners,
 ) -> bool {
+    let _ = paint_state;
+    // Most slots share one previous resource set; prove it once.
+    let mut compatible_previous: Option<usize> = None;
     for entry in entries {
         if !entry.replayable || owners.peek_instance(&entry.key) != Some(entry.instance) {
             return false;
         }
-        let Some(slot) = paint_state.ResidentFragment(entry.instance) else {
-            return false;
-        };
+        // The recorded slot: published slots are carried, as the same shared
+        // allocations, into every replacement result's resident state.
+        let slot = unsafe { &*(entry.slot as *const FragmentPaintData) };
         if !ReplayOwnerMatches(slot, entry.owner)
             || slot.pre_paint_invalidation.own()
             || slot.pre_paint_invalidation.descendants()
@@ -964,9 +967,12 @@ fn ReplayValid(
                 return false;
             }
         }
-        let previous = slot.resources.clone();
-        if !RetainedResourcesAreCompatible(previous.as_ref(), resources, owners) {
-            return false;
+        let previous = slot.resources.as_ref().map_or(0, |r| Arc::as_ptr(r) as usize);
+        if compatible_previous != Some(previous) {
+            if !RetainedResourcesAreCompatible(slot.resources.as_ref(), resources, owners) {
+                return false;
+            }
+            compatible_previous = Some(previous);
         }
     }
     true
