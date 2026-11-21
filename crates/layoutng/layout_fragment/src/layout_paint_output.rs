@@ -19,7 +19,7 @@ pub(super) fn paint_cull_rect_has_scrolled_enough(
             .max(f64::MIN_POSITIVE);
         let threshold = CHANGED_ENOUGH_DISTANCE * expansion_ratio;
         (cursor.ViewNodeId() == id
-            && cursor.paint_cull_scroll_offset.is_some_and(|origin| {
+            && cursor.paint.LastCullRectUpdateScrollPosition().is_some_and(|origin| {
                 (offset.x - origin.x).abs() >= threshold || (offset.y - origin.y).abs() >= threshold
             }))
             || cursor

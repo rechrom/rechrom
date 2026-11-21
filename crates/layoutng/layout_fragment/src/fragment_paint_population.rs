@@ -449,7 +449,11 @@ fn PopulateInlineItemLocalPaintData(
                     ExportBoxPaintGeometry(box_fragment, &mut output.paint);
                 }
                 if purpose == LayoutUpdateKind::Paint && LiveScrollContainer(box_fragment).is_some() {
-                    output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
+                    // The publication recomputes the contents cull at the current offset;
+                    // record it on the scroll owner (cull_rect_updater.cc:67-89).
+                    output
+                        .paint
+                        .SetLastCullRectUpdateScrollPosition(output.paint.ScrollOffset());
                 }
                 let owner_fragment = item.PostLayoutBoxFragment();
                 let owner_fragment = if owner_fragment.is_null() {
@@ -1045,7 +1049,11 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         ExportBoxPaintGeometry(box_fragment, &mut output.paint);
     }
     if purpose == LayoutUpdateKind::Paint && LiveScrollContainer(box_fragment).is_some() {
-        output.paint_cull_scroll_offset = Some(output.paint.ScrollOffset());
+        // The publication recomputes the contents cull at the current offset;
+        // record it on the scroll owner (cull_rect_updater.cc:67-89).
+        output
+            .paint
+            .SetLastCullRectUpdateScrollPosition(output.paint.ScrollOffset());
     }
     let establishes_paint_state = paint_state_owners.insert(
         box_fragment as *const PhysicalBoxFragment,

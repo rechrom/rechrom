@@ -127,9 +127,12 @@ fn root_scroll_state(
         Option<layoutng_assembly::internal::layout_input::Offset>,
     )> {
         if node.paint.scroll_size.height > node.size.height
-            && node.paint_cull_scroll_offset.is_some()
+            && node.paint.LastCullRectUpdateScrollPosition().is_some()
         {
-            return Some((node.paint.ScrollOffset(), node.paint_cull_scroll_offset));
+            return Some((
+                node.paint.ScrollOffset(),
+                node.paint.LastCullRectUpdateScrollPosition(),
+            ));
         }
         node.Children().find_map(find)
     }

@@ -454,7 +454,7 @@ mod tests {
             owner.GetDocumentMut().StyleStateMut().impact = Default::default();
             let index = dom_id(&owner, "s");
             let id = owner.GetDocument().Node(index).Id();
-            let origin = fragment(&fragments, id).paint_cull_scroll_offset;
+            let origin = fragment(&fragments, id).paint.LastCullRectUpdateScrollPosition();
             let offset = Offset { x: 0.0, y: 700.0 };
             owner.GetDocumentMut().SetScrollOffset(index, offset);
 
@@ -471,7 +471,7 @@ mod tests {
             ));
             assert_eq!(fragment(&fragments, id).paint.ScrollOffset(), offset);
             assert_eq!(
-                fragment(&fragments, id).paint_cull_scroll_offset,
+                fragment(&fragments, id).paint.LastCullRectUpdateScrollPosition(),
                 Some(offset),
                 "active PrePaint refreshes cull data once hysteresis is crossed"
             );

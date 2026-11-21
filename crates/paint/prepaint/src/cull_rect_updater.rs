@@ -83,7 +83,7 @@ pub fn HasScrolledEnough(
     resources: Option<&PaintResources>,
     current: Offset,
 ) -> bool {
-    let Some(origin) = fragment.paint_cull_scroll_offset else {
+    let Some(origin) = fragment.paint.LastCullRectUpdateScrollPosition() else {
         return false;
     };
     let container = ContainerRect(fragment);

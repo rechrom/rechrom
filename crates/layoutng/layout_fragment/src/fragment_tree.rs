@@ -3042,10 +3042,47 @@ impl PaintProperties {
         }
     }
 
+    /// The source scroll offset (PaintLayerScrollableArea::GetScrollOffset or
+    /// the element's committed input). The stored copy is only the fallback
+    /// for hand-built fixture slots without a bound source.
     pub fn ScrollOffset(&self) -> Offset {
-        self.SourceObject()
-            .map(crate::internal::boundary::layout_boundary::LiveScrollOffset)
-            .SourceCheckedOr(self.scroll_offset, "scroll_offset")
+        match self.SourceObject() {
+            Some(object) => crate::internal::boundary::layout_boundary::LiveScrollOffset(object),
+            None => self.scroll_offset,
+        }
+    }
+
+    /// The source PaintLayerScrollableArea of this payload's LayoutObject.
+    fn SourceScrollableArea(
+        &self,
+    ) -> Option<&layoutng::internal::layout_scrollable_area::PaintLayerScrollableArea> {
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return None;
+        }
+        let box_model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
+        unsafe { box_model.as_ref()?.GetScrollableArea().as_ref() }
+    }
+
+    /// PaintLayerScrollableArea::LastCullRectUpdateScrollPosition() of the
+    /// source scroll container: the scroll offset its contents CullRect was
+    /// last computed for (core/paint/cull_rect_updater.cc:193-206). Paint
+    /// owns this bookkeeping on the scroll owner; slots without a source or
+    /// scrollable area have none.
+    pub fn LastCullRectUpdateScrollPosition(&self) -> Option<Offset> {
+        self.SourceScrollableArea()?
+            .LastCullRectUpdateScrollPosition()
+            .map(|(x, y)| Offset { x, y })
+    }
+
+    /// Record the scroll offset the contents CullRect was computed for
+    /// (CullRectUpdater::UpdateForSelf ->
+    /// PaintLayerScrollableArea::SetLastCullRectUpdateScrollPosition).
+    /// Returns whether the recorded position changed.
+    pub fn SetLastCullRectUpdateScrollPosition(&self, position: Offset) -> bool {
+        self.SourceScrollableArea().is_some_and(|area| {
+            area.SetLastCullRectUpdateScrollPosition((position.x, position.y))
+        })
     }
 
     /// PaintLayerStackingNode's flex/grid `order` comparison inputs: the

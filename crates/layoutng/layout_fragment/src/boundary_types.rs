@@ -564,7 +564,6 @@ impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
 #[derive(Clone)]
 pub struct FragmentPaintData<Paint> {
     pub inline_geometry: Vec<InlineGeometry>,
-    pub paint_cull_scroll_offset: Option<LayoutOffset>,
     pub pre_paint_revision: u64,
     pub pre_paint_subtree_revision: u64,
     pub pre_paint_owner_retained: bool,
@@ -645,7 +644,6 @@ impl<Paint> FragmentPaintData<Paint> {
     pub fn with_paint_handle(paint: PaintPropertiesHandle<Paint>) -> Self {
         Self {
             inline_geometry: Vec::new(),
-            paint_cull_scroll_offset: None,
             pre_paint_revision: 0,
             pre_paint_subtree_revision: 0,
             pre_paint_owner_retained: false,
@@ -672,7 +670,6 @@ impl<Paint> FragmentPaintData<Paint> {
     /// geometry is rewritten by the publication walk that follows.
     pub fn prepare_for_publication(&mut self) {
         self.inline_geometry.clear();
-        self.paint_cull_scroll_offset = None;
         self.fragmentainer_instance_id = 0;
         self.node_id = 0;
         self.kind = FragmentKind::kBox;
