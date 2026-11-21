@@ -237,7 +237,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
         let glyph_runs = self
             .context
             .borrow_mut()
-            .TextGlyphRuns(fragment.fragment_instance_id);
+            .TextGlyphRuns(fragment.ViewFragmentInstanceId());
         let metrics = glyph_runs
             .first()
             .map(|run| {

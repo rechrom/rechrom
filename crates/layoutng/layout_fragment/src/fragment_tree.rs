@@ -834,6 +834,11 @@ pub trait ResidentBoxGeometry {
     /// FragmentData::UniqueId of the owner's property fragment (the box
     /// fragment's FragmentData, else the object's first fragment).
     fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// Chromium identity of this fragment occurrence, read live from the
+    /// resident owner (see `PhysicalFragmentInstanceId` /
+    /// `InlineItemInstanceId`). A detached fixture without a resident owner
+    /// keeps its recorded `fragment_instance_id`.
+    fn ViewFragmentInstanceId(&self) -> u64;
     /// Whether this occurrence applies the box fragment's own paint state
     /// (its FragmentData properties, decorations and layer): every box
     /// fragment and every kBox inline item with a box fragment. Boxes reached
@@ -999,6 +1004,105 @@ fn LiveNinePieceImage(
     )
 }
 
+// Live fragment identities.
+//
+// Chromium keys retained per-fragment paint state by identities that survive
+// relayout without a per-publication census:
+//   * a box fragment by its FragmentData (FragmentData::UniqueId,
+//     core/paint/fragment_data.h:123-128);
+//   * an inline item by its DisplayItemClient and FragmentItem::FragmentId(),
+//     the pair DisplayItem::Id uses (platform/graphics/paint/display_item.h,
+//     DisplayItem::Id{client_id, type, fragment}); FragmentItems::
+//     FinalizeAfterLayout numbers every item of one LayoutObject across the
+//     whole inline formatting context, and line items of the container from
+//     kInitialLineFragmentId (fragment_items.cc:167-253);
+//   * a fragmentainer by its break token SequenceNumber, as
+//     BoxFragmentPainter scopes its display items
+//     (box_fragment_painter.cc:398-403).
+// FragmentData ids and DisplayItemClient ids are NewUniqueObjectId counters
+// (high bit clear); derived ids set bit 63 so the spaces never meet.
+const DERIVED_INSTANCE_ID_BIT: u64 = 1 << 63;
+const FRAGMENTAINER_INSTANCE_ID_BIT: u64 = 1 << 62;
+const HASHED_INSTANCE_ID_BIT: u64 = 1 << 61;
+const PACKED_CLIENT_LIMIT: u64 = 1 << 29;
+
+/// Pack (client, fragment) exactly while the client id fits 29 bits; beyond
+/// that (after half a billion process-wide object ids) mix it into the
+/// separately tagged hashed space.
+fn DerivedFragmentInstanceId(client: u64, fragmentainer: bool, fragment: u32) -> u64 {
+    let kind = if fragmentainer {
+        FRAGMENTAINER_INSTANCE_ID_BIT
+    } else {
+        0
+    };
+    if client < PACKED_CLIENT_LIMIT {
+        return DERIVED_INSTANCE_ID_BIT | kind | (client << 32) | u64::from(fragment);
+    }
+    // splitmix64 finalizer over the pair.
+    let mut z = client.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ u64::from(fragment);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    DERIVED_INSTANCE_ID_BIT | kind | HASHED_INSTANCE_ID_BIT | (z & (HASHED_INSTANCE_ID_BIT - 1))
+}
+
+fn ClientInstanceId(object: *const LayoutObject) -> Option<u64> {
+    (!object.is_null()).then(|| unsafe { &*(object as *const DisplayItemClient) }.Id() as u64)
+}
+
+/// Identity of a fragmentainer box (column or page area): its owner's
+/// DisplayItemClient and the display-item fragment BoxFragmentPainter
+/// scopes it with (break token SequenceNumber + 1, 0 for the last one).
+/// Descendants are inside this fragmentainer only through the tree walk
+/// (Chromium's PrePaintTreeWalk `fragmentainer_idx`); a walk propagates it.
+pub fn FragmentainerInstanceId(
+    fragment: &crate::physical_box_fragment::PhysicalBoxFragment,
+) -> u64 {
+    debug_assert!(fragment.IsFragmentainerBox());
+    // A fragmentainer is not a CSS box, so GetLayoutObject() hides the
+    // fragmentation-context owner it was laid out for.
+    let client = ClientInstanceId(fragment.layout_object_ptr()).unwrap_or(0);
+    let token = fragment.GetBreakToken();
+    let sequence = if token.is_null() {
+        0
+    } else {
+        unsafe { &*token }.SequenceNumber() + 1
+    };
+    DerivedFragmentInstanceId(client, true, sequence)
+}
+
+/// Identity of a resident physical fragment: FragmentData::UniqueId of a CSS
+/// box (its own FragmentData, else its object's first fragment), the
+/// fragmentainer identity of a column/page area, and 0 for a line box
+/// fragment, which owns no Chromium paint identity.
+pub fn PhysicalFragmentInstanceId(fragment: &crate::physical_fragment::PhysicalFragment) -> u64 {
+    if fragment.IsFragmentainerBox() {
+        return FragmentainerInstanceId(unsafe {
+            &*(fragment as *const crate::physical_fragment::PhysicalFragment
+                as *const crate::physical_box_fragment::PhysicalBoxFragment)
+        });
+    }
+    let object = fragment.GetLayoutObject();
+    if object.is_null() {
+        return 0;
+    }
+    let fragment_data = if fragment.IsBox() {
+        fragment.GetFragmentData().cast_mut()
+    } else {
+        std::ptr::null_mut()
+    };
+    crate::internal::boundary::layout_boundary::PropertyFragmentUniqueId(object, fragment_data)
+}
+
+/// Identity of a resident inline item: (DisplayItemClient id,
+/// FragmentItem::FragmentId()). Stable across relayout while the object
+/// keeps the same fragment sequence number, independent of the item's index,
+/// text offsets or container FragmentData.
+pub fn InlineItemInstanceId(item: &crate::fragment_item::FragmentItem) -> u64 {
+    ClientInstanceId(item.GetLayoutObject())
+        .map_or(0, |client| DerivedFragmentInstanceId(client, false, item.FragmentId()))
+}
+
 impl ResidentBoxGeometry for FragmentPaintData {
     fn ViewEstablishesPaintState(&self) -> bool {
         use layout_fragment_boundary::ResidentFragmentOwner;
@@ -1144,6 +1248,20 @@ impl ResidentBoxGeometry for FragmentPaintData {
             _ => std::ptr::null_mut(),
         };
         crate::internal::boundary::layout_boundary::PropertyFragmentUniqueId(object, fragment_data)
+    }
+
+    fn ViewFragmentInstanceId(&self) -> u64 {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => self.fragment_instance_id,
+            ResidentFragmentOwner::Physical(address) => PhysicalFragmentInstanceId(unsafe {
+                &*(address as *const crate::physical_fragment::PhysicalFragment)
+            }),
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).map_or(0, InlineItemInstanceId)
+            }
+        }
     }
 
     fn ViewTextHitTestBounds(&self) -> Option<FragmentPaintRect> {

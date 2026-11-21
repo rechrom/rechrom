@@ -77,7 +77,7 @@ fn generated_ellipsis_paints_glyphs_without_text_decoration() {
         let frame = page.CurrentFrame().expect("painted frame");
         let ellipsis = find_ellipsis(PaintFragmentCursor::FromHandle(&frame.fragments))
             .expect("generated ellipsis fragment");
-        let fragment_instance_id = ellipsis.fragment_instance_id;
+        let fragment_instance_id = ellipsis.FragmentInstanceId();
         assert!(frame.display_items.items.iter().any(|item| {
             item.fragment_instance_id == fragment_instance_id
                 && item.r#type == DisplayItemType::kDrawGlyphRun

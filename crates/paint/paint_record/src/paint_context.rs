@@ -447,7 +447,7 @@ impl<'o> PaintContext<'o> {
                 layoutng_assembly::fragment_tree::FragmentKind::kText
                     | layoutng_assembly::fragment_tree::FragmentKind::kGeneratedText
             ) {
-                output.insert(cursor.fragment_instance_id, cursor);
+                output.insert(cursor.FragmentInstanceId(), cursor);
             }
             for child in cursor.Children() {
                 collect(child, output);
@@ -603,7 +603,7 @@ impl<'o> PaintContext<'o> {
             .fragment
             .as_deref()
             .expect("PrePaint node must own a fragment");
-        item.fragment_instance_id = fragment.fragment_instance_id;
+        item.fragment_instance_id = fragment.ViewFragmentInstanceId();
         // Blink records save/restore/clip inside PaintRecords, not as drawing
         // DisplayItems. They must neither consume a pending scope ID nor create
         // a fallback identity. The existing flat replay ABI retains the ops.
