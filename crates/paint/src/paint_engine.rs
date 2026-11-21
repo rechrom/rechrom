@@ -1180,7 +1180,6 @@ impl PaintEngine {
         lifecycle: &dyn PaintLifecycleObserver,
     ) -> PreparedPrePaint {
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
-        self.pre_paint.SetRetainedOwnerLifetimes(false);
         let tree = WalkPrePaint(
             &mut self.pre_paint,
             PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
@@ -1224,7 +1223,6 @@ impl PaintEngine {
                 }),
             );
         }
-        self.pre_paint.SetRetainedOwnerLifetimes(false);
         let tree = WalkPrePaint(
             &mut self.pre_paint,
             PaintFragmentSource::FromCursor(layout_output.PaintCursor()),
@@ -1296,7 +1294,6 @@ impl PaintEngine {
         let source_lease = layout_output.PaintLease();
         let previous = self.persistent_data.GetPaintArtifact().cloned();
         let previous_subsequences = self.persistent_data.GetSubsequences().clone();
-        self.pre_paint.SetRetainedOwnerLifetimes(false);
         let (mut result, subsequences, performance) = RecordPaint(
             &mut self.pre_paint,
             layout_result,

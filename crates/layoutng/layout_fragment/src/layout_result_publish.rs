@@ -133,18 +133,6 @@ pub(super) fn populate_layout_result_paint_data(
             }
         }
     }
-    // A Paint publication certifies PrePaint inputs inside population: each
-    // slot is observed right after its children, from the dirty bits it was
-    // just bound with. Nothing after population reads or writes those inputs.
-    paint_state_owners.certification = if purpose == LayoutUpdateKind::Paint {
-        cache.pre_paint_certification.take()
-    } else {
-        None
-    };
-    if let Some(tracker) = paint_state_owners.certification.as_mut() {
-        tracker.BeginProductionUpdate();
-        tracker.SetProductionDocumentResources(Some(Arc::clone(&resources)));
-    }
     {
         let mut phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::PopulateFragmentPaintData,
@@ -188,7 +176,6 @@ pub(super) fn populate_layout_result_paint_data(
             "layout_fragment.PopulationProfile",
             &[
                 ("prefix_ms", stats.prefix_ns as f64 / 1e6),
-                ("certify_ms", stats.certify_ns as f64 / 1e6),
                 ("sidecar_store_ms", stats.sidecar_store_ns as f64 / 1e6),
                 ("property_export_ms", stats.property_export_ns as f64 / 1e6),
             ],
@@ -218,10 +205,6 @@ pub(super) fn populate_layout_result_paint_data(
                 ("svg_fieldset", r[7] as f64),
             ],
         );
-    }
-    if let Some(mut tracker) = paint_state_owners.certification.take() {
-        tracker.FinishProductionUpdate();
-        cache.pre_paint_certification = Some(tracker);
     }
     // Population compared the resident slots against the document resources
     // they were last painted with; the result now paints with these. They

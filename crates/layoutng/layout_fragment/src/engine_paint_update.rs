@@ -37,19 +37,11 @@ impl EnginePaintUpdate for LayoutEngine {
             boundary: self.boundary_,
             shape_coverage: self.shape_coverage_,
         };
-        // Population certifies each fragment's PrePaint input as it binds it.
-        self.boundary_cache_.pre_paint_certification =
-            Some(std::mem::take(&mut self.pre_paint_inputs_));
         let fragments = assembly.PublishLayoutResult(
             unsafe { &mut *root },
             &self.constraints_,
             &mut self.boundary_cache_,
         );
-        let inputs = self
-            .boundary_cache_
-            .pre_paint_certification
-            .take()
-            .expect("Paint publication must return its PrePaint certification");
         // The scroll directory is built on the first scroll that needs it
         // (EnsureScrollPaintIndex), from this publication's replay list.
         if let Some(index) = self.scroll_paint_index_.take() {
@@ -60,7 +52,6 @@ impl EnginePaintUpdate for LayoutEngine {
         self.published_result_stale_ = false;
         self.fragments = Some(fragments);
         self.output_kind = LayoutUpdateKind::Paint;
-        self.pre_paint_inputs_ = inputs;
         trace.set("published", 1.0);
         true
     }
@@ -93,7 +84,7 @@ impl EnginePaintUpdate for LayoutEngine {
         }
         // Chromium updates FragmentData on the live LayoutResult owner. Keep
         // the same result-local sidecar and its stable per-fragment addresses.
-        UpdatePrePaintInputs(&mut self.pre_paint_inputs_, fragments, &self.objects_);
+        UpdatePrePaintInputs(fragments, &self.objects_);
         trace.set("published", 1.0);
         true
     }
@@ -128,7 +119,7 @@ impl EnginePaintUpdate for LayoutEngine {
             trace.set("rejected", 1.0);
             return false;
         }
-        UpdatePrePaintInputs(&mut self.pre_paint_inputs_, fragments, &self.objects_);
+        UpdatePrePaintInputs(fragments, &self.objects_);
         trace.set("updated_sources", self.pending_paint_ids_.len() as f64);
         self.pending_paint_ids_.clear();
         self.pending_inline_ink_ids_.clear();
@@ -228,7 +219,7 @@ impl EnginePaintUpdate for LayoutEngine {
             let _phase = layout_fragment_boundary::trace::span(
                 layout_fragment_boundary::trace::TracePhase::UpdatePrePaintInputs,
             );
-            UpdatePrePaintInputs(&mut self.pre_paint_inputs_, fragments, &self.objects_);
+            UpdatePrePaintInputs(fragments, &self.objects_);
         }
         self.pending_scroll_ids_.clear();
         true

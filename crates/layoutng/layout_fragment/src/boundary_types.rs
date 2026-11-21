@@ -558,15 +558,12 @@ impl<Paint: Clone> std::ops::DerefMut for PaintPropertiesHandle<Paint> {
     }
 }
 
-/// Fragment-local geometry, identity, and revision state parameterized by its
+/// Fragment-local geometry, identity, and lifecycle state parameterized by its
 /// assembly-owned heavy paint payload.
 // cpp: layoutng_fragment_tree/fragment_tree.h:303-322
 #[derive(Clone)]
 pub struct FragmentPaintData<Paint> {
     pub inline_geometry: Vec<InlineGeometry>,
-    pub pre_paint_revision: u64,
-    pub pre_paint_subtree_revision: u64,
-    pub pre_paint_owner_retained: bool,
     pub fragment_instance_id: u64,
     pub fragmentainer_instance_id: u64,
     pub node_id: u64,
@@ -599,31 +596,7 @@ pub struct FragmentPaintData<Paint> {
     /// values migrate to getters over this owner. Lifecycle state beside the
     /// per-publication geometry, never part of the shared payload.
     pub resident_owner: ResidentFragmentOwner,
-    /// PrePaint input certification of this slot by the revision tracker
-    /// epoch that wrote it. Slots persist across replacement results, so
-    /// this is the previous certification of the same fragment instance.
-    pub certified: CertifiedPrePaintInput,
     pub paint: PaintPropertiesHandle<Paint>,
-}
-
-/// What the PrePaint revision tracker last certified for a slot: its
-/// revisions, DisplayItemClient owner ids and the paint resources (with the
-/// resource kinds the fragment used). `epoch` 0 means never certified, or
-/// certified by a tracker that has since been invalidated.
-#[derive(Clone, Default)]
-pub struct CertifiedPrePaintInput {
-    pub epoch: u64,
-    pub revision: u64,
-    pub subtree_revision: u64,
-    pub owner_ids: [u64; 7],
-    pub resources: Option<Arc<PaintResources>>,
-    pub resource_usage: u8,
-    /// The slot's position in its container and size when certified. A
-    /// parent's relayout can move a child without dirtying the child itself
-    /// (a LayoutNG cache hit, e.g. re-centering under `margin: auto`), so
-    /// geometry is not proven by the child's own dirty bits.
-    pub offset: LayoutOffset,
-    pub size: LayoutSize,
 }
 
 /// Addresses of a slot's resident source owner, valid for the LayoutResult
@@ -646,9 +619,6 @@ impl<Paint> FragmentPaintData<Paint> {
     pub fn with_paint_handle(paint: PaintPropertiesHandle<Paint>) -> Self {
         Self {
             inline_geometry: Vec::new(),
-            pre_paint_revision: 0,
-            pre_paint_subtree_revision: 0,
-            pre_paint_owner_retained: false,
             fragment_instance_id: 0,
             fragmentainer_instance_id: 0,
             node_id: 0,
@@ -662,13 +632,12 @@ impl<Paint> FragmentPaintData<Paint> {
             resources: None,
             pre_paint_invalidation: PrePaintInvalidation::default(),
             resident_owner: ResidentFragmentOwner::None,
-            certified: CertifiedPrePaintInput::default(),
             paint,
         }
     }
 
     /// Prepare the resident fragment slot for another source publication.
-    /// Paint payload and lifecycle revisions stay in place; source-fragment
+    /// Paint payload and lifecycle state stay in place; source-fragment
     /// geometry is rewritten by the publication walk that follows.
     pub fn prepare_for_publication(&mut self) {
         self.inline_geometry.clear();
@@ -690,23 +659,6 @@ impl<Paint: Default> Default for FragmentPaintData<Paint> {
     }
 }
 
-impl<Paint> crate::revision::FragmentRevisionNode for FragmentPaintData<Paint> {
-    fn pre_paint_revision(&self) -> u64 {
-        self.pre_paint_revision
-    }
-
-    fn set_pre_paint_revision(&mut self, revision: u64) {
-        self.pre_paint_revision = revision;
-    }
-
-    fn pre_paint_subtree_revision(&self) -> u64 {
-        self.pre_paint_subtree_revision
-    }
-
-    fn set_pre_paint_subtree_revision(&mut self, revision: u64) {
-        self.pre_paint_subtree_revision = revision;
-    }
-}
 
 /// Fragmentation metadata needed to paint one collapsed-border table section.
 /// It contains no table algorithm or source LayoutObject state.

@@ -493,7 +493,6 @@ impl EngineMutation for LayoutEngine {
                 self.tree_facts_ = None;
                 self.fragments = None;
                 self.invalidated_fragments_ = None;
-                self.pre_paint_inputs_.invalidate();
                 self.tree_ = Some(tree);
                 self.tree_relations_dirty_ = true;
                 self.targeted_font_objects_ = None;

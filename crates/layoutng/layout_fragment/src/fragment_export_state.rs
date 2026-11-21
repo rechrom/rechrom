@@ -25,8 +25,6 @@ pub(super) struct PaintPopulationStats {
     pub(super) exported_local_ns: u64,
     /// Synchronize + identity + retained-properties check, before binding.
     pub(super) prefix_ns: u64,
-    /// PrePaint input certification of each bound slot.
-    pub(super) certify_ns: u64,
 }
 
 impl PaintPopulationStats {
@@ -87,9 +85,6 @@ pub(super) struct FragmentOwners {
     /// this publication. Values are only (last native container, entry count),
     /// never a retained fragment list or another layout tree.
     pub(super) inline_fragment_data: LayoutBoundaryHashMap<*const LayoutObject, (u64, u32)>,
-    /// The engine's PrePaint input tracker, lent for a Paint publication.
-    pub(super) certification:
-        Option<layout_fragment::fragment_tree::pre_paint_revision::PrePaintRevisionTracker>,
     /// The previous publication's slots (replay source) and this one's.
     pub(super) replay_previous: PopulationReplay,
     pub(super) replay_next: PopulationReplay,
@@ -102,43 +97,6 @@ pub(super) struct FragmentOwners {
     pub(super) replay_reasons: [usize; 8],
 }
 impl FragmentOwners {
-    /// Certify one bound slot after all of its children were populated.
-    /// Returns whether its subtree changed for the parent's observation.
-    pub(super) fn certify(
-        &mut self,
-        output: *mut FragmentPaintData,
-        descendant_changed: bool,
-    ) -> bool {
-        let Some(tracker) = self.certification.as_mut() else {
-            return false;
-        };
-        let started = browser_tracing::enabled().then(std::time::Instant::now);
-        let changed = tracker.ObserveProductionNode(unsafe { &mut *output }, descendant_changed);
-        if let Some(started) = started {
-            self.population_stats.certify_ns = self
-                .population_stats
-                .certify_ns
-                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
-        }
-        changed
-    }
-
-    /// certify for a slot population replayed unchanged.
-    pub(super) fn certify_replayed(&mut self, output: *mut FragmentPaintData) -> bool {
-        let Some(tracker) = self.certification.as_mut() else {
-            return false;
-        };
-        let started = browser_tracing::enabled().then(std::time::Instant::now);
-        let changed = tracker.ReplayProductionNode(unsafe { &mut *output });
-        if let Some(started) = started {
-            self.population_stats.certify_ns = self
-                .population_stats
-                .certify_ns
-                .saturating_add(started.elapsed().as_nanos().min(u64::MAX as u128) as u64);
-        }
-        changed
-    }
-
     pub(super) fn insert(&mut self, source: *const PhysicalBoxFragment, instance: u64) -> bool {
         self.instances.entry(source).or_insert(instance);
         self.paint.insert(source)
@@ -215,21 +173,20 @@ pub(super) fn PopulateSVGChildPaintData(
     display_item_fragment: u32,
     next_fragment_instance_id: &mut u64,
     next_fragmentainer_instance_id: &mut u64,
-) -> bool {
+) {
     let Some(owner) = (unsafe { object.as_ref() }) else {
-        return false;
+        return;
     };
     if !(owner.IsSVGRoot() || (owner.IsSVGContainer() && !owner.IsSVGForeignObject())) {
-        return false;
+        return;
     }
-    let mut changed = false;
     let mut child = owner.SlowFirstChild();
     while let Some(layout_child) = unsafe { child.as_ref() } {
         let child_box = DynamicTo::<LayoutBox>(child);
         if let Some(child_box) = unsafe { child_box.as_ref() } {
             let child_offset = child_box.PhysicalLocation();
             for child_fragment in child_box.PhysicalFragments() {
-                changed |= PopulatePhysicalFragmentPaintData(
+                PopulatePhysicalFragmentPaintData(
                     child_fragment,
                     child_offset,
                     sources,
@@ -247,7 +204,6 @@ pub(super) fn PopulateSVGChildPaintData(
         }
         child = layout_child.NextSibling();
     }
-    changed
 }
 
 /// The fragment-local paint slots the last Paint publication bound, in

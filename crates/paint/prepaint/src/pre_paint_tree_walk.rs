@@ -918,7 +918,7 @@ struct NodeCache {
     revision: u64,
     subtree_revision: u64,
     /// The document paint resources this node was last proven against, and
-    /// the resource usage (pre_paint_revision::PaintResourceUsage) of this
+    /// the resource usage (paint_resource_usage::PaintResourceUsage) of this
     /// node and of its whole subtree. Every node of the subtree paints the
     /// same under `resources` as under the value it was built with.
     resources: Option<Arc<PaintResources>>,
@@ -1015,10 +1015,6 @@ pub struct PrePaintTreeWalk {
     // Completed geometry/cull state belongs to the resident paint lifecycle,
     // never to the published drawing artifact or a borrowed fragment tree.
     property_keys: BTreeMap<u64, PaintPropertyKey>,
-    reset_owners: BTreeSet<PaintPropertyOwner>,
-    // The caller proved that this exact rooted source tree and its local paint
-    // inputs survived a scroll-only update without a new Build/Layout pass.
-    retained_owner_lifetimes: bool,
     pub retained_tree: Option<Box<PaintTreeNode<'static>>>,
     retained_source_lease: Option<PaintFragmentLease>,
     pending_source_lease: Option<PaintFragmentLease>,
@@ -1072,8 +1068,6 @@ impl Default for PrePaintTreeWalk {
             visual_viewport_state: None,
             visual_viewport_scroll_offset: None,
             property_keys: BTreeMap::new(),
-            reset_owners: BTreeSet::new(),
-            retained_owner_lifetimes: false,
             retained_tree: None,
             retained_source_lease: None,
             pending_source_lease: None,
@@ -4739,6 +4733,11 @@ struct PrePaintPrevious {
     logical_tree_order: u64,
     /// DisplayItemClient ids compared by SameClientDirectory.
     clients: ClientIds,
+    /// The selection and scrolling-background DisplayItemClients, which
+    /// SameClientDirectory does not compare but whose recorded ids prove
+    /// them not newly created (HasUnrecordedJustCreatedClient).
+    selection_client_id: u64,
+    scrolling_background_client_id: u64,
 }
 
 fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPrevious {
@@ -4775,6 +4774,10 @@ fn PrePaintPreviousOf(f: &FragmentPaintData, link_offset: Offset) -> PrePaintPre
         logical_parent_fragment_instance_id: p.logical_parent_fragment_instance_id,
         logical_tree_order: p.logical_tree_order,
         clients: ClientDirectoryIds(f),
+        selection_client_id: p.SelectionClientId(),
+        scrolling_background_client_id: f
+            .ViewScrollContainer()
+            .map_or(0, |scroll| scroll.scrolling_background_client_id),
     }
 }
 
@@ -4787,7 +4790,6 @@ fn PreviousFragmentSnapshot(f: &FragmentPaintData) -> FragmentPaintData {
         // Document resources are read from the document, never the slot.
         resources: None,
         paint: f.paint.clone(),
-        certified: Default::default(),
         ..*f
     };
     // Gap rules are read live from the resident box; keep the value this
@@ -5712,38 +5714,136 @@ fn ClientDirectoryIds(fragment: &FragmentPaintData) -> ClientIds {
     }
 }
 
+/// The DisplayItemClient ids PrePaint recorded for a retained node: its
+/// client directory plus the selection and scrolling-background clients.
+fn RecordedClientIds(recorded: &PrePaintPrevious) -> [u64; 7] {
+    let (corner, horizontal, vertical) = recorded.clients.scrollbars.unwrap_or((0, None, None));
+    [
+        recorded.clients.display_item,
+        recorded.clients.paint_layer,
+        recorded.selection_client_id,
+        recorded.scrolling_background_client_id,
+        corner,
+        horizontal.unwrap_or(0),
+        vertical.unwrap_or(0),
+    ]
+}
+
+/// Whether a live client is new to PrePaint's record. Chromium's
+/// DisplayItemClient::IsJustCreated holds until a paint commit validates the
+/// client (display_item_client.h:71-74), so a client PrePaint walked but
+/// Paint never committed (for example a culled one) is still just created.
+/// Client ids are process-unique tokens: a just-created client whose id the
+/// retained node recorded is that same client lifetime, not a new one.
+fn IsNewClient(recorded: &[u64; 7], id: u64, just_created: bool) -> bool {
+    just_created && !recorded.contains(&id)
+}
+
+/// Whether any live DisplayItemClient of `fragment` (object, selection,
+/// PaintLayer, scrolling background, scroll corner and scrollbars) is just
+/// created and absent from the retained node's `recorded` client ids.
+fn HasUnrecordedJustCreatedClient(recorded: &PrePaintPrevious, fragment: &FragmentPaintData) -> bool {
+    let recorded = RecordedClientIds(recorded);
+    let paint = &fragment.paint;
+    IsNewClient(
+        &recorded,
+        paint.DisplayItemClientId(),
+        paint.DisplayItemClientState().is_just_created,
+    ) || IsNewClient(
+        &recorded,
+        paint.SelectionClientId(),
+        paint.SelectionClientState().is_just_created,
+    ) || IsNewClient(
+        &recorded,
+        paint.PaintLayerClientId(),
+        paint.PaintLayerClientState().is_just_created,
+    ) || fragment.ViewScrollContainer().is_some_and(|scroll| {
+        IsNewClient(
+            &recorded,
+            scroll.scrolling_background_client_id,
+            paint
+                .ScrollClientState(
+                    scroll.scrolling_background_client_id,
+                    scroll.scrolling_background_client_invalidation_reason,
+                    scroll.scrolling_background_client_is_cacheable,
+                    scroll.scrolling_background_client_is_just_created.get(),
+                )
+                .is_just_created,
+        )
+    }) || fragment.ViewScrollbars().is_some_and(|bars| {
+        IsNewClient(
+            &recorded,
+            bars.corner_client_id,
+            paint
+                .ScrollClientState(
+                    bars.corner_client_id,
+                    bars.corner_client_invalidation_reason,
+                    bars.corner_client_is_cacheable,
+                    bars.corner_client_is_just_created.get(),
+                )
+                .is_just_created,
+        ) || [&bars.horizontal, &bars.vertical]
+            .into_iter()
+            .flatten()
+            .any(|axis| {
+                IsNewClient(
+                    &recorded,
+                    axis.display_item_client_id,
+                    paint
+                        .ScrollClientState(
+                            axis.display_item_client_id,
+                            axis.display_item_client_invalidation_reason,
+                            axis.display_item_client_is_cacheable,
+                            axis.display_item_client_is_just_created.get(),
+                        )
+                        .is_just_created,
+                )
+            })
+    })
+}
+
 /// Whether `b` keeps the client directory of the retained node `previous`.
 /// The previous ids come from the node's record. Equal ids name the same
 /// live DisplayItemClient, so its cacheability is the same object state;
-/// only `b`'s just-created clients need the retained-owner proof.
+/// only a just-created client the record does not name is new
+/// (IsNewClient).
 fn SameClientDirectory(previous: &PaintTreeNode<'_>, b: &FragmentPaintData) -> bool {
     let y = &b.paint;
-    if RecordOf(previous).clients != ClientDirectoryIds(b) {
+    let recorded = RecordOf(previous);
+    if recorded.clients != ClientDirectoryIds(b) {
         return false;
     }
+    let recorded = RecordedClientIds(&recorded);
     let (y_item, y_layer) = (y.DisplayItemClientState(), y.PaintLayerClientState());
-    let mut created = y_item.is_just_created || y_layer.is_just_created;
+    let mut created = IsNewClient(&recorded, y.DisplayItemClientId(), y_item.is_just_created)
+        || IsNewClient(&recorded, y.PaintLayerClientId(), y_layer.is_just_created);
     if let Some(bars) = &y.scrollbars {
-        created |= y
-            .ScrollClientState(
+        created |= IsNewClient(
+            &recorded,
+            bars.corner_client_id,
+            y.ScrollClientState(
                 bars.corner_client_id,
                 bars.corner_client_invalidation_reason,
                 bars.corner_client_is_cacheable,
                 bars.corner_client_is_just_created.get(),
             )
-            .is_just_created;
+            .is_just_created,
+        );
         for axis in [&bars.horizontal, &bars.vertical].into_iter().flatten() {
-            created |= y
-                .ScrollClientState(
+            created |= IsNewClient(
+                &recorded,
+                axis.display_item_client_id,
+                y.ScrollClientState(
                     axis.display_item_client_id,
                     axis.display_item_client_invalidation_reason,
                     axis.display_item_client_is_cacheable,
                     axis.display_item_client_is_just_created.get(),
                 )
-                .is_just_created;
+                .is_just_created,
+            );
         }
     }
-    !created || b.pre_paint_owner_retained
+    !created
 }
 
 /// Source: `pre_paint_tree_walk.cc:430-437`.
@@ -6055,8 +6155,11 @@ impl PrePaintTreeWalk {
         let old = a.cache.as_ref().expect("cached geometry");
         let new = b.cache.as_ref().expect("new geometry");
         let bf = b.fragment.as_deref().unwrap();
-        if (bf.paint.DisplayItemClientState().is_just_created && !bf.pre_paint_owner_retained)
-            || !SamePreviousSourceIdentity(a, bf)
+        if IsNewClient(
+            &RecordedClientIds(&RecordOf(a)),
+            bf.paint.DisplayItemClientId(),
+            bf.paint.DisplayItemClientState().is_just_created,
+        ) || !SamePreviousSourceIdentity(a, bf)
         {
             return false;
         }
@@ -6216,17 +6319,13 @@ impl PrePaintTreeWalk {
             return Some(3);
         }
         // Recorded client ids name the same live clients; a client the
-        // record does not cover must not be newly created unless Layout
-        // observed its owner token as retained.
-        if !SameClientDirectory(node, f)
-            || (!f.pre_paint_owner_retained
-                && layoutng_assembly::fragment_tree::pre_paint_revision::HasJustCreatedClient(f))
-        {
+        // record does not name must not be newly created.
+        if !SameClientDirectory(node, f) || HasUnrecordedJustCreatedClient(&cache.record, f) {
             return Some(4);
         }
         let usage = || {
             cache.resource_usage
-                | layoutng_assembly::fragment_tree::pre_paint_revision::PaintResourceUsage(f)
+                | layoutng_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(f)
         };
         if !self.SameDocumentResources(
             cache.resources.as_ref(),
@@ -6305,7 +6404,7 @@ impl PrePaintTreeWalk {
         }) {
             return same;
         }
-        let same = layoutng_assembly::fragment_tree::pre_paint_revision::SamePaintResourcesFor(
+        let same = layoutng_assembly::fragment_tree::paint_resource_usage::SamePaintResourcesFor(
             recorded, current, usage,
         );
         self.resource_memo
@@ -6411,7 +6510,7 @@ impl PrePaintTreeWalk {
         self.stats.invalidation_nodes += should_run_invalidation as usize;
         // PrePaint's own admission (RetainedSelfChange /
         // RetainedDescendantChange): the live dirty bits plus this node's
-        // records, never a Layout-certified revision.
+        // records, never a Layout revision.
         let self_change = previous
             .as_deref()
             .map(|node| self.RetainedSelfChange(node, fragment));
@@ -6716,9 +6815,11 @@ impl PrePaintTreeWalk {
                         let bf = built.fragment.as_deref().unwrap();
                         let recorded = RecordOf(&old);
                         let (oc, nc) = (old.cache.as_ref().unwrap(), built.cache.as_ref().unwrap());
-                        Some(if bf.paint.DisplayItemClientState().is_just_created
-                            && !bf.pre_paint_owner_retained
-                        {
+                        Some(if IsNewClient(
+                            &RecordedClientIds(&recorded),
+                            bf.paint.DisplayItemClientId(),
+                            bf.paint.DisplayItemClientState().is_just_created,
+                        ) {
                             "SG.just_created"
                         } else if !SamePreviousSourceIdentity(&old, bf) {
                             "SG.identity"
@@ -6893,7 +6994,7 @@ impl PrePaintTreeWalk {
             let resources = fragment.Cursor().DocumentResources().cloned();
             let usage = match previous_resource_usage {
                 Some(usage) if self_unchanged => usage,
-                _ => layoutng_assembly::fragment_tree::pre_paint_revision::PaintResourceUsage(
+                _ => layoutng_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(
                     &fragment,
                 ),
             };
@@ -7381,10 +7482,6 @@ impl PrePaintTreeWalk {
         }
     }
 
-    pub fn SetRetainedOwnerLifetimes(&mut self, retained: bool) {
-        self.retained_owner_lifetimes = retained;
-    }
-
     fn CaptureRootFixedPositionContext(&mut self, base: &ChildContext, root: &PaintTreeNode<'_>) {
         // Blink paint_property_tree_builder.cc UpdateForChildren creates the
         // LayoutView OverflowClip before UpdateOutOfFlowContext. The latter
@@ -7531,16 +7628,10 @@ impl PrePaintTreeWalk {
             client,
             fragment: fragment.ViewDisplayItemFragment(),
         };
-        // Chromium client creation is the lifetime boundary, including allocator
-        // address reuse. Never infer identity from a recycled pointer alone.
-        if !self.retained_owner_lifetimes
-            && !fragment.pre_paint_owner_retained
-            && fragment.paint.DisplayItemClientState().is_just_created
-            && self.reset_owners.insert(owner)
-        {
-            self.property_node_store.clear_owner(owner);
-            self.property_node_store.invalidate_published();
-        }
+        // Chromium client creation is the lifetime boundary, including
+        // allocator address reuse. The owner key is the process-unique client
+        // id (DisplayItemClient::Id), never a recycled pointer, so slots the
+        // store holds for it are this same client's own.
         self.property_keys
             .insert(id, PaintPropertyKey { owner, role });
     }
@@ -7585,7 +7676,6 @@ impl PrePaintTreeWalk {
         self.revision_generation =
             PRE_PAINT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         self.resource_memo.clear();
-        self.reset_owners.clear();
         // Retained raw builder states can survive more than one incremental
         // pass. Keep every temporary label still reachable from those states;
         // the completed stable slot directory alone cannot identify a raw
