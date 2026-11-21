@@ -1945,6 +1945,32 @@ impl PaintProperties {
         unsafe { self.SourceObjectPointer().as_ref() }
     }
 
+    /// The bound source LayoutObject's current PrePaint dirty bits, read live
+    /// (LayoutObject::NeedsPaintPropertyUpdate, ShouldCheckForPaintInvalidation,
+    /// their descendant/subtree variants and the PrePaint subtree-walk
+    /// reasons; core/layout/layout_object.h), the same facts PrePaintTreeWalk
+    /// admits nodes by (core/paint/pre_paint_tree_walk.cc:418-436). `None`
+    /// for hand-built projections without a live source; callers then use
+    /// the slot's `pre_paint_invalidation` snapshot.
+    ///
+    /// Rechrom clears these bits in the paint client commit
+    /// (LayoutObject::ClearPaintFlags from layout_commit's client_commit.rs)
+    /// rather than inside the PrePaint walk as Chromium does
+    /// (pre_paint_tree_walk.cc:107). A clean result therefore means
+    /// "unchanged since the last full paint commit", not "since the last
+    /// PrePaint walk".
+    pub fn LivePrePaintInvalidation(&self) -> Option<PrePaintInvalidation> {
+        let object = self.SourceObjectPointer();
+        if object.is_null() {
+            return None;
+        }
+        Some(
+            crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(
+                object,
+            ),
+        )
+    }
+
     fn SourcePaintLayerPointer(&self) -> *mut PaintLayer {
         Self::PaintLayerOfObject(self.SourceObjectPointer())
     }

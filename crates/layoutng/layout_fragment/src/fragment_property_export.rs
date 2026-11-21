@@ -401,6 +401,8 @@ mod tests {
 }
 
 /// Selection commit updates the same resident PrePaint sidecars after LayoutClean.
+/// This is also the live projection behind
+/// `PaintProperties::LivePrePaintInvalidation`.
 pub(crate) fn ExportSelectionPrePaintInvalidation(
     object: *const LayoutObject,
 ) -> layout_fragment::fragment_tree::PrePaintInvalidation {

@@ -52,8 +52,6 @@ struct FragmentCoverage {
     /// provide pixels and Paint must record the newly visible content.
     unrecorded_visual_rect: Option<PaintRect>,
     controls: Option<OverflowControlGeometry>,
-    revision: u64,
-    subtree_revision: u64,
 }
 
 /// Only overflow controls need flat paint geometry during a retained scroll.
@@ -93,6 +91,12 @@ pub struct RetainedScrollPaintState {
     /// Whether Paint folded a live scroll offset into background drawing
     /// commands. Property-driven backgrounds keep their existing records.
     has_scroll_dependent_background: bool,
+    /// PaintArtifact::recording_revision this state describes: the full
+    /// Paint it was captured after, advanced by this path's own updates.
+    /// The dirty-bit proof in collect_current_fragments is only valid since
+    /// that paint's client commit cleared the LayoutObject paint flags, so a
+    /// later full Paint (a new recording) requires a fresh capture.
+    recording_revision: u64,
 }
 
 fn fragment_identity(f: &FragmentPaintData) -> (u64, u64, u64, u32) {
@@ -447,7 +451,10 @@ impl RetainedScrollPaintState {
         }
         for node in nodes {
             let f = node.fragment.as_deref()?;
-            let (revision, subtree_revision) = node.RecordedRevisions()?;
+            // Only nodes PrePaint actually visited (they carry its retained
+            // per-node cache) can be retained. This is a presence gate; the
+            // revision values are not compared (see collect_current_fragments).
+            node.RecordedRevisions()?;
             // Pixel-moving effects are retained property-tree effects. Their
             // unsupported coverage mapping is isolated below to that state;
             // it must not disable retained scrolling for unrelated layers.
@@ -576,8 +583,6 @@ impl RetainedScrollPaintState {
                             .needs_reorder_overlay_overflow_controls
                             .get(),
                     }),
-                revision,
-                subtree_revision,
             });
         }
         let mut physical_ranges = HashMap::with_capacity(fragments.len());
@@ -602,6 +607,7 @@ impl RetainedScrollPaintState {
             masks: retained_masks,
             coverage_groups,
             has_scroll_dependent_background,
+            recording_revision: artifact.recording_revision,
         })
     }
 }
@@ -673,7 +679,33 @@ fn collect_current_fragments<'a>(
         return false;
     }
     let old = &retained.fragments[index];
-    if f.pre_paint_subtree_revision != 0 && f.pre_paint_subtree_revision == old.subtree_revision {
+    // Chromium proves "nothing changed since the last PrePaint" with the
+    // LayoutObject dirty bits PrePaintTreeWalk admits nodes by
+    // (core/paint/pre_paint_tree_walk.cc:418-436: NeedsPaintPropertyUpdate,
+    // ShouldCheckForPaintInvalidation and their descendant variants, plus
+    // the PrePaint subtree-walk reasons). Read them live from the bound
+    // source LayoutObject; hand-built fixtures keep the slot snapshot.
+    //
+    // Rechrom clears those bits only at the full paint client commit
+    // (LayoutObject::ClearPaintFlags in layout_commit's client_commit.rs),
+    // never on this retained path's CommitRetainedPaint. The state compared
+    // here is captured after the latest full Paint (its recording_revision
+    // forces a recapture after any later one), so any bit set since then (including this path's own scroll refresh,
+    // PaintLayerScrollableArea::UpdateScrollOffset ->
+    // SetNeedsPaintPropertyUpdate) is still visible and reports a change.
+    // Bits left over from a PrePaint-only lifecycle are over-reported, which
+    // only takes the ordinary PrePaint/Paint path.
+    let invalidation = f
+        .paint
+        .LivePrePaintInvalidation()
+        .unwrap_or(f.pre_paint_invalidation);
+    let self_clean = !invalidation.own();
+    let geometry_same = link_offset == old.offset && f.ViewSize() == old.size;
+    // A whole physical subtree is unchanged when neither this object nor any
+    // descendant is dirty. Its own position in the container is checked too:
+    // a parent's relayout can move a cache-hit child without dirtying it.
+    // Descendant positions are relative to their (clean) containers.
+    if self_clean && !invalidation.descendants() && geometry_same {
         explicit.remove(&physical);
         if clean_ranges
             .iter()
@@ -688,16 +720,18 @@ fn collect_current_fragments<'a>(
         *collected += physical_end - physical;
         return true;
     }
-    let self_clean = f.pre_paint_revision != 0 && f.pre_paint_revision == old.revision;
+    // This object alone is unchanged when its own bits are clean and it sits
+    // where it was recorded (the moved-without-dirtying case above).
+    let self_clean = self_clean && geometry_same;
     let unowned_sticky_change = f.paint.StickyOffset() != old.sticky_offset
         && (f.paint.StickyConstraint().is_none() || f.paint.DisplayItemClientId() == 0);
     if !self_clean && (link_offset != old.offset || f.ViewSize() != old.size || unowned_sticky_change) {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
-                "scroll-paint-reject stage=geometry node_id={} self_revision={} old_revision={} offset_changed={} size_changed={} sticky_changed={}",
+                "scroll-paint-reject stage=geometry node_id={} own_dirty={} descendants_dirty={} offset_changed={} size_changed={} sticky_changed={}",
                 f.ViewNodeId(),
-                f.pre_paint_revision,
-                old.revision,
+                invalidation.own(),
+                invalidation.descendants(),
                 link_offset != old.offset,
                 f.ViewSize() != old.size,
                 f.paint.StickyOffset() != old.sticky_offset
@@ -731,12 +765,12 @@ fn collect_current_fragments<'a>(
             fragment: f.ViewDisplayItemFragment(),
         };
         // ScrollTranslation and StickyTranslation are property values. Layout
-        // can refresh them while retaining the fragment's geometry revision,
+        // can refresh them while the fragment's own dirty bits stay clean,
         // so read owners that already have one of those property slots even
         // when the fragment itself is otherwise clean.
         // Retained geometry cannot add or remove an ObjectPaintProperties
         // slot. Refresh only the existing StickyTranslation owner; an
-        // unrelated fragment revision must not turn an ordinary node into a
+        // unrelated dirty bit on the fragment must not turn an ordinary node into a
         // synthetic sticky-property candidate.
         let tracks_sticky = sticky.contains_key(&owner);
         if tracks_sticky {
@@ -891,7 +925,15 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     }
     {
         let _trace = browser_tracing::span("prepaint", "ScrollPaint.CaptureRetainedState");
-        if !*retained_scroll_state_initialized {
+        // PaintEngine keeps the state across full Paints that did not need a
+        // PrePaint post-walk. The live dirty-bit proof below only covers
+        // changes since the latest full paint commit, so a state captured
+        // before that paint must be recaptured from the current resident
+        // tree and artifact.
+        let stale = retained_scroll_state
+            .as_ref()
+            .is_some_and(|state| state.recording_revision != artifact.recording_revision);
+        if !*retained_scroll_state_initialized || stale {
             *retained_scroll_state = prepaint.retained_tree.as_deref().and_then(|tree| {
                 RetainedScrollPaintState::capture(tree, &prepaint.property_node_store, artifact)
             });
@@ -1321,6 +1363,11 @@ pub fn TryUpdateScrollPropertiesWithPrePaint(
     let retained_fragment_count = retained.fragments.len();
     prepaint.CommitDirectScrollPropertySnapshots(updated_store, &mut trees);
     drop(publish_trace);
+    // This path's own scrollbar re-recording is not a full Paint: the
+    // retained coverage stays the baseline for the next scroll.
+    if let Some(state) = retained_scroll_state.as_mut() {
+        state.recording_revision = artifact.recording_revision;
+    }
     if let Some(started) = started {
         eprintln!("scroll-prepaint-direct ms={:.3} checked_fragments={} rebuilt_prepaint_nodes=0 updated_chunks={} updated_scrollbar_records={}",
             started.elapsed().as_secs_f64() * 1000.0, retained_fragment_count,
