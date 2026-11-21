@@ -289,8 +289,7 @@ fn LineSelfBordersContain(
         return true;
     };
     let overflow_origin = fragment
-        .paint
-        .self_ink_overflow
+        .ViewSelfInkOverflow()
         .map_or(absolute, |overflow| Offset {
             x: absolute.x + overflow.offset.x,
             y: absolute.y + overflow.offset.y,
@@ -323,7 +322,7 @@ fn HitGeometry(
     }
     let (point, absolute) = LocalPoint(fragment, point, parent)?;
     if fragment.ViewKind() == layoutng_assembly::fragment_tree::FragmentKind::kLine {
-        if let Some(overflow) = fragment.paint.ink_overflow {
+        if let Some(overflow) = fragment.ViewInkOverflow() {
             let left = absolute.x + overflow.offset.x;
             let top = absolute.y + overflow.offset.y;
             if point.x < left

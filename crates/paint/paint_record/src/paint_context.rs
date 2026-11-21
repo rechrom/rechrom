@@ -702,7 +702,7 @@ impl<'o> PaintContext<'o> {
         );
         if let Some(recorder) = &mut self.drawing_recorder {
             recorder.8 = fragment.paint.DisplayItemRasterEffectOutset();
-            recorder.9 = fragment.paint.self_ink_overflow.is_some()
+            recorder.9 = fragment.ViewSelfInkOverflow().is_some()
                 || fragment.paint.box_self_visual_overflow.is_some();
         }
     }

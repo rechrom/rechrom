@@ -762,6 +762,21 @@ pub trait ResidentBoxGeometry {
     fn ViewNodeId(&self) -> u64;
     /// Borrowed-view fragment kind from the resident owner's type.
     fn ViewKind(&self) -> FragmentKind;
+    /// Borrowed-view ink overflow (self, contents, ink, filtered), read
+    /// from the resident fragment or item.
+    fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4];
+    fn ViewSelfInkOverflow(&self) -> Option<FragmentPaintRect> {
+        self.ViewInkOverflows()[0]
+    }
+    fn ViewContentsInkOverflow(&self) -> Option<FragmentPaintRect> {
+        self.ViewInkOverflows()[1]
+    }
+    fn ViewInkOverflow(&self) -> Option<FragmentPaintRect> {
+        self.ViewInkOverflows()[2]
+    }
+    fn ViewFilteredInkOverflow(&self) -> Option<FragmentPaintRect> {
+        self.ViewInkOverflows()[3]
+    }
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
@@ -808,6 +823,33 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4] {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        let stored = [
+            self.paint.self_ink_overflow,
+            self.paint.contents_ink_overflow,
+            self.paint.ink_overflow,
+            self.paint.filtered_ink_overflow,
+        ];
+        match self.resident_owner {
+            ResidentFragmentOwner::None => stored,
+            ResidentFragmentOwner::Physical(_) => match self.ResidentBoxFragment() {
+                Some(box_fragment) => {
+                    crate::internal::boundary::layout_boundary::LiveBoxInkOverflow(box_fragment)
+                }
+                None => stored,
+            },
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items
+                    .Items()
+                    .get(index)
+                    .and_then(crate::internal::boundary::layout_boundary::LiveItemInkOverflow)
+                    .unwrap_or(stored)
+            }
+        }
+    }
+
     fn ViewKind(&self) -> FragmentKind {
         use crate::fragment_item::ItemType;
         use layout_fragment_boundary::ResidentFragmentOwner;

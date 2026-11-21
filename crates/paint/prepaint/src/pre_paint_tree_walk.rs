@@ -774,10 +774,9 @@ impl PaintTreeNode<'_> {
         // the same paint space as the resolved mask regions.
         if is_svg_effect_child {
             if let Some(visual) = fragment
-                .paint
-                .ink_overflow
-                .or(fragment.paint.contents_ink_overflow)
-                .or(fragment.paint.self_ink_overflow)
+                .ViewInkOverflow()
+                .or(fragment.ViewContentsInkOverflow())
+                .or(fragment.ViewSelfInkOverflow())
             {
                 let visual = PaintRect {
                     x: self.paint_offset.x + visual.offset.x,
@@ -3408,10 +3407,9 @@ fn SvgMaskPaintingArea(
     match clip {
         BackgroundBox::kText | BackgroundBox::kNoClip => {
             let visual = fragment
-                .paint
-                .ink_overflow
-                .or(fragment.paint.contents_ink_overflow)
-                .or(fragment.paint.self_ink_overflow)
+                .ViewInkOverflow()
+                .or(fragment.ViewContentsInkOverflow())
+                .or(fragment.ViewSelfInkOverflow())
                 .ok_or("source SVG visual-overflow geometry")?;
             Ok((
                 PaintRect {

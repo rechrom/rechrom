@@ -156,8 +156,7 @@ impl<'n, 'f, 'c, 'o> TextDecorationPainter<'n, 'f, 'c, 'o> {
                 }
             } else {
                 let ink_overflow = fragment
-                    .paint
-                    .ink_overflow
+                    .ViewInkOverflow()
                     .expect("text fragment has source ink overflow");
                 PaintRect {
                     x: rect.x,

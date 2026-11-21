@@ -968,3 +968,41 @@ pub(crate) fn LiveSvgViewBox(
     }
     Some(data.and_then(|data| data.svg_view_box))
 }
+
+// Ink overflow read from the fragment itself, as Chromium's painters read
+// PhysicalBoxFragment / FragmentItem InkOverflowRect (stage 3 of the
+// borrowed-view boundary). Order: self, contents, ink, filtered ink.
+
+/// A box fragment's computed ink overflow; all `None` until computed.
+pub(crate) fn LiveBoxInkOverflow(fragment: &PhysicalBoxFragment) -> [Option<FragmentPaintRect>; 4] {
+    if !fragment.IsInkOverflowComputed() {
+        return [None; 4];
+    }
+    let ink_overflow = fragment.InkOverflowRect();
+    let box_model = DynamicTo::<LayoutBoxModelObject>(fragment.GetLayoutObject());
+    // Source: core/paint/box_fragment_painter.cc:2122-2133.
+    let filtered = unsafe { box_model.as_ref() }
+        .map(|box_model| ExportInkRect(box_model.ApplyFiltersToRect(&ink_overflow)));
+    [
+        Some(ExportInkRect(fragment.SelfInkOverflowRect())),
+        Some(ExportInkRect(fragment.ContentsInkOverflowRect())),
+        Some(ExportInkRect(ink_overflow)),
+        filtered,
+    ]
+}
+
+/// An inline item's ink overflow, or `None` when the item's overflow was
+/// never computed (population's plain-text fallback stays stored).
+pub(crate) fn LiveItemInkOverflow(item: &FragmentItem) -> Option<[Option<FragmentPaintRect>; 4]> {
+    if let Some(box_fragment) = unsafe { item.BoxFragment().as_ref() } {
+        return Some(LiveBoxInkOverflow(box_fragment));
+    }
+    item.IsInkOverflowComputed().then(|| {
+        [
+            Some(ExportInkRect(item.SelfInkOverflowRect())),
+            None,
+            Some(ExportInkRect(item.InkOverflowRect())),
+            None,
+        ]
+    })
+}

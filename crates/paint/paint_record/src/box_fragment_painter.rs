@@ -682,7 +682,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             return true;
         }
-        let Some(rect) = fragment.paint.ink_overflow else {
+        let Some(rect) = fragment.ViewInkOverflow() else {
             return true;
         };
         // Chromium: box_fragment_painter.cc:1923-1936. Soft wraps and <br>
@@ -761,7 +761,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.SvgShape().is_some() {
             return true;
         }
-        let Some(rect) = fragment.paint.filtered_ink_overflow else {
+        let Some(rect) = fragment.ViewFilteredInkOverflow() else {
             // Standalone synthetic fragments have no source LayoutObject from
             // which to export filtered overflow. Conservatively admit them;
             // source paint inputs always carry the exact rectangle.
@@ -4655,7 +4655,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 // ordinary untransformed fill path.
                 if svg.is_none()
                     && (fragment.paint.text_glyph_ink.is_some()
-                        || fragment.paint.self_ink_overflow.is_some())
+                        || fragment.ViewSelfInkOverflow().is_some())
                     && !fragment.paint.IsTextCombine()
                     && fragment.paint.text_combine_inline_offset == 0.0
                     && input_run.writing_mode == WritingMode::kHorizontalTb
@@ -5124,7 +5124,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     selection_style.text_stroke_width(),
                     selection_range.expect("selection rect has a logical range"),
                     fragment.text_start.zip(fragment.text_end),
-                    fragment.paint.ink_overflow,
+                    fragment.ViewInkOverflow(),
                     item,
                     physical_box_offset,
                     fragment.ViewSize(),
@@ -6550,7 +6550,7 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     if fragment.paint.text_line_top_offset.is_some() {
         paint_offset.y += fragment.paint.text_line_snap_delta.unwrap_or(0.0);
     }
-    if let Some(rect) = fragment.paint.self_ink_overflow {
+    if let Some(rect) = fragment.ViewSelfInkOverflow() {
         return node.EnclosingRect(PaintRect {
             x: paint_offset.x + rect.offset.x,
             y: paint_offset.y + rect.offset.y,
@@ -6618,7 +6618,7 @@ pub(crate) fn DecorationVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let rect = fragment
         .paint
         .box_self_visual_overflow
-        .or(fragment.paint.ink_overflow)
+        .or(fragment.ViewInkOverflow())
         .expect("painted box fragment has source visual overflow");
     // Source: core/paint/box_fragment_painter.cc:3021-3030 and
     // core/paint/box_painter.cc:124-129. Layout owns visual overflow; Paint
@@ -9457,7 +9457,7 @@ mod background_attachment_tests {
         ));
 
         let mut line_break = FragmentPaintData::default();
-        line_break.paint.ink_overflow = fragment.paint.ink_overflow;
+        line_break.paint.ink_overflow = fragment.ViewInkOverflow();
         line_break.paint.is_line_break = true;
         let mut line_break_node = PaintTreeNode::default();
         line_break_node.SetOwnedFragmentForTesting(&line_break);

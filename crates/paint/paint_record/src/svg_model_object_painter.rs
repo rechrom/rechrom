@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use paint_model::PaintRect;
@@ -80,9 +81,9 @@ impl SVGModelObjectPainter {
         let rect = fragment
             .paint
             .SvgVisualRect()
-            .or(fragment.paint.ink_overflow)
-            .or(fragment.paint.contents_ink_overflow)
-            .or(fragment.paint.self_ink_overflow)
+            .or(fragment.ViewInkOverflow())
+            .or(fragment.ViewContentsInkOverflow())
+            .or(fragment.ViewSelfInkOverflow())
             // Rechrom's source SVG shape object is a LayoutBlockFlow.  Its
             // LayoutBox::SelfVisualOverflowRect() is exported separately from
             // PhysicalFragment ink overflow and is the retained source value

@@ -480,9 +480,8 @@ impl RetainedScrollPaintState {
             ));
             let unrecorded_visual_rect = (paintable && !was_recorded)
                 .then(|| {
-                    f.paint
-                        .ink_overflow
-                        .or(f.paint.self_ink_overflow)
+                    f.ViewInkOverflow()
+                        .or(f.ViewSelfInkOverflow())
                         .or(f.paint.box_self_visual_overflow)
                         .or(f.paint.text_glyph_ink)
                 })
