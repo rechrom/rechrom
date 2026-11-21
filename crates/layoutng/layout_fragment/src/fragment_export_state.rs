@@ -74,7 +74,6 @@ pub(super) struct FragmentOwners {
     pub(super) paint: LayoutBoundaryHashSet<*const PhysicalBoxFragment>,
     pub(super) instances: LayoutBoundaryHashMap<*const PhysicalBoxFragment, u64>,
     pub(super) exported_styles: ExportedStyleCache,
-    pub(super) exported_selection_styles: ExportedSelectionStyleCache,
     pub(super) debug_names: DebugNameCache,
     pub(super) fragment_instance_ids: LayoutBoundaryHashMap<FragmentIdentityKey, u64>,
     // Exact source identities from the preceding LayoutResult. LayoutNG may

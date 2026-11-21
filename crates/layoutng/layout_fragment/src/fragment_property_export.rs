@@ -31,7 +31,6 @@ pub(super) fn ExportPaintProperties(
         LayoutUpdateKind::Paint,
         None,
         None,
-        None,
     )
 }
 
@@ -88,39 +87,52 @@ pub(super) fn ExportPrePaintInvalidation(
     }
 }
 
-// Source: core/paint/text_painter.cc:743-764.  Keep this lookup in Layout,
-// while the source ancestor tree and first-line style variant still exist.
-fn ExportSvgTextDecorationStyle(
-    object: *const LayoutObject,
-    sources: &SourceMap,
-    style_sources: &StyleSourceMap,
-    effective_style: *const StyleComputedStyle,
+// Source: core/paint/text_painter.cc:743-764
+// (SvgTextPaintState::TextDecorationObject) and :766-787 (the decorating
+// object's style, or its ::first-line style, supplies fill and stroke).
+// Chromium walks the live LayoutObject ancestors while painting; Paint calls
+// this through PaintProperties::SvgTextDecorationStyle instead of reading a
+// copy frozen at Layout publication.
+pub(crate) fn LiveSvgTextDecorationStyle(
+    object: &LayoutObject,
+    effective_style: &StyleComputedStyle,
 ) -> Option<PaintStyle> {
-    if object.is_null() || !unsafe { &*object }.IsSVGInlineText() {
+    if !object.IsSVGInlineText() {
         return None;
     }
-    let standard_style = unsafe { &*object }.StyleRef() as *const StyleComputedStyle;
-    let use_first_line = !effective_style.is_null() && effective_style != standard_style;
-    let mut result = unsafe { &*object }.Parent();
+    let use_first_line = !std::ptr::eq(effective_style, object.StyleRef());
+    let mut result = object.Parent();
     while !result.is_null() {
+        let ancestor = unsafe { &*result };
         let style = if use_first_line {
-            unsafe { &*result }.FirstLineStyleRef()
+            ancestor.FirstLineStyleRef()
         } else {
-            unsafe { &*result }.StyleRef()
+            ancestor.StyleRef()
         };
         if style.GetTextDecorationLine() != TextDecorationLine::kNone {
-            let source = sources.get(&(result as *const LayoutObject))?;
-            let resources = style_sources
-                .get(&(style as *const StyleComputedStyle))
-                .map(|entry| unsafe { &*entry.resources })
-                .unwrap_or_else(|| unsafe { &*source.node }.InputStyleResources());
-            let exported =
+            let node = ancestor.GetNode();
+            if node.is_null() {
+                return None;
+            }
+            let node = unsafe { &*node };
+            // The decorating node's document-resolved style resources; its
+            // ::first-line variant carries its own resources when present
+            // (the same pairing LayoutBoundaryCache::style_sources records).
+            let first_line_resources = if use_first_line
+                && std::ptr::eq(style as *const StyleComputedStyle, node.InputFirstLineStyle())
+            {
+                node.InputFirstLineStyleResources().as_deref()
+            } else {
+                None
+            };
+            let resources = first_line_resources.unwrap_or_else(|| node.InputStyleResources());
+            return Some(
                 crate::internal::boundary::paint_style_export::ExportStyleWithInputResources(
                     style, resources,
-                );
-            return Some(exported);
+                ),
+            );
         }
-        result = unsafe { &*result }.Parent();
+        result = ancestor.Parent();
     }
     None
 }
@@ -135,7 +147,6 @@ pub(super) fn ExportProperties(
     resources: &Arc<PaintResources>,
     purpose: LayoutUpdateKind,
     mut exported_styles: Option<&mut ExportedStyleCache>,
-    mut exported_selection_styles: Option<&mut ExportedSelectionStyleCache>,
     mut debug_names: Option<&mut DebugNameCache>,
 ) -> PaintProperties {
     let mut output = PaintProperties::default();
@@ -208,16 +219,7 @@ pub(super) fn ExportProperties(
     } else {
         unsafe { &*effective_style }
     };
-    let selection_key = layout_style as *const StyleComputedStyle as usize;
-    let style_facts = if purpose == LayoutUpdateKind::Paint {
-        exported_selection_styles
-            .as_deref()
-            .and_then(|styles| styles.get(&selection_key))
-            .map(|entry| entry.1)
-            .unwrap_or_else(|| crate::style_projection::ReadFragmentStyleFacts(layout_style))
-    } else {
-        crate::style_projection::ReadFragmentStyleFacts(layout_style)
-    };
+    let style_facts = crate::style_projection::ReadFragmentStyleFacts(layout_style);
     let exported_style_key = (
         layout_style as *const StyleComputedStyle as usize,
         projected_style_identity,
@@ -315,41 +317,12 @@ pub(super) fn ExportProperties(
             );
         }
     }
-    if purpose == LayoutUpdateKind::Paint {
-        // Chromium resolves the ::selection painting style while painting
-        // selected text (HighlightStyleUtils::HighlightPaintingStyle); it is
-        // not stored per fragment. A projection with a live source resolves
-        // it in Paint (PaintProperties::SelectionPaintStyle); only detached
-        // projections receive a stored copy.
-        let live_selection = output.style.Source().is_some();
-        let cached_selection = exported_selection_styles
-            .as_deref()
-            .and_then(|styles| styles.get(&selection_key))
-            .cloned();
-        let mut entry = cached_selection.clone().unwrap_or((None, style_facts));
-        if !live_selection && entry.0.is_none() {
-            entry.0 = Some((
-                ExportSelectionPaintStyle(layout_style),
-                ExportSelectionTextDecoration(layout_style),
-            ));
-        }
-        let entry_changed = cached_selection
-            .as_ref()
-            .is_none_or(|cached| cached.0.is_none() != entry.0.is_none());
-        if entry_changed {
-            if let Some(styles) = exported_selection_styles.as_deref_mut() {
-                styles.insert(selection_key, entry.clone());
-            }
-        }
-        if !live_selection {
-            let (selection_style, selection_text_decoration) =
-                entry.0.expect("detached selection style was exported");
-            output.selection_style = selection_style;
-            output.selection_text_decoration = selection_text_decoration;
-        }
-        output.svg_text_decoration_style =
-            ExportSvgTextDecorationStyle(object, sources, style_sources, effective_style);
-    }
+    // Chromium resolves the ::selection painting style and decoration
+    // (HighlightStyleUtils::HighlightPaintingStyle, SelectionTextDecoration)
+    // and the SVG decorating-ancestor style (text_painter.cc:743-787) while
+    // painting. Paint reads them live through PaintProperties::
+    // SelectionPaintStyle, SelectionTextDecoration and SvgTextDecorationStyle;
+    // nothing is frozen into the publication here.
     output.border = style_facts.border;
     output.padding = style_facts.padding;
     // Chromium's PrePaint and painters read these from the LayoutObject's

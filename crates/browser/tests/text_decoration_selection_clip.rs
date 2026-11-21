@@ -261,7 +261,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             .expect("text fragment ink overflow")
             .size
             .height;
-        let exported_selection_decoration = data.paint.selection_text_decoration.clone();
+        let exported_selection_decoration = data.paint.SelectionTextDecoration();
         let glyph_rect = frame
             .display_items
             .items

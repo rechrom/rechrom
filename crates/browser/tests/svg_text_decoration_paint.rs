@@ -88,8 +88,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
         let text_data = text.PaintData();
         let decoration_style = text_data
             .paint
-            .svg_text_decoration_style
-            .as_ref()
+            .SvgTextDecorationStyle()
             .expect("declaring SVG decoration style");
         let fill = decoration_style.svg_fill.expect("ancestor fill");
         let stroke = decoration_style.svg_stroke.expect("ancestor stroke");

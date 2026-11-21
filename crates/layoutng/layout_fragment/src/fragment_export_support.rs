@@ -72,8 +72,8 @@ fn SameDecorationLines(a: &TextDecorationPaint, b: &TextDecorationPaint) -> bool
 }
 
 // Source: core/highlight/highlight_style_utils.cc:38-43,126-167,169-187,
-// 240-251,405-535. Freeze the selection layer while source ComputedStyle and
-// LayoutTheme color resolution are still available. In particular, the macOS
+// 240-251,405-535. Resolved at paint time from the live ComputedStyle and
+// LayoutTheme (PaintProperties::SelectionPaintStyle). In particular, the macOS
 // theme deliberately keeps the originating foreground for default selection.
 pub(crate) fn ExportSelectionPaintStyle(style: &StyleComputedStyle) -> PaintStyle {
     let selection_style = style.HighlightData().Selection();
@@ -161,14 +161,4 @@ pub(super) type SourceMap = LayoutBoundaryHashMap<*const LayoutObject, SourceEnt
 pub(super) type StyleSourceEntry = LayoutBoundaryStyleSourceEntry;
 pub(super) type StyleSourceMap = LayoutBoundaryHashMap<*const StyleComputedStyle, StyleSourceEntry>;
 pub(super) type ExportedStyleCache = LayoutBoundaryHashMap<(usize, usize), PaintStyle>;
-/// Per-ComputedStyle export facts. The stored ::selection projection is
-/// `None` until a fragment without a live source style needs it; live
-/// fragments resolve it in Paint through PaintProperties::SelectionPaintStyle.
-pub(super) type ExportedSelectionStyleCache = LayoutBoundaryHashMap<
-    usize,
-    (
-        Option<(PaintStyle, Option<TextDecorationPaint>)>,
-        crate::style_projection::FragmentStyleFacts,
-    ),
->;
 pub(super) type DebugNameCache = LayoutBoundaryHashMap<*const LayoutObject, Arc<str>>;

@@ -81,7 +81,7 @@ fn text_fit_scales_shadows_and_glyphs_but_not_decorations() {
             find_text(PaintFragmentCursor::FromHandle(&frame.fragments)).expect("text fragment");
         let text_data = text.PaintData();
         assert!(
-            text_data.paint.selection_text_decoration.is_none(),
+            text_data.paint.SelectionTextDecoration().is_none(),
             "documents without ::selection must not synthesize a selection decoration override"
         );
         assert!(
