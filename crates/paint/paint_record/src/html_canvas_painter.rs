@@ -42,9 +42,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let replaced = fragment
-            .paint
-            .replaced_content
-            .as_ref()
+            .ViewReplacedContent()
             .expect("LayoutHTMLCanvas must publish replaced-content geometry");
         debug_assert!(replaced.is_canvas);
         let resource = fragment.resources.as_deref().and_then(|resources| {
@@ -410,8 +408,7 @@ mod tests {
     fn ordinary_canvas_records_resident_foreign_layer() {
         let mut fragment = fragment(true);
         fragment
-            .paint
-            .replaced_content
+            .ViewReplacedContent()
             .as_mut()
             .unwrap()
             .draws_background_onto_content_layer = true;

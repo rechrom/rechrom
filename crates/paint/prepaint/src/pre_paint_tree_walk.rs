@@ -84,9 +84,7 @@ impl EmbeddedLocalFrameView {
         cross_origin_to_parent: bool,
     ) -> Self {
         assert!(owner
-            .paint
-            .replaced_content
-            .as_ref()
+            .ViewReplacedContent()
             .is_some_and(|content| content.is_layout_embedded_content));
         assert_ne!(owner.paint.DisplayItemClientId(), 0);
         // Exactly the same source-owner lease used by ResidentFragment. It
@@ -1785,14 +1783,12 @@ fn ResolveReflectionOffset(filter: &PaintFilterOperation, basis: f64) -> f64 {
 
 // Source: paint_property_tree_builder.cc:2894-2926.
 fn ReplacedElementAlwaysClipsToContentBox(node: &FragmentPaintData) -> bool {
-    node.paint
-        .replaced_content
-        .as_ref()
+    node.ViewReplacedContent()
         .is_some_and(|replaced| !replaced.respects_css_overflow)
 }
 
 fn NeedsOverflowClipForReplacedContents(node: &FragmentPaintData) -> bool {
-    let Some(replaced) = node.paint.replaced_content.as_ref() else {
+    let Some(replaced) = node.ViewReplacedContent() else {
         return false;
     };
     if replaced.is_svg_root {
@@ -1816,7 +1812,7 @@ fn NeedsOverflowClip(node: &FragmentPaintData) -> bool {
     if !node.paint.HasSource() || !node.paint.establishes_paint_state {
         return false;
     }
-    if let Some(replaced) = node.paint.replaced_content.as_ref() {
+    if let Some(replaced) = node.ViewReplacedContent() {
         if ReplacedElementAlwaysClipsToContentBox(node) || replaced.clips_to_content_box {
             return NeedsOverflowClipForReplacedContents(node);
         }
@@ -1837,7 +1833,7 @@ fn NeedsOverflowClip(node: &FragmentPaintData) -> bool {
 // boundary representation yet and is handled as unsupported rather than
 // being inferred from border-radius geometry.
 fn NeedsInnerBorderRadiusClip(node: &FragmentPaintData) -> bool {
-    if node.paint.replaced_content.is_some() && ReplacedElementAlwaysClipsToContentBox(node) {
+    if node.ViewReplacedContent().is_some() && ReplacedElementAlwaysClipsToContentBox(node) {
         return false;
     }
     node.paint.style.border_radii().is_some()
@@ -7095,9 +7091,7 @@ impl PrePaintTreeWalk {
             .fragment
             .as_deref()
             .unwrap()
-            .paint
-            .replaced_content
-            .as_ref()
+            .ViewReplacedContent()
             .unwrap();
         let mut properties = base.properties.clone();
         if view.cross_origin_to_parent {

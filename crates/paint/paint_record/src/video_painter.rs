@@ -51,9 +51,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
             return;
         }
         let replaced = fragment
-            .paint
-            .replaced_content
-            .as_ref()
+            .ViewReplacedContent()
             .expect("LayoutVideo must publish replaced-content geometry");
         debug_assert!(replaced.is_media && replaced.is_video);
         // Source: video_painter.cc:38-47. Protected/unreadable video surfaces

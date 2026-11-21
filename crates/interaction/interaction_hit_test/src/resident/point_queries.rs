@@ -619,7 +619,7 @@ fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
             | layoutng_assembly::fragment_tree::FragmentKind::kLine
     ) || fragment.paint.is_layout_inline
         || fragment.ViewIsInlineBox()
-        || fragment.paint.replaced_content.is_some()
+        || fragment.ViewReplacedContent().is_some()
         || IsSvgHitObject(fragment.paint.SourceKind())
     {
         EventHitPhase::Foreground

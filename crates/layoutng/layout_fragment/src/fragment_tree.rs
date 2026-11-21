@@ -790,6 +790,8 @@ pub trait ResidentBoxGeometry {
     fn ViewFirstBaseline(&self) -> Option<f64>;
     /// SVG text paint data computed from the resident inline item.
     fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>>;
+    /// The replaced content rect of the resident box's LayoutReplaced.
+    fn ViewReplacedContent(&self) -> Option<ReplacedContentPaintData>;
     fn ViewIsInlineBox(&self) -> bool {
         self.ViewBoxGeometryFacts().0
     }
@@ -860,6 +862,20 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewReplacedContent(&self) -> Option<ReplacedContentPaintData> {
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                let replaced = foundation::DynamicTo::<layoutng::internal::layout_replaced::LayoutReplaced>(
+                    box_fragment.GetLayoutObject(),
+                );
+                (!replaced.is_null()).then(|| {
+                    crate::internal::boundary::layout_boundary::ExportReplacedContentPaintData(replaced)
+                })
+            }
+            None => self.paint.replaced_content.clone(),
+        }
+    }
+
     fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>> {
         match self.resident_owner {
             layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {

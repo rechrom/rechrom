@@ -193,9 +193,7 @@ impl BoxPaintInvalidator {
         }
 
         if fragment
-            .paint
-            .replaced_content
-            .as_ref()
+            .ViewReplacedContent()
             .is_some_and(|current| {
                 previous.replaced_content
                     != Some(FragmentPaintRect {

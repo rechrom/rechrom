@@ -1364,9 +1364,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 height: (fragment.ViewSize().height - clip_inset.top - clip_inset.bottom).max(0.0),
             };
             if let Some(replaced) = fragment
-                .paint
-                .replaced_content
-                .as_ref()
+                .ViewReplacedContent()
                 .filter(|replaced| replaced_always_clips && replaced.is_layout_embedded_content)
             {
                 // Source: paint_property_tree_builder.cc:3273-3279. Embedded

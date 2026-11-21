@@ -1263,23 +1263,17 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // common box/background/border/outline pass to LayoutReplaced;
             // this point supplies only its replaced foreground contribution.
             if fragment
-                .paint
-                .replaced_content
-                .as_ref()
+                .ViewReplacedContent()
                 .is_some_and(|content| content.is_layout_embedded_content)
             {
                 // EmbeddedContentPainter traversal belongs to paint_walk.
             } else if fragment
-                .paint
-                .replaced_content
-                .as_ref()
+                .ViewReplacedContent()
                 .is_some_and(|content| content.is_canvas)
             {
                 HTMLCanvasPainter::new(self.node, self.context).PaintReplaced(paint_info);
             } else if fragment
-                .paint
-                .replaced_content
-                .as_ref()
+                .ViewReplacedContent()
                 .is_some_and(|content| content.is_video && !content.video_uses_poster)
                 && (paint_info.ShouldOmitCompositingInfo()
                     || (phase == PaintPhase::kForeground
@@ -5593,9 +5587,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // object-fit/object-position resolution. Paint consumes its retained
         // ReplacedContentRect and never recomputes that geometry from style or
         // resource dimensions.
-        let replaced_content = style
-            .replaced_content
-            .as_ref()
+        let replaced_content = fragment
+            .ViewReplacedContent()
             .expect("replaced paint fragment has source replaced-content geometry");
         let paint_rect = PaintRect {
             x: self.node.paint_offset.x + replaced_content.offset.x,

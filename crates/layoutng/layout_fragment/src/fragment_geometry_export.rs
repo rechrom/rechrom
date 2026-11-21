@@ -451,7 +451,7 @@ pub(super) fn ExportContentSize(box_fragment: &PhysicalBoxFragment) -> Size {
 
 /// LayoutVideo display mode can change without a new physical fragment.
 /// Re-read the same native replaced geometry at the paint-only commit too.
-pub(super) fn ExportReplacedContentPaintData(
+pub(crate) fn ExportReplacedContentPaintData(
     replaced: *const LayoutReplaced,
 ) -> ReplacedContentPaintData {
     let rect = unsafe { &*replaced }.ReplacedContentRect();
