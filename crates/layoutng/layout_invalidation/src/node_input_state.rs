@@ -14,6 +14,7 @@ pub(super) fn NewStandaloneNodeData(input: &NodeConstructionData) -> StandaloneN
         compatibility_mode: CompatibilityMode::kStandards,
         printing: false,
         should_print_backgrounds: false,
+        should_apply_root_background_behavior: true,
         paginated: false,
         fragmentainer_block_size: None,
         vertical_scroll_enforced: false,

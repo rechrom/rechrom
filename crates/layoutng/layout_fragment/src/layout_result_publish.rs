@@ -263,12 +263,7 @@ pub(super) fn populate_layout_result_paint_data(
         let _phase = layout_fragment_boundary::trace::span(
             layout_fragment_boundary::trace::TracePhase::PopulateGlobalPaintData,
         );
-        ExportCanvasBackground(
-            root,
-            objects,
-            source,
-            space.should_apply_root_background_behavior,
-        );
+        ExportCanvasBackground(root, source);
         ExportGlobalMainThreadScrollFacts(root, objects, source);
     }
     trace.set(

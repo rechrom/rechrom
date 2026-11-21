@@ -1730,6 +1730,9 @@ pub struct ElementData {
     pub html_anchor: bool,
     pub html_canvas: bool,
     pub html_hr: bool,
+    /// IsA<HTMLHtmlElement>: background propagation to the canvas requires an
+    /// HTML document element (layout_box_model_object.cc BackgroundTransfersToView).
+    pub html_html: bool,
     /// LayoutMedia/HTMLMediaElement identity retained across the DOM-to-layout
     /// boundary. Audio and video share LayoutMedia; only video overrides
     /// LayoutVideo::IsVideo().
@@ -1881,6 +1884,7 @@ impl Default for ElementData {
             html_anchor: false,
             html_canvas: false,
             html_hr: false,
+            html_html: false,
             html_media: false,
             html_video: false,
             video: None,

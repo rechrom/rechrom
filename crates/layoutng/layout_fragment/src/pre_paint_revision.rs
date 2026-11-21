@@ -286,9 +286,10 @@ fn paint_resource_usage(fragment: &FragmentPaintData) -> u8 {
     // projection of every background layer.
     let (fixed_background, style_images) = paint.style.ResourceUsageFacts(nine_piece_images);
     // Viewport-relative painters, which also read the base background facts.
+    // The canvas background is painted by the LayoutView root fragment
+    // (IsLayoutView), so it needs no separate admission here.
     let viewport = paint.IsLayoutView()
-        || paint.canvas_background.is_some()
-        || paint.is_page_container
+        || super::ResidentBoxGeometry::IsPageContainer(fragment)
         || fixed_background;
     let images = paint.replaced_is_image
         || paint.VideoFrameResourceId().is_some()

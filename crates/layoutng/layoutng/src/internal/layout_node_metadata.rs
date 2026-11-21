@@ -99,6 +99,10 @@ pub struct StandaloneNodeData {
     pub compatibility_mode: CompatibilityMode,
     pub printing: bool,
     pub should_print_backgrounds: bool,
+    /// ConstraintSpace::should_apply_root_background_behavior
+    /// (ViewPainter::ShouldApplyRootBackgroundBehavior, view_painter.cc:461-463).
+    /// Paint reads it live for BackgroundTransfersToView and canvas selection.
+    pub should_apply_root_background_behavior: bool,
     pub paginated: bool,
     pub fragmentainer_block_size: Option<f64>,
     pub vertical_scroll_enforced: bool,
@@ -272,6 +276,9 @@ impl Node {
     }
     pub fn InputShouldPrintBackgrounds(&self) -> bool {
         self.GlobalInputData().should_print_backgrounds
+    }
+    pub fn InputShouldApplyRootBackgroundBehavior(&self) -> bool {
+        self.GlobalInputData().should_apply_root_background_behavior
     }
     pub fn InputPaginated(&self) -> bool {
         self.GlobalInputData().paginated
@@ -556,6 +563,8 @@ impl Node {
         self.input_data_.compatibility_mode = input.compatibility_mode;
         self.input_data_.printing = input.printing;
         self.input_data_.should_print_backgrounds = input.should_print_backgrounds;
+        self.input_data_.should_apply_root_background_behavior =
+            input.should_apply_root_background_behavior;
         self.input_data_.paginated = input.fragmentainer_block_size.is_some();
         self.input_data_.fragmentainer_block_size = input.fragmentainer_block_size;
         self.input_data_.vertical_scroll_enforced = input.vertical_scroll_enforced;

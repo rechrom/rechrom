@@ -50,7 +50,7 @@ use foundation::{
     PhysicalRect, PhysicalSize, WritingMode as StyleWritingMode,
 };
 use layoutng_assembly::fragment_tree::{
-    FragmentKind, FragmentPaintData, FragmentPaintRect, PaintGlyph,
+    CanvasBackgroundPaintView, FragmentKind, FragmentPaintData, FragmentPaintRect, PaintGlyph,
 };
 use layoutng_assembly::internal::background_bleed_avoidance::{
     BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
@@ -233,7 +233,7 @@ pub(crate) fn BackgroundForPainting(
             // BoxBackgroundPaintContext::ShouldSkipBackgroundIfWhite: page
             // border boxes deliberately stay transparent so the paper/PDF
             // viewer white can still be customized by the embedding surface.
-            if fragment.paint.is_page_border_box {
+            if fragment.IsPageBorderBox() {
                 return (Color::default(), false);
             }
             let paints_white = color.alpha > 0.0
@@ -268,7 +268,7 @@ pub(crate) fn BackgroundForPainting(
 }
 
 fn BackgroundStyleForPainting(fragment: &FragmentPaintData) -> Option<&PaintStyle> {
-    if fragment.paint.is_page_border_box {
+    if fragment.IsPageBorderBox() {
         fragment.paint.page_document_background_style.as_ref()
     } else {
         Some(&fragment.paint.style)
@@ -748,7 +748,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if fragment.paint.is_paginated_root {
+        if fragment.IsPaginatedRoot() {
             return true;
         }
         // SVGShapePainter performs its own transformed visual-bounds cull.
@@ -972,16 +972,16 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             // ViewPainter::PaintBoxDecorationBackground paints no background
             // for the paginated LayoutView itself. Each selected page
             // container owns the `@page` background instead.
-            if fragment.paint.is_paginated_root {
+            if fragment.IsPaginatedRoot() {
                 return;
             }
-            if fragment.paint.is_page_container {
+            if fragment.IsPageContainer() {
                 self.PaintPageContainerBackground(paint_info);
                 return;
             }
             if self.node.is_root && !paint_info.ShouldSkipBackground() {
-                if fragment.paint.background_transfers_to_view
-                    && fragment.paint.canvas_background.is_some()
+                if fragment.paint.BackgroundTransfersToView()
+                    && CanvasBackground(self.node).is_some()
                 {
                     let background_state = CanvasBackgroundPaintState(self.node);
                     let paints_separate_backdrop =
@@ -2096,7 +2096,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if fragment.paint.background_transfers_to_view
+        if fragment.paint.BackgroundTransfersToView()
             || fragment.paint.BackgroundIsKnownToBeObscured()
         {
             return;
@@ -2530,7 +2530,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("page container paint tree node has a fragment");
-        let Some(page_geometry) = fragment.paint.page_container_background_geometry else {
+        let Some(page_geometry) = fragment.PageContainerBackgroundGeometry() else {
             return;
         };
         if ShouldForceWhiteBackgroundForPrintEconomy(fragment) {
@@ -2693,10 +2693,10 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("root paint tree node has a fragment");
-        let Some(canvas) = fragment.paint.canvas_background.as_ref() else {
+        let Some(canvas) = CanvasBackground(self.node) else {
             return;
         };
-        let style = &canvas.style;
+        let style: &PaintStyle = canvas.style;
         if ShouldForceWhiteBackgroundForPrintEconomyWithStyle(fragment, style) {
             return;
         }
@@ -2967,7 +2967,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        if fragment.paint.background_transfers_to_view {
+        if fragment.paint.BackgroundTransfersToView() {
             return;
         }
         let style = &fragment.paint.style;
@@ -6585,7 +6585,7 @@ fn UsesCompositedFixedBackground(node: &PaintTreeNode<'_>) -> bool {
         .expect("paint tree node has a fragment");
     let background_images = fragment.paint.style.background_images();
     fragment.paint.CanCompositeBackgroundAttachmentFixed()
-        && !fragment.paint.background_transfers_to_view
+        && !fragment.paint.BackgroundTransfersToView()
         && !node.fixed_background_acts_as_scroll
         && node.fixed_background_properties.is_some()
         && fragment.paint.BackgroundPaintLocation().PaintsBorderBox()
@@ -6686,9 +6686,27 @@ fn CanvasBackgroundDisplayItemId(
     }
 }
 
+/// The LayoutView canvas background, read live from the resident root and
+/// body fragments (PaintFragmentCursor::CanvasBackground; ViewPainter,
+/// view_painter.cc:76-449). Its style is the selected fragment's PaintStyle
+/// projection. Hand-built fixtures without a source cursor keep the stored
+/// selection.
+fn CanvasBackground<'n>(node: &'n PaintTreeNode<'_>) -> Option<CanvasBackgroundPaintView<'n>> {
+    match node.SourceCursor() {
+        Some(cursor) => cursor.CanvasBackground(),
+        None => node
+            .fragment
+            .as_deref()?
+            .paint
+            .canvas_background
+            .as_ref()
+            .map(|canvas| canvas.AsRef()),
+    }
+}
+
 fn CanvasBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<PaintRect> {
-    let fragment = node.fragment.as_deref()?;
-    fragment.paint.canvas_background.as_ref()?;
+    node.fragment.as_deref()?;
+    CanvasBackground(node)?;
     ViewBackgroundRect(node, scrolling)
 }
 
@@ -6718,7 +6736,7 @@ fn CanvasBackgroundPaintState(node: &PaintTreeNode<'_>) -> PropertyTreeState {
     let document_element_node_id = node
         .fragment
         .as_deref()
-        .and_then(|fragment| fragment.paint.canvas_background.as_ref())
+        .and_then(|_| CanvasBackground(node))
         .map_or(0, |canvas| canvas.document_element_node_id);
     // Source: view_painter.cc:166-188 uses document.documentElement()'s
     // LayoutObject, which is always a descendant of the LayoutView. The
@@ -6758,14 +6776,10 @@ fn CanvasBackgroundPositioningBoxRect(
     node: &PaintTreeNode<'_>,
     box_type: BackgroundBox,
 ) -> PaintRect {
-    let fragment = node
-        .fragment
+    node.fragment
         .as_deref()
         .expect("canvas background requires a fragment");
-    let canvas = fragment
-        .paint
-        .canvas_background
-        .as_ref()
+    let canvas = CanvasBackground(node)
         .expect("canvas background positioning requires document-element geometry");
     let mut rect = PaintRect {
         x: canvas.document_element_paint_offset.x,
@@ -6803,14 +6817,10 @@ fn CanvasBackgroundPositioningBoxRectInState(
     {
         return CanvasBackgroundPositioningBoxRect(node, box_type);
     }
-    let fragment = node
-        .fragment
+    node.fragment
         .as_deref()
         .expect("canvas background requires a fragment");
-    let canvas = fragment
-        .paint
-        .canvas_background
-        .as_ref()
+    let canvas = CanvasBackground(node)
         .expect("canvas background positioning requires document-element geometry");
     let mut rect = PaintRect {
         x: mapped_canvas_rect.x,
@@ -7228,8 +7238,8 @@ fn ResolveBackgroundDestinationRects(
         || has_geometry_override
         || !paint_model::paint_phase::ShouldPaintSelfBlockBackground(phase)
         || paint.Display() == Display::kTableCell
-        || paint.is_page_container
-        || paint.is_page_border_box
+        || fragment.IsPageContainer()
+        || fragment.IsPageBorderBox()
         || fragment.ViewStitchedDecoration().is_some()
         || node.paint_layer_is_fragmented
         || paint.style.border_shape_unsupported
@@ -7410,19 +7420,17 @@ fn EffectiveBackgroundAttachment(
         .expect("paint tree node has a fragment");
     match layer.attachment {
         BackgroundAttachment::kFixed
-            if fragment.paint.is_page_border_box
+            if fragment.IsPageBorderBox()
                 && !fragment
-                    .paint
-                    .page_document_background_geometry
+                    .PageDocumentBackgroundGeometry()
                     .is_some_and(|geometry| geometry.has_background_fixed_to_viewport) =>
         {
             BackgroundAttachment::kScroll
         }
         BackgroundAttachment::kFixed
-            if fragment.paint.is_page_container
+            if fragment.IsPageContainer()
                 && !fragment
-                    .paint
-                    .page_container_background_geometry
+                    .PageContainerBackgroundGeometry()
                     .is_some_and(|geometry| geometry.has_background_fixed_to_viewport) =>
         {
             BackgroundAttachment::kScroll
@@ -7522,9 +7530,9 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
         .expect("paint tree node has a fragment");
     let paint = &fragment.paint;
     let box_type = UsedBackgroundGeometryBox(box_type);
-    if let Some(page) = paint
-        .is_page_container
-        .then_some(paint.page_container_background_geometry)
+    if let Some(page) = fragment
+        .IsPageContainer()
+        .then(|| fragment.PageContainerBackgroundGeometry())
         .flatten()
     {
         let mut rect = PaintRect {
@@ -7542,9 +7550,9 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
         }
         return ContractPaintRect(rect, page.padding);
     }
-    if let Some(page) = paint
-        .is_page_border_box
-        .then_some(paint.page_document_background_geometry)
+    if let Some(page) = fragment
+        .IsPageBorderBox()
+        .then(|| fragment.PageDocumentBackgroundGeometry())
         .flatten()
     {
         let mut rect = PaintRect {

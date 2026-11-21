@@ -104,6 +104,7 @@ pub(super) fn ElementMetadata(
     data.html_anchor = node.Name() == "a";
     data.html_canvas = node.IsHTMLElement("canvas");
     data.html_hr = node.IsHTMLElement("hr");
+    data.html_html = node.IsHTMLElement("html");
     data.html_media = document.IsMediaElement(index);
     data.html_video = document.IsVideoElement(index);
     data.video = document.VideoLayoutStateForElement(index);

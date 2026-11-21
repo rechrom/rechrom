@@ -15,7 +15,6 @@ pub(super) fn refresh_retained_paint_inputs(
     fragments: crate::layout_engine::PaintFragmentCursor<'_>,
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
-    should_apply_root_background_behavior: bool,
 ) -> bool {
     let mut sources = SourceMap::default();
     let mut style_sources = StyleSourceMap::default();
@@ -128,10 +127,8 @@ pub(super) fn refresh_retained_paint_inputs(
     ) {
         let children = cursor.Children();
         let node = unsafe { cursor.PaintDataMut() };
-        node.paint.background_transfers_to_view = false;
         node.paint.background_is_known_to_be_obscured = false;
         node.paint.page_document_background_style = None;
-        node.paint.canvas_background = None;
         node.paint.view_background_invalidation = None;
         if ink_clients.contains(&node.paint.DisplayItemClientId()) {
             // Ancestor contents ink depends on the invalidated text item.
@@ -192,12 +189,7 @@ pub(super) fn refresh_retained_paint_inputs(
             &ink_items,
         )
     };
-    ExportCanvasBackground(
-        root,
-        &objects,
-        fragments,
-        should_apply_root_background_behavior,
-    );
+    ExportCanvasBackground(root, fragments);
     ExportGlobalMainThreadScrollFacts(root, &objects, fragments);
     true
 }

@@ -4,7 +4,7 @@ use layoutng_style::style::computed_style::ComputedStyle;
 
 use super::super::layout_box_model_object::LayoutBoxModelObject;
 use super::super::layout_input::DocumentRole;
-use super::super::layout_node_metadata::{ContainerNode, Node};
+use super::super::layout_node_metadata::{ContainerNode, Element, Node};
 
 // Source: third_party/blink/renderer/core/layout/layout_box_model_object.cc:1123-1151.
 #[unsafe(no_mangle)]
@@ -60,7 +60,14 @@ pub(super) fn LayoutBoxModelObjectBackgroundTransfersToView(
         root = unsafe { &mut (*parent).node };
     }
     let document_element = unsafe { FindDocumentElement(root) };
-    if document_element.is_null() || !unsafe { &*document_element }.IsHTMLElement() {
+    // IsA<HTMLHtmlElement>(document_element), carried by the element input.
+    if document_element.is_null()
+        || !unsafe { &*document_element }.IsElementNode()
+        || !unsafe { &*document_element.cast::<Element>() }
+            .InputElementData()
+            .as_ref()
+            .is_some_and(|data| data.html_html)
+    {
         return false;
     }
 

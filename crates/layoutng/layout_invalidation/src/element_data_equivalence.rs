@@ -25,6 +25,7 @@ fn element_data_eq(element: &ElementData, other: &ElementData) -> bool {
         && (element.html_anchor == other.html_anchor)
         && (element.html_canvas == other.html_canvas)
         && (element.html_hr == other.html_hr)
+        && (element.html_html == other.html_html)
         && (element.html_media == other.html_media)
         && (element.html_video == other.html_video)
         && (element.video == other.video)

@@ -139,6 +139,49 @@ pub struct CanvasBackgroundPaintData<Style> {
     pub background_any_layer_uses_content_box: bool,
 }
 
+impl<Style> CanvasBackgroundPaintData<Style> {
+    /// Re-type the selected style, e.g. from a borrowed live view of the
+    /// source fragment's style to an owned copy retained for invalidation.
+    pub fn MapStyle<Other>(self, map: impl FnOnce(Style) -> Other) -> CanvasBackgroundPaintData<Other> {
+        CanvasBackgroundPaintData {
+            style: map(self.style),
+            effective_zoom: self.effective_zoom,
+            document_element_node_id: self.document_element_node_id,
+            previous_document_element_geometry: self.previous_document_element_geometry,
+            document_element_paint_offset: self.document_element_paint_offset,
+            document_element_size: self.document_element_size,
+            document_element_border: self.document_element_border,
+            document_element_padding: self.document_element_padding,
+            document_element_content_box: self.document_element_content_box,
+            document_element_scrollable_overflow: self.document_element_scrollable_overflow,
+            document_element_has_transform: self.document_element_has_transform,
+            background_fill_layer_count: self.background_fill_layer_count,
+            background_any_local_attachment_image: self.background_any_local_attachment_image,
+            background_any_layer_uses_content_box: self.background_any_layer_uses_content_box,
+        }
+    }
+
+    /// Borrow a stored selection as the same view the live path returns.
+    pub fn AsRef(&self) -> CanvasBackgroundPaintData<&Style> {
+        CanvasBackgroundPaintData {
+            style: &self.style,
+            effective_zoom: self.effective_zoom,
+            document_element_node_id: self.document_element_node_id,
+            previous_document_element_geometry: self.previous_document_element_geometry,
+            document_element_paint_offset: self.document_element_paint_offset,
+            document_element_size: self.document_element_size,
+            document_element_border: self.document_element_border,
+            document_element_padding: self.document_element_padding,
+            document_element_content_box: self.document_element_content_box,
+            document_element_scrollable_overflow: self.document_element_scrollable_overflow,
+            document_element_has_transform: self.document_element_has_transform,
+            background_fill_layer_count: self.background_fill_layer_count,
+            background_any_local_attachment_image: self.background_any_local_attachment_image,
+            background_any_layer_uses_content_box: self.background_any_layer_uses_content_box,
+        }
+    }
+}
+
 impl Default for PaintResources {
     fn default() -> Self {
         Self {

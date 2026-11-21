@@ -124,7 +124,6 @@ impl EnginePaintUpdate for LayoutEngine {
             PaintFragmentCursor::FromHandle(fragments),
             &self.pending_paint_ids_,
             &self.pending_inline_ink_ids_,
-            self.constraints_.should_apply_root_background_behavior,
         ) {
             trace.set("rejected", 1.0);
             return false;
