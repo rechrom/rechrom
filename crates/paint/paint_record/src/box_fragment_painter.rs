@@ -6851,7 +6851,7 @@ fn CanvasBackgroundPositioningBoxRectInState(
 
 fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
-    let source_background = fragment.paint.view_background_rect.map(|rect| PaintRect {
+    let source_background = fragment.paint.ViewBackgroundRect().map(|rect| PaintRect {
         x: node.paint_offset.x + rect.offset.x,
         y: node.paint_offset.y + rect.offset.y,
         width: rect.size.width,

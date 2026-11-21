@@ -178,7 +178,6 @@ pub(super) fn ExportProperties(
         if let Some(selection_client) = unsafe { selection_client.as_ref() } {
             output.selection_client_id = selection_client.Id() as u64;
         }
-        output.display_item_raster_effect_outset = client.VisualRectOutsetForRasterEffects();
     }
     let text_combine = DynamicTo::<LayoutTextCombine>(object);
     if !text_combine.is_null() {
@@ -235,51 +234,6 @@ pub(super) fn ExportProperties(
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
     if purpose == LayoutUpdateKind::Paint {
-        if !layout_box.is_null() {
-            let box_ = unsafe { &*layout_box };
-            let previous_size = box_.PreviousSize();
-            let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object);
-            output.previous_box_geometry =
-                Some(layout_fragment::fragment_tree::PreviousBoxGeometry {
-                    size: Size {
-                        width: Number(previous_size.width),
-                        height: Number(previous_size.height),
-                    },
-                    content_box: ExportInkRect(box_.PreviousPhysicalContentBoxRect()),
-                    self_visual_overflow: ExportInkRect(box_.PreviousSelfVisualOverflowRect()),
-                    scrollable_overflow: ExportInkRect(box_.PreviousScrollableOverflowRect()),
-                    replaced_content: (!replaced.is_null()).then(|| {
-                        ExportInkRect(
-                            unsafe { &*replaced }
-                                .ReplacedContentRectFrom(&box_.PreviousPhysicalContentBoxRect()),
-                        )
-                    }),
-                });
-            // Preserve the LayoutBox virtual override rather than calling only
-            // the DisplayItemClient base default (layout_box.cc:4099-4108).
-            output.display_item_raster_effect_outset =
-                unsafe { &*layout_box }.VisualRectOutsetForRasterEffects();
-            let layout_view = DynamicTo::<LayoutView>(object);
-            if !layout_view.is_null() {
-                output.previous_view_background_rect = Some(ExportInkRect(
-                    unsafe { &*layout_view }.PreviousBackgroundRect(),
-                ));
-                output.view_background_rect =
-                    Some(ExportInkRect(unsafe { &*layout_view }.BackgroundRect()));
-            }
-        } else if unsafe { &*object }.IsSVGShape() {
-            // layout_svg_shape.cc:664-674: hairline raster expansion is metadata,
-            // not an inflation of the stored VisualRect or chunk bounds.
-            let style = unsafe { &*object }.StyleRef();
-            if style.HasVisibleStroke() {
-                output.display_item_raster_effect_outset =
-                    if style.CapStyle() == foundation::LineCap::kButtCap {
-                        layout_fragment::fragment_tree::RasterEffectOutset::kHalfPixel
-                    } else {
-                        layout_fragment::fragment_tree::RasterEffectOutset::kWholePixel
-                    };
-            }
-        }
         // A source object with no PaintLayer is a known result, not permission for
         // Paint to reconstruct a layer from flattened style (notably SVG children).
         // PaintLayerPainter uses the layer's own client, distinct from this box.
@@ -911,4 +865,69 @@ pub(crate) fn LiveTextControlHost(object: &LayoutObject) -> Option<Option<u64>> 
         ancestor = node.parentNode().cast();
     }
     Some(None)
+}
+
+/// Source: BoxPaintInvalidator's previous geometry, kept on the LayoutBox
+/// (LayoutBox::PreviousSize / PreviousPhysicalContentBoxRect /
+/// PreviousSelfVisualOverflowRect / PreviousScrollableOverflowRect). The
+/// layout commit saves them after the artifact commits
+/// (SavePreviousBoxGeometriesIfNeeded), so PrePaint reads the previous values.
+pub(crate) fn LivePreviousBoxGeometry(
+    object: &LayoutObject,
+) -> Option<layout_fragment::fragment_tree::PreviousBoxGeometry> {
+    let object_ptr = object as *const LayoutObject;
+    let box_ = unsafe { DynamicTo::<LayoutBox>(object_ptr).as_ref() }?;
+    let previous_size = box_.PreviousSize();
+    let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object_ptr);
+    Some(layout_fragment::fragment_tree::PreviousBoxGeometry {
+        size: Size {
+            width: Number(previous_size.width),
+            height: Number(previous_size.height),
+        },
+        content_box: ExportInkRect(box_.PreviousPhysicalContentBoxRect()),
+        self_visual_overflow: ExportInkRect(box_.PreviousSelfVisualOverflowRect()),
+        scrollable_overflow: ExportInkRect(box_.PreviousScrollableOverflowRect()),
+        replaced_content: (!replaced.is_null()).then(|| {
+            ExportInkRect(
+                unsafe { &*replaced }
+                    .ReplacedContentRectFrom(&box_.PreviousPhysicalContentBoxRect()),
+            )
+        }),
+    })
+}
+
+/// LayoutView::BackgroundRect(); None for other objects.
+pub(crate) fn LiveViewBackgroundRect(object: &LayoutObject) -> Option<FragmentPaintRect> {
+    unsafe { DynamicTo::<LayoutView>(object as *const LayoutObject).as_ref() }
+        .map(|view| ExportInkRect(view.BackgroundRect()))
+}
+
+/// LayoutView::PreviousBackgroundRect(); None for other objects.
+pub(crate) fn LivePreviousViewBackgroundRect(object: &LayoutObject) -> Option<FragmentPaintRect> {
+    unsafe { DynamicTo::<LayoutView>(object as *const LayoutObject).as_ref() }
+        .map(|view| ExportInkRect(view.PreviousBackgroundRect()))
+}
+
+/// DisplayItemClient::VisualRectOutsetForRasterEffects with its LayoutBox
+/// (layout_box.cc:4099-4108) and LayoutSVGShape (layout_svg_shape.cc:664-674)
+/// overrides.
+pub(crate) fn LiveRasterEffectOutset(
+    object: &LayoutObject,
+) -> layout_fragment::fragment_tree::RasterEffectOutset {
+    let object_ptr = object as *const LayoutObject;
+    if let Some(box_) = unsafe { DynamicTo::<LayoutBox>(object_ptr).as_ref() } {
+        return box_.VisualRectOutsetForRasterEffects();
+    }
+    if object.IsSVGShape() {
+        let style = object.StyleRef();
+        return if !style.HasVisibleStroke() {
+            unsafe { &*(object_ptr as *const DisplayItemClient) }
+                .VisualRectOutsetForRasterEffects()
+        } else if style.CapStyle() == foundation::LineCap::kButtCap {
+            layout_fragment::fragment_tree::RasterEffectOutset::kHalfPixel
+        } else {
+            layout_fragment::fragment_tree::RasterEffectOutset::kWholePixel
+        };
+    }
+    unsafe { &*(object_ptr as *const DisplayItemClient) }.VisualRectOutsetForRasterEffects()
 }

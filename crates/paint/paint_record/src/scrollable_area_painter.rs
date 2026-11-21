@@ -265,7 +265,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                         data.theme_disallows_hit_test,
                     ),
                 },
-                fragment.paint.display_item_raster_effect_outset,
+                fragment.paint.DisplayItemRasterEffectOutset(),
                 self.node.paint_snap_offset,
             );
             self.context.borrow_mut().Append(

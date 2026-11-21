@@ -69,7 +69,7 @@ pub(super) fn ExportCanvasBackground(
                 style: cursor.paint.style.clone(),
                 effective_zoom: cursor.paint.EffectiveZoom(),
                 document_element_node_id: 0,
-                previous_document_element_geometry: cursor.paint.previous_box_geometry,
+                previous_document_element_geometry: cursor.paint.PreviousBoxGeometry(),
                 document_element_paint_offset: Offset::default(),
                 document_element_size: size,
                 document_element_border: cursor.Borders(),

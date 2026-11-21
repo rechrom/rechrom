@@ -1833,6 +1833,39 @@ impl PaintProperties {
             .SourceCheckedOr(self.text_control_host, "text_control_host")
     }
 
+    // Previous-frame geometry is Chromium's LayoutBox / LayoutView state,
+    // saved by the layout commit after the artifact commits.
+
+    pub fn PreviousBoxGeometry(&self) -> Option<PreviousBoxGeometry> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LivePreviousBoxGeometry)
+            .SourceCheckedOr(self.previous_box_geometry, "previous_box_geometry")
+    }
+
+    pub fn ViewBackgroundRect(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveViewBackgroundRect)
+            .SourceCheckedOr(self.view_background_rect, "view_background_rect")
+    }
+
+    pub fn PreviousViewBackgroundRect(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LivePreviousViewBackgroundRect)
+            .SourceCheckedOr(
+                self.previous_view_background_rect,
+                "previous_view_background_rect",
+            )
+    }
+
+    pub fn DisplayItemRasterEffectOutset(&self) -> RasterEffectOutset {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveRasterEffectOutset)
+            .SourceCheckedOr(
+                self.display_item_raster_effect_outset,
+                "display_item_raster_effect_outset",
+            )
+    }
+
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
         self.live_style_facts = live;
     }

@@ -153,7 +153,8 @@ pub(crate) use layout_fragment_fragment_property_export::{
     LiveRegionCaptureCropId, LiveReplacedLocalSelectionVisualRect, LiveReplacedSelectionState,
     LiveScrollableOverflow, LiveTrackedElementSubRects, LiveFocusedImageMapArea,
     LiveImageDecodingMode, LiveSourceKind, LiveSvgViewBoxIsEmpty, LiveTextControlHost,
-    LiveVideoFrameResourceId,
+    LiveVideoFrameResourceId, LivePreviousBoxGeometry, LiveViewBackgroundRect,
+    LivePreviousViewBackgroundRect, LiveRasterEffectOutset,
 };
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,

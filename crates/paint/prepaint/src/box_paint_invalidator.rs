@@ -97,9 +97,9 @@ impl BoxPaintInvalidator {
         match (
             fragment
                 .paint
-                .previous_view_background_rect
+                .PreviousViewBackgroundRect()
                 .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
-            fragment.paint.view_background_rect,
+            fragment.paint.ViewBackgroundRect(),
         ) {
             (Some(old), Some(new)) => old != new,
             _ => false,
@@ -279,7 +279,7 @@ pub(crate) fn PreviousGeometry(
     fragment: &FragmentPaintData,
     previous: Option<&FragmentPaintData>,
 ) -> Option<PreviousBoxGeometry> {
-    fragment.paint.previous_box_geometry.or_else(|| {
+    fragment.paint.PreviousBoxGeometry().or_else(|| {
         // Standalone immutable fixtures have no native LayoutBox owner.
         previous.map(|old| {
             let (offset, size) = PhysicalContentBoxSignature(old);
@@ -320,9 +320,9 @@ fn ComputeViewBackgroundInvalidation(
     let (old_rect, new_rect) = match (
         fragment
             .paint
-            .previous_view_background_rect
+            .PreviousViewBackgroundRect()
             .or_else(|| previous.and_then(|old| old.paint.view_background_rect)),
-        fragment.paint.view_background_rect,
+        fragment.paint.ViewBackgroundRect(),
     ) {
         (Some(old), Some(new)) => (old, new),
         _ => return BackgroundInvalidationType::None,

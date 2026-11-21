@@ -628,7 +628,7 @@ impl<'o> PaintContext<'o> {
             std::slice::from_ref(&item),
             node.paint_snap_offset,
         );
-        let raster_effect_outset = fragment.paint.display_item_raster_effect_outset;
+        let raster_effect_outset = fragment.paint.DisplayItemRasterEffectOutset();
         let rect_known_to_be_opaque =
             CalculateRectKnownToBeOpaqueForRecord(visual_rect, std::slice::from_ref(&item));
         let record_background =
@@ -700,7 +700,7 @@ impl<'o> PaintContext<'o> {
             node.paint_snap_offset,
         );
         if let Some(recorder) = &mut self.drawing_recorder {
-            recorder.8 = fragment.paint.display_item_raster_effect_outset;
+            recorder.8 = fragment.paint.DisplayItemRasterEffectOutset();
             recorder.9 = fragment.paint.self_ink_overflow.is_some()
                 || fragment.paint.box_self_visual_overflow.is_some();
         }

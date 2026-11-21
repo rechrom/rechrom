@@ -164,8 +164,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.display_item_client_owner_node_id =
                 current.display_item_client_owner_node_id;
             node.paint.selection_client_id = current.selection_client_id;
-            node.paint.display_item_raster_effect_outset =
-                current.display_item_raster_effect_outset;
             node.paint.paint_layer_client_id = current.paint_layer_client_id;
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
@@ -180,9 +178,6 @@ pub(super) fn refresh_retained_paint_inputs(
                 current.background_any_default_attachment_image;
             node.paint.background_any_layer_uses_content_box =
                 current.background_any_layer_uses_content_box;
-            node.paint.previous_box_geometry = current.previous_box_geometry;
-            node.paint.previous_view_background_rect = current.previous_view_background_rect;
-            node.paint.view_background_rect = current.view_background_rect;
             if unsafe { &*object }.IsVideo() {
                 node.paint.replaced_content = Some(ExportReplacedContentPaintData(
                     object.cast::<LayoutReplaced>(),
