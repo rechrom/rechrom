@@ -300,7 +300,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
             "crop ID did not reach the resident Layout Element"
         );
         assert_eq!(
-            fragment(&page, "capture").paint.region_capture_crop_id,
+            fragment(&page, "capture").paint.RegionCaptureCropId(),
             Some(crop_id),
             "crop ID did not cross the DOM-to-fragment boundary"
         );
@@ -387,10 +387,10 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         }
 
         assert_eq!(
-            fragment(&page, "capture").paint.region_capture_crop_id,
+            fragment(&page, "capture").paint.RegionCaptureCropId(),
             Some(crop_id)
         );
-        let fragment_tracking = &fragment(&page, "capture").paint.tracked_element_sub_rects;
+        let fragment_tracking = &fragment(&page, "capture").paint.TrackedElementSubRects();
         assert_eq!(fragment_tracking.len(), 1);
         assert_eq!(fragment_tracking[0].feature, 7);
         assert_eq!(fragment_tracking[0].id, tracked_id);
@@ -502,7 +502,7 @@ fn html_box_publishes_region_capture_and_tracked_subrects() {
         }
         assert!(fragment(&page, "capture")
             .paint
-            .tracked_element_sub_rects
+            .TrackedElementSubRects()
             .is_empty());
         assert!(page
             .CurrentFrame()
@@ -559,7 +559,7 @@ fn tracked_plain_inline_forces_a_fragment_and_publishes_bounds() {
 
         let fragment = fragment(&page, "capture");
         assert!(fragment.paint.box_fragment_is_inline_box);
-        assert_eq!(fragment.paint.tracked_element_sub_rects.len(), 1);
+        assert_eq!(fragment.paint.TrackedElementSubRects().len(), 1);
         let tracked = page
             .CurrentFrame()
             .unwrap()

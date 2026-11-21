@@ -1692,6 +1692,103 @@ impl PaintProperties {
         self.is_first_for_node || self.can_paint_multiple_fragments
     }
 
+    // LayoutObject / LayoutBox / PaintLayer / Element geometry facts, read
+    // live as Chromium's PrePaint and painters do (stage 2 of the export
+    // removal). The stored fields remain only for fragments without a source.
+
+    pub fn CssMaskBoundingBox(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveCssMaskBoundingBox)
+            .SourceCheckedOr(self.css_mask_bounding_box, "css_mask_bounding_box")
+    }
+
+    pub fn ScrollableOverflow(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveScrollableOverflow)
+            .SourceCheckedOr(self.scrollable_overflow, "scrollable_overflow")
+    }
+
+    pub fn PaintLayerFirstFragmentVisualRect(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(|_| {
+                self.SourcePaintLayer().map(
+                    crate::internal::boundary::layout_boundary::LivePaintLayerFirstFragmentVisualRect,
+                )
+            })
+            .SourceCheckedOr(
+                self.paint_layer_first_fragment_visual_rect,
+                "paint_layer_first_fragment_visual_rect",
+            )
+    }
+
+    pub fn PaintLayerContentsVisualRect(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(|_| {
+                self.SourcePaintLayer().and_then(
+                    crate::internal::boundary::layout_boundary::LivePaintLayerContentsVisualRect,
+                )
+            })
+            .SourceCheckedOr(
+                self.paint_layer_contents_visual_rect,
+                "paint_layer_contents_visual_rect",
+            )
+    }
+
+    pub fn PaintLayerFilterReferenceBox(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(|_| {
+                self.SourcePaintLayer().and_then(
+                    crate::internal::boundary::layout_boundary::LivePaintLayerFilterReferenceBox,
+                )
+            })
+            .SourceCheckedOr(
+                self.paint_layer_filter_reference_box,
+                "paint_layer_filter_reference_box",
+            )
+    }
+
+    pub fn PaintLayerFilterViewport(&self) -> Option<Size> {
+        self.SourceObject()
+            .map(|_| {
+                self.SourcePaintLayer().and_then(
+                    crate::internal::boundary::layout_boundary::LivePaintLayerFilterViewport,
+                )
+            })
+            .SourceCheckedOr(self.paint_layer_filter_viewport, "paint_layer_filter_viewport")
+    }
+
+    pub fn ReplacedSelectionState(&self) -> SelectionState {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveReplacedSelectionState)
+            .SourceCheckedOr(self.replaced_selection_state, "replaced_selection_state")
+    }
+
+    pub fn ReplacedLocalSelectionVisualRect(&self) -> Option<FragmentPaintRect> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveReplacedLocalSelectionVisualRect)
+            .SourceCheckedOr(
+                self.replaced_local_selection_visual_rect,
+                "replaced_local_selection_visual_rect",
+            )
+    }
+
+    pub fn RegionCaptureCropId(&self) -> Option<[u64; 2]> {
+        self.SourceObject()
+            .map(crate::internal::boundary::layout_boundary::LiveRegionCaptureCropId)
+            .SourceCheckedOr(self.region_capture_crop_id, "region_capture_crop_id")
+    }
+
+    pub fn TrackedElementSubRects(
+        &self,
+    ) -> &[crate::internal::layout_input::TrackedElementSubRect] {
+        match self.SourceObject() {
+            Some(object) => {
+                crate::internal::boundary::layout_boundary::LiveTrackedElementSubRects(object)
+            }
+            None => &self.tracked_element_sub_rects,
+        }
+    }
+
     pub(crate) fn BindLiveStyleFacts(&mut self, live: bool) {
         self.live_style_facts = live;
     }

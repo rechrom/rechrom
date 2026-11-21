@@ -567,8 +567,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("element capture metadata requires a fragment");
-        if fragment.paint.region_capture_crop_id.is_none()
-            && fragment.paint.tracked_element_sub_rects.is_empty()
+        if fragment.paint.RegionCaptureCropId().is_none()
+            && fragment.paint.TrackedElementSubRects().is_empty()
         {
             return;
         }
@@ -592,18 +592,18 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("element capture metadata requires a fragment");
         let mut context = self.context.borrow_mut();
-        if let Some(crop_id) = fragment.paint.region_capture_crop_id {
+        if let Some(crop_id) = fragment.paint.RegionCaptureCropId() {
             context.RecordRegionCaptureDataWithClient(
                 self.node, client_id, client, crop_id, paint_rect,
             );
         }
-        if !fragment.paint.tracked_element_sub_rects.is_empty() {
+        if !fragment.paint.TrackedElementSubRects().is_empty() {
             context.RecordTrackedElementDataWithClient(
                 self.node,
                 client_id,
                 client,
                 paint_rect,
-                &fragment.paint.tracked_element_sub_rects,
+                &fragment.paint.TrackedElementSubRects(),
             );
         }
     }
@@ -776,7 +776,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // ReplacedPainter::ShouldPaint unions LocalSelectionVisualRect so an
         // inline selection that extends beyond ordinary ink remains admitted.
         // cpp: core/paint/replaced_painter.cc:410-413
-        if let Some(selection_rect) = fragment.paint.replaced_local_selection_visual_rect {
+        if let Some(selection_rect) = fragment.paint.ReplacedLocalSelectionVisualRect() {
             local_rect.union(PaintRect {
                 x: selection_rect.offset.x,
                 y: selection_rect.offset.y,
@@ -1256,7 +1256,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && fragment.paint.source_kind == NodeKind::kReplaced
             && fragment.paint.establishes_paint_state
             && (phase != PaintPhase::kSelectionDragImage
-                || fragment.paint.replaced_selection_state != SelectionState::kNone)
+                || fragment.paint.ReplacedSelectionState() != SelectionState::kNone)
         {
             // cpp: core/layout/layout_replaced.cc:238-241
             // Source: image_painter.cc:59-60. ImagePainter delegates the
@@ -3141,8 +3141,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         drop(cache_skipper);
         let snapped_border_rect = self.node.PixelSnappedRect(&border_rect);
         if !paint_info.ShouldSkipBackground()
-            && (fragment.paint.region_capture_crop_id.is_some()
-                || !fragment.paint.tracked_element_sub_rects.is_empty())
+            && (fragment.paint.RegionCaptureCropId().is_some()
+                || !fragment.paint.TrackedElementSubRects().is_empty())
         {
             self.RecordRegionCaptureAndTrackedElementDataForClient(
                 snapped_border_rect,
@@ -5503,12 +5503,12 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .expect("paint tree node has a fragment");
         if fragment.paint.IsPrinting()
-            || fragment.paint.replaced_selection_state == SelectionState::kNone
+            || fragment.paint.ReplacedSelectionState() == SelectionState::kNone
             || !fragment.pre_paint_invalidation.can_be_selection_leaf
         {
             return;
         }
-        let Some(local_rect) = fragment.paint.replaced_local_selection_visual_rect else {
+        let Some(local_rect) = fragment.paint.ReplacedLocalSelectionVisualRect() else {
             return;
         };
         let selection_rect = PaintRect {
@@ -5526,7 +5526,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // selected drawing closes.
         let _selection_bounds = self.context.borrow().selection_handles_visible.then(|| {
             SelectionBoundsRecorder::new(
-                fragment.paint.replaced_selection_state,
+                fragment.paint.ReplacedSelectionState(),
                 selection_rect,
                 self.context,
                 fragment.paint.Direction(),

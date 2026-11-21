@@ -67,7 +67,7 @@ impl BoxPaintInvalidator {
             {
                 if let (Some(old), Some(new)) = (
                     previous_geometry.map(|old| old.scrollable_overflow),
-                    fragment.paint.scrollable_overflow,
+                    fragment.paint.ScrollableOverflow(),
                 ) {
                     if ShouldFullyInvalidateBackgroundOnScrollableOverflowChange(fragment, old, new)
                     {
@@ -807,7 +807,7 @@ mod tests {
             document_element_border: Edges::default(),
             document_element_padding: Edges::default(),
             document_element_content_box: FragmentPaintRect::default(),
-            document_element_scrollable_overflow: fragment.paint.scrollable_overflow,
+            document_element_scrollable_overflow: fragment.paint.ScrollableOverflow(),
             document_element_has_transform: false,
             background_fill_layer_count: 1,
             background_any_local_attachment_image: true,

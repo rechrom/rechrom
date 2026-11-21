@@ -57,7 +57,7 @@ fn LocalCullRect(local_cull_rect: Option<PaintRect>) -> CullRect {
 #[doc(hidden)]
 pub fn ContentsVisualRect(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
     let fragment = node.fragment.as_deref()?;
-    let mut contents = FragmentRect(fragment.paint.paint_layer_contents_visual_rect?);
+    let mut contents = FragmentRect(fragment.paint.PaintLayerContentsVisualRect()?);
     contents.x += node.paint_offset.x;
     contents.y += node.paint_offset.y;
     if fragment.paint.svg_view_box.is_some() {

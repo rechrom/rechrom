@@ -120,7 +120,7 @@ fn CullAdmission(
     }
 
     let (Some(visual_rect), Some(self_cull_rect)) = (
-        fragment.paint.paint_layer_first_fragment_visual_rect,
+        fragment.paint.PaintLayerFirstFragmentVisualRect(),
         layer.self_cull_rect,
     ) else {
         // Hand-built fragments and incomplete lifecycle input retain the
@@ -255,7 +255,7 @@ fn ShouldCreateSubsequence(
         }
         if let (Some(last_bounds), Some(visual_rect), Some(resources)) = (
             context.borrow().LastChunkBounds(),
-            fragment.paint.paint_layer_first_fragment_visual_rect,
+            fragment.paint.PaintLayerFirstFragmentVisualRect(),
             fragment.resources.as_deref(),
         ) {
             let visual_rect = PaintRect {

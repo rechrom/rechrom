@@ -751,7 +751,7 @@ impl PaintTreeNode<'_> {
         let fragment = self.fragment.as_deref()?;
         let is_svg_effect_child = IsSvgEffectChild(fragment.paint.source_kind);
         if !is_svg_effect_child {
-            let bounds = fragment.paint.css_mask_bounding_box?;
+            let bounds = fragment.paint.CssMaskBoundingBox()?;
             return Some(PaintRect {
                 x: self.paint_offset.x + bounds.offset.x,
                 y: self.paint_offset.y + bounds.offset.y,
@@ -3606,7 +3606,7 @@ fn ResolveMaskLayers(
             if layer.image.clip == BackgroundBox::kNoClip {
                 let bounds = fragment
                     .paint
-                    .css_mask_bounding_box
+                    .CssMaskBoundingBox()
                     .expect("source CSS mask bounding box");
                 (
                     positioning,

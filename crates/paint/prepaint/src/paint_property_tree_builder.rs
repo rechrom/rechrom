@@ -790,7 +790,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let filter_viewport =
                 fragment
                     .paint
-                    .paint_layer_filter_viewport
+                    .PaintLayerFilterViewport()
                     .map(|size| PaintRect {
                         x: 0.0,
                         y: 0.0,
@@ -1035,7 +1035,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             } else {
                 fragment
                     .paint
-                    .paint_layer_filter_reference_box
+                    .PaintLayerFilterReferenceBox()
                     .map(|rect| PaintRect {
                         x: node.paint_offset.x + rect.offset.x,
                         y: node.paint_offset.y + rect.offset.y,
@@ -1068,7 +1068,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let filter_viewport =
                 fragment
                     .paint
-                    .paint_layer_filter_viewport
+                    .PaintLayerFilterViewport()
                     .map(|size| PaintRect {
                         x: 0.0,
                         y: 0.0,

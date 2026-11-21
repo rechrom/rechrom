@@ -134,7 +134,7 @@ impl SVGModelObjectPainter {
             .fragment
             .as_deref()
             .expect("SVG region-capture object must own a fragment");
-        let Some(crop_id) = fragment.paint.region_capture_crop_id else {
+        let Some(crop_id) = fragment.paint.RegionCaptureCropId() else {
             return;
         };
         let Some(rect) = Self::VisualRect(node) else {

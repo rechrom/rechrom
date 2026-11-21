@@ -147,6 +147,12 @@ use layout_fragment_fragment_export_support::{
 #[path = "../../../../layout_fragment/src/fragment_property_export.rs"]
 mod layout_fragment_fragment_property_export;
 pub(crate) use layout_fragment_fragment_property_export::ExportSelectionPrePaintInvalidation;
+pub(crate) use layout_fragment_fragment_property_export::{
+    LiveCssMaskBoundingBox, LivePaintLayerContentsVisualRect, LivePaintLayerFilterReferenceBox,
+    LivePaintLayerFilterViewport, LivePaintLayerFirstFragmentVisualRect,
+    LiveRegionCaptureCropId, LiveReplacedLocalSelectionVisualRect, LiveReplacedSelectionState,
+    LiveScrollableOverflow, LiveTrackedElementSubRects,
+};
 use layout_fragment_fragment_property_export::{
     ExportPaintProperties, ExportPrePaintInvalidation, ExportProperties, PropertyFragmentUniqueId,
 };

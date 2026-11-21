@@ -43,7 +43,7 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
         // Source: inline_box_fragment_painter.cc:160-171. Tracking is
         // published even when the inline has no authored decoration; the DOM
         // input forces a real inline box fragment instead of a culled inline.
-        if !fragment.paint.tracked_element_sub_rects.is_empty() {
+        if !fragment.paint.TrackedElementSubRects().is_empty() {
             let paint_rect = self.node.EnclosingRect(PaintRect {
                 x: self.node.paint_offset.x,
                 y: self.node.paint_offset.y,
@@ -53,7 +53,7 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
             self.context.borrow_mut().RecordTrackedElementData(
                 self.node,
                 paint_rect,
-                &fragment.paint.tracked_element_sub_rects,
+                &fragment.paint.TrackedElementSubRects(),
             );
         }
 

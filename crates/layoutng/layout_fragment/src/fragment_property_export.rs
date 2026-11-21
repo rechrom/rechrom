@@ -145,11 +145,6 @@ pub(super) fn ExportProperties(
     output.BindSourceObject(object);
     let object_ref = unsafe { &*object };
     output.inside_blocking_wheel_event_handler = object_ref.InsideBlockingWheelEventHandler();
-    let element = DynamicTo::<Element>(object_ref.GetNode());
-    if let Some(element) = unsafe { element.as_ref() } {
-        output.region_capture_crop_id = element.InputRegionCaptureCropId();
-        output.tracked_element_sub_rects = element.InputTrackedElementSubRects().to_vec();
-    }
     if purpose == LayoutUpdateKind::Paint {
         // Source: paint_invalidator.cc:222. LayoutBox uses this point to
         // promote a delayed full invalidation once it intersects the visible
@@ -240,44 +235,6 @@ pub(super) fn ExportProperties(
     }
     let layout_box = DynamicTo::<LayoutBox>(object);
     if purpose == LayoutUpdateKind::Paint {
-        // Sources: core/paint/css_mask_painter.cc:44-98 and
-        // svg_background_paint_context.cc:29-33. Ordinary CSS boxes,
-        // including SVGForeignObject, use one object-wide maximum mask region
-        // for ObjectPaintProperties::MaskClip. The no-clip query below unions
-        // the foreignObject's self-painting descendants at its PaintLayer,
-        // matching the specialized SVG context while keeping this geometry
-        // distinct from the per-layer clip boxes resolved in Paint.
-        let object_ref = unsafe { &*object };
-        let style = object_ref.StyleRef();
-        if style.HasMask()
-            && object_ref.IsBoxModelObject()
-            && (!object_ref.IsSVGChild() || object_ref.IsSVGForeignObject())
-        {
-            let no_clip = style.MaskLayers().LayersClipMax() == EFillBox::kNoClip;
-            let mut bounds = if object_ref.IsBox() {
-                let box_ = unsafe { &*To::<LayoutBox>(object) };
-                if no_clip {
-                    let layer = box_.Layer();
-                    assert!(!layer.is_null());
-                    unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
-                } else {
-                    box_.PhysicalBorderBoxRect()
-                }
-            } else {
-                let inline = unsafe { &*To::<LayoutInline>(object) };
-                if no_clip {
-                    let layer = inline.Layer();
-                    assert!(!layer.is_null());
-                    unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
-                } else {
-                    inline.PhysicalLinesBoundingBox()
-                }
-            };
-            if style.HasMaskBoxImageOutsets() {
-                bounds.Expand(&style.MaskBoxImageOutsets());
-            }
-            output.css_mask_bounding_box = Some(ExportInkRect(bounds));
-        }
         if !layout_box.is_null() {
             let box_ = unsafe { &*layout_box };
             let previous_size = box_.PreviousSize();
@@ -298,9 +255,6 @@ pub(super) fn ExportProperties(
                         )
                     }),
                 });
-            output.scrollable_overflow = Some(ExportInkRect(
-                unsafe { &*layout_box }.ScrollableOverflowRect(),
-            ));
             // Preserve the LayoutBox virtual override rather than calling only
             // the DisplayItemClient base default (layout_box.cc:4099-4108).
             output.display_item_raster_effect_outset =
@@ -336,55 +290,6 @@ pub(super) fn ExportProperties(
             if !layer.is_null() {
                 let layer = unsafe { &*layer };
                 output.paint_layer_client_id = layer.Id();
-                // Source: core/paint/paint_layer_painter.cc:304-318,361-368,
-                // 612-623. Export PaintLayer's already-maintained aggregates;
-                // Paint must not approximate them from flattened fragments.
-                // Source: core/paint/paint_layer_painter.cc:192-219. Export
-                // the LayoutObject-local overflow. PaintLayerPainter applies
-                // the current PrePaint FragmentData paint offset, matching the
-                // source timing; the Layout snapshot precedes that lifecycle.
-                let layout_object = layer.GetLayoutObject();
-                let mut visual_rect = if layout_object.IsBox() {
-                    let layout_box = DynamicTo::<LayoutBox>(layout_object);
-                    debug_assert!(!layout_box.is_null());
-                    unsafe { &*layout_box }.SelfVisualOverflowRect()
-                } else {
-                    layout_object.VisualOverflowRect()
-                };
-                visual_rect = layout_object.ApplyFiltersToRect(&visual_rect);
-                let visual_rect = foundation::gfx::ToEnclosingRect(gfx::RectF::from(visual_rect));
-                output.paint_layer_first_fragment_visual_rect = Some(FragmentPaintRect {
-                    offset: Offset {
-                        x: visual_rect.x() as f64,
-                        y: visual_rect.y() as f64,
-                    },
-                    size: Size {
-                        width: visual_rect.width() as f64,
-                        height: visual_rect.height() as f64,
-                    },
-                });
-                let layout_box = DynamicTo::<LayoutBox>(layout_object);
-                if !layout_box.is_null() {
-                    let mut contents_visual_rect =
-                        unsafe { &*layout_box }.ContentsVisualOverflowRect();
-                    output.paint_layer_contents_visual_rect =
-                        Some(ExportInkRect(contents_visual_rect));
-                }
-                // Source: core/paint/paint_layer.cc:2044-2047. The retained
-                // fragment boundary is immutable, so this snapshots the value
-                // that PaintLayerResourceInfo caches in Chromium. PrePaint's
-                // revision comparison provides the same change detection.
-                if layer.HasFilterThatMovesPixels() {
-                    output.paint_layer_filter_reference_box =
-                        Some(super::layout_fragment_ink_overflow_export::ExportInkRect(
-                            layer.LocalBoundingBoxIncludingSelfPaintingDescendants(),
-                        ));
-                    output.paint_layer_filter_viewport =
-                        layer.ComputeFilterViewport().map(|viewport| Size {
-                            width: f64::from(viewport.width()),
-                            height: f64::from(viewport.height()),
-                        });
-                }
                 // These decisions belong to source Layout/PaintLayer setup. In
                 // particular, style adjustment makes static flex/grid items with
                 // z-index stacking contexts, and containment/perspective can form
@@ -472,21 +377,6 @@ pub(super) fn ExportProperties(
         parent = unsafe { &*parent }.Parent();
     }
     output.source_kind = source.InputKind();
-    // LayoutImage owns this virtual identity. Do not reconstruct it from DOM
-    // fields here: generated ImageContentData has no HTML-image flag, while
-    // other LayoutReplaced subclasses (for example canvas) are not images.
-    // cpp: core/layout/layout_image.h:135-138
-    if purpose == LayoutUpdateKind::Paint {
-        let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object);
-        if !replaced.is_null() {
-            let replaced = unsafe { &*replaced };
-            output.replaced_selection_state = replaced.GetSelectionState();
-            let selection_rect = replaced.LocalSelectionVisualRect();
-            if !selection_rect.IsEmpty() {
-                output.replaced_local_selection_visual_rect = Some(ExportInkRect(selection_rect));
-            }
-        }
-    }
     let layout_style = if effective_style.is_null() {
         unsafe { &*object }.StyleRef()
     } else {
@@ -831,4 +721,144 @@ pub(crate) fn ExportSelectionPrePaintInvalidation(
     object: *const LayoutObject,
 ) -> layout_fragment::fragment_tree::PrePaintInvalidation {
     ExportPrePaintInvalidation(object)
+}
+
+// Live LayoutObject / PaintLayer / Element paint facts read by the
+// PaintProperties getters (stage 2 of the Layout -> Paint export removal).
+// Chromium's PrePaint and painters query these on the LayoutObject itself.
+
+/// Source: core/paint/css_mask_painter.cc:44-98 and
+/// svg_background_paint_context.cc:29-33. Ordinary CSS boxes, including
+/// SVGForeignObject, use one object-wide maximum mask region for
+/// ObjectPaintProperties::MaskClip. The no-clip query unions the
+/// foreignObject's self-painting descendants at its PaintLayer.
+pub(crate) fn LiveCssMaskBoundingBox(object: &LayoutObject) -> Option<FragmentPaintRect> {
+    let object_ptr = object as *const LayoutObject as *mut LayoutObject;
+    let style = object.StyleRef();
+    if !(style.HasMask()
+        && object.IsBoxModelObject()
+        && (!object.IsSVGChild() || object.IsSVGForeignObject()))
+    {
+        return None;
+    }
+    let no_clip = style.MaskLayers().LayersClipMax() == EFillBox::kNoClip;
+    let mut bounds = if object.IsBox() {
+        let box_ = unsafe { &*To::<LayoutBox>(object_ptr) };
+        if no_clip {
+            let layer = box_.Layer();
+            assert!(!layer.is_null());
+            unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
+        } else {
+            box_.PhysicalBorderBoxRect()
+        }
+    } else {
+        let inline = unsafe { &*To::<LayoutInline>(object_ptr) };
+        if no_clip {
+            let layer = inline.Layer();
+            assert!(!layer.is_null());
+            unsafe { &*layer }.LocalBoundingBoxIncludingSelfPaintingDescendants()
+        } else {
+            inline.PhysicalLinesBoundingBox()
+        }
+    };
+    if style.HasMaskBoxImageOutsets() {
+        bounds.Expand(&style.MaskBoxImageOutsets());
+    }
+    Some(ExportInkRect(bounds))
+}
+
+/// LayoutBox::ScrollableOverflowRect(); None for objects that are not boxes.
+pub(crate) fn LiveScrollableOverflow(object: &LayoutObject) -> Option<FragmentPaintRect> {
+    let layout_box = DynamicTo::<LayoutBox>(object as *const LayoutObject);
+    unsafe { layout_box.as_ref() }.map(|box_| ExportInkRect(box_.ScrollableOverflowRect()))
+}
+
+/// Source: core/paint/paint_layer_painter.cc:192-219
+/// (PaintLayerPainter::FirstFragmentVisualRect). The LayoutObject-local
+/// filtered overflow; PaintLayerPainter applies the FragmentData paint offset.
+pub(crate) fn LivePaintLayerFirstFragmentVisualRect(layer: &crate::internal::paint_layer::PaintLayer) -> FragmentPaintRect {
+    let layout_object = layer.GetLayoutObject();
+    let mut visual_rect = if layout_object.IsBox() {
+        let layout_box = DynamicTo::<LayoutBox>(layout_object);
+        debug_assert!(!layout_box.is_null());
+        unsafe { &*layout_box }.SelfVisualOverflowRect()
+    } else {
+        layout_object.VisualOverflowRect()
+    };
+    visual_rect = layout_object.ApplyFiltersToRect(&visual_rect);
+    let visual_rect = foundation::gfx::ToEnclosingRect(gfx::RectF::from(visual_rect));
+    FragmentPaintRect {
+        offset: Offset {
+            x: visual_rect.x() as f64,
+            y: visual_rect.y() as f64,
+        },
+        size: Size {
+            width: visual_rect.width() as f64,
+            height: visual_rect.height() as f64,
+        },
+    }
+}
+
+/// Source: core/paint/paint_layer_painter.cc:304-318 — the layer box's
+/// ContentsVisualOverflowRect(); None when the layer object is not a box.
+pub(crate) fn LivePaintLayerContentsVisualRect(layer: &crate::internal::paint_layer::PaintLayer) -> Option<FragmentPaintRect> {
+    let layout_box = DynamicTo::<LayoutBox>(layer.GetLayoutObject());
+    unsafe { layout_box.as_ref() }.map(|box_| ExportInkRect(box_.ContentsVisualOverflowRect()))
+}
+
+/// Source: core/paint/paint_layer.cc:2044-2047 (PaintLayer::FilterReferenceBox).
+pub(crate) fn LivePaintLayerFilterReferenceBox(layer: &crate::internal::paint_layer::PaintLayer) -> Option<FragmentPaintRect> {
+    layer
+        .HasFilterThatMovesPixels()
+        .then(|| ExportInkRect(layer.LocalBoundingBoxIncludingSelfPaintingDescendants()))
+}
+
+/// Source: core/paint/paint_layer.cc (PaintLayer::FilterViewport).
+pub(crate) fn LivePaintLayerFilterViewport(layer: &crate::internal::paint_layer::PaintLayer) -> Option<Size> {
+    if !layer.HasFilterThatMovesPixels() {
+        return None;
+    }
+    layer.ComputeFilterViewport().map(|viewport| Size {
+        width: f64::from(viewport.width()),
+        height: f64::from(viewport.height()),
+    })
+}
+
+/// LayoutReplaced::GetSelectionState (layout_replaced.cc:599-617).
+pub(crate) fn LiveReplacedSelectionState(object: &LayoutObject) -> crate::internal::selection_state::SelectionState {
+    let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(
+        object as *const LayoutObject,
+    );
+    unsafe { replaced.as_ref() }.map_or(crate::internal::selection_state::SelectionState::kNone, |replaced| {
+        replaced.GetSelectionState()
+    })
+}
+
+/// LayoutReplaced::LocalSelectionVisualRect (layout_replaced.cc:599-617).
+pub(crate) fn LiveReplacedLocalSelectionVisualRect(
+    object: &LayoutObject,
+) -> Option<FragmentPaintRect> {
+    let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(
+        object as *const LayoutObject,
+    );
+    let rect = unsafe { replaced.as_ref() }?.LocalSelectionVisualRect();
+    (!rect.IsEmpty()).then(|| ExportInkRect(rect))
+}
+
+fn LiveElement(object: &LayoutObject) -> Option<&Element> {
+    unsafe { DynamicTo::<Element>(object.GetNode()).as_ref() }
+}
+
+/// Element::GetRegionCaptureCropId(), read as PaintController's
+/// region-capture chunk metadata does (box_fragment_painter.cc).
+pub(crate) fn LiveRegionCaptureCropId(object: &LayoutObject) -> Option<[u64; 2]> {
+    LiveElement(object).and_then(|element| element.InputRegionCaptureCropId())
+}
+
+/// Element tracked sub-rects, read as PaintController's tracked-element
+/// chunk metadata does.
+pub(crate) fn LiveTrackedElementSubRects(
+    object: &LayoutObject,
+) -> &[crate::internal::layout_input::TrackedElementSubRect] {
+    LiveElement(object).map_or(&[], |element| element.InputTrackedElementSubRects())
 }

@@ -153,8 +153,6 @@ pub(super) fn refresh_retained_paint_inputs(
             node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
             node.paint.inside_blocking_wheel_event_handler =
                 current.inside_blocking_wheel_event_handler;
-            node.paint.region_capture_crop_id = current.region_capture_crop_id;
-            node.paint.tracked_element_sub_rects = current.tracked_element_sub_rects;
             node.paint.style = current.style;
             node.paint.form_control = current.form_control;
             // FragmentData identity is owned by this retained physical
@@ -167,17 +165,9 @@ pub(super) fn refresh_retained_paint_inputs(
             node.paint.display_item_client_owner_node_id =
                 current.display_item_client_owner_node_id;
             node.paint.selection_client_id = current.selection_client_id;
-            node.paint.replaced_selection_state = current.replaced_selection_state;
-            node.paint.replaced_local_selection_visual_rect =
-                current.replaced_local_selection_visual_rect;
             node.paint.display_item_raster_effect_outset =
                 current.display_item_raster_effect_outset;
             node.paint.paint_layer_client_id = current.paint_layer_client_id;
-            node.paint.paint_layer_first_fragment_visual_rect =
-                current.paint_layer_first_fragment_visual_rect;
-            node.paint.paint_layer_contents_visual_rect = current.paint_layer_contents_visual_rect;
-            node.paint.paint_layer_filter_reference_box = current.paint_layer_filter_reference_box;
-            node.paint.paint_layer_filter_viewport = current.paint_layer_filter_viewport;
             node.paint.paint_layer_order_parent_unique_id =
                 current.paint_layer_order_parent_unique_id;
             node.paint.paint_layer_order = current.paint_layer_order;
@@ -191,7 +181,6 @@ pub(super) fn refresh_retained_paint_inputs(
                 current.background_any_default_attachment_image;
             node.paint.background_any_layer_uses_content_box =
                 current.background_any_layer_uses_content_box;
-            node.paint.scrollable_overflow = current.scrollable_overflow;
             node.paint.previous_box_geometry = current.previous_box_geometry;
             node.paint.previous_view_background_rect = current.previous_view_background_rect;
             node.paint.view_background_rect = current.view_background_rect;

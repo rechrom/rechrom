@@ -81,7 +81,7 @@ pub(super) fn ExportCanvasBackground(
                     },
                     size: cursor.content_size,
                 },
-                document_element_scrollable_overflow: cursor.paint.scrollable_overflow,
+                document_element_scrollable_overflow: cursor.paint.ScrollableOverflow(),
                 document_element_has_transform: false,
                 background_fill_layer_count: cursor.paint.BackgroundFillLayerCount(),
                 background_any_local_attachment_image: cursor.paint.BackgroundAnyLocalAttachmentImage(),
