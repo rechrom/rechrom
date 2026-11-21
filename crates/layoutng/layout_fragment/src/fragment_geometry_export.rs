@@ -205,10 +205,6 @@ pub(super) fn ExportBoxPaintGeometry(
     let layout_box = DynamicTo::<LayoutBox>(box_fragment.GetLayoutObject());
     if !layout_box.is_null() {
         let layout_box = unsafe { &*layout_box };
-        let (scroll_size, client_size, scrolls_overflow) = LiveScrollGeometry(layout_box);
-        paint.scroll_size = scroll_size;
-        paint.client_size = client_size;
-        paint.scrolls_overflow = scrolls_overflow;
         let object = unsafe { &*box_fragment.GetLayoutObject() };
 
         // The element input is the source tree's current, already-clamped

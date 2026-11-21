@@ -70,14 +70,10 @@ pub(super) fn ExportBoxInkOverflow(fragment: &PhysicalBoxFragment, paint: &mut P
 
 #[inline(never)]
 pub(super) fn ExportInlineInkOverflow(item: &FragmentItem, paint: &mut PaintProperties) {
-    let box_fragment = item.BoxFragment();
-    if !box_fragment.is_null() {
-        ExportBoxInkOverflow(unsafe { &*box_fragment }, paint);
-        return;
-    }
-    if item.IsInkOverflowComputed() {
-        paint.self_ink_overflow = Some(ExportInkRect(item.SelfInkOverflowRect()));
-        paint.ink_overflow = Some(ExportInkRect(item.InkOverflowRect()));
+    // Box items and items with computed ink overflow are read live
+    // (ResidentBoxGeometry::ViewInkOverflows); only the uncomputed-text
+    // fallback below is stored.
+    if !item.BoxFragment().is_null() || item.IsInkOverflowComputed() {
         return;
     }
     if !item.IsText() || item.IsSvgText() || item.IsSymbolMarker() {

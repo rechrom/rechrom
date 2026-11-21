@@ -1243,9 +1243,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             let borders = output.Borders();
             ExportNinePieceImages(style, output.size, resources, borders, &mut output.paint);
         }
-        if purpose == LayoutUpdateKind::Paint {
-            ExportBoxInkOverflow(box_fragment, &mut output.paint);
-        }
     }
     if box_fragment.IsFragmentainerBox() {
         fragmentainer_instance_id = *next_fragmentainer_instance_id;
