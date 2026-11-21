@@ -191,9 +191,15 @@ impl FragmentOwners {
             instance
         } else {
             self.new_fragment_instances += 1;
-            let instance = *next_fragment_instance_id;
-            *next_fragment_instance_id += 1;
-            instance
+            // Chromium identifies a box fragment by its FragmentData
+            // (FragmentData::UniqueId); use that id itself. Inline items and
+            // fallback fragments draw from the same process-wide
+            // NewUniqueObjectId space, so the two never collide.
+            let _ = next_fragment_instance_id;
+            match &key {
+                FragmentIdentityKey::FragmentData(id) => *id,
+                _ => foundation::NewUniqueObjectId(),
+            }
         };
         self.fragment_instance_ids.insert(key, instance);
         instance
