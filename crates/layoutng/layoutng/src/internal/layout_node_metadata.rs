@@ -894,6 +894,20 @@ pub struct Element {
     out_of_flow_data_: Member<super::css::out_of_flow_data::OutOfFlowData>,
     active_transform_animations_: u8,
     may_be_implicit_anchor_: bool,
+    // cpp: core/html/canvas/image_element_base.h (last_painted_image_id_).
+    // ImagePainter updates it through the element while painting.
+    last_painted_image_id_: std::cell::Cell<image_resource::PaintImageId>,
+}
+
+impl Element {
+    /// ImageElementBase::last_painted_image_id_: store the id ImagePainter
+    /// painted and return the previous one (image_element_base.cc:232-248).
+    pub fn ReplaceLastPaintedImageId(
+        &self,
+        id: image_resource::PaintImageId,
+    ) -> image_resource::PaintImageId {
+        self.last_painted_image_id_.replace(id)
+    }
 }
 
 // cpp: layoutng/internal/layout_node_metadata.h:186-247

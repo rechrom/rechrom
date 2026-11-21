@@ -808,6 +808,15 @@ pub trait ResidentBoxGeometry {
     /// FragmentData::UniqueId of the owner's property fragment (the box
     /// fragment's FragmentData, else the object's first fragment).
     fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// LayoutImage::MutableForPainting::UpdatePaintedRect on the live
+    /// LayoutImage; true when the painted rect changed.
+    fn UpdateImagePaintedRect(&self, rect: FragmentPaintRect) -> bool;
+    /// Store the painted image id on the image element
+    /// (ImageElementBase::last_painted_image_id_) and return the previous one.
+    fn ReplaceImageLastPaintedId(
+        &self,
+        id: image_resource::PaintImageId,
+    ) -> image_resource::PaintImageId;
     /// A text item's point-test bounds relative to the item.
     fn ViewTextHitTestBounds(&self) -> Option<FragmentPaintRect>;
     /// Collapsed-border geometry of the resident table box.
@@ -894,6 +903,42 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn UpdateImagePaintedRect(&self, rect: FragmentPaintRect) -> bool {
+        if let Some(object) = self.paint.SourceObject().filter(|object| object.IsLayoutImage()) {
+            let image = unsafe {
+                &*(object as *const LayoutObject
+                    as *const crate::internal::layout_replaced::LayoutInputReplaced)
+            };
+            let unit = foundation::LayoutUnit::from_f64;
+            return image.UpdatePaintedRect(foundation::PhysicalRect::new(
+                foundation::PhysicalOffset::new(unit(rect.offset.x), unit(rect.offset.y)),
+                foundation::PhysicalSize::new(unit(rect.size.width), unit(rect.size.height)),
+            ));
+        }
+        // Detached fixtures keep the value on the payload.
+        let changed = self.paint.image_last_paint_rect.get() != Some(rect);
+        self.paint.image_last_paint_rect.set(Some(rect));
+        changed
+    }
+
+    fn ReplaceImageLastPaintedId(
+        &self,
+        id: image_resource::PaintImageId,
+    ) -> image_resource::PaintImageId {
+        let node = self.paint.SourceObject().map(LayoutObject::GetNode);
+        if let Some(node) = node.filter(|node| !node.is_null()) {
+            let node = unsafe { &*node };
+            if node.IsElementNode() {
+                let element = unsafe {
+                    &*(node as *const crate::internal::layout_node_metadata::Node
+                        as *const crate::internal::layout_node_metadata::Element)
+                };
+                return element.ReplaceLastPaintedImageId(id);
+            }
+        }
+        self.paint.image_last_painted_id.replace(id)
+    }
+
     fn ViewPropertyFragmentUniqueId(&self) -> u64 {
         use layout_fragment_boundary::ResidentFragmentOwner;
         let object = self.paint.SourceObjectPointer();

@@ -484,9 +484,7 @@ fn UpdateImagePaintedRect(node: &PaintTreeNode<'_>, visual_rect: PaintRect) -> b
             height: visual_rect.height,
         },
     };
-    let changed = fragment.paint.image_last_paint_rect.get() != Some(painted_rect);
-    fragment.paint.image_last_paint_rect.set(Some(painted_rect));
-    changed
+    fragment.UpdateImagePaintedRect(painted_rect)
 }
 
 fn UseCachedImageDrawingIfPossible(
@@ -509,10 +507,7 @@ fn ImageDecodingModeForPainting(
     fragment: &FragmentPaintData,
     image: &PaintImage,
 ) -> image_resource::ImageDecodingMode {
-    let previous = fragment
-        .paint
-        .image_last_painted_id
-        .replace(image.paint_image_id);
+    let previous = fragment.ReplaceImageLastPaintedId(image.paint_image_id);
     let content_transitioned = previous != image_resource::PaintImageId::INVALID
         && image.paint_image_id != image_resource::PaintImageId::INVALID
         && previous != image.paint_image_id;

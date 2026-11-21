@@ -359,6 +359,8 @@ pub struct LayoutInputReplaced {
     cached_resource_priority_: Cell<Option<ResourcePriority>>,
     cached_speculative_decode_size_: Cell<gfx::Size>,
     cached_speculative_decode_quality_: Cell<InterpolationQuality>,
+    // cpp: core/layout/layout_image.h (last_paint_rect_).
+    last_paint_rect_: Cell<PhysicalRect>,
 }
 
 // cpp: core/layout/layout_image.h:212-217
@@ -389,6 +391,7 @@ impl LayoutInputReplaced {
             cached_resource_priority_: Cell::new(None),
             cached_speculative_decode_size_: Cell::new(gfx::Size::default()),
             cached_speculative_decode_quality_: Cell::new(foundation::kInterpolationNone),
+            last_paint_rect_: Cell::new(PhysicalRect::default()),
         }
     }
     pub fn GetName(&self) -> &'static str {
@@ -404,6 +407,15 @@ impl LayoutInputReplaced {
     pub fn NaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
         self.CheckIsNotDestroyed();
         self.natural_dimensions_.borrow().clone()
+    }
+    // cpp: core/layout/layout_image.cc:411-421
+    // LayoutImage::MutableForPainting::UpdatePaintedRect. Chromium invalidates
+    // the DisplayItemClient here with kImage; the painter receives `true` and
+    // rejects the cached drawing instead.
+    pub fn UpdatePaintedRect(&self, paint_rect: PhysicalRect) -> bool {
+        let changed = self.last_paint_rect_.get() != paint_rect;
+        self.last_paint_rect_.set(paint_rect);
+        changed
     }
     pub fn ImageResource(&self) -> std::cell::Ref<'_, LayoutImageResource> {
         self.CheckIsNotDestroyed();

@@ -29,6 +29,7 @@ impl Element {
             out_of_flow_data_: Member::default(),
             active_transform_animations_: 0,
             may_be_implicit_anchor_: false,
+            last_painted_image_id_: std::cell::Cell::new(image_resource::PaintImageId::INVALID),
         };
         validate_element_input_prefix(input).map_err(ElementMetadataError::InvalidInput)?;
         prepare_element_dimensions(&mut element, input)
