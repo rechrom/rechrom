@@ -5,6 +5,7 @@
 mod test_thread;
 
 use browser::page::Page;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::{internal::layout_input::FontFace, layout_engine::PaintFragmentCursor};
 use paint::paint_engine::DisplayItemType;
 use std::{cell::RefCell, io, rc::Rc};
@@ -33,7 +34,7 @@ impl URLLoader for FixtureLoader {
 }
 
 fn find_ellipsis(fragment: PaintFragmentCursor<'_>) -> Option<PaintFragmentCursor<'_>> {
-    if fragment.PaintData().paint.is_ellipsis {
+    if fragment.PaintData().ViewTextItemFacts().0 {
         return Some(fragment);
     }
     fragment.Children().into_iter().find_map(find_ellipsis)

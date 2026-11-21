@@ -4,7 +4,7 @@ pub use layout_fragment_boundary::{
     BackgroundPaintLocation, CollapsedTableEdge, CollapsedTablePaintData, CollapsedTableSection,
     ColumnRule, ColumnRulePaintData, FieldsetPaintData, FormControlPaintData, FragmentBoxSides,
     FragmentKind, FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
-    InlineGeometry, InlineGeometryRect, LayoutResultHandle, MathMLPaintData, MathMLPaintKind,
+    LayoutResultHandle, MathMLPaintData, MathMLPaintKind,
     PaintGlyph, PaintGlyphRun, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
     ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
     ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
@@ -126,12 +126,10 @@ pub struct PaintProperties {
     /// CanPaintMultipleFragments() result. Paint consumes these directly
     /// instead of duplicating LayoutObject-type fragmentation policy.
     pub is_first_for_node: bool,
-    pub can_paint_multiple_fragments: bool,
     pub is_layout_view: bool,
     /// Exact LayoutObject/Document facts consumed by
     /// CullRectUpdater::ShouldUseInfiniteCullRect. PrePaint must not infer
     /// these from style or fragment geometry.
-    pub is_inclusive_descendant_of_unbounded_element: bool,
     pub is_printing: bool,
     /// Host Settings::GetShouldPrintBackgrounds() snapshot. This is distinct
     /// from printing itself because print-economy color rewriting is disabled
@@ -140,7 +138,6 @@ pub struct PaintProperties {
     pub canvas_draw_element_enabled: bool,
     pub is_in_canvas_subtree: bool,
     pub is_overscroll_area_parent: bool,
-    pub is_overscroll_container: bool,
     /// Source: PaintLayerPainter::Paint() early lifecycle admission.
     pub needs_layout: bool,
     pub child_layout_blocked_by_display_lock: bool,
@@ -168,28 +165,20 @@ pub struct PaintProperties {
     /// every printed page.
     pub is_paginated_root: bool,
     pub is_layout_inline: bool,
-    pub should_apply_paint_containment: bool,
-    pub should_apply_style_containment: bool,
-    pub should_apply_layout_containment: bool,
     pub should_clip_overflow_along_either_axis: bool,
     pub should_clip_overflow_along_both_axes: bool,
-    pub is_layout_block: bool,
     pub is_layout_block_flow: bool,
     /// PhysicalBoxFragment::IsInlineFormattingContext(). Forced-colors
     /// backplates belong to the block that owns FragmentItems, not to an
     /// arbitrary ancestor reconstructed from the flattened paint tree.
     pub is_inline_formatting_context: bool,
     pub in_forced_colors_mode: bool,
-    pub is_background_attachment_fixed_object: bool,
     /// Source: core/frame/local_frame_view.cc:1504-1527. Published only by the
     /// actual LayoutView after querying source fixed-background membership.
     pub requires_main_thread_scrolling_for_background_attachment_fixed: Option<bool>,
     /// PaintController snapshots the client's actual reason when appending an
     /// item (paint_controller.cc:531-545). None is an unexported external input.
     pub display_item_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
-    /// Fixture-only DebugName for payloads without a bound source object;
-    /// read through DisplayItemClientDebugName, never written by population.
-    pub display_item_client_debug_name: std::sync::Arc<str>,
     pub paint_layer_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     // None means source ink overflow has not been computed. Never substitute
     // a frame rect here: text glyphs and decorations can extend outside it.
@@ -208,10 +197,6 @@ pub struct PaintProperties {
     // Baseline-adjusted, writing-mode converted glyph bounds. This remains
     // available when full text decoration/emphasis overflow is not implemented.
     pub text_glyph_ink: Option<FragmentPaintRect>,
-    /// FragmentItem::ComputeTextBoundsRectForHitTest() in item-local
-    /// coordinates for ordinary point-event hit testing. SVG text uses its
-    /// transformed quad path and therefore leaves this unset.
-    pub text_hit_test_bounds: Option<FragmentPaintRect>,
     // BoxPainter::VisualRect uses LayoutBox::SelfVisualOverflowRect(), which
     // is a stitched LayoutBox rect rather than a physical fragment ink rect.
     pub box_self_visual_overflow: Option<FragmentPaintRect>,
@@ -220,45 +205,21 @@ pub struct PaintProperties {
     pub self_outline: Option<SelfOutlinePaintData>,
     pub previous_box_geometry: Option<PreviousBoxGeometry>,
     pub box_fragment_is_inline_box: bool,
-    pub display_item_raster_effect_outset: RasterEffectOutset,
     // Chromium DisplayItemClient identity and lifecycle, independently of DOM
     // node ids and the source occurrence's fragment_instance_id.
     // cpp: platform/graphics/paint/display_item_client.h:33-35,71-82
     pub display_item_client_id: u64,
-    /// Chromium DisplayItemClient::OwnerNodeId(), kept distinct from the
-    /// layout/export node identity above. DOMNodeId is a signed 32-bit type.
-    pub display_item_client_owner_node_id: i32,
     // A distinct persistent source PaintLayer DisplayItemClient, when present.
     // cpp: core/paint/paint_layer.h:168-171
     /// Chromium layer ownership was queried, including the authoritative no-layer result.
     /// False is reserved for standalone fragments without a source Layout owner.
     pub paint_layer_state_is_authoritative: bool,
     pub paint_layer_client_id: u64,
-    pub paint_layer_client_is_cacheable: bool,
-    pub paint_layer_client_is_just_created: std::cell::Cell<bool>,
     pub paint_layer_is_self_painting: bool,
-    pub paint_layer_invisible_for_position_visibility: bool,
-    pub paint_layer_has_ancestor_invisible_for_position_visibility: bool,
-    /// PaintLayer::HasVisibleContent(), kept separate from z-list visibility:
-    /// the latter also includes visible self-painting descendants and view
-    /// transition names, while PaintLayerPainter gates this layer's own phases
-    /// on visible content only.
-    pub paint_layer_has_visible_content: bool,
-    pub paint_layer_has_self_painting_layer_descendant: bool,
-    /// PaintLayer::HasNonIsolatedDescendantWithBlendMode(). Chromium creates
-    /// an isolation Effect only when this aggregate is true; `isolation:
-    /// isolate` by itself is only a stacking-context boundary.
-    pub paint_layer_has_non_isolated_descendant_with_blend_mode: bool,
-    pub paint_layer_is_under_svg_hidden_container: bool,
-    /// Source: PaintLayer::SupportsSubsequenceCaching().
-    pub paint_layer_supports_subsequence_caching: bool,
-    /// Source: PaintLayer::SelfOrDescendantNeedsRepaint().
-    pub paint_layer_self_or_descendant_needs_repaint: bool,
     /// Exact inputs to PaintLayerPainter's PaintResult/cull admission. These
     /// are source LayoutObject/PaintLayer facts, not reconstructable from a
     /// physical fragment or projected CSS style.
     pub paint_layer_is_fragmented: bool,
-    pub paint_layer_known_to_clip_subtree_to_padding_box: bool,
     /// Source: PaintLayerPainter::FirstFragmentVisualRect(). This is the
     /// filtered, paint-offset, enclosing-pixel rect consumed by subsequence
     /// admission; Paint must not rebuild it from a fragment border box.
@@ -288,15 +249,6 @@ pub struct PaintProperties {
     /// negative/non-negative stacking lists.
     pub paint_layer_is_stacked: bool,
     pub paint_layer_stacking_level: i32,
-    pub paint_layer_is_z_order_list_visible: bool,
-    pub paint_layer_is_in_top_or_view_transition_layer: bool,
-    pub paint_layer_is_direct_layout_view_child: bool,
-    /// Chromium PaintLayerStackingNode inputs for overlay overflow-control
-    /// reordering. These are exported by Layout because Paint must not infer
-    /// containing-block or flex/grid order semantics from flattened style.
-    pub paint_layer_can_contain_absolute_position_objects: bool,
-    pub paint_layer_can_contain_fixed_position_objects: bool,
-    pub paint_layer_has_overlay_overflow_controls: bool,
     /// UniqueId of the flex/grid ordering ancestor's parent. None means the
     /// PaintLayer is not a child/grandchild covered by OrderLessThan().
     pub paint_layer_order_parent_unique_id: Option<u64>,
@@ -306,7 +258,6 @@ pub struct PaintProperties {
     pub selection_client_id: u64,
     pub selection_client_invalidation_reason: Option<foundation::PaintInvalidationReason>,
     pub selection_client_is_cacheable: bool,
-    pub selection_client_is_just_created: std::cell::Cell<bool>,
     // The active ScopedDisplayItemFragment value: inline FragmentId(), layer
     // fragment index, or the containing fragmentainer's break-token identity.
     // cpp: core/layout/inline/fragment_item.h:172-188
@@ -329,8 +280,6 @@ pub struct PaintProperties {
     /// LayoutObject::IsSVGChild(). SVG hit-test opacity cannot be reconstructed
     /// from the reduced NodeKind set because every SVG child is mixed.
     pub is_svg_child: bool,
-    pub logical_parent_node_id: Option<u64>,
-    pub logical_parent_fragment_instance_id: Option<u64>,
     pub logical_tree_order: u64,
     pub establishes_paint_state: bool,
     pub hidden: bool,
@@ -345,11 +294,10 @@ pub struct PaintProperties {
     /// is set; Paint must not rediscover it from exported descendants.
     pub svg_descendant_may_have_transform_related_operations: bool,
     /// SVGViewportContainerElement::HasEmptyViewBox(). Keep this authored
-    /// element fact distinct from `svg_view_box`, which is later reused for
+    /// element fact distinct from `SvgViewBox()`, which is later reused for
     /// the nearest resolved viewport dimensions of every SVG child.
     pub svg_view_box_is_empty: bool,
     pub painted_atomically: bool,
-    pub has_collapsed_borders: bool,
     pub source_kind: NodeKind,
     /// Chromium LayoutImage::IsLayoutImage() identity. `NodeKind::kReplaced`
     /// also covers canvas, video, embedded content and frames, so Paint must
@@ -369,9 +317,6 @@ pub struct PaintProperties {
     /// ImageElementBase::last_painted_image_id_. Paint mutates this only after
     /// cache reuse has failed, matching GetDecodingModeForPainting().
     pub image_last_painted_id: std::cell::Cell<image_resource::PaintImageId>,
-    /// Focused HTMLAreaElement shape/style facts associated by DOM with this
-    /// LayoutImage. ImagePainter supplies container geometry and clipping.
-    pub focused_image_map_area: Option<FocusedImageMapArea>,
     /// LayoutImage::last_paint_rect_. ImagePainter mutates this retained Paint
     /// lifecycle value immediately before consulting the Drawing cache. It is
     /// deliberately excluded from immutable pre-paint input equivalence.
@@ -390,15 +335,8 @@ pub struct PaintProperties {
     /// latter may aggregate multiple inline fragment items, so Paint must not
     /// reconstruct it from the physical box fragment.
     /// cpp: core/layout/layout_replaced.cc:599-617
-    /// LayoutObject::IsSelected(), including LayoutTextFragment virtual query.
-    pub is_selected: bool,
     pub replaced_selection_state: SelectionState,
     pub replaced_local_selection_visual_rect: Option<FragmentPaintRect>,
-    /// HighlightStyleUtils::SelectionTextDecoration result. Paint compares its
-    /// line set with each originating decoration before applying the selection
-    /// phase color; it must not reconstruct highlight inheritance. Read
-    /// through SelectionTextDecoration(); stored only for detached fixtures.
-    pub selection_text_decoration: Option<TextDecorationPaint>,
     /// TextPainter::SvgTextPaintState::TextDecorationObject() style.  SVG text
     /// decorations use the fill/stroke of the first ancestor that declares the
     /// decoration, which can differ from the leaf text's own style. Read
@@ -436,9 +374,6 @@ pub struct PaintProperties {
     /// size-dependent before checking whether the first image can render.
     pub background_fill_layer_count: usize,
     pub has_background: bool,
-    /// LayoutBox::BackgroundShouldAlwaysBeClipped(), exported as the virtual
-    /// Layout decision rather than reconstructed from style in Paint.
-    pub background_should_always_be_clipped: bool,
     pub background_any_local_attachment_image: bool,
     pub background_any_default_attachment_image: bool,
     pub background_any_layer_uses_content_box: bool,
@@ -448,21 +383,14 @@ pub struct PaintProperties {
     /// LayoutView::BackgroundRect(), the positioning area for fixed canvas
     /// backgrounds. Present only on the LayoutView.
     pub view_background_rect: Option<FragmentPaintRect>,
-    pub previous_view_background_rect: Option<FragmentPaintRect>,
-    /// LayoutObject::CanCompositeBackgroundAttachmentFixed is the canonical
-    /// eligibility decision. It includes the one-layer, clip, shadow,
-    /// appearance and border-radius restrictions required by BackgroundClip.
-    pub can_composite_background_attachment_fixed: bool,
     pub margin: Edges,
     pub border: Edges,
-    pub border_sides: FragmentBoxSides,
     pub border_styles: [BorderLineStyle; 4],
     pub padding: Edges,
     /// A sliced inline box's strip, written by PrePaint
     /// (PopulateInlineStitchedDecorations), and the fixture fallback. Other
     /// resident boxes read it live (ViewStitchedDecoration).
     pub stitched_decoration: Option<StitchedDecorationData>,
-    pub box_decoration_break: BoxDecorationBreak,
     pub display: Display,
     pub position: Position,
     // A fixed-position LayoutBox whose containing block is the LayoutView.
@@ -480,11 +408,6 @@ pub struct PaintProperties {
     pub overscroll_behavior_y: OverscrollBehavior,
     /// Source: core/paint/paint_property_tree_builder.cc:3634-3635.
     pub prevent_scroll_axis_locking: bool,
-    /// CSS 2.1 `clip: rect(...)` in the box's local stitched coordinate space.
-    /// This is distinct from overflow clipping: it clips the box's own paint
-    /// as well as descendants and is ordered between Effect and Filter.
-    pub css_clip: Option<FragmentPaintRect>,
-    pub overflow_clip_margin_outsets: Option<Edges>,
     pub scroll_offset: Offset,
     /// PhysicalBoxFragment::OverflowClipRect with overlay scrollbar space
     /// excluded for hit testing. None means this fragment does not clip
@@ -494,21 +417,11 @@ pub struct PaintProperties {
     /// Interaction consume the source snap instead of re-rounding scroll_offset.
     pub pixel_snapped_scrolled_content_offset: Offset,
     pub scroll_size: Size,
-    /// Exact LayoutBox::ScrollsOverflow() input used to choose whether gap
-    /// decorations paint in border or scrolling-contents space. This is not
-    /// equivalent to CSS overflow or merely having a ScrollTranslation node.
-    pub scrolls_overflow: bool,
-    /// Chromium CSSOM client dimensions, excluding classic scrollbar gutters.
-    pub client_size: Option<Size>,
     // Chromium scrollable area, including viewport-propagated overflow. CSS
     // input overflow alone does not identify the LayoutView's scrolling owner.
     pub scroll_container: Option<ScrollContainerPaintData>,
     pub writing_mode: WritingMode,
     pub direction: TextDirection,
-    pub first_baseline: Option<f64>,
-    /// FragmentItem::IsEllipsis(). TextDecorationPainter must not infer this
-    /// from generated-text kind because other generated runs can be decorated.
-    pub is_ellipsis: bool,
     /// FragmentItem::GetTextFitScale(). SVG text keeps 1 because its separate
     /// SVG transform/scaled-font path owns that scaling.
     pub text_fit_scale: f64,
@@ -517,49 +430,32 @@ pub struct PaintProperties {
     pub text_combine_inline_offset: f64,
     pub replaced_content: Option<ReplacedContentPaintData>,
     pub glyph_runs: Arc<Vec<PaintGlyphRun>>,
-    pub text_control_host: Option<u64>,
     pub list_marker_symbol: Option<ListStyleType>,
     pub list_marker_inside: bool,
     pub mathml: Option<Arc<MathMLPaintData>>,
-    pub frame_set: Option<Arc<FrameSetPaintData>>,
     pub fieldset: Option<Arc<FieldsetPaintData>>,
-    pub column_rules: Option<Arc<ColumnRulePaintData>>,
     /// Final physical gap-rule segments in Chromium's rule-overlap order.
     pub gap_rules: Option<Arc<GapRulePaintData>>,
-    pub collapsed_table: Option<Arc<CollapsedTablePaintData>>,
-    pub table: Option<Arc<TablePaintData>>,
     pub scrollbars: Option<Arc<ScrollbarPaintData>>,
     pub form_control: Option<Arc<FormControlPaintData>>,
     pub svg_shape: Option<Arc<SvgShapeData>>,
-    pub svg_view_box: Option<SvgViewBoxData>,
-    pub svg_local_transform: Option<TransformMatrix>,
     pub svg_viewport: Option<SvgViewportGeometry>,
-    /// LayoutSVGContainer::VisualRectInLocalSVGCoordinates(), aggregated from
-    /// the final child layout in SVG user coordinates.  This is distinct from
-    /// the container's zero-sized anonymous NG box overflow.
-    pub svg_visual_rect: Option<FragmentPaintRect>,
-    pub svg_text: Option<Arc<SvgTextPaintData>>,
-    pub table_cell_column: Option<usize>,
 }
 
 impl Default for PaintProperties {
     fn default() -> Self {
-        static EMPTY_DEBUG_NAME: OnceLock<Arc<str>> = OnceLock::new();
         static EMPTY_GLYPH_RUNS: OnceLock<Arc<Vec<PaintGlyphRun>>> = OnceLock::new();
         Self {
             source_object_address: 0,
             live_style_facts: false,
             property_fragment_unique_id: 0,
             is_first_for_node: true,
-            can_paint_multiple_fragments: true,
             is_layout_view: false,
-            is_inclusive_descendant_of_unbounded_element: false,
             is_printing: false,
             should_print_backgrounds: false,
             canvas_draw_element_enabled: false,
             is_in_canvas_subtree: false,
             is_overscroll_area_parent: false,
-            is_overscroll_container: false,
             needs_layout: false,
             child_layout_blocked_by_display_lock: false,
             is_fragment_less_box: false,
@@ -570,21 +466,13 @@ impl Default for PaintProperties {
             is_page_border_box: false,
             is_paginated_root: false,
             is_layout_inline: false,
-            should_apply_paint_containment: false,
-            should_apply_style_containment: false,
-            should_apply_layout_containment: false,
             should_clip_overflow_along_either_axis: false,
             should_clip_overflow_along_both_axes: false,
-            is_layout_block: false,
             is_layout_block_flow: false,
             is_inline_formatting_context: false,
             in_forced_colors_mode: false,
-            is_background_attachment_fixed_object: false,
             requires_main_thread_scrolling_for_background_attachment_fixed: None,
             display_item_client_invalidation_reason: None,
-            display_item_client_debug_name: Arc::clone(
-                EMPTY_DEBUG_NAME.get_or_init(|| Arc::from("")),
-            ),
             paint_layer_client_invalidation_reason: None,
             self_ink_overflow: None,
             contents_ink_overflow: None,
@@ -592,29 +480,15 @@ impl Default for PaintProperties {
             filtered_ink_overflow: None,
             css_mask_bounding_box: None,
             text_glyph_ink: None,
-            text_hit_test_bounds: None,
             box_self_visual_overflow: None,
             self_outline: None,
             previous_box_geometry: None,
             box_fragment_is_inline_box: false,
-            display_item_raster_effect_outset: RasterEffectOutset::kNone,
             display_item_client_id: 0,
-            display_item_client_owner_node_id: 0,
             paint_layer_state_is_authoritative: false,
             paint_layer_client_id: 0,
-            paint_layer_client_is_cacheable: false,
-            paint_layer_client_is_just_created: std::cell::Cell::new(false),
             paint_layer_is_self_painting: false,
-            paint_layer_invisible_for_position_visibility: false,
-            paint_layer_has_ancestor_invisible_for_position_visibility: false,
-            paint_layer_has_visible_content: false,
-            paint_layer_has_self_painting_layer_descendant: false,
-            paint_layer_has_non_isolated_descendant_with_blend_mode: false,
-            paint_layer_is_under_svg_hidden_container: false,
-            paint_layer_supports_subsequence_caching: false,
-            paint_layer_self_or_descendant_needs_repaint: true,
             paint_layer_is_fragmented: false,
-            paint_layer_known_to_clip_subtree_to_padding_box: false,
             paint_layer_first_fragment_visual_rect: None,
             paint_layer_contents_visual_rect: None,
             paint_layer_filter_reference_box: None,
@@ -623,12 +497,6 @@ impl Default for PaintProperties {
             paint_layer_is_stacking_context: false,
             paint_layer_is_stacked: false,
             paint_layer_stacking_level: 0,
-            paint_layer_is_z_order_list_visible: false,
-            paint_layer_is_in_top_or_view_transition_layer: false,
-            paint_layer_is_direct_layout_view_child: false,
-            paint_layer_can_contain_absolute_position_objects: false,
-            paint_layer_can_contain_fixed_position_objects: false,
-            paint_layer_has_overlay_overflow_controls: false,
             paint_layer_order_parent_unique_id: None,
             paint_layer_order: 0,
             display_item_client_is_cacheable: false,
@@ -636,7 +504,6 @@ impl Default for PaintProperties {
             selection_client_id: 0,
             selection_client_invalidation_reason: None,
             selection_client_is_cacheable: false,
-            selection_client_is_just_created: std::cell::Cell::new(false),
             display_item_fragment: 0,
             has_source: false,
             visible_to_hit_testing: true,
@@ -645,8 +512,6 @@ impl Default for PaintProperties {
             region_capture_crop_id: None,
             tracked_element_sub_rects: Vec::new(),
             is_svg_child: false,
-            logical_parent_node_id: None,
-            logical_parent_fragment_instance_id: None,
             logical_tree_order: 0,
             establishes_paint_state: false,
             hidden: false,
@@ -655,21 +520,17 @@ impl Default for PaintProperties {
             svg_descendant_may_have_transform_related_operations: false,
             svg_view_box_is_empty: false,
             painted_atomically: false,
-            has_collapsed_borders: false,
             source_kind: NodeKind::kBox,
             replaced_is_image: false,
             video_frame_resource_id: None,
             image_decoding_mode: Default::default(),
             image_last_painted_id: std::cell::Cell::new(image_resource::PaintImageId::INVALID),
-            focused_image_map_area: None,
             image_last_paint_rect: std::cell::Cell::new(None),
             effective_zoom: 1.0,
             style: PaintStyle::default(),
             selection_style: PaintStyle::default(),
-            is_selected: false,
             replaced_selection_state: SelectionState::kNone,
             replaced_local_selection_visual_rect: None,
-            selection_text_decoration: None,
             svg_text_decoration_style: None,
             background_transfers_to_view: false,
             background_is_known_to_be_obscured: false,
@@ -681,21 +542,16 @@ impl Default for PaintProperties {
             background_paint_location: BackgroundPaintLocation::BorderBox,
             background_fill_layer_count: 0,
             has_background: false,
-            background_should_always_be_clipped: false,
             background_any_local_attachment_image: false,
             background_any_default_attachment_image: false,
             background_any_layer_uses_content_box: false,
             scrollable_overflow: None,
             view_background_rect: None,
-            previous_view_background_rect: None,
-            can_composite_background_attachment_fixed: false,
             margin: Edges::default(),
             border: Edges::default(),
-            border_sides: FragmentBoxSides::default(),
             border_styles: [BorderLineStyle::kNone; 4],
             padding: Edges::default(),
             stitched_decoration: None,
-            box_decoration_break: BoxDecorationBreak::kSlice,
             display: Display::kBlock,
             position: Position::kStatic,
             fixed_to_view: false,
@@ -708,43 +564,27 @@ impl Default for PaintProperties {
             overscroll_behavior_x: Default::default(),
             overscroll_behavior_y: Default::default(),
             prevent_scroll_axis_locking: false,
-            css_clip: None,
-            overflow_clip_margin_outsets: None,
             scroll_offset: Offset::default(),
             hit_test_overflow_clip: None,
             pixel_snapped_scrolled_content_offset: Offset::default(),
             scroll_size: Size::default(),
-            scrolls_overflow: false,
-            client_size: None,
             scroll_container: None,
             writing_mode: WritingMode::kHorizontalTb,
             direction: TextDirection::kLtr,
-            first_baseline: None,
-            is_ellipsis: false,
             text_fit_scale: 1.0,
             text_combine: None,
             text_combine_inline_offset: 0.0,
             replaced_content: None,
             glyph_runs: Arc::clone(EMPTY_GLYPH_RUNS.get_or_init(|| Arc::new(Vec::new()))),
-            text_control_host: None,
             list_marker_symbol: None,
             list_marker_inside: false,
             mathml: None,
-            frame_set: None,
             fieldset: None,
-            column_rules: None,
             gap_rules: None,
-            collapsed_table: None,
-            table: None,
             scrollbars: None,
             form_control: None,
             svg_shape: None,
-            svg_view_box: None,
-            svg_local_transform: None,
             svg_viewport: None,
-            svg_visual_rect: None,
-            svg_text: None,
-            table_cell_column: None,
         }
     }
 }
@@ -1158,7 +998,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     .get(index)
                     .and_then(crate::internal::boundary::layout_boundary::LiveTextHitTestBounds)
             }
-            _ => self.paint.text_hit_test_bounds,
+            _ => None,
         }
     }
 
@@ -1169,7 +1009,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     box_fragment,
                 )
             }
-            None => self.paint.collapsed_table.clone(),
+            None => None,
         }
     }
 
@@ -1182,7 +1022,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewHasCollapsedBorders(&self) -> bool {
         self.ResidentBoxFragment()
-            .map_or(self.paint.has_collapsed_borders, |box_fragment| {
+            .map_or(false, |box_fragment| {
                 box_fragment.HasCollapsedBorders()
             })
     }
@@ -1196,7 +1036,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewCanPaintMultipleFragments(&self) -> bool {
         self.ResidentBoxFragment()
-            .map_or(self.paint.can_paint_multiple_fragments, |box_fragment| {
+            .map_or(true, |box_fragment| {
                 crate::internal::fragmentation_utils::CanPaintMultipleFragmentsForFragment(
                     box_fragment,
                 )
@@ -1208,7 +1048,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             Some(box_fragment) => box_fragment
                 .IsTableCell()
                 .then(|| box_fragment.TableCellColumnIndex() as usize),
-            None => self.paint.table_cell_column,
+            None => None,
         }
     }
 
@@ -1217,7 +1057,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             Some(box_fragment) => {
                 crate::internal::boundary::layout_boundary::LiveBoxDecorationBreak(box_fragment)
             }
-            None => self.paint.box_decoration_break,
+            None => BoxDecorationBreak::kSlice,
         }
     }
 
@@ -1226,7 +1066,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             Some(box_fragment) => {
                 crate::internal::boundary::layout_boundary::ExportTablePaintData(box_fragment)
             }
-            None => self.paint.table.clone(),
+            None => None,
         }
     }
 
@@ -1235,7 +1075,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             Some(box_fragment) => {
                 crate::internal::boundary::layout_boundary::ExportOverflowClipMargin(box_fragment)
             }
-            None => self.paint.overflow_clip_margin_outsets,
+            None => None,
         }
     }
 
@@ -1269,11 +1109,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             Some(layout_box) => {
                 crate::internal::boundary::layout_boundary::LiveScrollGeometry(layout_box)
             }
-            None => (
-                self.paint.scroll_size,
-                self.paint.client_size,
-                self.paint.scrolls_overflow,
-            ),
+            None => (self.paint.scroll_size, None, false),
         }
     }
 
@@ -1304,15 +1140,14 @@ impl ResidentBoxGeometry for FragmentPaintData {
         match self.resident_owner {
             layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
-                match items.Items().get(index) {
-                    Some(item) => crate::internal::boundary::layout_boundary::ExportSvgTextPaintData(
+                items.Items().get(index).and_then(|item| {
+                    crate::internal::boundary::layout_boundary::ExportSvgTextPaintData(
                         item,
                         *item.RectInContainerFragment(),
-                    ),
-                    None => self.paint.svg_text.clone(),
-                }
+                    )
+                })
             }
-            _ => self.paint.svg_text.clone(),
+            _ => None,
         }
     }
 
@@ -1329,9 +1164,8 @@ impl ResidentBoxGeometry for FragmentPaintData {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {
                 crate::internal::boundary::layout_boundary::LiveFirstBaseline(box_fragment)
-                    .or(self.paint.first_baseline)
             }
-            None => self.paint.first_baseline,
+            None => None,
         }
     }
 
@@ -1341,7 +1175,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 box_fragment,
                 &self.paint,
             ),
-            None => self.paint.column_rules.clone(),
+            None => None,
         }
     }
 
@@ -1361,7 +1195,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 box_fragment,
                 &self.paint,
             ),
-            None => self.paint.frame_set.clone(),
+            None => None,
         }
     }
 
@@ -1431,7 +1265,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewTextItemFacts(&self) -> (bool, f64, Option<ListStyleType>, bool, f64) {
         let stored = (
-            self.paint.is_ellipsis,
+            false,
             self.paint.text_fit_scale,
             self.paint.list_marker_symbol,
             self.paint.list_marker_inside,
@@ -1732,7 +1566,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
                     left: sides.left,
                 }
             }
-            None => self.paint.border_sides,
+            None => layout_fragment_boundary::FragmentBoxSides::default(),
         }
     }
 
@@ -1896,12 +1730,9 @@ impl PaintProperties {
     /// Source: highlight_style_utils.cc:385-402, resolved like
     /// SelectionPaintStyle.
     pub fn SelectionTextDecoration(&self) -> Option<TextDecorationPaint> {
-        match self.style.Source() {
-            Some(source) => {
-                crate::internal::boundary::layout_boundary::ExportSelectionTextDecoration(source)
-            }
-            None => self.selection_text_decoration.clone(),
-        }
+        self.style
+            .Source()
+            .and_then(crate::internal::boundary::layout_boundary::ExportSelectionTextDecoration)
     }
 
     /// Source: core/paint/text_painter.cc:743-787. The style of the first
@@ -2015,11 +1846,14 @@ impl PaintProperties {
     /// (platform/graphics/paint/display_item_client.h; LayoutObject::DebugName,
     /// translated in layoutng/internal/layout_object_core_services.cc:489-499),
     /// computed on demand as Chromium does. Paint asks only while recording
-    /// paint debug info or tracing. Detached fixtures keep their stored name.
+    /// paint debug info or tracing. Detached fixtures have an empty name.
     pub fn DisplayItemClientDebugName(&self) -> Arc<str> {
         match self.SourceObject() {
             Some(object) => Arc::from(object.DebugName().Utf8()),
-            None => Arc::clone(&self.display_item_client_debug_name),
+            None => {
+                static EMPTY_DEBUG_NAME: OnceLock<Arc<str>> = OnceLock::new();
+                Arc::clone(EMPTY_DEBUG_NAME.get_or_init(|| Arc::from("")))
+            }
         }
     }
 
@@ -2102,7 +1936,7 @@ impl PaintProperties {
             self.LiveSelectionClient(),
             self.selection_client_invalidation_reason,
             self.selection_client_is_cacheable,
-            self.selection_client_is_just_created.get(),
+            false,
         )
     }
 
@@ -2110,8 +1944,8 @@ impl PaintProperties {
         Self::ClientState(
             self.LivePaintLayerClient(),
             self.paint_layer_client_invalidation_reason,
-            self.paint_layer_client_is_cacheable,
-            self.paint_layer_client_is_just_created.get(),
+            false,
+            false,
         )
     }
 
@@ -2246,7 +2080,7 @@ impl PaintProperties {
 
     pub fn IsInclusiveDescendantOfUnboundedElement(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsInclusiveDescendantOfUnboundedElement)
-            .unwrap_or(self.is_inclusive_descendant_of_unbounded_element)
+            .unwrap_or(false)
     }
 
     pub fn IsPrinting(&self) -> bool {
@@ -2317,7 +2151,7 @@ impl PaintProperties {
 
     pub fn IsOverscrollContainer(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsOverscrollContainer)
-            .unwrap_or(self.is_overscroll_container)
+            .unwrap_or(false)
     }
 
     pub fn ChildLayoutBlockedByDisplayLock(&self) -> bool {
@@ -2358,7 +2192,7 @@ impl PaintProperties {
 
     pub fn IsBackgroundAttachmentFixedObject(&self) -> bool {
         self.SourceObject().map(LayoutObject::IsBackgroundAttachmentFixedObject)
-            .unwrap_or(self.is_background_attachment_fixed_object)
+            .unwrap_or(false)
     }
 
     pub fn IsBoxModelObject(&self) -> bool {
@@ -2383,7 +2217,7 @@ impl PaintProperties {
                     .is_null()
                     && object.IsInTopOrViewTransitionLayer()
             })
-            .unwrap_or(self.paint_layer_is_in_top_or_view_transition_layer)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerIsDirectLayoutViewChild(&self) -> bool {
@@ -2393,7 +2227,7 @@ impl PaintProperties {
                     .is_null()
                     && unsafe { object.Parent().as_ref() }.is_some_and(LayoutObject::IsLayoutView)
             })
-            .unwrap_or(self.paint_layer_is_direct_layout_view_child)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerCanContainAbsolutePositionObjects(&self) -> bool {
@@ -2403,7 +2237,7 @@ impl PaintProperties {
                     .is_null()
                     && object.CanContainAbsolutePositionObjects()
             })
-            .unwrap_or(self.paint_layer_can_contain_absolute_position_objects)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerCanContainFixedPositionObjects(&self) -> bool {
@@ -2413,7 +2247,7 @@ impl PaintProperties {
                     .is_null()
                     && object.CanContainFixedPositionObjects()
             })
-            .unwrap_or(self.paint_layer_can_contain_fixed_position_objects)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerHasOverlayOverflowControls(&self) -> bool {
@@ -2428,7 +2262,7 @@ impl PaintProperties {
                     }
                     .is_some_and(|area| area.HasOverlayOverflowControls())
             })
-            .unwrap_or(self.paint_layer_has_overlay_overflow_controls)
+            .unwrap_or(false)
     }
 
     pub fn BackgroundPaintLocation(&self) -> BackgroundPaintLocation {
@@ -2446,7 +2280,7 @@ impl PaintProperties {
                 unsafe { foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).as_ref() }
                     .map(crate::internal::boundary::layout_boundary::LiveCssClip)
             })
-            .unwrap_or(self.css_clip)
+            .flatten()
     }
 
     pub fn VisibleToHitTesting(&self) -> bool {
@@ -2458,7 +2292,7 @@ impl PaintProperties {
     pub fn IsSelected(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsSelected)
-            .unwrap_or(self.is_selected)
+            .unwrap_or(false)
     }
 
     pub fn EffectiveAllowedTouchAction(&self) -> foundation::TouchAction {
@@ -2515,7 +2349,7 @@ impl PaintProperties {
                 let box_ = foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object);
                 !box_.is_null() && unsafe { &*box_ }.BackgroundShouldAlwaysBeClipped()
             })
-            .unwrap_or(self.background_should_always_be_clipped)
+            .unwrap_or(false)
     }
 
     pub fn CanCompositeBackgroundAttachmentFixed(&self) -> bool {
@@ -2524,7 +2358,7 @@ impl PaintProperties {
                 !foundation::DynamicTo::<layoutng::internal::layout_box::LayoutBox>(object).is_null()
                     && object.CanCompositeBackgroundAttachmentFixed()
             })
-            .unwrap_or(self.can_composite_background_attachment_fixed)
+            .unwrap_or(false)
     }
 
     pub fn IsLayoutBox(&self) -> bool {
@@ -2545,7 +2379,7 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyPaintContainment()
             })
-            .unwrap_or(self.should_apply_paint_containment)
+            .unwrap_or(false)
     }
 
     pub fn ShouldApplyStyleContainment(&self) -> bool {
@@ -2553,7 +2387,7 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyStyleContainment()
             })
-            .unwrap_or(self.should_apply_style_containment)
+            .unwrap_or(false)
     }
 
     pub fn ShouldApplyLayoutContainment(&self) -> bool {
@@ -2561,7 +2395,7 @@ impl PaintProperties {
             .map(|object| {
                 object.ShouldApplyLayoutContainment()
             })
-            .unwrap_or(self.should_apply_layout_containment)
+            .unwrap_or(false)
     }
 
     pub fn ShouldClipOverflowAlongEitherAxis(&self) -> bool {
@@ -2577,7 +2411,7 @@ impl PaintProperties {
     pub fn IsLayoutBlock(&self) -> bool {
         self.SourceObject()
             .map(LayoutObject::IsLayoutBlock)
-            .unwrap_or(self.is_layout_block)
+            .unwrap_or(false)
     }
 
     pub fn IsLayoutBlockFlow(&self) -> bool {
@@ -2600,31 +2434,31 @@ impl PaintProperties {
             })
             .unwrap_or(self.paint_layer_is_self_painting),
             invisible_for_position_visibility: layer.map(PaintLayer::InvisibleForPositionVisibility)
-            .unwrap_or(self.paint_layer_invisible_for_position_visibility),
+            .unwrap_or(false),
             has_ancestor_invisible_for_position_visibility: layer.map(PaintLayer::HasAncestorInvisibleForPositionVisibility)
-            .unwrap_or(self.paint_layer_has_ancestor_invisible_for_position_visibility),
+            .unwrap_or(false),
             has_visible_content: layer.map(|layer| {
                 layer.HasVisibleContent()
             })
-            .unwrap_or(self.paint_layer_has_visible_content),
+            .unwrap_or(false),
             has_self_painting_layer_descendant: layer.map(PaintLayer::HasSelfPaintingLayerDescendant)
-            .unwrap_or(self.paint_layer_has_self_painting_layer_descendant),
+            .unwrap_or(false),
             is_under_svg_hidden_container: layer.map(PaintLayer::IsUnderSVGHiddenContainer)
-            .unwrap_or(self.paint_layer_is_under_svg_hidden_container),
+            .unwrap_or(false),
             supports_subsequence_caching: layer.map(PaintLayer::SupportsSubsequenceCaching)
-            .unwrap_or(self.paint_layer_supports_subsequence_caching),
+            .unwrap_or(false),
             self_or_descendant_needs_repaint: layer.map(PaintLayer::SelfOrDescendantNeedsRepaint)
-            .unwrap_or(self.paint_layer_self_or_descendant_needs_repaint),
+            .unwrap_or(true),
             is_fragmented: layer.map(|layer| {
                 layer.GetLayoutObject().IsFragmented()
             })
             .unwrap_or(self.paint_layer_is_fragmented),
             known_to_clip_subtree_to_padding_box: layer.map(PaintLayer::KnownToClipSubtreeToPaddingBox)
-            .unwrap_or(self.paint_layer_known_to_clip_subtree_to_padding_box),
+            .unwrap_or(false),
             child_paint_blocked_by_display_lock: object.map(LayoutObject::ChildPaintBlockedByDisplayLock)
             .unwrap_or(self.child_paint_blocked_by_display_lock),
             is_z_order_list_visible: layer.map(PaintLayer::IsZOrderListVisible)
-            .unwrap_or(self.paint_layer_is_z_order_list_visible),
+            .unwrap_or(false),
         }
     }
 
@@ -2642,12 +2476,12 @@ impl PaintProperties {
 
     pub fn PaintLayerInvisibleForPositionVisibility(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::InvisibleForPositionVisibility)
-            .unwrap_or(self.paint_layer_invisible_for_position_visibility)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerHasAncestorInvisibleForPositionVisibility(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasAncestorInvisibleForPositionVisibility)
-            .unwrap_or(self.paint_layer_has_ancestor_invisible_for_position_visibility)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerHasVisibleContent(&self) -> bool {
@@ -2655,32 +2489,32 @@ impl PaintProperties {
             .map(|layer| {
                 layer.HasVisibleContent()
             })
-            .unwrap_or(self.paint_layer_has_visible_content)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerHasSelfPaintingLayerDescendant(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasSelfPaintingLayerDescendant)
-            .unwrap_or(self.paint_layer_has_self_painting_layer_descendant)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerHasNonIsolatedDescendantWithBlendMode(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::HasNonIsolatedDescendantWithBlendMode)
-            .unwrap_or(self.paint_layer_has_non_isolated_descendant_with_blend_mode)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerIsUnderSvgHiddenContainer(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::IsUnderSVGHiddenContainer)
-            .unwrap_or(self.paint_layer_is_under_svg_hidden_container)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerSupportsSubsequenceCaching(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::SupportsSubsequenceCaching)
-            .unwrap_or(self.paint_layer_supports_subsequence_caching)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerSelfOrDescendantNeedsRepaint(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::SelfOrDescendantNeedsRepaint)
-            .unwrap_or(self.paint_layer_self_or_descendant_needs_repaint)
+            .unwrap_or(true)
     }
 
     pub fn PaintLayerIsFragmented(&self) -> bool {
@@ -2693,7 +2527,7 @@ impl PaintProperties {
 
     pub fn PaintLayerKnownToClipSubtreeToPaddingBox(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::KnownToClipSubtreeToPaddingBox)
-            .unwrap_or(self.paint_layer_known_to_clip_subtree_to_padding_box)
+            .unwrap_or(false)
     }
 
     pub fn PaintLayerIsStackingContext(&self) -> bool {
@@ -2720,10 +2554,13 @@ impl PaintProperties {
 
     pub fn PaintLayerIsZOrderListVisible(&self) -> bool {
         self.SourcePaintLayer().map(PaintLayer::IsZOrderListVisible)
-            .unwrap_or(self.paint_layer_is_z_order_list_visible)
+            .unwrap_or(false)
     }
     pub fn CanPaintFragmentOccurrence(&self) -> bool {
-        self.is_first_for_node || self.can_paint_multiple_fragments
+        // The payload's CanPaintMultipleFragments() fallback was never
+        // exported (always true); resident boxes answer through
+        // ResidentBoxGeometry::ViewCanPaintMultipleFragments.
+        true
     }
 
     // LayoutObject / LayoutBox / PaintLayer / Element geometry facts, read
@@ -2834,13 +2671,9 @@ impl PaintProperties {
     }
 
     pub fn FocusedImageMapArea(&self) -> Option<&FocusedImageMapArea> {
-        match self
-            .SourceObject()
+        self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveFocusedImageMapArea)
-        {
-            Some(live) => live,
-            None => self.focused_image_map_area.as_ref(),
-        }
+            .flatten()
     }
 
     pub fn SvgViewBoxIsEmpty(&self) -> bool {
@@ -2852,7 +2685,7 @@ impl PaintProperties {
     pub fn TextControlHost(&self) -> Option<u64> {
         self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveTextControlHost)
-            .unwrap_or(self.text_control_host)
+            .flatten()
     }
 
     // Previous-frame geometry is Chromium's LayoutBox / LayoutView state,
@@ -2873,13 +2706,13 @@ impl PaintProperties {
     pub fn PreviousViewBackgroundRect(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LivePreviousViewBackgroundRect)
-            .unwrap_or(self.previous_view_background_rect)
+            .flatten()
     }
 
     pub fn DisplayItemRasterEffectOutset(&self) -> RasterEffectOutset {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveRasterEffectOutset)
-            .unwrap_or(self.display_item_raster_effect_outset)
+            .unwrap_or(RasterEffectOutset::kNone)
     }
 
     // DisplayItemClient identity. Chromium's PaintController and PrePaint
@@ -2897,7 +2730,7 @@ impl PaintProperties {
     pub fn DisplayItemClientOwnerNodeId(&self) -> i32 {
         self.SourceObject()
             .map(|object| object.OwnerNodeIdDefault())
-            .unwrap_or(self.display_item_client_owner_node_id)
+            .unwrap_or(0)
     }
 
     pub fn SelectionClientId(&self) -> u64 {
@@ -2971,10 +2804,7 @@ impl PaintProperties {
     }
 
     pub fn SvgLocalTransform(&self) -> Option<TransformMatrix> {
-        match self.SvgPaintGeometry() {
-            Some((transform, _, _)) => transform,
-            None => self.svg_local_transform.clone(),
-        }
+        self.SvgPaintGeometry().and_then(|(transform, _, _)| transform)
     }
 
     pub fn SvgViewport(&self) -> Option<SvgViewportGeometry> {
@@ -2985,20 +2815,13 @@ impl PaintProperties {
     }
 
     pub fn SvgVisualRect(&self) -> Option<FragmentPaintRect> {
-        match self.SvgPaintGeometry() {
-            Some((_, _, visual_rect)) => visual_rect,
-            None => self.svg_visual_rect,
-        }
+        self.SvgPaintGeometry().and_then(|(_, _, visual_rect)| visual_rect)
     }
 
     pub fn SvgViewBox(&self) -> Option<SvgViewBoxData> {
-        match self
-            .SourceObject()
+        self.SourceObject()
             .and_then(crate::internal::boundary::layout_boundary::LiveSvgViewBox)
-        {
-            Some(live) => live,
-            None => self.svg_view_box,
-        }
+            .flatten()
     }
 
     /// Whether the source is an anonymous LayoutTextCombine wrapper.
@@ -3074,7 +2897,7 @@ impl PaintProperties {
     pub fn LogicalParentNodeId(&self) -> Option<u64> {
         self.SourceObject()
             .map(crate::internal::boundary::layout_boundary::LiveLogicalParentNodeId)
-            .unwrap_or(self.logical_parent_node_id)
+            .flatten()
     }
 
     /// The source LayoutObject's resident document-order position: the

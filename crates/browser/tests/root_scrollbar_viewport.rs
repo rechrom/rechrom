@@ -3,6 +3,7 @@
 mod test_thread;
 
 use browser::page::Page;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::internal::layout_input::FontFace;
 use layoutng_assembly::layout_engine::PaintFragmentCursor;
 use std::{cell::RefCell, io, rc::Rc};
@@ -446,7 +447,7 @@ fn body_propagation_mutation_updates_clip_and_retained_snapshots() {
         );
         dimensions(&mut page, 300, 200);
         let old = page.CurrentFrame().unwrap().fragments.clone();
-        assert_eq!(root_paint(&old).paint.client_size.unwrap().width, 300.0);
+        assert_eq!(root_paint(&old).ViewScrollGeometry().1.unwrap().width, 300.0);
         check(
             &mut page,
             "document.documentElement.setAttribute('style','overflow:auto')",
@@ -462,7 +463,7 @@ fn body_propagation_mutation_updates_clip_and_retained_snapshots() {
             "document.body.setAttribute('style','overflow:visible')",
         );
         dimensions(&mut page, 285, 200);
-        assert_eq!(root_paint(&old).paint.client_size.unwrap().width, 300.0);
+        assert_eq!(root_paint(&old).ViewScrollGeometry().1.unwrap().width, 300.0);
     });
 }
 #[test]
