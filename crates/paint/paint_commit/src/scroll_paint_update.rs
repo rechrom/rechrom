@@ -797,7 +797,7 @@ fn has_scroll_dependent_background(node: &PaintTreeNode<'_>) -> bool {
     let Some(fragment) = node.fragment.as_deref() else {
         return false;
     };
-    if !fragment.paint.HasSource() || fragment.paint.background_transfers_to_view {
+    if !fragment.paint.HasSource() || fragment.paint.BackgroundTransfersToView() {
         return false;
     }
     let background_images = fragment.paint.style.background_images();

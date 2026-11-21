@@ -10362,7 +10362,8 @@ mod package_contract_tests {
         for owned_policy in [
             "pub(super) fn ExportCanvasBackground",
             "pub(super) fn ExportGlobalMainThreadScrollFacts",
-            "background_transfers_to_view",
+            "pub(crate) fn ViewBackgroundForRoot",
+            "view_background_invalidation",
             "requires_main_thread_scrolling_for_background_attachment_fixed",
         ] {
             assert!(

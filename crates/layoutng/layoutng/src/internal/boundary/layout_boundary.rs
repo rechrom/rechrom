@@ -35,7 +35,7 @@ use foundation::{
 use layout_fragment::block_break_token::BlockBreakToken;
 use layout_fragment::fragment_item::{FragmentItem, ItemType};
 use layout_fragment::fragment_tree::{
-    BackgroundPaintLocation, CanvasBackgroundPaintData, CollapsedTableEdge,
+    BackgroundPaintLocation, CollapsedTableEdge,
     CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
     FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentPaintData,
     FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
@@ -196,6 +196,9 @@ mod layout_fragment_global_paint_export;
 use layout_fragment_global_paint_export::{
     ExportCanvasBackground, ExportGlobalMainThreadScrollFacts,
 };
+pub(crate) use layout_fragment_global_paint_export::{
+    CanvasBackgroundForRoot, ViewBackgroundForRoot,
+};
 #[path = "../../../../layout_fragment/src/inline_fragment_paint_policy.rs"]
 mod layout_fragment_inline_fragment_paint_policy;
 pub(crate) use layout_fragment_inline_fragment_paint_policy::{
@@ -293,14 +296,12 @@ pub(crate) fn RefreshRetainedPaintInputs(
     fragments: crate::layout_engine::PaintFragmentCursor<'_>,
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
-    should_apply_root_background_behavior: bool,
 ) -> bool {
     layout_fragment_retained_paint_refresh::refresh_retained_paint_inputs(
         root,
         fragments,
         changed,
         inline_ink_changes,
-        should_apply_root_background_behavior,
     )
 }
 // cpp: layoutng/internal/boundary/layout_boundary.h:41-43

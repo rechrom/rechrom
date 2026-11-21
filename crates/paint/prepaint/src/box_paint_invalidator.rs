@@ -402,7 +402,7 @@ fn ComputeViewBackgroundInvalidation(
 
 fn HasEffectiveBackground(fragment: &FragmentPaintData) -> bool {
     fragment.paint.IsLayoutView()
-        || (fragment.paint.has_background && !fragment.paint.background_transfers_to_view)
+        || (fragment.paint.has_background && !fragment.paint.BackgroundTransfersToView())
 }
 
 fn BackgroundUsesContentBox(fragment: &FragmentPaintData) -> bool {

@@ -1331,67 +1331,6 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
     let box_fragment = To::<PhysicalBoxFragment>(fragment as *const PhysicalFragment);
     let box_fragment = unsafe { &*box_fragment };
     if !reuse_fragment_geometry {
-        output.paint.is_page_container =
-            box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageContainer;
-        if output.paint.is_page_container {
-            let page_border_link = box_fragment
-                .Children()
-                .iter()
-                .find(|child| {
-                    child.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox
-                })
-                .expect("page container must contain its page border box");
-            let page_border = page_border_link.get();
-            assert!(!page_border.is_null());
-            let page_border = unsafe { &*page_border.cast::<PhysicalBoxFragment>() };
-            let border = page_border.Borders();
-            let padding = page_border.Padding();
-            output.paint.page_container_background_geometry =
-                Some(crate::fragment_tree::PageContainerBackgroundPaintData {
-                    positioning_box_offset: Offset {
-                        x: Number(page_border_link.offset.left),
-                        y: Number(page_border_link.offset.top),
-                    },
-                    border: Edges {
-                        top: Number(border.top),
-                        right: Number(border.right),
-                        bottom: Number(border.bottom),
-                        left: Number(border.left),
-                    },
-                    padding: Edges {
-                        top: Number(padding.top),
-                        right: Number(padding.right),
-                        bottom: Number(padding.bottom),
-                        left: Number(padding.left),
-                    },
-                    ..crate::fragment_tree::PageContainerBackgroundPaintData::default()
-                });
-        }
-        output.paint.is_page_border_box =
-            box_fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox;
-        if output.paint.is_page_border_box {
-            let page_area = box_fragment
-                .Children()
-                .first()
-                .expect("page border box must contain its page area")
-                .get();
-            assert!(!page_area.is_null());
-            let page_area = unsafe { &*page_area.cast::<PhysicalBoxFragment>() };
-            debug_assert_eq!(
-                page_area.GetBoxType(),
-                crate::physical_fragment::BoxType::kPageArea
-            );
-            let offset = page_area.OffsetFromRootFragmentationContext();
-            output.paint.page_document_background_geometry =
-                Some(crate::fragment_tree::PageBackgroundPaintData {
-                    positioning_area_offset: Offset {
-                        x: Number(offset.left),
-                        y: Number(offset.top),
-                    },
-                    ..crate::fragment_tree::PageBackgroundPaintData::default()
-                });
-        }
-        output.paint.is_paginated_root = box_fragment.IsPaginatedRoot();
         output.paint.is_inline_formatting_context = box_fragment.IsInlineFormattingContext();
         output.paint.is_first_for_node = box_fragment.IsFirstForNode();
         output.paint.can_paint_multiple_fragments =
@@ -1515,8 +1454,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
         && output.paint.table.is_none()
         && output.paint.table_cell_column.is_none()
         && !output.paint.has_collapsed_borders
-        && !output.paint.is_page_container
-        && !output.paint.is_page_border_box
+        && !matches!(box_fragment.GetBoxType(), crate::physical_fragment::BoxType::kPageContainer | crate::physical_fragment::BoxType::kPageBorderBox)
         && !box_fragment.IsFragmentainerBox()
         && !box_fragment.HasExtraMathMLPainting()
         && box_fragment.GetGapGeometry().is_null()
@@ -1531,7 +1469,7 @@ pub(super) fn PopulatePhysicalFragmentPaintData(
             output.pre_paint_invalidation.own() || output.pre_paint_invalidation.descendants(),
             output.paint.scroll_container.is_some() || output.paint.scrollbars.is_some(),
             output.paint.table.is_some() || output.paint.table_cell_column.is_some() || output.paint.has_collapsed_borders || box_fragment.IsTableCell(),
-            output.paint.is_page_container || output.paint.is_page_border_box || box_fragment.IsFragmentainerBox(),
+            matches!(box_fragment.GetBoxType(), crate::physical_fragment::BoxType::kPageContainer | crate::physical_fragment::BoxType::kPageBorderBox) || box_fragment.IsFragmentainerBox(),
             box_fragment.HasExtraMathMLPainting() || !box_fragment.GetGapGeometry().is_null() || !box_fragment.GetFrameSetLayoutData().is_null(),
             true,
         ];

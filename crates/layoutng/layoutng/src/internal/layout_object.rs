@@ -1868,6 +1868,14 @@ impl LayoutObject {
         self.InputOwnerForLayout().InputShouldPrintBackgrounds()
     }
 
+    /// ViewPainter::ShouldApplyRootBackgroundBehavior(document)
+    /// (core/paint/view_painter.cc:461-463), carried as the document-global
+    /// ConstraintSpace fact; false for isolated SVG document images.
+    pub fn ShouldApplyRootBackgroundBehaviorForLayout(&self) -> bool {
+        self.CheckIsNotDestroyed();
+        self.InputOwnerForLayout().InputShouldApplyRootBackgroundBehavior()
+    }
+
     // cpp: layoutng/internal/layout_node_data.cc:139-142
     pub fn ScrollbarThemeForLayout(&self) -> &ScrollbarThemeMetrics {
         self.CheckIsNotDestroyed();

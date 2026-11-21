@@ -69,6 +69,11 @@ pub type TablePaintData = layout_fragment_boundary::TablePaintData<PaintStyle>;
 /// to rediscover DOM roles or containment rules.
 pub type CanvasBackgroundPaintData =
     layout_fragment_boundary::CanvasBackgroundPaintData<PaintStyle>;
+/// The same selection read live from the resident root/body fragments
+/// (PaintFragmentCursor::ViewBackground / CanvasBackground); the style is the
+/// selected fragment's own PaintStyle projection, borrowed, not copied.
+pub type CanvasBackgroundPaintView<'a> =
+    layout_fragment_boundary::CanvasBackgroundPaintData<&'a PaintStyle>;
 
 /// BoxBackgroundPaintContext state for a page border box painting the
 /// document canvas. The positioning size belongs to the LayoutView root while
@@ -147,6 +152,8 @@ pub struct PaintProperties {
     pub is_layout_box: bool,
     /// PhysicalBoxFragment::kPageContainer. Chromium routes this anonymous
     /// fragment through ViewPainter rather than ordinary box decoration.
+    /// The page box facts below are read live (ResidentBoxGeometry); these
+    /// stored values serve only detached fixtures without a resident owner.
     pub is_page_container: bool,
     /// PhysicalBoxFragment::kPageBorderBox. This is fragment identity, not a
     /// LayoutObject/style proxy, and selects ScopedPaintState's document-space
@@ -393,6 +400,7 @@ pub struct PaintProperties {
     pub svg_text_decoration_style: Option<PaintStyle>,
     /// True for an element whose CSS background is painted by the root canvas
     /// painter. Borders, shadows and outlines remain ordinary box decoration.
+    /// Read live by BackgroundTransfersToView(); stored only for fixtures.
     pub background_transfers_to_view: bool,
     /// LayoutBox::BackgroundIsKnownToBeObscured(). Layout computes this after
     /// foreground opacity is known; Paint uses the retained decision instead
@@ -403,12 +411,18 @@ pub struct PaintProperties {
     /// fragment's own style. None means that no laid-out document element was
     /// available, in which case the page border box paints no background.
     pub page_document_background_style: Option<PaintStyle>,
+    /// Page geometry: the global paint pass stores only the LayoutView-global
+    /// facts; ResidentBoxGeometry::Page*BackgroundGeometry() completes them
+    /// from the resident page fragment (fixtures keep the whole stored value).
     pub page_document_background_geometry: Option<PageBackgroundPaintData>,
     pub page_container_background_geometry: Option<PageContainerBackgroundPaintData>,
-    /// Present only on the root LayoutView fragment.
+    /// Detached-fixture canvas background. Production Paint reads the live
+    /// selection through PaintFragmentCursor::CanvasBackground().
     pub canvas_background: Option<CanvasBackgroundPaintData>,
     /// Root-element geometry/style retained even when the canvas background is
-    /// transparent, for LayoutView background invalidation.
+    /// transparent, for LayoutView background invalidation. Captured at
+    /// publication because BoxPaintInvalidator compares it with the previous
+    /// slot's value.
     pub view_background_invalidation: Option<CanvasBackgroundPaintData>,
     pub background_paint_location: BackgroundPaintLocation,
     /// Number of source FillLayers, including image:none slots omitted from
@@ -753,6 +767,24 @@ pub trait ResidentBoxGeometry {
     fn BorderImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
     /// The -webkit-mask-box-image of a box fragment (see BorderImage).
     fn MaskBoxImage(&self) -> Option<crate::internal::paint_input::NinePieceImagePaint>;
+    /// PhysicalFragment::GetBoxType() == kPageContainer
+    /// (core/layout/physical_fragment.h). ViewPainter paints the `@page`
+    /// background for this anonymous fragment.
+    fn IsPageContainer(&self) -> bool;
+    /// PhysicalFragment::GetBoxType() == kPageBorderBox.
+    fn IsPageBorderBox(&self) -> bool;
+    /// PhysicalBoxFragment::IsPaginatedRoot().
+    fn IsPaginatedRoot(&self) -> bool;
+    /// BoxBackgroundPaintContext geometry of a page container: the page
+    /// border-box link offset and its borders/padding are read from the
+    /// resident fragment (view_painter.cc:397-402, GetPageBorderBoxLink);
+    /// the LayoutView-global positioning size, root paint offset and fixed
+    /// attachment fact stay published by the global paint pass.
+    fn PageContainerBackgroundGeometry(&self) -> Option<PageContainerBackgroundPaintData>;
+    /// BoxBackgroundPaintContext geometry of a page border box. The page
+    /// area's OffsetFromRootFragmentationContext() is read from the resident
+    /// fragment; the LayoutView-global facts stay published (see above).
+    fn PageDocumentBackgroundGeometry(&self) -> Option<PageBackgroundPaintData>;
 }
 
 /// ExportNinePieceImageForFragment for a box fragment with a live style.
@@ -864,6 +896,103 @@ impl ResidentBoxGeometry for FragmentPaintData {
             }
             None => self.paint.border_sides,
         }
+    }
+
+    fn IsPageContainer(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => {
+                fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageContainer
+            }
+            None => self.paint.is_page_container,
+        }
+    }
+
+    fn IsPageBorderBox(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => {
+                fragment.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox
+            }
+            None => self.paint.is_page_border_box,
+        }
+    }
+
+    fn IsPaginatedRoot(&self) -> bool {
+        match self.ResidentBoxFragment() {
+            Some(fragment) => fragment.IsPaginatedRoot(),
+            None => self.paint.is_paginated_root,
+        }
+    }
+
+    fn PageContainerBackgroundGeometry(&self) -> Option<PageContainerBackgroundPaintData> {
+        use crate::physical_box_fragment::PhysicalBoxFragment;
+        let Some(fragment) = self.ResidentBoxFragment() else {
+            return self.paint.page_container_background_geometry;
+        };
+        if fragment.GetBoxType() != crate::physical_fragment::BoxType::kPageContainer {
+            return None;
+        }
+        // Source: pagination_utils.cc GetPageBorderBoxLink; view_painter.cc
+        // subtracts this link offset from the background image origin.
+        let page_border_link = fragment
+            .Children()
+            .iter()
+            .find(|child| child.GetBoxType() == crate::physical_fragment::BoxType::kPageBorderBox)
+            .expect("page container must contain its page border box");
+        let page_border = page_border_link.get();
+        assert!(!page_border.is_null());
+        let page_border = unsafe { &*page_border.cast::<PhysicalBoxFragment>() };
+        let border = page_border.Borders();
+        let padding = page_border.Padding();
+        Some(PageContainerBackgroundPaintData {
+            positioning_box_offset: Offset {
+                x: page_border_link.offset.left.ToDouble(),
+                y: page_border_link.offset.top.ToDouble(),
+            },
+            border: Edges {
+                top: border.top.ToDouble(),
+                right: border.right.ToDouble(),
+                bottom: border.bottom.ToDouble(),
+                left: border.left.ToDouble(),
+            },
+            padding: Edges {
+                top: padding.top.ToDouble(),
+                right: padding.right.ToDouble(),
+                bottom: padding.bottom.ToDouble(),
+                left: padding.left.ToDouble(),
+            },
+            ..self.paint.page_container_background_geometry.unwrap_or_default()
+        })
+    }
+
+    fn PageDocumentBackgroundGeometry(&self) -> Option<PageBackgroundPaintData> {
+        use crate::physical_box_fragment::PhysicalBoxFragment;
+        let Some(fragment) = self.ResidentBoxFragment() else {
+            return self.paint.page_document_background_geometry;
+        };
+        if fragment.GetBoxType() != crate::physical_fragment::BoxType::kPageBorderBox {
+            return None;
+        }
+        // Source: pagination_utils.cc GetPageArea and
+        // PhysicalBoxFragment::OffsetFromRootFragmentationContext().
+        let page_area = fragment
+            .Children()
+            .first()
+            .expect("page border box must contain its page area")
+            .get();
+        assert!(!page_area.is_null());
+        let page_area = unsafe { &*page_area.cast::<PhysicalBoxFragment>() };
+        debug_assert_eq!(
+            page_area.GetBoxType(),
+            crate::physical_fragment::BoxType::kPageArea
+        );
+        let offset = page_area.OffsetFromRootFragmentationContext();
+        Some(PageBackgroundPaintData {
+            positioning_area_offset: Offset {
+                x: offset.left.ToDouble(),
+                y: offset.top.ToDouble(),
+            },
+            ..self.paint.page_document_background_geometry.unwrap_or_default()
+        })
     }
 }
 
@@ -1449,6 +1578,24 @@ impl PaintProperties {
         self.SourceObject()
             .map(LayoutObject::BackgroundIsKnownToBeObscured)
             .SourceCheckedOr(self.background_is_known_to_be_obscured, "background_is_known_to_be_obscured")
+    }
+
+    /// LayoutBoxModelObject::BackgroundTransfersToView()
+    /// (core/layout/layout_box_model_object.cc:1123-1151) of the source
+    /// object: the document element, or the first body whose background
+    /// propagates to the canvas. BoxPainter skips its own background then and
+    /// ViewPainter paints it. Rechrom's isolated SVG documents opt out through
+    /// ViewPainter::ShouldApplyRootBackgroundBehavior (view_painter.cc:461).
+    pub fn BackgroundTransfersToView(&self) -> bool {
+        self.SourceObject()
+            .map(|object| {
+                let model = foundation::DynamicTo::<LayoutBoxModelObject>(object);
+                !model.is_null()
+                    && (object.IsDocumentElement() || object.IsBody())
+                    && object.ShouldApplyRootBackgroundBehaviorForLayout()
+                    && unsafe { &*model }.BackgroundTransfersToViewDefault()
+            })
+            .SourceCheckedOr(self.background_transfers_to_view, "background_transfers_to_view")
     }
 
     pub fn IsSVGChild(&self) -> bool {

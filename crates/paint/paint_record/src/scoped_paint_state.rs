@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use layoutng_assembly::fragment_tree::FragmentPaintData;
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::internal::layout_input::{NodeKind, Offset};
 use paint_model::geometry_mapper::SourceToDestinationRect;
 use paint_model::geometry_mapper::TranslationTransform;
@@ -174,7 +175,7 @@ impl<'n, 'f, 'c, 'o> ScopedPaintState<'n, 'f, 'c, 'o> {
             Some(ScopedPaintChunkProperties::mask(paint_info.context, node))
         } else if layer_adjusted || svg_child || paint_offset_translation_as_drawing {
             None
-        } else if fragment.paint.is_page_border_box {
+        } else if fragment.IsPageBorderBox() {
             // The detached @page border box paints document decorations in
             // document space, not its fitted page-container space.
             Some(ScopedPaintChunkProperties::new(

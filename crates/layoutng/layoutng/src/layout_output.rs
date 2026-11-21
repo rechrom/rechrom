@@ -681,6 +681,34 @@ impl<'a> PaintFragmentCursor<'a> {
         font.ShouldSkipDrawing()
     }
 
+    /// The LayoutView root fragment's canvas background selection
+    /// (ViewPainter, view_painter.cc:76-449; root/body transfer per
+    /// layout_box_model_object.cc:1123-1151), read live from the resident
+    /// root and body fragments. None for any other fragment, for documents
+    /// without root background behavior, or when nothing would be painted.
+    /// The style is the selected fragment's PaintStyle projection.
+    pub fn CanvasBackground(
+        self,
+    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+        let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
+        if !object.IsLayoutView() {
+            return None;
+        }
+        crate::internal::boundary::layout_boundary::CanvasBackgroundForRoot(object, self)
+    }
+
+    /// CanvasBackground including a transparent selection (LayoutView
+    /// background invalidation geometry).
+    pub fn ViewBackground(
+        self,
+    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+        let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
+        if !object.IsLayoutView() {
+            return None;
+        }
+        crate::internal::boundary::layout_boundary::ViewBackgroundForRoot(object, self)
+    }
+
     /// Enter the source fragment graph through the opaque owner supplied by
     /// the standalone `layout_fragment` package. Concrete type recovery stays
     /// inside the LayoutNG assembly adapter.

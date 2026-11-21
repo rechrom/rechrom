@@ -40,12 +40,12 @@ impl BoxDecorationData {
             )
         });
         let has_background = fragment.paint.has_background
-            || fragment.paint.is_page_border_box
+            || fragment.IsPageBorderBox()
             || style.background_color().alpha > 0.0
             || style.has_background_images()
             || (paint_info.ShouldOmitCompositingInfo() && style.has_backdrop_filters());
         let should_paint_background = has_background
-            && !fragment.paint.background_transfers_to_view
+            && !fragment.paint.BackgroundTransfersToView()
             && !paint_info.ShouldSkipBackground();
         let border = IncludedBorderEdges(fragment);
         let widths = [border.top, border.right, border.bottom, border.left];

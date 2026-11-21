@@ -536,7 +536,9 @@ fn classic_root_canvas_background_reaches_compositor_with_matching_clip() {
             );
             let frame = page.CurrentFrame().unwrap();
             let root = root_paint(&frame.fragments);
-            let canvas = root.paint.canvas_background.as_ref().unwrap_or_else(|| {
+            let canvas = PaintFragmentCursor::FromHandle(&frame.fragments)
+                .CanvasBackground()
+                .unwrap_or_else(|| {
                 panic!(
                     "missing canvas background for {background}; root style={:?}",
                     root.paint.style.background_color()
