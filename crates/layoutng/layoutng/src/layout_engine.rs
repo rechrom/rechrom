@@ -786,8 +786,7 @@ impl LayoutEngine {
                     break;
                 }
                 root.VisitSelectionInputsForObject(object,&mut|cursor|{
-                    let Some(data)=cursor.PaintDataOption() else{return;};
-                    if !seen_fragments.insert(data.fragment_instance_id){return;}
+                    if cursor.PaintDataOption().is_none()||!seen_fragments.insert(cursor.FragmentInstanceId()){return;}
                     let source=cursor.Cursor().GetLayoutObject();
                     let data=unsafe{cursor.PaintDataMut()};
                     data.pre_paint_invalidation=crate::internal::boundary::layout_boundary::ExportSelectionPrePaintInvalidation(source);

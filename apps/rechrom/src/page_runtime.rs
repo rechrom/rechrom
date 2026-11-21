@@ -3558,8 +3558,8 @@ fn drag_regions(page: &Page, viewport: Viewport) -> Vec<crate::chrome::DragRegio
         let mut pending = vec![(root, Offset::default())];
         let mut visited = std::collections::HashSet::new();
         while let Some((fragment, parent_offset)) = pending.pop() {
-            if fragment.fragment_instance_id != 0 && !visited.insert(fragment.fragment_instance_id)
-            {
+            let instance = fragment.FragmentInstanceId();
+            if instance != 0 && !visited.insert(instance) {
                 continue;
             }
             let offset = Offset {

@@ -987,6 +987,37 @@ impl<'a> PaintFragmentCursor<'a> {
         unsafe { self.source.GetLayoutObject().as_ref() }
     }
 
+    /// Chromium identity of this occurrence, computed from the resident
+    /// owner without a publication census: FragmentData::UniqueId for a box
+    /// fragment (ensured on demand), (DisplayItemClient, FragmentItem::
+    /// FragmentId) for an inline item, (owner client, break-token sequence)
+    /// for a fragmentainer, 0 for a line box fragment.
+    pub fn FragmentInstanceId(self) -> u64 {
+        match self.source {
+            FragmentCursor::Physical { fragment, .. } => {
+                layout_fragment::fragment_tree::PhysicalFragmentInstanceId(fragment)
+            }
+            FragmentCursor::Inline { item, .. } => {
+                layout_fragment::fragment_tree::InlineItemInstanceId(item)
+            }
+        }
+    }
+
+    /// The identity of the fragmentainer this cursor itself is (a column or
+    /// page area), else None. Descendants inherit the nearest one through
+    /// the walk that reaches them, as PrePaintTreeWalk carries
+    /// `fragmentainer_idx` (pre_paint_tree_walk.cc).
+    pub fn FragmentainerInstanceId(self) -> Option<u64> {
+        match self.source {
+            FragmentCursor::Physical { fragment, .. } if fragment.IsFragmentainerBox() => {
+                Some(layout_fragment::fragment_tree::FragmentainerInstanceId(
+                    unsafe { &*(fragment as *const PhysicalFragment as *const PhysicalBoxFragment) },
+                ))
+            }
+            _ => None,
+        }
+    }
+
     pub fn PaintData(self) -> &'a FragmentPaintData {
         self.PaintDataOption()
             .expect("source fragment has no committed paint input")

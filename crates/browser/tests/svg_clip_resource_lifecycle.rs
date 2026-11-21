@@ -5,7 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use layoutng_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle},
+    fragment_tree::{FragmentPaintData, LayoutResultHandle, ResidentBoxGeometry as _},
     internal::{
         layout_input::FontFace, layout_object::LayoutObject,
         layout_pass_scope::LayoutObjectFactoryScope,
@@ -858,8 +858,8 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
         assert_eq!(text.paint.style.color.red, 0.0);
         assert!(text.paint.glyph_runs == glyphs);
         assert_eq!(
-            text.fragment_instance_id,
-            find_fragment(&old, text_id).unwrap().fragment_instance_id
+            text.ViewFragmentInstanceId(),
+            find_fragment(&old, text_id).unwrap().ViewFragmentInstanceId()
         );
         assert_eq!(unsafe { &*object }.StyleRef().GetFont(), bound_font);
         assert_eq!(

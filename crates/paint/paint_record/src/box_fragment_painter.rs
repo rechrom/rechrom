@@ -4071,7 +4071,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let context = self.context.borrow();
             context
                 .caret
-                .zip(context.TextSource(fragment.fragment_instance_id))
+                .zip(context.TextSource(fragment.ViewFragmentInstanceId()))
                 .and_then(|(caret, cursor)| {
                     let (offset, color) = caret.BlockCaretTextPaint(cursor)?;
                     let local = cursor.TextRangeRect(offset, offset + 1)?;
@@ -4124,7 +4124,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if !self
             .context
             .borrow()
-            .HasTextSource(fragment.fragment_instance_id)
+            .HasTextSource(fragment.ViewFragmentInstanceId())
             && fragment.ViewTextItemFacts().2.is_none()
         {
             return;
@@ -4163,7 +4163,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let range_rect = |range: (u32, u32), selects_soft_line_break: bool| {
             self.context
                 .borrow()
-                .TextSource(fragment.fragment_instance_id)
+                .TextSource(fragment.ViewFragmentInstanceId())
                 .and_then(|cursor| {
                     cursor.TextSelectionRangeRect(range.0, range.1, selects_soft_line_break)
                 })
@@ -4396,7 +4396,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let glyph_runs = self
             .context
             .borrow_mut()
-            .TextGlyphRuns(fragment.fragment_instance_id);
+            .TextGlyphRuns(fragment.ViewFragmentInstanceId());
         let _drawing = visual_rect.map(|visual_rect| {
             if let Some((id, client)) = selection_client {
                 DrawingRecorder::with_client(self.context, self.node, id, client, visual_rect)
@@ -5081,7 +5081,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let source = self
                     .context
                     .borrow()
-                    .TextSource(fragment.fragment_instance_id);
+                    .TextSource(fragment.ViewFragmentInstanceId());
                 let item = source.and_then(|cursor| cursor.Cursor().InlineItem());
                 let mut physical_box_offset = self.node.paint_offset;
                 // text_fragment_painter.cc:69-103 line-top snap.
