@@ -6898,7 +6898,7 @@ impl Page {
                 if let Some(index) = document.FindNodeById(node.node_id) {
                     if document.AllowsResponsiveImageAutoSizes(index) {
                         let zoom = node.paint.EffectiveZoom().max(f32::MIN_POSITIVE);
-                        let width = (node.content_size.width as f32 / zoom).round() as f64;
+                        let width = (node.ViewContentSize().width as f32 / zoom).round() as f64;
                         output.push((index, width));
                     }
                 }

@@ -4210,8 +4210,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             if order < start.tree_order || order > end.tree_order {
                 return None;
             }
-            let mut range_start = fragment.text_start?;
-            let mut range_end = fragment.text_end?;
+            let mut range_start = fragment.ViewTextStart()?;
+            let mut range_end = fragment.ViewTextEnd()?;
             if order == start.tree_order {
                 range_start = range_start.max(start.offset);
             }
@@ -4243,8 +4243,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             && !fragment.ViewTextItemFacts().0
             && self.context.borrow().selection_handles_visible)
             .then(|| {
-                let fragment_start = fragment.text_start?;
-                let fragment_end = fragment.text_end?;
+                let fragment_start = fragment.ViewTextStart()?;
+                let fragment_end = fragment.ViewTextEnd()?;
                 let control = control_selection_state.and_then(|state| {
                     let range = (state.start, state.end);
                     let state = RefineSelectionStateForTextFragment(
@@ -4877,7 +4877,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let selected_glyphs = SliceGlyphsForSelection(
                     &input_run.glyphs,
                     selection_range,
-                    fragment.text_end.unwrap_or(selection_range.1),
+                    fragment.ViewTextEnd().unwrap_or(selection_range.1),
                 );
                 if selected_glyphs.is_empty() {
                     continue;
@@ -5026,7 +5026,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         for item in &glyph_foregrounds {
             self.context.borrow_mut().Append(item.clone(), self.node);
         }
-        if fragment.text_paint_timing_non_whitespace {
+        if fragment.ViewTextPaintTimingNonWhitespace() {
             self.context.borrow_mut().SetTextPainted();
         }
         if self
@@ -5108,7 +5108,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     highlight_rect,
                     selection_style.text_stroke_width(),
                     selection_range.expect("selection rect has a logical range"),
-                    fragment.text_start.zip(fragment.text_end),
+                    fragment.ViewTextStart().zip(fragment.ViewTextEnd()),
                     fragment.ViewInkOverflow(),
                     item,
                     physical_box_offset,

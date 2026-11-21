@@ -79,7 +79,7 @@ pub(super) fn ExportCanvasBackground(
                         x: cursor.Borders().left + cursor.Padding().left,
                         y: cursor.Borders().top + cursor.Padding().top,
                     },
-                    size: cursor.content_size,
+                    size: cursor.ViewContentSize(),
                 },
                 document_element_scrollable_overflow: cursor.paint.ScrollableOverflow(),
                 document_element_has_transform: false,

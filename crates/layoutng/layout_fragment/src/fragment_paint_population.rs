@@ -493,12 +493,6 @@ fn PopulateInlineItemLocalPaintData(
                     Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top));
             }
             output.paint.text_line_height = containing_line_height.map(Number);
-            output.text_start = Some(item.StartOffset());
-            output.text_end = Some(item.EndOffset());
-            let text = item.TextPaintInfo(fragment_items);
-            output.text_paint_timing_non_whitespace = !text
-                .text
-                .SubstringContainsOnlyWhitespaceOrEmpty(text.from, text.to);
         }
         ItemType::kLine => {
             output.kind = FragmentKind::kLine;

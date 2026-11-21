@@ -749,6 +749,12 @@ impl Default for PaintProperties {
 /// exported from style.
 pub trait ResidentBoxGeometry {
     fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment>;
+    /// The resident text or generated-text item and its FragmentItems.
+    fn ResidentTextItem(
+        &self,
+    ) -> Option<(&crate::fragment_item::FragmentItem, &crate::fragment_items::FragmentItems)>;
+    /// Whether the resident owner is an inline item.
+    fn ResidentOwnerIsInline(&self) -> bool;
     /// Borrowed-view size: PhysicalFragment::Size() of the resident physical
     /// owner, or FragmentItem::RectInContainerFragment() size of the resident
     /// inline item (what population stores in `size`). Detached fixtures
@@ -808,6 +814,13 @@ pub trait ResidentBoxGeometry {
     /// FragmentData::UniqueId of the owner's property fragment (the box
     /// fragment's FragmentData, else the object's first fragment).
     fn ViewPropertyFragmentUniqueId(&self) -> u64;
+    /// A text item's offsets in its text content (FragmentItem::StartOffset /
+    /// EndOffset).
+    fn ViewTextStart(&self) -> Option<u32>;
+    fn ViewTextEnd(&self) -> Option<u32>;
+    /// Whether a text item's painted text has a non-whitespace character
+    /// (text paint timing ignores whitespace-only text).
+    fn ViewTextPaintTimingNonWhitespace(&self) -> bool;
     /// Stitched decoration geometry: computed from the resident block box
     /// across its LayoutBox fragments; inline boxes keep PrePaint's stitched
     /// inline geometry (InlineBoxFragmentPainter).
@@ -907,6 +920,57 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ResidentTextItem(
+        &self,
+    ) -> Option<(&crate::fragment_item::FragmentItem, &crate::fragment_items::FragmentItems)> {
+        let layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } =
+            self.resident_owner
+        else {
+            return None;
+        };
+        let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+        let item = items.Items().get(index)?;
+        matches!(
+            item.Type(),
+            crate::fragment_item::ItemType::kText | crate::fragment_item::ItemType::kGeneratedText
+        )
+        .then_some((item, items))
+    }
+
+    fn ResidentOwnerIsInline(&self) -> bool {
+        matches!(
+            self.resident_owner,
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { .. }
+        )
+    }
+
+    fn ViewTextStart(&self) -> Option<u32> {
+        match self.ResidentTextItem() {
+            Some((item, _)) => Some(item.StartOffset()),
+            None if self.ResidentOwnerIsInline() => None,
+            None => self.text_start,
+        }
+    }
+
+    fn ViewTextEnd(&self) -> Option<u32> {
+        match self.ResidentTextItem() {
+            Some((item, _)) => Some(item.EndOffset()),
+            None if self.ResidentOwnerIsInline() => None,
+            None => self.text_end,
+        }
+    }
+
+    fn ViewTextPaintTimingNonWhitespace(&self) -> bool {
+        match self.ResidentTextItem() {
+            Some((item, items)) => {
+                let text = item.TextPaintInfo(items);
+                !text.text.SubstringContainsOnlyWhitespaceOrEmpty(text.from, text.to)
+            }
+            None if self.ResidentOwnerIsInline() => false,
+            None => self.text_paint_timing_non_whitespace,
+        }
+    }
+
     fn ViewStitchedDecoration(&self) -> Option<StitchedDecorationData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) if !box_fragment.IsInlineBox() => {
