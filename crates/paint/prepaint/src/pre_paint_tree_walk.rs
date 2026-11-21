@@ -7313,6 +7313,11 @@ impl PrePaintTreeWalk {
         self.pending_source_lease = Some(source_lease);
         self.completed_local_frame_prepaint.clear();
         self.paint_invalidator.BeginPass();
+        if source_owner_changed {
+            // Sliced inline strips depend on every fragment of the object;
+            // resolve them before any node reads them.
+            crate::inline_stitched_decoration::PopulateInlineStitchedDecorations(root.Cursor());
+        }
         self.requires_main_thread_for_background_attachment_fixed = root
             .paint
             .requires_main_thread_scrolling_for_background_attachment_fixed;

@@ -214,11 +214,6 @@ pub(crate) use layout_fragment_inline_fragment_paint_policy::{
 #[path = "../../../../layout_fragment/src/scrollbar_thumb_geometry.rs"]
 mod layout_fragment_scrollbar_thumb_geometry;
 use layout_fragment_scrollbar_thumb_geometry::SetScrollbarThumb;
-#[path = "../../../../layout_fragment/src/fragment_relationship_export.rs"]
-mod layout_fragment_fragment_relationship_export;
-use layout_fragment_fragment_relationship_export::{
-    PopulateInlineStitchedDecorations, PopulateInlineStitchedDecorationsFromReplay,
-};
 #[path = "../../../../layout_fragment/src/sticky_paint_export.rs"]
 mod layout_fragment_sticky_paint_export;
 use layout_fragment_sticky_paint_export::ExportStickyPaintProperties;

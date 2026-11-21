@@ -800,9 +800,11 @@ old `layoutng_*` source-package names at the repository boundary.
   `nine_piece_image_export.rs`. Each cost domain has its own fragment
   sampling entry. Whole-tree post-publication work is also separated:
   `global_paint_export.rs` owns canvas and main-thread-scroll facts,
-  `fragment_relationship_export.rs` owns logical-parent resolution and
-  sliced-inline stitching, and `sticky_paint_export.rs` owns sticky
-  constraint projection. The successful layout transaction's preorder source
+  and `sticky_paint_export.rs` owns sticky constraint projection.
+  Logical-parent occurrences and sliced-inline stitching are resolved by
+  PrePaint (`pre_paint_tree_walk.rs`, `inline_stitched_decoration.rs`) and
+  the client-rect walk, not per publication. The successful layout
+  transaction's preorder source
   collection and sticky update are grouped with their trace phase in
   `sticky_layout_commit.rs`, preventing that whole-tree scan from being
   charged to `LayoutEngine::RunLayout`. Scrollbar thumb geometry has its own

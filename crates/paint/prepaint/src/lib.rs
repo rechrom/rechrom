@@ -13,6 +13,7 @@ pub use paint_reuse::pre_paint_state_compare;
 
 pub mod background_geometry;
 pub mod block_paint_invalidator;
+mod inline_stitched_decoration;
 pub mod box_paint_invalidator;
 pub mod client_rects;
 pub mod clip_path_clipper;

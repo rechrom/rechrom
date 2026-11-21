@@ -10371,20 +10371,6 @@ mod package_contract_tests {
             );
         }
 
-        let relationships = std::fs::read_to_string(
-            root.join("layout_fragment/src/fragment_relationship_export.rs"),
-        )
-        .expect("read source fragment relationship owner");
-        for owned_policy in [
-            "pub(super) fn PopulateInlineStitchedDecorations",
-            "StitchedDecorationData",
-        ] {
-            assert!(
-                relationships.contains(owned_policy),
-                "layout_fragment relationship pass lost {owned_policy}"
-            );
-        }
-
         let sticky =
             std::fs::read_to_string(root.join("layout_fragment/src/sticky_paint_export.rs"))
                 .expect("read source sticky paint owner");
@@ -10413,7 +10399,6 @@ mod package_contract_tests {
                 .expect("read fragment boundary adapter");
         for owner in [
             "layout_fragment/src/global_paint_export.rs",
-            "layout_fragment/src/fragment_relationship_export.rs",
             "layout_fragment/src/sticky_paint_export.rs",
             "layout_fragment/src/scrollbar_thumb_geometry.rs",
         ] {
