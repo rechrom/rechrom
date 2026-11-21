@@ -16,32 +16,15 @@ pub(super) fn refresh_retained_paint_inputs(
     changed: &HashSet<u64>,
     inline_ink_changes: &HashSet<u64>,
 ) -> bool {
-    let mut sources = SourceMap::default();
-    let mut style_sources = StyleSourceMap::default();
     let mut clients = HashMap::new();
     let mut objects = Vec::new();
     let root_ptr: *mut LayoutObject = root;
     let mut object = root_ptr;
-    let mut logical_order = 0;
     while !object.is_null() {
         objects.push(object);
         let current = unsafe { &*object };
         let node = current.GetNode();
         if !node.is_null() {
-            logical_order += 1;
-            sources.insert(
-                object as *const _,
-                SourceEntry {
-                    node,
-                    logical_tree_order: logical_order,
-                },
-            );
-            style_sources.insert(
-                current.StyleRef() as *const _,
-                StyleSourceEntry {
-                    resources: unsafe { &*node }.InputStyleResources(),
-                },
-            );
             if changed.contains(&unsafe { &*node }.InputId()) {
                 clients.insert(
                     unsafe { &*(object as *const DisplayItemClient) }.Id() as u64,
@@ -85,22 +68,15 @@ pub(super) fn refresh_retained_paint_inputs(
     unsafe fn refresh(
         cursor: crate::layout_engine::PaintFragmentCursor<'_>,
         clients: &HashMap<u64, *mut LayoutObject>,
-        sources: &SourceMap,
-        styles: &StyleSourceMap,
     ) {
         let children = cursor.Children();
         let node = unsafe { cursor.PaintDataMut() };
         node.paint.background_is_known_to_be_obscured = false;
         if let Some(&object) = clients.get(&node.paint.DisplayItemClientId()) {
-            let resources = cursor
-                .DocumentResources()
-                .expect("completed fragment has document resources");
-            let current =
-                ExportPaintProperties(object, sources, styles, std::ptr::null(), resources);
+            let current = ExportPaintProperties(object, std::ptr::null());
             let live_style_facts = current.LiveStyleFacts();
             node.paint.BindSourceObject(object);
-            // ExportPaintProperties has made the object ready for invalidation.
-            node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
+            node.pre_paint_invalidation = ReadyPrePaintInvalidation(object);
             node.paint.style = current.style;
             // FragmentData identity is owned by this retained physical
             // fragment. ExportPaintProperties has no physical-fragment
@@ -118,9 +94,9 @@ pub(super) fn refresh_retained_paint_inputs(
                 current.background_any_layer_uses_content_box;
         }
         for child in children {
-            unsafe { refresh(child, clients, sources, styles) };
+            unsafe { refresh(child, clients) };
         }
     }
-    unsafe { refresh(fragments, &clients, &sources, &style_sources) };
+    unsafe { refresh(fragments, &clients) };
     true
 }

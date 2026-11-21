@@ -186,6 +186,8 @@ impl<'a> Iterator for FragmentChildren<'a> {
 pub(crate) struct PaintFragmentChildren<'a> {
     sources: FragmentChildren<'a>,
     state: Option<&'a LayoutPaintState>,
+    /// The display-item fragment scope every child inherits from the parent.
+    display_item_fragment: Option<u32>,
 }
 
 impl<'a> PaintFragmentChildren<'a> {
@@ -193,6 +195,7 @@ impl<'a> PaintFragmentChildren<'a> {
         Self {
             sources: FragmentChildren::new(cursor.source),
             state: cursor.state,
+            display_item_fragment: cursor.ChildDisplayItemFragmentScope(),
         }
     }
 }
@@ -200,16 +203,14 @@ impl<'a> PaintFragmentChildren<'a> {
 impl<'a> Iterator for PaintFragmentChildren<'a> {
     type Item = PaintFragmentCursor<'a>;
 
+    // Every child owns a resident sidecar: it is bound and initialized on
+    // its first access in the current publication (LayoutPaintState).
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let child = PaintFragmentCursor {
-                source: self.sources.next()?,
-                state: self.state,
-            };
-            if child.PaintDataOption().is_some() {
-                return Some(child);
-            }
-        }
+        Some(PaintFragmentCursor {
+            source: self.sources.next()?,
+            state: self.state,
+            display_item_fragment: self.display_item_fragment,
+        })
     }
 }
 

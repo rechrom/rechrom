@@ -43,7 +43,7 @@ impl EnginePaintUpdate for LayoutEngine {
             &mut self.boundary_cache_,
         );
         // The scroll directory is built on the first scroll that needs it
-        // (EnsureScrollPaintIndex), from this publication's replay list.
+        // (EnsureScrollPaintIndex), from this publication's fragment cursor.
         if let Some(index) = self.scroll_paint_index_.take() {
             self.scroll_paint_index_spare_ = Some(index);
         }

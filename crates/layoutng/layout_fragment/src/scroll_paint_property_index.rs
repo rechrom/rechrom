@@ -12,7 +12,6 @@ use super::{
 };
 use crate::fragment_tree::ResidentBoxGeometry as _;
 use crate::layout_engine::PaintFragmentCursor;
-use super::layout_fragment_fragment_export_state::PopulationReplayEntry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -46,28 +45,6 @@ impl ScrollPaintPropertyIndex {
         fragments: &LayoutResultHandle,
         cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
         reuse: Option<Self>,
-    ) -> Self {
-        Self::new_from(root, fragments, cached_objects, reuse, None)
-    }
-
-    /// `new` over a Paint publication's recorded slots (its preorder
-    /// occurrence list), without a fragment cursor walk.
-    pub(crate) fn new_from_replay(
-        root: &mut LayoutObject,
-        fragments: &LayoutResultHandle,
-        cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
-        reuse: Option<Self>,
-        replay: &[PopulationReplayEntry],
-    ) -> Self {
-        Self::new_from(root, fragments, cached_objects, reuse, Some(replay))
-    }
-
-    fn new_from(
-        root: &mut LayoutObject,
-        fragments: &LayoutResultHandle,
-        cached_objects: Option<(Arc<Vec<*mut LayoutObject>>, Arc<Vec<*mut LayoutObject>>)>,
-        reuse: Option<Self>,
-        replay: Option<&[PopulationReplayEntry]>,
     ) -> Self {
         let root = root as *mut LayoutObject;
         // Fragments name their source through the bound LayoutObject, so only
@@ -116,14 +93,11 @@ impl ScrollPaintPropertyIndex {
             }
             path.pop();
         }
-        match replay {
-            Some(entries) => index.collect_replay(entries),
-            None => collect(
-                &mut index,
-                PaintFragmentCursor::FromHandle(fragments),
-                &mut Vec::new(),
-            ),
-        }
+        collect(
+            &mut index,
+            PaintFragmentCursor::FromHandle(fragments),
+            &mut Vec::new(),
+        );
         // Source identities may disappear after DOM mutations. Drop empty
         // buckets after their capacity had a chance to serve this rebuild.
         index.by_source_id.retain(|_, entries| !entries.is_empty());
@@ -212,7 +186,7 @@ impl ScrollPaintPropertyIndex {
         if !fragment.paint.HasSource() {
             return;
         }
-        // Population binds every sourced slot to its LayoutObject; HasSource()
+        // Slot initialization binds every sourced slot to its LayoutObject; HasSource()
         // reads that binding, so the bound owner is the source object.
         let object = fragment.paint.SourceObjectPointer();
         if object.is_null() {
@@ -241,23 +215,6 @@ impl ScrollPaintPropertyIndex {
         self.by_source_id.entry(source_id).or_default().push(entry);
         if fragment.paint.Position() == Position::kSticky {
             self.sticky_fragments.push(entry);
-        }
-    }
-
-    /// The occurrence walk over recorded publication slots: preorder, each
-    /// entry's `len` spanning its subtree.
-    fn collect_replay(&mut self, entries: &[PopulationReplayEntry]) {
-        let mut path: Vec<*mut FragmentPaintData> = Vec::new();
-        let mut ends: Vec<usize> = Vec::new();
-        for (index, entry) in entries.iter().enumerate() {
-            while ends.last().is_some_and(|end| *end <= index) {
-                ends.pop();
-                path.pop();
-            }
-            let input = entry.slot as *mut FragmentPaintData;
-            path.push(input);
-            ends.push(index + entry.len.max(1));
-            self.admit(input, &path);
         }
     }
 }

@@ -44,11 +44,6 @@ impl layout_commit::PaintCommitBackend for PaintCommit<'_, '_> {
                 layer.ClearNeedsRepaintRecursively();
             }
         }
-        layout
-            .fragments
-            .PaintState::<LayoutPaintState>()
-            .expect("published layout result owns paint state")
-            .CommitPublication();
     }
 
     #[inline(never)]
