@@ -152,8 +152,8 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
         let content_box_rect = PaintRect {
             x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
             y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
-            width: fragment.content_size.width,
-            height: fragment.content_size.height,
+            width: fragment.ViewContentSize().width,
+            height: fragment.ViewContentSize().height,
         };
         let visual_rect = if replaced.clips_to_content_box {
             content_box_rect

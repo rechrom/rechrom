@@ -754,6 +754,9 @@ pub trait ResidentBoxGeometry {
     /// inline item (what population stores in `size`). Detached fixtures
     /// without an owner keep the stored value.
     fn ViewSize(&self) -> Size;
+    /// Borrowed-view content size: the box fragment's border box minus
+    /// borders and padding (clamped at zero), else the view size.
+    fn ViewContentSize(&self) -> Size;
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
@@ -800,6 +803,23 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewContentSize(&self) -> Size {
+        if matches!(self.resident_owner, layout_fragment_boundary::ResidentFragmentOwner::None) {
+            return self.content_size;
+        }
+        match self.ResidentBoxFragment() {
+            Some(box_fragment) => {
+                let insets = box_fragment.Borders() + box_fragment.Padding();
+                let size = box_fragment.Size();
+                Size {
+                    width: (size.width - insets.HorizontalSum()).ClampNegativeToZero().ToDouble(),
+                    height: (size.height - insets.VerticalSum()).ClampNegativeToZero().ToDouble(),
+                }
+            }
+            None => self.ViewSize(),
+        }
+    }
+
     fn ViewSize(&self) -> Size {
         use layout_fragment_boundary::ResidentFragmentOwner;
         match self.resident_owner {

@@ -3200,8 +3200,8 @@ fn ClipPathReferenceRect(
         ClipPathReferenceBox::kContentBox | ClipPathReferenceBox::kFillBox => PaintRect {
             x: border_box.x + border.left + fragment.Padding().left,
             y: border_box.y + border.top + fragment.Padding().top,
-            width: fragment.content_size.width,
-            height: fragment.content_size.height,
+            width: fragment.ViewContentSize().width,
+            height: fragment.ViewContentSize().height,
         },
         ClipPathReferenceBox::kMarginBox => {
             let margin = paint.Margin();
@@ -3321,8 +3321,8 @@ fn MaskBox(
     PaintRect {
         x: rect.x + fragment.Padding().left,
         y: rect.y + fragment.Padding().top,
-        width: fragment.content_size.width,
-        height: fragment.content_size.height,
+        width: fragment.ViewContentSize().width,
+        height: fragment.ViewContentSize().height,
     }
 }
 
@@ -4721,7 +4721,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         display_item_fragment: p.display_item_fragment,
         size: f.ViewSize(),
         offset: f.offset,
-        content_size: f.content_size,
+        content_size: f.ViewContentSize(),
         phase_flags,
         floating: p.Floating() as i32,
         display: p.Display() as i32,

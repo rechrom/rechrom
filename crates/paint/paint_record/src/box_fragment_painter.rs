@@ -5420,8 +5420,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let content_box = self.node.PixelSnappedRect(&PaintRect {
             x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
             y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
-            width: fragment.content_size.width,
-            height: fragment.content_size.height,
+            width: fragment.ViewContentSize().width,
+            height: fragment.ViewContentSize().height,
         });
         if content_box.width <= 0.0
             || content_box.height <= 0.0
@@ -5583,8 +5583,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let content_box = PaintRect {
             x: self.node.paint_offset.x + fragment.Borders().left + fragment.Padding().left,
             y: self.node.paint_offset.y + fragment.Borders().top + fragment.Padding().top,
-            width: fragment.content_size.width,
-            height: fragment.content_size.height,
+            width: fragment.ViewContentSize().width,
+            height: fragment.ViewContentSize().height,
         };
         if content_box.width <= 0.0 || content_box.height <= 0.0 {
             return;
@@ -7383,8 +7383,8 @@ fn BackgroundBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Paint
     PaintRect {
         x: x + border.left + fragment.Padding().left,
         y: y + border.top + fragment.Padding().top,
-        width: fragment.content_size.width,
-        height: fragment.content_size.height,
+        width: fragment.ViewContentSize().width,
+        height: fragment.ViewContentSize().height,
     }
 }
 
@@ -10033,7 +10033,7 @@ mod background_attachment_tests {
         };
         fragment.paint.replaced_is_image = true;
         fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-            size: fragment.content_size,
+            size: fragment.ViewContentSize(),
             is_image: true,
             ..Default::default()
         });
@@ -10112,7 +10112,7 @@ mod background_attachment_tests {
         fragment.paint.replaced_is_image = true;
         fragment.paint.style.force_dark = true;
         fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-            size: fragment.content_size,
+            size: fragment.ViewContentSize(),
             is_image: true,
             ..Default::default()
         });
@@ -10164,7 +10164,7 @@ mod background_attachment_tests {
         };
         fragment.paint.replaced_is_image = true;
         fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-            size: fragment.content_size,
+            size: fragment.ViewContentSize(),
             is_image: true,
             ..Default::default()
         });
@@ -10206,7 +10206,7 @@ mod background_attachment_tests {
             fragment.paint.replaced_is_image = true;
             fragment.paint.replaced_selection_state = selection_state;
             fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-                size: fragment.content_size,
+                size: fragment.ViewContentSize(),
                 is_image: true,
                 ..Default::default()
             });
@@ -10316,7 +10316,7 @@ mod background_attachment_tests {
             };
             fragment.paint.replaced_is_image = true;
             fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-                size: fragment.content_size,
+                size: fragment.ViewContentSize(),
                 is_image: true,
                 ..Default::default()
             });
@@ -10395,7 +10395,7 @@ mod background_attachment_tests {
             fragment.paint.display_item_client_invalidation_reason =
                 Some(foundation::PaintInvalidationReason::kNone);
             fragment.paint.replaced_content = Some(ReplacedContentPaintData {
-                size: fragment.content_size,
+                size: fragment.ViewContentSize(),
                 is_image: true,
                 ..Default::default()
             });

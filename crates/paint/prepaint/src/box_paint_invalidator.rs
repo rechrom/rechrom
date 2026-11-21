@@ -563,7 +563,7 @@ fn PhysicalContentBoxSignature(fragment: &FragmentPaintData) -> (Offset, Size) {
             x: fragment.Borders().left + fragment.Padding().left,
             y: fragment.Borders().top + fragment.Padding().top,
         },
-        fragment.content_size,
+        fragment.ViewContentSize(),
     )
 }
 
