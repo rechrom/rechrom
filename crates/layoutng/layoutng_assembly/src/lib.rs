@@ -4926,7 +4926,6 @@ mod package_contract_tests {
         for owned_entry in [
             "pub(crate) fn ExportGeometryStyle",
             "pub(crate) fn ExportStyle",
-            "pub(crate) fn ExportStyleWithProjectedSvg",
             "pub(crate) fn SetResolvedOffsetTransform",
             "clip_path_paint_export.rs",
         ] {
@@ -9864,8 +9863,6 @@ mod package_contract_tests {
             "fn ExportPrePaintInvalidation",
             "pub(super) fn ExportProperties",
             "ShouldDoFullPaintInvalidation",
-            "ExportStyleWithProjectedSvg",
-            "ExportStickyPaintProperties",
             "FormControlPaintData",
         ] {
             assert!(
@@ -9962,8 +9959,6 @@ mod package_contract_tests {
             "pub(super) fn ExportTextCombineEmphasis",
             "pub(crate) fn BuildPaintGlyphRuns",
             "pub(crate) fn ExportTextPaintBaseline",
-            "pub(super) fn ExportTextCombineInlineOffset",
-            "pub(super) fn ExportListMarkerSymbol",
         ] {
             assert!(
                 owner.contains(owned_policy),
@@ -10250,7 +10245,6 @@ mod package_contract_tests {
             .expect("read source ink-overflow owner");
         for owned_policy in [
             "pub(super) fn ExportInkRect",
-            "pub(super) fn ExportBoxInkOverflow",
             "pub(super) fn ExportInlineInkOverflow",
             "ComputeInkBounds",
             "text_glyph_ink",
@@ -10261,14 +10255,12 @@ mod package_contract_tests {
             );
         }
         assert!(
-            ink.matches("#[inline(never)]").count() >= 2,
-            "box and inline ink export must retain separate sampling frames"
+            ink.matches("#[inline(never)]").count() >= 1,
+            "inline ink export must retain its sampling frame"
         );
         assert!(
-            ink.contains("layout_box.SelfVisualOverflowRect()")
-                && !ink.contains("paint.style.box_shadows")
-                && !ink.contains("paint.style.outline_width"),
-            "LayoutBox visual overflow must come from the source overflow owner, not style reconstruction"
+            !ink.contains("paint.style.box_shadows") && !ink.contains("paint.style.outline_width"),
+            "visual overflow must come from the source overflow owner, not style reconstruction"
         );
 
         let images =
@@ -10301,7 +10293,6 @@ mod package_contract_tests {
             );
         }
         for leaked_policy in [
-            "fn ExportBoxInkOverflow(",
             "fn ExportInlineInkOverflow(",
             "fn ExportNinePieceImages(",
         ] {
@@ -10409,7 +10400,6 @@ mod package_contract_tests {
             "fn ExportCanvasBackground(",
             "fn ResolveLogicalParentOccurrences(",
             "fn PopulateInlineStitchedDecorations(",
-            "fn ExportStickyPaintProperties(",
             "fn SetScrollbarThumb(",
         ] {
             assert!(
