@@ -4511,6 +4511,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 true,
             );
         }
+        // text_fragment_painter.cc:69-103 reads the containing line box
+        // through the InlineCursor once per text fragment.
+        let text_line_geometry = fragment.ViewTextLineGeometry();
         let mut glyph_foregrounds = Vec::new();
         let mut block_caret_glyphs = Vec::new();
         let mut selection_glyph_shadows = Vec::new();
@@ -4533,7 +4536,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let mut origin = TextPaintOrigin(self.node);
                 let mut physical_box_offset = self.node.paint_offset;
                 let mut text_line_top = 0.0;
-                if let Some(text_line_top_offset) = fragment.paint.text_line_top_offset {
+                if let Some((text_line_top_offset, _)) = text_line_geometry {
                     text_line_top = self.node.paint_offset.y + text_line_top_offset;
                     // ComputePhysicalBoxGeometry rounds the physical line top,
                     // not the fragment-local export inputs. Recompute the
@@ -4567,7 +4570,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     font_size: input_run.font_size,
                     baseline: input_run.baseline,
                     text_line_top,
-                    text_line_height: fragment.paint.text_line_height.unwrap_or(0.0),
+                    text_line_height: text_line_geometry.map_or(0.0, |(_, height)| height),
                     text_blob_origin: Offset {
                         x: origin.x + shadow_offset.x,
                         y: origin.y + input_run.baseline + shadow_offset.y,
@@ -5081,9 +5084,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     .TextSource(fragment.fragment_instance_id);
                 let item = source.and_then(|cursor| cursor.Cursor().InlineItem());
                 let mut physical_box_offset = self.node.paint_offset;
-                if fragment.paint.text_line_top_offset.is_some() {
-                    physical_box_offset.y += fragment.paint.text_line_snap_delta.unwrap_or(0.0);
-                }
+                // text_fragment_painter.cc:69-103 line-top snap.
+                physical_box_offset.y +=
+                    source.and_then(|cursor| cursor.TextLineSnapDelta()).unwrap_or(0.0);
                 let highlight_rect = source
                     .and_then(|cursor| {
                         let range = selection_range.expect("selection rect has a logical range");
@@ -5213,7 +5216,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         // those ops apply it (Blink's rotated context uses LineRelativeRect).
         if let Some((local, _)) = block_caret_text {
             let mut physical_offset = self.node.paint_offset;
-            if let Some(line_top) = fragment.paint.text_line_top_offset {
+            if let Some(line_top) = fragment.ViewTextLineTopOffset() {
                 let top = physical_offset.y + line_top;
                 physical_offset.y += (top + 0.5).floor() - top;
             }
@@ -6521,9 +6524,10 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let mut paint_offset = node.paint_offset;
     // text_fragment_painter.cc:98-99 shares this physical-line snap with the
     // text origin; moving the glyphs must move their visual rect as well.
-    if fragment.paint.text_line_top_offset.is_some() {
-        paint_offset.y += fragment.paint.text_line_snap_delta.unwrap_or(0.0);
-    }
+    paint_offset.y += node
+        .SourceCursor()
+        .and_then(|cursor| cursor.TextLineSnapDelta())
+        .unwrap_or(0.0);
     if let Some(rect) = fragment.ViewSelfInkOverflow() {
         return node.EnclosingRect(PaintRect {
             x: paint_offset.x + rect.offset.x,
@@ -7104,7 +7108,7 @@ fn DecorationRect(node: &PaintTreeNode<'_>) -> PaintRect {
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    if let Some(rect) = fragment.paint.first_line_decoration_rect {
+    if let Some(rect) = fragment.ViewFirstLineDecorationRect() {
         return PaintRect {
             x: node.paint_offset.x + rect.offset.x,
             y: node.paint_offset.y + rect.offset.y,

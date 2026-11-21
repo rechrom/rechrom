@@ -518,3 +518,104 @@ pub(crate) fn LiveTextItemFacts(
         text_combine_inline_offset,
     ))
 }
+
+/// The line item containing the text item at `index`: InlineCursor::
+/// MoveToContainingLine walks back to the previous line box
+/// (layoutng_fragment_tree/inline_cursor.cc:554-562).
+fn ContainingLineItem(items: &[FragmentItem], index: usize) -> Option<&FragmentItem> {
+    items[..index.min(items.len())]
+        .iter()
+        .rev()
+        .find(|item| item.Type() == ItemType::kLine)
+}
+
+/// A text item's containing line geometry as TextFragmentPainter reads it
+/// from its InlineCursor (core/paint/text_fragment_painter.cc:69-103,
+/// ComputeBoxRect's `parent_offset`): the line top relative to the item and
+/// the line height. `None` for items that are not text or outside a line.
+pub(crate) fn LiveTextLineGeometry(
+    items: &layout_fragment::fragment_items::FragmentItems,
+    index: usize,
+) -> Option<(f64, f64)> {
+    let span = items.Items();
+    let item = span.get(index)?;
+    if !matches!(item.Type(), ItemType::kText | ItemType::kGeneratedText) {
+        return None;
+    }
+    let line = ContainingLineItem(span, index)?;
+    Some((
+        Number(line.OffsetInContainerFragment().top - item.RectInContainerFragment().offset.top),
+        Number(line.Size().height),
+    ))
+}
+
+/// The line-top snap of ComputeBoxRect (core/paint/text_fragment_painter.cc:
+/// 69-103): `LayoutUnit((paint_offset.top + parent_offset.top).Round())`
+/// minus the unrounded line top, where `paint_offset` is the containing box
+/// fragment's FragmentData::PaintOffset() and `parent_offset` its line's
+/// offset in that container. `container` owns `items`.
+pub(crate) fn LiveTextLineSnapDelta(
+    container: &PhysicalBoxFragment,
+    items: &layout_fragment::fragment_items::FragmentItems,
+    index: usize,
+) -> Option<f64> {
+    let span = items.Items();
+    let item = span.get(index)?;
+    if !matches!(item.Type(), ItemType::kText | ItemType::kGeneratedText) {
+        return None;
+    }
+    let line = ContainingLineItem(span, index)?;
+    let fragment_data = container.GetFragmentData();
+    let paint_offset_top = if fragment_data.is_null() {
+        LayoutUnit::default()
+    } else {
+        unsafe { &*fragment_data }.PaintOffset().top
+    };
+    let line_top = paint_offset_top + line.OffsetInContainerFragment().top;
+    Some(Number(LayoutUnit::from_signed(line_top.Round()) - line_top))
+}
+
+/// The `::first-line` decoration rect of a line item in line-local
+/// coordinates: LineBoxFragmentPainter (core/paint/
+/// inline_box_fragment_painter.cc) paints the first-line background over the
+/// first-line style's default-baseline font height, placed against the line
+/// box metrics. `None` unless the line uses a distinct first-line style.
+pub(crate) fn LiveFirstLineDecorationRect(item: &FragmentItem) -> Option<FragmentPaintRect> {
+    if item.Type() != ItemType::kLine || !item.UsesFirstLineStyle() {
+        return None;
+    }
+    let object = unsafe { item.GetLayoutObject().as_ref() }?;
+    let line_style = object.FirstLineStyleRef();
+    if std::ptr::eq(line_style, object.StyleRef()) {
+        return None;
+    }
+    let line_box = item.LineBoxFragment();
+    debug_assert!(!line_box.is_null());
+    let line_metrics = unsafe { &*line_box }.Metrics();
+    let text_metrics = line_style.GetFontHeightForDefaultBaseline();
+    let size = item.RectInContainerFragment().size;
+    let (width, height) = (Number(size.width), Number(size.height));
+    Some(if line_style.IsHorizontalWritingMode() {
+        FragmentPaintRect {
+            offset: Offset {
+                x: 0.0,
+                y: Number(line_metrics.ascent - text_metrics.ascent),
+            },
+            size: Size {
+                width,
+                height: Number(text_metrics.LineHeight()),
+            },
+        }
+    } else {
+        FragmentPaintRect {
+            offset: Offset {
+                x: width - Number(line_metrics.ascent) - Number(text_metrics.descent),
+                y: 0.0,
+            },
+            size: Size {
+                width: Number(text_metrics.LineHeight()),
+                height,
+            },
+        }
+    })
+}

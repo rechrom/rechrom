@@ -205,9 +205,6 @@ pub struct PaintProperties {
     /// than an individual mask layer's clip box: Chromium uses LayersClipMax
     /// and includes mask-box-image outsets when building MaskClip.
     pub css_mask_bounding_box: Option<FragmentPaintRect>,
-    /// Content box used only by LineBoxFragmentPainter for a `::first-line`
-    /// background. None means this line owns no line-box decoration item.
-    pub first_line_decoration_rect: Option<FragmentPaintRect>,
     // Baseline-adjusted, writing-mode converted glyph bounds. This remains
     // available when full text decoration/emphasis overflow is not implemented.
     pub text_glyph_ink: Option<FragmentPaintRect>,
@@ -506,13 +503,6 @@ pub struct PaintProperties {
     pub writing_mode: WritingMode,
     pub direction: TextDirection,
     pub first_baseline: Option<f64>,
-    pub text_line_top_offset: Option<f64>,
-    /// `TextFragmentPainter::ComputePhysicalBoxGeometry` line-top adjustment,
-    /// captured from the source fragment's `paint_offset + parent_offset`.
-    /// Flattened PaintTreeNode offsets cannot reconstruct that pair after a
-    /// paint offset translation without changing the rounding phase.
-    pub text_line_snap_delta: Option<f64>,
-    pub text_line_height: Option<f64>,
     /// FragmentItem::IsEllipsis(). TextDecorationPainter must not infer this
     /// from generated-text kind because other generated runs can be decorated.
     pub is_ellipsis: bool,
@@ -598,7 +588,6 @@ impl Default for PaintProperties {
             ink_overflow: None,
             filtered_ink_overflow: None,
             css_mask_bounding_box: None,
-            first_line_decoration_rect: None,
             text_glyph_ink: None,
             text_hit_test_bounds: None,
             box_self_visual_overflow: None,
@@ -728,9 +717,6 @@ impl Default for PaintProperties {
             writing_mode: WritingMode::kHorizontalTb,
             direction: TextDirection::kLtr,
             first_baseline: None,
-            text_line_top_offset: None,
-            text_line_snap_delta: None,
-            text_line_height: None,
             is_ellipsis: false,
             text_fit_scale: 1.0,
             text_combine: None,
@@ -800,6 +786,21 @@ pub trait ResidentBoxGeometry {
     /// The active ScopedDisplayItemFragment value; an inline item's
     /// FragmentItem::FragmentId().
     fn ViewDisplayItemFragment(&self) -> u32;
+    /// A text item's containing line top relative to the item and the line
+    /// height, read from the resident FragmentItems through its containing
+    /// line (InlineCursor::MoveToContainingLine; core/paint/
+    /// text_fragment_painter.cc:69-103). `None` for other owners.
+    fn ViewTextLineGeometry(&self) -> Option<(f64, f64)>;
+    fn ViewTextLineTopOffset(&self) -> Option<f64> {
+        self.ViewTextLineGeometry().map(|(top, _)| top)
+    }
+    fn ViewTextLineHeight(&self) -> Option<f64> {
+        self.ViewTextLineGeometry().map(|(_, height)| height)
+    }
+    /// The `::first-line` decoration rect of a resident line item whose
+    /// first-line style differs from its normal style (LineBoxFragmentPainter).
+    /// `None` means the line owns no line-box decoration item.
+    fn ViewFirstLineDecorationRect(&self) -> Option<FragmentPaintRect>;
     /// Whether the fragment is hidden for paint; an inline item's
     /// FragmentItem::IsHiddenForPaint() or a disabled SVG viewport.
     fn ViewHidden(&self) -> bool;
@@ -1368,6 +1369,28 @@ impl ResidentBoxGeometry for FragmentPaintData {
                 &self.paint,
             ),
             None => self.paint.fieldset.clone(),
+        }
+    }
+
+    fn ViewTextLineGeometry(&self) -> Option<(f64, f64)> {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                crate::internal::boundary::layout_boundary::LiveTextLineGeometry(items, index)
+            }
+            _ => None,
+        }
+    }
+
+    fn ViewFirstLineDecorationRect(&self) -> Option<FragmentPaintRect> {
+        match self.resident_owner {
+            layout_fragment_boundary::ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                items.Items().get(index).and_then(
+                    crate::internal::boundary::layout_boundary::LiveFirstLineDecorationRect,
+                )
+            }
+            _ => None,
         }
     }
 

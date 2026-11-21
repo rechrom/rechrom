@@ -1073,6 +1073,25 @@ impl<'a> PaintFragmentCursor<'a> {
     /// deliberately distinct from the physical selection-background rect:
     /// Paint uses it for selected glyph/decorations clipping after applying
     /// the writing-mode rotation.
+    /// TextFragmentPainter's line-top snap (core/paint/
+    /// text_fragment_painter.cc:69-103 ComputeBoxRect): the rounded minus
+    /// the unrounded physical line top, from the containing line's offset
+    /// and the container fragment's FragmentData::PaintOffset(). `None`
+    /// unless this cursor is a text item inside a line.
+    pub fn TextLineSnapDelta(self) -> Option<f64> {
+        match self.source {
+            FragmentCursor::Inline {
+                items,
+                container,
+                index,
+                ..
+            } => crate::internal::boundary::layout_boundary::LiveTextLineSnapDelta(
+                container, items, index,
+            ),
+            FragmentCursor::Physical { .. } => None,
+        }
+    }
+
     pub fn TextHighlightRangeRect(self, start: u32, end: u32) -> Option<LayoutRect> {
         layout_fragment_text_fragment_queries::text_highlight_range_rect(self, start, end)
     }

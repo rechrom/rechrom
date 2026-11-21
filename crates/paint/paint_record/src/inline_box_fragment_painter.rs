@@ -108,7 +108,7 @@ impl<'n, 'f, 'c, 'o> LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
         // ::first-line box. Ordinary line boxes therefore retain their own
         // exact border-box contribution as well.
         box_painter.RecordRegionCaptureAndTrackedElementData();
-        if fragment.paint.first_line_decoration_rect.is_none()
+        if fragment.ViewFirstLineDecorationRect().is_none()
             || fragment.ViewHidden()
             || !fragment.paint.style.visible()
         {
@@ -175,7 +175,7 @@ mod tests {
                 frame_token: None,
                 parent_frame_token: None,
             });
-        assert!(fragment.paint.first_line_decoration_rect.is_none());
+        assert!(fragment.ViewFirstLineDecorationRect().is_none());
 
         let mut node = PaintTreeNode::default();
         node.paint_offset = Offset { x: 5.0, y: 7.0 };
