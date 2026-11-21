@@ -749,6 +749,11 @@ impl Default for PaintProperties {
 /// exported from style.
 pub trait ResidentBoxGeometry {
     fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment>;
+    /// Borrowed-view size: PhysicalFragment::Size() of the resident physical
+    /// owner, or FragmentItem::RectInContainerFragment() size of the resident
+    /// inline item (what population stores in `size`). Detached fixtures
+    /// without an owner keep the stored value.
+    fn ViewSize(&self) -> Size;
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
     fn BorderSides(&self) -> layout_fragment_boundary::FragmentBoxSides;
@@ -795,6 +800,34 @@ fn LiveNinePieceImage(
 }
 
 impl ResidentBoxGeometry for FragmentPaintData {
+    fn ViewSize(&self) -> Size {
+        use layout_fragment_boundary::ResidentFragmentOwner;
+        match self.resident_owner {
+            ResidentFragmentOwner::None => self.size,
+            ResidentFragmentOwner::Physical(address) => {
+                let size = unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) }
+                    .Size();
+                Size {
+                    width: size.width.ToDouble(),
+                    height: size.height.ToDouble(),
+                }
+            }
+            ResidentFragmentOwner::InlineItem { items, index } => {
+                let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
+                match items.Items().get(index) {
+                    Some(item) => {
+                        let size = item.RectInContainerFragment().size;
+                        Size {
+                            width: size.width.ToDouble(),
+                            height: size.height.ToDouble(),
+                        }
+                    }
+                    None => self.size,
+                }
+            }
+        }
+    }
+
     fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment> {
         use crate::physical_box_fragment::PhysicalBoxFragment;
         use layout_fragment_boundary::ResidentFragmentOwner;

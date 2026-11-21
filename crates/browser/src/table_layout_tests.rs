@@ -1,3 +1,4 @@
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::{
     fragment_tree::{FragmentKind, FragmentPaintData},
     internal::layout_input::{ConstraintSpace, FontFace, Size},
@@ -165,8 +166,8 @@ fn body() {
             let mut values = if let Some(f) = find(&fragments, node.Id()) {
                 let p = &f.paint;
                 vec![
-                    f.size.width.round(),
-                    f.size.height.round(),
+                    f.ViewSize().width.round(),
+                    f.ViewSize().height.round(),
                     (f.content_size.width + p.padding.left + p.padding.right).round(),
                     (f.content_size.height + p.padding.top + p.padding.bottom).round(),
                     f.content_size.width,

@@ -374,8 +374,8 @@ fn BuildBackplates(root: &PaintTreeNode<'_>) -> Vec<PaintRect> {
                 backplates.AddTextRect(PaintRect {
                     x: node.paint_offset.x,
                     y: node.paint_offset.y,
-                    width: fragment.size.width,
-                    height: fragment.size.height,
+                    width: fragment.ViewSize().width,
+                    height: fragment.ViewSize().height,
                 });
             }
             return;
@@ -572,7 +572,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         {
             return;
         }
-        let paint_rect = PixelSnappedBorderBoxRect(self.node, fragment.size);
+        let paint_rect = PixelSnappedBorderBoxRect(self.node, fragment.ViewSize());
         self.RecordRegionCaptureAndTrackedElementDataForClient(
             paint_rect,
             fragment.paint.DisplayItemClientId(),
@@ -1117,9 +1117,9 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                 let painting_contents = paint_info.IsPaintingBackgroundInContentsSpace();
                 let paint_rect = if fragment.paint.IsLayoutView() {
                     ViewBackgroundRect(self.node, painting_contents)
-                        .unwrap_or_else(|| PixelSnappedBorderBoxRect(self.node, fragment.size))
+                        .unwrap_or_else(|| PixelSnappedBorderBoxRect(self.node, fragment.ViewSize()))
                 } else {
-                    PixelSnappedBorderBoxRect(self.node, fragment.size)
+                    PixelSnappedBorderBoxRect(self.node, fragment.ViewSize())
                 };
                 let scrolling_client = painting_contents
                     .then(|| {
@@ -2554,8 +2554,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let rect = self.node.PixelSnappedRect(&PaintRect {
             x: self.node.paint_offset.x,
             y: self.node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         });
         if rect.width <= 0.0 || rect.height <= 0.0 || !IsVisible(self.node, &rect) {
             return;
@@ -4572,8 +4572,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                         + fragment.paint.text_combine_inline_offset
                         + shadow_offset.x,
                     y: self.node.paint_offset.y + shadow_offset.y,
-                    width: fragment.size.width,
-                    height: fragment.size.height,
+                    width: fragment.ViewSize().width,
+                    height: fragment.ViewSize().height,
                 };
                 let mut item = DisplayItem {
                     r#type: DisplayItemType::kDrawGlyphRun,
@@ -4726,8 +4726,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let rect = PaintRect {
                 x: self.node.paint_offset.x + fragment.paint.text_combine_inline_offset,
                 y: self.node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             };
             // SVG glyphs are positioned by a record-local textPath transform.
             // Their unrotated baseline box is not a visibility bound.
@@ -5127,7 +5127,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
                     fragment.paint.ink_overflow,
                     item,
                     physical_box_offset,
-                    fragment.size,
+                    fragment.ViewSize(),
                 );
                 {
                     let mut context = self.context.borrow_mut();
@@ -5346,8 +5346,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let rect = PaintRect {
             x: self.node.paint_offset.x,
             y: self.node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         };
         for run in &emphasis.glyph_runs {
             let mut item = DisplayItem {
@@ -5402,8 +5402,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             PaintRect {
                 x: self.node.paint_offset.x,
                 y: self.node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             },
             fragment.paint.EffectiveZoom() as f64,
         );
@@ -5988,8 +5988,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             let source = PaintRect {
                 x: self.node.paint_offset.x,
                 y: self.node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             };
             if source.width >= 2.0 && source.height >= 2.0 && IsVisible(self.node, &source) {
                 self.context.borrow_mut().Append(
@@ -6083,8 +6083,8 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         let source_box = outline_rects.first().copied().unwrap_or(PaintRect {
             x: self.node.paint_offset.x,
             y: self.node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         });
         let horizontal_offset = outline_offset.max(-source_box.width / 2.0);
         let vertical_offset = outline_offset.max(-source_box.height / 2.0);
@@ -6563,8 +6563,8 @@ fn FragmentVisualRect(node: &PaintTreeNode<'_>) -> PaintRect {
     let mut rect = PaintRect {
         x: paint_offset.x,
         y: paint_offset.y,
-        width: fragment.size.width,
-        height: fragment.size.height,
+        width: fragment.ViewSize().width,
+        height: fragment.ViewSize().height,
     };
     if let Some(glyph) = fragment.paint.text_glyph_ink {
         rect.union(PaintRect {
@@ -6859,8 +6859,8 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
             node.PixelSnappedRect(&source_background.unwrap_or(PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             })),
         );
     }
@@ -6877,17 +6877,17 @@ fn ViewBackgroundRect(node: &PaintTreeNode<'_>, scrolling: bool) -> Option<Paint
                 }
             })
         })
-        .unwrap_or(fragment.size);
+        .unwrap_or(fragment.ViewSize());
     let mut rect = PaintRect {
         x: node.paint_offset.x,
         y: node.paint_offset.y,
         width: viewport
             .width
-            .max(fragment.size.width)
+            .max(fragment.ViewSize().width)
             .max(fragment.paint.scroll_size.width),
         height: viewport
             .height
-            .max(fragment.size.height)
+            .max(fragment.ViewSize().height)
             .max(fragment.paint.scroll_size.height),
     };
     if let Some(source_background) = source_background {
@@ -8261,7 +8261,7 @@ mod background_attachment_tests {
             height: 20.0,
         };
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
-            size: fragment.size,
+            size: fragment.ViewSize(),
             ..FragmentPaintRect::default()
         });
         fragment.paint.establishes_paint_state = true;
@@ -9002,7 +9002,7 @@ mod background_attachment_tests {
         };
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
             offset: Offset::default(),
-            size: fragment.size,
+            size: fragment.ViewSize(),
         });
         fragment.paint.gap_rules = Some(Arc::new(GapRulePaintData {
             rules: vec![
@@ -9102,7 +9102,7 @@ mod background_attachment_tests {
         };
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
             offset: Offset::default(),
-            size: fragment.size,
+            size: fragment.ViewSize(),
         });
         fragment.paint.gap_rules = Some(Arc::new(GapRulePaintData {
             rules: vec![
@@ -9169,7 +9169,7 @@ mod background_attachment_tests {
         };
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
             offset: Offset::default(),
-            size: fragment.size,
+            size: fragment.ViewSize(),
         });
         fragment.paint.gap_rules = Some(Arc::new(GapRulePaintData {
             rules: vec![
@@ -9668,7 +9668,7 @@ mod background_attachment_tests {
         fragment.paint.is_layout_view = true;
         fragment.paint.style.SetVisibleForTesting(true);
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
-            size: fragment.size,
+            size: fragment.ViewSize(),
             ..FragmentPaintRect::default()
         });
         fragment.resources = Some(Arc::new(PaintResources {
@@ -9761,7 +9761,7 @@ mod background_attachment_tests {
         fragment.paint.is_layout_view = true;
         fragment.paint.style.SetVisibleForTesting(true);
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
-            size: fragment.size,
+            size: fragment.ViewSize(),
             ..FragmentPaintRect::default()
         });
         fragment.paint.display_item_client_id = 91;
@@ -10708,7 +10708,7 @@ mod background_attachment_tests {
             height: 80.0,
         };
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {
-            size: fragment.size,
+            size: fragment.ViewSize(),
             ..FragmentPaintRect::default()
         });
         fragment.paint.style.outline_width = 2.0;

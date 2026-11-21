@@ -114,7 +114,7 @@ fn LocalPoint(
         let transform = fragment.paint.style.transform.as_ref().unwrap();
         let reference_rect = paint::geometry_mapper::ResolveTransformReferenceRect(
             fragment.paint.style.transform_reference_box,
-            fragment.size,
+            fragment.ViewSize(),
             fragment.Borders(),
             fragment.Padding(),
         );
@@ -259,7 +259,7 @@ fn OuterBorderContains(
     point: Offset,
     absolute: Offset,
 ) -> bool {
-    query.border_contains(fragment, fragment.size, point, absolute, false, true, true)
+    query.border_contains(fragment, fragment.ViewSize(), point, absolute, false, true, true)
 }
 
 fn InnerBorderContains(
@@ -268,7 +268,7 @@ fn InnerBorderContains(
     point: Offset,
     absolute: Offset,
 ) -> bool {
-    query.border_contains(fragment, fragment.size, point, absolute, true, false, true)
+    query.border_contains(fragment, fragment.ViewSize(), point, absolute, true, false, true)
 }
 
 // Chromium: core/paint/box_fragment_painter.cc:2535-2547. A line item uses
@@ -302,7 +302,7 @@ fn LineSelfBordersContain(
         point,
         overflow_origin,
         true,
-    ) && ContouredBorderContainsAt(query, containing_box, fragment.size, point, absolute, false)
+    ) && ContouredBorderContainsAt(query, containing_box, fragment.ViewSize(), point, absolute, false)
 }
 
 fn HitGeometry(
@@ -341,7 +341,7 @@ fn HitGeometry(
     let hit_bounds = fragment.paint.text_hit_test_bounds.unwrap_or(
         layoutng_assembly::fragment_tree::FragmentPaintRect {
             offset: Offset::default(),
-            size: fragment.size,
+            size: fragment.ViewSize(),
         },
     );
     let hit_left = absolute.x + hit_bounds.offset.x;
@@ -930,7 +930,7 @@ pub fn TextPositionAtPoint<'a>(
         {
             let dy = (absolute.y - point.y)
                 .max(0.0)
-                .max(point.y - absolute.y - fragment.size.height);
+                .max(point.y - absolute.y - fragment.ViewSize().height);
             let local = Offset {
                 x: point.x - absolute.x,
                 y: point.y - absolute.y,

@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::internal::layout_input::NodeKind;
 use paint_model::PaintRect;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
@@ -29,8 +30,8 @@ impl SVGRootPainter {
         let snapped_viewport = node.PixelSnappedRect(&PaintRect {
             x: node.paint_offset.x,
             y: node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         });
         snapped_viewport.width > 0.0
             && snapped_viewport.height > 0.0

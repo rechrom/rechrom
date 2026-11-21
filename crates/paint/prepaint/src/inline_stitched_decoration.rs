@@ -12,6 +12,7 @@
 
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::collections::HashMap;
 
 use foundation::{LayoutOffset as Offset, LayoutSize as Size};
@@ -61,9 +62,9 @@ pub(crate) fn PopulateInlineStitchedDecorations(root: PaintFragmentCursor<'_>) {
         let horizontal = first.paint.WritingMode() == WritingMode::kHorizontalTb;
         let inline_size = |fragment: &FragmentPaintData| {
             if horizontal {
-                fragment.size.width
+                fragment.ViewSize().width
             } else {
-                fragment.size.height
+                fragment.ViewSize().height
             }
         };
         let total_inline_size: f64 = fragments
@@ -91,11 +92,11 @@ pub(crate) fn PopulateInlineStitchedDecorations(root: PaintFragmentCursor<'_>) {
                 size: if horizontal {
                     Size {
                         width: total_inline_size,
-                        height: fragment.size.height,
+                        height: fragment.ViewSize().height,
                     }
                 } else {
                     Size {
-                        width: fragment.size.width,
+                        width: fragment.ViewSize().width,
                         height: total_inline_size,
                     }
                 },

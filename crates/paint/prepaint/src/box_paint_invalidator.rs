@@ -572,7 +572,7 @@ fn StitchedSize(fragment: &FragmentPaintData) -> Size {
         .paint
         .stitched_decoration
         .as_ref()
-        .map_or(fragment.size, |decoration| decoration.size)
+        .map_or(fragment.ViewSize(), |decoration| decoration.size)
 }
 
 fn SelfVisualOverflowSize(fragment: &FragmentPaintData) -> Size {
@@ -611,7 +611,7 @@ mod tests {
             width: 100.0,
             height: 50.0,
         };
-        fragment.content_size = fragment.size;
+        fragment.content_size = fragment.ViewSize();
         fragment
             
             .pre_paint_invalidation

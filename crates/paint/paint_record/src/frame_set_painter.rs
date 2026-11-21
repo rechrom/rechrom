@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input_types::Color;
@@ -169,8 +170,8 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
             PaintRect {
                 x: self.node.paint_offset.x,
                 y: self.node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             },
         );
         let data = fragment.paint.frame_set.as_ref().unwrap();
@@ -196,7 +197,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
                         x,
                         y,
                         width: data.border_thickness,
-                        height: fragment.size.height - (y - self.node.paint_offset.y),
+                        height: fragment.ViewSize().height - (y - self.node.paint_offset.y),
                     });
                     self.PaintColumnBorder(info, rect, fill);
                     x += data.border_thickness;
@@ -211,7 +212,7 @@ impl<'n, 'f, 'c, 'o> FrameSetPainter<'n, 'f, 'c, 'o> {
                 let rect = self.node.PixelSnappedRect(&PaintRect {
                     x: self.node.paint_offset.x,
                     y,
-                    width: fragment.size.width,
+                    width: fragment.ViewSize().width,
                     height: data.border_thickness,
                 });
                 self.PaintRowBorder(info, rect, fill);

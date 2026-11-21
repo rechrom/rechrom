@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::box_decoration_data::BoxDecorationData;
@@ -47,8 +48,8 @@ impl<'n, 'f, 'c, 'o> InlineBoxFragmentPainter<'n, 'f, 'c, 'o> {
             let paint_rect = self.node.EnclosingRect(PaintRect {
                 x: self.node.paint_offset.x,
                 y: self.node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             });
             self.context.borrow_mut().RecordTrackedElementData(
                 self.node,

@@ -11,6 +11,7 @@
 //! view-transition, canvas-subtree and unbounded-element branches remain
 //! absent rather than being approximated here.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::layout_input::Offset;
 use paint_model::cull_rect::{ApplyScrollExpansion, IsSmallScroller, LocalPixelDistanceToExpand};
@@ -33,7 +34,7 @@ pub fn ExpansionRatio(fragment: &FragmentPaintData) -> f64 {
 
 #[inline]
 fn ContainerRect(fragment: &FragmentPaintData) -> PaintRect {
-    let size = fragment.paint.client_size.unwrap_or(fragment.size);
+    let size = fragment.paint.client_size.unwrap_or(fragment.ViewSize());
     PaintRect {
         x: 0.0,
         y: 0.0,

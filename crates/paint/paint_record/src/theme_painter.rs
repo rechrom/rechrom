@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::layout_input::{
@@ -43,8 +44,8 @@ fn ControlBox(node: &PaintTreeNode<'_>) -> PaintRect {
         .expect("paint tree node has a fragment");
     let left = (node.paint_offset.x + 0.5).floor();
     let top = (node.paint_offset.y + 0.5).floor();
-    let right = (node.paint_offset.x + fragment.size.width + 0.5).floor();
-    let bottom = (node.paint_offset.y + fragment.size.height + 0.5).floor();
+    let right = (node.paint_offset.x + fragment.ViewSize().width + 0.5).floor();
+    let bottom = (node.paint_offset.y + fragment.ViewSize().height + 0.5).floor();
     PaintRect {
         x: left,
         y: top,

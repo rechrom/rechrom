@@ -145,7 +145,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         if math.rule_thickness <= 0.0 {
             return;
         }
-        let width = fragment.size.width
+        let width = fragment.ViewSize().width
             - fragment.Borders().left
             - fragment.Borders().right
             - fragment.Padding().left
@@ -171,7 +171,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
         if fragment.paint.Direction() == TextDirection::kLtr {
             logical_offset
         } else {
-            fragment.size.width - logical_offset - inner_width
+            fragment.ViewSize().width - logical_offset - inner_width
         }
     }
 
@@ -201,8 +201,8 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
                 rect: PaintRect {
                     x: self.node.paint_offset.x,
                     y: self.node.paint_offset.y,
-                    width: fragment.size.width,
-                    height: fragment.size.height,
+                    width: fragment.ViewSize().width,
+                    height: fragment.ViewSize().height,
                 },
                 color,
                 font_face_index: input_run.font_face_index,
@@ -241,7 +241,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .mathml
             .as_ref()
             .expect("operator requires MathML paint data");
-        let content_width = fragment.size.width
+        let content_width = fragment.ViewSize().width
             - fragment.Borders().left
             - fragment.Borders().right
             - fragment.Padding().left
@@ -283,7 +283,7 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             base_width = base.size.width;
             base_ascent = base.paint.first_baseline.unwrap_or(base.size.height);
         }
-        let baseline = paint.first_baseline.unwrap_or(fragment.size.height);
+        let baseline = paint.first_baseline.unwrap_or(fragment.ViewSize().height);
         let block_offset =
             baseline - math.vertical_gap - (base_ascent + math.radical_margin_inline_start);
         let inline_offset =

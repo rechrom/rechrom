@@ -317,8 +317,8 @@ impl NinePieceImagePainter {
         let mut decoration_area = PaintRect {
             x: node.paint_offset.x,
             y: node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         };
         if fragment.paint.Display() == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
@@ -498,10 +498,10 @@ impl NinePieceImagePainter {
             let clip = PaintRect {
                 x: node.paint_offset.x - if sides.left { outsets.left } else { 0.0 },
                 y: node.paint_offset.y - if sides.top { outsets.top } else { 0.0 },
-                width: fragment.size.width
+                width: fragment.ViewSize().width
                     + if sides.left { outsets.left } else { 0.0 }
                     + if sides.right { outsets.right } else { 0.0 },
-                height: fragment.size.height
+                height: fragment.ViewSize().height
                     + if sides.top { outsets.top } else { 0.0 }
                     + if sides.bottom { outsets.bottom } else { 0.0 },
             };

@@ -3,6 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/compositing/compositing_reason_finder.{h,cc}`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::{CompositingReason, CompositingReasonCombos, CompositingReasons};
 use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
 use layoutng_assembly::internal::layout_input::{NodeKind, PaintStyle};
@@ -242,8 +243,8 @@ impl CompositingReasonFinder {
                 "will-change-prepaint offset=({}, {}) size=({}, {}) source={} establishes={} transform={} transform-property={} opacity={} filter={} reasons={:?}",
                 fragment.offset.x,
                 fragment.offset.y,
-                fragment.size.width,
-                fragment.size.height,
+                fragment.ViewSize().width,
+                fragment.ViewSize().height,
                 fragment.paint.HasSource(),
                 fragment.paint.establishes_paint_state,
                 style.will_change_transform(),

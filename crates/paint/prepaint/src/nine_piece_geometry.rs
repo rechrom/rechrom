@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use layoutng_assembly::internal::layout_input::{
     BoxDecorationBreak, Display, Offset, PaintImage, Size,
 };
@@ -110,8 +111,8 @@ impl NinePieceImageGeometry {
         let mut decoration_area = PaintRect {
             x: node.paint_offset.x,
             y: node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         };
         if fragment.paint.Display() == Display::kInline
             && fragment.paint.box_decoration_break == BoxDecorationBreak::kSlice
@@ -147,8 +148,8 @@ impl NinePieceImageGeometry {
             PaintRect {
                 x: 0.0,
                 y: 0.0,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             },
             |stitched| PaintRect {
                 x: 0.0,

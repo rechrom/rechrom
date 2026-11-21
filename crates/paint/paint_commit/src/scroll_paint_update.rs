@@ -4,6 +4,7 @@
 //! contents coordinates. Updating a scroll translation never moves that region.
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use paint_model::{
     display_item_id::DisplayItemIdType,
     geometry_mapper::{MapRectToRoot, MapRectWithTransforms, MultiplyTransforms},
@@ -545,7 +546,7 @@ impl RetainedScrollPaintState {
             }
             fragments.push(FragmentCoverage {
                 offset: f.offset,
-                size: f.size,
+                size: f.ViewSize(),
                 sticky_offset: f.paint.StickyOffset(),
                 paint_offset: node.paint_offset,
                 recorded_world: world.unwrap_or(raw_world),
@@ -690,7 +691,7 @@ fn collect_current_fragments<'a>(
     let self_clean = f.pre_paint_revision != 0 && f.pre_paint_revision == old.revision;
     let unowned_sticky_change = f.paint.StickyOffset() != old.sticky_offset
         && (f.paint.StickyConstraint().is_none() || f.paint.DisplayItemClientId() == 0);
-    if !self_clean && (f.offset != old.offset || f.size != old.size || unowned_sticky_change) {
+    if !self_clean && (f.offset != old.offset || f.ViewSize() != old.size || unowned_sticky_change) {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
                 "scroll-paint-reject stage=geometry node_id={} self_revision={} old_revision={} offset_changed={} size_changed={} sticky_changed={}",
@@ -698,7 +699,7 @@ fn collect_current_fragments<'a>(
                 f.pre_paint_revision,
                 old.revision,
                 f.offset != old.offset,
-                f.size != old.size,
+                f.ViewSize() != old.size,
                 f.paint.StickyOffset() != old.sticky_offset
             );
         }
@@ -709,7 +710,7 @@ fn collect_current_fragments<'a>(
                 ("stage", 3.0),
                 ("node_id", f.node_id as f64),
                 ("offset_changed", (f.offset != old.offset) as u8 as f64),
-                ("size_changed", (f.size != old.size) as u8 as f64),
+                ("size_changed", (f.ViewSize() != old.size) as u8 as f64),
                 (
                     "sticky_changed",
                     (f.paint.StickyOffset() != old.sticky_offset) as u8 as f64,

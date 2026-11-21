@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use foundation::{gfx, ETextDecorationSkipInk, FloatValueForLength, LayoutUnit, PhysicalRect};
@@ -983,7 +984,7 @@ fn TextPaintSize(node: &PaintTreeNode<'_>) -> Size {
     if let Some(svg) = fragment.paint.svg_text.as_ref() {
         return svg.untransformed_size;
     }
-    fragment.size
+    fragment.ViewSize()
 }
 
 #[cfg(test)]

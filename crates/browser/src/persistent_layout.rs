@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use dom::{UserInteractionState, DOM};
 use layout_fragment::LayoutResultHandle;
 #[cfg(test)]
@@ -846,7 +847,7 @@ mod tests {
                     let f = fragment(tree, id);
                     println!(
                         "{name}: size={:?} offset={:?} background={:?} source={} establishes={}",
-                        f.size,
+                        f.ViewSize(),
                         f.offset,
                         f.paint.style.background_color,
                         f.paint.HasSource(),

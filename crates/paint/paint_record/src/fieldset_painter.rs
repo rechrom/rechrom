@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use layoutng_assembly::internal::background_bleed_avoidance::{
@@ -38,8 +39,8 @@ impl<'n, 'f, 'c, 'o> FieldsetPainter<'n, 'f, 'c, 'o> {
         let mut rect = PaintRect {
             x: node.paint_offset.x,
             y: node.paint_offset.y,
-            width: fragment.size.width,
-            height: fragment.size.height,
+            width: fragment.ViewSize().width,
+            height: fragment.ViewSize().height,
         };
         let Some(fieldset) = fragment.paint.fieldset.as_ref() else {
             return rect;

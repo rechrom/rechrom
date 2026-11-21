@@ -1,6 +1,7 @@
 //! DOM box geometry does not need clips, display items, outlines or effects.
 //! Keep physical coordinate mapping separate from logical paint traversal order.
 #![allow(non_snake_case)]
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::pre_paint_tree_walk::{
     ChildGeometryOrigin, FlatToWorldSpaceOffset, ResolveChildGeometryOrigin,
     ResolveFragmentGeometry, SvgViewBoxTransform,
@@ -112,8 +113,8 @@ fn Gather<'a>(
                     PaintRect {
                         x: geometry.paint_offset.x,
                         y: geometry.paint_offset.y,
-                        width: fragment.size.width,
-                        height: fragment.size.height,
+                        width: fragment.ViewSize().width,
+                        height: fragment.ViewSize().height,
                     },
                     transforms,
                 )
@@ -218,8 +219,8 @@ fn FirstLogicalTreeOrder(nodes: &[GeometryNode<'_>], index: usize) -> u64 {
 fn DistanceSquared(nodes: &[GeometryNode<'_>], candidate: usize, child: usize) -> f64 {
     let left = nodes[candidate].absolute_offset.x;
     let top = nodes[candidate].absolute_offset.y;
-    let right = left + nodes[candidate].fragment.size.width;
-    let bottom = top + nodes[candidate].fragment.size.height;
+    let right = left + nodes[candidate].fragment.ViewSize().width;
+    let bottom = top + nodes[candidate].fragment.ViewSize().height;
     let x = nodes[child].absolute_offset.x;
     let y = nodes[child].absolute_offset.y;
     let dx = if x < left {

@@ -3,6 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/table_cell_paint_invalidator.{h,cc}`.
 
+use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason};
 use layoutng_assembly::fragment_tree::FragmentPaintData;
 use layoutng_assembly::internal::layout_input::{Display, Offset};
@@ -105,7 +106,7 @@ fn StitchedSize(fragment: &FragmentPaintData) -> layoutng_assembly::internal::la
         .paint
         .stitched_decoration
         .as_ref()
-        .map_or(fragment.size, |decoration| decoration.size)
+        .map_or(fragment.ViewSize(), |decoration| decoration.size)
 }
 
 #[cfg(test)]

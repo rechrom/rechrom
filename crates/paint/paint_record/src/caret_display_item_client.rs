@@ -86,9 +86,9 @@ fn PaintCaretWithState(
     let content = PaintRect {
         x: node.paint_offset.x + border.left + padding.left,
         y: node.paint_offset.y + border.top + padding.top,
-        width: (fragment.size.width - border.left - border.right - padding.left - padding.right)
+        width: (fragment.ViewSize().width - border.left - border.right - padding.left - padding.right)
             .max(0.0),
-        height: (fragment.size.height - border.top - border.bottom - padding.top - padding.bottom)
+        height: (fragment.ViewSize().height - border.top - border.bottom - padding.top - padding.bottom)
             .max(0.0),
     };
     if let Some(root_rect) = (!drag)

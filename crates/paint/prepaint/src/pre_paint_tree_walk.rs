@@ -1115,23 +1115,23 @@ pub fn SvgTransformToPixelSnappedBorderBox(
         }
         snapped
     };
-    let snapped_width = snap_size(fragment.size.width, paint_offset.x, paint_snap_offset.x);
-    let snapped_height = snap_size(fragment.size.height, paint_offset.y, paint_snap_offset.y);
+    let snapped_width = snap_size(fragment.ViewSize().width, paint_offset.x, paint_snap_offset.x);
+    let snapped_height = snap_size(fragment.ViewSize().height, paint_offset.y, paint_snap_offset.y);
     let mut offset_to_border_box = TranslationTransform(snapped_x, snapped_y);
-    if fragment.size.width != 0.0 && fragment.size.height != 0.0 {
+    if fragment.ViewSize().width != 0.0 && fragment.ViewSize().height != 0.0 {
         let scale = if viewport.is_document_element {
             Some((
-                snapped_width / fragment.size.width,
-                snapped_height / fragment.size.height,
+                snapped_width / fragment.ViewSize().width,
+                snapped_height / fragment.ViewSize().height,
             ))
         } else if viewport.inline_root_pixel_snapping_scale_adjustment
-            && (fragment.size.width > snapped_width || fragment.size.height > snapped_height)
+            && (fragment.ViewSize().width > snapped_width || fragment.ViewSize().height > snapped_height)
         {
-            let scale_x = snapped_width / fragment.size.width;
-            let scale_y = snapped_height / fragment.size.height;
+            let scale_x = snapped_width / fragment.ViewSize().width;
+            let scale_y = snapped_height / fragment.ViewSize().height;
             let uniform_scale = scale_x.min(scale_y);
-            let scaled_width = fragment.size.width * uniform_scale;
-            let scaled_height = fragment.size.height * uniform_scale;
+            let scaled_width = fragment.ViewSize().width * uniform_scale;
+            let scaled_height = fragment.ViewSize().height * uniform_scale;
             if snapped_width - scaled_width > 1.0 || snapped_height - scaled_height > 1.0 {
                 Some((scale_x, scale_y))
             } else {
@@ -1381,7 +1381,7 @@ fn CanPropagateSubpixelAccumulation(
     .into_iter()
     .flatten()
     .fold(TransformMatrix::default(), |matrix, transform| {
-        MultiplyTransforms(&matrix, &ResolvePaintTransform(transform, fragment.size))
+        MultiplyTransforms(&matrix, &ResolvePaintTransform(transform, fragment.ViewSize()))
     });
     if !IsScaleOrTranslation(&matrix) {
         return (false, false);
@@ -1517,7 +1517,7 @@ pub fn ResolveFragmentGeometry(
             // parent, whose ScrollTranslation remains a separate ancestor.
             let reference_rect = ResolveTransformReferenceRect(
                 style.transform_reference_box(),
-                fragment.size,
+                fragment.ViewSize(),
                 fragment.Borders(),
                 fragment.Padding(),
             );
@@ -3148,8 +3148,8 @@ fn ClipPathReferenceRect(
             PaintRect {
                 x: paint_offset.x,
                 y: paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             },
             |shape| PaintRect {
                 x: paint_offset.x + shape.bounds_offset.x,
@@ -3167,8 +3167,8 @@ fn ClipPathReferenceRect(
                 PaintRect {
                     x: paint_offset.x,
                     y: paint_offset.y,
-                    width: fragment.size.width,
-                    height: fragment.size.height,
+                    width: fragment.ViewSize().width,
+                    height: fragment.ViewSize().height,
                 },
                 |view| PaintRect {
                     x: paint_offset.x + view.x,
@@ -3187,8 +3187,8 @@ fn ClipPathReferenceRect(
     let border_box = PaintRect {
         x: paint_offset.x,
         y: paint_offset.y,
-        width: fragment.size.width,
-        height: fragment.size.height,
+        width: fragment.ViewSize().width,
+        height: fragment.ViewSize().height,
     };
     match reference_box {
         ClipPathReferenceBox::kPaddingBox => PaintRect {
@@ -3262,12 +3262,12 @@ fn GeometryBoxClipPathRadii(
         },
         _ => Edges::default(),
     };
-    let radii = ResolveCornerRadii(style, &fragment.BorderSides(), fragment.size, inset);
+    let radii = ResolveCornerRadii(style, &fragment.BorderSides(), fragment.ViewSize(), inset);
     if reference_box == ClipPathReferenceBox::kMarginBox {
         return Ok(OutsetCornerRadiiWithCorrection(
             radii,
             fragment.paint.Margin(),
-            fragment.size,
+            fragment.ViewSize(),
         ));
     }
     Ok(radii)
@@ -3283,8 +3283,8 @@ fn MaskBox(
     let mut rect = PaintRect {
         x: absolute_offset.x,
         y: absolute_offset.y,
-        width: fragment.size.width,
-        height: fragment.size.height,
+        width: fragment.ViewSize().width,
+        height: fragment.ViewSize().height,
     };
     if let Some(table) = paint.table.as_ref() {
         rect = PaintRect {
@@ -3458,12 +3458,12 @@ fn MaskClipRadii(fragment: &FragmentPaintData, box_type: BackgroundBox) -> Paint
             paint
                 .fieldset
                 .as_ref()
-                .map_or(fragment.size, |fieldset| Size {
-                    width: (fragment.size.width
+                .map_or(fragment.ViewSize(), |fieldset| Size {
+                    width: (fragment.ViewSize().width
                         - fieldset.border_outsets.left
                         - fieldset.border_outsets.right)
                         .max(0.0),
-                    height: (fragment.size.height
+                    height: (fragment.ViewSize().height
                         - fieldset.border_outsets.top
                         - fieldset.border_outsets.bottom)
                         .max(0.0),
@@ -4211,8 +4211,8 @@ fn PropagateAutoDarkModeState(node: &mut PaintTreeNode<'_>, inherited_paused: bo
             let snapped = node.PixelSnappedRect(&PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             });
             let layout_zoom = fragment
                 
@@ -4719,7 +4719,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
         fragmentainer_instance_id: f.fragmentainer_instance_id,
         display_item_client_id: p.DisplayItemClientId(),
         display_item_fragment: p.display_item_fragment,
-        size: f.size,
+        size: f.ViewSize(),
         offset: f.offset,
         content_size: f.content_size,
         phase_flags,
@@ -7735,7 +7735,7 @@ impl PrePaintTreeWalk {
             ];
             let reference_rect = ResolveTransformReferenceRect(
                 style.transform_reference_box(),
-                fragment.size,
+                fragment.ViewSize(),
                 fragment.Borders(),
                 fragment.Padding(),
             );
@@ -8843,7 +8843,7 @@ mod tests {
             2.0,
         )
         .unwrap();
-        assert_eq!(tiny_document.values[0] * fragment.size.width, 0.5);
+        assert_eq!(tiny_document.values[0] * fragment.ViewSize().width, 0.5);
     }
 
     #[test]

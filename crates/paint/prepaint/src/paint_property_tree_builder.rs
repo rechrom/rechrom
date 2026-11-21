@@ -724,15 +724,15 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                             node.PixelSnappedRect(&PaintRect {
                                 x: node.paint_offset.x,
                                 y: node.paint_offset.y,
-                                width: fragment.size.width,
-                                height: fragment.size.height,
+                                width: fragment.ViewSize().width,
+                                height: fragment.ViewSize().height,
                             }),
                             property_space_delta,
                         )),
                         radii: ResolveCornerRadii(
                             style,
                             &fragment.BorderSides(),
-                            fragment.size,
+                            fragment.ViewSize(),
                             Edges::default(),
                         ),
                         clip_path: None,
@@ -1188,8 +1188,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let mut local = PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             };
             if matches!(
                 layer.clip,
@@ -1293,8 +1293,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let border_box = node.PixelSnappedRect(&PaintRect {
                 x: node.paint_offset.x,
                 y: node.paint_offset.y,
-                width: fragment.size.width,
-                height: fragment.size.height,
+                width: fragment.ViewSize().width,
+                height: fragment.ViewSize().height,
             });
             let controls_outside_border = controls_bounds.is_some_and(|bounds| {
                 let bounds = PaintRect {
@@ -1360,8 +1360,8 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
             let mut local = PaintRect {
                 x: node.paint_offset.x + clip_inset.left,
                 y: node.paint_offset.y + clip_inset.top,
-                width: (fragment.size.width - clip_inset.left - clip_inset.right).max(0.0),
-                height: (fragment.size.height - clip_inset.top - clip_inset.bottom).max(0.0),
+                width: (fragment.ViewSize().width - clip_inset.left - clip_inset.right).max(0.0),
+                height: (fragment.ViewSize().height - clip_inset.top - clip_inset.bottom).max(0.0),
             };
             if let Some(replaced) = fragment
                 .paint
@@ -1434,7 +1434,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                         ResolveCornerRadii(
                             style,
                             &fragment.BorderSides(),
-                            fragment.size,
+                            fragment.ViewSize(),
                             Edges::default(),
                         ),
                         outsets,
@@ -1447,7 +1447,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     resolved_clip_radii = ResolveCornerRadii(
                         style,
                         &fragment.BorderSides(),
-                        fragment.size,
+                        fragment.ViewSize(),
                         clip_inset,
                     );
                 }
@@ -1876,11 +1876,11 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 x: node.paint_offset.x
                     + property_space_delta.x
                     + origin.pixels.x
-                    + fragment.size.width * origin.percentages.x / 100.0,
+                    + fragment.ViewSize().width * origin.percentages.x / 100.0,
                 y: node.paint_offset.y
                     + property_space_delta.y
                     + origin.pixels.y
-                    + fragment.size.height * origin.percentages.y / 100.0,
+                    + fragment.ViewSize().height * origin.percentages.y / 100.0,
             };
             let mut perspective = TransformMatrix::default();
             perspective.values[11] = -1.0 / depth;
