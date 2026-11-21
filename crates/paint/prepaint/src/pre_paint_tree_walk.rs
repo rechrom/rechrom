@@ -4300,8 +4300,7 @@ fn MarkPaintPhaseNeeds(node: &mut PaintTreeNode<'_>) {
         && (fragment.paint.FocusedImageMapArea().is_some()
             || fragment
                 .paint
-                .form_control
-                .as_ref()
+                .FormControl()
                 .is_some_and(|control| control.auto_focus_ring)
             || (style.outline_style() != BorderLineStyle::kNone
                 && !(style.outline_width() <= 0.0)
@@ -4641,8 +4640,7 @@ fn SamePhaseStructure(a: &FragmentPaintData, b: &FragmentPaintData) -> bool {
             f.paint.HasSource(),
             f.paint.Floating(),
             f.paint
-                .form_control
-                .as_ref()
+                .FormControl()
                 .is_some_and(|control| control.auto_focus_ring),
             f.paint.FocusedImageMapArea().is_some(),
             f.paint.scrollbars.is_some(),
@@ -4708,8 +4706,7 @@ fn PrePaintPreviousOf(f: &FragmentPaintData) -> PrePaintPrevious {
     let (visible, outline_style, outline_width, outline_alpha) = p.style.PhaseStyleValues();
     let phase_flags = u32::from(p.HasSource())
         | u32::from(
-            p.form_control
-                .as_ref()
+            p.FormControl()
                 .is_some_and(|control| control.auto_focus_ring),
         ) << 1
         | u32::from(p.FocusedImageMapArea().is_some()) << 2

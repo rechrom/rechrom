@@ -545,7 +545,7 @@ fn ShouldSkipPaintUnderInvalidationChecking(fragment: &FragmentPaintData) -> boo
         
         .pre_paint_invalidation
         .should_delay_full_paint_invalidation
-        || fragment.paint.form_control.as_ref().is_some_and(|control| {
+        || fragment.paint.FormControl().is_some_and(|control| {
             control.appearance == layoutng_style::style::appearance::AppearanceValue::kMediaSlider
                 || (control.is_progress && control.indeterminate)
         })
@@ -5961,8 +5961,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .unwrap_or_else(|| style.outline_offset());
         let auto_outline = fragment
             .paint
-            .form_control
-            .as_ref()
+            .FormControl()
             .is_some_and(|control| control.auto_focus_ring);
         let has_css_outline = self.node.paints_outline
             && !exact_outline_is_empty
@@ -5984,8 +5983,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if self.node.paints_outline
             && fragment
                 .paint
-                .form_control
-                .as_ref()
+                .FormControl()
                 .is_some_and(|control| control.auto_focus_ring)
         {
             let source = PaintRect {

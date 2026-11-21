@@ -33,7 +33,7 @@ impl BoxDecorationData {
             .as_deref()
             .expect("box decoration requires a fragment");
         let style = &fragment.paint.style;
-        let has_appearance = fragment.paint.form_control.as_ref().is_some_and(|control| {
+        let has_appearance = fragment.paint.FormControl().is_some_and(|control| {
             !matches!(
                 control.appearance,
                 AppearanceValue::kNone | AppearanceValue::kAuto

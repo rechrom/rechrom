@@ -280,7 +280,7 @@ impl<'n, 'f, 'c, 'o> ThemePainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let Some(control) = fragment.paint.form_control.as_ref() else {
+        let Some(control) = fragment.paint.FormControl() else {
             return false;
         };
         if matches!(

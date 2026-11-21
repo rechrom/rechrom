@@ -494,44 +494,6 @@ pub(super) fn ExportProperties(
     if purpose == LayoutUpdateKind::Layout {
         return output;
     }
-    let appearance = layout_style.EffectiveAppearance();
-    if appearance != AppearanceValue::kNone
-        || element_data.is_some_and(|element_data| element_data.control_focused)
-    {
-        let mut control = FormControlPaintData {
-            appearance,
-            ..FormControlPaintData::default()
-        };
-        if let Some(element_data) = element_data {
-            control.r#type = element_data.form_control_type;
-            control.checked = element_data.control_checked;
-            control.indeterminate = element_data.control_indeterminate;
-            control.is_progress = element_data.control_is_progress;
-            control.disabled = element_data.control_disabled;
-            control.read_only = element_data.control_read_only;
-            control.hovered = element_data.control_hovered;
-            control.active = element_data.control_active;
-            control.focused = element_data.control_focused;
-            // OutlinePainter uses the computed outline, including the UA
-            // :focus-visible rule; focus alone must not override outline:none
-            // or add an auto ring alongside an author's non-auto outline.
-            control.auto_focus_ring = element_data.control_focused
-                && appearance == AppearanceValue::kNone
-                && layout_style.HasOutline()
-                && layout_style.OutlineStyleIsAuto();
-            control.autofilled = element_data.autofill_state != AutofillState::kNotFilled;
-            control.value_ratio = element_data
-                .control_value_ratio
-                .or(element_data.range_value_ratio);
-        }
-        if !layout_style.AccentColor().IsAutoColor() {
-            control.accent_color = crate::internal::boundary::paint_style_export::StyleColor(
-                layout_style,
-                layout_style.AccentColor().ToStyleColor(),
-            );
-        }
-        output.form_control = Some(Arc::new(control));
-    }
     output
 }
 
@@ -900,4 +862,53 @@ pub(crate) fn LivePaintLayerOrder(object: &LayoutObject) -> (Option<u64>, i32) {
         unsafe { &*order_ancestor }.StyleRef().Order()
     };
     (Some(unsafe { &*order_parent }.UniqueId()), order)
+}
+
+/// FormControlPaintData from the control element and its style (the
+/// LayoutTheme / ThemePainter inputs Chromium reads from the Element).
+pub(crate) fn LiveFormControl(
+    object: &LayoutObject,
+    layout_style: &StyleComputedStyle,
+) -> Option<Arc<FormControlPaintData>> {
+    let element_data = LiveElementInputData(object)?;
+    let appearance = layout_style.EffectiveAppearance();
+    if appearance != AppearanceValue::kNone
+        || element_data.is_some_and(|element_data| element_data.control_focused)
+    {
+        let mut control = FormControlPaintData {
+            appearance,
+            ..FormControlPaintData::default()
+        };
+        if let Some(element_data) = element_data {
+            control.r#type = element_data.form_control_type;
+            control.checked = element_data.control_checked;
+            control.indeterminate = element_data.control_indeterminate;
+            control.is_progress = element_data.control_is_progress;
+            control.disabled = element_data.control_disabled;
+            control.read_only = element_data.control_read_only;
+            control.hovered = element_data.control_hovered;
+            control.active = element_data.control_active;
+            control.focused = element_data.control_focused;
+            // OutlinePainter uses the computed outline, including the UA
+            // :focus-visible rule; focus alone must not override outline:none
+            // or add an auto ring alongside an author's non-auto outline.
+            control.auto_focus_ring = element_data.control_focused
+                && appearance == AppearanceValue::kNone
+                && layout_style.HasOutline()
+                && layout_style.OutlineStyleIsAuto();
+            control.autofilled = element_data.autofill_state != AutofillState::kNotFilled;
+            control.value_ratio = element_data
+                .control_value_ratio
+                .or(element_data.range_value_ratio);
+        }
+        if !layout_style.AccentColor().IsAutoColor() {
+            control.accent_color = crate::internal::boundary::paint_style_export::StyleColor(
+                layout_style,
+                layout_style.AccentColor().ToStyleColor(),
+            );
+        }
+        Some(Arc::new(control))
+    } else {
+        None
+    }
 }

@@ -242,8 +242,7 @@ impl BoxPaintInvalidator {
             || (style.outline_style() != BorderLineStyle::kNone && style.outline_width() != 0.0);
         let has_effective_appearance = fragment
             .paint
-            .form_control
-            .as_ref()
+            .FormControl()
             .is_some_and(|control| control.appearance != AppearanceValue::kNone);
         if has_visual_overflowing_effect
             || has_effective_appearance

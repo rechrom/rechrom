@@ -1907,6 +1907,18 @@ impl PaintProperties {
             .SourceCheckedOr(self.selection_client_id, "selection_client_id")
     }
 
+    /// The control element's theme-painting inputs, built from the source
+    /// Element and the fragment's effective style.
+    pub fn FormControl(&self) -> Option<Arc<FormControlPaintData>> {
+        match self.SourceObject() {
+            Some(object) => crate::internal::boundary::layout_boundary::LiveFormControl(
+                object,
+                self.FactStyle().unwrap_or_else(|| object.StyleRef()),
+            ),
+            None => self.form_control.clone(),
+        }
+    }
+
     /// PaintLayerStackingNode's flex/grid `order` comparison inputs: the
     /// shared parent's UniqueObjectId and the order value.
     pub fn PaintLayerOrder(&self) -> (Option<u64>, i32) {

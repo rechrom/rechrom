@@ -152,7 +152,6 @@ pub(super) fn refresh_retained_paint_inputs(
             // ExportPaintProperties has made the object ready for invalidation.
             node.pre_paint_invalidation = ExportPrePaintInvalidation(object);
             node.paint.style = current.style;
-            node.paint.form_control = current.form_control;
             // FragmentData identity is owned by this retained physical
             // fragment. ExportPaintProperties has no physical-fragment
             // context and therefore reports the LayoutObject's first
