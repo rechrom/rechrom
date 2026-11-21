@@ -891,6 +891,36 @@ impl<'a> PaintFragmentCursor<'a> {
         layout_fragment_fragment_cursor_children::paint_fragment_children(self)
     }
 
+    // Borrowed-view boundary (stage 1 of replacing the per-fragment paint
+    // sidecar): geometry read straight from the resident PhysicalFragment or
+    // FragmentItem and its link, in the sidecar's CSS-pixel units, the way
+    // Chromium's painters read PhysicalBoxFragment::Size() and the
+    // PhysicalFragmentLink offset.
+
+    /// The fragment's size (PhysicalFragment::Size / FragmentItem::Size).
+    pub fn ViewSize(self) -> foundation::LayoutSize {
+        let size = self.source.Size();
+        foundation::LayoutSize {
+            width: size.width.ToDouble(),
+            height: size.height.ToDouble(),
+        }
+    }
+
+    /// The offset of a physical fragment in its parent (the child link) or
+    /// of an inline item in its container fragment.
+    pub fn ViewOffsetInContainer(self) -> foundation::LayoutOffset {
+        let offset = self.source.Offset();
+        foundation::LayoutOffset {
+            x: offset.left.ToDouble(),
+            y: offset.top.ToDouble(),
+        }
+    }
+
+    /// The LayoutObject behind the fragment, if any.
+    pub fn ViewLayoutObject(self) -> Option<&'a LayoutObject> {
+        unsafe { self.source.GetLayoutObject().as_ref() }
+    }
+
     pub fn PaintData(self) -> &'a FragmentPaintData {
         self.PaintDataOption()
             .expect("source fragment has no committed paint input")
