@@ -26,15 +26,14 @@ pub(super) fn install_layout_result_paint_state(
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
     let result_identity = result as *const LayoutResult as usize;
     let result_changed = cache.fragment_identity_result != result_identity;
-    // A retained update of the same LayoutResult mutates Chromium's canonical
-    // FragmentData sidecars in place (notably for scroll paint properties).
-    // A replacement LayoutResult, however, is a new immutable publication:
-    // handles retained by Paint/tests must keep their previous owner bindings
-    // and values. Reusing the cache Arc here let BeginPublication clear the old
-    // handle's owner map before the replacement was committed.
+    // A retained update of the same LayoutResult republishes the same state.
+    // A replacement LayoutResult gets its own state, whose lease retains that
+    // result for the handles Paint keeps; the FragmentPaintData sidecars
+    // themselves stay on their LayoutObjects' FragmentData across both, as
+    // Chromium's FragmentData does (core/paint/fragment_data.h), so nothing
+    // is seeded or moved between the states.
     let retained_paint_state = !result_changed && cache.fragment_paint_state.is_some();
-    // A topology mutation cleared the object index; the objects it drops are
-    // the only owners whose resident slots can disappear.
+    // A topology mutation cleared the object index.
     let objects_rebuilt = cache.objects.is_empty();
     if objects_rebuilt {
         let _phase = layout_fragment_boundary::trace::span(
@@ -43,35 +42,22 @@ pub(super) fn install_layout_result_paint_state(
         EnsureLayoutBoundaryObjectIndex(root, cache);
     }
     let paint_state = if result_changed {
-        let state = crate::layout_engine::LayoutPaintState::New();
-        if purpose == LayoutUpdateKind::Paint {
-            if let Some(previous) = &cache.fragment_paint_state {
-                trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
-                let live: Option<LayoutBoundaryHashSet<*const LayoutObject>> =
-                    objects_rebuilt.then(|| {
-                        cache
-                            .objects
-                            .iter()
-                            .map(|object| *object as *const LayoutObject)
-                            .collect()
-                    });
-                let is_live = live
-                    .as_ref()
-                    .map(|live| move |object: *const LayoutObject| live.contains(&object));
-                state.SeedFrom(
-                    previous,
-                    is_live
-                        .as_ref()
-                        .map(|is_live| is_live as &dyn Fn(*const LayoutObject) -> bool),
-                );
+        let state = crate::layout_engine::LayoutPaintState::New(result);
+        if let Some(previous) = &cache.fragment_paint_state {
+            trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
+            if purpose == LayoutUpdateKind::Paint {
+                state.InheritFrom(previous);
             }
+            // Handles of the previous result stay readable; the shared
+            // sidecars now bind to this result's owners.
+            previous.Supersede();
         }
         state
     } else {
         cache
             .fragment_paint_state
             .clone()
-            .unwrap_or_else(crate::layout_engine::LayoutPaintState::New)
+            .unwrap_or_else(|| crate::layout_engine::LayoutPaintState::New(result))
     };
     paint_state.BeginPublication();
     if result_changed {
@@ -136,11 +122,11 @@ pub(super) fn install_layout_result_paint_state(
             }
         }
     }
-    // The resident slots were last exported with the document resources the
+    // The resident sidecars were last exported with the document resources the
     // state holds (its previous publication or a later Page resource
-    // update). Slots initialized after an incompatible change re-export;
+    // update). Sidecars bound after an incompatible change re-export;
     // the values are the Document / LocalFrameView facts Chromium reads,
-    // held once per result rather than on every fragment slot.
+    // held once per result rather than on every fragment sidecar.
     let resources_compatible =
         PaintResourcesAreCompatible(paint_state.DocumentResources(), &resources);
     paint_state.InstallPublication(resources, resources_compatible, Some(cache.styles.Key()));

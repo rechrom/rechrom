@@ -174,8 +174,8 @@ pub struct LayoutBoundaryCache {
     // cull-rect updates; preserve the same identity in fragment-local Paint
     // data so PrePaint does not mistake a retained source owner for a new one.
     pub(crate) fragment_identity_result: usize,
-    /// Chromium-style resident FragmentData state. Replacement LayoutResults
-    /// rebind source owners to the same stable fragment slots.
+    /// Paint publication state of the current LayoutResult. The per-fragment
+    /// sidecars live on the LayoutObjects' FragmentData, not here.
     pub(crate) fragment_paint_state: Option<Arc<crate::layout_engine::LayoutPaintState>>,
     /// `style_sources` / `sticky_objects` predate a compatible style
     /// replacement and must be rebuilt before their next read.
@@ -228,7 +228,11 @@ impl LayoutBoundaryCache {
         self.style_sources.clear();
         self.style_indices_stale = false;
         self.fragment_identity_result = 0;
-        self.fragment_paint_state = None;
+        // Handles of the dropped state stay readable, but the next
+        // publication owns the FragmentData sidecar bindings.
+        if let Some(state) = self.fragment_paint_state.take() {
+            state.Supersede();
+        }
     }
 }
 
