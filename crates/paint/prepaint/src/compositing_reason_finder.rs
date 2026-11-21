@@ -223,7 +223,7 @@ impl CompositingReasonFinder {
         if fragment.paint.IsGlobalRootScroller() {
             reasons.Put(CompositingReason::kRootScroller);
         }
-        if fragment.paint.sticky_constraint.is_some() {
+        if fragment.paint.StickyConstraint().is_some() {
             reasons.Put(CompositingReason::kStickyPosition);
         }
         if fragment.paint.NeedsAnchorPositionScrollAdjustment() {

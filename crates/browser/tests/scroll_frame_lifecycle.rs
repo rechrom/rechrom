@@ -193,9 +193,9 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
             check(&mut page, "if(document.getElementById('sticky').getBoundingClientRect().y!==0)throw Error('root sticky');if(document.getElementById('fixed').getBoundingClientRect().y!==7)throw Error('fixed');if(document.getElementById('fixedsticky').getBoundingClientRect().y!==50)throw Error('fixed ancestor sticky');");
             let tree = &page.CurrentFrame().unwrap().fragments;
             fn sticky(node: PaintFragmentCursor<'_>) {
-                if let Some(constraint) = node.paint.sticky_constraint {
+                if let Some(constraint) = node.paint.StickyConstraint() {
                     if let Some(axis) = constraint.vertical {
-                        assert_eq!(axis.current_sticky_offset, node.paint.sticky_offset.y,
+                        assert_eq!(axis.current_sticky_offset, node.paint.StickyOffset().y,
                             "native matrix and compositor recorded basis must be published together");
                     }
                 }

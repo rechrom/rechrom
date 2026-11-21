@@ -75,14 +75,15 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
     fragment: &mut FragmentPaintData,
     sources: &[*mut LayoutObject],
 ) -> bool {
-    let old_scroll = fragment.paint.scroll_offset;
     let old_scroll_coordinates = fragment
         .paint
         .scroll_container
         .as_ref()
         .map(|scroll| (scroll.scroll_origin, scroll.scroll_position));
-    let old_sticky = fragment.paint.sticky_offset;
-    let old_sticky_constraint = fragment.paint.sticky_constraint;
+    // A sticky box moves with every scroll of its scroller; PrePaint reads
+    // its offset and constraint live (LiveStickyPaintProperties), so report
+    // it changed rather than keeping copies to compare.
+    let mut sticky = false;
     let old_scrollbars = fragment.paint.scrollbars.clone();
     if fragment.paint.HasSource() {
         let direct = fragment.paint.SourceObjectPointer();
@@ -98,14 +99,7 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
             direct
         };
         if !object.is_null() {
-            let node = unsafe { &*object }.GetNode();
-            if !node.is_null() && unsafe { &*node }.IsElementNode() {
-                let element = unsafe { &*(node as *const Element) };
-                if let Some(data) = element.InputElementData() {
-                    fragment.paint.scroll_offset = data.scroll_offset;
-                }
-            }
-            ExportStickyPaintProperties(object, &mut fragment.paint);
+            sticky = unsafe { &*object }.StyleRef().GetPosition() == foundation::EPosition::kSticky;
             let layout_box = DynamicTo::<LayoutBox>(object);
             if !layout_box.is_null() {
                 let layout_box = unsafe { &*layout_box };
@@ -158,14 +152,12 @@ pub(super) fn refresh_fragment_scroll_paint_properties(
             }
         }
     }
-    old_scroll != fragment.paint.scroll_offset
+    sticky
         || old_scroll_coordinates
             != fragment
                 .paint
                 .scroll_container
                 .as_ref()
                 .map(|scroll| (scroll.scroll_origin, scroll.scroll_position))
-        || old_sticky != fragment.paint.sticky_offset
-        || old_sticky_constraint != fragment.paint.sticky_constraint
         || old_scrollbars != fragment.paint.scrollbars
 }

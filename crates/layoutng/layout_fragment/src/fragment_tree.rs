@@ -1918,6 +1918,33 @@ impl PaintProperties {
         }
     }
 
+    /// The sticky translation, read from the LayoutBoxModelObject's current
+    /// StickyPositionOffset (PaintPropertyTreeBuilder::UpdateStickyTranslation).
+    pub fn StickyOffset(&self) -> Offset {
+        match self.SourceObject() {
+            Some(object) => {
+                crate::internal::boundary::layout_boundary::LiveStickyPaintProperties(
+                    object as *const LayoutObject,
+                )
+                .0
+            }
+            None => self.sticky_offset,
+        }
+    }
+
+    /// The compositor's sticky constraint basis from the same sticky update.
+    pub fn StickyConstraint(&self) -> Option<StickyPositionPaintData> {
+        match self.SourceObject() {
+            Some(object) => {
+                crate::internal::boundary::layout_boundary::LiveStickyPaintProperties(
+                    object as *const LayoutObject,
+                )
+                .1
+            }
+            None => self.sticky_constraint.clone(),
+        }
+    }
+
     pub fn SvgShape(&self) -> Option<&Arc<SvgShapeData>> {
         match self
             .SourceObject()

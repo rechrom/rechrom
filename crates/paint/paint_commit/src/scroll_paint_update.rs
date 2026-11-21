@@ -546,7 +546,7 @@ impl RetainedScrollPaintState {
             fragments.push(FragmentCoverage {
                 offset: f.offset,
                 size: f.size,
-                sticky_offset: f.paint.sticky_offset,
+                sticky_offset: f.paint.StickyOffset(),
                 paint_offset: node.paint_offset,
                 recorded_world: world.unwrap_or(raw_world),
                 properties: node.properties.nodes.clone(),
@@ -688,8 +688,8 @@ fn collect_current_fragments<'a>(
         return true;
     }
     let self_clean = f.pre_paint_revision != 0 && f.pre_paint_revision == old.revision;
-    let unowned_sticky_change = f.paint.sticky_offset != old.sticky_offset
-        && (f.paint.sticky_constraint.is_none() || f.paint.DisplayItemClientId() == 0);
+    let unowned_sticky_change = f.paint.StickyOffset() != old.sticky_offset
+        && (f.paint.StickyConstraint().is_none() || f.paint.DisplayItemClientId() == 0);
     if !self_clean && (f.offset != old.offset || f.size != old.size || unowned_sticky_change) {
         if std::env::var_os("BROWSER_PROFILE_INPUT").is_some() {
             eprintln!(
@@ -699,7 +699,7 @@ fn collect_current_fragments<'a>(
                 old.revision,
                 f.offset != old.offset,
                 f.size != old.size,
-                f.paint.sticky_offset != old.sticky_offset
+                f.paint.StickyOffset() != old.sticky_offset
             );
         }
         browser_tracing::instant(
@@ -712,10 +712,10 @@ fn collect_current_fragments<'a>(
                 ("size_changed", (f.size != old.size) as u8 as f64),
                 (
                     "sticky_changed",
-                    (f.paint.sticky_offset != old.sticky_offset) as u8 as f64,
+                    (f.paint.StickyOffset() != old.sticky_offset) as u8 as f64,
                 ),
                 ("old_sticky_y", old.sticky_offset.y),
-                ("new_sticky_y", f.paint.sticky_offset.y),
+                ("new_sticky_y", f.paint.StickyOffset().y),
             ],
         );
         return false;
@@ -739,10 +739,10 @@ fn collect_current_fragments<'a>(
         // synthetic sticky-property candidate.
         let tracks_sticky = sticky.contains_key(&owner);
         if tracks_sticky {
-            let Some(constraint) = f.paint.sticky_constraint else {
+            let Some(constraint) = f.paint.StickyConstraint() else {
                 return false;
             };
-            let current = (f.paint.sticky_offset, constraint);
+            let current = (f.paint.StickyOffset(), constraint);
             if dirty_sticky
                 .insert(owner, current)
                 .is_some_and(|old| old != current)

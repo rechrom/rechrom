@@ -104,8 +104,8 @@ fn LocalPoint(
         && fragment.paint.HasSource()
         && fragment.paint.Position() == layoutng_assembly::internal::layout_input::Position::kSticky
     {
-        point.x -= fragment.paint.sticky_offset.x;
-        point.y -= fragment.paint.sticky_offset.y;
+        point.x -= fragment.paint.StickyOffset().x;
+        point.y -= fragment.paint.StickyOffset().y;
     }
     if fragment.paint.establishes_paint_state
         && fragment.paint.HasSource()

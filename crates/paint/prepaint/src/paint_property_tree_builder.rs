@@ -279,9 +279,9 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                 source_roles.push(PaintPropertyRole::PaintOffsetTranslation);
             }
             if position == Position::kSticky
-                && (fragment.paint.sticky_constraint.is_some()
-                    || fragment.paint.sticky_offset.x != 0.0
-                    || fragment.paint.sticky_offset.y != 0.0)
+                && (fragment.paint.StickyConstraint().is_some()
+                    || fragment.paint.StickyOffset().x != 0.0
+                    || fragment.paint.StickyOffset().y != 0.0)
             {
                 source_roles.push(PaintPropertyRole::StickyTranslation);
             }
@@ -354,7 +354,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                     id
                 };
                 let sticky_constraint = (*role == PaintPropertyRole::StickyTranslation)
-                    .then_some(fragment.paint.sticky_constraint)
+                    .then_some(fragment.paint.StickyConstraint())
                     .flatten();
                 let mut parent_transform = node.properties.nodes.transform.clone();
                 if *role == PaintPropertyRole::ElementCanvasTransform {

@@ -1293,9 +1293,9 @@ fn NeedsPaintOffsetTranslation(fragment: &FragmentPaintData, style: Option<&Pain
     if NeedsIsolationNodes(fragment)
         || HasTransformPayload(style)
         || fragment.paint.scroll_container.is_some()
-        || fragment.paint.sticky_constraint.is_some()
-        || fragment.paint.sticky_offset.x != 0.0
-        || fragment.paint.sticky_offset.y != 0.0
+        || fragment.paint.StickyConstraint().is_some()
+        || fragment.paint.StickyOffset().x != 0.0
+        || fragment.paint.StickyOffset().y != 0.0
         || fragment.paint.NeedsAnchorPositionScrollAdjustment()
         || fragment.paint.scrollbars.is_some()
         || fragment.paint.SourceKind() == NodeKind::kSvgRoot
@@ -1426,9 +1426,9 @@ pub fn ResolveFragmentGeometry(
     // current offset. At scroll origin the offset is commonly zero, but the
     // identity property node is still required for impl-side scrolling.
     let has_sticky_translation = position == Position::kSticky
-        && (fragment.paint.sticky_constraint.is_some()
-            || fragment.paint.sticky_offset.x != 0.0
-            || fragment.paint.sticky_offset.y != 0.0);
+        && (fragment.paint.StickyConstraint().is_some()
+            || fragment.paint.StickyOffset().x != 0.0
+            || fragment.paint.StickyOffset().y != 0.0);
     let has_paint_offset_translation = NeedsPaintOffsetTranslation(fragment, style);
     let text_combine = fragment.paint.TextCombine();
     if establishes
@@ -1487,8 +1487,8 @@ pub fn ResolveFragmentGeometry(
             geometry.resets_paint_space = true;
         }
         if has_sticky_translation {
-            if !fragment.paint.sticky_offset.x.is_finite()
-                || !fragment.paint.sticky_offset.y.is_finite()
+            if !fragment.paint.StickyOffset().x.is_finite()
+                || !fragment.paint.StickyOffset().y.is_finite()
             {
                 panic!("sticky offset must be finite");
             }
@@ -1498,8 +1498,8 @@ pub fn ResolveFragmentGeometry(
             // rounding, including its negative half-integral behavior.
             geometry.sticky_pixel_snap_offset = geometry.paint_offset;
             let total = Offset {
-                x: geometry.paint_offset.x + fragment.paint.sticky_offset.x,
-                y: geometry.paint_offset.y + fragment.paint.sticky_offset.y,
+                x: geometry.paint_offset.x + fragment.paint.StickyOffset().x,
+                y: geometry.paint_offset.y + fragment.paint.StickyOffset().y,
             };
             let rounded = Offset {
                 x: SnapToPixel(total.x, 1.0),

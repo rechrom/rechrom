@@ -10374,7 +10374,7 @@ mod package_contract_tests {
                 .expect("read source sticky paint owner");
         for owned_policy in [
             "#[inline(never)]",
-            "pub(super) fn ExportStickyPaintProperties",
+            "pub(crate) fn LiveStickyPaintProperties",
             "StickyAxisPaintData",
             "StickyPositionPaintData",
         ] {

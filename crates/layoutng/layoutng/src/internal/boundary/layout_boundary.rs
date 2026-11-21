@@ -217,7 +217,7 @@ mod layout_fragment_scrollbar_thumb_geometry;
 use layout_fragment_scrollbar_thumb_geometry::SetScrollbarThumb;
 #[path = "../../../../layout_fragment/src/sticky_paint_export.rs"]
 mod layout_fragment_sticky_paint_export;
-use layout_fragment_sticky_paint_export::ExportStickyPaintProperties;
+pub(crate) use layout_fragment_sticky_paint_export::LiveStickyPaintProperties;
 pub(crate) fn UpdateStickyOffsets(
     objects: impl IntoIterator<Item = *mut LayoutObject>,
     reuse_constraints: bool,

@@ -7,22 +7,23 @@
 
 use super::*;
 
-// Keep the matrix offset and the compositor's recorded constraint basis from
-// the same source sticky update, for full export and retained scroll refresh.
+// The sticky translation and the compositor's constraint basis, read from
+// the same source sticky update on the LayoutBoxModelObject
+// (StickyPositionOffset / StickyConstraints), as Chromium's
+// PaintPropertyTreeBuilder::UpdateStickyTranslation reads them.
 #[inline(never)]
-pub(super) fn ExportStickyPaintProperties(
+pub(crate) fn LiveStickyPaintProperties(
     object: *const LayoutObject,
-    output: &mut PaintProperties,
-) {
-    output.sticky_offset = Offset::default();
-    output.sticky_constraint = None;
-    if output.Position() == Position::kSticky {
+) -> (Offset, Option<StickyPositionPaintData>) {
+    let mut sticky_offset = Offset::default();
+    let mut sticky_constraint = None;
+    if unsafe { &*object }.StyleRef().GetPosition() == foundation::EPosition::kSticky {
         let box_model = DynamicTo::<LayoutBoxModelObject>(object);
         if !box_model.is_null() {
             let box_model = unsafe { &*box_model };
             let constraints = box_model.StickyConstraints();
             let offset = box_model.StickyPositionOffset();
-            output.sticky_offset = Offset {
+            sticky_offset = Offset {
                 x: Number(offset.left),
                 y: Number(offset.top),
             };
@@ -75,13 +76,14 @@ pub(super) fn ExportStickyPaintProperties(
                 })
             };
             let constraint = StickyPositionPaintData {
-                owner_client_id: output.DisplayItemClientId(),
+                owner_client_id: unsafe { &*(object as *const DisplayItemClient) }.Id() as u64,
                 horizontal: export_axis(PhysicalAxis::kHorizontal),
                 vertical: export_axis(PhysicalAxis::kVertical),
             };
             if constraint.horizontal.is_some() || constraint.vertical.is_some() {
-                output.sticky_constraint = Some(constraint);
+                sticky_constraint = Some(constraint);
             }
         }
     }
+    (sticky_offset, sticky_constraint)
 }

@@ -194,14 +194,6 @@ pub(super) fn ExportProperties(
         return output;
     };
     let source = unsafe { &*source_entry.node };
-    if source.IsElementNode() {
-        let element = unsafe {
-            &*(source as *const Node as *const crate::internal::layout_node_metadata::Element)
-        };
-        if let Some(data) = element.InputElementData() {
-            output.scroll_offset = data.scroll_offset;
-        }
-    }
     let mut style_resources = source.InputStyleResources();
     if !effective_style.is_null() {
         if let Some(effective_source) = style_sources.get(&effective_style) {
@@ -410,17 +402,6 @@ pub(super) fn ExportProperties(
         // Source: core/paint/paint_property_tree_builder.cc:3634-3635.
         output.prevent_scroll_axis_locking =
             layout_style.ScrollAxisLock() == foundation::EScrollAxisLock::kNone;
-    }
-    ExportStickyPaintProperties(object, &mut output);
-    let element_data = if source.IsElementNode() {
-        unsafe { &*(source as *const Node as *const Element) }
-            .InputElementData()
-            .as_ref()
-    } else {
-        None
-    };
-    if let Some(element_data) = element_data {
-        output.scroll_offset = element_data.scroll_offset;
     }
     // SVG shape, transform, viewport and viewBox are read live from the
     // LayoutSVG owners (PaintProperties::SvgShape / SvgViewport / ...).
