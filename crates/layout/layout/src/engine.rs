@@ -311,8 +311,3 @@ impl LayoutEngine {
     }
 }
 
-/// Legacy side channels that consumer crates call today.
-// Wave E: fold into LayoutMutation / query views
-impl LayoutEngine {
-    }
-}
