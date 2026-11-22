@@ -10,9 +10,9 @@ use crate::{
 use crate::{
     css_property_value::CSSPropertyValue,
     css_property_value_set::*,
-    css_selector::{CSSSelector, CSSSelectorComplex, MatchType, PseudoType, QualifiedName},
+    css_selector::{CSSSelector, CSSSelectorComplex, MatchType, PseudoType},
     css_selector_list::CSSSelectorList,
-    css_value::{CSSValue, CSSValuePayload},
+    css_value::CSSValuePayload,
     media_queries::{
         media_query_backend::MediaQueryFeatureFlags,
         media_query_backend::MediaQueryValueBackend,
@@ -28,9 +28,7 @@ use crate::{
         css_parser_impl::*,
         css_parser_mode::*,
         css_parser_token::CSSParserTokenType::*,
-        css_parser_token_stream::{
-            BlockGuard, CSSParserTokenStream, EnableUnicodeRanges, TokenStreamTokenizer,
-        },
+        css_parser_token_stream::{BlockGuard, CSSParserTokenStream, TokenStreamTokenizer},
         css_selector_parser::{CSSSelectorParser, SelectorParserContext, SelectorParserOptions},
         media_query_parser::MediaQueryParser,
     },
@@ -2032,7 +2030,6 @@ fn ParseFontFaceDescriptor(
     )
     .map_err(kind)
 }
-use style_parser::font_face_descriptors::ConsumeFamilyName;
 impl crate::style_rule_keyframe::StyleRuleKeyframeBackend for Backend {
     type ExecutionContext = CSSParserContext<Backend>;
     type PropertySet = CSSPropertyValueSetRuleHandle<ProductionCSSValueDispatch>;

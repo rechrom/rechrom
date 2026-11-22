@@ -102,7 +102,8 @@ impl PersistentDocument {
             if self.arena[last].node_type == DOMNodeType::kText
                 && !self.arena[last].IsCDATASection()
             {
-                self.ReplaceDataUTF16(last, self.CharacterDataUTF16Slice(last).len(), 0, data);
+                let _ =
+                    self.ReplaceDataUTF16(last, self.CharacterDataUTF16Slice(last).len(), 0, data);
                 return last;
             }
         }
@@ -119,7 +120,7 @@ impl PersistentDocument {
         if position > 0 {
             let previous = self.arena[parent].children[position - 1];
             if self.arena[previous].node_type == DOMNodeType::kText {
-                self.ReplaceDataUTF16(
+                let _ = self.ReplaceDataUTF16(
                     previous,
                     self.CharacterDataUTF16Slice(previous).len(),
                     0,

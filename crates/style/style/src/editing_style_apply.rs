@@ -188,7 +188,7 @@ fn Conflicts(
     let mut properties = Vec::new();
     for property in source.Properties() {
         let p = property.PropertyID();
-        let Some(value) = inline.GetPropertyCSSValue(p) else {
+        let Some(_value) = inline.GetPropertyCSSValue(p) else {
             continue;
         };
         properties.push(p);

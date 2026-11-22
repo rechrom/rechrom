@@ -2,7 +2,7 @@
 // Concrete owners for container_query_parser and media_query_parser.cc:223-255,341-395.
 #![allow(non_snake_case)]
 use crate::{
-    css_value::{CSSValuePayload, CSSValueSubclass},
+    css_value::CSSValuePayload,
     media_queries::{
         conditional_exp_node::ConditionalExpNode, media_query_backend::MediaQueryFeatureFlags,
         media_query_exp::*,
@@ -20,7 +20,7 @@ use crate::{
     production_css_value as values,
     production_style_sheet::{Backend, Feature},
 };
-use foundation::{AtomicString, String};
+use foundation::AtomicString;
 use std::rc::Rc;
 pub type ContainerSet =
     crate::container_query::ContainerQuerySet<values::Value, values::CSSUnparsedDeclarationValue>;

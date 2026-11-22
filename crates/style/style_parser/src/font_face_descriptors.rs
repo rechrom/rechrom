@@ -201,7 +201,6 @@ pub fn ParseFontFaceDescriptorWithDiagnostics<
     diagnostic: &mut dyn FnMut(DiagnosticKind, u32),
 ) -> DescriptorResult {
     use crate::at_rule_descriptors::AtRuleDescriptorID as D;
-    use crate::css_primitive_value::UnitType;
     let _mode = ParserModeOverridingScope::new(context, CSSParserMode::kCSSFontFaceRuleMode);
     let mut stream: CSSParserTokenStream<crate::css_tokenizer::CSSTokenizer> =
         CSSParserTokenStream::new(StringView::from(text), 0);

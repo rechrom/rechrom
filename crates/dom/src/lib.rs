@@ -1,3 +1,5 @@
+// Identifiers keep Chromium's C++ names (methods, enum constants) for source alignment.
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 // Test linkage to the real replaced-object provider used by browser layout.
 #[cfg(test)]
 extern crate layout as _;

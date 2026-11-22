@@ -4,7 +4,7 @@
 // Reuses ConditionalParser and MediaQueryParser::ConsumeFeatureWithSet.
 #![allow(non_snake_case)]
 use super::{
-    conditional_parser::{ConditionalParser, ConsumeIfIdent, ParseMode},
+    conditional_parser::{ConditionalParser, ParseMode},
     css_parser_token::CSSParserTokenType::*,
     css_parser_token_stream::{CSSParserTokenStream, RestoringBlockGuard, TokenStreamTokenizer},
     css_tokenizer::CSSTokenizer,

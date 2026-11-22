@@ -14,7 +14,6 @@ use layout::input::{
     SvgViewportLength, WhiteSpace,
 };
 use layout::mutation::LayoutObject;
-use layout::mutation::LayoutTreeUpdate;
 use layout_style::style::appearance::AppearanceValue;
 
 unsafe extern "C" {
@@ -1005,11 +1004,11 @@ pub(super) fn first_letter_length(
     }
     let is_newline = |character: u16| character == 0x0a || character == 0x0d;
     let is_space = |character: u16| {
-        ((if preserve_breaks {
+        (if preserve_breaks {
             !is_newline(character) && unicode::IsSpaceOrNewline(character)
         } else {
             unicode::IsSpaceOrNewline(character)
-        }) || character == 0x00a0)
+        }) || character == 0x00a0
     };
     if *punctuation == FirstLetterPunctuationState::NotSeen {
         while length < text_length && is_space(text.Span16()[length as usize]) {

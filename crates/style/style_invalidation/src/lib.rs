@@ -1,3 +1,5 @@
+// Identifiers keep Chromium's C++ names (methods, enum constants) for source alignment.
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 pub mod invalidation_dom;
 pub mod invalidation_flags;
 pub mod invalidation_set;
