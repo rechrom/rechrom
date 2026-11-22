@@ -38,7 +38,7 @@ use crate::{
 };
 use dom::persistent_document::{DOMNamespace, DOMNodeType};
 use foundation::{AtomicString, IsHorizontalWritingMode};
-use layoutng_style::style::{computed_style::ComputedStyle, computed_style_constants::PseudoId};
+use layout_style::style::{computed_style::ComputedStyle, computed_style_constants::PseudoId};
 use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 const FEATURE_UNKNOWN: u16 = 1 << 1;
@@ -620,7 +620,7 @@ mod tests {
         production_style_sheet::Backend,
     };
     use foundation::{Persistent, String};
-    use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+    use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
     fn node_with_id(document: &dom::Document, id: &str) -> usize {
         (0..document.NodeCount())

@@ -1,7 +1,7 @@
 #[path = "../src/test_thread.rs"]
 mod test_thread;
 
-use layoutng_assembly::{
+use layout_assembly::{
     internal::{
         layout_input::{ComputedStyle, Display, ElementData, NodeKind},
         layout_object::LayoutObject,

@@ -1,7 +1,7 @@
 //! Dispatch traits borrow the same lower numeric/math payloads.
 use crate::css_value::{CSSValueCustomHash, CSSValueRandom, CSSValueSubclass};
 use foundation::{HashInts, String};
-use layoutng_style::css::{
+use layout_style::css::{
     css_math_function_value::CSSMathFunctionValue,
     css_numeric_literal_value::CSSNumericLiteralValue,
 };

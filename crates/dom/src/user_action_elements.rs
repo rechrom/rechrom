@@ -239,7 +239,7 @@ impl PersistentDocument {
     /// Element::FocusStateChanged, element.cc:9046-9101. The caller supplies
     /// the existing LayoutObject attachment fact; style remains element-owned.
     pub fn InvalidateFocusStateStyle(&mut self, element: usize, has_layout: bool) {
-        use layoutng_style::style::computed_style_constants::PseudoId;
+        use layout_style::style::computed_style_constants::PseudoId;
         let Some(style) = self
             .ResolvedStyleFor(element)
             .and_then(|style| style.ComputedStyle())

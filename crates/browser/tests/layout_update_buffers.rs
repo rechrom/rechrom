@@ -1,7 +1,7 @@
 #[path = "../src/test_thread.rs"]
 mod test_thread;
 
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::FragmentPaintData,
     internal::{
         layout_input::{ComputedStyle, ConstraintSpace},
@@ -251,7 +251,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             (100, 12, 7, [255, 0, 0, 255]),
             (200, 52, 29, [0, 0, 255, 255]),
         ] {
-            space.PushImage(layoutng_assembly::internal::layout_input::PaintImage {
+            space.PushImage(layout_assembly::internal::layout_input::PaintImage {
                     id,
                     width,
                     height,

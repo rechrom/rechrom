@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -11,21 +11,21 @@ pub type FlatTransforms = Arc<[TransformMatrix]>;
 
 use foundation::{PaintInvalidationReason, TrustedIdentityHashMap as HashMap};
 
-use layoutng_assembly::fragment_tree::{
+use layout_assembly::fragment_tree::{
     FragmentKind, FragmentPaintData, PaintResources, TextCombinePaintData,
 };
-use layoutng_assembly::internal::layout_input::PaintStyle;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::PaintStyle;
+use layout_assembly::internal::layout_input::{
     BorderLineStyle, Display, Edges, FloatSide, NodeKind, Offset, Overflow, PaintClipPathChild,
     PaintImage, PaintPathCommand, PaintPathVerb, Position, Size, TransformMatrix,
 };
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::paint_input::{
     BackgroundBox, ClipPathLength, ClipPathPaint, ClipPathRadiusKind, ClipPathReferenceBox,
     ClipPathShapeRadius, PaintBlendMode, PaintCornerRadii, PaintCornerRadius, PaintFilterOperation,
     PaintFilterType, PaintMaskImageState, PaintMaskLayer, PaintReflectionDirection, PaintTransform,
     SvgFilterPrimitiveKind,
 };
-use layoutng_assembly::layout_engine::{PaintFragmentCursor, PaintFragmentLease};
+use layout_assembly::layout_engine::{PaintFragmentCursor, PaintFragmentLease};
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::block_paint_invalidator::BlockPaintInvalidator;
@@ -80,7 +80,7 @@ pub struct EmbeddedLocalFrameView {
 impl EmbeddedLocalFrameView {
     pub fn new(
         owner: PaintFragmentCursor<'_>,
-        layout: &layoutng_assembly::layout_engine::LayoutPaintOutput,
+        layout: &layout_assembly::layout_engine::LayoutPaintOutput,
         cross_origin_to_parent: bool,
     ) -> Self {
         assert!(owner
@@ -212,7 +212,7 @@ fn StickyElementIdForClient(
 }
 
 fn BuildCompositorStickyConstraint(
-    sticky: layoutng_assembly::fragment_tree::StickyPositionPaintData,
+    sticky: layout_assembly::fragment_tree::StickyPositionPaintData,
     parent: &Arc<TransformPaintPropertyNode>,
     pixel_snap_offset: Offset,
 ) -> Option<PaintCompositorStickyConstraint> {
@@ -785,7 +785,7 @@ impl PaintTreeNode<'_> {
     /// fixture nodes without a source keep their fixture value.
     pub fn DocumentResources(
         &self,
-    ) -> Option<&Arc<layoutng_assembly::fragment_tree::PaintResources>> {
+    ) -> Option<&Arc<layout_assembly::fragment_tree::PaintResources>> {
         match self.source_cursor {
             Some(cursor) => cursor.DocumentResources(),
             None => self.fragment.as_deref()?.resources.as_ref(),
@@ -2167,19 +2167,19 @@ fn EllipsePath(
         height: radius_y * 2.0,
     };
     let radii = PaintCornerRadii {
-        top_left: layoutng_assembly::internal::paint_input::PaintCornerRadius {
+        top_left: layout_assembly::internal::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        top_right: layoutng_assembly::internal::paint_input::PaintCornerRadius {
+        top_right: layout_assembly::internal::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        bottom_right: layoutng_assembly::internal::paint_input::PaintCornerRadius {
+        bottom_right: layout_assembly::internal::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        bottom_left: layoutng_assembly::internal::paint_input::PaintCornerRadius {
+        bottom_left: layout_assembly::internal::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
@@ -2307,7 +2307,7 @@ fn ResolveComputedShapeClipPath(
     svg_effect_child: bool,
     output: &mut Vec<PaintPathCommand>,
 ) -> Result<(PaintRect, bool), &'static str> {
-    use layoutng_style::style::{
+    use layout_style::style::{
         basic_shapes::ShapeType,
         clip_path_operation::{ClipPathOperation, OperationType},
         shape_clip_path_operation::ShapeClipPathOperation,
@@ -2328,7 +2328,7 @@ fn ResolveComputedShapeClipPath(
         return Err("compiled shape clip-path has an invalid style owner");
     }
     let shape = unsafe {
-        &*(shape as *const dyn layoutng_style::style::basic_shapes::BasicShape as *const StyleShape)
+        &*(shape as *const dyn layout_style::style::basic_shapes::BasicShape as *const StyleShape)
     };
     let zoom = source.EffectiveZoom().max(f32::MIN_POSITIVE);
     let reference_scale = if svg_effect_child { zoom } else { 1. };
@@ -2382,8 +2382,8 @@ fn ResolveClipPath(
             width: (reference_box.width - left - right).max(0.0),
             height: (reference_box.height - top - bottom).max(0.0),
         };
-        let radius = |value: layoutng_assembly::internal::paint_input::ClipPathRadius| {
-            layoutng_assembly::internal::paint_input::PaintCornerRadius {
+        let radius = |value: layout_assembly::internal::paint_input::ClipPathRadius| {
+            layout_assembly::internal::paint_input::PaintCornerRadius {
                 x: length(value.x, reference_box.width, pixel_scale).max(0.0),
                 y: length(value.y, reference_box.height, pixel_scale).max(0.0),
             }
@@ -2599,7 +2599,7 @@ fn ResolveClipPath(
 
 fn TransformClipPoint(
     point: Offset,
-    transform: layoutng_assembly::internal::paint_input::SvgClipTransform,
+    transform: layout_assembly::internal::paint_input::SvgClipTransform,
 ) -> Offset {
     let [a, b, c, d, e, f] = transform.values;
     Offset {
@@ -2608,12 +2608,12 @@ fn TransformClipPoint(
     }
 }
 fn MultiplyClipTransform(
-    a: layoutng_assembly::internal::paint_input::SvgClipTransform,
-    b: layoutng_assembly::internal::paint_input::SvgClipTransform,
-) -> layoutng_assembly::internal::paint_input::SvgClipTransform {
+    a: layout_assembly::internal::paint_input::SvgClipTransform,
+    b: layout_assembly::internal::paint_input::SvgClipTransform,
+) -> layout_assembly::internal::paint_input::SvgClipTransform {
     let [a0, a1, a2, a3, a4, a5] = a.values;
     let [b0, b1, b2, b3, b4, b5] = b.values;
-    layoutng_assembly::internal::paint_input::SvgClipTransform {
+    layout_assembly::internal::paint_input::SvgClipTransform {
         values: [
             a0 * b0 + a2 * b1,
             a1 * b0 + a3 * b1,
@@ -2631,21 +2631,21 @@ fn MultiplyClipTransform(
     }
 }
 fn ResolveClipTransformPercentages(
-    mut transform: layoutng_assembly::internal::paint_input::SvgClipTransform,
+    mut transform: layout_assembly::internal::paint_input::SvgClipTransform,
     width: f64,
     height: f64,
-) -> layoutng_assembly::internal::paint_input::SvgClipTransform {
+) -> layout_assembly::internal::paint_input::SvgClipTransform {
     transform.values[4] += transform.percentages[0] * width + transform.percentages[1] * height;
     transform.values[5] += transform.percentages[2] * width + transform.percentages[3] * height;
     transform.percentages = [0.0; 4];
     transform
 }
 fn ResolveSvgClipGeometry(
-    geometry: &layoutng_assembly::internal::paint_input::SvgClipGeometry,
+    geometry: &layout_assembly::internal::paint_input::SvgClipGeometry,
     width: f64,
     height: f64,
 ) -> Vec<PaintPathCommand> {
-    use layoutng_assembly::internal::paint_input::{SvgClipGeometry as G, SvgClipLength};
+    use layout_assembly::internal::paint_input::{SvgClipGeometry as G, SvgClipLength};
     let x = |v: SvgClipLength| v.value + v.percentage * width;
     let y = |v: SvgClipLength| v.value + v.percentage * height;
     let diagonal = ((width * width + height * height) * 0.5).sqrt();
@@ -2799,14 +2799,14 @@ fn ResolveSvgClipGeometry(
     }
 }
 fn ResolveSvgClipViewport(
-    viewport: layoutng_assembly::internal::paint_input::SvgClipViewport,
+    viewport: layout_assembly::internal::paint_input::SvgClipViewport,
     reference_width: f64,
     reference_height: f64,
-) -> layoutng_assembly::internal::paint_input::SvgClipTransform {
-    use layoutng_assembly::internal::paint_input::{
+) -> layout_assembly::internal::paint_input::SvgClipTransform {
+    use layout_assembly::internal::paint_input::{
         SvgClipPreserveAspectRatio as P, SvgClipTransform,
     };
-    let resolve = |length: layoutng_assembly::internal::paint_input::SvgClipLength, basis| {
+    let resolve = |length: layout_assembly::internal::paint_input::SvgClipLength, basis| {
         length.value + length.percentage * basis
     };
     let width = resolve(viewport.width, reference_width).max(0.0);
@@ -2843,13 +2843,13 @@ fn ResolveSvgClipViewport(
 }
 
 pub fn ResolveSvgClipText(
-    text: &layoutng_assembly::internal::paint_input::SvgClipText,
-    fonts: &[layoutng_assembly::internal::layout_input::FontFace],
+    text: &layout_assembly::internal::paint_input::SvgClipText,
+    fonts: &[layout_assembly::internal::layout_input::FontFace],
     geometry_size: (f64, f64),
     cursor: &mut Offset,
 ) -> Result<Vec<Vec<PaintPathCommand>>, String> {
     use font_engine::{ClipTextFace, ClipTextRequest, OutlineVerb, TextDirection};
-    use layoutng_assembly::internal::paint_input::SvgClipTextAnchor;
+    use layout_assembly::internal::paint_input::SvgClipTextAnchor;
     let variation_storage = fonts
         .iter()
         .map(|font| {
@@ -2897,7 +2897,7 @@ pub fn ResolveSvgClipText(
         },
         &faces,
     )?;
-    let resolve = |values: &[layoutng_assembly::internal::paint_input::SvgClipLength],
+    let resolve = |values: &[layout_assembly::internal::paint_input::SvgClipLength],
                    index: usize,
                    basis: f64| {
         values
@@ -3047,18 +3047,18 @@ pub fn ResolveSvgClipText(
     Ok(result)
 }
 pub fn ResolveReferenceClipPath(
-    graph: &layoutng_assembly::internal::paint_input::SvgClipPathGraph,
+    graph: &layout_assembly::internal::paint_input::SvgClipPathGraph,
     reference: PaintRect,
     paint_offset: Offset,
     effective_zoom: f64,
     svg_owner: bool,
     resource_viewport: Option<Size>,
-    fonts: &[layoutng_assembly::internal::layout_input::FontFace],
+    fonts: &[layout_assembly::internal::layout_input::FontFace],
     runtime_error: &mut Option<String>,
     output: &mut Vec<PaintPathCommand>,
     children: &mut Vec<PaintClipPathChild>,
 ) -> PaintRect {
-    use layoutng_assembly::internal::paint_input::{
+    use layout_assembly::internal::paint_input::{
         SvgClipPathUnits, SvgClipTransform, SvgClipTransformStep,
     };
     let first_output_child = children.len();
@@ -3644,7 +3644,7 @@ fn ResolveMaskLayers(
                 ..Default::default()
             };
             if let Some(graph) = reference.graph.as_deref() {
-                use layoutng_assembly::internal::paint_input::SvgMaskUnits;
+                use layout_assembly::internal::paint_input::SvgMaskUnits;
                 if IsSvgEffectChild(fragment.paint.SourceKind())
                     && fragment.paint.SvgShape().is_none()
                     && (graph.mask_units == SvgMaskUnits::kObjectBoundingBox
@@ -6393,7 +6393,7 @@ impl PrePaintTreeWalk {
         }
         let usage = || {
             cache.resource_usage
-                | layoutng_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(f)
+                | layout_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(f)
         };
         if !self.SameDocumentResources(
             cache.resources.as_ref(),
@@ -6472,7 +6472,7 @@ impl PrePaintTreeWalk {
         }) {
             return same;
         }
-        let same = layoutng_assembly::fragment_tree::paint_resource_usage::SamePaintResourcesFor(
+        let same = layout_assembly::fragment_tree::paint_resource_usage::SamePaintResourcesFor(
             recorded, current, usage,
         );
         self.resource_memo
@@ -7073,7 +7073,7 @@ impl PrePaintTreeWalk {
             let resources = fragment.Cursor().DocumentResources().cloned();
             let usage = match previous_resource_usage {
                 Some(usage) if self_unchanged => usage,
-                _ => layoutng_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(
+                _ => layout_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(
                     &fragment,
                 ),
             };
@@ -8725,16 +8725,16 @@ mod tests {
         ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, SamePhaseInputs,
         SvgTransformToPixelSnappedBorderBox, TransformPropertyRoles,
     };
-    use layoutng_assembly::fragment_tree::{
+    use layout_assembly::fragment_tree::{
         FieldsetPaintData, FragmentKind, FragmentPaintData, FragmentPaintRect, PaintResources,
         ScrollContainerPaintData, ScrollbarPaintAxis, ScrollbarPaintData, SelfOutlinePaintData,
     };
-    use layoutng_assembly::internal::layout_input::{
+    use layout_assembly::internal::layout_input::{
         BorderLineStyle, Display, FloatSide, NodeKind, Offset, Overflow, PaintPathCommand,
         PaintPathVerb, Position, Size, SvgShapeData, SvgShapeGeometry, TransformMatrix,
     };
-    use layoutng_assembly::internal::layout_input_types::Color;
-    use layoutng_assembly::internal::paint_input::{
+    use layout_assembly::internal::layout_input_types::Color;
+    use layout_assembly::internal::paint_input::{
         BackgroundBox, BackgroundImageLayer, ClipPathCircle, ClipPathLength, ClipPathPaint,
         ClipPathRadiusKind, ClipPathShapeRadius, PaintColorStop, PaintCornerRadii,
         PaintFilterOperation, PaintFilterType, PaintMaskImageState, PaintMaskLayer, PaintShader,
@@ -9131,7 +9131,7 @@ mod tests {
         fragment.paint.paint_layer_is_self_painting = true;
         fragment.paint.effective_zoom = 2.0;
         fragment.paint.paint_layer_filter_reference_box =
-            Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
+            Some(layout_assembly::fragment_tree::FragmentPaintRect {
                 offset: Offset { x: 3.0, y: 4.0 },
                 size: Size {
                     width: 40.0,
@@ -9977,10 +9977,10 @@ mod tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.source_kind = NodeKind::kSvgShape;
         fragment.paint.style.clip_path =
-            Some(layoutng_assembly::internal::paint_input::ClipPathPaint {
+            Some(layout_assembly::internal::paint_input::ClipPathPaint {
                 inset: Some(Default::default()),
                 reference_box:
-                    layoutng_assembly::internal::paint_input::ClipPathReferenceBox::kFillBox,
+                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kFillBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10032,10 +10032,10 @@ mod tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.source_kind = NodeKind::kSvgShape;
         fragment.paint.style.clip_path =
-            Some(layoutng_assembly::internal::paint_input::ClipPathPaint {
+            Some(layout_assembly::internal::paint_input::ClipPathPaint {
                 inset: Some(Default::default()),
                 reference_box:
-                    layoutng_assembly::internal::paint_input::ClipPathReferenceBox::kStrokeBox,
+                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kStrokeBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10081,10 +10081,10 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.clip_path =
-            Some(layoutng_assembly::internal::paint_input::ClipPathPaint {
+            Some(layout_assembly::internal::paint_input::ClipPathPaint {
                 geometry_box_only: true,
                 reference_box:
-                    layoutng_assembly::internal::paint_input::ClipPathReferenceBox::kBorderBox,
+                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kBorderBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10137,16 +10137,16 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.border_radii = Some(PaintCornerRadii {
-            top_left: layoutng_assembly::internal::paint_input::PaintCornerRadius {
+            top_left: layout_assembly::internal::paint_input::PaintCornerRadius {
                 x: 8.0,
                 y: 8.0,
             },
             ..Default::default()
         });
         fragment.paint.style.border_corner_curvatures() =
-            layoutng_assembly::internal::paint_input::PaintCornerCurvatures([4.0, 2.0, 2.0, 2.0]);
+            layout_assembly::internal::paint_input::PaintCornerCurvatures([4.0, 2.0, 2.0, 2.0]);
         fragment.paint.style.clip_path =
-            Some(layoutng_assembly::internal::paint_input::ClipPathPaint {
+            Some(layout_assembly::internal::paint_input::ClipPathPaint {
                 geometry_box_only: true,
                 ..Default::default()
             });
@@ -10193,7 +10193,7 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.clip_path =
-            Some(layoutng_assembly::internal::paint_input::ClipPathPaint {
+            Some(layout_assembly::internal::paint_input::ClipPathPaint {
                 reference_error: Some("clip-path shape()/ray() is unsupported".into()),
                 ..Default::default()
             });
@@ -10304,7 +10304,7 @@ mod tests {
         let mut outlined_fragment = FragmentPaintData::default();
         outlined_fragment.paint.has_source = true;
         outlined_fragment.paint.style.outline_style =
-            layoutng_assembly::internal::layout_input::BorderLineStyle::kSolid;
+            layout_assembly::internal::layout_input::BorderLineStyle::kSolid;
         outlined_fragment.paint.style.outline_width = 1.0;
         outlined_fragment.paint.style.outline_color.alpha = 1.0;
         let mut outlined = PaintTreeNode::default();
@@ -10373,7 +10373,7 @@ mod tests {
         image.paint.establishes_paint_state = true;
         image.paint.is_layout_box = true;
         image.paint.replaced_content =
-            Some(layoutng_assembly::fragment_tree::ReplacedContentPaintData {
+            Some(layout_assembly::fragment_tree::ReplacedContentPaintData {
                 respects_css_overflow: false,
                 clips_to_content_box: true,
                 is_image: true,
@@ -10398,7 +10398,7 @@ mod tests {
             width: 100.0,
             height: 80.0,
         };
-        let radius = layoutng_assembly::internal::paint_input::PaintCornerRadius { x: 8.0, y: 8.0 };
+        let radius = layout_assembly::internal::paint_input::PaintCornerRadius { x: 8.0, y: 8.0 };
         fragment.paint.style.border_radii = Some(PaintCornerRadii {
             top_left: radius,
             top_right: radius,
@@ -10639,7 +10639,7 @@ mod tests {
             };
             fragment.paint.style.will_change_opacity = force_preferred;
             fragment.paint.scroll_container =
-                Some(layoutng_assembly::fragment_tree::ScrollContainerPaintData {
+                Some(layout_assembly::fragment_tree::ScrollContainerPaintData {
                     compositor_element_id: Default::default(),
                     scrollable_axes: [true, true],
                     scroll_origin: Offset::default(),
@@ -11127,7 +11127,7 @@ mod tests {
             height: 80.0,
         };
         fragment.paint.fieldset = Some(Arc::new(FieldsetPaintData {
-            border_outsets: layoutng_assembly::internal::layout_input::Edges {
+            border_outsets: layout_assembly::internal::layout_input::Edges {
                 top: 7.0,
                 right: 4.0,
                 bottom: 3.0,

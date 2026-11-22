@@ -5,7 +5,7 @@ use super::*;
 use foundation::{
     EBlockEllipsis, EBreakBetween, EBreakInside, EContinue, TabSize, TabSizeValueType,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::EVerticalAlign, max_lines_data::MaxLinesData,
 };
 

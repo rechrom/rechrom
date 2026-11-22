@@ -41,7 +41,7 @@ impl<'listener> Interaction<'listener> {
     pub fn WithSelectionState(
         output: InteractionOutputEmitter,
         listeners: Option<EventListenerDispatcher<'listener>>,
-        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        selections: Rc<layout_assembly::editing_state::SelectionState>,
         clock: Rc<dyn interaction_dispatch::core::dom::events::event::EventClock>,
     ) -> Self {
         Self {

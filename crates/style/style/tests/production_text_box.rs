@@ -2,7 +2,7 @@ use font_engine::fonts::shaping::text_spacing_trim::TextSpacingTrim as S;
 use foundation::{
     CSSPropertyID as P, CSSValueID as V, ETextAutospace, ETextBoxTrim, String, TextDecorationLine,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     text_box_edge::TextBoxEdgeType as E,
     text_fit::{TextFitMethod as M, TextFitTarget as T, TextFitType as F},

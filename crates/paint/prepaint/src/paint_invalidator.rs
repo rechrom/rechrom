@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason};
-use layoutng_assembly::fragment_tree::{FragmentPaintData, PrePaintSourceObject};
-use layoutng_assembly::internal::layout_input::{Display, Offset};
+use layout_assembly::fragment_tree::{FragmentPaintData, PrePaintSourceObject};
+use layout_assembly::internal::layout_input::{Display, Offset};
 
 /// Source: `paint_invalidator.h:20-72`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -7,7 +7,7 @@ use crate::css_computed_style_declaration::{
 };
 use crate::resolver::cascade_origin::CascadeOrigin;
 use foundation::CSSPropertyID;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 use style_model::css_property_value_set::{CSSPropertyValueSet, CSSPropertyValueSetRuleHandle};
 use style_parser::production_css_value::{ProductionCSSValueDispatch, Value};

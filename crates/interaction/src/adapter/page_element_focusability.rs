@@ -8,7 +8,7 @@
 
 use dom::{DOMFormControlClass, DOMInputType, DOMNamespace, DOMNodeType, Document};
 use interaction_default::core::dom::element::{self, ElementMouseFocusability, FocusableState};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 
 /// Scalar queries over the current resident LayoutObject. A missing object is
 /// distinct from an object which is not scrollable or is not a canvas.

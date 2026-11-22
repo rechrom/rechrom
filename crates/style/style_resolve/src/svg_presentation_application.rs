@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{LineCap, LineJoin, Member};
-use layoutng_style::style::computed_style_constants::EBaselineShiftType;
+use layout_style::style::computed_style_constants::EBaselineShiftType;
 
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
     use CSSPropertyID::*;

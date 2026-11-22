@@ -6,7 +6,7 @@ use foundation::{
     ETextAlign, ETextDecorationStyle, ETextTransform, TextDecorationLine, TextDecorationThickness,
     TextJustify,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::TextUnderlinePosition,
     text_indent_flags::TextIndentFlags,
     text_overflow_data::{TextOverflowData, TextOverflowType},

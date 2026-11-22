@@ -3,8 +3,8 @@
 #![allow(non_snake_case)]
 
 use foundation::{Member, PhysicalOffset, Visitor};
-use layoutng_assembly::{fragment_item::FragmentItem, internal::used_font::UsedFont};
-use layoutng_style::style::{
+use layout_assembly::{fragment_item::FragmentItem, internal::used_font::UsedFont};
+use layout_style::style::{
     applied_text_decoration::AppliedTextDecorationVector, computed_style::ComputedStyle,
 };
 

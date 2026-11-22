@@ -23,12 +23,12 @@ use font_engine::Font;
 use foundation::{
     CSSPropertyID, CSSValueID, Length, MakeGarbageCollected, Member, String, WritingMode,
 };
-use layoutng_style::style::filter_operation::{
+use layout_style::style::filter_operation::{
     BasicColorMatrixFilterOperation, BasicComponentTransferFilterOperation, BlurFilterOperation,
     DropShadowFilterOperation, FilterOperation, OperationType,
 };
-use layoutng_style::style::filter_operations::FilterOperations;
-use layoutng_style::style::shadow_data::ShadowData;
+use layout_style::style::filter_operations::FilterOperations;
+use layout_style::style::shadow_data::ShadowData;
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;

@@ -2,8 +2,8 @@
 
 use std::cell::RefCell;
 
-use layoutng_assembly::internal::layout_input::{TextDirection, WritingMode};
-use layoutng_assembly::internal::selection_state::SelectionState;
+use layout_assembly::internal::layout_input::{TextDirection, WritingMode};
+use layout_assembly::internal::selection_state::SelectionState;
 use paint_chunk::{PaintSelectionBound, PaintSelectionBoundType};
 
 use crate::paint_context::PaintContext;

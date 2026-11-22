@@ -13,7 +13,7 @@ use crate::core::layout::{
     native_hit_test::NativeHitTestRequiredPort,
 };
 use foundation::{gfx, PhysicalOffset, PhysicalRect};
-use layoutng_assembly::{internal::layout_view::LayoutView, layout_engine::PaintFragmentCursor};
+use layout_assembly::{internal::layout_view::LayoutView, layout_engine::PaintFragmentCursor};
 
 /// Implemented by the same live LocalFrame/LocalFrameView owner. PreparedRevision
 /// changes for layout, PrePaint, viewport or scrolling invalidation, even if

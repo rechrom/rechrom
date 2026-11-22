@@ -7,7 +7,7 @@ use crate::invalidation::{
 };
 use dom::{persistent_document::DOMNodeType, Document};
 use foundation::AtomicString;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;

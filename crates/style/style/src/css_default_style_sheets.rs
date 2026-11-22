@@ -35,7 +35,7 @@ use crate::style_sheet_contents::{
     MixinMap, RuleSetHandle, StyleSheetContents, StyleSheetContentsBackend,
 };
 use foundation::{CSSPropertyID, String};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;

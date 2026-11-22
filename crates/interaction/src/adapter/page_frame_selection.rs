@@ -13,7 +13,7 @@ use interaction_default::core::editing::{
     },
     set_selection_options::{SetSelectionBy, SetSelectionOptions},
 };
-use layoutng_assembly::{
+use layout_assembly::{
     editing_state::{DOMSelection, SelectionState},
     EditingPosition, EditingTextAffinity,
 };
@@ -112,7 +112,7 @@ pub trait PageFrameSelectionHost {
     fn SuppressScrollAnchoringForNode(
         &self,
         node: Option<u64>,
-    ) -> layoutng_assembly::layout_engine::SuppressScrollAnchorScope;
+    ) -> layout_assembly::layout_engine::SuppressScrollAnchorScope;
     fn SelectedHtmlForClipboard(&self,selection:DOMSelection)->Result<Vec<u16>,interaction_default::core::editing::serializers::styled_markup_serializer::SerializationError>;
     fn SerializeParagraphForMove(&self, selection: DOMSelection, constraining_ancestor: Option<u64>) -> Result<Vec<u16>, interaction_default::core::editing::serializers::styled_markup_serializer::SerializationError>;
     fn MarkupSanitizationHost(
@@ -544,7 +544,7 @@ impl PageFrameSelection {
         if let Some((anchor, focus)) = offset(selection.anchor).zip(offset(selection.focus)) {
             self.selections.SetActiveControlSelection(
                 control,
-                layoutng_assembly::editing_state::Selection { anchor, focus },
+                layout_assembly::editing_state::Selection { anchor, focus },
             );
         }
     }
@@ -574,7 +574,7 @@ impl PageFrameSelection {
                 document.TextControlInnerEditorOffset(index, point)
             };
             let (anchor, focus) = offset(selection.anchor).zip(offset(selection.focus))?;
-            Some(layoutng_assembly::editing_state::Selection { anchor, focus })
+            Some(layout_assembly::editing_state::Selection { anchor, focus })
         });
         if let Some(selection) = projected {
             self.selections
@@ -601,7 +601,7 @@ impl PageFrameSelection {
     pub(crate) fn SuppressScrollAnchoringForNode(
         &self,
         node: Option<u64>,
-    ) -> layoutng_assembly::layout_engine::SuppressScrollAnchorScope {
+    ) -> layout_assembly::layout_engine::SuppressScrollAnchorScope {
         self.host.SuppressScrollAnchoringForNode(node)
     }
     pub(crate) fn SelectionIsDirectional(&self) -> bool {
@@ -891,8 +891,8 @@ impl PageFrameSelection {
         let position = |anchor| EditingPosition::WithAnchor(owner.Id(), 0, anchor);
         self.SetSelection(
             Some(DOMSelection {
-                anchor: position(layoutng_assembly::EditingPositionAnchorType::BeforeAnchor),
-                focus: position(layoutng_assembly::EditingPositionAnchorType::AfterAnchor),
+                anchor: position(layout_assembly::EditingPositionAnchorType::BeforeAnchor),
+                focus: position(layout_assembly::EditingPositionAnchorType::AfterAnchor),
                 affinity: EditingTextAffinity::Downstream,
             }),
             SetSelectionOptions::default(),
@@ -1021,7 +1021,7 @@ pub(crate) fn NativeEditingBoundaryPoint(
     document: &dom::Document,
     position: EditingPosition,
 ) -> Option<dom::DOMBoundaryPoint> {
-    use layoutng_assembly::EditingPositionAnchorType as A;
+    use layout_assembly::EditingPositionAnchorType as A;
     let node = position.node_id?;
     let index = document.FindNodeById(node)?;
     let (node_id, offset) = match position.anchor {

@@ -216,7 +216,7 @@ impl PageInteraction {
         bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
         state: Rc<RefCell<UserInteractionState>>,
         emitter: Option<interaction::InteractionOutputEmitter>,
-        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        selections: Rc<layout_assembly::editing_state::SelectionState>,
         clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
     ) -> Self {
         Self::InstallWithRetainedOwner(document, bindings, state, emitter, selections, clock, None)
@@ -226,7 +226,7 @@ impl PageInteraction {
         document: Rc<RefCell<DOM>>,
         bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
         state: Rc<RefCell<UserInteractionState>>,
-        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        selections: Rc<layout_assembly::editing_state::SelectionState>,
         clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
         engine: Interaction<'static>,
         controller: Rc<interaction::adapter::page_form_controller::PageFormController>,
@@ -247,7 +247,7 @@ impl PageInteraction {
         bindings: &Rc<RefCell<DOMJavaScriptBindings>>,
         state: Rc<RefCell<UserInteractionState>>,
         emitter: Option<interaction::InteractionOutputEmitter>,
-        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        selections: Rc<layout_assembly::editing_state::SelectionState>,
         clock: Rc<dyn interaction::dispatch::core::dom::events::event::EventClock>,
         retained: Option<(
             Interaction<'static>,

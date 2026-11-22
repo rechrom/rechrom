@@ -6,16 +6,16 @@ use crate::Element;
 use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
 use font_engine::text::implementation::unicode_category::Category;
 use foundation::{unicode, StringView};
-use layoutng_assembly::internal::form_control_types::FormControlType;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::form_control_types::FormControlType;
+use layout_assembly::internal::layout_input::{
     ComputedStyle, Display, ElementData, ExtendedStyle, FrameDimension, FrameDimensionType,
     MathTokenKind, NodeKind, Offset, PaintPathCommand, PaintPathVerb, SvgLengthAdjust,
     SvgShapeData, SvgShapeGeometry, SvgTextPathData, SvgUseData, SvgViewBoxData, SvgViewportData,
     SvgViewportLength, WhiteSpace,
 };
-use layoutng_assembly::internal::layout_object::LayoutObject;
-use layoutng_assembly::layout_engine::LayoutTreeUpdate;
-use layoutng_style::style::appearance::AppearanceValue;
+use layout_assembly::internal::layout_object::LayoutObject;
+use layout_assembly::layout_engine::LayoutTreeUpdate;
+use layout_style::style::appearance::AppearanceValue;
 
 unsafe extern "C" {
     fn strtod(begin: *const std::ffi::c_char, end: *mut *mut std::ffi::c_char) -> f64;
@@ -36,12 +36,12 @@ pub(super) trait LayoutNodeView {
     fn node_attribute(&self, name: &str) -> Option<&str>;
     fn marker_container_sizes(
         &self,
-    ) -> Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes> {
+    ) -> Option<layout_style::css::css_to_length_conversion_data::ContainerSizes> {
         None
     }
     fn marker_length_values(
         &self,
-    ) -> std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues> {
+    ) -> std::sync::Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues> {
         style_parser::svg_length_parser::SVGMarkerLengthInputs::Parse(|name| {
             self.node_attribute(name).map(str::to_owned)
         })
@@ -68,12 +68,12 @@ impl LayoutNodeView for crate::persistent_document::DOMNode {
     }
     fn marker_container_sizes(
         &self,
-    ) -> Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes> {
+    ) -> Option<layout_style::css::css_to_length_conversion_data::ContainerSizes> {
         self.SVGLengthContainerSizes()
     }
     fn marker_length_values(
         &self,
-    ) -> std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues> {
+    ) -> std::sync::Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues> {
         self.SVGMarkerLengthValues()
     }
 }
@@ -165,7 +165,7 @@ pub(super) fn svg_text_path_layout_needed(
             return true;
         }
         if current.RuntimeClass()
-            != layoutng_assembly::internal::layout_object::LayoutObjectClass::SvgInline
+            != layout_assembly::internal::layout_object::LayoutObjectClass::SvgInline
         {
             return false;
         }
@@ -582,7 +582,7 @@ pub(super) fn element_metadata_svg(
 ) {
     data.svg_path_element = node.node_name() == "path";
     if node.node_name() == "marker" {
-        use layoutng_assembly::internal::layout_input::{SvgMarkerData, SvgMarkerOrient};
+        use layout_assembly::internal::layout_input::{SvgMarkerData, SvgMarkerOrient};
         let angle = |value: &str| {
             let value = value.trim_end_matches(|c: char| c.is_ascii_whitespace());
             let (number, multiplier) = if let Some(n) = value.strip_suffix("deg") {
@@ -867,7 +867,7 @@ pub(super) fn element_kind_html(
     node: &impl LayoutNodeView,
     element: &ElementData,
     style: &ComputedStyle,
-    source: Option<&layoutng_style::style::computed_style::ComputedStyle>,
+    source: Option<&layout_style::style::computed_style::ComputedStyle>,
 ) -> NodeKind {
     match node.node_name() {
         "br" => return NodeKind::kLineBreak,
@@ -1061,32 +1061,32 @@ pub(super) fn is_block_container_display(display: Display) -> bool {
 // path without a canonical source style conservative.
 
 pub(super) fn needs_svg_filter_resources(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
+    style: &layout_style::style::computed_style::ComputedStyle,
 ) -> bool {
     style.Filter().HasReferenceFilter() || style.BackdropFilter().HasReferenceFilter()
 }
 
 pub(super) fn resolve_svg_clip_path(
     style: &mut ComputedStyle,
-    source: &layoutng_style::style::computed_style::ComputedStyle,
-    snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
-    scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
+    source: &layout_style::style::computed_style::ComputedStyle,
+    snapshot: &std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    scope: layout_style::style::reference_clip_path_operation::SvgClipResourceScope,
 ) {
     style.svg_clip_resources = svg_clip_resource_binding(source, snapshot, scope);
 }
 
 pub(super) fn svg_clip_resource_binding(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
-    snapshot: &std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>,
-    scope: layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope,
-) -> layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
+    style: &layout_style::style::computed_style::ComputedStyle,
+    snapshot: &std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>,
+    scope: layout_style::style::reference_clip_path_operation::SvgClipResourceScope,
+) -> layout_assembly::internal::paint_input::SvgClipResourceBinding {
     // Every native element retains its document/tree-scope resource identity.
     // Resource definitions need the generation even without their own IRI
     // properties, because source cycle caching belongs to the target owner.
     let _ = style;
     // This is a resource binding, not a second representation of clip-path.
     // Chromium ComputedStyle remains the sole owner of the actual operation.
-    layoutng_assembly::internal::paint_input::SvgClipResourceBinding {
+    layout_assembly::internal::paint_input::SvgClipResourceBinding {
         snapshot: std::sync::Arc::clone(snapshot),
         scope,
     }

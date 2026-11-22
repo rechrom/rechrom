@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 foundation = { path = "../../foundation" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
+layout_style = { path = "../../layout/layout_style" }

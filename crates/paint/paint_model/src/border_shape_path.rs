@@ -3,7 +3,7 @@
 //! core/paint/border_shape_utils.cc:54-80.
 use crate::basic_shape_path::InvalidBasicShape;
 use foundation::{gfx::RectF, EBorderStyle};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::{BasicShape, BasicShapePolygon, ShapeType},
     computed_style::ComputedStyle,
 };

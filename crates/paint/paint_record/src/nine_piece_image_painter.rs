@@ -1,12 +1,12 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::{
     BoxDecorationBreak, Display, Offset, PaintImage, Size, TransformMatrix,
 };
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::paint_input::{
     NinePieceImagePaint, PaintImageTileRule, PaintShader,
 };
 
@@ -643,8 +643,8 @@ impl NinePieceImagePainter {
 
 #[cfg(test)]
 mod tests {
-    use layoutng_assembly::internal::layout_input::Edges;
-    use layoutng_assembly::internal::paint_input::NinePieceImagePaint;
+    use layout_assembly::internal::layout_input::Edges;
+    use layout_assembly::internal::paint_input::NinePieceImagePaint;
 
     use super::{NinePieceImagePainter, PaintRect};
 

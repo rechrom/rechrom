@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::internal::layout_input::NodeKind;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::internal::layout_input::NodeKind;
 use paint_model::PaintRect;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
@@ -48,8 +48,8 @@ impl SVGRootPainter {
 mod tests {
     use std::cell::RefCell;
 
-    use layoutng_assembly::fragment_tree::{FragmentPaintData, SvgViewportGeometry};
-    use layoutng_assembly::internal::layout_input::{NodeKind, Offset, Size};
+    use layout_assembly::fragment_tree::{FragmentPaintData, SvgViewportGeometry};
+    use layout_assembly::internal::layout_input::{NodeKind, Offset, Size};
     use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
     use crate::paint_context::PaintContext;

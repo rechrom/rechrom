@@ -1,7 +1,7 @@
 //! Native select effects outside the DOM/default-action owner. The embedding
 //! lends one current Document's original layout and host services per call.
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

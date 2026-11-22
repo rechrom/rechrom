@@ -52,7 +52,7 @@ pub(super) fn Apply(
                 let keyword = Identifier(id, v)?;
                 match id {
                     kScrollBehavior => {
-                        use layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior as S;
+                        use layout_style::style::scroll_enums::mojom::blink::ScrollBehavior as S;
                         b.SetScrollBehavior(match keyword {
                             CSSValueID::kAuto => S::kAuto,
                             CSSValueID::kSmooth => S::kSmooth,

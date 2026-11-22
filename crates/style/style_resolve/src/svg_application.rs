@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::EPaintOrder,
     svg_dash_array::SVGDashArray,
     svg_paint::{SVGPaint, SVGPaintType},

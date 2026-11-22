@@ -1,7 +1,7 @@
 use foundation::{
     CSSPropertyID, Color, EBorderStyle, String, TextDirection, WritingDirectionMode, WritingMode,
 };
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{

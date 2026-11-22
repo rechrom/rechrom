@@ -51,7 +51,7 @@ impl ProgrammaticScrollAnimatorSink for RootScrollSink {
                     y: offset.offset.y() as f64,
                 },
                 scroll_type:
-                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                    layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
             },
         ));
     }

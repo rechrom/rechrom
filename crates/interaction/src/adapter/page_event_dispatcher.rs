@@ -182,8 +182,8 @@ use interaction_scroll::core::input::mouse_wheel_event_manager::{
     MouseWheelEventManager, WheelDocument, WheelFrameView, WheelHitTestResult, WheelNodeQueries,
     WheelTargetQuery,
 };
-use layoutng_assembly::editing_state::SelectionState;
-use layoutng_assembly::internal::layout_input::Offset;
+use layout_assembly::editing_state::SelectionState;
+use layout_assembly::internal::layout_input::Offset;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -271,7 +271,7 @@ pub trait MouseFrameGeometry {
     fn DragLayout(
         &self,
         _node_id: u64,
-    ) -> Option<layoutng_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
+    ) -> Option<layout_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
         None
     }
     fn DragBoundingBox(&self, _node_id: u64) -> Option<foundation::gfx::Rect> {

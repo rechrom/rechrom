@@ -2,7 +2,7 @@
 //! css_parsing_utils.cc:7673-7857; custom direction/shorthand parse functions.
 #![allow(non_snake_case)]
 use super::*;
-use layoutng_style::style::grid_area::NamedGridAreaMap;
+use layout_style::style::grid_area::NamedGridAreaMap;
 pub(super) fn IsShorthand(id: CSSPropertyID) -> bool {
     matches!(
         id,

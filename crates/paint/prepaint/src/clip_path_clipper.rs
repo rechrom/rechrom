@@ -4,7 +4,7 @@
 //! Views borrow compiled Style and the existing resource/fragment owners. The
 //! source resolver retains loading, TreeScope, cycle and display-lock policy.
 use foundation::{blink_geometry::transforms::affine_transform::AffineTransform, gfx::RectF};
-use layoutng_style::style::{
+use layout_style::style::{
     clip_path_operation::{ClipPathOperation, OperationType},
     computed_style_constants::GeometryBox,
     geometry_box_clip_path_operation::GeometryBoxClipPathOperation,
@@ -62,7 +62,7 @@ pub enum ClipContentKind {
 pub trait ClipPathContent<L: ClipPathLocation> {
     fn IsUseElement(&self) -> bool;
     fn IsGraphicsElement(&self) -> bool;
-    fn LayoutStyle(&self) -> Option<&layoutng_style::style::computed_style::ComputedStyle>;
+    fn LayoutStyle(&self) -> Option<&layout_style::style::computed_style::ComputedStyle>;
     fn LockedAncestorPreventingLayout(&self) -> bool;
     fn LayoutKind(&self) -> ClipContentKind;
     fn VisibleTargetGraphicsElementForClipping(&self) -> Option<Box<dyn ClipPathContent<L> + '_>>;
@@ -84,7 +84,7 @@ enum ClipStrategy {
     Path,
 }
 fn modify_for_clip_path(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
+    style: &layout_style::style::computed_style::ComputedStyle,
     strategy: ClipStrategy,
 ) -> ClipStrategy {
     if strategy == ClipStrategy::Path && style.HasClipPath() {

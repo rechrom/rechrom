@@ -4,7 +4,7 @@
 //! contents coordinates. Updating a scroll translation never moves that region.
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use paint_model::{
     display_item_id::DisplayItemIdType,
     geometry_mapper::{MapRectToRoot, MapRectWithTransforms, MultiplyTransforms},
@@ -25,7 +25,7 @@ use prepaint::pre_paint_tree_walk::{
 };
 
 use crate::PaintArtifact;
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::{FragmentPaintData, StickyPositionPaintData},
     internal::layout_input::{Offset, Size, TransformMatrix},
     internal::paint_input::BackgroundAttachment,

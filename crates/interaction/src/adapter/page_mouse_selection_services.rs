@@ -28,7 +28,7 @@ use interaction_input::{
     base::time::time::TimeTicks, public::common::input::web_mouse_event::WebMouseEvent,
     ui::base::mojom::menu_source_type::MenuSourceType,
 };
-use layoutng_assembly::{editing_state::DOMSelection, EditingPositionWithAffinity};
+use layout_assembly::{editing_state::DOMSelection, EditingPositionWithAffinity};
 
 pub(crate) struct PageMouseSelectionServicesOwner<'a, 'listener, 'frame> {
     dispatcher: &'a EventDispatcher<'listener, 'frame>,

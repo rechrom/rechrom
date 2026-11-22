@@ -13,7 +13,7 @@ use cssom::{
     CSSInlineStyle,
 };
 use foundation::{CSSPropertyID as P, CSSValueID as V, TextDirection};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 use style_model::{
     css_property_value_set::{CSSPropertyValueSet, ImmutableCSSPropertyValueSet},

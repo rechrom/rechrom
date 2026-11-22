@@ -32,7 +32,7 @@ use interaction_scroll::core::input::{
         ScrollableAreaRef, SnapScrollKind, UserScrollRequest,
     },
 };
-use layoutng_assembly::{
+use layout_assembly::{
     native_autoscroll_source::{
         NativeAutoscrollLayout, NativeLogicalScrollArea, NativeLogicalScrollBoxFacts,
         NativeLogicalScrollNodeFacts, NativeLogicalScrollingArea,
@@ -76,7 +76,7 @@ pub trait PageLogicalScrollLayout {
     fn PlanSnapForUserScroll(
         &self,
         area: &NativeLogicalScrollArea,
-        kind: layoutng_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind,
+        kind: layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind,
         direction: foundation::PhysicalDirection,
         line_step: f32,
         animation: NativeSnapAnimationState,
@@ -391,7 +391,7 @@ impl ScrollableArea for PageScrollableArea {
         direction: ScrollDirectionPhysical,
         _emit: &ScrollEffectEmitter,
     ) -> bool {
-        use layoutng_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind;
+        use layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind;
         let kind = match kind {
             SnapScrollKind::Direction => NativeUserSnapScrollKind::Direction,
             SnapScrollKind::Page => NativeUserSnapScrollKind::Page,
@@ -568,7 +568,7 @@ fn CompletionMode(value: NativeScrollCompletionMode) -> ScrollCompletionMode {
 }
 
 fn Consumption(
-    value: layoutng_assembly::native_user_scroll_source::NativeScrollConsumption,
+    value: layout_assembly::native_user_scroll_source::NativeScrollConsumption,
 ) -> interaction_scroll::core::scroll::scroll_types::ScrollConsumption {
     interaction_scroll::core::scroll::scroll_types::ScrollConsumption::new(
         value.did_scroll_x,

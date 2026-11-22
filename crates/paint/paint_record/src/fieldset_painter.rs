@@ -1,12 +1,12 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layoutng_assembly::internal::background_bleed_avoidance::{
+use layout_assembly::internal::background_bleed_avoidance::{
     BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
 };
-use layoutng_assembly::internal::paint_input::{BackgroundBox, PaintBlendMode};
+use layout_assembly::internal::paint_input::{BackgroundBox, PaintBlendMode};
 
 use crate::box_decoration_data::BoxDecorationData;
 use crate::box_fragment_painter::{BackgroundRadii, BoxFragmentPainter};

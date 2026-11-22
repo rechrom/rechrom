@@ -6,7 +6,7 @@ mod test_thread;
 
 use browser::page::Page;
 use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType, Offset};
-use layoutng_assembly::{
+use layout_assembly::{
     internal::layout_input::{FontFace, NodeKind},
     fragment_tree::ResidentBoxGeometry as _,
     layout_engine::PaintFragmentCursor,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::page::{Page, PageClient, PageState};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::internal::layout_input::{ConstraintSpace, Offset, PaintImage, Size};
+use layout_assembly::internal::layout_input::{ConstraintSpace, Offset, PaintImage, Size};
 use page_mutation::{
     AnimationStyleSample, AnimationTick, InteractionStateMutation, PageMutation,
     ResourceLoadFailed, ResourceMutation, ScrollMutation, ViewportMutation,
@@ -104,7 +104,7 @@ fn empty_animation_tick_same_scroll_same_interaction_and_failed_resource_keep_la
             target_node_id: node,
             offset: Offset::default(),
             scroll_type:
-                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }));
         state.ApplyMutation(PageMutation::InteractionStateMutation(
             InteractionStateMutation::default(),
@@ -191,7 +191,7 @@ fn changed_scroll_animation_viewport_font_and_image_invalidate_layout() {
             target_node_id: scroller,
             offset: Offset { x: 0., y: 10. },
             scroll_type:
-                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }));
         assert!(state.layout_revision.get().is_none());
         assert_eq!(geometry(&state, node)[0].y, y - 10.);

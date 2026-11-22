@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, Color, EBorderStyle as S, String as CSSString};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{

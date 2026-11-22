@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::internal::layout_input::{Edges, Offset, Size, TransformMatrix};
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::layout_input::{Edges, Offset, Size, TransformMatrix};
+use layout_assembly::internal::paint_input::{
     PaintTransform, PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
 };
 

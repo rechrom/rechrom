@@ -40,9 +40,9 @@ use super::style_resolver_state::{
     ComputedStyleHandle, StyleResolverState, StyleResolverStateBackend,
 };
 use foundation::{EUserModify, HashInts};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
-use layoutng_style::style::computed_style_constants::PseudoId;
-use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues;
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 

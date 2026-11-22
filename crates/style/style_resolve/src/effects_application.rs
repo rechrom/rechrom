@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{ECursor, LengthPoint, LengthSize, MakeGarbageCollected, Member};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::{
         BasicShape, BasicShapeCircle, BasicShapeEllipse, BasicShapeInset, BasicShapePolygon,
         BasicShapeRadius, BasicShapeWithCenterAndRadii, RadiusType,

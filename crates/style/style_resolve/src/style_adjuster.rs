@@ -58,7 +58,7 @@
 // variables/assignments/UseCounter blocks. Console diagnostics are retained.
 // DOM adapters retain existing Element identity and provide a typed view for
 // the canonical ComputedStyle Element ABI. State and builder are the existing
-// StyleResolverState and layoutng_style::ComputedStyleBuilder, respectively.
+// StyleResolverState and layout_style::ComputedStyleBuilder, respectively.
 
 // cpp: style_adjuster.cc:402-408,1261-1268. Share this source branch with
 // production publication instead of reconstructing stacking from paint's
@@ -105,22 +105,22 @@ use foundation::{
     EWordBreak, IsHorizontalWritingMode, Length, Member, PhysicalToLogical, TextDecorationLine,
     TextDirection, TextEmphasisMark, TouchAction, ValuesEquivalent, Vector, WritingMode,
 };
-use layoutng_style::css::forward::ui::ColorProvider;
-use layoutng_style::css::white_space::EWhiteSpace;
-use layoutng_style::style::appearance::AppearanceValue;
-use layoutng_style::style::color_scheme::mojom::blink::ColorScheme;
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
-use layoutng_style::style::computed_style_constants::{
+use layout_style::css::forward::ui::ColorProvider;
+use layout_style::css::white_space::EWhiteSpace;
+use layout_style::style::appearance::AppearanceValue;
+use layout_style::style::color_scheme::mojom::blink::ColorScheme;
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style_constants::{
     Containment, EVerticalAlign, ItemPosition, ItemPositionType, OverflowAlignment, PseudoId,
     TextUnderlinePosition,
 };
-use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues as Initial;
-use layoutng_style::style::forward::Element as ComputedStyleElement;
-use layoutng_style::style::style_intrinsic_length::{
+use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues as Initial;
+use layout_style::style::forward::Element as ComputedStyleElement;
+use layout_style::style::style_intrinsic_length::{
     StyleIntrinsicLength, StyleIntrinsicLengthOptions,
 };
-use layoutng_style::style::style_self_alignment_data::StyleSelfAlignmentData;
-use layoutng_style::style::text_overflow_data::TextOverflowData;
+use layout_style::style::style_self_alignment_data::StyleSelfAlignmentData;
+use layout_style::style::text_overflow_data::TextOverflowData;
 use std::rc::Rc;
 use style_model::preferred_color_scheme::PreferredColorScheme;
 

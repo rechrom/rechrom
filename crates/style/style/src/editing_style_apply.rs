@@ -370,7 +370,7 @@ fn LegacyFontSize(
     value: &values::Value,
     always: bool,
 ) -> Option<i32> {
-    use layoutng_style::css::font_size_functions::{
+    use layout_style::css::font_size_functions::{
         self as size, FontSizeDocumentInputs, FontSizeSettings,
     };
     let mono = Style(document, StyledNode(document, document.Node(node).Id())?)

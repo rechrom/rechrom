@@ -11,7 +11,7 @@ use super::{
     hit_test_result::{HitTestResult, NodeRef, ScrollbarRef},
 };
 use foundation::{gfx, PhysicalOffset, PhysicalRect, PhysicalSize};
-use layoutng_geometry::geometry::physical_rect::PhysicalRectExt;
+use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use std::cell::{Cell, RefCell};
 
 /// Durable interaction state attached to one resident LayoutView by its Frame

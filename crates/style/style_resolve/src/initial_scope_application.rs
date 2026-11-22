@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member, StyleInitialLetter, StyleNameScope};
-use layoutng_style::style::scroll_marker_group::{
+use layout_style::style::scroll_marker_group::{
     ScrollMarkerGroup, ScrollMarkerMode, ScrollMarkerPosition,
 };
 

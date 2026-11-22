@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use foundation::LengthBox;
-use layoutng_style::style::{
+use layout_style::style::{
     border_image_length::BorderImageLength,
     border_image_length_box::BorderImageLengthBox,
     nine_piece_image::{ENinePieceImageRule, NinePieceImage},

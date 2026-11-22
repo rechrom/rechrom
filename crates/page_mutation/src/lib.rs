@@ -1,7 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 use cssom::CSSStyleSheet;
 use dom::dom_mutation::DOMMutation;
-use layoutng_assembly::internal::layout_input::{FontFace, Offset, PaintImage, Size};
+use layout_assembly::internal::layout_input::{FontFace, Offset, PaintImage, Size};
 use std::sync::Arc;
 
 // cpp: page_mutation/page_mutation.h:17-22
@@ -93,7 +93,7 @@ pub struct ScrollMutation {
     /// Source: mojom::blink::ScrollType. This survives Page coalescing so the
     /// resident ScrollableArea can distinguish explicit scrolls from layout
     /// side effects and notify the macOS painted-scrollbar animator.
-    pub scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+    pub scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType,
 }
 pub use animation::{AnimationCascadeOrigin, AnimationStyleSample, AnimationTick};
 // cpp: page_mutation/page_mutation.h:76-82

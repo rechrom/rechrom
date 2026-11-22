@@ -28,7 +28,7 @@ use super::cascade_origin::CascadeOrigin;
 use super::match_flags::{MatchFlag, MatchFlags};
 use crate::valid_property_filter::ValidPropertyFilter;
 use foundation::AtomicString;
-use layoutng_style::style::computed_style_constants::{PseudoId, PseudoIdFlags};
+use layout_style::style::computed_style_constants::{PseudoId, PseudoIdFlags};
 use std::collections::HashSet;
 use std::rc::Rc;
 use style_model::css_property_value_set::{

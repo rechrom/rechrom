@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{EAspectRatioType, StyleAspectRatio};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::Containment,
     style_intrinsic_length::{StyleIntrinsicLength, StyleIntrinsicLengthOptions},
 };
@@ -126,7 +126,7 @@ fn Intrinsic(
     } else {
         Some(Length::Fixed(
             // cpp: css_primitive_value.cc:43-66,328-332 ClampToCSSLengthRange.
-            layoutng_style::css::css_primitive_value::ClampToCSSLengthRange(Pixels(
+            layout_style::css::css_primitive_value::ClampToCSSLengthRange(Pixels(
                 id, b, value, root, media,
             )?) as f64,
         ))
@@ -181,7 +181,7 @@ pub(super) fn Apply(
         }
         // generated longhands.cc:12261-12273; converter.cc:3898-3943.
         kOverflowClipMargin => {
-            use layoutng_style::style::style_overflow_clip_margin::{
+            use layout_style::style::style_overflow_clip_margin::{
                 ReferenceBox, StyleOverflowClipMargin,
             };
             let margin = if initial {

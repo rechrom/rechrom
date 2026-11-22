@@ -4,7 +4,7 @@
 
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::box_fragment_painter::IsVisible;
@@ -137,7 +137,7 @@ impl<'n, 'f, 'c, 'o> HTMLCanvasPainter<'n, 'f, 'c, 'o> {
                     id,
                     DisplayItemClientInfo::from_fragment(fragment),
                     layer,
-                    layoutng_assembly::internal::layout_input::Offset {
+                    layout_assembly::internal::layout_input::Offset {
                         x: destination.x,
                         y: destination.y,
                     },
@@ -198,10 +198,10 @@ mod tests {
     use crate::paint_context::PaintContext;
     use crate::{PaintPhase, PaintRecording};
     use canvas::CanvasPaintResource;
-    use layoutng_assembly::fragment_tree::{
+    use layout_assembly::fragment_tree::{
         FragmentPaintData, PaintResources, ReplacedContentPaintData,
     };
-    use layoutng_assembly::internal::layout_input::{Offset, Size};
+    use layout_assembly::internal::layout_input::{Offset, Size};
     use paint_model::paint_flags::PaintFlag;
     use std::{
         any::Any,

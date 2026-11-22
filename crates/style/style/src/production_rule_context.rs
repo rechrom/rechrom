@@ -11,7 +11,7 @@ use crate::{
     production_css_value::{CSSUnparsedDeclarationValue, Value},
 };
 use foundation::AtomicString;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::rc::Rc;
 
 pub(crate) type ProductionContainerQuery = ContainerQuery<Value, CSSUnparsedDeclarationValue>;

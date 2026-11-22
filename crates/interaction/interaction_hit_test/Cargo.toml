@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 foundation = { path = "../../foundation" }
 interaction_input = { path = "../interaction_input" }
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layout_assembly = { path = "../../layout/layout_assembly" }
 paint = { path = "../../paint" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
-layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }
+layout_style = { path = "../../layout/layout_style" }
+layout_geometry = { path = "../../layout/layout_geometry" }

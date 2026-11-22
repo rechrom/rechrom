@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, Length, String as CSSString};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::TimelineAxis as Axis,
 };

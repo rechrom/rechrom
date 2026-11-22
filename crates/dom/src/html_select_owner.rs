@@ -44,7 +44,7 @@ pub enum DOMSelectUAPartKind {
 #[derive(Clone)]
 pub(super) struct HTMLSelectElementData {
     pub(super) content_model_violations_count: u32,
-    pub(super) option_style: layoutng_style::style::menu_list_inner_style::MenuListOptionStyleOwner,
+    pub(super) option_style: layout_style::style::menu_list_inner_style::MenuListOptionStyleOwner,
     pub(super) size: u32,
     pub(super) is_multiple: bool,
     pub(super) uses_menu_list: bool,

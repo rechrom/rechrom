@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::FragmentPaintData,
     internal::{
         layout_input::{
@@ -292,7 +292,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
         }
 
         let source = foundation::DynamicTo::<
-            layoutng_assembly::internal::layout_node_metadata::Element,
+            layout_assembly::internal::layout_node_metadata::Element,
         >(native(&page, "capture").GetNode());
         assert_eq!(
             unsafe { &*source }.InputRegionCaptureCropId(),

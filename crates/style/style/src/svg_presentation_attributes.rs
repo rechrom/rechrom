@@ -287,7 +287,7 @@ fn NormalizeSVGTransform(value: &str) -> String {
 mod tests {
     use super::*;
     use foundation::{CSSPropertyID as P, Length};
-    use layoutng_style::style::computed_style::ComputedStyle;
+    use layout_style::style::computed_style::ComputedStyle;
 
     fn node(document: &PersistentDocument, id: &str) -> usize {
         (0..document.NodeCount())

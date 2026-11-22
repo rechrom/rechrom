@@ -36,20 +36,20 @@ xhr_transport = { path = "../xhr_transport" }
 image_decoder = { path = "../image_decoder" }
 document_image = { path = "../document_image" }
 image_resource = { path = "../image_resource" }
-layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
-layout_fragment = { path = "../layoutng/layout_fragment" }
-layoutng_style = { path = "../layoutng/layoutng_style" }
-layout_algo_block = { path = "../layoutng/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
-layout_algo_multicol = { path = "../layoutng/layout_algo_multicol" }
-layout_algo_flex = { path = "../layoutng/layout_algo_flex" }
-layout_algo_grid = { path = "../layoutng/layout_algo_grid" }
-layout_algo_table = { path = "../layoutng/layout_algo_table" }
-layout_algo_float = { path = "../layoutng/layout_algo_float" }
-layout_algo_forms = { path = "../layoutng/layout_algo_forms" }
-layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }
-layout_algo_svg = { path = "../layoutng/layout_algo_svg" }
-layout_algo_list = { path = "../layoutng/layout_algo_list" }
-layout_algo_out_of_flow = { path = "../layoutng/layout_algo_out_of_flow", optional = true }
+layout_assembly = { path = "../layout/layout_assembly" }
+layout_fragment = { path = "../layout/layout_fragment" }
+layout_style = { path = "../layout/layout_style" }
+layout_algo_block = { path = "../layout/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_multicol = { path = "../layout/layout_algo_multicol" }
+layout_algo_flex = { path = "../layout/layout_algo_flex" }
+layout_algo_grid = { path = "../layout/layout_algo_grid" }
+layout_algo_table = { path = "../layout/layout_algo_table" }
+layout_algo_float = { path = "../layout/layout_algo_float" }
+layout_algo_forms = { path = "../layout/layout_algo_forms" }
+layout_algo_replaced = { path = "../layout/layout_algo_replaced" }
+layout_algo_svg = { path = "../layout/layout_algo_svg" }
+layout_algo_list = { path = "../layout/layout_algo_list" }
+layout_algo_out_of_flow = { path = "../layout/layout_algo_out_of_flow", optional = true }
 paint = { path = "../paint" }
 paint_skia = { path = "../paint/paint_skia" }
 url_loader = { path = "../url_loader" }
@@ -68,5 +68,5 @@ raster = { path = "../raster", features = ["artifact_test_support"] }
 
 [features]
 default = ["inline_layout"]
-inline_layout = ["layoutng_assembly/translation_in_progress", "layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
+inline_layout = ["layout_assembly/translation_in_progress", "layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
 webgl_vertical_slice = ["webapi/webgl_vertical_slice"]

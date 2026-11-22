@@ -1,7 +1,7 @@
 //! Chromium ComputedStyleUtils.cc:913-986,5348-5364; original typed values.
 use crate::production_css_value::{self as values, Value};
 use foundation::{CSSValueID as V, Member, ScopedCSSNameList, StyleNameScope};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::{
         ContentDistributionType as D, ContentPosition as C, ItemPosition as I, ItemPositionType,
         OverflowAlignment as O,

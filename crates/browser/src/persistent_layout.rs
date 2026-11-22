@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use dom::{UserInteractionState, DOM};
 use layout_fragment::LayoutResultHandle;
 #[cfg(test)]
-use layoutng_assembly::fragment_tree::FragmentPaintData;
-use layoutng_assembly::{
+use layout_assembly::fragment_tree::FragmentPaintData;
+use layout_assembly::{
     internal::layout_input::ConstraintSpace,
     layout_engine::{LayoutEngine, PaintFragmentCursor},
 };
@@ -41,7 +41,7 @@ fn RecordLayoutDetachEffects(engine: &mut LayoutEngine, owner: &DOM) {
 /// as an ordinary tree-sync detach, before StyleEngine::DidDetach.
 pub(crate) fn DetachDocumentLayoutTreeWithEngine(engine: &mut LayoutEngine, owner: &DOM) {
     engine
-        .ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::DetachDocumentLayoutTree);
+        .ApplyMutation(layout_assembly::layout_engine::LayoutMutation::DetachDocumentLayoutTree);
     RecordLayoutDetachEffects(engine, owner);
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn LayoutDocumentWithEngine(
         owner,
         interaction,
         constraints,
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+        layout_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
     );
 }
 
@@ -80,7 +80,7 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     owner: &mut DOM,
     interaction: &UserInteractionState,
     constraints: &ConstraintSpace,
-    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+    purpose: layout_assembly::layout_boundary_support::LayoutUpdateKind,
 ) -> bool {
     let _trace = browser_tracing::span("layout", "Page.LayoutDocumentWithEngine");
     // Tree synchronization, layout and export form one synchronous lifecycle.
@@ -94,10 +94,10 @@ pub(crate) fn LayoutDocumentWithEngineAtStage(
     SynchronizeLayoutTreeWithEngine(engine, owner, interaction, constraints);
     let build_done = profile.map(|start| start.elapsed());
     let updated = match purpose {
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint => {
+        layout_assembly::layout_boundary_support::LayoutUpdateKind::Paint => {
             engine.LayoutIfNeeded()
         }
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout => {
+        layout_assembly::layout_boundary_support::LayoutUpdateKind::Layout => {
             engine.UpdateLayoutIfNeeded()
         }
     };
@@ -158,7 +158,7 @@ pub(crate) fn MeasurementInputsMatch(
     owner: &mut DOM,
     interaction: &UserInteractionState,
 ) -> bool {
-    use layoutng_assembly::layout_engine::LayoutMutation;
+    use layout_assembly::layout_engine::LayoutMutation;
     // Clean geometry alone does not certify DOM-owned editing metadata.
     // The ordinary synchronization transaction applies these local deltas.
     if !owner
@@ -280,7 +280,7 @@ pub(crate) fn RefreshTargetedPaintDataWithEngine(
 /// A proven offset-only change retains the completed frame's geometry. Mixed
 /// mutations still enter LayoutEngine::Layout and verify result identity before
 /// refreshing paint-only scroll, sticky and scrollbar properties.
-pub(crate) use layoutng_assembly::layout_engine::ScrollLayoutUpdate;
+pub(crate) use layout_assembly::layout_engine::ScrollLayoutUpdate;
 
 #[cfg(test)]
 pub(crate) fn LayoutPersistentScrollDocument(
@@ -289,8 +289,8 @@ pub(crate) fn LayoutPersistentScrollDocument(
     constraints: &ConstraintSpace,
     changes: &[(
         u64,
-        layoutng_assembly::internal::layout_input::Offset,
-        layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+        layout_assembly::internal::layout_input::Offset,
+        layout_style::style::scroll_enums::mojom::blink::ScrollType,
     )],
     fragments: &mut LayoutResultHandle,
     scroll_only: bool,
@@ -312,8 +312,8 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     constraints: &ConstraintSpace,
     changes: &[(
         u64,
-        layoutng_assembly::internal::layout_input::Offset,
-        layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+        layout_assembly::internal::layout_input::Offset,
+        layout_style::style::scroll_enums::mojom::blink::ScrollType,
     )],
     fragments: &mut LayoutResultHandle,
     scroll_only: bool,
@@ -326,7 +326,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
     fn changed_enough(
         node: PaintFragmentCursor<'_>,
         id: u64,
-        offset: layoutng_assembly::internal::layout_input::Offset,
+        offset: layout_assembly::internal::layout_input::Offset,
     ) -> bool {
         node.ViewNodeId() == id && paint::CullRectUpdater::HasScrolledEnough(
                 &node,
@@ -382,11 +382,11 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
 mod tests {
     use super::*;
     use dom::persistent_document::DOMNodeType;
-    use layoutng_assembly::internal::{
+    use layout_assembly::internal::{
         layout_node_metadata::{Element, Text},
         layout_object::LayoutObject,
     };
-    use layoutng_assembly::layout_engine::LayoutMutation;
+    use layout_assembly::layout_engine::LayoutMutation;
     use std::collections::BTreeMap;
 
     fn resolve(owner: &mut DOM) {
@@ -420,8 +420,8 @@ mod tests {
         }
         std::ptr::null_mut()
     }
-    fn cached(root: *mut LayoutObject) -> *const layoutng_assembly::layout_result::LayoutResult {
-        let b = foundation::DynamicTo::<layoutng_assembly::internal::layout_box::LayoutBox>(root);
+    fn cached(root: *mut LayoutObject) -> *const layout_assembly::layout_result::LayoutResult {
+        let b = foundation::DynamicTo::<layout_assembly::internal::layout_box::LayoutBox>(root);
         unsafe { &*b }.GetLayoutResult(0)
     }
     fn fragment(root: &FragmentPaintData, id: u64) -> &FragmentPaintData {
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn phased_scroll_refreshes_cull_projection_at_hysteresis_boundary() {
         crate::test_thread::run(|| {
-            use layoutng_assembly::internal::layout_input::Offset;
+            use layout_assembly::internal::layout_input::Offset;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner = html::html_parser::ParseHTML(
@@ -463,7 +463,7 @@ mod tests {
                     &mut engine,
                     &mut owner,
                     &cs,
-                    &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
+                    &[((id), offset, layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                     &mut fragments,
                     true,
                 ),
@@ -533,7 +533,7 @@ mod tests {
                 &mut owner,
                 &interaction,
                 &constraints,
-                layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+                layout_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
             ));
             let first = engine.GetLayoutResult().unwrap().RootPointer();
             owner.GetDocumentMut().StyleStateMut().impact = Default::default();
@@ -543,7 +543,7 @@ mod tests {
                 &mut owner,
                 &interaction,
                 &constraints,
-                layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+                layout_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
             ));
             let second = engine.GetLayoutResult().unwrap().RootPointer();
             assert_eq!(
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn scroll_layout_entry_retains_result_and_matches_fresh_layout() {
         crate::test_thread::run(|| {
-            use layoutng_assembly::internal::layout_input::Offset;
+            use layout_assembly::internal::layout_input::Offset;
 
             let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
             let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=s style='width:100px;height:40px;overflow:hidden;zoom:80%'><div style='width:200px;height:120px;background:red'>scrolling text</div></div></body></html>");
@@ -591,7 +591,7 @@ mod tests {
                     &mut engine,
                     &mut owner,
                     &cs,
-                    &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
+                    &[((id), offset, layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                     &mut fragments,
                     false,
                 ));
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn positioned_scroll_descendants_refresh_paint_properties() {
         crate::test_thread::run(|| {
-            use layoutng_assembly::internal::layout_input::Offset;
+            use layout_assembly::internal::layout_input::Offset;
             for position in ["sticky", "fixed", "absolute"] {
                 let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
                 let mut owner=html::html_parser::ParseHTML(&format!("<html><body><div id=s style='height:40px;overflow:scroll'><div style='position:{position};top:0;height:20px'></div><div style='height:200px'></div></div></body></html>"));
@@ -656,7 +656,7 @@ mod tests {
                         &mut engine,
                         &mut owner,
                         &cs,
-                        &[((id), offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
+                        &[((id), offset, layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                         &mut fragments,
                         false,
                     ),
@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn scroll_metadata_reuses_layout_with_positioned_and_floating_descendants() {
         crate::test_thread::run(|| {
-            use layoutng_assembly::internal::layout_input::Offset;
+            use layout_assembly::internal::layout_input::Offset;
 
             for placement in [
                 "position:fixed;top:12px",
@@ -734,7 +734,7 @@ mod tests {
                                 &mut engine,
                                 &mut owner,
                                 &cs,
-                                &[(scroller_id, offset, layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
+                                &[(scroller_id, offset, layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic)],
                                 &mut persistent,
                                 true,
                             ));
@@ -781,7 +781,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+                layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -945,7 +945,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+                layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -1001,7 +1001,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+                layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -1244,7 +1244,7 @@ mod tests {
                 &crate::CreateBrowserConstraints(320, 200),
             );
             fn find(f: &FragmentPaintData, id: u64) -> Option<&FragmentPaintData> {
-                if f.ViewNodeId() == id && f.ViewKind() == layoutng_assembly::fragment_tree::FragmentKind::kBox
+                if f.ViewNodeId() == id && f.ViewKind() == layout_assembly::fragment_tree::FragmentKind::kBox
                 {
                     return Some(f);
                 }
@@ -1422,7 +1422,7 @@ mod tests {
                 d.AppendChild(nodes["contents"], nodes["letter-next"]);
                 d.SetScrollOffset(
                     nodes["contents"],
-                    layoutng_assembly::internal::layout_input::Offset { x: 3.0, y: 4.0 },
+                    layout_assembly::internal::layout_input::Offset { x: 3.0, y: 4.0 },
                 );
             }
             resolve_for(&mut owner, 1024, 768);
@@ -1430,7 +1430,7 @@ mod tests {
             let root =
                 crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             let _factory_scope =
-                layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+                layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let mut actual = BTreeMap::new();

@@ -98,9 +98,9 @@ use foundation::{
     AtomicString, EDisplay, EInsideLink, EInteractivity, EOrder, EOverflow, EPosition, EUserModify,
     HashFloat, HashInt, PhysicalOffset, TextDirection,
 };
-use layoutng_style::style::computed_style_constants::PseudoId;
-use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues;
-use layoutng_style::style::gap_data_list::GapDataList;
+use layout_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues;
+use layout_style::style::gap_data_list::GapDataList;
 
 use style_model::{
     color_scheme_flags::ColorSchemeFlags, preferred_color_scheme::PreferredColorScheme,

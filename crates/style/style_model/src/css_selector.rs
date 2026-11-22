@@ -25,7 +25,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 use foundation::{AtomicString, String};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     LazyLock,

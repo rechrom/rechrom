@@ -5,7 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use dom::UserInteractionState;
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::{FragmentPaintData, LayoutResultHandle},
     internal::{
         layout_box::LayoutBox, layout_input::FontFace, layout_object::LayoutObject,
@@ -192,7 +192,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
         let image_input = unsafe {
             &*native(&page, "image")
                 .GetNode()
-                .cast::<layoutng_assembly::internal::layout_node_metadata::Element>()
+                .cast::<layout_assembly::internal::layout_node_metadata::Element>()
         }
         .InputElementData()
         .as_ref()
@@ -370,7 +370,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
         let image_input = unsafe {
             &*native(&page, "image")
                 .GetNode()
-                .cast::<layoutng_assembly::internal::layout_node_metadata::Element>()
+                .cast::<layout_assembly::internal::layout_node_metadata::Element>()
         }
         .InputElementData()
         .as_ref()

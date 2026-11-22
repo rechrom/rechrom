@@ -82,8 +82,8 @@ use foundation::{
     EScrollbarWidth, EUserModify, Length, LengthValueRange, Persistent, String, StringView,
     WritingDirectionMode, WritingMode,
 };
-use layoutng_style::style::appearance::AppearanceValue;
-use layoutng_style::{
+use layout_style::style::appearance::AppearanceValue;
+use layout_style::{
     css::style_color::StyleColor,
     style::{
         computed_style::{ComputedStyle, ComputedStyleBuilder},
@@ -1943,10 +1943,10 @@ impl StyleResolverBackend for ProductionStyleCascadeBackend<'_> {
         {
             let preferred = match preferred {
                 PreferredColorScheme::kDark => {
-                    layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
+                    layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
                 }
                 PreferredColorScheme::kLight => {
-                    layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
+                    layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
                 }
             };
             builder.SetUsedColorScheme(page_schemes, preferred, force_dark);
@@ -3349,7 +3349,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
     fn QueryDetermineStartingElement(
         &self,
         element: &Self::Element,
-        pseudo: layoutng_style::style::computed_style_constants::PseudoId,
+        pseudo: layout_style::style::computed_style_constants::PseudoId,
         selector: &Self::ContainerSelector,
         nearest_size_container: Option<&Self::Element>,
     ) -> Option<Rc<Self::Element>> {
@@ -3980,7 +3980,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
             let resolved_light_dark = match value.Payload() {
                 CSSValuePayload::kLightDarkValuePairClass(pair) => {
                     let selected = if state.StyleBuilder().UsedColorScheme()
-                        == layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kLight
+                        == layout_style::style::color_scheme::mojom::blink::ColorScheme::kLight
                     {
                         pair.AsValuePair().first.clone()
                     } else {
@@ -4242,7 +4242,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
     }
     fn BuilderScrollbarGutter(
         &self,
-        builder: &layoutng_style::style::computed_style::ComputedStyleBuilder,
+        builder: &layout_style::style::computed_style::ComputedStyleBuilder,
     ) -> Self::ScrollbarGutter {
         ScrollbarGutter::from_bits(builder.ScrollbarGutter() as i32)
     }
@@ -4255,7 +4255,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         width: EScrollbarWidth,
         writing_mode: WritingMode,
     ) -> gfx::Size {
-        use layoutng::internal::layout_scrollable_area::{
+        use layout_core::internal::layout_scrollable_area::{
             ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
         };
         use paint_input_types::layout_input_types::ScrollbarThemeMetrics;

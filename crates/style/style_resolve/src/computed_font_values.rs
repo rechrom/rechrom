@@ -13,7 +13,7 @@ use font_engine::fonts::{
     font_variant_numeric::*,
 };
 use foundation::{AtomicString, CSSPropertyID as P, CSSValueID as V, String as BlinkString};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 use style_model::{css_primitive_value::UnitType, css_value::CSSValuePayload};
 fn ident(id: V) -> Rc<Value> {

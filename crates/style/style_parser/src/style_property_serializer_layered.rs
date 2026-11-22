@@ -36,7 +36,7 @@ fn RangePercent(value: &Value, default: f64) -> (CSSValueID, f64) {
     if let Some(value) = offset {
         percent=match value.Payload(){
         CSSValuePayload::kNumericLiteralClass(value) if value.GetType()==UnitType::kPercentage=>value.GetValueIfKnown().unwrap_or(-1.0),
-        CSSValuePayload::kMathFunctionClass(value) if value.Category()==layoutng_style::css::css_math_expression_node::CalculationResultCategory::Percent=>value.GetValueIfKnown().unwrap_or(-1.0),_=>-1.0,
+        CSSValuePayload::kMathFunctionClass(value) if value.Category()==layout_style::css::css_math_expression_node::CalculationResultCategory::Percent=>value.GetValueIfKnown().unwrap_or(-1.0),_=>-1.0,
     };
     }
     (name, percent)

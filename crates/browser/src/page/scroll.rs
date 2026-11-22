@@ -320,7 +320,7 @@ impl Page {
                 target_node_id: update.target_node_id,
                 offset: update.offset,
                 scroll_type:
-                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
+                    layout_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
             },
         ));
         // DidCompositorScroll has already committed the resident native area.
@@ -338,12 +338,12 @@ impl Page {
             {
                 *offset = update.offset;
                 *scroll_type =
-                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor;
+                    layout_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor;
             } else {
                 pending.push((
                     update.target_node_id,
                     update.offset,
-                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
+                    layout_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
                 ));
             }
         }
@@ -669,7 +669,7 @@ impl Page {
         let mutation = PageMutation::ScrollMutation(page_mutation::ScrollMutation {
             target_node_id,
             offset,
-            scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
+            scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType::kCompositor,
         });
         if let Some(scripts) = &mut self.scripts {
             scripts.ApplyMutation(mutation)?;

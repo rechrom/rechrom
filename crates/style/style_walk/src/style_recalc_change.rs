@@ -16,7 +16,7 @@
 // Omissions: preprocessor/namespace/forward/access/class scaffolding,
 // redundant default/copy operators and debug-only ToString.
 
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 
 /// Only foreign DOM ownership and subtype views cross this boundary. Query
 /// dependency flags are read directly from the canonical ComputedStyle.

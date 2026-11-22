@@ -19,7 +19,7 @@ use crate::{
         ParseProperty, ParsePropertyTokensWithBase, VariableArguments, VariableBlockEnd,
     },
 };
-use layoutng_style::css::svg_length_value::SVGMarkerLengthValues;
+use layout_style::css::svg_length_value::SVGMarkerLengthValues;
 use std::{
     cell::RefCell,
     rc::Rc,

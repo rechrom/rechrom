@@ -2,7 +2,7 @@
 //! Source: html_image_fallback_helper.cc:214-283; image_input_type.cc:247-281.
 use super::*;
 use foundation::{AtomicString, Persistent};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     html_image_fallback_helper::{self as helper, ImageFallbackHostFacts},
 };

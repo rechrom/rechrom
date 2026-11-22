@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID, ECursor, String, WindRule};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::{
         BasicShapeCircle, BasicShapeEllipse, BasicShapePolygon, BasicShapeWithCenterAndRadii,
         RadiusType, ShapeType,
@@ -40,7 +40,7 @@ fn circle_ellipse_and_path_reach_typed_shapes() {
     let shape_operation = |style: &ComputedStyle| {
         let operation = unsafe { &*style.ClipPath().unwrap() };
         unsafe {
-            &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+            &*(operation as *const dyn layout_style::style::clip_path_operation::ClipPathOperation
                 as *const ShapeClipPathOperation)
         }
     };
@@ -48,7 +48,7 @@ fn circle_ellipse_and_path_reach_typed_shapes() {
     assert_eq!(circle_operation.GetGeometryBox(), GeometryBox::kPaddingBox);
     let circle = unsafe {
         &*(circle_operation.GetBasicShape()
-            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const dyn layout_style::style::basic_shapes::BasicShape
             as *const BasicShapeCircle)
     };
     assert_eq!(circle.Radius().GetType(), RadiusType::kFarthestSide);
@@ -58,7 +58,7 @@ fn circle_ellipse_and_path_reach_typed_shapes() {
     assert_eq!(ellipse_operation.GetGeometryBox(), GeometryBox::kContentBox);
     let ellipse = unsafe {
         &*(ellipse_operation.GetBasicShape()
-            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const dyn layout_style::style::basic_shapes::BasicShape
             as *const BasicShapeEllipse)
     };
     assert_eq!(ellipse.RadiusX().GetType(), RadiusType::kValue);
@@ -68,7 +68,7 @@ fn circle_ellipse_and_path_reach_typed_shapes() {
     assert_eq!(path_operation.GetGeometryBox(), GeometryBox::kViewBox);
     let path = unsafe {
         &*(path_operation.GetBasicShape()
-            as *const dyn layoutng_style::style::basic_shapes::BasicShape
+            as *const dyn layout_style::style::basic_shapes::BasicShape
             as *const StylePath)
     };
     assert_eq!(path.GetWindRule(), WindRule::RULE_EVENODD);
@@ -84,7 +84,7 @@ fn local_clip_path_url_reaches_typed_computed_style_reference() {
     let operation = unsafe { &*computed_style(&owner, "target").ClipPath().unwrap() };
     assert_eq!(operation.GetType(), ClipType::kReference);
     let reference = unsafe {
-        &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+        &*(operation as *const dyn layout_style::style::clip_path_operation::ClipPathOperation
             as *const ReferenceClipPathOperation)
     };
     assert_eq!(reference.Url().Utf8(), "#clip");
@@ -175,14 +175,14 @@ fn polygon_and_box_clipping_and_shape_outside_preserve_computed_style_owners() {
     let clip = unsafe { &*p.ClipPath().unwrap() };
     assert_eq!(clip.GetType(), ClipType::kShape);
     let clip = unsafe {
-        &*(clip as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+        &*(clip as *const dyn layout_style::style::clip_path_operation::ClipPathOperation
             as *const ShapeClipPathOperation)
     };
     assert_eq!(clip.GetGeometryBox(), GeometryBox::kContentBox);
     let shape = clip.GetBasicShape();
     assert_eq!(shape.GetType(), ShapeType::kBasicShapePolygonType);
     let polygon = unsafe {
-        &*(shape as *const dyn layoutng_style::style::basic_shapes::BasicShape
+        &*(shape as *const dyn layout_style::style::basic_shapes::BasicShape
             as *const BasicShapePolygon)
     };
     assert_eq!(polygon.Values().len(), 6);
@@ -205,7 +205,7 @@ fn polygon_and_box_clipping_and_shape_outside_preserve_computed_style_owners() {
     assert_eq!(clip.GetType(), ClipType::kGeometryBox);
     assert_eq!(
         unsafe {
-            &*(clip as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
+            &*(clip as *const dyn layout_style::style::clip_path_operation::ClipPathOperation
                 as *const GeometryBoxClipPathOperation)
         }
         .GetGeometryBox(),
@@ -284,7 +284,7 @@ fn invalid_supported_effect_values_and_missing_computed_style_owners_are_typed()
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     for (id, text) in [(CSSPropertyID::kShapeOutside, "url(shape.png)")] {
         let mut builder =
-            layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+            layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         let property = ParseProperty(
             id,
             &String::from(text),

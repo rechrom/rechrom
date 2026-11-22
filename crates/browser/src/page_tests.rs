@@ -2,7 +2,7 @@ use crate::page::{Page, PageClient, PageFrame};
 use dom::Document;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layoutng_assembly::internal::layout_input::FontFace;
+use layout_assembly::internal::layout_input::FontFace;
 use std::{cell::RefCell, io, path::PathBuf, rc::Rc};
 use url_loader::{RequestDestination, URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Operation(usize, Option<URLResponse>);
@@ -695,7 +695,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
 #[test]
 fn viewport_scroll_reaches_window_and_updates_client_rects() {
     crate::test_thread::run(|| {
-        use layoutng_assembly::internal::layout_input::Offset;
+        use layout_assembly::internal::layout_input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
         let root =
             std::env::temp_dir().join(format!("layoutng-viewport-scroll-{}", std::process::id()));
@@ -730,7 +730,7 @@ fn viewport_scroll_reaches_window_and_updates_client_rects() {
             target_node_id: root_element,
             offset: Offset { x: 0.0, y: 1000.0 },
             scroll_type:
-                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         for _ in 0..4 {
@@ -844,7 +844,7 @@ fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
 fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery() {
     crate::test_thread::run(|| {
         use interaction::input_event::{FocusEvent, InputEvent};
-        use layoutng_assembly::internal::layout_input::Offset;
+        use layout_assembly::internal::layout_input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
         let root =
             std::env::temp_dir().join(format!("layoutng-scroll-retention-{}", std::process::id()));
@@ -923,7 +923,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             target_node_id: find(&page, "s"),
             offset: Offset { x: 0.0, y: 3.0 },
             scroll_type:
-                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         assert!(snapshot.PtrEq(&page.CurrentFrame().unwrap().fragments));
@@ -945,7 +945,7 @@ fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery(
             target_node_id: find(&page, "s"),
             offset: Offset { x: 0.0, y: 6.0 },
             scroll_type:
-                layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
         }))
         .unwrap();
         assert_eq!(
@@ -1406,8 +1406,8 @@ impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
             }]
             .into(),
             resources: Some(std::sync::Arc::new(
-                layoutng_assembly::fragment_tree::PaintResources {
-                    images: vec![layoutng_assembly::internal::layout_input::PaintImage {
+                layout_assembly::fragment_tree::PaintResources {
+                    images: vec![layout_assembly::internal::layout_input::PaintImage {
                         id: nested_image_id,
                         revision: 1,
                         width: decoded.width,

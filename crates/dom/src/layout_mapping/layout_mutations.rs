@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::{UserInteractionState, DOM};
-use layoutng_assembly::{
+use layout_assembly::{
     editing_state::LayoutEditingState,
     internal::layout_input::{
         CompatibilityMode as LayoutCompatibilityMode, ConstraintSpace, Offset,
@@ -263,7 +263,7 @@ impl DOM {
         let resolved_resources = document.ResolvedStyleResourcesFor(index);
         let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
         let replaced_image_shader = None;
-        let style_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+        let style_resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
@@ -324,7 +324,7 @@ impl DOM {
         let resolved_resources = document.ResolvedStyleResourcesFor(index);
         let svg_filter_graphs = document.SVGFilterGraphs().unwrap();
         let replaced_image_shader = None;
-        let style_resources = layoutng_assembly::style_projection::StyleResourceBindings::FromParts(
+        let style_resources = layout_assembly::style_projection::StyleResourceBindings::FromParts(
             svg_filter_graphs,
             &clip_resources,
             &resolved_resources.svg_mask_resource,
@@ -401,7 +401,7 @@ impl DOM {
         &mut self,
         node_id: u64,
         offset: Offset,
-        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+        scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType,
         mut receive: impl FnMut(LayoutMutation<'_>) -> bool,
     ) -> bool {
         if !self.SetScrollOffset(node_id, offset) {

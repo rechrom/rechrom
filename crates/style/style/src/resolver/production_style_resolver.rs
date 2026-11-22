@@ -22,7 +22,7 @@ use foundation::{
     EOverflow, EPosition, EUserModify, Length, Member, Persistent, PhysicalOffset, TextDirection,
     Vector,
 };
-use layoutng_style::{
+use layout_style::{
     css::style_color::StyleColor,
     style::{
         appearance::AppearanceValue,
@@ -731,10 +731,10 @@ impl StyleResolverBackend for ProductionInitialStyleHost<'_> {
     ) {
         let preferred = match preferred {
             PreferredColorScheme::kDark => {
-                layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
+                layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
             }
             PreferredColorScheme::kLight => {
-                layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
+                layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
             }
         };
         builder.SetUsedColorScheme(page_schemes, preferred, force_dark)
@@ -2456,10 +2456,10 @@ impl StyleResolverBackend for ProductionRuleMatchingHost<'_> {
     ) {
         let preferred = match preferred {
             PreferredColorScheme::kDark => {
-                layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
+                layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kDark
             }
             PreferredColorScheme::kLight => {
-                layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
+                layout_style::style::color_scheme::mojom::blink::PreferredColorScheme::kLight
             }
         };
         b.SetUsedColorScheme(schemes, preferred, force_dark)
@@ -2585,7 +2585,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn ElementPseudoIdForStyling(
         &self,
         e: &Self::Element,
-    ) -> layoutng_style::style::computed_style_constants::PseudoId {
+    ) -> layout_style::style::computed_style_constants::PseudoId {
         self.document
             .PseudoElementFacts(e.index)
             .map_or(PseudoId::kPseudoIdNone, |facts| facts.pseudo_id)
@@ -2593,7 +2593,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn PseudoIdForShadowElementName(
         &self,
         name: &AtomicString,
-    ) -> layoutng_style::style::computed_style_constants::PseudoId {
+    ) -> layout_style::style::computed_style_constants::PseudoId {
         // cpp: html/shadow/shadow_element_utils.cc:71-95. Keep this mapping
         // limited to the six UA-shadow names Chromium promotes to PseudoId;
         // media-control names deliberately remain kPseudoIdNone.
@@ -2609,7 +2609,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     }
     fn IsTransitionPseudoElement(
         &self,
-        _: layoutng_style::style::computed_style_constants::PseudoId,
+        _: layout_style::style::computed_style_constants::PseudoId,
     ) -> bool {
         false
     }
@@ -3062,7 +3062,7 @@ impl<'d> StyleResolverRuleMatchingBackend for ProductionRuleMatchingHost<'d> {
     fn CollectorPseudoId(
         &self,
         collector: &Self::ElementRuleCollector,
-    ) -> layoutng_style::style::computed_style_constants::PseudoId {
+    ) -> layout_style::style::computed_style_constants::PseudoId {
         collector.pseudo.id
     }
     fn BeginAddingAuthorRulesForTreeScope(
@@ -3663,7 +3663,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn GetCascadeFilter(&self, element: &Self::Element) -> CascadeFilter {
         let filter = CascadeFilter::new();
-        if layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(
+        if layout_style::style::computed_style_constants::IsHighlightPseudoElement(
             self.cascade.pseudo_id,
         ) {
             filter.Add(CSSProperty::kValidForHighlight)
@@ -3907,7 +3907,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         state.layout_parent = Some(style)
     }
     fn StateIsForHighlight(&self, state: &Self::StyleResolverState) -> bool {
-        layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(state.pseudo_id)
+        layout_style::style::computed_style_constants::IsHighlightPseudoElement(state.pseudo_id)
     }
     fn StateHadNoMatchedProperties(&self, state: &Self::StyleResolverState) -> bool {
         state.had_no_matched_properties
@@ -4182,13 +4182,13 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             ResolverStyleFlag::EmUnits => builder.HasEmUnits(),
             ResolverStyleFlag::StaticViewportUnits => {
                 builder.ViewportUnitFlags()
-                    & layoutng_style::style::computed_style_constants::ViewportUnitFlag::kStatic
+                    & layout_style::style::computed_style_constants::ViewportUnitFlag::kStatic
                         as u32
                     != 0
             }
             ResolverStyleFlag::DynamicViewportUnits => {
                 builder.ViewportUnitFlags()
-                    & layoutng_style::style::computed_style_constants::ViewportUnitFlag::kDynamic
+                    & layout_style::style::computed_style_constants::ViewportUnitFlag::kDynamic
                         as u32
                     != 0
             }
@@ -5090,7 +5090,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         let has_svg_reference = state.builder.MutableClipPath().is_some_and(|operation| {
             unsafe { operation.as_ref() }.is_some_and(|operation| {
                 operation.GetType()
-                    == layoutng_style::style::clip_path_operation::OperationType::kReference
+                    == layout_style::style::clip_path_operation::OperationType::kReference
             })
         });
         if !MatchedPropertiesCache::<StyleAdjusterElementTypeForCache>::IsStyleCacheable(
@@ -5415,7 +5415,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         Rc::new(self.cascade.transitions.cloned().unwrap_or_default())
     }
     fn IsHighlightPseudoElement(&self, pseudo_id: PseudoId) -> bool {
-        layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(pseudo_id)
+        layout_style::style::computed_style_constants::IsHighlightPseudoElement(pseudo_id)
     }
     fn CancelCompositedAnimationsAffectingProperties(
         &self,
@@ -5702,7 +5702,7 @@ pub(crate) fn ApplyBaseStyleForElement(
     let node = inputs.document.Node(inputs.element_index);
     if parent.is_none()
         && !collaborators.is_document_element
-        && !layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(
+        && !layout_style::style::computed_style_constants::IsHighlightPseudoElement(
             collaborators.pseudo_id,
         )
     {
@@ -5757,7 +5757,7 @@ pub(crate) fn ApplyBaseStyleForElement(
             "base:unsupported-pseudo-request",
         )]);
     }
-    if layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(
+    if layout_style::style::computed_style_constants::IsHighlightPseudoElement(
         collaborators.pseudo_id,
     ) && collaborators.originating_style.is_none()
     {
@@ -6462,7 +6462,7 @@ mod tests {
         assert_eq!(actual.Display(), EDisplay::kFlex);
         assert_eq!(
             actual.AlignItems().GetPosition(),
-            layoutng_style::style::computed_style_constants::ItemPosition::kCenter
+            layout_style::style::computed_style_constants::ItemPosition::kCenter
         );
         assert_eq!(actual.UserModify(), EUserModify::kReadOnly);
         assert!(unsafe {
@@ -6973,7 +6973,7 @@ mod tests {
             visited_link_color: None,
             active_link_color: None,
             is_document_element: false,
-            pseudo_id: layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdNone,
+            pseudo_id: layout_style::style::computed_style_constants::PseudoId::kPseudoIdNone,
             originating_style: None,
             subject_node: None,
             container_runtime: None,

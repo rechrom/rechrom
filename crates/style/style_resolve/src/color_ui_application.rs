@@ -3,13 +3,13 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{AtomicString, MakeGarbageCollected, Vector};
-use layoutng_style::css::{
+use layout_style::css::{
     color_scheme_flags::{ColorSchemeFlag as F, ColorSchemeFlags},
     style_auto_color::StyleAutoColor,
     style_caret_color::StyleCaretColor,
     style_color::{UnresolvedColorFunction, UnresolvedColorMix},
 };
-use layoutng_style::style::color_scheme::mojom::blink::PreferredColorScheme;
+use layout_style::style::color_scheme::mojom::blink::PreferredColorScheme;
 use CSSPropertyID::*;
 /// Real page/style-engine settings. The defaults are Chromium's initial page
 /// flags and force-dark setting; media supplies the preferred scheme separately.

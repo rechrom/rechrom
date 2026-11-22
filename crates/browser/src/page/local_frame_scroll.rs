@@ -119,7 +119,7 @@ impl InteractionScrollOwner {
     }
     pub(super) fn WithLayout<T>(
         &self,
-        query: impl FnOnce(&mut layoutng_assembly::layout_engine::LayoutEngine) -> T,
+        query: impl FnOnce(&mut layout_assembly::layout_engine::LayoutEngine) -> T,
     ) -> Option<T> {
         match self {
             Self::Root(page) => Some(query(&mut page.upgrade()?.layout_engine.borrow_mut())),
@@ -282,7 +282,7 @@ impl InteractionScrollOwner {
                     x: f64::from(mutation.offset.x()),
                     y: f64::from(mutation.offset.y()),
                 },
-                scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kUser,
+                scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType::kUser,
             }),
             ScrollEffect::ScrollFinished { .. } => {
                 if let Some(page) = owner.Page() {

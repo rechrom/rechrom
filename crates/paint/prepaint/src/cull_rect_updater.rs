@@ -11,9 +11,9 @@
 //! view-transition, canvas-subtree and unbounded-element branches remain
 //! absent rather than being approximated here.
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::fragment_tree::{FragmentPaintData, PaintResources};
-use layoutng_assembly::internal::layout_input::Offset;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::{FragmentPaintData, PaintResources};
+use layout_assembly::internal::layout_input::Offset;
 use paint_model::cull_rect::{ApplyScrollExpansion, IsSmallScroller, LocalPixelDistanceToExpand};
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_model::{CullRect, PaintRect, PaintResult};

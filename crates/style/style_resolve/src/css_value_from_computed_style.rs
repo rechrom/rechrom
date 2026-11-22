@@ -12,7 +12,7 @@ use foundation::{
     CSSPropertyID as P, CSSValueID as V, EDisplay, EFloat, ETextAlign, ETextDecorationStyle,
     ETextTransform, IsLtr, TextWrapMode, UnicodeBidi,
 };
-use layoutng_style::{
+use layout_style::{
     css::{style_color::StyleColor, white_space::WhiteSpaceCollapse},
     style::{computed_style::ComputedStyle, computed_style_constants::EVerticalAlign},
 };
@@ -189,7 +189,7 @@ pub fn CSSValueFromComputedStyle(
             foundation::EScrollbarWidth::kNone => V::kNone,
         }),
         P::kScrollBehavior => {
-            use layoutng_style::style::scroll_enums::mojom::ScrollBehavior as S;
+            use layout_style::style::scroll_enums::mojom::ScrollBehavior as S;
             Ident(match style.GetScrollBehavior() {
                 S::kAuto => V::kAuto,
                 S::kSmooth => V::kSmooth,

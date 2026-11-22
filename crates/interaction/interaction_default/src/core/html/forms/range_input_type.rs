@@ -325,9 +325,9 @@ impl<D: Decimal> RangeInputType<D> {
     }
     pub fn AdjustStyle(
         &self,
-        builder: &mut layoutng_style::style::computed_style::ComputedStyleBuilder,
+        builder: &mut layout_style::style::computed_style::ComputedStyleBuilder,
     ) {
-        layoutng_style::style::range_input_style::AdjustRangeInputStyle(builder);
+        layout_style::style::range_input_style::AdjustRangeInputStyle(builder);
     }
     // Source: cc:301-310.
     pub fn ParseToNumber(&self, value: &str, default: D) -> D {

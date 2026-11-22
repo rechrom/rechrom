@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 use font_engine::SharedFontBytes;
 #[cfg(test)]
-use layoutng_assembly::internal::layout_input::{FontFace, FontFallbackRole};
+use layout_assembly::internal::layout_input::{FontFace, FontFallbackRole};
 #[cfg(all(test, not(target_os = "linux")))]
-use layoutng_assembly::internal::layout_input::{FontUnicodeRange, FontVariation};
+use layout_assembly::internal::layout_input::{FontUnicodeRange, FontVariation};
 
 // Historical eager fixture used only for font-reader regression tests.
 // Production resolves typed requests through BrowserSystemFontProvider.

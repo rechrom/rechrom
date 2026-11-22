@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, CSSValueID as V, EResize, String, UnicodeBidi, WindRule};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     grid_area::K_GRID_MAX_TRACKS,
     scroll_enums::mojom::blink::ScrollBehavior,

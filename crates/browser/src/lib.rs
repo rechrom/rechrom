@@ -9,16 +9,16 @@ use layout_algo_replaced::assembly::InstallReplacedAlgorithm;
 use layout_algo_svg::assembly::InstallSvgModule;
 use layout_fragment::LayoutResultHandle;
 #[cfg(test)]
-use layoutng_assembly::fragment_tree::FragmentPaintData;
-use layoutng_assembly::internal::boundary::assembly::InstallLayoutBoundary;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::fragment_tree::FragmentPaintData;
+use layout_assembly::internal::boundary::assembly::InstallLayoutBoundary;
+use layout_assembly::internal::layout_input::{
     ConstraintSpace, OverscrollType, Size, ViewportGeometry,
 };
-use layoutng_assembly::internal::layout_input_types::{
+use layout_assembly::internal::layout_input_types::{
     ControlThemeMetrics, IntSize, ScrollbarThemeMetrics,
 };
-use layoutng_assembly::layout_assembly::LayoutAssembly;
-pub use layoutng_assembly::layout_engine::LayoutEngine;
+use layout_assembly::engine_assembly::LayoutAssembly;
+pub use layout_assembly::layout_engine::LayoutEngine;
 use std::cell::RefCell;
 use std::io;
 use std::path::Path;
@@ -71,7 +71,7 @@ pub fn CreateLayoutAssembly() -> LayoutAssembly {
     assembly.shape_coverage = Some(&paint_skia::shape_coverage::SkiaShapeCoverageRasterizer);
     #[cfg(feature = "inline_layout")]
     {
-        layoutng_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
+        layout_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
         layout_algo_block::block_inline_layout::InstallBlockInlineSupport(&mut assembly);
         layout_algo_out_of_flow::assembly::InstallOutOfFlowAlgorithm(&mut assembly);
     }
@@ -401,7 +401,7 @@ mod tests {
 
     fn svg_profile_exports_shape_fragments() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../layoutng/src/pixel_testdata/algorithm_profiles/svg.html");
+            .join("../../../layout_core/src/pixel_testdata/algorithm_profiles/svg.html");
         let url = format!("file://{}", fixture.display());
         let root = LayoutUrl(&url, 400, 320).unwrap();
         fn inspect(node: &FragmentPaintData, shapes: &mut usize) {
@@ -522,7 +522,7 @@ mod tests {
     const SIZE_LIMITS_REFERENCE: &[u8] =
         include_bytes!("../tests/fixtures/block-size-limits-reference.png");
     const SOURCE_BLOCK_PROFILE: &str =
-        include_str!("../../../../layoutng/src/pixel_testdata/algorithm_profiles/block.html");
+        include_str!("../../../../layout_core/src/pixel_testdata/algorithm_profiles/block.html");
     const SOURCE_BLOCK_PROFILE_REFERENCE: &[u8] =
         include_bytes!("../tests/fixtures/block-profile-reference.png");
 

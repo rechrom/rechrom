@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::internal::{
+use layout_assembly::internal::{
     layout_object::LayoutObject, layout_pass_scope::LayoutObjectFactoryScope,
 };
 use page_mutation::PageMutation;

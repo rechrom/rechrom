@@ -12,7 +12,7 @@ use event_loop::{
 #[cfg(test)]
 use foundation::begin_frame::{BeginFrameArgs, BeginFrameSource};
 use interaction::input_event::*;
-use layoutng_assembly::internal::layout_input::Size;
+use layout_assembly::internal::layout_input::Size;
 #[cfg(test)]
 use page_mutation::PageMutation;
 use std::{
@@ -24,7 +24,7 @@ use std::{
 };
 
 #[cfg(test)]
-use layoutng_assembly::fragment_tree::FragmentPaintData;
+use layout_assembly::fragment_tree::FragmentPaintData;
 #[cfg(test)]
 use std::{
     cell::Cell,
@@ -399,7 +399,7 @@ pub fn spawn(
 }
 
 fn configure_scrollbar_mode(
-    metrics: &mut layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics,
+    metrics: &mut layout_assembly::internal::layout_input_types::ScrollbarThemeMetrics,
     mode: Option<&str>,
 ) -> io::Result<()> {
     match mode {

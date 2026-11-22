@@ -27,13 +27,13 @@ pub type PaintArtifact = paint_record::PaintRecording;
 #[derive(Clone)]
 pub struct PaintOutput {
     artifact: Arc<PaintArtifact>,
-    layout_commit: layoutng_assembly::layout_engine::PaintClientCommit,
+    layout_commit: layout_assembly::layout_engine::PaintClientCommit,
 }
 
 impl PaintOutput {
     pub fn new(
         artifact: Arc<PaintArtifact>,
-        layout_commit: layoutng_assembly::layout_engine::PaintClientCommit,
+        layout_commit: layout_assembly::layout_engine::PaintClientCommit,
     ) -> Self {
         Self {
             artifact,
@@ -42,14 +42,14 @@ impl PaintOutput {
     }
 }
 
-impl layoutng_assembly::layout_engine::PaintCommitOutput for PaintOutput {
+impl layout_assembly::layout_engine::PaintCommitOutput for PaintOutput {
     type Artifact = Arc<PaintArtifact>;
 
     fn IntoLayoutCommit(
         self,
     ) -> (
         Self::Artifact,
-        layoutng_assembly::layout_engine::PaintClientCommit,
+        layout_assembly::layout_engine::PaintClientCommit,
     ) {
         (self.artifact, self.layout_commit)
     }

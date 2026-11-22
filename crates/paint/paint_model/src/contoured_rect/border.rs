@@ -8,10 +8,10 @@ use foundation::{
     gfx_quad_geometry::QuadFHitTestExt,
     PhysicalRect, PhysicalSize, SizeForLengthSize,
 };
-use layoutng_geometry::geometry::{
+use layout_geometry::geometry::{
     box_sides::PhysicalBoxSides, box_strut::PhysicalBoxStrut, physical_rect::PhysicalRectExt,
 };
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 fn hull(corner: Corner) -> QuadF {
     let half = corner.HalfCorner();
     let normal = half + LineF::new(corner.Outer(), half).Normal();
@@ -231,11 +231,11 @@ pub fn PixelSnappedContouredBorderWithOutsets(
 pub fn GeometryBoxReference(
     style: &ComputedStyle,
     border_rect: PhysicalRect,
-    geometry: layoutng_style::style::computed_style_constants::GeometryBox,
+    geometry: layout_style::style::computed_style_constants::GeometryBox,
     outsets: OutsetsF,
 ) -> ContouredRect {
     let mut result = ContouredBorder(style, border_rect, PhysicalBoxSides::default());
-    if geometry == layoutng_style::style::computed_style_constants::GeometryBox::kMarginBox {
+    if geometry == layout_style::style::computed_style_constants::GeometryBox::kMarginBox {
         result.OutsetWithCornerCorrection(outsets);
     } else {
         result.Outset(outsets);

@@ -13,7 +13,7 @@
 //! This required-services adapter is the production Page hit-test route.
 //! Source layer traversal, DOM result owners and virtual geometry operations
 //! are supplied by the call-scoped resident binding below.
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::{
     core::{
         layout::{
@@ -27,7 +27,7 @@ use crate::{
     platform::geometry::{contoured_rect::ContouredRectHitTest, path::PathHitTest},
 };
 use foundation::{gfx, EPointerEvents, EVisibility, PhysicalOffset, PhysicalRect, PhysicalSize};
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_item::FragmentItem as NativeItem,
     internal::layout_object::LayoutObject,
     layout_engine::{FragmentCursor, PaintFragmentCursor},
@@ -45,12 +45,12 @@ pub trait ResidentHitTestServices<L: ?Sized> {
     ) -> bool;
     fn NativeClipPathHitTest(
         &self,
-        source: layoutng_assembly::layout_engine::NativeHitTestCursor<'_>,
+        source: layout_assembly::layout_engine::NativeHitTestCursor<'_>,
         location: &HitTestLocation,
     ) -> bool;
     fn SvgForeignObjectLayerHitTest(
         &self,
-        source: layoutng_assembly::layout_engine::NativeHitTestCursor<'_>,
+        source: layout_assembly::layout_engine::NativeHitTestCursor<'_>,
         result: &mut HitTestResult<'_, L>,
         location: &HitTestLocation,
     ) -> crate::core::layout::native_hit_test::NativeHitTestResult;
@@ -58,7 +58,7 @@ pub trait ResidentHitTestServices<L: ?Sized> {
     /// lease for a real local Frame must be reported as a required port.
     fn EmbeddedChildFrameView(
         &self,
-        owner: &layoutng_assembly::internal::layout_node_metadata::Node,
+        owner: &layout_assembly::internal::layout_node_metadata::Node,
     ) -> Result<
         crate::core::layout::layout_embedded_content_hit_test::ChildFrameView<'_>,
         crate::core::layout::native_hit_test::NativeHitTestRequiredPort,
@@ -79,7 +79,7 @@ pub trait ResidentHitTestServices<L: ?Sized> {
     fn ResolveNode(&self, id: u64) -> Option<NodeRef>;
     fn ResolveNativeNode(
         &self,
-        node: &layoutng_assembly::internal::layout_node_metadata::Node,
+        node: &layout_assembly::internal::layout_node_metadata::Node,
     ) -> Option<NodeRef>;
     fn DocumentElement(&self) -> Option<NodeRef>;
     fn ObjectBoundingBox(&self, cursor: PaintFragmentCursor<'_>) -> gfx::RectF;
@@ -231,7 +231,7 @@ impl<'a, L: ?Sized> ResidentFragment<'a, L> {
     }
     fn Node(
         &self,
-        node: *mut layoutng_assembly::internal::layout_node_metadata::Node,
+        node: *mut layout_assembly::internal::layout_node_metadata::Node,
     ) -> Option<NodeRef> {
         let node = unsafe { node.as_ref() }?;
         self.services.ResolveNativeNode(node)
@@ -389,10 +389,10 @@ impl<L: ?Sized> PhysicalFragment<L> for ResidentFragment<'_, L> {
     }
     fn IsInSelfHitTestingPhase(&self, phase: HitTestPhase) -> bool {
         let native_phase = match phase {
-            HitTestPhase::kForeground => layoutng_assembly::internal::hit_test_phase::HitTestPhase::kForeground,
-            HitTestPhase::kFloat => layoutng_assembly::internal::hit_test_phase::HitTestPhase::kFloat,
-            HitTestPhase::kDescendantBlockBackgrounds => layoutng_assembly::internal::hit_test_phase::HitTestPhase::kDescendantBlockBackgrounds,
-            HitTestPhase::kSelfBlockBackground => layoutng_assembly::internal::hit_test_phase::HitTestPhase::kSelfBlockBackground,
+            HitTestPhase::kForeground => layout_assembly::internal::hit_test_phase::HitTestPhase::kForeground,
+            HitTestPhase::kFloat => layout_assembly::internal::hit_test_phase::HitTestPhase::kFloat,
+            HitTestPhase::kDescendantBlockBackgrounds => layout_assembly::internal::hit_test_phase::HitTestPhase::kDescendantBlockBackgrounds,
+            HitTestPhase::kSelfBlockBackground => layout_assembly::internal::hit_test_phase::HitTestPhase::kSelfBlockBackground,
         };
         self.Physical()
             .is_some_and(|fragment| fragment.IsInSelfHitTestingPhase(native_phase))
@@ -425,12 +425,12 @@ impl<L: ?Sized> FragmentItems<L> for ResidentFragment<'_, L> {
         let Some((container, items)) = self.ItemOwner() else {
             return Vec::new();
         };
-        let mut cursor = layoutng_assembly::inline_cursor::InlineCursor::from_fragment(container);
+        let mut cursor = layout_assembly::inline_cursor::InlineCursor::from_fragment(container);
         if let Some(parent) = parent {
             cursor.MoveToFragmentItem(&items[parent]);
             cursor = cursor.CursorForDescendants();
         }
-        let mut indices = layoutng_assembly::inline_cursor::InlineBackwardCursor::new(&cursor)
+        let mut indices = layout_assembly::inline_cursor::InlineBackwardCursor::new(&cursor)
             .IntoSiblingItemIndices();
         if let Some(parent) = parent {
             // Native descendant cursors root their item span at parent + 1.
@@ -512,7 +512,7 @@ impl<L: ?Sized> FragmentItem<L> for ResidentFragment<'_, L> {
             .ComputeTextBoundsRectForHitTest(offset, visual_overflow)
     }
 }
-fn offset(value: layoutng_assembly::internal::layout_input::Offset) -> PhysicalOffset {
+fn offset(value: layout_assembly::internal::layout_input::Offset) -> PhysicalOffset {
     PhysicalOffset::new(
         foundation::LayoutUnit::FromDoubleRound(value.x),
         foundation::LayoutUnit::FromDoubleRound(value.y),
@@ -535,7 +535,7 @@ impl<L: ?Sized> FragmentGeometryQueries<L> for ResidentFragment<'_, L> {
         self.Object().ChildPaintBlockedByDisplayLock()
     }
     fn AtomicInlineItemHiddenForPaint(&self) -> bool {
-        let mut cursor = layoutng_assembly::inline_cursor::InlineCursor::default();
+        let mut cursor = layout_assembly::inline_cursor::InlineCursor::default();
         cursor.MoveToLayoutObject(self.Object());
         cursor.IsNotNull() && cursor.Current().IsHiddenForPaint()
     }
@@ -702,7 +702,7 @@ impl<'a> ResidentLayer<'a> {
         unsafe { self.cursor.Cursor().GetLayoutObject().as_ref() }
             .expect("source layer LayoutObject")
     }
-    fn Native(&self) -> &'a layoutng_assembly::internal::paint_layer::PaintLayer {
+    fn Native(&self) -> &'a layout_assembly::internal::paint_layer::PaintLayer {
         self.root
             .LayerForPaintObject(
                 self.resident
@@ -980,7 +980,7 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
         index: usize,
     ) -> Option<Rc<dyn LayerPhysicalFragment<ResidentLayerResult<'r>> + '_>> {
         let object =
-            layoutng_assembly::layout_engine::NativeHitTestCursor::ForObject(self.Object());
+            layout_assembly::layout_engine::NativeHitTestCursor::ForObject(self.Object());
         let first = object.FirstPhysicalFragment()?;
         let box_ = unsafe { first.OwnerLayoutBox().as_ref() }?;
         if index >= box_.PhysicalFragmentCount() as usize {
@@ -1179,7 +1179,7 @@ impl<'r> PaintLayerHitTest<ResidentLayerResult<'r>> for ResidentLayer<'_> {
         self.Object().IsBox()
     }
     fn BorderBoxRect(&self) -> PhysicalRect {
-        layoutng_assembly::layout_engine::NativeHitTestCursor::ForObject(self.Object())
+        layout_assembly::layout_engine::NativeHitTestCursor::ForObject(self.Object())
             .PhysicalBorderBoxRect()
     }
     fn ShouldApplyOverflowClipMargin(&self) -> bool {

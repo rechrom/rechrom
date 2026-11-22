@@ -167,13 +167,13 @@ pub(super) fn Apply(
                 return Ok(());
             }
             let size = (size as f32)
-                .min(layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize);
+                .min(layout_style::style::computed_style_constants::kMaximumAllowedFontSize);
             d.SetKeywordSize(keyword);
             d.SetIsAbsoluteSize(absolute);
             d.SetSpecifiedSize(size);
             d.SetComputedSize(
                 (size * b.EffectiveZoom())
-                    .min(layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize),
+                    .min(layout_style::style::computed_style_constants::kMaximumAllowedFontSize),
             );
         }
         kFontWeight => {
@@ -420,7 +420,7 @@ fn CheckForGenericFamilyChange(
     description.SetSpecifiedSize(size);
     description.SetComputedSize(
         (size * effective_zoom)
-            .min(layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize),
+            .min(layout_style::style::computed_style_constants::kMaximumAllowedFontSize),
     );
 }
 

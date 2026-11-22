@@ -1605,7 +1605,7 @@ impl interaction_default::core::html::forms::select_type::MenuListTextOperations
     fn OptionStyle(
         &self,
         option: &u64,
-    ) -> foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle> {
+    ) -> foundation::Persistent<layout_style::style::computed_style::ComputedStyle> {
         ReadNode(&self.c.document, *option, |document, _, option| {
             document
                 .ResolvedStyleFor(option)
@@ -1619,7 +1619,7 @@ impl interaction_default::core::html::forms::select_type::MenuListTextOperations
     }
     fn InnerStyle(
         &self,
-    ) -> foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle> {
+    ) -> foundation::Persistent<layout_style::style::computed_style::ComputedStyle> {
         self.Inner()
             .map(|inner| self.OptionStyle(&inner))
             .unwrap_or_default()
@@ -1630,7 +1630,7 @@ impl interaction_default::core::html::forms::select_type::MenuListTextOperations
     }
     fn SetInnerModifiedStyleOutsideStyleRecalc(
         &self,
-        style: foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>,
+        style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         self.SetInnerComputedStyle(style.clone());
         if let Some(inner) = self.Inner() {
@@ -1640,7 +1640,7 @@ impl interaction_default::core::html::forms::select_type::MenuListTextOperations
     }
     fn SetInnerComputedStyle(
         &self,
-        style: foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>,
+        style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         let mut owner = self.c.document.borrow_mut();
         let document = owner.GetDocumentMut();

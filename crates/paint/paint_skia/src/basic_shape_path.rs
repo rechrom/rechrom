@@ -3,7 +3,7 @@ use foundation::{
     gfx::{PointF, RectF},
     WindRule,
 };
-use layoutng_style::style::basic_shapes::BasicShape;
+use layout_style::style::basic_shapes::BasicShape;
 use paint_model::basic_shape_path::{BasicShapePathSink, BuildBasicShapePath, InvalidBasicShape};
 use skia::{
     include::core::SkPathTypes::{SkPathDirection, SkPathFillType},
@@ -129,7 +129,7 @@ impl paint_model::border_shape_path::BorderShapePathSink for BorderBuilder {
     }
 }
 pub(super) fn BorderShapeOuterPath(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
+    style: &layout_style::style::computed_style::ComputedStyle,
     reference: RectF,
 ) -> Result<SkPath, InvalidBasicShape> {
     paint_model::border_shape_path::OuterPath(style, reference, &BorderBuilder)
@@ -139,7 +139,7 @@ pub(super) fn BorderShapeOuterPath(
 mod tests {
     use super::*;
     use foundation::{Length, LengthPoint};
-    use layoutng_style::style::basic_shapes::{
+    use layout_style::style::basic_shapes::{
         BasicShapeCircle, BasicShapePolygon, BasicShapeWithCenterAndRadii,
     };
     #[test]
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn css_shape_command_sink_matches_native_svg_arc_primitives() {
         use foundation::{LengthPoint, LengthSize};
-        use layoutng_style::style::style_shape::{ArcSegment, Segment, StyleShape};
+        use layout_style::style::style_shape::{ArcSegment, Segment, StyleShape};
         use paint_model::{
             basic_shape_commands::BasicShapeCommands,
             paint_clip_path::{PaintPath, PaintPathFillType},
@@ -204,11 +204,11 @@ mod tests {
                 let mut sink = BasicShapeCommands::default();
                 BuildBasicShapePath(&shape, reference, 1., 0.5, &mut sink).unwrap();
                 assert!(sink.commands.iter().any(
-                    |command| command.verb == layoutng_geometry::shape_path::PathVerb::kConicTo
+                    |command| command.verb == layout_geometry::shape_path::PathVerb::kConicTo
                 ));
                 let resolved = sink.Finish();
                 let measure =
-                    layoutng_geometry::shape_path_measure::ShapePathMeasure::new(&resolved);
+                    layout_geometry::shape_path_measure::ShapePathMeasure::new(&resolved);
                 let mut contours = skia::src::core::SkContourMeasure::SkContourMeasureIter::new(
                     &native, false, 1.,
                 );

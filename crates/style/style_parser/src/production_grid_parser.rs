@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use crate::css_parser_idioms::{IsCSSSpace, IsNameCodePoint};
-use layoutng_style::style::grid_area::{GridArea, GridSpan, NamedGridAreaMap};
+use layout_style::style::grid_area::{GridArea, GridSpan, NamedGridAreaMap};
 
 fn NoneValue() -> Rc<Value> {
     values::identifier(CSSValueID::kNone)
@@ -374,7 +374,7 @@ fn ConsumeRepeat<T: TokenStreamTokenizer>(
             Rc::new(Value::new(CSSValuePayload::kGridIntegerRepeatClass(
                 values::CSSGridIntegerRepeatValue {
                     repetitions: repetitions.unwrap(),
-                    extra_clamp: layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32
+                    extra_clamp: layout_style::style::grid_area::K_GRID_MAX_TRACKS as u32
                         / repeated_items,
                     list: values::CSSValueList::new(entries, values::ListSeparator::Space),
                 },

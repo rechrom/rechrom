@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::internal::layout_input::{Offset, PaintImage, Size};
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::layout_input::{Offset, PaintImage, Size};
+use layout_assembly::internal::paint_input::{
     BackgroundImageLayer, BackgroundRepeat, BackgroundRepeatRule, BackgroundSizeMode,
 };
 

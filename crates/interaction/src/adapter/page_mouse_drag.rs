@@ -37,7 +37,7 @@ use interaction_input::{
         web_pointer_event::WebPointerEvent, web_pointer_properties::PointerType,
     },
 };
-use layoutng_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout;
+use layout_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout;
 
 pub(crate) fn HandleDrag(
     dispatcher: &EventDispatcher<'_, '_>,
@@ -578,7 +578,7 @@ impl DragSourceContext for PageMouseDrag<'_, '_, '_, '_> {
             })
             .unwrap_or(false);
         if richly {
-            use layoutng_assembly::{
+            use layout_assembly::{
                 EditingPosition as P, EditingPositionAnchorType as A, EditingTextAffinity,
             };
             self.pointer
@@ -586,7 +586,7 @@ impl DragSourceContext for PageMouseDrag<'_, '_, '_, '_> {
                 .focus_services
                 .selection
                 .SetSelection(
-                    Some(layoutng_assembly::editing_state::DOMSelection {
+                    Some(layout_assembly::editing_state::DOMSelection {
                         anchor: P::WithAnchor(id, 0, A::BeforeAnchor),
                         focus: P::WithAnchor(id, 0, A::AfterAnchor),
                         affinity: EditingTextAffinity::Downstream,
@@ -639,11 +639,11 @@ impl DragSourceContext for PageMouseDrag<'_, '_, '_, '_> {
             };
             d.Node(i).Children().len()
         };
-        use layoutng_assembly::{
+        use layout_assembly::{
             EditingPosition as P, EditingPositionAnchorType as A, EditingTextAffinity,
         };
         frame.SetSelection(
-            Some(layoutng_assembly::editing_state::DOMSelection {
+            Some(layout_assembly::editing_state::DOMSelection {
                 anchor: P::WithAnchor(anchor, 0, A::OffsetInAnchor),
                 focus: P::WithAnchor(anchor, children, A::OffsetInAnchor),
                 affinity: EditingTextAffinity::Downstream,

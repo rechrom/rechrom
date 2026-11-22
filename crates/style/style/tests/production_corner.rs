@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID, String, TextDirection, WritingDirectionMode, WritingMode};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::{BasicShapePolygon, ShapeType},
     computed_style::ComputedStyle,
     computed_style_constants::GeometryBox,
@@ -145,7 +145,7 @@ fn border_shape_preserves_default_boxes_pair_equality_and_computed_style_ownersh
         ShapeType::kBasicShapePolygonType
     );
     let polygon = unsafe {
-        &*(single.OuterShape() as *const dyn layoutng_style::style::basic_shapes::BasicShape
+        &*(single.OuterShape() as *const dyn layout_style::style::basic_shapes::BasicShape
             as *const BasicShapePolygon)
     };
     assert_eq!(polygon.Values()[2].Pixels(), 10.0);

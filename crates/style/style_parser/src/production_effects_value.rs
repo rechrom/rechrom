@@ -6,7 +6,7 @@ use crate::{
     production_css_value::Value,
 };
 use foundation::{String, WindRule};
-use layoutng_style::style::svg_path_byte_stream::SVGPathByteStream;
+use layout_style::style::svg_path_byte_stream::SVGPathByteStream;
 use std::rc::Rc;
 
 pub struct CSSBasicShapeCircleValue {

@@ -137,7 +137,7 @@ impl Default for UserAgentStyleSheets {
 mod tests {
     use super::*;
     use foundation::EDisplay;
-    use layoutng_assembly::internal::layout_input::{ConstraintSpace, Size};
+    use layout_assembly::internal::layout_input::{ConstraintSpace, Size};
 
     #[test]
     fn cached_typed_html_quirks_svg_mathml_ua_sheets_reach_browser_computed_style() {

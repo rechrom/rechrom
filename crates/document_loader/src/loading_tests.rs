@@ -321,7 +321,7 @@ fn fetcher(backend: Rc<RefCell<dyn URLLoader>>) -> ResourceFetcher {
 }
 fn fetcher_with_constraints(
     backend: Rc<RefCell<dyn URLLoader>>,
-    constraints: Rc<RefCell<layoutng_assembly::internal::layout_input::ConstraintSpace>>,
+    constraints: Rc<RefCell<layout_assembly::internal::layout_input::ConstraintSpace>>,
 ) -> ResourceFetcher {
     let decode = Rc::new(decode::DecodeEngine::WithDecoders(
         Rc::new(RefCell::new(Images)),
@@ -618,7 +618,7 @@ impl URLLoader for FailingLoader {
 fn font_fallback_progresses_one_poll_pass_at_a_time_and_keeps_failure_callbacks() {
     let requests = Rc::new(RefCell::new(vec![]));
     let constraints = Rc::new(RefCell::new(
-        layoutng_assembly::internal::layout_input::ConstraintSpace::default(),
+        layout_assembly::internal::layout_input::ConstraintSpace::default(),
     ));
     let fetcher = fetcher_with_constraints(
         Rc::new(RefCell::new(FailingLoader(requests.clone()))),

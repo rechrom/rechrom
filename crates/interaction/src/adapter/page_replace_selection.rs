@@ -87,7 +87,7 @@ impl TrivialReplacementContext for StructuralCommand {
                 d.ResolvedStyleFor(index)
                     .and_then(|s| s.ComputedStyle())
                     .is_some_and(|s| {
-                        s.WhiteSpace() == layoutng_style::css::white_space::EWhiteSpace::kPre
+                        s.WhiteSpace() == layout_style::css::white_space::EWhiteSpace::kPre
                     })
             })
             .unwrap_or(false)

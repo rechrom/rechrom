@@ -5,7 +5,7 @@
 //! Sources: pre_paint_tree_walk.cc:398-447 and
 //! paint_property_tree_builder.cc:4731-4770. This comparison itself neither
 //! mutates node identities nor produces property invalidation.
-use layoutng_assembly::internal::paint_input::PaintCornerRadii;
+use layout_assembly::internal::paint_input::PaintCornerRadii;
 use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey,

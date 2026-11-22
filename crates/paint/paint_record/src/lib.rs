@@ -6,7 +6,7 @@
 //! geometry. Tree traversal, reuse, chunk grouping, and artifact publication
 //! remain separate stages.
 
-// layoutng_assembly contains the selected inline provider modules, but these
+// layout_assembly contains the selected inline provider modules, but these
 // two source virtual-dispatch entry points are otherwise referenced only by
 // `extern "Rust"` declarations in a paint_record-only test link. Retain their
 // provider objects for that link without adding a production dependency or
@@ -14,13 +14,13 @@
 #[cfg(test)]
 #[used]
 static TEST_LAYOUT_TEXT_COMBINE_PROVIDER: extern "Rust" fn(
-    &layoutng_assembly::internal::layout_object::LayoutObject,
-) -> bool = layoutng_assembly::layout_text_combine::DispatchIsLayoutTextCombine;
+    &layout_assembly::internal::layout_object::LayoutObject,
+) -> bool = layout_assembly::layout_text_combine::DispatchIsLayoutTextCombine;
 #[cfg(test)]
 #[used]
 static TEST_TEXT_OVERFLOW_PROVIDER: extern "Rust" fn(
-    *const layoutng_assembly::internal::layout_block_flow::LayoutBlockFlow,
-) -> bool = layoutng_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    *const layout_assembly::internal::layout_block_flow::LayoutBlockFlow,
+) -> bool = layout_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
 
 use prepaint::{
     background_geometry, nine_piece_image_grid, paint_shader_resolver, pre_paint_tree_walk,
@@ -33,7 +33,7 @@ pub mod box_decoration_data;
 pub mod box_fragment_painter;
 pub mod caret_display_item_client;
 pub mod decorating_box {
-    pub use layoutng_assembly::decorating_box::*;
+    pub use layout_assembly::decorating_box::*;
 }
 pub mod decoration_line_painter;
 pub mod display_item;
@@ -47,11 +47,11 @@ pub mod frame_set_painter;
 pub mod html_canvas_painter;
 pub mod inline_box_fragment_painter;
 pub mod inline_paint_context {
-    pub use layoutng_assembly::inline_paint_context::*;
+    pub use layout_assembly::inline_paint_context::*;
 }
 pub mod ignore_paint_timing_scope;
 pub mod line_relative_rect {
-    pub use layoutng_assembly::line_relative_rect::*;
+    pub use layout_assembly::line_relative_rect::*;
 }
 pub mod mathml_painter;
 pub mod nine_piece_image_painter;
@@ -76,7 +76,7 @@ pub mod svg_root_painter;
 pub mod svg_shape_painter;
 pub mod table_painters;
 pub mod text_decoration_info {
-    pub use layoutng_assembly::text_decoration_info::*;
+    pub use layout_assembly::text_decoration_info::*;
 }
 pub mod text_decoration_painter;
 pub mod theme_painter;
@@ -96,7 +96,7 @@ pub use foreign_layer_display_item::{
     ForeignLayer, ForeignLayerDisplayItemData, ForeignLayerSize, NewForeignLayerDisplayItem,
     RecordForeignLayer,
 };
-pub use layoutng_assembly::fragment_tree::RasterEffectOutset;
+pub use layout_assembly::fragment_tree::RasterEffectOutset;
 pub use paint_controller::{PaintController, PaintControllerPersistentData, SubsequencesData};
 pub use paint_model::{PaintPhase, PaintRect, ResolveDocumentImageContainerKey};
 pub use paint_op::PaintOpType;

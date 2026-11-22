@@ -4,8 +4,8 @@
 //! range on each item. Methods therefore accept the resident artifact where
 //! Blink's C++ subtype owns a `PaintRecord` value directly.
 
-use layoutng_assembly::internal::layout_input::Offset;
-use layoutng_assembly::internal::paint_input::PaintBlendMode;
+use layout_assembly::internal::layout_input::Offset;
+use layout_assembly::internal::paint_input::PaintBlendMode;
 use paint_chunk::PaintChunkBackgroundColorInfo;
 use paint_model::display_item_id::{DisplayItemId, DisplayItemIdType};
 use paint_model::PaintRect;

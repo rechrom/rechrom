@@ -11,7 +11,7 @@ use crate::{
 };
 use font_engine::FontSelectionValue;
 use foundation::{CSSPropertyID, CSSValueID, Color, IsHorizontalWritingMode, Length, LengthType};
-use layoutng_style::{
+use layout_style::{
     css::style_color::StyleColor,
     style::{
         computed_style::{ComputedStyle, ComputedStyleBuilder},
@@ -202,7 +202,7 @@ type Result = std::result::Result<(), LonghandApplicationError>;
 /// computed style StyleImage. Only the resource owner may supply this binding.
 pub struct FetchedImageBinding {
     resource_id: Option<std::num::NonZeroU64>,
-    image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+    image: std::ptr::NonNull<layout_style::style::style_image::StyleImage>,
 }
 impl FetchedImageBinding {
     /// The resource owner supplies a live, GC-traced fetched subtype. This
@@ -213,7 +213,7 @@ impl FetchedImageBinding {
     /// resource owner retain the supplied resource identity.
     pub unsafe fn FromResource(
         resource_id: std::num::NonZeroU64,
-        image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+        image: std::ptr::NonNull<layout_style::style::style_image::StyleImage>,
     ) -> std::result::Result<Self, LonghandApplicationError> {
         if !unsafe { image.as_ref() }.IsImageResource() {
             return Err(LonghandApplicationError::InvalidValue(
@@ -229,7 +229,7 @@ impl FetchedImageBinding {
     /// and failed requests keep fetched-image identity and the resource owner's
     /// URL; their concrete StyleImage carries the distinct lifecycle state.
     pub unsafe fn FromUnpublished(
-        image: std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+        image: std::ptr::NonNull<layout_style::style::style_image::StyleImage>,
     ) -> std::result::Result<Self, LonghandApplicationError> {
         if !unsafe { image.as_ref() }.IsImageResource() {
             return Err(LonghandApplicationError::InvalidValue(
@@ -244,7 +244,7 @@ impl FetchedImageBinding {
     pub fn ResourceId(&self) -> Option<std::num::NonZeroU64> {
         self.resource_id
     }
-    pub fn Image(&self) -> std::ptr::NonNull<layoutng_style::style::style_image::StyleImage> {
+    pub fn Image(&self) -> std::ptr::NonNull<layout_style::style::style_image::StyleImage> {
         self.image
     }
 }
@@ -253,7 +253,7 @@ pub trait URLImageResolver {
     /// element's TreeScope, independent of the declaration's stylesheet.
     fn SVGResourceScope(
         &self,
-    ) -> Option<layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope> {
+    ) -> Option<layout_style::style::reference_clip_path_operation::SvgClipResourceScope> {
         None
     }
 
@@ -261,7 +261,7 @@ pub trait URLImageResolver {
         &self,
         value: &crate::production_css_value::CSSImageValue,
     ) -> std::result::Result<
-        std::ptr::NonNull<layoutng_style::style::style_image::StyleImage>,
+        std::ptr::NonNull<layout_style::style::style_image::StyleImage>,
         LonghandApplicationError,
     > {
         self.ResolveImage(value).map(|binding| binding.Image())
@@ -450,10 +450,10 @@ fn ResolveGradientLength(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    layoutng_style::style::generated_gradient_image::GradientLength,
+    layout_style::style::generated_gradient_image::GradientLength,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::GradientLength;
+    use layout_style::style::generated_gradient_image::GradientLength;
     let length = text_application::ConvertLength(id, b, value, root, media)?;
     let (percent, pixels) =
         GradientLengthParts(&length).ok_or(LonghandApplicationError::Unsupported(id))?;
@@ -468,10 +468,10 @@ fn ResolveGradientPosition(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    layoutng_style::style::generated_gradient_image::GradientLength,
+    layout_style::style::generated_gradient_image::GradientLength,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::GradientLength;
+    use layout_style::style::generated_gradient_image::GradientLength;
     if let CSSValuePayload::kIdentifierClass(keyword) = value.Payload() {
         return Ok(GradientLength {
             percent: match keyword.0 {
@@ -551,10 +551,10 @@ fn ResolveGradientStops(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    Vec<layoutng_style::style::generated_gradient_image::GradientStop>,
+    Vec<layout_style::style::generated_gradient_image::GradientStop>,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::{GradientLength, GradientStop};
+    use layout_style::style::generated_gradient_image::{GradientLength, GradientStop};
     if stops.is_empty() {
         return Err(LonghandApplicationError::InvalidValue(id));
     }
@@ -613,7 +613,7 @@ fn ResolveGradientStops(
             let color = if let Some(value) = &stop.color {
                 ConvertColorForUsedScheme(id, b, value)?
             } else {
-                layoutng_style::css::style_color::StyleColor::from_color(Color::kTransparent)
+                layout_style::css::style_color::StyleColor::from_color(Color::kTransparent)
             };
             Ok(GradientStop {
                 offset: position.percent,
@@ -634,7 +634,7 @@ fn ConvertColorForUsedScheme(
     while let CSSValuePayload::kLightDarkValuePairClass(pair) = value.Payload() {
         let pair = pair.AsValuePair();
         value = if b.UsedColorScheme()
-            == layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kLight
+            == layout_style::style::color_scheme::mojom::blink::ColorScheme::kLight
         {
             pair.first.as_ref()
         } else {
@@ -651,10 +651,10 @@ fn ResolveLinearGradient(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    layoutng_style::style::generated_gradient_image::LinearGradientData,
+    layout_style::style::generated_gradient_image::LinearGradientData,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::LinearGradientData;
+    use layout_style::style::generated_gradient_image::LinearGradientData;
     let (start, end, angle_degrees, corner) = if let Some(angle) = &value.angle {
         (
             [0.0, 0.0],
@@ -707,11 +707,11 @@ fn ResolveRadialGradient(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    layoutng_style::style::generated_gradient_image::RadialGradientData,
+    layout_style::style::generated_gradient_image::RadialGradientData,
     LonghandApplicationError,
 > {
     use crate::production_css_value::{CSSRadialGradientExtent as E, CSSRadialGradientShape as S};
-    use layoutng_style::style::generated_gradient_image::{
+    use layout_style::style::generated_gradient_image::{
         GradientLength, RadialGradientData, RadialGradientExtent as RE, RadialGradientShape as RS,
     };
     let shape = match value.shape.unwrap_or(S::Ellipse) {
@@ -764,10 +764,10 @@ fn ResolveConicGradient(
     root: f32,
     media: &MediaValuesCachedData,
 ) -> std::result::Result<
-    layoutng_style::style::generated_gradient_image::ConicGradientData,
+    layout_style::style::generated_gradient_image::ConicGradientData,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::generated_gradient_image::ConicGradientData;
+    use layout_style::style::generated_gradient_image::ConicGradientData;
     Ok(ConicGradientData {
         center_x: ResolveGradientPosition(id, b, &value.position_x, true, root, media)?,
         center_y: ResolveGradientPosition(id, b, &value.position_y, false, root, media)?,
@@ -793,10 +793,10 @@ fn ResolveStyleImage(
     media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> std::result::Result<
-    *mut layoutng_style::style::style_image::StyleImage,
+    *mut layout_style::style::style_image::StyleImage,
     LonghandApplicationError,
 > {
-    use layoutng_style::style::{
+    use layout_style::style::{
         generated_gradient_image::{
             CSSImageGeneratorValue, CSSLinearGradientValue, StyleGeneratedImage,
         },
@@ -857,31 +857,31 @@ fn ResolveStyleImage(
                 foundation::MakeGarbageCollected(CSSLinearGradientValue::FromResolved(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
-                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
+                layout_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
         CSSValuePayload::kRadialGradientClass(gradient) => {
-            use layoutng_style::style::generated_gradient_image::CSSRadialGradientValue;
+            use layout_style::style::generated_gradient_image::CSSRadialGradientValue;
             let data = ResolveRadialGradient(id, b, gradient, root, media)
                 .map_err(|_| LonghandApplicationError::Unsupported(id))?;
             let generator =
                 foundation::MakeGarbageCollected(CSSRadialGradientValue::FromRadial(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
-                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
+                layout_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
         CSSValuePayload::kConicGradientClass(gradient) => {
-            use layoutng_style::style::generated_gradient_image::CSSConicGradientValue;
+            use layout_style::style::generated_gradient_image::CSSConicGradientValue;
             let data = ResolveConicGradient(id, b, gradient, root, media)
                 .map_err(|_| LonghandApplicationError::Unsupported(id))?;
             let generator =
                 foundation::MakeGarbageCollected(CSSConicGradientValue::FromConic(data));
             foundation::MakeGarbageCollected(StyleGeneratedImage::new(
                 generator.cast::<CSSImageGeneratorValue>(),
-                layoutng_style::css::css_to_length_conversion_data::ContainerSizes::default(),
+                layout_style::css::css_to_length_conversion_data::ContainerSizes::default(),
             ))
             .cast::<StyleImage>()
         }
@@ -898,7 +898,7 @@ fn ResolveFetchedImage(
     url: &crate::production_css_value::CSSImageValue,
     resolution: Option<f32>,
 ) -> std::result::Result<
-    *mut layoutng_style::style::style_image::StyleImage,
+    *mut layout_style::style::style_image::StyleImage,
     LonghandApplicationError,
 > {
     let resolver = images.ok_or(LonghandApplicationError::Unsupported(id))?;
@@ -924,7 +924,7 @@ fn ApplyLayerImages(
     media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> Result {
-    use layoutng_style::style::fill_layer::FillLayer;
+    use layout_style::style::fill_layer::FillLayer;
     let mask = id == CSSPropertyID::kMaskImage;
     let inherit = v.IsInheritedValue();
     let initial = v.IsInitialValue() || v.IsUnsetValue() || inherit && parent.is_none();
@@ -1247,8 +1247,8 @@ fn ConvertShadow(
     root: f32,
     media: &MediaValuesCachedData,
     root_line_height: Option<f32>,
-) -> std::result::Result<layoutng_style::style::shadow_data::ShadowData, LonghandApplicationError> {
-    use layoutng_style::style::shadow_data::{ShadowData, ShadowStyle};
+) -> std::result::Result<layout_style::style::shadow_data::ShadowData, LonghandApplicationError> {
+    use layout_style::style::shadow_data::{ShadowData, ShadowStyle};
     let length = |value: &Value| {
         if let CSSValuePayload::kMathFunctionClass(math) = value.Payload() {
             if math.Category() != crate::css_math_expression_node::CalculationResultCategory::Length
@@ -1344,7 +1344,7 @@ fn ApplyShadow(
     length_context: PropertyConversionContext<'_>,
 ) -> Result {
     use foundation::{MakeGarbageCollected, Member};
-    use layoutng_style::style::shadow_list::{ShadowDataVector, ShadowList};
+    use layout_style::style::shadow_list::{ShadowDataVector, ShadowList};
     let shadow = if initial {
         Member::default()
     } else if inherit {
@@ -1420,7 +1420,7 @@ fn ApplyContainer(
     initial: bool,
 ) -> Result {
     use foundation::{HeapVector, MakeGarbageCollected, Member, ScopedCSSName, ScopedCSSNameList};
-    use layoutng_style::style::computed_style_constants::EContainerType;
+    use layout_style::style::computed_style_constants::EContainerType;
     if id == CSSPropertyID::kContainerName {
         if initial {
             b.SetContainerNameOwned(Member::default());
@@ -3148,7 +3148,7 @@ mod length_zoom_contract_tests {
 #[cfg(test)]
 mod content_remaining_tests {
     use super::*;
-    use layoutng_style::style::content_data::{
+    use layout_style::style::content_data::{
         CloneContentData, ContentData, CounterContentData, QuoteContentData, TextContentData,
     };
     #[test]
@@ -3180,7 +3180,7 @@ mod content_remaining_tests {
         let quote = unsafe { (&*first).Next().unwrap() };
         assert_eq!(
             unsafe { (&*(quote as *const QuoteContentData)).Quote() },
-            layoutng_style::style::computed_style_constants::QuoteType::kOpen
+            layout_style::style::computed_style_constants::QuoteType::kOpen
         );
         let counter = unsafe { (&*quote).Next().unwrap() };
         let single = unsafe { &*(counter as *const CounterContentData) };
@@ -3277,7 +3277,7 @@ mod background_linear_image_production_tests {
     }
     #[test]
     fn generated_gradient_properties_reach_computed_style_layers_and_preserve_dependency_errors() {
-        use layoutng_style::style::generated_gradient_image::{
+        use layout_style::style::generated_gradient_image::{
             CSSLinearGradientValue, GeneratedGradientData,
         };
         let heap = foundation::LayoutHeapScope::new();
@@ -3472,7 +3472,7 @@ mod shadow_properties_production_tests {
     }
     #[test]
     fn shadow_properties_store_computed_style_defaults_components_inheritance_and_gc() {
-        use layoutng_style::style::shadow_data::ShadowStyle;
+        use layout_style::style::shadow_data::ShadowStyle;
         let heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut b = ComputedStyleBuilder::from_style(initial);

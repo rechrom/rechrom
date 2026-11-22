@@ -13,7 +13,7 @@ use super::html_select_element::{
 use super::menu_list_popup::{MenuListPopup, MenuListPopupEnvironment};
 use foundation::Persistent;
 use interaction_dispatch::core::dom::events::event::EventRef;
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::rc::Weak;
@@ -81,7 +81,7 @@ pub trait SelectEnvironment {
     fn CountBaseSelectAppearance(&self);
     fn InstallOptionStyleOwner(
         &self,
-    ) -> layoutng_style::style::menu_list_inner_style::MenuListOptionStyleOwner;
+    ) -> layout_style::style::menu_list_inner_style::MenuListOptionStyleOwner;
     fn SpatialNavigationEnabled(&self) -> bool;
     fn PopsMenuByArrowKeys(&self) -> bool;
     fn PopsMenuByReturnKey(&self) -> bool;
@@ -792,7 +792,7 @@ pub struct MenuListSelectType {
     pub base: SelectType,
     snav_arrow_key_selection: Cell<bool>,
     active_option_notification: MenuListActiveOptionState,
-    option_style: layoutng_style::style::menu_list_inner_style::MenuListOptionStyleOwner,
+    option_style: layout_style::style::menu_list_inner_style::MenuListOptionStyleOwner,
     popup: Rc<MenuListPopup>,
     is_appearance_base_select: Cell<bool>,
 }

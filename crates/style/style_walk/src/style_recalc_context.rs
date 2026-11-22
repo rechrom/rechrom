@@ -19,8 +19,8 @@
 // ForSlottedRules/ForPartRules or LayoutObject-based context derivation.
 
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::rc::Rc;
 
 /// Existing DOM/pseudo/display-lock owners. Returned Rc values retain the

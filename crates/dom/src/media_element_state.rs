@@ -440,7 +440,7 @@ impl PersistentDocument {
     pub fn VideoLayoutStateForElement(
         &self,
         node: usize,
-    ) -> Option<layoutng_assembly::internal::layout_input::VideoLayoutState> {
+    ) -> Option<layout_assembly::internal::layout_input::VideoLayoutState> {
         if !self.IsVideoElement(node) {
             return None;
         }
@@ -452,7 +452,7 @@ impl PersistentDocument {
             .map(|player| player.LayoutFacts());
         let image_source = self.VideoImageSourceURL(node);
         Some(
-            layoutng_assembly::internal::layout_input::VideoLayoutState {
+            layout_assembly::internal::layout_input::VideoLayoutState {
                 show_poster: source.show_poster.get(),
                 has_available_video_frame: player
                     .is_some_and(|player| player.has_available_video_frame),

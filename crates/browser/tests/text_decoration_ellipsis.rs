@@ -5,8 +5,8 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::{internal::layout_input::FontFace, layout_engine::PaintFragmentCursor};
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::{internal::layout_input::FontFace, layout_engine::PaintFragmentCursor};
 use paint::paint_engine::DisplayItemType;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};

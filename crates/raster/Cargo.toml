@@ -10,7 +10,7 @@ compositor = { path = "../compositor" }
 foundation = { path = "../foundation" }
 font_engine = { path = "../font_engine" }
 image_resource = { path = "../image_resource" }
-paint_input_types = { path = "../layoutng/paint_input_types" }
+paint_input_types = { path = "../layout/paint_input_types" }
 paint = { path = "../paint" }
 skia = { path = "../skia" }
 

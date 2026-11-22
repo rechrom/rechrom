@@ -54,7 +54,7 @@ use font_engine::{
     LayoutLocale, OpticalSizing, SimpleFontData, TextSpacingTrim,
 };
 use foundation::{AtomicString, CSSValueID, Member, Persistent};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use std::rc::Rc;
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@
 use crate::ownership::{InteractionDocument, ReadNode};
 use dom::{DOMBoundaryPoint, DOMNodeType};
 use interaction_default::core::editing::backspace_state_machine::PreviousBackwardDeletionOffset;
-use layoutng_assembly::layout_engine::LayoutOutput;
+use layout_assembly::layout_engine::LayoutOutput;
 
 #[derive(Clone, Copy)]
 pub struct PreparedEditingGeometry<'a> {

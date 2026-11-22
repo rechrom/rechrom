@@ -5,7 +5,7 @@
 //! Enum matches are typed and exhaustive; no enum ordinals or CSS text are read.
 use crate::production_css_value::{self as values, Value};
 use foundation::{CSSPropertyID as P, CSSValueID as V};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 pub fn KeywordValue(property: P, style: &ComputedStyle) -> Option<Rc<Value>> {
     let id = match property {

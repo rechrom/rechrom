@@ -6,7 +6,7 @@ mod tests {
     use crate::parser::css_parser_mode::CSSParserMode;
     use crate::{media_queries::MediaValuesCachedData, resolver::production_style_builder::Apply};
     use foundation::CSSPropertyID;
-    use layoutng_style::style::{
+    use layout_style::style::{
         computed_style::{ComputedStyle, ComputedStyleBuilder},
         computed_style_constants::{
             CompositingOperator, EFillBox, EFillMaskMode, EFillRepeat, EFillSizeType,

@@ -7,7 +7,7 @@ use foundation::{
     EPositionTryOrder, HeapVector, MakeGarbageCollected, Member, ScopedCSSName, ScopedCSSNameList,
     StyleNameScope, StyleNameScopeType,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::{PositionVisibility, TryTactic},
     position_area::{PositionArea, PositionAreaRegion as R},
     position_try_fallbacks::{kNoTryTactics, PositionTryFallback, PositionTryFallbacks},

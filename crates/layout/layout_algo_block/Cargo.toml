@@ -1,0 +1,32 @@
+[package]
+name = "layout_algo_block"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { path = "../../foundation" }
+font_engine = { path = "../../font_engine" }
+layout_assembly = { path = "../layout_assembly" }
+layout_geometry = { path = "../layout_geometry" }
+layout_style = { path = "../layout_style" }
+
+[dev-dependencies]
+paint = { path = "../../paint" }
+raster = { path = "../../raster" }
+
+[features]
+default = []
+# Matches //src/layoutng_block:inline_extension. The block-only C++ render
+# profile links the algorithm target but does not install inline support.
+inline_extension = ["layout_assembly/translation_in_progress"]
+block_only_host = []
+# The full browser supplies the replaced-content implementation separately.
+replaced_extension = []
+# Opt-in executable acceptance test while the host virtual dispatch is linked.
+constructed_fixture = ["block_only_host"]
+
+[lib]
+path = "src/lib.rs"
+
+# Pending Bazel dependencies: foundation APIs, font_engine, and the
+# layoutng_inline extension API when inline_extension is enabled.

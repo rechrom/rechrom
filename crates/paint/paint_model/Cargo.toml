@@ -7,7 +7,7 @@ edition = "2021"
 scroll_snap = { path = "../../compositor/scroll_snap" }
 foundation = { path = "../../foundation" }
 image_resource = { path = "../../image_resource" }
-layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layout_geometry = { path = "../../layout/layout_geometry" }
+layout_style = { path = "../../layout/layout_style" }
+layout_assembly = { path = "../../layout/layout_assembly" }
 serde_json = "1"

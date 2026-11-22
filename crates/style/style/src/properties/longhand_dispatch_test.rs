@@ -1,6 +1,6 @@
 use super::longhand_dispatch::*;
 use foundation::{CSSPropertyID, CSSValueID, EPosition, EVisibility};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
 fn apply_declarations(
     builder: &mut ComputedStyleBuilder,
@@ -28,7 +28,7 @@ fn apply_declarations(
 
 #[test]
 fn typed_alignment_values_set_computed_style_content_self_and_legacy_data() {
-    use layoutng_style::style::computed_style_constants::*;
+    use layout_style::style::computed_style_constants::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder = ComputedStyleBuilder::from_style(initial);
@@ -93,7 +93,7 @@ fn typed_alignment_values_set_computed_style_content_self_and_legacy_data() {
 
 #[test]
 fn place_shorthands_preserve_baseline_and_overflow_computed_style_semantics() {
-    use layoutng_style::style::computed_style_constants::*;
+    use layout_style::style::computed_style_constants::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder = ComputedStyleBuilder::from_style(initial);
@@ -149,8 +149,8 @@ fn place_shorthands_preserve_baseline_and_overflow_computed_style_semantics() {
 #[test]
 fn wrapping_and_flex_flow_shorthands_apply_computed_style_values_and_reset_omitted_longhands() {
     use foundation::{TextWrapMode, TextWrapStyle};
-    use layoutng_style::css::white_space::WhiteSpaceCollapse;
-    use layoutng_style::style::computed_style_constants::*;
+    use layout_style::css::white_space::WhiteSpaceCollapse;
+    use layout_style::style::computed_style_constants::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder = ComputedStyleBuilder::from_style(initial);
@@ -273,8 +273,8 @@ fn flex_basis_inherits_computed_style_length_and_requires_cross_zoom_capability(
 
 #[test]
 fn animation_and_transition_lists_have_computed_style_storage_and_copy_on_write() {
-    use layoutng_style::style::computed_style_constants::EAnimPlayState;
-    use layoutng_style::style::css_timing_data::*;
+    use layout_style::style::computed_style_constants::EAnimPlayState;
+    use layout_style::style::css_timing_data::*;
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut parent = ComputedStyleBuilder::from_style(initial);

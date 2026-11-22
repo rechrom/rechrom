@@ -35,7 +35,7 @@ pub type PropertyValue = crate::css_property_value::CSSPropertyValue<ProductionC
 pub enum Unavailable {}
 
 // The parsed and computed style computed image values share one typed URL owner.
-pub use layoutng_style::css::css_url_data::{CSSUrlData, ProductionURL};
+pub use layout_style::css::css_url_data::{CSSUrlData, ProductionURL};
 
 // cpp: core/css/css_cursor_image_value.h:38-62; .cc:39-73.
 #[derive(Clone)]
@@ -2165,7 +2165,7 @@ pub struct CSSGridIntegerRepeatValue {
 impl CSSGridIntegerRepeatValue {
     pub fn ClampRepetitions(&self, repetitions: u32) -> u32 {
         repetitions
-            .min(layoutng_style::style::grid_area::K_GRID_MAX_TRACKS as u32)
+            .min(layout_style::style::grid_area::K_GRID_MAX_TRACKS as u32)
             .min(self.extra_clamp)
     }
 }

@@ -260,7 +260,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
     fn DragLayout(
         &self,
         node: u64,
-    ) -> Option<layoutng_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
+    ) -> Option<layout_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
         let (frame, runtime, _) = self.Owners().ok()?;
         frame.EnsureFocusLayout(&runtime);
         let result = runtime.layout.borrow().MouseCoordinateLayout(node);

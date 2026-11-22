@@ -702,10 +702,10 @@ fn image_notification_does_not_hide_simultaneous_dom_invalidation() {
 fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
     crate::test_thread::run(|| {
         fn find(
-            root: &layoutng_assembly::fragment_tree::FragmentPaintData,
+            root: &layout_assembly::fragment_tree::FragmentPaintData,
             id: u64,
-        ) -> Option<&layoutng_assembly::fragment_tree::FragmentPaintData> {
-            if layoutng_assembly::fragment_tree::ResidentBoxGeometry::ViewNodeId(root) == id {
+        ) -> Option<&layout_assembly::fragment_tree::FragmentPaintData> {
+            if layout_assembly::fragment_tree::ResidentBoxGeometry::ViewNodeId(root) == id {
                 return Some(root);
             }
             root.children.iter().find_map(|child| find(child, id))
@@ -730,7 +730,7 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
             &mut owner,
             &mut cs,
             "test:photo".into(),
-            layoutng_assembly::internal::layout_input::PaintImage {
+            layout_assembly::internal::layout_input::PaintImage {
                 id: 9,
                 revision: 1,
                 width: 128,

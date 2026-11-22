@@ -1,6 +1,6 @@
-use layoutng_assembly::fragment_tree::PaintResources;
-use layoutng_assembly::internal::layout_input::{Offset, Size};
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::fragment_tree::PaintResources;
+use layout_assembly::internal::layout_input::{Offset, Size};
+use layout_assembly::internal::paint_input::{
     BackgroundRepeatRule, InterpolationQuality, PaintCornerRadii, PaintMaskComposite,
     PaintMaskMode, PaintShader,
 };
@@ -61,7 +61,7 @@ impl Default for DisplayMaskLayer {
 }
 
 pub fn ResolveDocumentImageContainerKey(
-    image: &layoutng_assembly::internal::layout_input::PaintImage,
+    image: &layout_assembly::internal::layout_input::PaintImage,
     target_size: Size,
     effective_zoom: f64,
     resources: Option<&PaintResources>,

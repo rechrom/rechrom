@@ -15,13 +15,13 @@ style_diff = { path = "../style_diff" }
 style_commit = { path = "../style_commit" }
 browser_tracing = { path = "../../tracing" }
 foundation = { path = "../../foundation" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
-paint_input_types = { path = "../../layoutng/paint_input_types" }
+layout_style = { path = "../../layout/layout_style" }
+paint_input_types = { path = "../../layout/paint_input_types" }
 font_engine = { path = "../../font_engine" }
 
 dom = { path = "../../dom" }
 cssom = { path = "../../cssom" }
-layoutng = { package = "layoutng_assembly", path = "../../layoutng/layoutng_assembly" }
+layout_core = { package = "layout_assembly", path = "../../layout/layout_assembly" }
 url = "2"
 
 [dev-dependencies]

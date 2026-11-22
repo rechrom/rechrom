@@ -1,0 +1,20 @@
+[package]
+name = "layout_style"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+foundation = { path = "../../foundation" }
+font_engine = { path = "../../font_engine" }
+image_resource = { path = "../../image_resource" }
+layout_geometry = { path = "../layout_geometry" }
+
+[lib]
+path = "src/lib.rs"
+
+# Pending Bazel dependencies: remaining font_engine:api and engine interfaces;
+# foundation APIs:
+# blink_base_rendering_headers, blink_geometry_api, core_export,
+# gfx_geometry_api, graphics_types_api, style_values_api, text_values_api,
+# blink_base, blink_geometry, gfx_geometry, graphics_types, style_values,
+# text_values.

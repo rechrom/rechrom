@@ -1,0 +1,17 @@
+[package]
+name = "paint_input_types"
+version = "0.0.1"
+edition = "2021"
+
+# Plain retained paint values shared by Layout (producer), Paint, Raster,
+# Compositor and Style. Only lower value crates may be named here: never
+# layout_core, layout_assembly or a layout_* package.
+[dependencies]
+canvas = { path = "../../canvas" }
+foundation = { path = "../../foundation" }
+font_engine = { path = "../../font_engine" }
+image_resource = { path = "../../image_resource" }
+layout_style = { path = "../layout_style" }
+
+[lib]
+path = "src/lib.rs"

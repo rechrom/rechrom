@@ -32,8 +32,8 @@ fn ApplyContent(
     media: &MediaValuesCachedData,
     images: Option<&dyn URLImageResolver>,
 ) -> Result {
-    use layoutng_style::style::computed_style_constants::QuoteType;
-    use layoutng_style::style::content_data::{
+    use layout_style::style::computed_style_constants::QuoteType;
+    use layout_style::style::content_data::{
         AltCounterContentData, AltTextContentData, ContentData, CounterContentData, CounterData,
         ImageContentData, NoneContentData, QuoteContentData, TextContentData,
     };
@@ -175,7 +175,7 @@ fn ApplyContent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layoutng_style::style::content_data::ImageContentData;
+    use layout_style::style::content_data::ImageContentData;
     fn value(css: &str) -> std::rc::Rc<Value> {
         crate::parser::production_property_parser::ParseProperty(
             CSSPropertyID::kContent,

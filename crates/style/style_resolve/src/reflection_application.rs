@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member};
-use layoutng_style::{
+use layout_style::{
     css::css_reflection_direction::CSSReflectionDirection as D,
     style::{nine_piece_image::NinePieceImage, style_reflection::StyleReflection},
 };

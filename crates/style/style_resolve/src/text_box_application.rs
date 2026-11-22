@@ -4,7 +4,7 @@
 use super::*;
 use font_engine::fonts::shaping::text_spacing_trim::TextSpacingTrim;
 use foundation::{ETextAutospace, ETextBoxTrim};
-use layoutng_style::style::{
+use layout_style::style::{
     text_box_edge::{TextBoxEdge, TextBoxEdgeType as Edge},
     text_decoration_inset::TextDecorationInset,
     text_fit::{TextFit, TextFitTarget, TextFitType},

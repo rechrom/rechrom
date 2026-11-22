@@ -8,7 +8,7 @@ use crate::css_selector::{
 };
 use crate::selector_checker::SelectorCheckerBackend;
 use foundation::AtomicString;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::rc::Rc;
 
 pub struct EasySelectorChecker;

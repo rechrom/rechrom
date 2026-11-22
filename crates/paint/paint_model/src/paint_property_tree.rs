@@ -13,11 +13,11 @@ use std::sync::{Arc, OnceLock};
 use crate::paint_clip_path::PaintClipPath;
 use crate::property_filter_operations::PropertyFilterOperations;
 use crate::PaintRect;
-use layoutng_assembly::fragment_tree::StickyPositionPaintData;
-pub use layoutng_assembly::internal::layout_input::OverscrollBehavior as LayoutOverscrollBehavior;
-use layoutng_assembly::internal::layout_input::{Offset, TransformMatrix};
-pub use layoutng_assembly::internal::paint_input::PaintBlendMode;
-use layoutng_assembly::internal::paint_input::PaintCornerRadii;
+use layout_assembly::fragment_tree::StickyPositionPaintData;
+pub use layout_assembly::internal::layout_input::OverscrollBehavior as LayoutOverscrollBehavior;
+use layout_assembly::internal::layout_input::{Offset, TransformMatrix};
+pub use layout_assembly::internal::paint_input::PaintBlendMode;
+use layout_assembly::internal::paint_input::PaintCornerRadii;
 
 /// Source: paint_property_node.h. Ordinary retained updates use the source's
 /// non-running-animation default; explicit effect comparisons can preserve the
@@ -1449,7 +1449,7 @@ pub struct ScrollCompositorState {
     pub max_scroll_offset_affected_by_page_scale: bool,
     pub composited_scrolling_preference: PaintCompositedScrollingPreference,
     pub main_thread_repaint_reasons: u8,
-    pub overscroll_behavior: [layoutng_assembly::internal::layout_input::OverscrollBehavior; 2],
+    pub overscroll_behavior: [layout_assembly::internal::layout_input::OverscrollBehavior; 2],
     pub scrolling_contents_cull_rect: PaintRect,
     /// The producer queried scroll-snap state and proved that no source
     /// SnapContainerData exists. False means a non-none snap payload is still
@@ -6041,7 +6041,7 @@ mod retained_scroll_update_tests {
             .is_none());
         let constraint = StickyPositionPaintData {
             owner_client_id: 42,
-            vertical: Some(layoutng_assembly::fragment_tree::StickyAxisPaintData {
+            vertical: Some(layout_assembly::fragment_tree::StickyAxisPaintData {
                 scroll_container_client_id: 42,
                 min_inset: Some(0.0),
                 ..Default::default()

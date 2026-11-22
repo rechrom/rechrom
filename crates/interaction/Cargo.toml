@@ -10,7 +10,7 @@ paint = { path = "../paint" }
 # OffsetMapping, and PhysicalBoxFragment editing queries.  Those source-owned
 # reciprocal modules are assembled behind LayoutNG's translation feature; the
 # Interaction facade must select the same production assembly as Browser.
-layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
+layout_assembly = { path = "../layout/layout_assembly", features = ["translation_in_progress"] }
 foundation = { path = "../foundation" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
@@ -19,7 +19,7 @@ interaction_dispatch = { path = "interaction_dispatch" }
 interaction_hit_test = { path = "interaction_hit_test" }
 interaction_input = { path = "interaction_input" }
 interaction_scroll = { path = "interaction_scroll" }
-layoutng_style = { path = "../layoutng/layoutng_style" }
+layout_style = { path = "../layout/layout_style" }
 image_resource = { path = "../image_resource" }
 font_engine = { path = "../font_engine" }
 

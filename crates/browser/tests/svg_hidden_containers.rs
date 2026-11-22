@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::FragmentPaintData,
     internal::{
         layout_input::FontFace, layout_object::LayoutObject,
@@ -176,12 +176,12 @@ fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
             (
                 "defs",
                 false,
-                layoutng_assembly::internal::layout_input::NodeKind::kSvgHiddenContainer,
+                layout_assembly::internal::layout_input::NodeKind::kSvgHiddenContainer,
             ),
             (
                 "clip",
                 true,
-                layoutng_assembly::internal::layout_input::NodeKind::kSvgResourceClipper,
+                layout_assembly::internal::layout_input::NodeKind::kSvgResourceClipper,
             ),
         ] {
             let object = native(&page, name);

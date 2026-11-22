@@ -22,7 +22,7 @@ use paint_input_types::{
         SvgPatternImage, SvgPatternReferenceFilter, SvgPatternText,
     },
 };
-use layoutng_style::style::{computed_style::ComputedStyle, svg_paint::SVGPaintType};
+use layout_style::style::{computed_style::ComputedStyle, svg_paint::SVGPaintType};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -744,7 +744,7 @@ fn PatternComputedStyle(style: &ResolvedNodeStyle) -> Result<&ComputedStyle, Pat
 fn PatternPaint(
     style: &ResolvedNodeStyle,
 ) -> Result<paint_input_types::paint_input::PaintStyleData, PatternContentError> {
-    Ok(layoutng::internal::boundary::paint_style_export::Export(
+    Ok(layout_core::internal::boundary::paint_style_export::Export(
         PatternComputedStyle(style)?,
         None,
     ))
@@ -847,7 +847,7 @@ fn PatternMask(
     // layout-style projection intentionally omits effect/stroke/mask fields.
     let canonical = Style(document, pending, node)
         .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
-        .map(|style| layoutng::internal::boundary::paint_style_export::Export(style, None));
+        .map(|style| layout_core::internal::boundary::paint_style_export::Export(style, None));
     let paint = canonical.as_ref().unwrap_or(paint);
     if paint.mask_images.is_empty() {
         return Ok(None);
@@ -1025,7 +1025,7 @@ fn PatternPrimitivesWithShapes(
             // silently change fill/stroke/currentColor.
             let use_computed = PatternComputedStyle(use_style)?;
             let target_computed = PatternComputedStyle(target_style)?;
-            if layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
+            if layout_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
                 use_computed,
                 target_computed,
             ) != 0
@@ -1144,7 +1144,7 @@ fn PatternPrimitivesWithShapes(
                 match computed_style.FillPaint().paint_type {
                     SVGPaintType::kContextFill => {
                         fill_is_context = true;
-                        fill = layoutng::internal::boundary::paint_style_export::SvgColor(
+                        fill = layout_core::internal::boundary::paint_style_export::SvgColor(
                             computed_style,
                             context.style.FillPaint(),
                             context.style.InternalVisitedFillPaint(),
@@ -1161,7 +1161,7 @@ fn PatternPrimitivesWithShapes(
                     }
                     SVGPaintType::kContextStroke => {
                         fill_is_context = true;
-                        fill = layoutng::internal::boundary::paint_style_export::SvgColor(
+                        fill = layout_core::internal::boundary::paint_style_export::SvgColor(
                             computed_style,
                             context.style.StrokePaint(),
                             context.style.InternalVisitedStrokePaint(),
@@ -1181,7 +1181,7 @@ fn PatternPrimitivesWithShapes(
                 match computed_style.StrokePaint().paint_type {
                     SVGPaintType::kContextFill => {
                         stroke_is_context = true;
-                        stroke = layoutng::internal::boundary::paint_style_export::SvgColor(
+                        stroke = layout_core::internal::boundary::paint_style_export::SvgColor(
                             computed_style,
                             context.style.FillPaint(),
                             context.style.InternalVisitedFillPaint(),
@@ -1198,7 +1198,7 @@ fn PatternPrimitivesWithShapes(
                     }
                     SVGPaintType::kContextStroke => {
                         stroke_is_context = true;
-                        stroke = layoutng::internal::boundary::paint_style_export::SvgColor(
+                        stroke = layout_core::internal::boundary::paint_style_export::SvgColor(
                             computed_style,
                             context.style.StrokePaint(),
                             context.style.InternalVisitedStrokePaint(),
@@ -1974,7 +1974,7 @@ pub(crate) fn ResolveContextPaintServer(
     document: &Document,
     pending: &PendingStyles<'_>,
     context: &SVGContextPaint<'_>,
-    paint: &layoutng_style::style::svg_paint::SVGPaint,
+    paint: &layout_style::style::svg_paint::SVGPaint,
     opacity: f32,
     resolving: &mut HashSet<usize>,
 ) -> Option<PaintShader> {
@@ -2335,7 +2335,7 @@ pub(crate) fn ResolveMaskDefinition(
                 return Err("mask content without its own layout box".into());
             }
             let paint =
-                layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
+                layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
             let paint = &paint;
             if matches!(
                 computed_style.FillPaint().paint_type,
@@ -2346,7 +2346,7 @@ pub(crate) fn ResolveMaskDefinition(
             ) {
                 return Err("context mask paint".into());
             }
-            if paint.svg_non_scaling_stroke || computed_style.PaintOrder()!=layoutng_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
+            if paint.svg_non_scaling_stroke || computed_style.PaintOrder()!=layout_style::style::computed_style_constants::EPaintOrder::kPaintOrderNormal || element.FindAttribute("pathLength").is_some() {return Err("mask non-scaling stroke, paint order or pathLength".into());}
             if !computed_style.StrokeWidth().length().IsFixed()
                 || !computed_style.StrokeDashOffset().IsFixed()
                 || unsafe { computed_style.StrokeDashArray().as_ref() }

@@ -30,7 +30,7 @@ use crate::{
 use foundation::{
     AtomicString, CSSValueID, IsHorizontalWritingMode, String, WritingDirectionMode, WritingMode,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::ComputedStyle,
     computed_style_constants::TryTactic,
     position_area::{PositionArea, PositionAreaRegion},

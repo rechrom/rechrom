@@ -39,7 +39,7 @@ pub enum MouseSelectionGeometryQuery {
         target: u64,
         hit: EditingPositionWithAffinity,
         local_point: foundation::PhysicalOffset,
-        options: layoutng_assembly::EditingPositionOptions,
+        options: layout_assembly::EditingPositionOptions,
     },
     ParentAnchored(EditingPositionWithAffinity),
     FirstInNode(u64),
@@ -168,7 +168,7 @@ pub fn CaretSelectionForContentsHit(
     target: u64,
     hit: Option<interaction_hit_test::core::layout::hit_test_result::HitTestPositionData>,
     local_point: foundation::PhysicalOffset,
-    options: layoutng_assembly::EditingPositionOptions,
+    options: layout_assembly::EditingPositionOptions,
     locale: &std::ffi::CStr,
 ) -> Option<DOMSelection> {
     use interaction_hit_test::core::layout::hit_test_result::{
@@ -248,7 +248,7 @@ impl interaction_default::core::editing::bidi_adjustment::BidiAdjustmentContext
         b: &PositionWithAffinity<u64>,
     ) -> interaction_default::core::editing::bidi_adjustment::BidiRangeAdjustment<u64> {
         use interaction_default::core::editing::bidi_adjustment::BidiRangeAdjustment as R;
-        use layoutng_assembly::layout_engine::EditingBidiRangeAdjustment as N;
+        use layout_assembly::layout_engine::EditingBidiRangeAdjustment as N;
         let dom = |p: &PositionWithAffinity<u64>| {
             NativePosition(
                 &position_conversion::ToPositionInDOMTree(&self.Dom(), self, &p.position),
@@ -261,7 +261,7 @@ impl interaction_default::core::editing::bidi_adjustment::BidiAdjustmentContext
         let native = self.layout.unwrap().AdjustBidiRange(
             &a,
             &b,
-            layoutng_assembly::EditingPositionOptions {
+            layout_assembly::EditingPositionOptions {
                 bidi_caret_affinity: self.BidiCaretAffinityEnabled(),
                 ..Default::default()
             },
@@ -288,7 +288,7 @@ struct MouseSelectionHit {
     target: u64,
     position: PositionWithAffinity<u64>,
     local_point: foundation::PhysicalOffset,
-    options: layoutng_assembly::EditingPositionOptions,
+    options: layout_assembly::EditingPositionOptions,
 }
 impl
     interaction_default::core::editing::selection_hit_test::SelectionHitTestContext<

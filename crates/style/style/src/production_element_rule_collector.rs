@@ -33,7 +33,7 @@ use crate::{
 };
 use dom::Document;
 use foundation::{AtomicString, CSSPropertyID};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

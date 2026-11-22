@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{MakeGarbageCollected, Member};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::BasicShape, computed_style_constants::GeometryBox,
     style_border_shape::StyleBorderShape, superellipse::Superellipse,
 };

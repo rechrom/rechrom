@@ -16,7 +16,7 @@ struct FrameSelectionOwners {
 impl ResidentFrameSelectionHost {
     fn SerializeEditingRange(
         &self,
-        selection: layoutng_assembly::editing_state::DOMSelection,
+        selection: layout_assembly::editing_state::DOMSelection,
         options: interaction::default::core::editing::serializers::styled_markup_accumulator::CreateMarkupOptions,
         constraining_ancestor: Option<u64>,
     ) -> Result<Vec<u16>, interaction::default::core::editing::serializers::styled_markup_serializer::SerializationError>{
@@ -241,7 +241,7 @@ impl FrameSelectionOwners {
             .as_ref()
             .map_or(&self.page.document, |(_, runtime)| &runtime.document)
     }
-    fn Layout(&self) -> &RefCell<layoutng_assembly::layout_engine::LayoutEngine> {
+    fn Layout(&self) -> &RefCell<layout_assembly::layout_engine::LayoutEngine> {
         self.child
             .as_ref()
             .map_or(&self.page.layout_engine, |(_, runtime)| &runtime.layout)
@@ -251,7 +251,7 @@ impl FrameSelectionOwners {
             .as_ref()
             .map_or(&self.page.style_engine, |(_, runtime)| &runtime.style)
     }
-    fn Editing(&self) -> &Rc<layoutng_assembly::editing_state::LayoutEditingState> {
+    fn Editing(&self) -> &Rc<layout_assembly::editing_state::LayoutEditingState> {
         self.child
             .as_ref()
             .map_or(&self.page.layout_editing, |(_, runtime)| &runtime.editing)
@@ -270,7 +270,7 @@ impl FrameSelectionOwners {
             self.page.EnsureLayoutOutputForNode(node);
         }
     }
-    fn CurrentSelection(&self) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    fn CurrentSelection(&self) -> Option<layout_assembly::editing_state::DOMSelection> {
         let owner = self.Document().borrow();
         interaction::adapter::page_frame_selection::CurrentDOMSelectionForFocus(
             owner.GetDocument(),
@@ -279,7 +279,7 @@ impl FrameSelectionOwners {
     }
     fn CaretBounds(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
         extent: interaction::default::core::editing::frame_selection::RevealExtentOption,
     ) -> foundation::gfx::Rect {
         self.EnsureLayoutOutput();
@@ -299,7 +299,7 @@ impl FrameSelectionOwners {
     }
     fn ApplyNativeScrollResult(
         &self,
-        result: layoutng_assembly::native_scroll_source::NativeScrollResult,
+        result: layout_assembly::native_scroll_source::NativeScrollResult,
     ) {
         if let Some((frame, runtime)) = &self.child {
             frame.ApplyNativeScrollResult(runtime, result);
@@ -507,7 +507,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
     fn SuppressScrollAnchoringForNode(
         &self,
         node: Option<u64>,
-    ) -> layoutng_assembly::layout_engine::SuppressScrollAnchorScope {
+    ) -> layout_assembly::layout_engine::SuppressScrollAnchorScope {
         let owners = self.Owners().expect("live editing frame");
         let scope = owners
             .Layout()
@@ -521,7 +521,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
     ) -> Rc<dyn interaction::adapter::page_markup_sanitization::MarkupSanitizationHost> {
         Rc::new(crate::markup_sanitization::BrowserMarkupSanitizationHost)
     }
-    fn SelectedHtmlForClipboard(&self,selection:layoutng_assembly::editing_state::DOMSelection)->Result<Vec<u16>,interaction::default::core::editing::serializers::styled_markup_serializer::SerializationError>{
+    fn SelectedHtmlForClipboard(&self,selection:layout_assembly::editing_state::DOMSelection)->Result<Vec<u16>,interaction::default::core::editing::serializers::styled_markup_serializer::SerializationError>{
         use interaction::default::core::editing::serializers::{
             markup_formatter::ResolveUrls, styled_markup_accumulator::CreateMarkupOptions,
         };
@@ -537,7 +537,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
             None,
         )
     }
-    fn SerializeParagraphForMove(&self, selection: layoutng_assembly::editing_state::DOMSelection, constraining_ancestor: Option<u64>) -> Result<Vec<u16>, interaction::default::core::editing::serializers::styled_markup_serializer::SerializationError>{
+    fn SerializeParagraphForMove(&self, selection: layout_assembly::editing_state::DOMSelection, constraining_ancestor: Option<u64>) -> Result<Vec<u16>, interaction::default::core::editing::serializers::styled_markup_serializer::SerializationError>{
         self.SerializeEditingRange(selection, interaction::default::core::editing::serializers::styled_markup_accumulator::CreateMarkupOptions { convert_blocks_to_inlines: true, ..Default::default() }, constraining_ancestor)
     }
     fn ReadPrimarySelection(
@@ -711,7 +711,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn EnclosingTextControlIsOutsideShadowTree(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
     ) -> bool {
         let Some(state) = self.Owners() else {
             return false;
@@ -755,7 +755,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
     fn CaretSelectionForContentsPoint(
         &self,
         point: (i32, i32),
-    ) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    ) -> Option<layout_assembly::editing_state::DOMSelection> {
         use interaction::hit_test::core::layout::{
             hit_test_location::HitTestLocation, hit_test_request::RequestType,
         };
@@ -795,7 +795,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
             target,
             position,
             *hit.result.LocalPoint(),
-            layoutng_assembly::EditingPositionOptions {
+            layout_assembly::EditingPositionOptions {
                 move_caret_to_horizontal_boundary_when_past_top_or_bottom: settings
                     .editing_behavior
                     .ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(),
@@ -813,7 +813,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn ComputeVisibleSelectionRootEditableElementDeprecated(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
     ) -> Option<u64> {
         let state = self.Owners()?;
         let forced = {
@@ -847,8 +847,8 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn CreateVisibleSelection(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
-    ) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
+    ) -> Option<layout_assembly::editing_state::DOMSelection> {
         let state = self.Owners()?;
         state.EnsureLayoutOutput();
         let layout = state.Layout().borrow();
@@ -863,7 +863,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn VisibleSelectionRootEditableElement(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
     ) -> Option<u64> {
         let state = self.Owners()?;
         state.EnsureLayoutOutput();
@@ -879,7 +879,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn VisibleSelectionStartAnchor(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
     ) -> Option<u64> {
         let state = self.Owners()?;
         let owner = state.Document().borrow();
@@ -892,7 +892,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
     fn SelectionAtFirstPositionInOrBeforeNode(
         &self,
         node_id: u64,
-    ) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    ) -> Option<layout_assembly::editing_state::DOMSelection> {
         let state = self.Owners()?;
         let owner = state.Document().borrow();
         interaction::adapter::page_focus_controller::SelectionAtFirstPositionInOrBeforeNodeForFocus(
@@ -959,7 +959,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
 
     fn AbsoluteCaretBoundsOfVisibleFocus(
         &self,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
     ) -> foundation::gfx::Rect {
         let Some(state) = self.Owners() else {
             return Default::default();
@@ -994,7 +994,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
         alignment: interaction::default::core::editing::frame_selection::SelectionAlignment,
     ) {
         use interaction::default::core::editing::frame_selection::SelectionAlignment as A;
-        use layoutng_assembly::native_scroll_source::{
+        use layout_assembly::native_scroll_source::{
             ScrollAlignment, ScrollAlignmentBehavior, ScrollIntoViewParams,
         };
         let Some(state) = self.Owners() else {
@@ -1014,7 +1014,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
             let mut layout = state.Layout().borrow_mut();
             layout.NativeScrollSource(node_id).map(|mut source| {
                 source.ScrollRectToVisible(
-                    layoutng_assembly::layout_engine::LayoutRect {
+                    layout_assembly::layout_engine::LayoutRect {
                         x: rect.x() as f64,
                         y: rect.y() as f64,
                         width: rect.width() as f64,

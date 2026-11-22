@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, String};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{
     media_queries::{MediaValuesCachedData, PreferredColorScheme},
     parser::{
@@ -242,7 +242,7 @@ fn invalid_stable_ui_grammar_and_unavailable_color_contexts_remain_typed() {
         )
         .unwrap();
         let mut wide_builder =
-            layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+            layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         style::resolver::production_style_builder::Apply(
             id,
             &mut wide_builder,
@@ -260,7 +260,7 @@ fn invalid_stable_ui_grammar_and_unavailable_color_contexts_remain_typed() {
         )
         .unwrap();
         let mut builder =
-            layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+            layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         assert!(
             matches!(style::resolver::production_style_builder::Apply(id,&mut builder,None,value[0].Value(),16.0,&MediaValuesCachedData::default()),Err(style::properties::longhand_dispatch::LonghandApplicationError::Unsupported(p)) if p==id)
         );

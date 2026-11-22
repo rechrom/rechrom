@@ -4,7 +4,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::{FragmentPaintData, ResidentBoxGeometry as _},
     internal::layout_input::{FontFace, Offset},
 };
@@ -98,7 +98,7 @@ fn find_fragment<'a>(
         .find_map(|child| find_fragment(child, absolute, predicate))
 }
 
-fn item(page: &Page, name: &str) -> (Offset, layoutng_assembly::internal::layout_input::Size) {
+fn item(page: &Page, name: &str) -> (Offset, layout_assembly::internal::layout_input::Size) {
     let owner = page.Document();
     let doc = owner.GetDocument();
     let index = (0..doc.NodeCount())

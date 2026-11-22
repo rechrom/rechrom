@@ -4,7 +4,7 @@
 use super::*;
 use crate::production_css_value::ListSeparator;
 use foundation::{AtomicString, MakeGarbageCollected, Member, ScopedCSSName};
-use layoutng_style::style::css_timing_data::{CompositeOperation, StyleTimeline};
+use layout_style::style::css_timing_data::{CompositeOperation, StyleTimeline};
 
 pub(super) fn IsAnimationProperty(id: CSSPropertyID) -> bool {
     matches!(
@@ -125,8 +125,8 @@ mod tests {
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseDeclarationList, ParseProperty, PropertyParseErrorKind},
     };
-    use layoutng_style::style::computed_style_constants::{TimelineAxis, TimelineScroller};
-    use layoutng_style::style::css_timing_data::{
+    use layout_style::style::computed_style_constants::{TimelineAxis, TimelineScroller};
+    use layout_style::style::css_timing_data::{
         CSSAnimationData, TimelineNamedRange, TimelineOffset,
     };
     fn initial() -> &'static ComputedStyle {

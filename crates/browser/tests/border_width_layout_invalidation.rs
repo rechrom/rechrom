@@ -5,7 +5,7 @@
 mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::{FragmentPaintData, LayoutResultHandle},
     internal::layout_input::{FontFace, Size},
     layout_engine::PaintFragmentCursor,

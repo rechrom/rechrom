@@ -2,7 +2,7 @@
 //! PositionArea keyword classification and span conversion from Chromium source.
 #![allow(non_snake_case)]
 use foundation::CSSValueID;
-use layoutng_style::style::position_area::PositionAreaRegion as R;
+use layout_style::style::position_area::PositionAreaRegion as R;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     General,

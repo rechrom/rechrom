@@ -625,7 +625,7 @@ impl interaction_default::core::editing::commands::undo_step::UndoStepContext<Im
                         document.FindNodeById(node).is_some_and(|node| {
                             document.IsConnectedToDocument(node)
                                 && (position.anchor
-                                    != layoutng_assembly::EditingPositionAnchorType::OffsetInAnchor
+                                    != layout_assembly::EditingPositionAnchorType::OffsetInAnchor
                                     || position.offset <= document.LastOffsetForEditing(node))
                         })
                     })

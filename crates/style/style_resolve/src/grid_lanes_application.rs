@@ -3,7 +3,7 @@
 //! Public production entry is hidden by the CSSGridLanesLayout stable default.
 #![allow(non_snake_case)]
 use super::*;
-use layoutng_style::style::grid_lanes_direction::GridLanesDirection;
+use layout_style::style::grid_lanes_direction::GridLanesDirection;
 fn Direction(
     id: CSSPropertyID,
     v: &Value,
@@ -64,7 +64,7 @@ mod tests {
         production_property_parser::{ParseDeclarationList, ParseProperty},
     };
     use foundation::{RuleBreak, RuleVisibilityItems};
-    use layoutng_style::style::grid_lanes_direction::GridLanesOrientation;
+    use layout_style::style::grid_lanes_direction::GridLanesOrientation;
     fn initial() -> &'static ComputedStyle {
         unsafe { &*ComputedStyle::GetInitialStyleSingleton() }
     }

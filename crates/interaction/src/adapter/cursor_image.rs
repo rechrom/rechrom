@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 use crate::core::input::event_handler_cursor as source;
 use image_resource::{DocumentImageBitmapRequest, ImmutableImageBitmap};
-use layoutng_style::style::{
+use layout_style::style::{
     cursor_data::CursorData, forward::ImageResourceContent, style_image::StyleImage,
 };
 use std::{rc::Rc, sync::Arc};

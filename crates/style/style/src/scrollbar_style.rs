@@ -6,7 +6,7 @@
 //! owner or callback crosses into Style.
 #![allow(non_snake_case, non_upper_case_globals)]
 
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 
 /// Checked scalar projection of core/scroll/scroll_types.h ScrollbarPart.
 /// Combined masks are not individual style targets.

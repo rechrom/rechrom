@@ -6,7 +6,7 @@ use foundation::{
     gfx::{PointF, RectF},
     FloatValueForLength, WindRule,
 };
-use layoutng_style::style::{basic_shapes::*, style_path::StylePath};
+use layout_style::style::{basic_shapes::*, style_path::StylePath};
 
 pub use foundation::svg_path_byte_stream::{
     BuildSvgByteStream, NativePathSink as BasicShapePathSink,
@@ -229,7 +229,7 @@ pub fn BuildBasicShapePath(
         ShapeType::kStyleShapeType => {
             let shape = unsafe {
                 &*(shape as *const dyn BasicShape
-                    as *const layoutng_style::style::style_shape::StyleShape)
+                    as *const layout_style::style::style_shape::StyleShape)
             };
             crate::style_shape_path::BuildStyleShapePath(shape, rect, scale, sink);
         }

@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, EDisplay};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{
     document_style_engine::DocumentStyleError, media_queries::MediaValuesCachedData, StyleEngine,
 };

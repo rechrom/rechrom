@@ -14,7 +14,7 @@ use crate::svg_filter_geometry::{
 };
 use crate::PaintRect;
 use foundation::gfx::{Point, Rect, Size};
-use layoutng_assembly::internal::{
+use layout_assembly::internal::{
     layout_input::Offset,
     layout_input_types::Color,
     paint_input::{
@@ -413,7 +413,7 @@ impl PropertyFilterOperations {
     /// stays reachable through its typed blocker as well.
     pub fn reflection_mask_layers(
         &self,
-    ) -> &[layoutng_assembly::internal::paint_input::PaintReflectionMaskLayer] {
+    ) -> &[layout_assembly::internal::paint_input::PaintReflectionMaskLayer] {
         match self {
             Self::Ready { operations, .. } => {
                 for operation in operations.operations() {
@@ -669,8 +669,8 @@ impl PaintFilter for ReflectionPaintFilter {
         let bottom = top + rect.height() as f64;
         let vertical = matches!(
             self.operation.reflection_direction,
-            layoutng_assembly::internal::paint_input::PaintReflectionDirection::kAbove
-                | layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow
+            layout_assembly::internal::paint_input::PaintReflectionDirection::kAbove
+                | layout_assembly::internal::paint_input::PaintReflectionDirection::kBelow
         );
         let offset = ctm.map_or(self.operation.reflection_offset, |transform| {
             let mapped = if vertical {
@@ -682,12 +682,12 @@ impl PaintFilter for ReflectionPaintFilter {
         });
         let (reflected_left, reflected_top, reflected_right, reflected_bottom) =
             match self.operation.reflection_direction {
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kAbove
-                | layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow => {
+                layout_assembly::internal::paint_input::PaintReflectionDirection::kAbove
+                | layout_assembly::internal::paint_input::PaintReflectionDirection::kBelow => {
                     (left, offset - bottom, right, offset - top)
                 }
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kLeft
-                | layoutng_assembly::internal::paint_input::PaintReflectionDirection::kRight => {
+                layout_assembly::internal::paint_input::PaintReflectionDirection::kLeft
+                | layout_assembly::internal::paint_input::PaintReflectionDirection::kRight => {
                     (offset - right, top, offset - left, bottom)
                 }
             };
@@ -800,13 +800,13 @@ mod tests {
                 primitive_units: SvgFilterUnits::kUserSpaceOnUse,
                 region,
                 primitives: vec![
-                    layoutng_assembly::internal::paint_input::SvgFilterPrimitive {
-                        input: layoutng_assembly::internal::paint_input::SvgFilterInput::kSourceGraphic,
+                    layout_assembly::internal::paint_input::SvgFilterPrimitive {
+                        input: layout_assembly::internal::paint_input::SvgFilterInput::kSourceGraphic,
                         result: String::new(),
                         region: SvgFilterRegion::default(),
                         linear_rgb: false,
                         origin_tainted: false,
-                        kind: layoutng_assembly::internal::paint_input::SvgFilterPrimitiveKind::kOffset {
+                        kind: layout_assembly::internal::paint_input::SvgFilterPrimitiveKind::kOffset {
                             dx: 0.0,
                             dy: 0.0,
                         },
@@ -1142,7 +1142,7 @@ mod tests {
     #[test]
     fn svg_reference_propagates_only_the_last_effect_origin_taint() {
         let primitive = |result: &str, origin_tainted, kind| {
-            layoutng_assembly::internal::paint_input::SvgFilterPrimitive {
+            layout_assembly::internal::paint_input::SvgFilterPrimitive {
                 input: SvgFilterInput::kSourceGraphic,
                 result: result.into(),
                 region: SvgFilterRegion::default(),
@@ -1178,7 +1178,7 @@ mod tests {
                 octaves: 1,
                 seed: 0.0,
                 stitch: false,
-                kind: layoutng_assembly::internal::paint_input::SvgTurbulenceType::kTurbulence,
+                kind: layout_assembly::internal::paint_input::SvgTurbulenceType::kTurbulence,
             },
         ));
         assert!(!svg_filter_origin_tainted(&graph, false));
@@ -1209,7 +1209,7 @@ mod tests {
     #[test]
     fn svg_result_keywords_and_missing_names_follow_builder_fallbacks() {
         let primitive = |input, result: &str, origin_tainted| {
-            layoutng_assembly::internal::paint_input::SvgFilterPrimitive {
+            layout_assembly::internal::paint_input::SvgFilterPrimitive {
                 input,
                 result: result.into(),
                 region: SvgFilterRegion::default(),
@@ -1277,7 +1277,7 @@ mod tests {
         let reflection = PaintFilterOperation {
             r#type: PaintFilterType::kBoxReflect,
             reflection_direction:
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow,
+                layout_assembly::internal::paint_input::PaintReflectionDirection::kBelow,
             reflection_offset: 14.0,
             ..Default::default()
         };
@@ -1346,7 +1346,7 @@ mod tests {
 
     #[test]
     fn box_reflection_keeps_resolved_bitmap_mask_layers_reachable() {
-        let mask = layoutng_assembly::internal::paint_input::PaintReflectionMaskLayer {
+        let mask = layout_assembly::internal::paint_input::PaintReflectionMaskLayer {
             image: Some(image_resource::PaintImage {
                 width: 1,
                 height: 1,
@@ -1376,7 +1376,7 @@ mod tests {
     #[test]
     fn document_reflection_mask_remains_an_explicit_typed_blocker() {
         let key = image_resource::ContainerKey::new(1, 1, 1.0, 1.0);
-        let mask = layoutng_assembly::internal::paint_input::PaintReflectionMaskLayer {
+        let mask = layout_assembly::internal::paint_input::PaintReflectionMaskLayer {
             image: Some(image_resource::PaintImage {
                 width: 1,
                 height: 1,
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[test]
     fn canvas_effect_classes_keep_typed_payload_bounds_and_replay() {
-        use layoutng_assembly::internal::paint_input::{
+        use layout_assembly::internal::paint_input::{
             PaintComponentTransferFunction, PaintComponentTransferType, PaintConvolveEdgeMode,
             PaintTurbulenceType,
         };

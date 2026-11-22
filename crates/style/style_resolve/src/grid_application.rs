@@ -8,7 +8,7 @@ use crate::resolver::style_builder_converter::{
     AppendIntegerGridRepeat, GridTrackListEntry, GridTrackSizeInput, StyleBuilderConverter,
 };
 use foundation::{MakeGarbageCollected, Member};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_grid_template_areas::ComputedGridTemplateAreas,
     computed_grid_track_list::ComputedGridTrackList,
     computed_style_constants::GridAutoFlow,
@@ -40,9 +40,9 @@ fn Position(
     v: &Value,
     root: f32,
     media: &MediaValuesCachedData,
-) -> std::result::Result<layoutng_style::style::grid_position::GridPosition, LonghandApplicationError>
+) -> std::result::Result<layout_style::style::grid_position::GridPosition, LonghandApplicationError>
 {
-    use layoutng_style::style::{grid_area::K_GRID_MAX_TRACKS, grid_position::GridPosition};
+    use layout_style::style::{grid_area::K_GRID_MAX_TRACKS, grid_position::GridPosition};
     let mut position = GridPosition::default();
     if let CSSValuePayload::kCustomIdentClass(name) = v.Payload() {
         position.SetNamedGridArea(&name.name);
@@ -474,10 +474,10 @@ mod tests {
     fn flow(b: &ComputedStyleBuilder) -> GridAutoFlow {
         unsafe { &*b.CloneStyle() }.GetGridAutoFlow()
     }
-    fn rows(b: &ComputedStyleBuilder) -> &layoutng_style::style::grid_track_list::GridTrackList {
+    fn rows(b: &ComputedStyleBuilder) -> &layout_style::style::grid_track_list::GridTrackList {
         unsafe { &*b.SpecifiedGridTemplateRows().Get() }.GetTrackList()
     }
-    fn columns(b: &ComputedStyleBuilder) -> &layoutng_style::style::grid_track_list::GridTrackList {
+    fn columns(b: &ComputedStyleBuilder) -> &layout_style::style::grid_track_list::GridTrackList {
         unsafe { &*b.SpecifiedGridTemplateColumns().Get() }.GetTrackList()
     }
     #[test]

@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::internal::layout_input::{ConstraintSpace, PaintImage};
+use layout_assembly::internal::layout_input::{ConstraintSpace, PaintImage};
 
 use crate::error::invalid_argument;
 use crate::{persistent_document::DOM, ImageResourceMetadata};

@@ -2,7 +2,7 @@
 //! Source: core/dom/pseudo_element.cc:196-214,744-787;
 //! core/dom/events/event_path.cc:42-57,107-128.
 use super::*;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DOMPseudoElementFacts {
@@ -196,7 +196,7 @@ impl PersistentDocument {
             // Move the existing default marker style creation to its DOM
             // PseudoElement owner so Layout receives this same style pointer.
             let mut builder =
-                layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(style);
+                layout_style::style::computed_style::ComputedStyleBuilder::from_style(style);
             builder.SetDisplay(foundation::EDisplay::kInline);
             builder.SetStyleType(PseudoId::kPseudoIdMarker);
             let owner = Persistent::from_ptr(builder.TakeStyle().cast_mut());

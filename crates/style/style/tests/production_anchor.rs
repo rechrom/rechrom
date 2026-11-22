@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, CSSValueID as V, EPositionTryOrder, String};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::{PositionVisibility, TryTactic},
     position_area::PositionAreaRegion as R,

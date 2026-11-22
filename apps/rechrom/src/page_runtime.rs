@@ -3547,8 +3547,8 @@ fn title(page: &Page) -> String {
     page.Title().chars().take(100).collect()
 }
 fn drag_regions(page: &Page, viewport: Viewport) -> Vec<crate::chrome::DragRegion> {
-    use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-    use layoutng_assembly::{internal::layout_input::Offset, layout_engine::PaintFragmentCursor};
+    use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+    use layout_assembly::{internal::layout_input::Offset, layout_engine::PaintFragmentCursor};
     let mut regions = vec![crate::chrome::DragRegion {
         x: 92.0,
         y: 0.0,

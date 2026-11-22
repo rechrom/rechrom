@@ -6,8 +6,8 @@
 //! pipeline comparison operation and returns Chromium's computed style difference
 //! category without projecting or copying style state.
 
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleDifference};
-use layoutng_style::style::computed_style_base::ComputedStyleBase;
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleDifference};
+use layout_style::style::computed_style_base::ComputedStyleBase;
 
 /// cpp: ComputedStyle::ComputeDifference.
 #[inline]

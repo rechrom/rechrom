@@ -5,8 +5,8 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::{
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::{
     internal::layout_input::{FontFace, NodeKind},
     layout_engine::PaintFragmentCursor,
 };

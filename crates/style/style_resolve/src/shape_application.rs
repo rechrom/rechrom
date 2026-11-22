@@ -3,7 +3,7 @@
 use super::effects_application::{LengthValue, Number};
 use super::*;
 use foundation::{svg_path_byte_stream::SvgPathCommand as C, Length, LengthPoint, LengthSize};
-use layoutng_style::style::style_shape::{
+use layout_style::style::style_shape::{
     ArcSegment, ControlPoint, ControlPointOrigin, CurveSegment, Segment, StyleShape,
 };
 use std::rc::Rc;
@@ -220,16 +220,16 @@ mod tests {
         }
         let operation = unsafe { builder.ClipPath().unwrap().as_ref().unwrap() };
         let operation = unsafe {
-            &*(operation as *const dyn layoutng_style::style::clip_path_operation::ClipPathOperation
-                as *const layoutng_style::style::shape_clip_path_operation::ShapeClipPathOperation)
+            &*(operation as *const dyn layout_style::style::clip_path_operation::ClipPathOperation
+                as *const layout_style::style::shape_clip_path_operation::ShapeClipPathOperation)
         };
         assert_eq!(
             operation.GetBasicShape().GetType(),
-            layoutng_style::style::basic_shapes::ShapeType::kStyleShapeType
+            layout_style::style::basic_shapes::ShapeType::kStyleShapeType
         );
         let shape = unsafe {
             &*(operation.GetBasicShape()
-                as *const dyn layoutng_style::style::basic_shapes::BasicShape
+                as *const dyn layout_style::style::basic_shapes::BasicShape
                 as *const StyleShape)
         };
         assert_eq!(shape.GetWindRule(), foundation::WindRule::RULE_EVENODD);
@@ -250,7 +250,7 @@ mod tests {
         let border = unsafe { builder.BorderShape().Get().as_ref().unwrap() };
         assert_eq!(
             border.OuterShape().GetType(),
-            layoutng_style::style::basic_shapes::ShapeType::kStyleShapeType
+            layout_style::style::basic_shapes::ShapeType::kStyleShapeType
         );
     }
 }

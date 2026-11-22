@@ -3,9 +3,9 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::internal::layout_input::FontFace;
-use layoutng_assembly::layout_engine::PaintFragmentCursor;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::internal::layout_input::FontFace;
+use layout_assembly::layout_engine::PaintFragmentCursor;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -104,8 +104,8 @@ fn check(page: &mut Page, expression: &str) {
 }
 
 fn root_paint(
-    fragments: &layoutng_assembly::fragment_tree::LayoutResultHandle,
-) -> &layoutng_assembly::fragment_tree::FragmentPaintData {
+    fragments: &layout_assembly::fragment_tree::LayoutResultHandle,
+) -> &layout_assembly::fragment_tree::FragmentPaintData {
     PaintFragmentCursor::FromHandle(fragments).PaintData()
 }
 #[test]

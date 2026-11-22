@@ -3,7 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/paint_property_tree_builder.{h,cc}`.
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use super::*;
 use crate::compositing_reason_finder::CompositingReasonFinder;
 
@@ -1638,7 +1638,7 @@ impl<'a> PaintPropertyTreeBuilder<'a> {
                                 if scroll_snap_type.is_none {
                                     state.snap_container_data_absent = true;
                                 } else {
-                                    use layoutng_assembly::fragment_tree::{
+                                    use layout_assembly::fragment_tree::{
                                         ScrollSnapAxisPaintData as Axis,
                                         ScrollSnapStrictnessPaintData as Strictness,
                                     };

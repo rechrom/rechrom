@@ -6,8 +6,8 @@ use cssom::{CSSDeclaration, CSSOMAdoptionError, CSSOMEvent, CSSOMMutation, CSSSt
 use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
 use foundation::Persistent;
 use foundation::{StringView, TextDirection};
-use layoutng_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
-use layoutng_style::style::computed_style::ComputedStyle as StyleComputedStyle;
+use layout_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
+use layout_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
@@ -774,7 +774,7 @@ impl DOMNode {
 
     pub(crate) fn SVGLengthContainerSizes(
         &self,
-    ) -> Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes> {
+    ) -> Option<layout_style::css::css_to_length_conversion_data::ContainerSizes> {
         self.resolved_style.resources.svg_length_container_sizes
     }
     pub fn SVGMarkerLengthInputs(
@@ -794,7 +794,7 @@ impl DOMNode {
     }
     pub fn SVGMarkerLengthValues(
         &self,
-    ) -> std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues> {
+    ) -> std::sync::Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues> {
         self.resolved_style
             .resources
             .svg_marker_resolved_lengths
@@ -869,7 +869,7 @@ pub enum PseudoContent {
     Text(String),
     Image {
         resource_id: u64,
-        shader: Option<std::sync::Arc<layoutng_assembly::internal::paint_input::PaintShader>>,
+        shader: Option<std::sync::Arc<layout_assembly::internal::paint_input::PaintShader>>,
         natural_width: Option<f64>,
         natural_height: Option<f64>,
         resolution_scale: f64,
@@ -968,7 +968,7 @@ impl PseudoElement {
             unsafe { other.computed_style_owner.Get().as_ref() },
         ) {
             (Some(a), Some(b)) => {
-                layoutng_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
+                layout_style::style::computed_style_base::ComputedStyleBase::FieldInvalidationDiff(
                     a, b,
                 ) == 0
             }
@@ -1020,20 +1020,20 @@ pub struct ResolvedNodeStyle {
 #[derive(Clone, Default, PartialEq)]
 pub struct ResolvedStyleResources {
     pub svg_mask_resource:
-        Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgMaskGraph>>,
+        Option<std::sync::Arc<layout_assembly::internal::paint_input::SvgMaskGraph>>,
     pub svg_pattern_content_target: Option<u64>,
     // Source ContainerQueryEvaluator dimensions for SVG animated length units.
     // None means the embedding has not supplied a container-query environment;
     // Some(empty dimensions) means source selection found no eligible size.
     pub svg_length_container_sizes:
-        Option<layoutng_style::css::css_to_length_conversion_data::ContainerSizes>,
+        Option<layout_style::css::css_to_length_conversion_data::ContainerSizes>,
     /// The same SVG animated-length numeric AST after StyleCascade token
     /// substitution. Layout borrows it without parser or custom-property data.
     pub svg_marker_resolved_lengths:
-        Option<std::sync::Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues>>,
-    pub svg_fill_server: Option<layoutng_assembly::internal::paint_input::SvgPaintServer>,
-    pub svg_stroke_server: Option<layoutng_assembly::internal::paint_input::SvgPaintServer>,
-    pub svg_markers: Vec<layoutng_assembly::internal::paint_input::SvgMarkerInstance>,
+        Option<std::sync::Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues>>,
+    pub svg_fill_server: Option<layout_assembly::internal::paint_input::SvgPaintServer>,
+    pub svg_stroke_server: Option<layout_assembly::internal::paint_input::SvgPaintServer>,
+    pub svg_markers: Vec<layout_assembly::internal::paint_input::SvgMarkerInstance>,
 }
 
 impl PartialEq for ResolvedNodeStyle {
@@ -1101,7 +1101,7 @@ impl ResolvedNodeStyle {
 }
 
 fn CollectStyleImageSources(style: &StyleComputedStyle, output: &mut Vec<String>) {
-    use layoutng_style::style::{
+    use layout_style::style::{
         content_data::ImageContentData, fill_layer::FillLayer, style_fetched_image::FetchedImage,
         style_image::StyleImage,
     };
@@ -1109,7 +1109,7 @@ fn CollectStyleImageSources(style: &StyleComputedStyle, output: &mut Vec<String>
         let Some(image) = (unsafe { image.as_ref() }) else {
             return;
         };
-        let image = layoutng_style::style::style_mask_source_image::MaskSourceImage(image)
+        let image = layout_style::style::style_mask_source_image::MaskSourceImage(image)
             .and_then(|mask| mask.FetchedImage())
             .unwrap_or(image);
         if let Some(image) = FetchedImage(image) {
@@ -1313,10 +1313,10 @@ pub struct PersistentDocument {
     // Local SVG resource identity/content is owned by this document. Frames
     // retain immutable graph Arcs; style replacement never rewrites them.
     svg_clip_resources:
-        Option<std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
+        Option<std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>>,
     svg_clip_resource_inputs: Option<(u64, u64)>,
     svg_filter_graphs:
-        std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>,
+        std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>,
     resolved_style_revision: u64,
     // SVGResources tracks changes to resource definitions/descendants, rather
     // than invalidating the catalog for an unrelated HTML color or hover edit.
@@ -1380,7 +1380,7 @@ pub struct PersistentDocument {
     ultimate_originating_elements: HashMap<usize, usize>,
     ua_shadow_pseudo_elements: HashMap<usize, HashMap<String, usize>>,
     generated_pseudo_elements:
-        HashMap<usize, HashMap<layoutng_style::style::computed_style_constants::PseudoId, usize>>,
+        HashMap<usize, HashMap<layout_style::style::computed_style_constants::PseudoId, usize>>,
     generated_pseudo_facts: HashMap<usize, DOMPseudoElementFacts>,
     range_slider_shadow_parts: HashMap<usize, (usize, DOMRangeShadowPart)>,
     text_field_spin_button_hosts: HashMap<usize, usize>,
@@ -2081,9 +2081,9 @@ impl PersistentDocument {
     pub fn SVGResourceScope(
         &self,
         index: usize,
-    ) -> layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope {
+    ) -> layout_style::style::reference_clip_path_operation::SvgClipResourceScope {
         let origin = self.CorrespondingSVGElement(index).unwrap_or(index);
-        layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope {
+        layout_style::style::reference_clip_path_operation::SvgClipResourceScope {
             document_id: self.arena_id,
             tree_scope_id: self.arena[self.TreeScopeRoot(origin)].id,
         }
@@ -2263,7 +2263,7 @@ impl PersistentDocument {
 
     pub fn SVGResources(
         &self,
-    ) -> Option<&std::sync::Arc<layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot>>
+    ) -> Option<&std::sync::Arc<layout_assembly::internal::paint_input::SvgClipResourceSnapshot>>
     {
         let inputs = self.SVGResourceInputKey()?;
         (self.svg_clip_resource_inputs == Some(inputs))
@@ -2273,7 +2273,7 @@ impl PersistentDocument {
 
     pub(crate) fn SVGFilterGraphs(
         &self,
-    ) -> Option<&std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>>
+    ) -> Option<&std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>>
     {
         self.SVGResources()?;
         Some(&self.svg_filter_graphs)
@@ -2282,9 +2282,9 @@ impl PersistentDocument {
     pub(crate) fn PublishSVGResources(
         &mut self,
         mut snapshot: std::sync::Arc<
-            layoutng_assembly::internal::paint_input::SvgClipResourceSnapshot,
+            layout_assembly::internal::paint_input::SvgClipResourceSnapshot,
         >,
-        filters: std::sync::Arc<Vec<layoutng_assembly::internal::paint_input::SvgFilterGraph>>,
+        filters: std::sync::Arc<Vec<layout_assembly::internal::paint_input::SvgFilterGraph>>,
     ) -> bool {
         // cpp: SVGFilterElement::PrimitiveAttributeChanged/InvalidateFilterChain.
         // Filter content participates in the same document resource lifecycle;
@@ -2332,7 +2332,7 @@ impl PersistentDocument {
                 .expect("SVG resource revision exhausted")
         });
         std::sync::Arc::make_mut(&mut snapshot).version =
-            layoutng_assembly::internal::paint_input::SvgClipResourceVersion {
+            layout_assembly::internal::paint_input::SvgClipResourceVersion {
                 document_id: self.arena_id,
                 revision,
             };
@@ -2378,12 +2378,12 @@ impl PersistentDocument {
 
     pub fn ViewportStyle(
         &self,
-    ) -> Option<&foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>> {
+    ) -> Option<&foundation::Persistent<layout_style::style::computed_style::ComputedStyle>> {
         self.viewport_style.as_ref()
     }
     pub fn SetViewportStyle(
         &mut self,
-        style: foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>,
+        style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         if self
             .viewport_style
@@ -3706,7 +3706,7 @@ impl PersistentDocument {
         if value.trim().eq_ignore_ascii_case("currentcolor") {
             return "#000000".into();
         }
-        let Some(color) = layoutng_assembly::css_color_parser::ParseCSSColor(value) else {
+        let Some(color) = layout_assembly::css_color_parser::ParseCSSColor(value) else {
             return "#000000".into();
         };
         let channel = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };

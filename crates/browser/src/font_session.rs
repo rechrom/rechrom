@@ -4,7 +4,7 @@ use font_engine::FontEngine;
 use font_engine::{
     FontContextVersion, FontEngineHandle, FontMutation, SystemFontProvider, SystemFontResponse,
 };
-use layoutng_assembly::internal::layout_input::ConstraintSpace;
+use layout_assembly::internal::layout_input::ConstraintSpace;
 use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct SystemFontSession {
@@ -229,7 +229,7 @@ impl SystemFontSession {
 /// only the final pass can reach measurement, container sizes, Paint or clients.
 #[cfg(test)]
 pub(crate) fn LayoutWithSystemFonts(
-    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    layout: &mut layout_assembly::layout_engine::LayoutEngine,
     document: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
     constraints: &mut ConstraintSpace,
@@ -241,17 +241,17 @@ pub(crate) fn LayoutWithSystemFonts(
         interaction,
         constraints,
         fonts,
-        layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
+        layout_assembly::layout_boundary_support::LayoutUpdateKind::Paint,
     );
 }
 
 pub(crate) fn LayoutWithSystemFontsAtStage(
-    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    layout: &mut layout_assembly::layout_engine::LayoutEngine,
     document: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
     constraints: &mut ConstraintSpace,
     fonts: &mut SystemFontSession,
-    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+    purpose: layout_assembly::layout_boundary_support::LayoutUpdateKind,
 ) -> bool {
     LayoutWithSystemFontsAtStageImpl(
         layout,
@@ -269,12 +269,12 @@ pub(crate) fn LayoutWithSystemFontsAtStage(
 /// Start the first font/layout pass from that exact owner; retries still use
 /// the ordinary synchronization path after font invalidation.
 pub(crate) fn LayoutWithSystemFontsAtStageAfterTreeSynchronization(
-    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    layout: &mut layout_assembly::layout_engine::LayoutEngine,
     document: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
     constraints: &mut ConstraintSpace,
     fonts: &mut SystemFontSession,
-    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+    purpose: layout_assembly::layout_boundary_support::LayoutUpdateKind,
 ) -> bool {
     LayoutWithSystemFontsAtStageImpl(
         layout,
@@ -288,12 +288,12 @@ pub(crate) fn LayoutWithSystemFontsAtStageAfterTreeSynchronization(
 }
 
 fn LayoutWithSystemFontsAtStageImpl(
-    layout: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    layout: &mut layout_assembly::layout_engine::LayoutEngine,
     document: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
     constraints: &mut ConstraintSpace,
     fonts: &mut SystemFontSession,
-    purpose: layoutng_assembly::layout_boundary_support::LayoutUpdateKind,
+    purpose: layout_assembly::layout_boundary_support::LayoutUpdateKind,
     mut tree_synchronized: bool,
 ) -> bool {
     let mut updated = false;
@@ -327,7 +327,7 @@ fn LayoutWithSystemFontsAtStageImpl(
             // ends at LayoutClean; only the paint lifecycle exports
             // fragment-local Paint data, once per frame.
             let finished = if purpose
-                == layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout
+                == layout_assembly::layout_boundary_support::LayoutUpdateKind::Layout
             {
                 layout.FinishLayoutWithoutPaintPublication()
             } else {
@@ -348,7 +348,7 @@ fn LayoutWithSystemFontsAtStageImpl(
         }
         if !completion.bindings_changed {
             layout.ApplyMutation(
-                layoutng_assembly::layout_engine::LayoutMutation::FontFallbackChanged,
+                layout_assembly::layout_engine::LayoutMutation::FontFallbackChanged,
             );
         }
         // Chromium's font invalidation dirties text layout while retaining the
@@ -449,7 +449,7 @@ mod tests {
             ));
             crate::style_services::ResolveLayoutStyles(&mut document, &constraints);
             let mut layout =
-                layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
+                layout_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
             LayoutWithSystemFonts(
                 &mut layout,
                 &mut document,
@@ -468,7 +468,7 @@ mod tests {
             let final_result = layout
                 .TakeLayoutResult()
                 .expect("only settled layout returned");
-            fn selected(node: &layoutng_assembly::fragment_tree::FragmentPaintData) -> bool {
+            fn selected(node: &layout_assembly::fragment_tree::FragmentPaintData) -> bool {
                 node.paint
                     .glyph_runs
                     .iter()

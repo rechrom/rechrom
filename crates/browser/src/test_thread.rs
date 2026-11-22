@@ -38,8 +38,8 @@ pub(crate) fn run(body: fn()) {
 pub(crate) fn BuildDOMProjection(
     owner: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
-    engine: &mut layoutng_assembly::layout_engine::LayoutEngine,
-) -> *mut layoutng_assembly::internal::layout_object::LayoutObject {
+    engine: &mut layout_assembly::layout_engine::LayoutEngine,
+) -> *mut layout_assembly::internal::layout_object::LayoutObject {
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     engine.GetLayoutTree().expect("projected tree").Root() as *const _ as *mut _
 }

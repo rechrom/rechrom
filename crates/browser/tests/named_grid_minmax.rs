@@ -3,7 +3,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::FragmentPaintData,
     internal::layout_input::{FontFace, Offset},
 };
@@ -97,7 +97,7 @@ fn find_fragment<'a>(
         .find_map(|child| find_fragment(child, absolute, predicate))
 }
 
-fn item(page: &Page, name: &str) -> (Offset, layoutng_assembly::internal::layout_input::Size) {
+fn item(page: &Page, name: &str) -> (Offset, layout_assembly::internal::layout_input::Size) {
     let owner = page.Document();
     let doc = owner.GetDocument();
     let index = (0..doc.NodeCount())
@@ -117,7 +117,7 @@ fn item(page: &Page, name: &str) -> (Offset, layoutng_assembly::internal::layout
 fn native(
     page: &Page,
     name: &str,
-) -> foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle> {
+) -> foundation::Persistent<layout_style::style::computed_style::ComputedStyle> {
     let owner = page.Document();
     let doc = owner.GetDocument();
     let index = (0..doc.NodeCount())
@@ -156,7 +156,7 @@ fn minmax_is_retained_in_canonical_computed_grid_tracks() {
         let track = columns.GetTrackList().RepeatTrackSize(2, 0);
         assert_eq!(
             track.GetType(),
-            layoutng_style::style::grid_track_size::GridTrackSizeType::kMinMaxTrackSizing
+            layout_style::style::grid_track_size::GridTrackSizeType::kMinMaxTrackSizing
         );
         assert_eq!(track.MinTrackBreadth().Pixels(), 0.0);
         assert_eq!(track.MaxTrackBreadth().Pixels(), 768.0);

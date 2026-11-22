@@ -5,8 +5,8 @@ use super::*;
 use crate::match_flags::{MatchFlag, MatchFlags};
 use crate::selector_checker::*;
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style_constants::PseudoId;
 
 struct Backend {
     nodes: Vec<Rc<usize>>,

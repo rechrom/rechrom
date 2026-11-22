@@ -131,7 +131,7 @@ impl PersistentDocument {
     pub fn InstallSelectOptionStyleOwner(
         &mut self,
         select: usize,
-    ) -> layoutng_style::style::menu_list_inner_style::MenuListOptionStyleOwner {
+    ) -> layout_style::style::menu_list_inner_style::MenuListOptionStyleOwner {
         let C::HTMLSelectElement(data) = &mut self.arena[select].class else {
             unreachable!("native select")
         };
@@ -142,7 +142,7 @@ impl PersistentDocument {
     pub fn SelectOptionStyleOwner(
         &self,
         select: usize,
-    ) -> layoutng_style::style::menu_list_inner_style::MenuListOptionStyleOwner {
+    ) -> layout_style::style::menu_list_inner_style::MenuListOptionStyleOwner {
         let C::HTMLSelectElement(data) = &self.arena[select].class else {
             unreachable!("native select")
         };

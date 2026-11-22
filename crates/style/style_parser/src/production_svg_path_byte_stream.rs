@@ -2,7 +2,7 @@
 //! The byte stream deliberately preserves relative and smooth segment kinds;
 //! Style owns syntax while the Layout/Paint boundary owns path normalization.
 
-use layoutng_style::style::svg_path_byte_stream::SVGPathByteStream;
+use layout_style::style::svg_path_byte_stream::SVGPathByteStream;
 
 struct Parser<'a> {
     input: &'a [u8],

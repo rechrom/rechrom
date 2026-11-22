@@ -19,8 +19,8 @@ use dom::persistent_document::{
 use dom::user_interaction_state::UserInteractionState;
 use dom::Document;
 use foundation::{AtomicString, Persistent};
-use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;

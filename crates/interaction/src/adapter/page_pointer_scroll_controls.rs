@@ -14,7 +14,7 @@ use interaction_scroll::core::scroll::scrollbar::{
     ScrollbarThumbUse, ThumbGeometry,
 };
 use interaction_scroll::core::scroll::{scrollbar_animation as animation, scrollbar_theme};
-use layoutng_assembly::{
+use layout_assembly::{
     internal::{
         scrollbar::Scrollbar, scrollbar_orientation::ScrollbarOrientation,
         scrollbar_part::ScrollbarPart,
@@ -48,7 +48,7 @@ pub trait PagePointerScrollControls {
     fn ScrollbarInteraction(
         &self,
         scrollbar: &Persistent<Scrollbar>,
-        event: layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
+        event: layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
     ) -> io::Result<()>;
     fn RunOverlayFadeTimer(&self, task: ScrollbarTimerTask);
     fn PublishMacScrollbarAnimation(
@@ -174,10 +174,10 @@ impl PagePointerScrollControlOwners {
     pub fn HandleNativeActivities(
         &self,
         activities: Vec<
-            layoutng_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
+            layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
         >,
     ) -> io::Result<()> {
-        use layoutng_assembly::internal::layout_scrollable_area::NativeScrollbarActivityKind as Kind;
+        use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivityKind as Kind;
         for activity in activities {
             let owner = self.NativeScrollbar(activity.scrollbar);
             if matches!(activity.kind, Kind::Removed) {
@@ -356,7 +356,7 @@ impl NativePointerScrollbar {
     }
     fn Interaction(
         &self,
-        event: layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
+        event: layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
     ) {
         if let Err(error) = self.controls.ScrollbarInteraction(&self.owner, event) {
             self.error.borrow_mut().get_or_insert(error);
@@ -503,22 +503,22 @@ impl scrollbar::ScrollbarMouseSource for NativePointerScrollbar {
     }
     fn MouseEnteredScrollbar(&self) {
         self.Interaction(
-            layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Entered,
+            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Entered,
         );
     }
     fn MouseExitedScrollbar(&self) {
         self.Interaction(
-            layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Exited,
+            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Exited,
         );
     }
     fn MouseCapturedScrollbar(&self) {
         self.Interaction(
-            layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Captured,
+            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Captured,
         );
     }
     fn MouseReleasedScrollbar(&self) {
         self.Interaction(
-            layoutng_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Released,
+            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Released,
         );
     }
     fn UsesFluentOverlayScrollbars(&self) -> bool {

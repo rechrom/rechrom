@@ -1,6 +1,6 @@
 use dom::persistent_document::{DOMAttribute, DOMNamespace};
-use layoutng_assembly::internal::layout_input::{Offset, PaintPathVerb, SvgShapeGeometry};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_assembly::internal::layout_input::{Offset, PaintPathVerb, SvgShapeGeometry};
+use layout_style::style::computed_style::ComputedStyle;
 
 #[test]
 fn mask_polyline_uses_the_open_layout_shape_path() {

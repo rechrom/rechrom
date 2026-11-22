@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use layoutng_assembly::fragment_tree::PaintResources;
-use layoutng_assembly::internal::layout_input::{Offset, PaintPathVerb, Size, TransformMatrix};
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::fragment_tree::PaintResources;
+use layout_assembly::internal::layout_input::{Offset, PaintPathVerb, Size, TransformMatrix};
+use layout_assembly::internal::layout_input_types::Color;
+use layout_assembly::internal::paint_input::{
     PaintColorInterpolationSpace, PaintColorStop, PaintHueInterpolationMethod, PaintRadialExtent,
     PaintRadialShape, PaintShader, PaintShaderKind, SvgMarkerPrimitive, SvgPatternCommand,
 };
@@ -52,7 +52,7 @@ fn ScaleTransform(x: f64, y: f64) -> TransformMatrix {
 }
 
 fn PatternViewBoxTransform(
-    view_box: &layoutng_assembly::internal::layout_input::SvgViewBoxData,
+    view_box: &layout_assembly::internal::layout_input::SvgViewBoxData,
     width: f64,
     height: f64,
 ) -> TransformMatrix {
@@ -91,7 +91,7 @@ fn PatternViewBoxTransform(
 }
 
 fn ResolvePatternImage(
-    image: &mut layoutng_assembly::internal::paint_input::SvgPatternImage,
+    image: &mut layout_assembly::internal::paint_input::SvgPatternImage,
     resources: Option<&PaintResources>,
 ) {
     let resources = resources.expect("pattern image has no PaintResources");
@@ -171,7 +171,7 @@ fn ResolvePatternImage(
 }
 
 fn PatternOutlineBounds(
-    commands: &[layoutng_assembly::internal::layout_input::PaintPathCommand],
+    commands: &[layout_assembly::internal::layout_input::PaintPathCommand],
 ) -> Option<(Offset, Size)> {
     let mut bounds: Option<(f64, f64, f64, f64)> = None;
     let mut include = |point: Offset| {
@@ -217,9 +217,9 @@ fn PatternOutlineBounds(
 }
 
 fn ResolvePatternPrimitive(
-    mut primitive: layoutng_assembly::internal::paint_input::SvgMarkerPrimitive,
+    mut primitive: layout_assembly::internal::paint_input::SvgMarkerPrimitive,
     resources: &PaintResources,
-) -> layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
+) -> layout_assembly::internal::paint_input::SvgMarkerPrimitive {
     let bounds_origin = primitive.shape.bounds_offset;
     let bounds_size = Size {
         width: primitive.shape.bounds_width,
@@ -247,11 +247,11 @@ fn ResolvePatternPrimitive(
 }
 
 fn ResolvePatternCommands(
-    commands: Vec<layoutng_assembly::internal::paint_input::SvgPatternCommand>,
+    commands: Vec<layout_assembly::internal::paint_input::SvgPatternCommand>,
     resources: Option<&PaintResources>,
     geometry_size: (f64, f64),
-) -> Vec<layoutng_assembly::internal::paint_input::SvgPatternCommand> {
-    use layoutng_assembly::internal::paint_input::SvgPatternCommand;
+) -> Vec<layout_assembly::internal::paint_input::SvgPatternCommand> {
+    use layout_assembly::internal::paint_input::SvgPatternCommand;
     let resources = resources.expect("SVG pattern content has no PaintResources");
     let mut cursor = Offset::default();
     let mut output = Vec::with_capacity(commands.len());
@@ -273,7 +273,7 @@ fn ResolvePatternCommands(
                     continue;
                 };
                 text.paint.shape.geometry =
-                    layoutng_assembly::internal::layout_input::SvgShapeGeometry::kPath;
+                    layout_assembly::internal::layout_input::SvgShapeGeometry::kPath;
                 text.paint.shape.bounds_offset = origin;
                 text.paint.shape.bounds_width = size.width;
                 text.paint.shape.bounds_height = size.height;
@@ -314,7 +314,7 @@ fn ResolvePatternCommands(
                     panic!("unsupported SVG pattern mask: {reason}");
                 }
                 let mask_geometry = if mask.content_units
-                    == layoutng_assembly::internal::paint_input::SvgMaskUnits::kObjectBoundingBox
+                    == layout_assembly::internal::paint_input::SvgMaskUnits::kObjectBoundingBox
                 {
                     (1.0, 1.0)
                 } else {
@@ -368,9 +368,9 @@ fn PatternRectBounds(
 }
 
 fn PatternCommandBounds(
-    commands: &[layoutng_assembly::internal::paint_input::SvgPatternCommand],
+    commands: &[layout_assembly::internal::paint_input::SvgPatternCommand],
 ) -> Option<[f64; 4]> {
-    use layoutng_assembly::internal::paint_input::SvgPatternCommand;
+    use layout_assembly::internal::paint_input::SvgPatternCommand;
     let mut result: Option<[f64; 4]> = None;
     for command in commands {
         let bounds = match command {
@@ -414,12 +414,12 @@ fn PatternCommandBounds(
 // SVGResources::ResolveRectangle and SVGMaskPainter content-units transform.
 // Shared by local mask layers and masks within immutable pattern records.
 fn ResolveSvgMaskGeometry(
-    resolved: &mut layoutng_assembly::internal::paint_input::SvgMaskGraph,
+    resolved: &mut layout_assembly::internal::paint_input::SvgMaskGraph,
     object: [f64; 4],
     geometry_size: (f64, f64),
 ) {
-    use layoutng_assembly::internal::paint_input::SvgMaskUnits;
-    let axis = |length: layoutng_assembly::internal::paint_input::SvgClipLength,
+    use layout_assembly::internal::paint_input::SvgMaskUnits;
+    let axis = |length: layout_assembly::internal::paint_input::SvgClipLength,
                 origin: f64,
                 extent: f64,
                 units: SvgMaskUnits| {
@@ -451,10 +451,10 @@ fn ResolveSvgMaskGeometry(
 }
 
 fn ResolvePatternMaskGeometry(
-    commands: &mut [layoutng_assembly::internal::paint_input::SvgPatternCommand],
+    commands: &mut [layout_assembly::internal::paint_input::SvgPatternCommand],
     geometry_size: (f64, f64),
 ) {
-    use layoutng_assembly::internal::paint_input::SvgPatternCommand;
+    use layout_assembly::internal::paint_input::SvgPatternCommand;
     let mut index = 0;
     while index < commands.len() {
         let SvgPatternCommand::SaveLayerMask(mask) = &commands[index] else {
@@ -493,11 +493,11 @@ fn ResolvePatternMaskGeometry(
 }
 
 fn ResolvePatternClips(
-    commands: &mut [layoutng_assembly::internal::paint_input::SvgPatternCommand],
+    commands: &mut [layout_assembly::internal::paint_input::SvgPatternCommand],
     _geometry_size: (f64, f64),
     resources: &PaintResources,
 ) {
-    use layoutng_assembly::internal::paint_input::{
+    use layout_assembly::internal::paint_input::{
         PaintMaskMode, SvgClipLength, SvgMaskGraph, SvgMaskUnits, SvgPatternCommand,
     };
     let mut index = 0;
@@ -576,14 +576,14 @@ fn ResolvePatternClips(
             .map(|child| {
                 let (origin, size) = PatternOutlineBounds(&child.commands)
                     .unwrap_or((Offset::default(), Size::default()));
-                let mut shape = layoutng_assembly::internal::layout_input::SvgShapeData::default();
-                shape.geometry = layoutng_assembly::internal::layout_input::SvgShapeGeometry::kPath;
+                let mut shape = layout_assembly::internal::layout_input::SvgShapeData::default();
+                shape.geometry = layout_assembly::internal::layout_input::SvgShapeGeometry::kPath;
                 shape.bounds_offset = origin;
                 shape.bounds_width = size.width;
                 shape.bounds_height = size.height;
                 shape.path = child.commands;
                 SvgPatternCommand::DrawShape(
-                    layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
+                    layout_assembly::internal::paint_input::SvgMarkerPrimitive {
                         shape,
                         fill: Some(white),
                         fill_even_odd: child.even_odd,
@@ -616,9 +616,9 @@ fn ResolvePatternClips(
 }
 
 fn ResolvePatternReferenceFilters(
-    commands: &mut [layoutng_assembly::internal::paint_input::SvgPatternCommand],
+    commands: &mut [layout_assembly::internal::paint_input::SvgPatternCommand],
 ) {
-    use layoutng_assembly::internal::paint_input::SvgPatternCommand;
+    use layout_assembly::internal::paint_input::SvgPatternCommand;
     let mut index = 0;
     while index < commands.len() {
         let SvgPatternCommand::SaveLayerReferenceFilter(filter) = &commands[index] else {
@@ -658,10 +658,10 @@ fn ResolvePatternReferenceFilters(
 }
 
 fn FinalizePatternMasks(
-    commands: &mut [layoutng_assembly::internal::paint_input::SvgPatternCommand],
+    commands: &mut [layout_assembly::internal::paint_input::SvgPatternCommand],
     owner_to_tile: &TransformMatrix,
 ) {
-    use layoutng_assembly::internal::paint_input::SvgPatternCommand;
+    use layout_assembly::internal::paint_input::SvgPatternCommand;
     for command in commands {
         let SvgPatternCommand::SaveLayerMask(mask) = command else {
             continue;
@@ -951,7 +951,7 @@ fn NormalizeStops(shader: &mut PaintShader) -> Option<(f64, f64)> {
     let first = shader.stops.first()?.offset;
     let last = shader.stops.last()?.offset;
     let normalize = shader.spread
-        == layoutng_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
+        == layout_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
         || first < 0.0
         || last > 1.0;
     if !normalize {
@@ -963,7 +963,7 @@ fn NormalizeStops(shader: &mut PaintShader) -> Option<(f64, f64)> {
         let first_color = *shader.stops.first().unwrap();
         let last_color = *shader.stops.last().unwrap();
         shader.stops.clear();
-        if shader.spread != layoutng_assembly::internal::paint_input::PaintSpreadMethod::kRepeat {
+        if shader.spread != layout_assembly::internal::paint_input::PaintSpreadMethod::kRepeat {
             let mut first_color = first_color;
             first_color.offset = offset;
             first_color.offset_length = 0.0;
@@ -975,7 +975,7 @@ fn NormalizeStops(shader: &mut PaintShader) -> Option<(f64, f64)> {
         last_color.offset_length = 0.0;
         last_color.is_hint = false;
         shader.stops.push(last_color);
-        shader.spread = layoutng_assembly::internal::paint_input::PaintSpreadMethod::kPad;
+        shader.spread = layout_assembly::internal::paint_input::PaintSpreadMethod::kPad;
         return None;
     }
     for stop in &mut shader.stops {
@@ -1532,7 +1532,7 @@ fn ResolvePaintShaderInner(
             let basis = output.radius;
             ResolvePhysicalColorStops(&mut output, basis);
             ReplaceColorHints(&mut output);
-            if output.spread != layoutng_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
+            if output.spread != layout_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
             {
                 ClampNegativeRadialStops(&mut output);
             }
@@ -1540,7 +1540,7 @@ fn ResolvePaintShaderInner(
                 let mut inner = output.radius * first;
                 let mut outer = output.radius * last;
                 if output.spread
-                    == layoutng_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
+                    == layout_assembly::internal::paint_input::PaintSpreadMethod::kRepeat
                     && inner < 0.0
                 {
                     let period = outer - inner;
@@ -1596,7 +1596,7 @@ fn ResolvePaintShaderInner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layoutng_assembly::internal::paint_input::{PaintShaderKind, PaintSpreadMethod};
+    use layout_assembly::internal::paint_input::{PaintShaderKind, PaintSpreadMethod};
 
     fn color(red: f32, blue: f32) -> Color {
         Color {
@@ -1715,7 +1715,7 @@ mod tests {
 #[test]
 fn pattern_document_container_uses_embedding_environment_not_last_resource_use() {
     use image_resource::{ContainerKey, DocumentPaintContent, PaintImageContent};
-    use layoutng_assembly::internal::{layout_input::PaintImage, paint_input::SvgPatternImage};
+    use layout_assembly::internal::{layout_input::PaintImage, paint_input::SvgPatternImage};
     use std::sync::Arc;
 
     let mut previous = ContainerKey::new(20, 40, 1.0, 1.0);
@@ -1761,14 +1761,14 @@ fn pattern_document_container_uses_embedding_environment_not_last_resource_use()
 /// SVGMaskPainter's resource-record route. CSS background tiling does not
 /// participate; replay consumes the existing non-repeating pattern record.
 pub(crate) fn ResolveLocalSvgMask(
-    graph: &layoutng_assembly::internal::paint_input::SvgMaskGraph,
+    graph: &layout_assembly::internal::paint_input::SvgMaskGraph,
     object: paint_model::PaintRect,
     offset: Offset,
     zoom: f64,
     viewport: Size,
     resources: Option<&PaintResources>,
 ) -> (paint_model::PaintRect, Option<PaintShader>) {
-    use layoutng_assembly::internal::paint_input::SvgPatternData;
+    use layout_assembly::internal::paint_input::SvgPatternData;
     let mut resolved = graph.clone();
     ResolveSvgMaskGeometry(
         &mut resolved,

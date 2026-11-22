@@ -1,15 +1,15 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::internal::background_bleed_avoidance::BackgroundBleedAvoidance;
-use layoutng_assembly::internal::layout_input::BorderLineStyle;
-use layoutng_style::style::appearance::AppearanceValue;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::internal::background_bleed_avoidance::BackgroundBleedAvoidance;
+use layout_assembly::internal::layout_input::BorderLineStyle;
+use layout_style::style::appearance::AppearanceValue;
 
 use crate::box_fragment_painter::{BackgroundLayerOccludesFollowingLayers, BackgroundRadii};
 use crate::contoured_border_geometry::IncludedBorderEdges;
 use crate::paint_info::PaintInfo;
 use crate::pre_paint_tree_walk::PaintTreeNode;
-use layoutng_assembly::internal::paint_input::BackgroundBox;
+use layout_assembly::internal::paint_input::BackgroundBox;
 
 // Chromium: core/paint/box_decoration_data.h:21-173 and
 // core/paint/box_decoration_data.cc:11-70.

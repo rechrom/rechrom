@@ -2,18 +2,18 @@
 
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use foundation::{gfx, ETextDecorationSkipInk, FloatValueForLength, LayoutUnit, PhysicalRect};
-use layoutng_assembly::internal::layout_input::PaintStyle;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::PaintStyle;
+use layout_assembly::internal::layout_input::{
     Offset, PaintShadow, Size, TextDecorationPaint, TextDecorationStyle, WritingMode,
 };
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_assembly::internal::layout_theme::LayoutTheme;
-use layoutng_assembly::internal::paint_input::SvgPaintComponent;
-use layoutng_assembly::text_decoration_info::{
+use layout_assembly::internal::layout_input_types::Color;
+use layout_assembly::internal::layout_theme::LayoutTheme;
+use layout_assembly::internal::paint_input::SvgPaintComponent;
+use layout_assembly::text_decoration_info::{
     CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness,
 };
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
@@ -988,10 +988,10 @@ fn TextPaintSize(node: &PaintTreeNode<'_>) -> Size {
 #[cfg(test)]
 mod tests {
     use foundation::{CSSValueID, LayoutUnit, Length, PhysicalRect, TextDecorationThickness};
-    use layoutng_assembly::internal::layout_input::{
+    use layout_assembly::internal::layout_input::{
         Offset, PaintShadow, PaintStyle, TextDecorationPaint,
     };
-    use layoutng_assembly::internal::layout_input_types::Color;
+    use layout_assembly::internal::layout_input_types::Color;
 
     use super::{
         CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness, EffectiveTextShadows,

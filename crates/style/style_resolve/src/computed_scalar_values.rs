@@ -6,7 +6,7 @@ use crate::{
     production_css_value::{self as values, Value},
 };
 use foundation::CSSPropertyID as P;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 use style_model::css_primitive_value::UnitType;
 pub fn ScalarValue(property: P, style: &ComputedStyle) -> Option<Rc<Value>> {

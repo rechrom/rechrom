@@ -1932,7 +1932,7 @@ impl LightDismissEnvironment for Effects<'_, '_, '_> {
             let node = d.FindNodeById(node)?;
             let facts = d.PseudoElementFacts(node)?;
             (facts.pseudo_id
-                == layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdBackdrop
+                == layout_style::style::computed_style_constants::PseudoId::kPseudoIdBackdrop
                 && d.Node(facts.originating_element).IsHTMLElement("dialog"))
             .then(|| d.Node(facts.originating_element).Id())
         })

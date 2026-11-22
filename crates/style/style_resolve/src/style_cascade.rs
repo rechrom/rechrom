@@ -64,7 +64,7 @@ use foundation::{
     EScrollbarWidth, WritingDirectionMode, WritingMode,
 };
 use foundation::{CSSValueID, String, StringView};
-use layoutng_style::style::appearance::AppearanceValue;
+use layout_style::style::appearance::AppearanceValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -375,7 +375,7 @@ pub trait StyleCascadeBackend: StyleResolverStateBackend {
     fn QueryDetermineStartingElement(
         &self,
         element: &Self::Element,
-        pseudo: layoutng_style::style::computed_style_constants::PseudoId,
+        pseudo: layout_style::style::computed_style_constants::PseudoId,
         selector: &Self::ContainerSelector,
         nearest_size_container: Option<&Self::Element>,
     ) -> Option<Rc<Self::Element>>;
@@ -574,7 +574,7 @@ pub trait StyleCascadeBackend: StyleResolverStateBackend {
     fn SmallerViewportUnitsEnabled(&self) -> bool;
     fn BuilderScrollbarGutter(
         &self,
-        builder: &layoutng_style::style::computed_style::ComputedStyleBuilder,
+        builder: &layout_style::style::computed_style::ComputedStyleBuilder,
     ) -> Self::ScrollbarGutter;
     fn ComputeScrollbarWidthsForViewportUnits(
         &self,
@@ -1147,7 +1147,7 @@ impl<'a, 's, B: StyleCascadeBackend> StyleCascade<'a, 's, B> {
     }
     // cpp: style_cascade.cc:659-696
     fn ApplyViewportUnitAffecting(&mut self, resolver: &mut B::CascadeResolver) {
-        use layoutng_style::style::computed_style_constants::PseudoId;
+        use layout_style::style::computed_style_constants::PseudoId;
         if !self.IsRootElement()
             || self.state_.IsForPseudoElement()
             || self

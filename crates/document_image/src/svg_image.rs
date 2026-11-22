@@ -15,7 +15,7 @@ use image_resource::{
     ContainerKey, CreatedDocumentImage, DocumentImage, DocumentImageEffect, DocumentImageFrame,
     DocumentImageMutation, ImageId, IntrinsicSize, MutationCause,
 };
-use layoutng_assembly::layout_assembly::LayoutAssembly;
+use layout_assembly::engine_assembly::LayoutAssembly;
 use style::media_queries::media_query_backend::{ForMediaValues, ParseMediaQuerySet};
 use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
 use style::PreferredColorScheme;
@@ -37,7 +37,7 @@ fn PreferredScheme(value: u8) -> PreferredColorScheme {
 // cpp: image_decoder/svg_image_decoder.h:8-20
 pub struct SVGImageDecoder {
     assembly_: LayoutAssembly,
-    host_constraints_: layoutng_assembly::internal::layout_input::ConstraintSpace,
+    host_constraints_: layout_assembly::internal::layout_input::ConstraintSpace,
     // SVGImage's isolated document uses the same namespace-specific UA rules
     // as any other document (StyleResolver::ForEachUARulesForElement). Keep
     // the embedding's typed, parser-backed sheets rather than reconstructing
@@ -67,9 +67,9 @@ struct SVGDocumentAnimation {
     document: DOM,
     style_engine: style::StyleEngine,
     user_agent_sheets: Vec<Rc<CSSStyleSheet>>,
-    engine: layoutng_assembly::layout_engine::LayoutEngine,
+    engine: layout_assembly::layout_engine::LayoutEngine,
     paint_engine: paint::paint_engine::PaintEngine,
-    constraints: layoutng_assembly::internal::layout_input::ConstraintSpace,
+    constraints: layout_assembly::internal::layout_input::ConstraintSpace,
     intrinsic_sizing: SVGIntrinsicSizing,
     // SVGImage::intrinsic_size_ is resource-owned; per-use view/container
     // changes must not rewrite that immutable resource dimension identity.
@@ -242,7 +242,7 @@ fn EffectiveIntrinsicSize(
 
     // cpp: core/layout/natural_sizing_info.cc ConcreteObjectSizeImpl(), with
     // the CSS Images default object size used by LayoutImage (300x150).
-    let size = layoutng_style::style::natural_sizing_info::ConcreteObjectSizeF(
+    let size = layout_style::style::natural_sizing_info::ConcreteObjectSizeF(
         &NaturalSizingInfo(sizing),
         &foundation::gfx::SizeF::new(300.0, 150.0),
     );
@@ -267,8 +267,8 @@ fn EffectiveIntrinsicSize(
 
 fn NaturalSizingInfo(
     sizing: SVGIntrinsicSizing,
-) -> layoutng_style::style::natural_sizing_info::NaturalSizingInfo {
-    layoutng_style::style::natural_sizing_info::NaturalSizingInfo {
+) -> layout_style::style::natural_sizing_info::NaturalSizingInfo {
+    layout_style::style::natural_sizing_info::NaturalSizingInfo {
         size: foundation::gfx::SizeF::new(
             sizing.width.unwrap_or(0.0) as f32,
             sizing.height.unwrap_or(0.0) as f32,
@@ -299,7 +299,7 @@ impl SVGImageDecoder {
     /// including SVG defaults. Container geometry is applied during creation.
     pub fn new_with_constraints(
         assembly: &LayoutAssembly,
-        constraints: &layoutng_assembly::internal::layout_input::ConstraintSpace,
+        constraints: &layout_assembly::internal::layout_input::ConstraintSpace,
         user_agent_sheets: &[Rc<CSSStyleSheet>],
     ) -> Self {
         Self {
@@ -407,8 +407,8 @@ impl SVGImageDecoder {
         mime_type: &str,
         container: &ContainerKey,
     ) -> io::Result<SVGDocumentAnimation> {
-        use layoutng_assembly::internal::layout_input::{Size, ViewportGeometry};
-        use layoutng_assembly::internal::layout_input_types::IntSize;
+        use layout_assembly::internal::layout_input::{Size, ViewportGeometry};
+        use layout_assembly::internal::layout_input_types::IntSize;
 
         let mut load_state = IsolatedSVGLoadState::NotStarted;
         load_state.Begin();
@@ -451,7 +451,7 @@ impl SVGImageDecoder {
         let root = FindSVG(document.GetDocument(), document.GetDocument().Root())
             .expect("prepared SVG document has its root");
         constraints.document_image_container = Some(
-            layoutng_assembly::internal::layout_input::DocumentImageContainer {
+            layout_assembly::internal::layout_input::DocumentImageContainer {
                 root_node_id: document.GetDocument().Node(root).Id(),
                 size: crate::svg_image_for_container::RootContainerSize(&container),
                 scale: crate::svg_image_for_container::ContainerScale(&container),
@@ -476,7 +476,7 @@ impl SVGImageDecoder {
             document,
             style_engine,
             user_agent_sheets: self.user_agent_sheets_.clone(),
-            engine: layoutng_assembly::layout_engine::LayoutEngine::new(&self.assembly_),
+            engine: layout_assembly::layout_engine::LayoutEngine::new(&self.assembly_),
             paint_engine: paint::paint_engine::PaintEngine::new(),
             constraints,
             intrinsic_sizing,
@@ -495,8 +495,8 @@ impl SVGImageDecoder {
 
 impl SVGDocumentAnimation {
     fn UpdateContainerEnvironment(&mut self) {
-        use layoutng_assembly::internal::layout_input::{Size, ViewportGeometry};
-        use layoutng_assembly::internal::layout_input_types::IntSize;
+        use layout_assembly::internal::layout_input::{Size, ViewportGeometry};
+        use layout_assembly::internal::layout_input_types::IntSize;
         self.constraints.available_size = Size {
             width: f64::from(self.container.width),
             height: f64::from(self.container.height),
@@ -578,7 +578,7 @@ impl SVGDocumentAnimation {
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
         {
             let _svg_resources =
-                layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
                     self.engine
                         .GetLayoutTree()
                         .expect("SVG image Paint retains native resources"),
@@ -669,7 +669,7 @@ impl DocumentImage for SVGDocumentAnimation {
         multiplier: f32,
         default_size: (f32, f32),
     ) -> io::Result<Option<(f32, f32)>> {
-        use layoutng_style::style::{
+        use layout_style::style::{
             natural_sizing_info::ConcreteObjectSizeF, style_image::StyleImage,
         };
         if !multiplier.is_finite()
@@ -874,7 +874,7 @@ impl image_resource::DocumentImageDecoder for SVGImageDecoder {
         match created {
             Ok(result) => result,
             Err(payload) => {
-                use layoutng_assembly::layout_engine::LayoutEngineError;
+                use layout_assembly::layout_engine::LayoutEngineError;
                 match payload.downcast_ref::<LayoutEngineError>() {
                     Some(LayoutEngineError::InvalidArgument(message)) => {
                         Err(io::Error::new(io::ErrorKind::InvalidInput, *message))

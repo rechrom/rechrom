@@ -1,6 +1,6 @@
 // C++: src/foundation/style_values/style/display_adjustment.h:8-18
 // The free function declared in lines 20-22 is implemented by the
-// layoutng_style package; keeping it there avoids a Cargo dependency cycle.
+// layout_style package; keeping it there avoids a Cargo dependency cycle.
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayAdjustmentContext {

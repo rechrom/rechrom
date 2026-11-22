@@ -59,9 +59,9 @@ use crate::resolver::media_query_result::MediaQueryResultFlags;
 use crate::style_sheet_contents::RenderBlockingBehavior;
 use crate::vision_deficiency::{CreateVisionDeficiencyFilterUrl, VisionDeficiency};
 use foundation::{AtomicString, Color, String};
-use layoutng_style::style::computed_style_constants::PseudoId;
-use layoutng_style::style::computed_style_constants::ViewportUnitFlag;
-use layoutng_style::style::position_try_fallbacks::{
+use layout_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::ViewportUnitFlag;
+use layout_style::style::position_try_fallbacks::{
     kNoTryTactics, PositionTryFallback, TryTacticList,
 };
 use std::cell::Cell;
@@ -1303,7 +1303,7 @@ pub trait StyleEngineInterleavingBackend: StyleEngineTraversalBackend {
     fn HasFirstLinePseudoStyle(style: &Self::ComputedStyle) -> bool;
     fn FirstLineDependsOnSizeQueries(style: &Self::ComputedStyle) -> bool;
     fn PositionAreaDeclarations(
-        area: &layoutng_style::style::position_area::PositionArea,
+        area: &layout_style::style::position_area::PositionArea,
     ) -> Rc<Self::CSSPropertyValueSet>;
     fn FallbackScopedName(fallback: &PositionTryFallback) -> Option<Rc<foundation::ScopedCSSName>>;
     fn ScopedNameTreeScope(name: &foundation::ScopedCSSName) -> Option<Rc<Self::TreeScope>>;

@@ -11,8 +11,8 @@ use crate::{
 use cssom::editing_style::{
     ReplacementStyleOperation as Op, ReplacementStyleResult as Out, ReplacementWhiteSpaceFacts,
 };
-use layoutng_style::style::style_image::StyleImage;
-use layoutng_style::style::visual_invalidation_diff::{
+use layout_style::style::style_image::StyleImage;
+use layout_style::style::visual_invalidation_diff::{
     LayoutWorkletDefinition, PaintInvalidationProperties, VisualInvalidationDiffContext,
 };
 

@@ -95,7 +95,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use layoutng_assembly::fragment_tree::PaintResources;
+    use layout_assembly::fragment_tree::PaintResources;
     use paint_chunk::PaintChunk;
     use paint_model::{
         geometry_mapper::TranslationTransform, paint_property_tree::PaintPropertyNodeLifecycle,

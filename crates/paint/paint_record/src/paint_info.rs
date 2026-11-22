@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use crate::display_item_id::DisplayItemIdType;
 use crate::paint_context::PaintContext;
 use crate::paint_engine::PaintPhase;
-use layoutng_assembly::internal::layout_input::Offset;
+use layout_assembly::internal::layout_input::Offset;
 use paint_model::paint_flags::{PaintFlag, PaintFlags};
 use paint_model::paint_property_tree::TransformPaintPropertyNode;
 use paint_model::{CullRect, PaintRect};

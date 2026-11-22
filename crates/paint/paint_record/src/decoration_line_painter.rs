@@ -5,7 +5,7 @@
 pub use foundation::{
     DecorationGeometry, DecorationLineBounds as Bounds, StrokeStyle, WaveDefinition,
 };
-use layoutng_assembly::internal::paint_input::SvgStrokeLineCap;
+use layout_assembly::internal::paint_input::SvgStrokeLineCap;
 use paint_model::cc::paint::path_effect::PathEffect;
 use paint_model::styled_stroke_data::{GeometryInfo, StyledStrokeData};
 

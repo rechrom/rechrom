@@ -32,7 +32,7 @@ use interaction_default::core::editing::{
     },
     visible_units_line::{self, StartOfLineContext, VisibleLineContext},
 };
-use layoutng_assembly::{
+use layout_assembly::{
     editing_state::DOMSelection,
     layout_engine::{EditingInlineContentsBlockIdentity, LayoutNode, LayoutOutput},
     EditingPosition, EditingPositionAnchorType, EditingPositionWithAffinity, EditingTextAffinity,
@@ -838,7 +838,7 @@ pub fn VisibleDOMSelectionCoversDocumentForFocus(
 pub fn ResidentSelectionContains(
     document: &Document,
     layout: LayoutOutput<'_>,
-    selections: &layoutng_assembly::editing_state::SelectionState,
+    selections: &layout_assembly::editing_state::SelectionState,
     locale: &std::ffi::CStr,
     point: &foundation::PhysicalOffset,
     hit: impl FnOnce() -> Option<EditingPositionWithAffinity>,
@@ -1263,7 +1263,7 @@ pub fn NotifyDisplayLockForSelectionChangeForFocus(
 /// while the node iterator borrows only the live document traversal.
 pub fn CommitLayoutSelectionForFocus(
     document: &Document,
-    engine: &mut layoutng_assembly::layout_engine::LayoutEngine,
+    engine: &mut layout_assembly::layout_engine::LayoutEngine,
     selection: Option<DOMSelection>,
     hidden: bool,
 ) -> bool {
@@ -1287,7 +1287,7 @@ pub fn CommitLayoutSelectionForFocus(
     let native = if range.IsNull() || range.IsCollapsed() {
         None
     } else {
-        Some(layoutng_assembly::layout_selection::LayoutSelectionRange {
+        Some(layout_assembly::layout_selection::LayoutSelectionRange {
             nodes: range.Nodes(&flat),
             start: NativePosition(range.StartPosition(), TextAffinity::Downstream)
                 .expect("non-null flat selection start")
@@ -1517,9 +1517,9 @@ impl interaction_default::core::editing::selection_focus::SelectionFocusDOM
 pub fn FrameCaretForSelection(
     document: &Document,
     layout: LayoutOutput<'_>,
-    selections: &layoutng_assembly::editing_state::SelectionState,
+    selections: &layout_assembly::editing_state::SelectionState,
     focused: Option<u64>,
-) -> Option<layoutng_assembly::caret::TextCaret> {
+) -> Option<layout_assembly::caret::TextCaret> {
     let _lifecycle = document.Lifecycle().DisallowTransition();
     let focused = focused?;
     if let Some(control) = selections.ActiveControl().filter(|id| *id == focused) {
@@ -1631,7 +1631,7 @@ pub fn FrameCaretForSelection(
     } else {
         None
     };
-    Some(layoutng_assembly::caret::TextCaret {
+    Some(layout_assembly::caret::TextCaret {
         node_id,
         text_control_host: None,
         utf16_offset: offset as u32,
@@ -1654,7 +1654,7 @@ pub fn DragCaretForSelection(
     document: &Document,
     layout: LayoutOutput<'_>,
     selection: Option<DOMSelection>,
-) -> Option<layoutng_assembly::caret::TextCaret> {
+) -> Option<layout_assembly::caret::TextCaret> {
     let _lifecycle = document.Lifecycle().DisallowTransition();
     let selection = selection?;
     VisibleDOMSelectionRootEditableElementForFocus(document, layout, Some(selection))?;
@@ -1675,7 +1675,7 @@ pub fn DragCaretForSelection(
         node.CaretBarWidth(),
         false,
     )?;
-    Some(layoutng_assembly::caret::TextCaret {
+    Some(layout_assembly::caret::TextCaret {
         node_id,
         text_control_host: None,
         utf16_offset: offset,
@@ -1906,7 +1906,7 @@ impl LineMovementContext for EditingPositionContext<'_> {
         adjacent: Option<bool>,
         only_editable: bool,
     ) -> LinePositionResult<u64> {
-        use layoutng_assembly::layout_engine::EditingLinePositionResult as NativeResult;
+        use layout_assembly::layout_engine::EditingLinePositionResult as NativeResult;
         // AbstractLineBox::CreateFor normalizes in flat strategy, then resolves
         // the original DOM position on the resident LayoutObject.
         let adjusted =
@@ -2041,7 +2041,7 @@ impl SelectionModifierContext for EditingPositionContext<'_> {
         entered: bool,
         right: bool,
     ) -> VisualCaretMoveResult<u64> {
-        use layoutng_assembly::layout_engine::VisualCaretMoveDirection;
+        use layout_assembly::layout_engine::VisualCaretMoveDirection;
         let native = self.NativeCaretPosition(position).and_then(|native| {
             Some(self.Layout(&native.position.node_id?)?.MoveCaretVisually(
                 &native,

@@ -9,8 +9,8 @@ canvas = { path = "../../canvas" }
 font_engine = { path = "../../font_engine" }
 foundation = { path = "../../foundation" }
 image_resource = { path = "../../image_resource" }
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
+layout_assembly = { path = "../../layout/layout_assembly" }
+layout_style = { path = "../../layout/layout_style" }
 paint_chunk = { path = "../paint_chunk" }
 paint_model = { path = "../paint_model" }
 paint_reuse = { path = "../paint_reuse" }
@@ -21,4 +21,4 @@ serde_json = "1"
 # Tests exercise the same assembled Layout providers used by Browser. The
 # production dependency remains feature-minimal; Cargo unifies this only for
 # the paint_record test target so the extern virtual-dispatch providers link.
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
+layout_assembly = { path = "../../layout/layout_assembly", features = ["translation_in_progress"] }

@@ -17,15 +17,15 @@
 #![allow(non_snake_case)]
 use super::style_resolver_state::{ResolverURIValue, ResolverValue, StyleResolverStateBackend};
 use foundation::{AtomicString, CSSPropertyID, Member};
-use layoutng_style::style::clip_path_operation::{ClipPathOperation, OperationType as ClipType};
-use layoutng_style::style::computed_style::ComputedStyleBuilder;
-use layoutng_style::style::content_data::ImageContentData;
-use layoutng_style::style::fill_layer::FillLayer;
-use layoutng_style::style::filter_operation::{FilterOperation, OperationType as FilterType};
-use layoutng_style::style::filter_operations::FilterOperationVector;
-use layoutng_style::style::forward::SVGResource as LayoutSVGResource;
-use layoutng_style::style::style_image::StyleImage;
-use layoutng_style::style::style_svg_resource::StyleSVGResource;
+use layout_style::style::clip_path_operation::{ClipPathOperation, OperationType as ClipType};
+use layout_style::style::computed_style::ComputedStyleBuilder;
+use layout_style::style::content_data::ImageContentData;
+use layout_style::style::fill_layer::FillLayer;
+use layout_style::style::filter_operation::{FilterOperation, OperationType as FilterType};
+use layout_style::style::filter_operations::FilterOperationVector;
+use layout_style::style::forward::SVGResource as LayoutSVGResource;
+use layout_style::style::style_image::StyleImage;
+use layout_style::style::style_svg_resource::StyleSVGResource;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;

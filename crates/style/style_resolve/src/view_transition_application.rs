@@ -5,7 +5,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{HeapVector, MakeGarbageCollected, Member, ScopedCSSNameList};
-use layoutng_style::style::{
+use layout_style::style::{
     style_view_transition_group::StyleViewTransitionGroup,
     style_view_transition_name::StyleViewTransitionName,
 };

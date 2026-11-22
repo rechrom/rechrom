@@ -21,7 +21,7 @@ use interaction_dispatch::core::{
     dom::events::event::EventTargetRef, events::ui_event::InputDeviceCapabilitiesRef,
     input::event_handling_util::WebInputEventResult,
 };
-use layoutng_assembly::{editing_state::SelectionState, EditingPositionAnchorType};
+use layout_assembly::{editing_state::SelectionState, EditingPositionAnchorType};
 use std::{cell::RefCell, cmp::Ordering, rc::Rc};
 
 use crate::core::input::mouse_event_manager::{
@@ -110,7 +110,7 @@ impl<'a> PageMouseFocus<'a> {
 
     fn BoundaryPoint(
         document: &Document,
-        position: layoutng_assembly::EditingPosition,
+        position: layout_assembly::EditingPosition,
     ) -> Option<DOMBoundaryPoint> {
         let node_id = position.node_id?;
         let index = document.FindNodeById(node_id)?;

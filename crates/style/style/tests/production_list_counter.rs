@@ -1,5 +1,5 @@
 use foundation::{AtomicString, CSSPropertyID, EListStylePosition, String};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{
     css_value::CSSValuePayload,
     media_queries::MediaValuesCachedData,
@@ -210,7 +210,7 @@ fn invalid_values_and_resource_scope_boundaries_remain_typed() {
             PropertyParseErrorKind::Unsupported
         );
     }
-    let mut b = layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(unsafe {
+    let mut b = layout_style::style::computed_style::ComputedStyleBuilder::from_style(unsafe {
         &*ComputedStyle::GetInitialStyleSingleton()
     });
     for (id, text) in [

@@ -3,7 +3,7 @@
 //! retained here; sizing and font algorithms remain with their source owners.
 use super::{DOMNodeType, PersistentDocument};
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 #[derive(Clone, Copy, Debug)]
 pub enum DateTimeCustomStyleError {

@@ -14,8 +14,8 @@ interaction_input = { path = "../interaction_input" }
 
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
-layoutng_geometry = { path = "../../layoutng/layoutng_geometry" }
+layout_style = { path = "../../layout/layout_style" }
+layout_geometry = { path = "../../layout/layout_geometry" }
 style_model = { path = "../../style/style_model" }
 image_resource = { path = "../../image_resource" }
 

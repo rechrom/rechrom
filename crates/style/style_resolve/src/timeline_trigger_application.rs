@@ -2,7 +2,7 @@
 //! css_to_style_map.cc:740-800; generated longhands.cc:16994-17300.
 #![allow(non_snake_case)]
 use super::*;
-use layoutng_style::style::css_timing_data::{
+use layout_style::style::css_timing_data::{
     CSSAnimationData, StyleTimeline, TimelineNamedRange, TimelineOffset, TimelineOffsetOrAuto,
 };
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
@@ -259,7 +259,7 @@ mod tests {
             d.GetTimelineTriggerSource(2),
             StyleTimeline::Name(_)
         ));
-        let repeated = layoutng_style::style::css_timing_data::CSSTimingData::GetRepeated(
+        let repeated = layout_style::style::css_timing_data::CSSTimingData::GetRepeated(
             d.TimelineTriggerActivationRangeStartList(),
             2,
         )

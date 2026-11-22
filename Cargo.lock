@@ -286,9 +286,9 @@ dependencies = [
  "layout_algo_replaced",
  "layout_algo_svg",
  "layout_algo_table",
+ "layout_assembly",
  "layout_fragment",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_style",
  "navigation_history",
  "open",
  "page_mutation",
@@ -886,7 +886,7 @@ dependencies = [
  "cssom",
  "dom",
  "html",
- "layoutng_assembly",
+ "layout_assembly",
 ]
 
 [[package]]
@@ -898,8 +898,8 @@ dependencies = [
  "foundation",
  "html",
  "image_resource",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
  "paint",
  "style",
 ]
@@ -921,7 +921,7 @@ dependencies = [
  "image_decoder",
  "image_resource",
  "javascript",
- "layoutng_assembly",
+ "layout_assembly",
  "navigation_history",
  "page_mutation",
  "resource",
@@ -949,8 +949,8 @@ dependencies = [
  "intersection_observer",
  "layout_algo_block",
  "layout_algo_replaced",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
  "navigation_history",
  "resize_observer",
  "sfv",
@@ -1520,7 +1520,7 @@ dependencies = [
  "dom",
  "foundation",
  "layout_algo_replaced",
- "layoutng_assembly",
+ "layout_assembly",
  "xml",
 ]
 
@@ -2104,8 +2104,8 @@ dependencies = [
  "interaction_hit_test",
  "interaction_input",
  "interaction_scroll",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
  "navigation_history",
  "paint",
  "url",
@@ -2122,8 +2122,8 @@ dependencies = [
  "interaction_dispatch",
  "interaction_input",
  "intersection_observer",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_geometry",
+ "layout_style",
  "navigation_history",
  "resize_observer",
  "style_model",
@@ -2148,9 +2148,9 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "interaction_input",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "paint",
 ]
 
@@ -2302,9 +2302,9 @@ version = "0.0.1"
 dependencies = [
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "paint",
  "raster",
 ]
@@ -2319,9 +2319,9 @@ version = "0.0.1"
 dependencies = [
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2330,9 +2330,9 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2342,9 +2342,9 @@ dependencies = [
  "browser_tracing",
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2358,9 +2358,9 @@ dependencies = [
  "browser_tracing",
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2387,10 +2387,10 @@ dependencies = [
  "layout_algo_mathml",
  "layout_commit",
  "layout_fragment",
+ "layout_geometry",
  "layout_invalidation",
  "layout_reuse",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_style",
  "paint_input_types",
  "skia",
 ]
@@ -2402,8 +2402,8 @@ dependencies = [
  "browser_tracing",
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
 ]
 
 [[package]]
@@ -2416,9 +2416,9 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "layout_algo_block",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2427,9 +2427,9 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2439,9 +2439,9 @@ dependencies = [
  "browser_tracing",
  "foundation",
  "image_resource",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2455,9 +2455,9 @@ dependencies = [
  "browser_tracing",
  "font_engine",
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
 ]
 
 [[package]]
@@ -2471,10 +2471,36 @@ dependencies = [
  "html",
  "layout_algo_block",
  "layout_algo_replaced",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "style",
+]
+
+[[package]]
+name = "layout_assembly"
+version = "0.0.1"
+dependencies = [
+ "browser_tracing",
+ "canvas",
+ "cssom",
+ "font_engine",
+ "foundation",
+ "icu_bidi",
+ "image_resource",
+ "intersection_observer",
+ "layout_algo_custom",
+ "layout_algo_mathml",
+ "layout_commit",
+ "layout_fragment",
+ "layout_geometry",
+ "layout_invalidation",
+ "layout_reuse",
+ "layout_style",
+ "paint_input_types",
+ "resize_observer",
+ "scroll_snap",
+ "skia",
 ]
 
 [[package]]
@@ -2499,6 +2525,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layout_geometry"
+version = "0.0.1"
+dependencies = [
+ "foundation",
+]
+
+[[package]]
 name = "layout_invalidation"
 version = "0.0.1"
 dependencies = [
@@ -2511,50 +2544,17 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_geometry",
+ "layout_geometry",
 ]
 
 [[package]]
-name = "layoutng_assembly"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "canvas",
- "cssom",
- "font_engine",
- "foundation",
- "icu_bidi",
- "image_resource",
- "intersection_observer",
- "layout_algo_custom",
- "layout_algo_mathml",
- "layout_commit",
- "layout_fragment",
- "layout_invalidation",
- "layout_reuse",
- "layoutng_geometry",
- "layoutng_style",
- "paint_input_types",
- "resize_observer",
- "scroll_snap",
- "skia",
-]
-
-[[package]]
-name = "layoutng_geometry"
-version = "0.0.1"
-dependencies = [
- "foundation",
-]
-
-[[package]]
-name = "layoutng_style"
+name = "layout_style"
 version = "0.0.1"
 dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layoutng_geometry",
+ "layout_geometry",
 ]
 
 [[package]]
@@ -3184,8 +3184,8 @@ dependencies = [
  "cssom",
  "dom",
  "image_resource",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
 ]
 
 [[package]]
@@ -3197,7 +3197,7 @@ dependencies = [
  "canvas",
  "foundation",
  "image_resource",
- "layoutng_assembly",
+ "layout_assembly",
  "paint_chunk",
  "paint_commit",
  "paint_model",
@@ -3212,7 +3212,7 @@ name = "paint_chunk"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layoutng_assembly",
+ "layout_assembly",
  "paint_model",
 ]
 
@@ -3222,7 +3222,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_assembly",
+ "layout_assembly",
  "paint_model",
  "paint_record",
  "prepaint",
@@ -3236,7 +3236,7 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layoutng_style",
+ "layout_style",
 ]
 
 [[package]]
@@ -3245,9 +3245,9 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "image_resource",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "scroll_snap",
  "serde_json",
 ]
@@ -3261,8 +3261,8 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
  "paint_chunk",
  "paint_model",
  "paint_reuse",
@@ -3274,7 +3274,7 @@ dependencies = [
 name = "paint_reuse"
 version = "0.0.1"
 dependencies = [
- "layoutng_assembly",
+ "layout_assembly",
  "paint_model",
 ]
 
@@ -3283,9 +3283,9 @@ name = "paint_skia"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "paint_model",
  "skia",
 ]
@@ -3295,7 +3295,7 @@ name = "paint_walk"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layoutng_assembly",
+ "layout_assembly",
  "paint_model",
  "paint_record",
  "prepaint",
@@ -3493,9 +3493,9 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layoutng_assembly",
- "layoutng_geometry",
- "layoutng_style",
+ "layout_assembly",
+ "layout_geometry",
+ "layout_style",
  "paint_model",
  "paint_reuse",
 ]
@@ -3747,7 +3747,7 @@ dependencies = [
  "image_resource",
  "interaction",
  "javascript",
- "layoutng_assembly",
+ "layout_assembly",
  "libc",
  "navigation_history",
  "net_filename",
@@ -4382,8 +4382,8 @@ dependencies = [
  "foundation",
  "html",
  "image_resource",
- "layoutng_assembly",
- "layoutng_style",
+ "layout_assembly",
+ "layout_style",
  "paint_input_types",
  "style_commit",
  "style_diff",
@@ -4403,7 +4403,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_diff",
  "style_model",
 ]
@@ -4412,7 +4412,7 @@ dependencies = [
 name = "style_diff"
 version = "0.0.1"
 dependencies = [
- "layoutng_style",
+ "layout_style",
  "style_model",
 ]
 
@@ -4431,7 +4431,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_model",
  "style_parser",
  "style_rules",
@@ -4443,7 +4443,7 @@ name = "style_model"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layoutng_style",
+ "layout_style",
 ]
 
 [[package]]
@@ -4452,7 +4452,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_model",
  "url",
 ]
@@ -4464,7 +4464,7 @@ dependencies = [
  "browser_tracing",
  "font_engine",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_match",
  "style_model",
  "style_parser",
@@ -4476,7 +4476,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_invalidation",
  "style_model",
  "style_parser",
@@ -4488,7 +4488,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layoutng_style",
+ "layout_style",
  "style_invalidation",
  "style_model",
 ]
@@ -5077,7 +5077,7 @@ dependencies = [
  "interaction",
  "javascript",
  "layout_algo_replaced",
- "layoutng_assembly",
+ "layout_assembly",
  "navigation_history",
  "paint",
  "percent-encoding",

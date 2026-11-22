@@ -31,18 +31,18 @@ use foundation::{
     gfx, AtomicString, CSSPropertyID, CSSValueID, EDisplay, EInsideLink, ETextOrientation,
     Persistent, WritingDirectionMode, WritingMode,
 };
-use layoutng_style::style::color_scheme::mojom::blink::ColorScheme;
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
-use layoutng_style::style::computed_style_base::IsAtShadowBoundary;
-use layoutng_style::style::computed_style_constants::{IsHighlightPseudoElement, PseudoId};
-use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues;
-use layoutng_style::style::default_anchor_data::DefaultAnchorData;
-use layoutng_style::style::display_style::DisplayStyle;
-use layoutng_style::style::font_size_style::FontSizeStyle;
-use layoutng_style::style::position_area::{PositionArea, PositionAreaOffsets};
-use layoutng_style::style::style_image::StyleImage;
-use layoutng_style::style::style_position_anchor::StylePositionAnchor;
-use layoutng_style::style::text_size_adjust::TextSizeAdjust;
+use layout_style::style::color_scheme::mojom::blink::ColorScheme;
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style_base::IsAtShadowBoundary;
+use layout_style::style::computed_style_constants::{IsHighlightPseudoElement, PseudoId};
+use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues;
+use layout_style::style::default_anchor_data::DefaultAnchorData;
+use layout_style::style::display_style::DisplayStyle;
+use layout_style::style::font_size_style::FontSizeStyle;
+use layout_style::style::position_area::{PositionArea, PositionAreaOffsets};
+use layout_style::style::style_image::StyleImage;
+use layout_style::style::style_position_anchor::StylePositionAnchor;
+use layout_style::style::text_size_adjust::TextSizeAdjust;
 use std::cell::{Cell, OnceCell, Ref, RefCell, RefMut};
 use std::rc::Rc;
 use style_model::css_parser_mode::CSSParserMode;
@@ -90,7 +90,7 @@ pub trait ResolverLengthConversionData<B: StyleResolverStateBackend> {
 /// All entries are calls owned by other source classes. No default result or
 /// fallback DOM, builder, CSSValue, animation, conversion or font is supplied.
 /// Builder operations and state branches are implemented below, using the real
-/// layoutng_style types. Inherited StyleResolverBackend builder/style methods
+/// layout_style types. Inherited StyleResolverBackend builder/style methods
 /// likewise refer to those exact types, with Persistent owning their outputs.
 pub trait StyleResolverStateBackend:
     StyleResolverBackend<

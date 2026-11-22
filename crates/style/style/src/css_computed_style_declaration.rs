@@ -6,7 +6,7 @@
 //! The document host completes the source lifecycle before lending this borrow;
 //! no DOM callbacks, CSS serialization, parser, or copied style is involved.
 use foundation::{CSSPropertyID, CSSValueID};
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::rc::Rc;
 use style_model::{
     css_property_name::CSSPropertyName, css_property_value::CSSPropertyValue,

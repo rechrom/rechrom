@@ -21,7 +21,7 @@ use interaction_default::core::editing::{
     set_selection_options::SetSelectionOptions,
     text_granularity::TextGranularity,
 };
-use layoutng_assembly::{
+use layout_assembly::{
     editing_state::DOMSelection, EditingPosition, EditingPositionAnchorType,
     EditingPositionWithAffinity, EditingTextAffinity,
 };

@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::{DynamicTo, RespectImageOrientationEnum};
-use layoutng_assembly::internal::{
+use layout_assembly::internal::{
     hit_test_phase::HitTestPhase,
     layout_box::LayoutBox,
     layout_input::FontFace,
@@ -14,7 +14,7 @@ use layoutng_assembly::internal::{
     loader::fetch::resource_priority::VisibilityStatus,
     selection_state::SelectionState,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::ComputedStyleBuilder, style_difference::StyleDifference,
 };
 use std::{cell::RefCell, io, rc::Rc};

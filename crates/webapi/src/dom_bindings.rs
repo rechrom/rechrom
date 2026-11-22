@@ -13,7 +13,7 @@ use javascript::javascript_runtime::{
     JavaScriptHostBindings, JavaScriptHostObjectNamespace, JavaScriptHostRuntime, JavaScriptNull,
     JavaScriptRealm, JavaScriptValue, WeakJavaScriptHostObjectNamespace, WeakJavaScriptRealm,
 };
-use layoutng_assembly::internal::layout_input::PaintPathVerb;
+use layout_assembly::internal::layout_input::PaintPathVerb;
 
 #[path = "dom_attributes.rs"]
 mod attributes;
@@ -2332,7 +2332,7 @@ impl DOMJavaScriptBindings {
                 && match property.as_str() {
                     "color" | "background-color" | "border-color" => {
                         value == "currentcolor"
-                            || layoutng_assembly::css_color_parser::ParseCSSColor(value).is_some()
+                            || layout_assembly::css_color_parser::ParseCSSColor(value).is_some()
                     }
                     "width" | "height" | "font-size" | "margin-left" | "padding-left" => {
                         value == "auto"

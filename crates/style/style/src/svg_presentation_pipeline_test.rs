@@ -4,7 +4,7 @@ use crate::{
 use cssom::css_style_sheet::CSSUserAgentStyleSheetRole;
 use dom::persistent_document::{DOMAttribute, DOMNamespace};
 use foundation::Length;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 
 fn node(owner: &dom::DOM, id: &str) -> usize {
     let doc = owner.GetDocument();

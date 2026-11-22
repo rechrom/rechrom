@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::AtomicString;
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::TimelineAxis,
     style_timeline_scope::{StyleTimelineScope, StyleTimelineScopeType},
     timeline_inset::TimelineInset,

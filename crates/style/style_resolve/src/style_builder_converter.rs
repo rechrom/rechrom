@@ -40,9 +40,9 @@ use foundation::{
     AtomicString, CSSPropertyID, CSSValueID, Color, ColorSpace, DynamicRangeLimit,
     DynamicRangeLimitKind, HueInterpolationMethod, Length, LengthBox,
 };
-use layoutng_style::css::css_reflection_direction::CSSReflectionDirection;
-use layoutng_style::style::color_scheme::mojom::blink::ColorScheme;
-use layoutng_style::style::{
+use layout_style::css::css_reflection_direction::CSSReflectionDirection;
+use layout_style::style::color_scheme::mojom::blink::ColorScheme;
+use layout_style::style::{
     basic_shapes::BasicShape,
     computed_style_constants::*,
     computed_style_initial_values::ComputedStyleInitialValues,
@@ -1538,7 +1538,7 @@ use foundation::{
     ScopedCSSNameList, StyleInitialLetter, StyleNameScope, StyleNameScopeType,
     TextDecorationThickness, TreeScope,
 };
-use layoutng_style::{
+use layout_style::{
     css::{
         style_auto_color::StyleAutoColor, style_caret_color::StyleCaretColor,
         style_color::StyleColor,
@@ -1674,7 +1674,7 @@ pub trait StyleBuilderConverterBatch2Backend: StyleBuilderConverterBackend {
         &self,
         s: &StyleResolverState<Self>,
         v: &ResolverValue<Self>,
-    ) -> *mut layoutng_style::style::style_image::StyleImage;
+    ) -> *mut layout_style::style::style_image::StyleImage;
     fn DocumentTreeScope(&self, s: &StyleResolverState<Self>) -> *const TreeScope;
     fn NumericColor(&self, v: &ResolverValue<Self>) -> Option<Color>;
     fn ResolveNonFiniteColor(&self, color: &mut Color);
@@ -2173,8 +2173,8 @@ impl StyleBuilderConverter {
         b: &B,
         s: &StyleResolverState<B>,
         v: &ResolverValue<B>,
-    ) -> layoutng_style::style::unzoomed_length::UnzoomedLength {
-        layoutng_style::style::unzoomed_length::UnzoomedLength::new(
+    ) -> layout_style::style::unzoomed_length::UnzoomedLength {
+        layout_style::style::unzoomed_length::UnzoomedLength::new(
             &b.PrimitiveLength(&s.UnzoomedLengthConversionData(), v),
         )
     }
@@ -3301,7 +3301,7 @@ pub fn ResolveColorValue<B: StyleBuilderConverterBatch2Backend>(
     result
 }
 
-use layoutng_style::style::{
+use layout_style::style::{
     scroll_marker_group::{ScrollMarkerGroup, ScrollMarkerMode, ScrollMarkerPosition},
     style_view_transition_group::StyleViewTransitionGroup,
     style_view_transition_name::{StyleViewTransitionName, StyleViewTransitionNameType},
@@ -3320,7 +3320,7 @@ use foundation::{
     EAspectRatioType, RespectImageOrientationEnum, RubyPosition, StyleAspectRatio,
     TransformOperationType,
 };
-use layoutng_style::{
+use layout_style::{
     css::color_scheme_flags::{ColorSchemeFlag, ColorSchemeFlags},
     style::{
         max_lines_data::MaxLinesData,

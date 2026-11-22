@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{DynamicRangeLimit, DynamicRangeLimitKind};
-use layoutng_style::style::{
+use layout_style::style::{
     flow_tolerance::FlowTolerance, style_interest_delay::StyleInterestDelay,
 };
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {

@@ -94,7 +94,7 @@ fn SerializeCorner(radius: &Value, shape: &Value) -> String {
             unreachable!("non-round corner shape is typed superellipse");
         };
         if Numeric(shape.Param())
-            == Some(layoutng_style::style::superellipse::Superellipse::Round().Parameter())
+            == Some(layout_style::style::superellipse::Superellipse::Round().Parameter())
         {
             return String::from("normal");
         }

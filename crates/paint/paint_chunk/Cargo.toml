@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 foundation = { path = "../../foundation" }
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layout_assembly = { path = "../../layout/layout_assembly" }
 paint_model = { path = "../paint_model" }

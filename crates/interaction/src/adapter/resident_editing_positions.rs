@@ -4,7 +4,7 @@ use foundation::{Persistent, PhysicalOffset};
 use interaction_hit_test::core::layout::hit_test_result::{
     self as hit, CaretPositionQuery, HitTestPositionData,
 };
-use layoutng_assembly::{internal::layout_node_metadata::Node, layout_engine::LayoutOutput};
+use layout_assembly::{internal::layout_node_metadata::Node, layout_engine::LayoutOutput};
 use std::rc::Rc;
 /// The provider borrows the current LayoutOutput for each call and returns only
 /// the original DOM position value. Hit nodes retain neither a LayoutOutput
@@ -46,7 +46,7 @@ pub fn QueryPositionForPoint(
     layout: LayoutOutput<'_>,
     node: &Node,
     point: &PhysicalOffset,
-    options: layoutng_assembly::EditingPositionOptions,
+    options: layout_assembly::EditingPositionOptions,
     ui_locale: &std::ffi::CStr,
 ) -> Option<HitTestPositionData> {
     let native = layout.PositionForNativeNode(node, point, options)?;
@@ -72,10 +72,10 @@ pub fn QueryCaretPosition(
 pub fn QuerySelectionContains(
     document: &dom::Document,
     layout: LayoutOutput<'_>,
-    selections: &layoutng_assembly::editing_state::SelectionState,
+    selections: &layout_assembly::editing_state::SelectionState,
     locale: &std::ffi::CStr,
     point: &PhysicalOffset,
-    hit: impl FnOnce() -> Option<layoutng_assembly::EditingPositionWithAffinity>,
+    hit: impl FnOnce() -> Option<layout_assembly::EditingPositionWithAffinity>,
 ) -> bool {
     super::page_editing_visible_position::ResidentSelectionContains(
         document, layout, selections, locale, point, hit,
@@ -83,9 +83,9 @@ pub fn QuerySelectionContains(
 }
 fn Project(
     document: &dom::Document,
-    value: layoutng_assembly::EditingPositionWithAffinity,
+    value: layout_assembly::EditingPositionWithAffinity,
 ) -> Option<HitTestPositionData> {
-    use layoutng_assembly::{EditingPositionAnchorType as Anchor, EditingTextAffinity as Affinity};
+    use layout_assembly::{EditingPositionAnchorType as Anchor, EditingTextAffinity as Affinity};
     let node = value.position.node_id?;
     let index = document.FindNodeById(node)?;
     Some(HitTestPositionData {

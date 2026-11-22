@@ -1,9 +1,9 @@
 //! Document-owned SVG filter resource snapshots.  CSS keeps only the IRI;
 //! this is the DOM -> Layout projection of the referenced SVG graph.
 use crate::persistent_document::{DOMNamespace, DOMNode, DOMNodeType};
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_assembly::internal::paint_input::*;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_assembly::internal::layout_input_types::Color;
+use layout_assembly::internal::paint_input::*;
+use layout_style::style::computed_style::ComputedStyle;
 use std::sync::Arc;
 
 // A borrowed view keeps filter graph construction on its DOM resource subtree.
@@ -531,7 +531,7 @@ fn flood_color(element: FilterElement<'_>, style: Option<&ComputedStyle>) -> Res
     if raw.eq_ignore_ascii_case("currentcolor") {
         return Err("feFlood currentColor requires computed SVG style".into());
     }
-    let mut color = layoutng_assembly::css_color_parser::ParseCSSColor(raw)
+    let mut color = layout_assembly::css_color_parser::ParseCSSColor(raw)
         .ok_or_else(|| "invalid feFlood flood-color".to_owned())?;
     color.alpha *= number(style_value(element, "flood-opacity"), 1.0).clamp(0.0, 1.0) as f32;
     Ok(color)
@@ -570,7 +570,7 @@ fn lighting_color(
     if raw.eq_ignore_ascii_case("currentcolor") {
         return Err("SVG lighting-color currentColor requires computed primitive style".into());
     }
-    layoutng_assembly::css_color_parser::ParseCSSColor(raw)
+    layout_assembly::css_color_parser::ParseCSSColor(raw)
         .ok_or_else(|| "invalid SVG lighting-color".to_owned())
 }
 fn linear_rgb(element: FilterElement<'_>, style: Option<&ComputedStyle>, inherited: bool) -> bool {

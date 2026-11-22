@@ -8,7 +8,7 @@
 
 use std::{any::Any, fmt, sync::Arc};
 
-use layoutng_assembly::internal::layout_input::Offset;
+use layout_assembly::internal::layout_input::Offset;
 use paint_chunk::DisplayItemClientInfo;
 use paint_model::{
     display_item_id::DisplayItemId, paint_property_tree::PropertyTreeState, PaintRect,

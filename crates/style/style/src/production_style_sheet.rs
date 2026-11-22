@@ -45,7 +45,7 @@ use crate::{
 use foundation::{
     AtomicString, CSSPropertyID, CSSValueID, Member, String, StringView, TrustedIdentityHashMap,
 };
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap},

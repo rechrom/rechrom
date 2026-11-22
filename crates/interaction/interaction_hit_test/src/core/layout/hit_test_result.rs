@@ -44,7 +44,7 @@ pub trait HitTestScrollbar {
     /// overflow-control query, just as NativeNodeOwner roots its DOM owner.
     fn NativeScrollbarOwner(
         &self,
-    ) -> Option<&foundation::Persistent<layoutng_assembly::internal::scrollbar::Scrollbar>> {
+    ) -> Option<&foundation::Persistent<layout_assembly::internal::scrollbar::Scrollbar>> {
         None
     }
 }
@@ -136,7 +136,7 @@ pub trait HitTestNode {
     }
     fn NativeNodeOwner(
         &self,
-    ) -> Option<&foundation::Persistent<layoutng_assembly::internal::layout_node_metadata::Node>>
+    ) -> Option<&foundation::Persistent<layout_assembly::internal::layout_node_metadata::Node>>
     {
         None
     }

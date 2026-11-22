@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, CSSValueID, Length, String as CSSString};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::ComputedStyle, computed_style_constants::EPaintOrder, svg_paint::SVGPaintType,
 };
 use style::{
@@ -222,7 +222,7 @@ fn svg_url_paint_keeps_typed_fallback_and_requires_real_resource_binding() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder =
-        layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+        layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
     Apply(
         P::kFill,
         &mut builder,
@@ -291,7 +291,7 @@ fn svg_geometry_uses_zoomed_lengths_and_stroke_width_uses_unzoomed_lengths() {
     let _heap = foundation::LayoutHeapScope::new();
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder =
-        layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+        layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
     builder.SetEffectiveZoom(2.);
     let mut font = builder.GetFontDescription().clone();
     font.SetSpecifiedSize(20.);

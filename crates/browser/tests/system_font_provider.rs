@@ -229,7 +229,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
         assert!(!page.IsLoading());
         let frame = page.CurrentFrame().expect("settled font/layout frame");
         fn collect(
-            node: &layoutng_assembly::fragment_tree::FragmentPaintData,
+            node: &layout_assembly::fragment_tree::FragmentPaintData,
             fonts: &mut Vec<SharedFontBytes>,
         ) {
             for run in &node.paint.glyph_runs {

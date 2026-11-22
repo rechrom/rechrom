@@ -69,9 +69,9 @@ impl SVGImageContainerUse {
 /// container independently from its rounded LocalFrameView viewport.
 pub(crate) fn RootContainerSize(
     container: &ContainerKey,
-) -> layoutng_assembly::internal::layout_input::Size {
+) -> layout_assembly::internal::layout_input::Size {
     let (w, h) = container.unrounded_size();
-    layoutng_assembly::internal::layout_input::Size {
+    layout_assembly::internal::layout_input::Size {
         width: foundation::LayoutUnit::FromFloatFloor(w as f32).ToDouble(),
         height: foundation::LayoutUnit::FromFloatFloor(h as f32).ToDouble(),
     }

@@ -23,17 +23,17 @@ use foundation::{
     AtomicString, BlendMode, CSSPropertyID, CSSValueID, Length, LengthBox, LengthSize,
     ScopedCSSName,
 };
-use layoutng_style::style::border_image_length::BorderImageLength;
-use layoutng_style::style::border_image_length_box::BorderImageLengthBox;
-use layoutng_style::style::computed_style_constants::{
+use layout_style::style::border_image_length::BorderImageLength;
+use layout_style::style::border_image_length_box::BorderImageLengthBox;
+use layout_style::style::computed_style_constants::{
     BackgroundEdgeOrigin, CompositingOperator, EAnimPlayState, EAnimationTriggerBehavior,
     EFillAttachment, EFillBox, EFillLayerType, EFillMaskMode, EFillRepeat, EFillSizeType,
     TimelineAxis, TimelineScroller,
 };
-use layoutng_style::style::fill_layer::{FillLayer, FillRepeat};
-use layoutng_style::style::nine_piece_image::{ENinePieceImageRule, NinePieceImage};
-use layoutng_style::style::style_image::StyleImage;
-use layoutng_style::style::timeline_inset::TimelineInset;
+use layout_style::style::fill_layer::{FillLayer, FillRepeat};
+use layout_style::style::nine_piece_image::{ENinePieceImageRule, NinePieceImage};
+use layout_style::style::style_image::StyleImage;
+use layout_style::style::timeline_inset::TimelineInset;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use style_model::css_value::{
@@ -281,7 +281,7 @@ pub fn MapNinePieceImageRepeatFromIdentifiers(
 // css_to_style_map.cc:591-615. Preserve legacy fixed-width side effects.
 pub fn ApplyLegacyBorderImageWidths(
     image: &NinePieceImage,
-    builder: &mut layoutng_style::style::computed_style::ComputedStyleBuilder,
+    builder: &mut layout_style::style::computed_style::ComputedStyleBuilder,
 ) {
     let slices = image.BorderSlices();
     if slices.Top().IsLength() && slices.Top().length().IsFixed() {

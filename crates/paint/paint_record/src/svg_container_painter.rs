@@ -2,8 +2,8 @@
 
 use std::cell::RefCell;
 
-use layoutng_assembly::internal::layout_input::NodeKind;
-use layoutng_assembly::internal::paint_input::PaintFilterType;
+use layout_assembly::internal::layout_input::NodeKind;
+use layout_assembly::internal::paint_input::PaintFilterType;
 use paint_model::PaintRect;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
@@ -108,10 +108,10 @@ mod tests {
     use super::*;
     use crate::paint_engine::DisplayItemType;
     use crate::PaintRecording;
-    use layoutng_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect};
-    use layoutng_assembly::internal::layout_input::{BorderLineStyle, Offset, Size};
-    use layoutng_assembly::internal::layout_input_types::Color;
-    use layoutng_assembly::internal::paint_input::PaintFilterOperation;
+    use layout_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect};
+    use layout_assembly::internal::layout_input::{BorderLineStyle, Offset, Size};
+    use layout_assembly::internal::layout_input_types::Color;
+    use layout_assembly::internal::paint_input::PaintFilterOperation;
     use paint_model::PaintRect;
 
     fn container() -> PaintTreeNode<'static> {

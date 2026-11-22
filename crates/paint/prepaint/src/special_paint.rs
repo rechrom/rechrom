@@ -3,7 +3,7 @@
 //! values changed by special painting are saved; no source/tree/style copy.
 use crate::cull_rect_updater::{CullRectUpdater, ShouldUseInfiniteCullRect};
 use crate::pre_paint_tree_walk::{PaintTreeNode, PrePaintTreeWalk};
-use layoutng_assembly::internal::layout_input::Position;
+use layout_assembly::internal::layout_input::Position;
 use paint_model::{
     paint_property_tree::{ClipPaintPropertyNode, PropertyTreeState},
     PaintRect,

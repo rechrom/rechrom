@@ -7,7 +7,7 @@
 use super::editing_node::DOMNodeClass;
 use super::{DOMNamespace, DOMNodeType, PersistentDocument};
 use foundation::{EContentVisibility, Persistent};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use std::cell::RefMut;
 use std::collections::HashSet;
 
@@ -316,8 +316,8 @@ impl DisplayLockContext {
     fn ContentLockState(
         &self,
         env: Environment,
-    ) -> layoutng_assembly::internal::layout_input::ContentLockState {
-        layoutng_assembly::internal::layout_input::ContentLockState::new(
+    ) -> layout_assembly::internal::layout_input::ContentLockState {
+        layout_assembly::internal::layout_input::ContentLockState::new(
             self.is_locked,
             self.ShouldLayoutChildren(env),
             self.ShouldPrePaintChildren(env),
@@ -452,7 +452,7 @@ impl PersistentDocument {
     pub fn DisplayLockContentState(
         &self,
         element: usize,
-    ) -> Option<layoutng_assembly::internal::layout_input::ContentLockState> {
+    ) -> Option<layout_assembly::internal::layout_input::ContentLockState> {
         self.arena[element]
             .display_lock_context
             .borrow()

@@ -5,7 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use dom::persistent_document::DOMNamespace;
-use layoutng_assembly::internal::layout_input::FontFace;
+use layout_assembly::internal::layout_input::FontFace;
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
 use std::{cell::RefCell, io, rc::Rc};

@@ -3,7 +3,7 @@ use crate::user_agent_styles::UserAgentStyleSheets;
 #[cfg(test)]
 use dom::UserInteractionState;
 use dom::{Document, DOM};
-use layoutng_assembly::internal::layout_input::ConstraintSpace;
+use layout_assembly::internal::layout_input::ConstraintSpace;
 use std::{cell::RefCell, rc::Rc};
 use style::media_queries::{
     media_values_cached::MediaValuesCachedData,
@@ -456,7 +456,7 @@ pub(crate) fn CreateLayoutBindingsHost(
             &mut document,
             &interaction.borrow(),
             &constraints,
-            layoutng_assembly::layout_boundary_support::LayoutUpdateKind::Layout,
+            layout_assembly::layout_boundary_support::LayoutUpdateKind::Layout,
         );
         drop(layout);
         engine.clone()
@@ -487,7 +487,7 @@ pub(crate) fn CreateLayoutBindingsHost(
         read_metric: Some(Box::new(move |id, name| {
             let layout = measure();
             let layout = layout.borrow();
-            let metric = layoutng_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
+            let metric = layout_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
             layout
                 .Output()?
                 .Node(id)
@@ -622,7 +622,7 @@ pub(crate) fn EnsureComputedStyleForNode(
 pub(crate) fn PublishContainerSizes(
     engine: &mut style::StyleEngine,
     owner: &mut DOM,
-    sizes: &[layoutng_assembly::layout_engine::ContainerQuerySizeSnapshot],
+    sizes: &[layout_assembly::layout_engine::ContainerQuerySizeSnapshot],
 ) -> bool {
     let sizes = sizes
         .iter()
@@ -889,7 +889,7 @@ mod measurement_tests {
         let mut space = ConstraintSpace::default();
         space
             .fonts
-            .push(layoutng_assembly::internal::layout_input::FontFace {
+            .push(layout_assembly::internal::layout_input::FontFace {
                 family: "sans-serif".into(),
                 bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
                     .as_slice()
@@ -897,18 +897,18 @@ mod measurement_tests {
                 ..Default::default()
             });
         space.viewport = Some(
-            layoutng_assembly::internal::layout_input::ViewportGeometry {
-                size: layoutng_assembly::internal::layout_input_types::IntSize {
+            layout_assembly::internal::layout_input::ViewportGeometry {
+                size: layout_assembly::internal::layout_input_types::IntSize {
                     width: 1024,
                     height: 768,
                 },
                 overscroll_type:
-                    layoutng_assembly::internal::layout_input::OverscrollType::kTransform,
+                    layout_assembly::internal::layout_input::OverscrollType::kTransform,
                 ..Default::default()
             },
         );
         space.scrollbar_theme = Some(
-            layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+            layout_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
                 auto_thickness: 15,
                 thin_thickness: 7,
                 minimum_thumb_length: 24,
@@ -917,7 +917,7 @@ mod measurement_tests {
                 ..Default::default()
             },
         );
-        space.available_size = layoutng_assembly::internal::layout_input::Size {
+        space.available_size = layout_assembly::internal::layout_input::Size {
             width: 1024.0,
             height: 768.0,
         };

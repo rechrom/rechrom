@@ -81,7 +81,7 @@ pub enum Child {
 }
 
 pub mod layout_mapping;
-extern crate layoutng_assembly as layoutng;
+extern crate layout_assembly as layout_core;
 
 mod lifecycle;
 

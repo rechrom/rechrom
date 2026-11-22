@@ -3,10 +3,10 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/table_cell_paint_invalidator.{h,cc}`.
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::{IsFullPaintInvalidationReason, PaintInvalidationReason};
-use layoutng_assembly::fragment_tree::FragmentPaintData;
-use layoutng_assembly::internal::layout_input::{Display, Offset};
+use layout_assembly::fragment_tree::FragmentPaintData;
+use layout_assembly::internal::layout_input::{Display, Offset};
 
 use crate::block_paint_invalidator::BlockPaintInvalidator;
 use crate::paint_invalidator::PaintInvalidatorContext;
@@ -101,7 +101,7 @@ impl TableCellPaintInvalidator {
     }
 }
 
-fn StitchedSize(fragment: &FragmentPaintData) -> layoutng_assembly::internal::layout_input::Size {
+fn StitchedSize(fragment: &FragmentPaintData) -> layout_assembly::internal::layout_input::Size {
     fragment
         .ViewStitchedDecoration()
         .as_ref()
@@ -111,7 +111,7 @@ fn StitchedSize(fragment: &FragmentPaintData) -> layoutng_assembly::internal::la
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layoutng_assembly::internal::layout_input::Size;
+    use layout_assembly::internal::layout_input::Size;
 
     #[test]
     fn cell_size_change_is_geometry_change() {

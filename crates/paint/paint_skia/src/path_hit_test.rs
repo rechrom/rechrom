@@ -29,7 +29,7 @@ impl PaintPathHitTestFactory for SkiaPathHitTestFactory {
     }
     fn create_basic_shape(
         &self,
-        shape: &dyn layoutng_style::style::basic_shapes::BasicShape,
+        shape: &dyn layout_style::style::basic_shapes::BasicShape,
         reference: foundation::gfx::RectF,
         zoom: f32,
         path_scale: f32,
@@ -40,7 +40,7 @@ impl PaintPathHitTestFactory for SkiaPathHitTestFactory {
     }
     fn create_border_shape(
         &self,
-        style: &layoutng_style::style::computed_style::ComputedStyle,
+        style: &layout_style::style::computed_style::ComputedStyle,
         outer_reference: foundation::gfx::RectF,
     ) -> Result<Box<dyn PaintPathHitTest>, paint_model::basic_shape_path::InvalidBasicShape> {
         Ok(Box::new(SkiaPathHitTest {

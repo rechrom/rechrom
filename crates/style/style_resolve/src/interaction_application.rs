@@ -10,7 +10,7 @@ use foundation::{
     AtomicString, CSSBitset, HangingPunctuation, MakeGarbageCollected, Member,
     RespectImageOrientationEnum, TouchAction,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     appearance::AppearanceValue, computed_style_constants::EMarginTrim,
     style_will_change_data::StyleWillChangeData,
 };

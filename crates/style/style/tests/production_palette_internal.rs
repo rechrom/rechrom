@@ -2,7 +2,7 @@ use font_engine::fonts::font_palette::{
     BasePaletteValueType, FontPalette, KeywordPaletteName as K,
 };
 use foundation::{CSSPropertyID as P, CSSValueID as V, String};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{

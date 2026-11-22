@@ -33,7 +33,7 @@ use interaction_input::public::common::input::web_touch_point::{
 // Adapter: platform-independent host coordinates. The Page adapter converts
 // its layout-space value at the boundary; interaction does not depend on
 // LayoutNG storage or types.
-pub use layoutng_assembly::internal::layout_input::Offset;
+pub use layout_assembly::internal::layout_input::Offset;
 
 // Adapter: retained Rechrom host API; not a Chromium declaration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

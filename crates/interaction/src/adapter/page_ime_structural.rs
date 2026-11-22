@@ -35,7 +35,7 @@ use interaction_default::core::editing::{
     },
     position::{Position, PositionAnchorType, PositionDOM, PositionTree},
 };
-use layoutng_assembly::{EditingPositionAnchorType, EditingPositionWithAffinity};
+use layout_assembly::{EditingPositionAnchorType, EditingPositionWithAffinity};
 pub(super) use link_format::ApplyLinkFormat;
 pub(super) use replacement::ApplyReplacement;
 pub(super) use style_commands::ExecuteStyle;

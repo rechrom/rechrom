@@ -1,4 +1,4 @@
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::page::{Page, PageClient, ScriptEnvironment};
 use std::{
     cell::{Cell, RefCell},
@@ -106,7 +106,7 @@ fn has_id(page: &Page, id: &str) -> bool {
     visit(owner.GetDocument(), owner.GetDocument().Root(), id)
 }
 fn fragment_has_id(page: &Page, id: &str) -> bool {
-    fn visit(fragment: &layoutng_assembly::fragment_tree::FragmentPaintData, id: u64) -> bool {
+    fn visit(fragment: &layout_assembly::fragment_tree::FragmentPaintData, id: u64) -> bool {
         fragment.ViewNodeId() == id || fragment.children.iter().any(|child| visit(child, id))
     }
     fn find_node_id(document: &dom::Document, index: usize, id: &str) -> Option<u64> {

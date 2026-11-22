@@ -119,11 +119,11 @@ pub(super) struct LocalFrameRuntime {
     pub(super) navigation_state: std::cell::OnceCell<Rc<document_loader::DocumentLoaderNavigationState>>,
     pub resources: Rc<ResourceFetcher>,
     pub style: RefCell<style::StyleEngine>,
-    pub layout: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
+    pub layout: RefCell<layout_assembly::layout_engine::LayoutEngine>,
     pub constraints: Rc<RefCell<ConstraintSpace>>,
     pub view: Rc<LocalFrameView>,
     hit_test: interaction::hit_test::core::layout::layout_view::LayoutViewHitTestState,
-    pub editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
+    pub editing: Rc<layout_assembly::editing_state::LayoutEditingState>,
     pub interaction_state: Rc<RefCell<UserInteractionState>>,
     pub(super) interaction_scroll: RefCell<Option<super::local_frame_scroll::ChildInteractionScroll>>,
     pub(super) compositor_scroll_pending: Cell<bool>,
@@ -268,7 +268,7 @@ impl LocalChildFrameHitTest for CurrentLocalFrameQuery<'_> {
         let result = layout.GetLayoutResult().ok_or_else(|| self.Required())?;
         let cursor = PaintFragmentCursor::FromHandle(result);
         let view = unsafe {
-            foundation::DynamicTo::<layoutng_assembly::internal::layout_view::LayoutView>(
+            foundation::DynamicTo::<layout_assembly::internal::layout_view::LayoutView>(
                 layout
                     .GetLayoutTree()
                     .ok_or_else(|| self.Required())?
@@ -378,7 +378,7 @@ impl interaction::adapter::resident_editing_positions::ResidentEditingPositionQu
     fn NodeOwner(
         &self,
         node: u64,
-    ) -> Option<foundation::Persistent<layoutng_assembly::internal::layout_node_metadata::Node>>
+    ) -> Option<foundation::Persistent<layout_assembly::internal::layout_node_metadata::Node>>
     {
         let runtime = self.runtime.upgrade()?;
         let result = runtime
@@ -390,7 +390,7 @@ impl interaction::adapter::resident_editing_positions::ResidentEditingPositionQu
     }
     fn PositionForPoint(
         &self,
-        node: &foundation::Persistent<layoutng_assembly::internal::layout_node_metadata::Node>,
+        node: &foundation::Persistent<layout_assembly::internal::layout_node_metadata::Node>,
         point: &foundation::PhysicalOffset,
     ) -> Option<interaction::hit_test::core::layout::hit_test_result::HitTestPositionData> {
         let (_, runtime, domain) = self.Owners();
@@ -402,7 +402,7 @@ impl interaction::adapter::resident_editing_positions::ResidentEditingPositionQu
             layout.Output()?,
             unsafe { node.Get().as_ref() }?,
             point,
-            layoutng_assembly::EditingPositionOptions {
+            layout_assembly::EditingPositionOptions {
                 move_caret_to_horizontal_boundary_when_past_top_or_bottom: settings
                     .editing_behavior
                     .ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(),
@@ -474,28 +474,28 @@ impl interaction::adapter::resident_editing_positions::ResidentEditingPositionQu
                 if p.document != document.GetDocument().RootHandle().Identity() {
                     return None;
                 }
-                Some(layoutng_assembly::EditingPositionWithAffinity {
-                    position: layoutng_assembly::EditingPosition::WithAnchor(
+                Some(layout_assembly::EditingPositionWithAffinity {
+                    position: layout_assembly::EditingPosition::WithAnchor(
                         p.node_id?,
                         p.offset,
                         match p.anchor {
                             A::OffsetInAnchor => {
-                                layoutng_assembly::EditingPositionAnchorType::OffsetInAnchor
+                                layout_assembly::EditingPositionAnchorType::OffsetInAnchor
                             }
                             A::BeforeAnchor => {
-                                layoutng_assembly::EditingPositionAnchorType::BeforeAnchor
+                                layout_assembly::EditingPositionAnchorType::BeforeAnchor
                             }
                             A::AfterAnchor => {
-                                layoutng_assembly::EditingPositionAnchorType::AfterAnchor
+                                layout_assembly::EditingPositionAnchorType::AfterAnchor
                             }
                             A::AfterChildren => {
-                                layoutng_assembly::EditingPositionAnchorType::AfterChildren
+                                layout_assembly::EditingPositionAnchorType::AfterChildren
                             }
                         },
                     ),
                     affinity: match p.affinity {
-                        F::Downstream => layoutng_assembly::EditingTextAffinity::Downstream,
-                        F::Upstream => layoutng_assembly::EditingTextAffinity::Upstream,
+                        F::Downstream => layout_assembly::EditingTextAffinity::Downstream,
+                        F::Upstream => layout_assembly::EditingTextAffinity::Upstream,
                     },
                 })
             },
@@ -571,7 +571,7 @@ impl PreparedLayoutViewLifecycle for CurrentLocalFrameView<'_> {
             .expect("prepared child LayoutView")
             .Root();
         let box_ = unsafe {
-            foundation::DynamicTo::<layoutng_assembly::internal::layout_box::LayoutBox>(root)
+            foundation::DynamicTo::<layout_assembly::internal::layout_box::LayoutBox>(root)
                 .as_ref()
         }
         .expect("LayoutView base");
@@ -588,7 +588,7 @@ impl LocalFrameDomain {
     pub(super) fn WithParentLayout<T>(
         &self,
         frame: &LocalFrame,
-        read: impl FnOnce(&layoutng_assembly::layout_engine::LayoutEngine) -> T,
+        read: impl FnOnce(&layout_assembly::layout_engine::LayoutEngine) -> T,
     ) -> T {
         if frame.parent == self.root {
             let page = self.page.upgrade().expect("live local root");
@@ -644,7 +644,7 @@ impl LocalFrameDomain {
     /// 4254). Only source owners/receipts travel to the local-root Paint pass.
     pub fn PreparePaint(
         &self,
-        root: &layoutng_assembly::layout_engine::LayoutEngine,
+        root: &layout_assembly::layout_engine::LayoutEngine,
     ) -> io::Result<Vec<LocalFramePaint>> {
         let page = self
             .page
@@ -657,7 +657,7 @@ impl LocalFrameDomain {
     fn PrepareChildren(
         &self,
         parent: u64,
-        parent_layout: &layoutng_assembly::layout_engine::LayoutEngine,
+        parent_layout: &layout_assembly::layout_engine::LayoutEngine,
         parent_index: Option<usize>,
         page: &PageState,
         prepared: &mut Vec<LocalFramePaint>,
@@ -795,9 +795,9 @@ impl LocalFrameDomain {
     }
     pub fn PaintInputs<'a>(
         root: &'a LayoutPaintOutput,
-        root_layout: &'a layoutng_assembly::layout_engine::LayoutEngine,
+        root_layout: &'a layout_assembly::layout_engine::LayoutEngine,
         prepared: &'a [LocalFramePaint],
-        layouts: &'a [std::cell::Ref<'_, layoutng_assembly::layout_engine::LayoutEngine>],
+        layouts: &'a [std::cell::Ref<'_, layout_assembly::layout_engine::LayoutEngine>],
     ) -> Vec<paint::LocalFrameViewPaintInput<'a>> {
         prepared
             .iter()
@@ -1144,7 +1144,7 @@ impl LocalFrame {
         let mut constraints = page.constraints.borrow().clone();
         // LocalFrameView's child constructor is unsized until its owning
         // LayoutEmbeddedContent supplies the physical content-box dimensions.
-        constraints.available_size = layoutng_assembly::internal::layout_input::Size {
+        constraints.available_size = layout_assembly::internal::layout_input::Size {
             width: 0.0,
             height: 0.0,
         };
@@ -1201,7 +1201,7 @@ impl LocalFrame {
             navigation_state,
             resources,
             style: RefCell::new(style),
-            layout: RefCell::new(layoutng_assembly::layout_engine::LayoutEngine::new(
+            layout: RefCell::new(layout_assembly::layout_engine::LayoutEngine::new(
                 &crate::CreateLayoutAssembly(),
             )),
             constraints,
@@ -1412,7 +1412,7 @@ impl LocalFrame {
         &self,
         runtime: &Rc<LocalFrameRuntime>,
         point: (i32, i32),
-    ) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    ) -> Option<layout_assembly::editing_state::DOMSelection> {
         use interaction::hit_test::core::layout::hit_test_request::RequestType;
         let domain = self.domain.upgrade()?;
         let frame = domain.Frame(self.state.Identity())?;
@@ -1456,7 +1456,7 @@ impl LocalFrame {
             target,
             position,
             *hit.Result().LocalPoint(),
-            layoutng_assembly::EditingPositionOptions {
+            layout_assembly::EditingPositionOptions {
                 move_caret_to_horizontal_boundary_when_past_top_or_bottom: settings
                     .editing_behavior
                     .ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(),

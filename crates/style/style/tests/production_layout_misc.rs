@@ -2,7 +2,7 @@ use foundation::{
     CSSPropertyID, EAspectRatioType, EClear, String, TextDirection, WritingDirectionMode,
     WritingMode,
 };
-use layoutng_style::style::{computed_style::ComputedStyle, computed_style_constants::Containment};
+use layout_style::style::{computed_style::ComputedStyle, computed_style_constants::Containment};
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{

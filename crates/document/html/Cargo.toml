@@ -13,5 +13,5 @@ foundation = { path = "../../foundation" }
 # DOM retains layout objects; standalone tests link the Rust replaced-object
 # boundary and the source inline implementation used by their destructor.
 [dev-dependencies]
-layout_algo_replaced = { path = "../../layoutng/layout_algo_replaced" }
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
+layout_algo_replaced = { path = "../../layout/layout_algo_replaced" }
+layout_assembly = { path = "../../layout/layout_assembly", features = ["translation_in_progress"] }

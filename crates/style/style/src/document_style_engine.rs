@@ -66,8 +66,8 @@ use foundation::{
     AtomicString, CSSPropertyID, DisplayAdjustmentContext, EDisplay, EOverflow, EOverflowWrap,
     EScrollbarWidth, EUserModify, EUserSelect, Persistent,
 };
-use layoutng_style::css::white_space::EWhiteSpace;
-use layoutng_style::style::{
+use layout_style::css::white_space::EWhiteSpace;
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder, ComputedStyleDifference},
     computed_style_base::{FieldDifference, IsAtShadowBoundary},
     computed_style_constants::{PseudoId, PseudoIdFlags},
@@ -157,7 +157,7 @@ struct DocumentURLImageResolver<'a> {
 impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_> {
     fn SVGResourceScope(
         &self,
-    ) -> Option<layoutng_style::style::reference_clip_path_operation::SvgClipResourceScope> {
+    ) -> Option<layout_style::style::reference_clip_path_operation::SvgClipResourceScope> {
         Some(self.document.SVGResourceScope(self.originating_index))
     }
 
@@ -165,7 +165,7 @@ impl production_style_builder::URLImageResolver for DocumentURLImageResolver<'_>
         &self,
         value: &crate::production_css_value::CSSImageValue,
     ) -> Result<std::ptr::NonNull<StyleImage>, LonghandApplicationError> {
-        use layoutng_style::style::style_mask_source_image::StyleMaskSourceImage;
+        use layout_style::style::style_mask_source_image::StyleMaskSourceImage;
         let local = value.url_data.unresolved_url.starts_with('#') || {
             let parsed = url::Url::parse(value.url_data.resolved_url.as_ref()).ok();
             let document = url::Url::parse(self.document.DocumentURL()).ok();
@@ -950,9 +950,9 @@ pub struct DocumentStyleEngine {
     registered_container_properties: Option<Rc<dyn RegisteredContainerPropertyResolver>>,
     color_scheme_settings: production_style_builder::ColorSchemeSettings,
     font_metrics: Option<Rc<dyn production_style_builder::FontMetricsResolver>>,
-    menu_list_theme: layoutng_style::style::menu_list_inner_style::MenuListPopupTheme,
+    menu_list_theme: layout_style::style::menu_list_inner_style::MenuListPopupTheme,
     menu_list_native_theme_metrics:
-        Option<layoutng_style::style::menu_list_inner_style::MenuListNativeThemeMetrics>,
+        Option<layout_style::style::menu_list_inner_style::MenuListNativeThemeMetrics>,
 }
 /// Read-only capacities of the production custom-property owner. Map bucket
 /// figures exclude control bytes/allocator rounding. Token payloads and maps
@@ -1212,7 +1212,7 @@ impl DocumentStyleEngine {
     }
     pub fn SetMenuListNativeThemeMetrics(
         &mut self,
-        metrics: layoutng_style::style::menu_list_inner_style::MenuListNativeThemeMetrics,
+        metrics: layout_style::style::menu_list_inner_style::MenuListNativeThemeMetrics,
     ) {
         self.menu_list_native_theme_metrics = Some(metrics);
     }
@@ -1450,7 +1450,7 @@ impl DocumentStyleEngine {
                     | PseudoType::kPseudoDrag
             ) && style.is_some_and(|style| {
                 style.HasPseudoElementStyle(
-                    layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdFirstLetter,
+                    layout_style::style::computed_style_constants::PseudoId::kPseudoIdFirstLetter,
                 )
             }) {
                 self.interaction_changed_subtrees.insert(id);
@@ -2882,7 +2882,7 @@ impl DocumentStyleEngine {
                             for data in old.AllRuleData() {
                                 for selector in data.Selector().SimpleSelectors() {
                                     let pseudo = GetPseudoId(selector.GetPseudoType());
-                                    if layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(pseudo) {
+                                    if layout_style::style::computed_style_constants::IsHighlightPseudoElement(pseudo) {
                                         old_highlight_pseudos.insert(pseudo);
                                     }
                                 }
@@ -4179,7 +4179,7 @@ impl DocumentStyleEngine {
                         if document.InputType(index)
                             == Some(dom::persistent_document::DOMInputType::kRange)
                         {
-                            layoutng_style::style::range_input_style::AdjustRangeInputStyle(
+                            layout_style::style::range_input_style::AdjustRangeInputStyle(
                                 &mut builder,
                             );
                         }
@@ -4531,7 +4531,7 @@ impl DocumentStyleEngine {
                                         resolver.Metrics(parent.GetFontDescription())
                                     })
                                     .map(|m| m.Height() as f32);
-                                let custom = layoutng_style::style::menu_list_inner_style::MenuListInnerCustomStyle(
+                                let custom = layout_style::style::menu_list_inner_style::MenuListInnerCustomStyle(
                                     parent, unsafe { option_style.Get().as_ref() },
                                     document.AutofillState(select) != dom::persistent_document::DOMAutofillState::kNotFilled,
                                     height, document.SelectRemoveOverflowHiddenEnabled(),
@@ -6702,7 +6702,7 @@ impl DocumentStyleEngine {
             };
             let defer_author_until_after_slotted = pseudo.is_some_and(|kind| {
                 kind.Id()
-                    == layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdPlaceholder
+                    == layout_style::style::computed_style_constants::PseudoId::kPseudoIdPlaceholder
             });
             let mut direct = Vec::<(
                 usize,
@@ -6812,7 +6812,7 @@ impl DocumentStyleEngine {
             let shadow_matching_index = if pseudo.is_none() {
                 Some(index)
             } else if pseudo.is_some_and(|kind| {
-                kind.Id() == layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdPlaceholder
+                kind.Id() == layout_style::style::computed_style_constants::PseudoId::kPseudoIdPlaceholder
             }) {
                 document.UAShadowPseudoElement(index, "-webkit-input-placeholder")
             } else {
@@ -7748,7 +7748,7 @@ impl DocumentStyleEngine {
                         known_to_be_opaque: image.StyleImage().KnownToBeOpaque(computed_style),
                     });
                 } else if let Some(shader) = unsafe { image.as_ref() }.and_then(|image| {
-                    layoutng::internal::boundary::paint_style_export::ExportGeneratedImageShader(
+                    layout_core::internal::boundary::paint_style_export::ExportGeneratedImageShader(
                         computed_style,
                         image,
                     )
@@ -7783,7 +7783,7 @@ fn ResolveSVGMarkerLengthValues(
     document: &Document,
     node: usize,
     context: &crate::resolver::production_container_runtime::ProductionContainerRuntime<'_>,
-) -> Result<Arc<layoutng_style::css::svg_length_value::SVGMarkerLengthValues>, DocumentStyleError> {
+) -> Result<Arc<layout_style::css::svg_length_value::SVGMarkerLengthValues>, DocumentStyleError> {
     use style_parser::svg_length_parser::SVGLengthInput;
     let inputs = document.Node(node).SVGMarkerLengthInputs();
     if !inputs.HasUnparsed() {
@@ -7830,7 +7830,7 @@ fn ResolveSVGMarkerLengthValues(
         })
     };
     Ok(Arc::new(
-        layoutng_style::css::svg_length_value::SVGMarkerLengthValues {
+        layout_style::css::svg_length_value::SVGMarkerLengthValues {
             width: resolve(&inputs.width)?,
             height: resolve(&inputs.height)?,
             ref_x: resolve(&inputs.ref_x)?,
@@ -7883,7 +7883,7 @@ fn ResolveSVGPaintServers(
             .filter(|style| style.StrokePaint().HasUrl())
             .map(|style| style.StrokePaint().GetUrl().Utf8());
         let marker_url =
-            |resource: *mut layoutng_style::style::style_svg_resource::StyleSVGResource| {
+            |resource: *mut layout_style::style::style_svg_resource::StyleSVGResource| {
                 unsafe { resource.as_ref() }
                     .map(|resource| resource.Url().Utf8())
                     .filter(|url| !url.is_empty())
@@ -7903,7 +7903,7 @@ fn ResolveSVGPaintServers(
             None
         };
         let length_container_sizes = marker_definition.then(|| {
-            use layoutng_style::css::css_primitive_value::UnitType::*;
+            use layout_style::css::css_primitive_value::UnitType::*;
             let values = resolved_marker_lengths
                 .as_ref()
                 .expect("resolved SVG animated lengths");
@@ -7926,7 +7926,7 @@ fn ResolveSVGPaintServers(
                     kContainerInlineSize
                 });
             let parent = containers.FlatTreeParentElement(node);
-            layoutng_style::css::css_to_length_conversion_data::ContainerSizes::PreCached(
+            layout_style::css::css_to_length_conversion_data::ContainerSizes::PreCached(
                 parent
                     .filter(|_| width)
                     .and_then(|parent| containers.ContainerUnitSizeForAxis(parent, true)),
@@ -8622,7 +8622,7 @@ struct ReattachElement<'a> {
     document: &'a Document,
     index: usize,
 }
-impl layoutng_style::style::computed_style::LayoutTreeElement for ReattachElement<'_> {
+impl layout_style::style::computed_style::LayoutTreeElement for ReattachElement<'_> {
     fn IsHTMLProgressElement(&self) -> bool {
         self.document.Node(self.index).IsHTMLElement("progress")
     }
@@ -8631,7 +8631,7 @@ impl layoutng_style::style::computed_style::LayoutTreeElement for ReattachElemen
     }
     fn SupportsBaseAppearance(
         &self,
-        appearance: layoutng_style::style::appearance::AppearanceValue,
+        appearance: layout_style::style::appearance::AppearanceValue,
     ) -> bool {
         crate::resolver::production_style_cascade::SupportsBaseAppearance(
             self.document,

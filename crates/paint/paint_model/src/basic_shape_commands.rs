@@ -1,9 +1,9 @@
 //! Paint's boundary projection of canonical platform-neutral ShapePath verbs.
 use crate::paint_clip_path::{Offset, PaintPathCommand, PaintPathVerb};
-pub use layoutng_geometry::shape_path::ShapePathBuilder as BasicShapeCommands;
-use layoutng_geometry::shape_path::{PathVerb, ShapePath};
+pub use layout_geometry::shape_path::ShapePathBuilder as BasicShapeCommands;
+use layout_geometry::shape_path::{PathVerb, ShapePath};
 pub fn IntoPaintCommands(path: &ShapePath) -> Vec<PaintPathCommand> {
-    let point = |p: layoutng_geometry::shape_path::PathPoint| Offset { x: p.x, y: p.y };
+    let point = |p: layout_geometry::shape_path::PathPoint| Offset { x: p.x, y: p.y };
     path.commands
         .iter()
         .map(|c| PaintPathCommand {

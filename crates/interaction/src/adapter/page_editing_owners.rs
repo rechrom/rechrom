@@ -14,8 +14,8 @@ use interaction_default::core::editing::commands::typing_command::NormalizeTextF
 use std::borrow::Cow;
 use std::rc::Rc;
 pub type SyntheticEventDispatcher<'a> = Rc<dyn Fn(&mut Event, u64) + 'a>;
-pub use layoutng_assembly::caret::TextCaret;
-pub use layoutng_assembly::editing_state::{Selection, SelectionState};
+pub use layout_assembly::caret::TextCaret;
+pub use layout_assembly::editing_state::{Selection, SelectionState};
 
 #[derive(Default)]
 pub struct PageEditingOwners {

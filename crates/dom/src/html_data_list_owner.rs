@@ -13,7 +13,7 @@ impl PersistentDocument {
     pub fn SelectPickerShouldStoreComputedStyle(
         &self,
         node: usize,
-        style: &layoutng_style::style::computed_style::ComputedStyle,
+        style: &layout_style::style::computed_style::ComputedStyle,
     ) -> Option<bool> {
         let (select, part) = self.SelectUAPart(node)?;
         if part != super::html_select_owner::DOMSelectUAPartKind::Picker {
@@ -113,7 +113,7 @@ impl PersistentDocument {
     pub fn SetSelectInnerComputedStyle(
         &mut self,
         select: usize,
-        style: foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>,
+        style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         let inner = self
             .SelectInnerElement(select)

@@ -30,7 +30,7 @@ use crate::rule_set::{RuleData, RuleSet};
 use dom::persistent_document::{CompatibilityMode, DOMNamespace, DOMNodeType};
 use dom::Document;
 use foundation::{AtomicString, EInsideLink};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -889,7 +889,7 @@ mod tests {
     };
     use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
     use foundation::{AtomicString, Persistent, String as WTFString};
-    use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+    use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
     fn parse(css: &str) -> crate::production_style_sheet::ProductionStyleSheet {
         ParseStyleSheet(

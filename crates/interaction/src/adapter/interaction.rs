@@ -14,7 +14,7 @@ use crate::{
 };
 use dom::InteractionStateMutation;
 use interaction_scroll::core::input::event_handler::EventHandlerScrollRouting;
-use layoutng_assembly::{
+use layout_assembly::{
     editing_state::SelectionState, internal::layout_input::Offset,
     layout_engine::PaintFragmentCursor,
 };
@@ -184,7 +184,7 @@ impl<'a> Interaction<'a> {
     pub fn WithSelectionState(
         emit: InteractionOutputEmitter,
         listeners: Option<EventListenerDispatcher<'a>>,
-        selections: Rc<layoutng_assembly::editing_state::SelectionState>,
+        selections: Rc<layout_assembly::editing_state::SelectionState>,
         clock: Rc<dyn interaction_dispatch::core::dom::events::event::EventClock>,
     ) -> Self {
         let editor = Rc::new(PageEditingOwners::WithSelectionState(selections.clone()));
@@ -399,7 +399,7 @@ impl<'a> Interaction<'a> {
     pub fn HandleNativeScrollbarActivities(
         &self,
         activities: Vec<
-            layoutng_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
+            layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
         >,
     ) -> std::io::Result<()> {
         let controls = self
@@ -823,11 +823,11 @@ impl<'a> Interaction<'a> {
         &self,
         document: &InteractionDocument,
     ) -> Option<DOMSelectionSnapshot> {
-        use layoutng_assembly::EditingPositionAnchorType as A;
+        use layout_assembly::EditingPositionAnchorType as A;
         let selection = self.FrameSelectionOwner()?.Current()?;
         let owner = document.borrow();
         let document = owner.GetDocument();
-        let boundary = |position: layoutng_assembly::EditingPosition| {
+        let boundary = |position: layout_assembly::EditingPosition| {
             let node = document.FindNodeById(position.node_id?)?;
             let point = match position.anchor {
                 A::OffsetInAnchor => dom::DOMBoundaryPoint {
@@ -869,11 +869,11 @@ impl<'a> Interaction<'a> {
         use interaction_default::core::editing::set_selection_options::{
             SetSelectionBy, SetSelectionOptions,
         };
-        use layoutng_assembly::{EditingPosition, EditingTextAffinity};
+        use layout_assembly::{EditingPosition, EditingTextAffinity};
         let Some(frame) = self.FrameSelectionOwner() else {
             return false;
         };
-        let selection = range.map(|range| layoutng_assembly::editing_state::DOMSelection {
+        let selection = range.map(|range| layout_assembly::editing_state::DOMSelection {
             anchor: EditingPosition::new(range.start.node_id, range.start.offset),
             focus: EditingPosition::new(range.end.node_id, range.end.offset),
             affinity: EditingTextAffinity::Downstream,
@@ -959,10 +959,10 @@ impl<'a> Interaction<'a> {
             return false;
         };
         frame.SetSelection(
-            Some(layoutng_assembly::editing_state::DOMSelection {
-                anchor: layoutng_assembly::EditingPosition::new(anchor.node_id, anchor.offset),
-                focus: layoutng_assembly::EditingPosition::new(focus.node_id, focus.offset),
-                affinity: layoutng_assembly::EditingTextAffinity::Downstream,
+            Some(layout_assembly::editing_state::DOMSelection {
+                anchor: layout_assembly::EditingPosition::new(anchor.node_id, anchor.offset),
+                focus: layout_assembly::EditingPosition::new(focus.node_id, focus.offset),
+                affinity: layout_assembly::EditingTextAffinity::Downstream,
             }),
             interaction_default::core::editing::set_selection_options::SetSelectionOptions {
                 should_close_typing: true,
@@ -1393,7 +1393,7 @@ impl<'a> Interaction<'a> {
             files,
         );
     }
-    pub fn DragCaretSelection(&self) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    pub fn DragCaretSelection(&self) -> Option<layout_assembly::editing_state::DOMSelection> {
         super::page_event_dispatcher::mouse_drag::CurrentDragCaret(&self.source_input)
     }
     pub fn HandleTargetDrag(

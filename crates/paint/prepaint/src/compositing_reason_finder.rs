@@ -3,10 +3,10 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/compositing/compositing_reason_finder.{h,cc}`.
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use foundation::{CompositingReason, CompositingReasonCombos, CompositingReasons};
-use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layoutng_assembly::internal::layout_input::{NodeKind, PaintStyle};
+use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
+use layout_assembly::internal::layout_input::{NodeKind, PaintStyle};
 use paint_model::paint_property_tree::PaintPropertyRole;
 use std::cell::Cell;
 
@@ -164,7 +164,7 @@ impl CompositingReasonFinder {
 
     /// Source: `compositing_reason_finder.cc:541-568`.
     pub fn PotentialCompositingReasonsFor3DTransform(style: &PaintStyle) -> CompositingReasons {
-        use layoutng_style::style::compositing_reason_facts::{
+        use layout_style::style::compositing_reason_facts::{
             Potential3DCompositingReasons, Potential3DTransformFacts,
         };
         Potential3DCompositingReasons(Potential3DTransformFacts {

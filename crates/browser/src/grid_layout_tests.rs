@@ -1,5 +1,5 @@
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::{
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::{
     fragment_tree::{FragmentKind, FragmentPaintData},
     internal::layout_input::{ConstraintSpace, FontFace, Size},
 };
@@ -50,17 +50,17 @@ fn run_matrix(smoke: bool) {
         ..Default::default()
     });
     space.viewport = Some(
-        layoutng_assembly::internal::layout_input::ViewportGeometry {
-            size: layoutng_assembly::internal::layout_input_types::IntSize {
+        layout_assembly::internal::layout_input::ViewportGeometry {
+            size: layout_assembly::internal::layout_input_types::IntSize {
                 width: 1024,
                 height: 768,
             },
-            overscroll_type: layoutng_assembly::internal::layout_input::OverscrollType::kTransform,
+            overscroll_type: layout_assembly::internal::layout_input::OverscrollType::kTransform,
             ..Default::default()
         },
     );
     space.scrollbar_theme = Some(
-        layoutng_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+        layout_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
             auto_thickness: 15,
             thin_thickness: 7,
             minimum_thumb_length: 24,
@@ -123,18 +123,18 @@ fn run_matrix(smoke: bool) {
             attr(d, "g15", "style", "width:270px;gap:4px");
         }
         crate::style_services::ResolveLayoutStyles(&mut owner, &space);
-        engine.ApplyMutation(layoutng_assembly::layout_engine::LayoutMutation::Constraints(&space));
+        engine.ApplyMutation(layout_assembly::layout_engine::LayoutMutation::Constraints(&space));
         let root = crate::test_thread::BuildDOMProjection(
             &mut owner,
             &dom::UserInteractionState::default(),
             &mut engine,
         );
-        let _scope = layoutng_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+        let _scope = layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
             &assembly.objects,
         );
         let mut grids = std::collections::BTreeMap::new();
         fn collect(
-            o: &layoutng_assembly::internal::layout_object::LayoutObject,
+            o: &layout_assembly::internal::layout_object::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
                 *const layout_algo_grid::layout_grid::LayoutGrid,
@@ -162,7 +162,7 @@ fn run_matrix(smoke: bool) {
                     .expect("successful layout has fragments");
                 fragments
             } else {
-                use layoutng_assembly::internal::{
+                use layout_assembly::internal::{
                     block_node::BlockNode, constraint_space::FragmentationType,
                     constraint_space_builder::ConstraintSpaceBuilder,
                     layout_pass_scope::LayoutPassScope,
@@ -210,7 +210,7 @@ fn run_matrix(smoke: bool) {
                 );
                 for _ in 0..if stage >= 5 { stage - 4 } else { 0 } {
                     let physical = foundation::To::<
-                        layoutng_assembly::physical_box_fragment::PhysicalBoxFragment,
+                        layout_assembly::physical_box_fragment::PhysicalBoxFragment,
                     >(unsafe { &*result }.GetPhysicalFragment());
                     let token = unsafe { &*physical }.GetBreakToken();
                     assert!(!token.is_null(), "expected continuation token");
@@ -267,8 +267,8 @@ fn run_matrix(smoke: bool) {
             }) {
                 let grid = unsafe { &**grid };
                 for direction in [
-                    layoutng_style::style::grid_enums::GridTrackSizingDirection::kForColumns,
-                    layoutng_style::style::grid_enums::GridTrackSizingDirection::kForRows,
+                    layout_style::style::grid_enums::GridTrackSizingDirection::kForColumns,
+                    layout_style::style::grid_enums::GridTrackSizingDirection::kForRows,
                 ] {
                     values.extend([
                         grid.AutoRepeatCountForDirection(direction) as f64,

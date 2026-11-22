@@ -6,7 +6,7 @@
 
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::display_item_id::DisplayItemIdType;
@@ -99,7 +99,7 @@ impl<'n, 'f, 'c, 'o> VideoPainter<'n, 'f, 'c, 'o> {
                     id,
                     DisplayItemClientInfo::from_fragment(fragment),
                     layer,
-                    layoutng_assembly::internal::layout_input::Offset {
+                    layout_assembly::internal::layout_input::Offset {
                         x: destination.x,
                         y: destination.y,
                     },
@@ -197,10 +197,10 @@ mod tests {
     use crate::ForeignLayer as _;
     use crate::{PaintPhase, PaintRecording};
     use image_resource::{PaintImage, PaintImageContent};
-    use layoutng_assembly::fragment_tree::{
+    use layout_assembly::fragment_tree::{
         FragmentPaintData, PaintResources, ReplacedContentPaintData,
     };
-    use layoutng_assembly::internal::layout_input::{Offset, Size};
+    use layout_assembly::internal::layout_input::{Offset, Size};
     use paint_model::paint_flags::PaintFlag;
     use std::{
         any::Any,

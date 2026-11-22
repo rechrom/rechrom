@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -49,26 +49,26 @@ use foundation::{
     blink_geometry::transforms::affine_transform::AffineTransform, LayoutUnit, PhysicalOffset,
     PhysicalRect, PhysicalSize, WritingMode as StyleWritingMode,
 };
-use layoutng_assembly::fragment_tree::{
+use layout_assembly::fragment_tree::{
     CanvasBackgroundPaintView, FragmentKind, FragmentPaintData, FragmentPaintRect, PaintGlyph,
     PaintResources,
 };
-use layoutng_assembly::internal::background_bleed_avoidance::{
+use layout_assembly::internal::background_bleed_avoidance::{
     BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
 };
-use layoutng_assembly::internal::caret_rect::CaretShape;
-use layoutng_assembly::internal::layout_input::PaintStyle;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::caret_rect::CaretShape;
+use layout_assembly::internal::layout_input::PaintStyle;
+use layout_assembly::internal::layout_input::{
     BorderLineStyle, Display, Edges, FloatSide, FocusedImageMapArea, ImageMapAreaShape,
     ListStyleType, NodeKind, Offset, PaintImage, PaintPathCommand, PaintPathVerb, Size,
     TransformMatrix, WritingMode,
 };
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::layout_input_types::Color;
+use layout_assembly::internal::paint_input::{
     BackgroundAttachment, BackgroundBox, BackgroundImageLayer, PaintBlendMode, PaintCornerRadii,
     SvgPaintComponent,
 };
-use layoutng_assembly::internal::selection_state::SelectionState;
+use layout_assembly::internal::selection_state::SelectionState;
 use paint_model::geometry_mapper::SourceToDestinationRect;
 
 // Chromium entity: core/paint/box_fragment_painter.h:35-344.
@@ -561,7 +561,7 @@ fn ShouldSkipPaintUnderInvalidationChecking(fragment: &FragmentPaintData) -> boo
         .pre_paint_invalidation
         .should_delay_full_paint_invalidation
         || fragment.paint.FormControl().is_some_and(|control| {
-            control.appearance == layoutng_style::style::appearance::AppearanceValue::kMediaSlider
+            control.appearance == layout_style::style::appearance::AppearanceValue::kMediaSlider
                 || (control.is_progress && control.indeterminate)
         })
 }
@@ -713,7 +713,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
         if fragment.ViewKind() == FragmentKind::kLine {
             let cull = paint_info.GetCullRect();
             return match fragment.paint.WritingMode() {
-                layoutng_assembly::internal::layout_input::WritingMode::kHorizontalTb => {
+                layout_assembly::internal::layout_input::WritingMode::kHorizontalTb => {
                     let y = node.paint_offset.y + rect.offset.y;
                     cull.IntersectsVerticalRange(y, y + rect.size.height)
                 }
@@ -742,7 +742,7 @@ impl<'n, 'f, 'c, 'o> BoxFragmentPainter<'n, 'f, 'c, 'o> {
             .as_deref()
             .and_then(|fragment| fragment.ViewMathML())
             .is_some_and(|math| {
-                math.kind == layoutng_assembly::fragment_tree::MathMLPaintKind::kOperator
+                math.kind == layout_assembly::fragment_tree::MathMLPaintKind::kOperator
             });
         if !parent_is_mathml_operator {
             return true;
@@ -7863,8 +7863,8 @@ fn SelectionGlyphClipRect(
     stroke_width: f64,
     selection: (u32, u32),
     fragment_range: Option<(u32, u32)>,
-    ink_overflow: Option<layoutng_assembly::fragment_tree::FragmentPaintRect>,
-    item: Option<&layoutng_assembly::fragment_item::FragmentItem>,
+    ink_overflow: Option<layout_assembly::fragment_tree::FragmentPaintRect>,
+    item: Option<&layout_assembly::fragment_item::FragmentItem>,
     physical_box_offset: Offset,
     physical_box_size: Size,
 ) -> PaintRect {
@@ -8083,21 +8083,21 @@ mod background_attachment_tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
-    use layoutng_assembly::fragment_tree::{
+    use layout_assembly::fragment_tree::{
         CanvasBackgroundPaintData, FragmentKind, FragmentPaintData, FragmentPaintRect, GapRule,
         GapRulePaintData, GapRuleSide, MathMLPaintData, MathMLPaintKind, PageBackgroundPaintData,
         PageContainerBackgroundPaintData, PaintGlyph, PaintResources, ReplacedContentPaintData,
         ScrollContainerPaintData, TextCombineEmphasisPaintData, TextCombinePaintData,
     };
-    use layoutng_assembly::internal::layout_input::{
+    use layout_assembly::internal::layout_input::{
         BorderLineStyle, Display, Edges, NodeKind, Offset, PaintImage, PaintShadow, PaintStyle,
         Size, ViewportGeometry,
     };
-    use layoutng_assembly::internal::layout_input_types::{Color, IntSize};
-    use layoutng_assembly::internal::paint_input::{
+    use layout_assembly::internal::layout_input_types::{Color, IntSize};
+    use layout_assembly::internal::paint_input::{
         BackgroundAttachment, BackgroundBox, BackgroundImageLayer,
     };
-    use layoutng_assembly::internal::selection_state::SelectionState;
+    use layout_assembly::internal::selection_state::SelectionState;
 
     use crate::geometry_mapper::TranslationTransform;
     use crate::paint_info::PaintInfo;
@@ -8203,8 +8203,8 @@ mod background_attachment_tests {
 
     #[test]
     fn box_under_invalidation_cache_skip_policy_matches_source_cases() {
-        use layoutng_assembly::fragment_tree::FormControlPaintData;
-        use layoutng_style::style::appearance::AppearanceValue;
+        use layout_assembly::fragment_tree::FormControlPaintData;
+        use layout_style::style::appearance::AppearanceValue;
 
         let mut fragment = FragmentPaintData::default();
         assert!(!ShouldSkipPaintUnderInvalidationChecking(&fragment));
@@ -8311,7 +8311,7 @@ mod background_attachment_tests {
         parent.SetOwnedFragmentForTesting(&parent_fragment);
 
         let mut line_fragment = FragmentPaintData::default();
-        line_fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kLine;
+        line_fragment.kind = layout_assembly::fragment_tree::FragmentKind::kLine;
         let mut line = PaintTreeNode::default();
         line.SetOwnedFragmentForTesting(&line_fragment);
         assert!(!BoxFragmentPainter::ShouldPaintChildFragment(
@@ -8796,7 +8796,7 @@ mod background_attachment_tests {
             &node,
             &layer,
             PaintPhase::kSelfBlockBackgroundOnly,
-            layoutng_assembly::internal::paint_input::BackgroundAttachment::kScroll,
+            layout_assembly::internal::paint_input::BackgroundAttachment::kScroll,
             PaintRect {
                 x: 0.25,
                 y: 0.25,
@@ -8858,7 +8858,7 @@ mod background_attachment_tests {
             &node,
             &layer,
             PaintPhase::kSelfBlockBackgroundOnly,
-            layoutng_assembly::internal::paint_input::BackgroundAttachment::kScroll,
+            layout_assembly::internal::paint_input::BackgroundAttachment::kScroll,
             rect,
             true,
         );
@@ -9480,7 +9480,7 @@ mod background_attachment_tests {
             PaintPhase::kForeground,
         );
         let mut fragment = FragmentPaintData::default();
-        fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kLine;
+        fragment.kind = layout_assembly::fragment_tree::FragmentKind::kLine;
         fragment.paint.ink_overflow = Some(FragmentPaintRect {
             offset: Offset::default(),
             size: Size {
@@ -9504,7 +9504,7 @@ mod background_attachment_tests {
 
         let mut vertical_fragment = fragment.clone();
         vertical_fragment.paint.writing_mode =
-            layoutng_assembly::internal::layout_input::WritingMode::kVerticalRl;
+            layout_assembly::internal::layout_input::WritingMode::kVerticalRl;
         let mut vertical_node = PaintTreeNode::default();
         vertical_node.SetOwnedFragmentForTesting(&vertical_fragment);
         vertical_node.paint_offset = Offset { x: 5.0, y: 100.0 };
@@ -9523,7 +9523,7 @@ mod background_attachment_tests {
     fn forced_colors_backplates_split_paragraphs_and_exclude_atomic_inline_text() {
         fn text_fragment(x: f64, width: f64) -> (FragmentPaintData, f64) {
             let mut fragment = FragmentPaintData::default();
-            fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+            fragment.kind = layout_assembly::fragment_tree::FragmentKind::kText;
             fragment.size = Size {
                 width,
                 height: 10.0,
@@ -9605,7 +9605,7 @@ mod background_attachment_tests {
         root_fragment.paint.style.forced_background_color = color;
         let (text, text_x) = {
             let mut fragment = FragmentPaintData::default();
-            fragment.kind = layoutng_assembly::fragment_tree::FragmentKind::kText;
+            fragment.kind = layout_assembly::fragment_tree::FragmentKind::kText;
             fragment.size = Size {
                 width: 18.0,
                 height: 9.0,
@@ -9941,7 +9941,7 @@ mod background_attachment_tests {
         use image_resource::{
             ContainerKey, DocumentPaintContent, DocumentPaintRecord, PaintImageContent,
         };
-        use layoutng_assembly::internal::layout_input::PaintImage;
+        use layout_assembly::internal::layout_input::PaintImage;
 
         let record: Arc<dyn DocumentPaintRecord> = Arc::new(0u8);
         let svg = PaintImage {
@@ -9996,7 +9996,7 @@ mod background_attachment_tests {
     #[test]
     fn replaced_image_availability_rejects_null_or_malformed_frames() {
         use image_resource::PaintImageContent;
-        use layoutng_assembly::internal::layout_input::PaintImage;
+        use layout_assembly::internal::layout_input::PaintImage;
 
         assert!(!IsPaintImageAvailable(&PaintImage::default()));
         assert!(!IsPaintImageAvailable(&PaintImage {
@@ -10625,7 +10625,7 @@ mod background_attachment_tests {
 
     #[test]
     fn table_parts_do_not_record_scroll_hit_test_data() {
-        use layoutng_assembly::internal::layout_input::Display;
+        use layout_assembly::internal::layout_input::Display;
 
         assert!(!ShouldRecordHitTestData(Display::kTableRow));
         assert!(!ShouldRecordHitTestData(Display::kTableSection));
@@ -10690,9 +10690,9 @@ mod background_attachment_tests {
         use crate::paint_context::PaintContext;
         use crate::paint_engine::DisplayItemType;
         use crate::{PaintPhase, PaintRecording, PaintRect};
-        use layoutng_assembly::fragment_tree::{FragmentPaintRect, SelfOutlinePaintData};
-        use layoutng_assembly::internal::layout_input::{BorderLineStyle, Offset, Size};
-        use layoutng_assembly::internal::layout_input_types::Color;
+        use layout_assembly::fragment_tree::{FragmentPaintRect, SelfOutlinePaintData};
+        use layout_assembly::internal::layout_input::{BorderLineStyle, Offset, Size};
+        use layout_assembly::internal::layout_input_types::Color;
 
         let mut fragment = FragmentPaintData::default();
         fragment.node_id = 7;
@@ -10759,8 +10759,8 @@ mod background_attachment_tests {
         use crate::display_item_id::DisplayItemIdType;
         use crate::paint_context::PaintContext;
         use crate::PaintRecording;
-        use layoutng_assembly::fragment_tree::FieldsetPaintData;
-        use layoutng_assembly::internal::paint_input::NinePieceImagePaint;
+        use layout_assembly::fragment_tree::FieldsetPaintData;
+        use layout_assembly::internal::paint_input::NinePieceImagePaint;
 
         let mut fragment = FragmentPaintData::default();
         fragment.node_id = 17;
@@ -10815,7 +10815,7 @@ mod background_attachment_tests {
 
     #[test]
     fn text_combine_caret_is_always_unscaled_before_children() {
-        use layoutng_assembly::internal::caret_rect::CaretShape;
+        use layout_assembly::internal::caret_rect::CaretShape;
 
         for shape in [
             CaretShape::kBar,

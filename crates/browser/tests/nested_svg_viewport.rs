@@ -5,7 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_tree::FragmentPaintData,
     internal::{
         layout_input::{FontFace, TransformMatrix},

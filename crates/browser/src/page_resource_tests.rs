@@ -7,7 +7,7 @@ use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::{
     javascript_runtime::JavaScriptRuntime, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
 };
-use layoutng_assembly::internal::layout_input::{ConstraintSpace, FontFace};
+use layout_assembly::internal::layout_input::{ConstraintSpace, FontFace};
 use open::script_scheduler::{ScriptLoadClient, ScriptScheduler};
 use page_mutation::ResourceMutation;
 use std::{cell::RefCell, io, path::PathBuf, rc::Rc};

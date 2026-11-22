@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, CSSValueID as V, Color, String};
-use layoutng_style::{
+use layout_style::{
     css::style_color::StyleColor,
     style::{
         computed_style::{ComputedStyle, ComputedStyleBuilder},
@@ -33,7 +33,7 @@ fn parse(id: P, text: &str) -> Vec<values::PropertyValue> {
     )
     .unwrap()
 }
-use layoutng_style::{
+use layout_style::{
     css::css_reflection_direction::CSSReflectionDirection as D,
     style::nine_piece_image::ENinePieceImageRule as R,
 };
@@ -117,14 +117,14 @@ fn visited_svg_paint_export_replaces_rgb_and_preserves_unvisited_alpha() {
     builder.SetFillOpacity(0.5);
     let style = unsafe { &*builder.TakeStyle() };
 
-    let fill = layoutng::internal::boundary::paint_style_export::Export(style, None)
+    let fill = layout_core::internal::boundary::paint_style_export::Export(style, None)
         .svg_fill
         .expect("visited fill");
     assert!((fill.red - 0.0).abs() < 0.005);
     assert!((fill.green - 1.0).abs() < 0.005);
     assert!((fill.blue - 0.0).abs() < 0.005);
     assert!((fill.alpha - 64.0 / 255.0 * 0.5).abs() < 0.005);
-    let projected = layoutng::style_projection::ProjectComputedStyle(style).unwrap();
+    let projected = layout_core::style_projection::ProjectComputedStyle(style).unwrap();
     assert_eq!(projected.paint.svg_fill, Some(fill));
 }
 

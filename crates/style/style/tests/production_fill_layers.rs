@@ -2,7 +2,7 @@
 //! manually invoking the already-translated FillLayer normalization helpers.
 use dom::{persistent_document::DOMAttribute, DOM};
 use foundation::{BlendMode, Persistent};
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::ComputedStyle,
     computed_style_constants::{BackgroundEdgeOrigin, EFillAttachment, EFillBox, EFillRepeat},
     fill_layer::FillLayer,

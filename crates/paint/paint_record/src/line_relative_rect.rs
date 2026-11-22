@@ -6,8 +6,8 @@ use foundation::{
     blink_geometry::transforms::affine_transform::AffineTransform, gfx, FloorToInt, LayoutUnit,
     PhysicalOffset, PhysicalRect, SnapSizeToPixel, WritingMode,
 };
-use layoutng_assembly::fragment_item::FragmentItem;
-use layoutng_geometry::geometry::logical_size::LogicalSize;
+use layout_assembly::fragment_item::FragmentItem;
+use layout_geometry::geometry::logical_size::LogicalSize;
 
 // Source: third_party/blink/renderer/core/paint/line_relative_rect.h:37-62.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

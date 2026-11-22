@@ -1,5 +1,5 @@
 use crate::page::Page;
-use layoutng_assembly::internal::{
+use layout_assembly::internal::{
     layout_block_flow::LayoutBlockFlow, layout_object::LayoutObject,
 };
 use std::{cell::RefCell, io, rc::Rc};

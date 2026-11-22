@@ -2,7 +2,7 @@
 
 use crate::{style_state::StyleUpdateImpact, DOM};
 use cssom::CSSDeclaration;
-use layoutng_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
+use layout_assembly::internal::layout_input::{Offset, TrackedElementSubRect};
 
 /// Lifecycle admission uses the document's existing accumulated impact and
 /// geometry revision; these methods do not resolve or copy a separate tree.

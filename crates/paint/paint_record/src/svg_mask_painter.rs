@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
@@ -68,7 +68,7 @@ impl SVGMaskPainter {
 mod tests {
     use super::*;
     use crate::PaintRecording;
-    use layoutng_assembly::fragment_tree::FragmentPaintData;
+    use layout_assembly::fragment_tree::FragmentPaintData;
     use paint_model::{DisplayMaskLayer, PaintRect};
 
     #[test]
@@ -80,11 +80,11 @@ mod tests {
         fragment.paint.style.force_dark = true;
         fragment.paint.style.dynamic_range_limit =
             foundation::DynamicRangeLimit::from_mix(0.25, 0.5);
-        fragment.paint.source_kind = layoutng_assembly::internal::layout_input::NodeKind::kSvgShape;
+        fragment.paint.source_kind = layout_assembly::internal::layout_input::NodeKind::kSvgShape;
         fragment.paint.self_ink_overflow =
-            Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
-                offset: layoutng_assembly::internal::layout_input::Offset { x: -5.0, y: 0.0 },
-                size: layoutng_assembly::internal::layout_input::Size {
+            Some(layout_assembly::fragment_tree::FragmentPaintRect {
+                offset: layout_assembly::internal::layout_input::Offset { x: -5.0, y: 0.0 },
+                size: layout_assembly::internal::layout_input::Size {
                     width: 2.0,
                     height: 2.0,
                 },
@@ -155,11 +155,11 @@ mod tests {
     fn svg_mask_visual_rect_excludes_css_mask_border() {
         let mut fragment = FragmentPaintData::default();
         fragment.paint.has_source = true;
-        fragment.paint.source_kind = layoutng_assembly::internal::layout_input::NodeKind::kSvgShape;
+        fragment.paint.source_kind = layout_assembly::internal::layout_input::NodeKind::kSvgShape;
         fragment.paint.self_ink_overflow =
-            Some(layoutng_assembly::fragment_tree::FragmentPaintRect {
-                offset: layoutng_assembly::internal::layout_input::Offset { x: 1.0, y: 2.0 },
-                size: layoutng_assembly::internal::layout_input::Size {
+            Some(layout_assembly::fragment_tree::FragmentPaintRect {
+                offset: layout_assembly::internal::layout_input::Offset { x: 1.0, y: 2.0 },
+                size: layout_assembly::internal::layout_input::Size {
                     width: 3.0,
                     height: 4.0,
                 },

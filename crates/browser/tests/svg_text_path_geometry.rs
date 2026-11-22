@@ -3,13 +3,13 @@
 mod test_thread;
 
 use browser::page::Page;
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layoutng_assembly::internal::{
+use layout_assembly::internal::{
     layout_input::FontFace, layout_object::LayoutObject,
     layout_pass_scope::LayoutObjectFactoryScope,
 };
-use layoutng_assembly::layout_engine::PaintFragmentCursor;
+use layout_assembly::layout_engine::PaintFragmentCursor;
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -273,7 +273,7 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
 
 fn first_svg_data(
     node: PaintFragmentCursor<'_>,
-) -> Option<std::sync::Arc<layoutng_assembly::fragment_tree::SvgTextPaintData>> {
+) -> Option<std::sync::Arc<layout_assembly::fragment_tree::SvgTextPaintData>> {
     if let Some(svg) = node.PaintData().ViewSvgText() {
         return Some(svg);
     }
@@ -343,9 +343,9 @@ fn svg_shaped_text_ink_overflow_recalculates_after_shadow_mutation() {
 #[test]
 fn shadow_extents_keep_original_and_skip_inset() {
     use foundation::gfx;
-    use layoutng_style::css::style_color::StyleColor;
-    use layoutng_style::style::shadow_data::{ShadowData, ShadowStyle};
-    use layoutng_style::style::shadow_list::{ShadowDataVector, ShadowList};
+    use layout_style::css::style_color::StyleColor;
+    use layout_style::style::shadow_data::{ShadowData, ShadowStyle};
+    use layout_style::style::shadow_list::{ShadowDataVector, ShadowList};
     let normal = ShadowData::new(
         gfx::Vector2dF::new(-5.0, 3.0),
         2.2,

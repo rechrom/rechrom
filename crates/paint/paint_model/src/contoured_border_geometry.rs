@@ -6,13 +6,13 @@
 //! `BorderShapeUtils`/`BorderShapePainter` subsystem and is never substituted
 //! by this module.
 
-use layoutng_assembly::fragment_tree::{
+use layout_assembly::fragment_tree::{
     FragmentBoxSides, FragmentPaintData, PaintProperties, ResidentBoxGeometry,
 };
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::{
     Edges, Offset, PaintPathCommand, PaintPathVerb, PaintStyle, Size,
 };
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::paint_input::{
     PaintCornerRadii, PaintCornerRadius, PaintStyleData,
 };
 

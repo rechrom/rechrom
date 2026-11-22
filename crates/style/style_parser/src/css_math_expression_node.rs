@@ -1,4 +1,4 @@
-//! CSS math token grammar over the single compiled model owned by layoutng_style.
+//! CSS math token grammar over the single compiled model owned by layout_style.
 #![allow(non_snake_case)]
 use crate::{
     css_numeric_literal_value::CSSNumericLiteralValue,
@@ -7,7 +7,7 @@ use crate::{
     css_primitive_value::UnitType,
 };
 use foundation::CSSValueID;
-pub use layoutng_style::css::css_math_expression_node::*;
+pub use layout_style::css::css_math_expression_node::*;
 // cpp: css_math_expression_node.cc:4708-4781,4839-4902,5069-5270.
 pub fn ConsumeMathFunction<T: TokenStreamTokenizer>(
     stream: &mut CSSParserTokenStream<'_, T>,

@@ -16,13 +16,13 @@ fileapi = { path = "../webapi/fileapi" }
 canvas = { path = "../canvas" }
 browser_tracing = { path = "../tracing" }
 cssom = { path = "../cssom" }
-layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+layout_assembly = { path = "../layout/layout_assembly" }
 
 css_parser = { path = "../css_parser", features = ["tokenizer"] }
 font_engine = { path = "../font_engine" }
 foundation = { path = "../foundation" }
 image_resource = { path = "../image_resource" }
-layoutng_style = { path = "../layoutng/layoutng_style" }
+layout_style = { path = "../layout/layout_style" }
 style_parser = { path = "../style/style_parser" }
 url = "2"
 
@@ -31,7 +31,7 @@ html = { path = "../document/html" }
 style = { path = "../style/style" }
 # Standalone DOM tests link the assembly dispatch's real replaced-object
 # provider; browser executables already supply it through their layout bundle.
-layout_algo_replaced = { path = "../layoutng/layout_algo_replaced" }
-layout_algo_block = { path = "../layoutng/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_replaced = { path = "../layout/layout_algo_replaced" }
+layout_algo_block = { path = "../layout/layout_algo_block", features = ["block_only_host", "replaced_extension"] }
 
-layoutng_assembly = { path = "../layoutng/layoutng_assembly", features = ["translation_in_progress"] }
+layout_assembly = { path = "../layout/layout_assembly", features = ["translation_in_progress"] }

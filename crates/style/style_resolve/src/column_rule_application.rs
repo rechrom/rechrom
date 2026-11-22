@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{EBorderStyle, EInsideLink};
-use layoutng_style::style::{
+use layout_style::style::{
     gap_data::{GapData, GapValue},
     gap_data_list::GapDataList,
 };

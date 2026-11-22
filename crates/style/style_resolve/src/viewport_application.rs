@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{AtomicString, LengthBox, Member};
-use layoutng_style::style::page_size_type::PageSizeType;
+use layout_style::style::page_size_type::PageSizeType;
 
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
     use CSSPropertyID::*;
@@ -148,7 +148,7 @@ pub(super) fn Apply(
                 let mut description = b.GetFontDescription().clone();
                 description.SetComputedSize(
                     (description.SpecifiedSize() * effective).min(
-                        layoutng_style::style::computed_style_constants::kMaximumAllowedFontSize,
+                        layout_style::style::computed_style_constants::kMaximumAllowedFontSize,
                     ),
                 );
                 StageFontDescription(b, &description);

@@ -39,7 +39,7 @@ use crate::match_result::{
     MixinParameterBindings as MatchMixinBindings, TreeScope as MatchTreeScope,
 };
 use foundation::{AtomicString, CSSPropertyID, EInsideLink};
-use layoutng_style::style::computed_style_constants::{IsHighlightPseudoElement, PseudoId};
+use layout_style::style::computed_style_constants::{IsHighlightPseudoElement, PseudoId};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use style_model::css_selector::{CSSSelectorComplex, GetPseudoId, MatchType};

@@ -1,5 +1,5 @@
 use dom::persistent_document::DOMAttribute;
-use layoutng_style::style::{computed_style_constants::PseudoId, content_data::TextContentData};
+use layout_style::style::{computed_style_constants::PseudoId, content_data::TextContentData};
 use style::{media_queries::MediaValuesCachedData, StyleEngine};
 
 fn node(owner: &dom::DOM, id: &str) -> usize {
@@ -23,7 +23,7 @@ fn media() -> MediaValuesCachedData {
         ..Default::default()
     }
 }
-fn content(style: &layoutng_style::style::computed_style::ComputedStyle) -> String {
+fn content(style: &layout_style::style::computed_style::ComputedStyle) -> String {
     let data = style.GetContentData().unwrap();
     assert!(unsafe { &*data }.IsText());
     assert!(unsafe { &*data }.Next().is_none());

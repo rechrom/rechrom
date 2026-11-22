@@ -1,7 +1,7 @@
 use foundation::{
     CSSPropertyID as P, CSSValueID as V, Color, EBorderStyle as S, EInsideLink, String,
 };
-use layoutng_style::{
+use layout_style::{
     css::style_color::StyleColor,
     style::computed_style::{ComputedStyle, ComputedStyleBuilder},
 };

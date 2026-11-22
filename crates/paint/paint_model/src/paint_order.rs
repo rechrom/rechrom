@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layoutng_assembly::internal::layout_input::{NodeKind, Position};
-use layoutng_assembly::internal::paint_input::PaintBlendMode;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
+use layout_assembly::internal::layout_input::{NodeKind, Position};
+use layout_assembly::internal::paint_input::PaintBlendMode;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PaintLayerClassification {

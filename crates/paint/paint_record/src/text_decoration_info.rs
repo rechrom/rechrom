@@ -12,7 +12,7 @@ use foundation::{
     gfx, Color, DecorationGeometry, EBoxDecorationBreak, ETextDecorationStyle, FloatValueForLength,
     LayoutUnit, Length, StrokeStyle, TextDecorationLine, TextDirection, WaveDefinition,
 };
-use layoutng_assembly::{
+use layout_assembly::{
     fragment_item::FragmentItem,
     inline_cursor::InlineCursor,
     internal::{
@@ -20,7 +20,7 @@ use layoutng_assembly::{
         used_font::UsedFont,
     },
 };
-use layoutng_style::style::{
+use layout_style::style::{
     applied_text_decoration::AppliedTextDecoration, computed_style::ComputedStyle,
 };
 
@@ -29,7 +29,7 @@ const USCRIPT_KATAKANA_OR_HIRAGANA: i32 = 54;
 
 // Source: third_party/blink/renderer/core/paint/text_decoration_info.cc:27-57.
 fn ResolveUnderlinePosition(style: &ComputedStyle) -> ResolvedUnderlinePosition {
-    use layoutng_style::style::computed_style_constants::TextUnderlinePosition;
+    use layout_style::style::computed_style_constants::TextUnderlinePosition;
 
     let position = style.GetTextUnderlinePosition();
     if style.GetFontBaseline() != FontBaseline::kCentralBaseline {
@@ -362,7 +362,7 @@ impl<'a> TextDecorationInfo<'a> {
         let use_decorating_box = inline_context.is_some()
             && decoration_override.is_none()
             && !is_svg_text.0
-            && !layoutng_style::style::computed_style_constants::IsHighlightPseudoElement(
+            && !layout_style::style::computed_style_constants::IsHighlightPseudoElement(
                 target_style.StyleType(),
             );
         let mut result = Self {
@@ -874,7 +874,7 @@ mod tests {
     use foundation::{
         EBoxDecorationBreak, LayoutHeapScope, Length, MakeGarbageCollected, TextDecorationThickness,
     };
-    use layoutng_style::style::text_decoration_inset::TextDecorationInset;
+    use layout_style::style::text_decoration_inset::TextDecorationInset;
 
     fn decoration(lines: TextDecorationLine, style: ETextDecorationStyle) -> AppliedTextDecoration {
         AppliedTextDecoration::new(

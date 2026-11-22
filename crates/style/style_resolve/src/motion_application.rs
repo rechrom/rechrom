@@ -5,7 +5,7 @@
 use super::*;
 use crate::css_math_expression_node::CalculationResultCategory as C;
 use foundation::{LengthPoint, MakeGarbageCollected, Member};
-use layoutng_style::style::{
+use layout_style::style::{
     basic_shapes::BasicShape,
     computed_style_constants::{CoordBox, OffsetRotationType},
     offset_path_operation::{
@@ -223,7 +223,7 @@ mod tests {
         css_parser_mode::CSSParserMode,
         production_property_parser::{ParseDeclarationList, ParseProperty, PropertyParseErrorKind},
     };
-    use layoutng_style::style::{basic_shapes::ShapeType, offset_path_operation::OperationType};
+    use layout_style::style::{basic_shapes::ShapeType, offset_path_operation::OperationType};
     fn initial() -> &'static ComputedStyle {
         unsafe { &*ComputedStyle::GetInitialStyleSingleton() }
     }

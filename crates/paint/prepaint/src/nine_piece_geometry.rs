@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::internal::layout_input::{
     BoxDecorationBreak, Display, Offset, PaintImage, Size,
 };
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::paint_input::{
     NinePieceImagePaint, PaintImageTileRule, PaintReflectionMaskLayer,
 };
 

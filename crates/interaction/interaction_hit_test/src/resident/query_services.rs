@@ -4,7 +4,7 @@
 use super::*;
 use crate::core::layout::native_hit_test::{NativeHitTestRequiredPort, NativeHitTestResult};
 use foundation::{layout_hit_test::LayoutHitTestKind as Kind, DynamicTo};
-use layoutng_assembly::{
+use layout_assembly::{
     internal::{
         layout_box_model_object::LayoutBoxModelObject, layout_node_metadata::Node,
         layout_scrollable_area::OverflowControlHit,
@@ -128,11 +128,11 @@ impl PathHitTest for RejectedPath {
     }
 }
 struct ResidentInlineRegion(Box<dyn paint::path_hit_test::PaintHitTestRegion>);
-struct ResidentScrollbar(foundation::Persistent<layoutng_assembly::internal::scrollbar::Scrollbar>);
+struct ResidentScrollbar(foundation::Persistent<layout_assembly::internal::scrollbar::Scrollbar>);
 impl crate::core::layout::hit_test_result::HitTestScrollbar for ResidentScrollbar {
     fn NativeScrollbarOwner(
         &self,
-    ) -> Option<&foundation::Persistent<layoutng_assembly::internal::scrollbar::Scrollbar>> {
+    ) -> Option<&foundation::Persistent<layout_assembly::internal::scrollbar::Scrollbar>> {
         Some(&self.0)
     }
 }

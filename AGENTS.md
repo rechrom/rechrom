@@ -34,7 +34,7 @@ URL / input
   -> Loader      resource, url_loader, document_loader, open, html
   -> DOM         dom, cssom
   -> Style       style_*
-  -> Layout      layoutng, layout_*
+  -> Layout      layout_core, layout_*
   -> Paint       prepaint, paint_*
   -> Compositor  compositor_*        (layerization, layers, tiles, raster scheduling)
   -> Viz         viz                 (surface aggregation, display scheduling)
@@ -119,12 +119,12 @@ effects). Shared model: `style_model`.
   second layout-style model. Extra boundary values are only for facts that are
   not in `ComputedStyle`.
 
-**Layout**: `LayoutMutation` applied by `layoutng_assembly` (attach, style
+**Layout**: `LayoutMutation` applied by `layout_assembly` (attach, style
 binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
 (`layout_algo_block`, `_inline`, `_flex`, `_grid`, `_table`, `_multicol`,
 `_float`, `_out_of_flow`, `_replaced`, `_svg`, `_forms`, `_list`) →
 `layout_fragment` (resident fragment tree) → `layout_commit` (typed
-publication). Shared roots: `layoutng_geometry`, `layoutng_style` (the single
+publication). Shared roots: `layout_geometry`, `layout_style` (the single
 `ComputedStyle` owner), `paint_input_types` (plain paint values Layout
 publishes: paint-input schema, `PaintResources`, glyph runs; Paint, Raster,
 Compositor and Style name them without depending on Layout), `foundation`

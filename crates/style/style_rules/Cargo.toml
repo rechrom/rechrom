@@ -7,6 +7,6 @@ edition = "2021"
 browser_tracing = { path = "../../tracing" }
 foundation = { path = "../../foundation" }
 style_model = { path = "../style_model" }
-layoutng_style = { path = "../../layoutng/layoutng_style" }
+layout_style = { path = "../../layout/layout_style" }
 style_invalidation = { path = "../style_invalidation" }
 style_parser = { path = "../style_parser" }

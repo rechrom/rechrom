@@ -1,7 +1,7 @@
 //! Original ViewTransitionStyleTracker CSS discovery, cc:635-800,890-982.
 //! The cursor borrows native paint order and the canonical ComputedStyle.
 use super::*;
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::ComputedStyle,
     computed_style_constants::{IsTransitionPseudoElement, PseudoId},
     style_view_transition_name::StyleViewTransitionNameType,

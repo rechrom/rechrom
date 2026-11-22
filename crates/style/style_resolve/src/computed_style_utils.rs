@@ -10,7 +10,7 @@ use font_engine::fonts::{
     font_selection_types::{kItalicSlopeValue, kNormalSlopeValue},
 };
 use foundation::{CSSValueID, Length, TextDecorationLine};
-use layoutng_style::{
+use layout_style::{
     css::{style_auto_color::StyleAutoColor, style_color::StyleColor},
     style::computed_style::ComputedStyle,
 };

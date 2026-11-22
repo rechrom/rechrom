@@ -5,16 +5,16 @@
 // Complex/custom branches stay explicit Unsupported.
 #![allow(unused_imports)]
 use foundation::*;
-use layoutng_style::css::style_color::StyleColor;
-use layoutng_style::css::white_space::WhiteSpaceCollapse;
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
-use layoutng_style::style::computed_style_constants::*;
-use layoutng_style::style::computed_style_initial_values::ComputedStyleInitialValues;
-use layoutng_style::style::css_timing_data::*;
-use layoutng_style::style::page_orientation::PageOrientation;
-use layoutng_style::style::style_content_alignment_data::StyleContentAlignmentData;
-use layoutng_style::style::style_flex_wrap_data::StyleFlexWrapData;
-use layoutng_style::style::style_self_alignment_data::StyleSelfAlignmentData;
+use layout_style::css::style_color::StyleColor;
+use layout_style::css::white_space::WhiteSpaceCollapse;
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style_constants::*;
+use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues;
+use layout_style::style::css_timing_data::*;
+use layout_style::style::page_orientation::PageOrientation;
+use layout_style::style::style_content_alignment_data::StyleContentAlignmentData;
+use layout_style::style::style_flex_wrap_data::StyleFlexWrapData;
+use layout_style::style::style_self_alignment_data::StyleSelfAlignmentData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LonghandApplicationError {

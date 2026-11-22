@@ -1,4 +1,4 @@
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::{
     TextOffsetMapping, TextTransform, TextTransformProvider, TextTransformResult,
 };
 

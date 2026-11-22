@@ -3,7 +3,7 @@
 //! core/dom/scroll_marker_group_data.h:87-208; .cc:424-448,616-621;
 //! core/dom/scroll_marker_group_pseudo_element.cc:47-52,146-166,208-219.
 use super::*;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DOMScrollMarkerInvalidation {

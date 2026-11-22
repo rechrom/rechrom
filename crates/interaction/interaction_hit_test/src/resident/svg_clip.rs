@@ -16,8 +16,8 @@ use foundation::{
     blink_geometry::transforms::affine_transform::AffineTransform, gfx,
     layout_hit_test::LayoutHitTestKind as Kind,
 };
-use layoutng_assembly::layout_engine::{NativeHitTestCursor, PaintFragmentCursor};
-use layoutng_style::style::{
+use layout_assembly::layout_engine::{NativeHitTestCursor, PaintFragmentCursor};
+use layout_style::style::{
     clip_path_operation::ClipPathOperation, computed_style::ComputedStyle,
     computed_style_constants::GeometryBox,
     reference_clip_path_operation::ReferenceClipPathOperation,

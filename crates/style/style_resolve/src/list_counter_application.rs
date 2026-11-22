@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{Member, QuotesData, ScopedRefPtr};
-use layoutng_style::style::{
+use layout_style::style::{
     counter_directives::{CounterPropertyEntry, CounterPropertyList},
     list_style_type_data::ListStyleTypeData,
 };

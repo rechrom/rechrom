@@ -4,5 +4,5 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-layoutng_assembly = { path = "../../layoutng/layoutng_assembly" }
+layout_assembly = { path = "../../layout/layout_assembly" }
 paint_model = { path = "../paint_model" }

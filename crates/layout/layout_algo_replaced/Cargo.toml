@@ -1,0 +1,12 @@
+[package]
+name = "layout_algo_replaced"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+browser_tracing = { path = "../../tracing" }
+foundation = { path = "../../foundation" }
+image_resource = { path = "../../image_resource" }
+layout_assembly = { path = "../layout_assembly" }
+layout_geometry = { path = "../layout_geometry" }
+layout_style = { path = "../layout_style" }

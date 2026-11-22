@@ -19,7 +19,7 @@ use interaction_hit_test::{
         ResidentLayer, ResidentLayerServices,
     },
 };
-use layoutng_assembly::layout_engine::{LayoutOutput, PaintFragmentCursor};
+use layout_assembly::layout_engine::{LayoutOutput, PaintFragmentCursor};
 
 pub type PointerHitResult = HitTestResult<'static, ()>;
 pub struct PointerHit {
@@ -323,7 +323,7 @@ impl AdjustmentContext<'_, '_> {
     fn Layout<'a>(
         &'a self,
         node: &NodeRef,
-    ) -> Option<layoutng_assembly::layout_engine::LayoutNode<'a>> {
+    ) -> Option<layout_assembly::layout_engine::LayoutNode<'a>> {
         self.query.layout.Node(node.DOMNodeId()?)
     }
 }

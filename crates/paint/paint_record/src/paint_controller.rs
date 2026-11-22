@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use foundation::TrustedIdentityHashMap as HashMap;
-use layoutng_assembly::fragment_tree::RasterEffectOutset;
+use layout_assembly::fragment_tree::RasterEffectOutset;
 use paint_chunk::{
     DisplayItemClientInfo, PaintChunkBackgroundColorInfo, PaintChunker, PaintHitTestData,
     PaintHitTestOpaqueness, PaintSelectionBound, PaintTrackedElementSubRect,

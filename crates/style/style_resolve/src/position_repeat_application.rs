@@ -10,7 +10,7 @@ use crate::{
 use foundation::{
     BlendMode, CSSPropertyID, CSSValueID, Length, LengthPoint, LengthSize, LengthType,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::{
         BackgroundEdgeOrigin, CompositingOperator, EFillAttachment, EFillBox, EFillLayerType,

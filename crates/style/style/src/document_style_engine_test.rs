@@ -319,7 +319,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
     let highlight = unsafe { &*highlight };
     assert_eq!(
         highlight.StyleType(),
-        layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
+        layout_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
     );
     assert_eq!(highlight.GetCurrentColor(None), Color::FromRGB(0xff, 0, 0));
     // Element::RecalcHighlightStyles leaves unmatched descendants on the
@@ -359,7 +359,7 @@ fn named_custom_highlight_metadata_survives_translated_update() {
     let final_style = unsafe { &*pointer(&owner, target) };
     assert!(final_style.HighlightData().CustomHighlight(&mark).is_null());
     assert!(!final_style.HasPseudoElementStyle(
-        layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
+        layout_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
     ));
 }
 
@@ -387,7 +387,7 @@ fn highlight_cache_survives_supported_defined_selector_resolution() {
     };
     let mark = foundation::AtomicString::from_str("mark");
     assert!(style.HasPseudoElementStyle(
-        layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
+        layout_style::style::computed_style_constants::PseudoId::kPseudoIdHighlight
     ));
     let highlight = style.HighlightData().CustomHighlight(&mark);
     assert!(!highlight.is_null());
@@ -1797,7 +1797,7 @@ fn light_dark_color_uses_each_elements_computed_color_scheme() {
 
 #[test]
 fn light_dark_url_images_use_computed_scheme_and_document_resource_owner() {
-    use layoutng_style::style::style_fetched_image::FetchedImage;
+    use layout_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let light_source = "https://example.test/light.svg";
@@ -2026,7 +2026,7 @@ fn resolved_background_gradient_is_retained_by_computed_style_computed_style() {
     let image = unsafe { first.GetImage().as_ref() }.expect("computed background image");
     assert!(image.IsGeneratedImage());
     assert!(
-        layoutng_style::style::generated_gradient_image::ResolvedLinearGradient(image).is_some()
+        layout_style::style::generated_gradient_image::ResolvedLinearGradient(image).is_some()
     );
     let second = unsafe { first.Next().as_ref() }.expect("second background layer");
     assert!(unsafe { second.GetImage().as_ref() }.is_some_and(|image| image.IsGeneratedImage()));
@@ -2036,7 +2036,7 @@ fn resolved_background_gradient_is_retained_by_computed_style_computed_style() {
 
 #[test]
 fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
-    use layoutng_style::style::style_fetched_image::FetchedImage;
+    use layout_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let source = "https://example.test/assets/card.png";
@@ -2053,7 +2053,7 @@ fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.SourceURL(), source);
     assert_eq!(fetched.ResourceId(), 0);
-    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images.len(), 1);
     assert_eq!(paint.background_images[0].source_url, source);
     assert_eq!(paint.background_images[0].resource_id, 0);
@@ -2075,14 +2075,14 @@ fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.ResourceId(), 41);
-    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].resource_id, 41);
     assert_eq!(paint.background_images[0].source_url, source);
 }
 
 #[test]
 fn inline_url_mask_is_retained_as_a_style_image_dependency() {
-    use layoutng_style::style::style_mask_source_image::MaskSourceImage;
+    use layout_style::style::style_mask_source_image::MaskSourceImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let source = "https://example.test/assets/logo-mask.png";
@@ -2123,7 +2123,7 @@ fn inline_url_mask_is_retained_as_a_style_image_dependency() {
 
 #[test]
 fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
-    use layoutng_style::style::style_fetched_image::FetchedImage;
+    use layout_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let one = "https://example.test/assets/card-1x.png";
@@ -2156,7 +2156,7 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
     let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!((fetched.ResourceId(), fetched.ResolutionScale()), (52, 2.0));
-    let paint = layoutng::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].image_resolution_scale, 2.0);
 
     let mut low_density = media();
@@ -2193,7 +2193,7 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let pending = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let pending = unsafe { &*pending.computed_style_owner.Get() };
-    assert!(layoutng::style_projection::ProjectListMarkerImage(pending).is_none());
+    assert!(layout_core::style_projection::ProjectListMarkerImage(pending).is_none());
 
     for (source, id, width, height) in [(one, 61, 80.0, 40.0), (two, 62, 160.0, 80.0)] {
         owner.GetDocumentMut().SetImageResource(
@@ -2212,7 +2212,7 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let resolved = unsafe { &*resolved.computed_style_owner.Get() };
-    let image = layoutng::style_projection::ProjectListMarkerImage(resolved)
+    let image = layout_core::style_projection::ProjectListMarkerImage(resolved)
         .expect("loaded list-style-image boundary data");
     assert_eq!((image.resource_id, image.resolution_scale), (62, 2.0));
     assert_eq!((image.natural_width, image.natural_height), (40.0, 80.0));
@@ -2221,7 +2221,7 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
 
 #[test]
 fn completed_url_image_rejects_cached_pending_style_snapshot() {
-    use layoutng_style::style::style_fetched_image::FetchedImage;
+    use layout_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let source = "https://example.test/assets/shared-card.png";
@@ -2274,7 +2274,7 @@ fn completed_url_image_rejects_cached_pending_style_snapshot() {
 
 #[test]
 fn translated_style_cascade_uses_document_substitution_and_image_owners() {
-    use layoutng_style::style::style_fetched_image::FetchedImage;
+    use layout_style::style::style_fetched_image::FetchedImage;
 
     let _heap = foundation::LayoutHeapScope::new();
     let source = "https://example.test/translated-card.png";
@@ -2341,7 +2341,7 @@ fn translated_style_cascade_uses_document_substitution_and_image_owners() {
 #[test]
 fn pseudo_background_and_content_urls_retain_resource_dependencies() {
     use dom::persistent_document::PseudoContent;
-    use layoutng_style::style::{
+    use layout_style::style::{
         content_data::ImageContentData, style_fetched_image::FetchedImage,
     };
 
@@ -2625,7 +2625,7 @@ fn document_computed_style_style_ua_author_inline_inheritance_and_media() {
     );
     assert_eq!(
         computed_style.GetWhiteSpaceCollapse(),
-        layoutng_style::css::white_space::WhiteSpaceCollapse::kPreserve
+        layout_style::css::white_space::WhiteSpaceCollapse::kPreserve
     );
     assert_eq!(
         computed_style
@@ -2818,7 +2818,7 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
     let group_resolved = owner.GetDocument().ResolvedStyleFor(group).unwrap();
     let group = unsafe { &*group_resolved.computed_style_owner.Get() };
     assert_eq!(group.Transform().size(), 1);
-    let projected_group = layoutng::style_projection::ProjectComputedStyle(group).unwrap();
+    let projected_group = layout_core::style_projection::ProjectComputedStyle(group).unwrap();
     assert_eq!(
         projected_group.paint.transform.as_ref().unwrap().operations[0]
             .matrix
@@ -3016,7 +3016,7 @@ fn svg_paint_server_alpha_is_quantized_without_quantizing_solid_fallback() {
         .ResolvedStyleFor(node(&owner, "gradient-client"))
         .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
         .expect("gradient client style");
-    let fallback = layoutng::internal::boundary::paint_style_export::Export(style, None)
+    let fallback = layout_core::internal::boundary::paint_style_export::Export(style, None)
         .svg_fill
         .expect("solid fallback");
     assert!((fallback.alpha - 0.7 * 0.503).abs() < 1e-6);
@@ -3152,7 +3152,7 @@ fn unnamed_white_space_combination_crosses_the_layout_boundary() {
     let computed_style = unsafe { &*style.computed_style_owner.Get() };
     assert_eq!(
         computed_style.GetWhiteSpaceCollapse(),
-        layoutng_style::css::white_space::WhiteSpaceCollapse::kPreserveBreaks
+        layout_style::css::white_space::WhiteSpaceCollapse::kPreserveBreaks
     );
     assert_eq!(
         computed_style.GetTextWrapMode(),
@@ -3301,7 +3301,7 @@ fn compound_class_background_and_zoom_cross_the_layout_boundary_once() {
     assert!((computed_style.ColumnGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
     assert!(computed_style.BackgroundColor().GetColor().Param2() > 0.1);
     assert!(computed_style.HasAuthorBackground());
-    let neutral = layoutng::style_projection::ProjectComputedStyle(computed_style).unwrap();
+    let neutral = layout_core::style_projection::ProjectComputedStyle(computed_style).unwrap();
     assert_eq!(neutral.width, Some(200.0));
     assert_eq!(neutral.extended.as_ref().unwrap().font_size, 40.0);
     assert!(neutral.extended.as_ref().unwrap().has_author_background);
@@ -3312,7 +3312,7 @@ fn compound_class_background_and_zoom_cross_the_layout_boundary_once() {
     assert_eq!(neutral.paint.box_shadows[0].blur_radius, 6.0);
     assert_eq!(neutral.paint.box_shadows[0].spread, 8.0);
     assert!((neutral.extended.as_ref().unwrap().column_gap.unwrap() - 41.472).abs() < 0.001);
-    let used = layoutng::internal::css_zoom::ZoomedStyle(&neutral);
+    let used = layout_core::internal::css_zoom::ZoomedStyle(&neutral);
     assert_eq!(used.width, Some(100.0));
     assert_eq!(used.extended.as_ref().unwrap().font_size, 20.0);
     assert_eq!(used.paint.border_radii.unwrap().top_left.x, 10.0);
@@ -3478,7 +3478,7 @@ fn width(owner: &dom::DOM, index: usize) -> f32 {
 fn pointer(
     owner: &dom::DOM,
     index: usize,
-) -> *mut layoutng_style::style::computed_style::ComputedStyle {
+) -> *mut layout_style::style::computed_style::ComputedStyle {
     owner
         .GetDocument()
         .ResolvedStyleFor(index)
@@ -4047,7 +4047,7 @@ fn incremental_appended_sheet_resolves_its_targets_without_revisiting_older_rule
 
 #[test]
 fn production_pseudo_styles_have_independent_cascade_and_computed_style_content() {
-    use layoutng_style::style::{
+    use layout_style::style::{
         computed_style_constants::PseudoId, content_data::TextContentData,
     };
     let _heap = foundation::LayoutHeapScope::new();
@@ -4212,7 +4212,7 @@ fn production_pseudo_styles_have_independent_cascade_and_computed_style_content(
 
 #[test]
 fn production_marker_pseudo_owns_cascade_cache_and_content() {
-    use layoutng_style::{
+    use layout_style::{
         css::white_space::EWhiteSpace, style::computed_style_constants::PseudoId,
     };
     let _heap = foundation::LayoutHeapScope::new();
@@ -4264,7 +4264,7 @@ fn production_marker_pseudo_owns_cascade_cache_and_content() {
 
 #[test]
 fn nested_generated_marker_owns_originating_pseudo_cascade_and_invalidation() {
-    use layoutng_style::style::computed_style_constants::PseudoId;
+    use layout_style::style::computed_style_constants::PseudoId;
     let _heap = foundation::LayoutHeapScope::new();
     let marker_ua = crate::ParseUserAgentCSSWithRole(
         "::marker, ::before::marker, ::after::marker { unicode-bidi:isolate; font-variant-numeric:tabular-nums; text-transform:none; text-indent:0 !important; text-align:start !important; text-align-last:auto !important; }",
@@ -4334,7 +4334,7 @@ fn nested_generated_marker_owns_originating_pseudo_cascade_and_invalidation() {
 
 #[test]
 fn translated_style_cascade_publishes_pseudo_computed_style_style_with_exact_stats() {
-    use layoutng_style::style::{
+    use layout_style::style::{
         computed_style_constants::PseudoId, content_data::TextContentData,
     };
 
@@ -4467,7 +4467,7 @@ fn registered_property_owner_is_dependency_scoped_and_reports_exact_apply() {
 
 #[test]
 fn production_pseudo_cache_retains_suppressed_attr_content_and_invalidates_it() {
-    use layoutng_style::style::{
+    use layout_style::style::{
         computed_style_constants::PseudoId, content_data::TextContentData,
     };
     let _heap = foundation::LayoutHeapScope::new();
@@ -4526,7 +4526,7 @@ fn production_pseudo_cache_retains_suppressed_attr_content_and_invalidates_it() 
 
 #[test]
 fn production_pseudo_generation_respects_contents_and_suppressed_ancestors() {
-    use layoutng_style::style::computed_style_constants::PseudoId;
+    use layout_style::style::computed_style_constants::PseudoId;
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<style>.host{display:contents}.host::before{content:'yes'}.host::first-letter{font-size:40px}</style><div id=contents class=host>Text</div><section style='display:none'><div id=suppressed class=host>Text</div></section>",
@@ -5069,7 +5069,7 @@ fn production_pseudo_sheet_removal_and_unsupported_requests_do_not_fake_content(
 
 #[test]
 fn production_animation_transition_cascade_writes_computed_style_timing_lists() {
-    use layoutng_style::style::css_timing_data::{
+    use layout_style::style::css_timing_data::{
         PlaybackDirection, TimingFunction, TransitionBehavior, TransitionProperty,
     };
     let _heap = foundation::LayoutHeapScope::new();
@@ -5163,7 +5163,7 @@ fn production_animation_transition_cascade_writes_computed_style_timing_lists() 
 
 #[test]
 fn production_position_and_repeat_values_reach_computed_style_style() {
-    use layoutng_style::style::computed_style_constants::{BackgroundEdgeOrigin, EFillRepeat};
+    use layout_style::style::computed_style_constants::{BackgroundEdgeOrigin, EFillRepeat};
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=target></div>");
     owner.GetDocumentMut().AppendStyleSheet(crate::ParseCSS(
@@ -5495,13 +5495,13 @@ fn production_slotted_shadow_container_query_uses_flat_tree_ancestry_in_update()
         assert_eq!(document.AssignedSlot(target), Some(slot));
 
         let initial = unsafe {
-            &*layoutng_style::style::computed_style::ComputedStyle::GetInitialStyleSingleton()
+            &*layout_style::style::computed_style::ComputedStyle::GetInitialStyleSingleton()
         };
         let mut builder =
-            layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+            layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
         builder.SetContainerType(1);
         let computed_style = foundation::Persistent::from_ptr(
-            builder.TakeStyle() as *mut layoutng_style::style::computed_style::ComputedStyle
+            builder.TakeStyle() as *mut layout_style::style::computed_style::ComputedStyle
         );
         let mut resolved = dom::persistent_document::ResolvedNodeStyle::default();
         resolved.SetComputedStyleOwner(computed_style);
@@ -5703,7 +5703,7 @@ fn update_consumes_ordered_manual_slot_owners_and_fallback_activation() {
 
 #[test]
 fn production_animation_shorthand_names_composition_and_inheritance_reach_computed_style_data() {
-    use layoutng_style::style::css_timing_data::{
+    use layout_style::style::css_timing_data::{
         CompositeOperation, PlaybackDirection, StyleTimeline, TimingFunction,
     };
     let _heap = foundation::LayoutHeapScope::new();
@@ -5787,7 +5787,7 @@ fn production_animation_shorthand_names_composition_and_inheritance_reach_comput
 #[test]
 fn production_grid_template_areas_shorthand_and_inheritance_reach_computed_style_grid_data() {
     use foundation::String;
-    use layoutng_style::style::computed_style_constants::GridAutoFlow;
+    use layout_style::style::computed_style_constants::GridAutoFlow;
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML(
         "<div id=parent style='display:grid;grid: auto-flow dense 12px / 1fr 40px'><div id=target style='grid:inherit'></div></div>",
@@ -5901,7 +5901,7 @@ fn named_grid_lines_reach_computed_style_track_list_and_grid_positions() {
 
 #[test]
 fn translated_element_resolution_retains_dynamic_pseudo_markers() {
-    use layoutng_style::style::computed_style_constants::PseudoId;
+    use layout_style::style::computed_style_constants::PseudoId;
 
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<!doctype html><a id=target class=link></a>");

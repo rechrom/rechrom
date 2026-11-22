@@ -1,7 +1,7 @@
 //! Canonical feature-values ownership through Style's retained document lifecycle.
 use font_engine::fonts::font_description::FontDescription;
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use style::{media_queries::MediaValuesCachedData, StyleEngine};
 
 fn media(width: f64) -> MediaValuesCachedData {
@@ -122,7 +122,7 @@ fn symbolic_alternates_remain_canonical_with_distinct_family_resolution_and_inhe
     );
     let pseudo = unsafe {
         &*parent.GetCachedPseudoElementStyleWithoutArgument(
-            layoutng_style::style::computed_style_constants::PseudoId::kPseudoIdBefore,
+            layout_style::style::computed_style_constants::PseudoId::kPseudoIdBefore,
         )
     };
     assert_eq!(

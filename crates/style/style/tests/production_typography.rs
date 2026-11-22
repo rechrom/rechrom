@@ -2,7 +2,7 @@ use foundation::{
     CSSPropertyID as P, ERubyOverhang, RubyPosition, String, TextEmphasisFill as F,
     TextEmphasisMark as M,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::TextEmphasisPosition as E,
 };

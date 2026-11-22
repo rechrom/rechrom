@@ -66,7 +66,7 @@ impl ResidentSelectControlHost {
             }
         }
     }
-    fn ApplyScroll(&self, result: layoutng_assembly::native_scroll_source::NativeScrollResult) {
+    fn ApplyScroll(&self, result: layout_assembly::native_scroll_source::NativeScrollResult) {
         match &self.0 {
             InteractionScrollOwner::Root(page) => {
                 if let Some(page) = page.upgrade() {
@@ -146,7 +146,7 @@ impl SelectControlHost for ResidentSelectControlHost {
     fn SetInnerModifiedStyleOutsideStyleRecalc(
         &self,
         inner: u64,
-        style: foundation::Persistent<layoutng_style::style::computed_style::ComputedStyle>,
+        style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         self.0
             .WithLayout(|layout| layout.SetInputModifiedStyleOutsideStyleRecalc(inner, style));

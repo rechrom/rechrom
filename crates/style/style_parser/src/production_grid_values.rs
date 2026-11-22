@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 use crate::css_value::CSSValueSubclass;
 use foundation::String;
-use layoutng_style::style::grid_area::NamedGridAreaMap;
+use layout_style::style::grid_area::NamedGridAreaMap;
 // cpp: core/css/css_grid_template_areas_value.h:37-65; .cc:41-101.
 pub struct CSSGridTemplateAreasValue {
     pub grid_area_map: NamedGridAreaMap,

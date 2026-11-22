@@ -5,8 +5,8 @@
 #![allow(non_snake_case)]
 
 use crate::PaintRect;
-use layoutng_assembly::internal::layout_input::PaintStyle;
-use layoutng_assembly::internal::layout_input_types::Color;
+use layout_assembly::internal::layout_input::PaintStyle;
+use layout_assembly::internal::layout_input_types::Color;
 use paint_model::DisplayMaskLayer;
 
 const MAX_IMAGE_LENGTH: f64 = 64.0;
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn mask_layers_classify_bitmap_and_generated_images_but_not_svg_mask_records() {
-        use layoutng_assembly::internal::paint_input::PaintShader;
+        use layout_assembly::internal::paint_input::PaintShader;
         use paint_model::DisplayMaskLayer;
 
         let mut style = PaintStyle::default();

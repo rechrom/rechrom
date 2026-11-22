@@ -52,7 +52,7 @@ use crate::cascade_layer_map::CascadeLayerRuleSet;
 use crate::cascade_layered::CascadeLayered;
 use crate::media_query_result::{MediaQueryResultFlags, MediaQuerySet, MediaQuerySetResult};
 use foundation::{AtomicString, String};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::collections::HashMap;
 use std::rc::Rc;
 

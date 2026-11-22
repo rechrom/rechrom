@@ -2,8 +2,8 @@
 //! Source paint_info.h:45-74; svg_object_painter.cc:104-138,141-202.
 //! Context paints borrow the original canonical style and resource payload.
 use crate::{paint_info::PaintInfo, PaintRect};
-use layoutng_assembly::internal::layout_input::{PaintStyle, TransformMatrix};
-use layoutng_style::style::{
+use layout_assembly::internal::layout_input::{PaintStyle, TransformMatrix};
+use layout_style::style::{
     computed_style::ComputedStyle,
     svg_paint::{SVGPaint, SVGPaintType},
 };
@@ -92,8 +92,8 @@ pub(crate) fn ContextFor<'a>(
 
 #[derive(Default)]
 pub(crate) struct ResolvedContextPaint {
-    pub color: Option<layoutng_assembly::internal::layout_input_types::Color>,
-    pub server: Option<layoutng_assembly::internal::paint_input::SvgPaintServer>,
+    pub color: Option<layout_assembly::internal::layout_input_types::Color>,
+    pub server: Option<layout_assembly::internal::paint_input::SvgPaintServer>,
     pub reference_box: PaintRect,
     pub transform: TransformMatrix,
 }
@@ -134,7 +134,7 @@ pub(crate) fn ResolveFor(
             child.VisitedDependentContextStroke(paint, context.canonical())
         };
         let (red, green, blue) = resolved.ToSRGB();
-        layoutng_assembly::internal::layout_input_types::Color {
+        layout_assembly::internal::layout_input_types::Color {
             red,
             green,
             blue,
@@ -173,20 +173,20 @@ pub(crate) fn ResolveFor(
 
 pub(crate) fn ResolveShader(
     paint: &ResolvedContextPaint,
-    resources: Option<&layoutng_assembly::fragment_tree::PaintResources>,
+    resources: Option<&layout_assembly::fragment_tree::PaintResources>,
     privacy_preserving: bool,
-) -> Option<layoutng_assembly::internal::paint_input::SvgPaintServer> {
+) -> Option<layout_assembly::internal::paint_input::SvgPaintServer> {
     let server = paint.server.as_ref()?;
     let rect = paint.reference_box;
     let mut shader = crate::paint_shader_resolver::ResolvePaintShaderForBounds(
         server,
         resources,
         Default::default(),
-        layoutng_assembly::internal::layout_input::Offset {
+        layout_assembly::internal::layout_input::Offset {
             x: rect.x,
             y: rect.y,
         },
-        Some(layoutng_assembly::internal::layout_input::Size {
+        Some(layout_assembly::internal::layout_input::Size {
             width: rect.width,
             height: rect.height,
         }),

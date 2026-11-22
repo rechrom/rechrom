@@ -6,7 +6,7 @@ use foundation::{
     AtomicString, ERubyOverhang, RubyPosition, TextDecorationSkipSpaces, TextEmphasisFill,
     TextEmphasisMark,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style_constants::TextEmphasisPosition,
     style_hyphenate_limit_chars::StyleHyphenateLimitChars, text_size_adjust::TextSizeAdjust,
 };

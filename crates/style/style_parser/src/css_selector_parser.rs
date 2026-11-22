@@ -26,7 +26,7 @@ use crate::css_selector::*;
 use crate::css_selector_list::CSSSelectorList;
 use foundation::StringView;
 use foundation::{AtomicString, CSSValueID, String};
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;

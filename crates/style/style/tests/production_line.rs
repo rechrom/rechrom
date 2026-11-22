@@ -2,7 +2,7 @@ use foundation::{
     CSSPropertyID as P, CSSValueID as V, EBreakBetween, EBreakInside, RuntimeEnabledFeatures,
     String,
 };
-use layoutng_style::style::{
+use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder},
     computed_style_constants::EVerticalAlign,
 };

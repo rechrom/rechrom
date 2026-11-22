@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::EInsideLink;
-use layoutng_style::style::gap_data_list::GapDataList;
+use layout_style::style::gap_data_list::GapDataList;
 use CSSPropertyID::*;
 
 pub(super) fn IsProperty(id: CSSPropertyID) -> bool {
@@ -105,7 +105,7 @@ pub(super) fn Apply(
                 .unwrap_or_else(|| b.InitialColorForColorScheme().GetColor());
             color = StyleColor::from_color(color.Resolve(
                 inherited,
-                layoutng_style::style::color_scheme::mojom::blink::ColorScheme::kLight,
+                layout_style::style::color_scheme::mojom::blink::ColorScheme::kLight,
                 None,
             ));
         }
@@ -141,7 +141,7 @@ pub(super) fn Apply(
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 let mut colors = GapDataList::default();
                 for color in values {
-                    colors.AddGapData(&layoutng_style::style::gap_data::GapData::from_value(color));
+                    colors.AddGapData(&layout_style::style::gap_data::GapData::from_value(color));
                 }
                 colors
             }

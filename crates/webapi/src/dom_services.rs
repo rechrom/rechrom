@@ -188,14 +188,14 @@ pub struct DOMBindingsHost {
         Box<
             dyn FnMut(
                 HostObjectId,
-                layoutng_assembly::internal::layout_input::Offset,
+                layout_assembly::internal::layout_input::Offset,
                 ViewportScrollBehavior,
             ),
         >,
     >,
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
     pub write_scroll:
-        Option<Box<dyn FnMut(HostObjectId, layoutng_assembly::internal::layout_input::Offset)>>,
+        Option<Box<dyn FnMut(HostObjectId, layout_assembly::internal::layout_input::Offset)>>,
     /// Document.fonts reflects the connected resource loader instead of a
     /// JavaScript-only readiness guess. True means at least one selected face
     /// still has transport or decode work.
@@ -1946,7 +1946,7 @@ mod tests {
     use dom::persistent_document::ResolvedNodeStyle;
     use interaction::event::{EventType, MakeSyntheticEvent};
     use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-    use layoutng_assembly::internal::layout_input::{
+    use layout_assembly::internal::layout_input::{
         Display, ExtendedStyle, Position, TextDirection,
     };
 
@@ -2173,19 +2173,19 @@ mod tests {
                         font_weight: 700.0,
                         font_italic: true,
                         line_height_percent: Some(150.0),
-                        text_align: layoutng_assembly::internal::layout_input::TextAlign::kCenter,
+                        text_align: layout_assembly::internal::layout_input::TextAlign::kCenter,
                         text_align_last:
-                            layoutng_assembly::internal::layout_input::TextAlignLast::kRight,
+                            layout_assembly::internal::layout_input::TextAlignLast::kRight,
                         ..Default::default()
                     }
                     .into(),
                 );
                 let initial = unsafe {
-                    &*layoutng_style::style::computed_style::ComputedStyle::GetInitialStyleSingleton(
+                    &*layout_style::style::computed_style::ComputedStyle::GetInitialStyleSingleton(
                     )
                 };
                 let mut builder =
-                    layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(
+                    layout_style::style::computed_style::ComputedStyleBuilder::from_style(
                         initial,
                     );
                 builder.SetMinHeightOwned(foundation::Length::MinContent().clone());
@@ -2194,7 +2194,7 @@ mod tests {
                 builder.SetMaxHeightOwned(foundation::Length::None().clone());
                 resolved
                     .SetComputedStyleOwner(foundation::Persistent::from_ptr(builder.TakeStyle()
-                        as *mut layoutng_style::style::computed_style::ComputedStyle));
+                        as *mut layout_style::style::computed_style::ComputedStyle));
                 std::sync::Arc::make_mut(&mut resolved.custom_properties)
                     .insert("--value".into(), Some(" green ".into()));
                 update_document

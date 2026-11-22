@@ -76,8 +76,8 @@ cargo build --locked -p rechrom_app
 cargo run --locked -p rechrom_app -- --url https://rechrom.dev
 ```
 
-The translated foundation primitives are owned by `crates/layoutng/layoutng_foundation/base`;
-`crates/layoutng/layoutng_foundation` preserves the higher-level foundation interfaces. The
+The translated foundation primitives are owned by `crates/layout/layoutng_foundation/base`;
+`crates/layout/layoutng_foundation` preserves the higher-level foundation interfaces. The
 Roboto fallback/test font is bundled in `assets/fonts` with its license.
 All platforms use the internal Rust Skia software renderer. Text shaping uses
 HarfRust, the HarfBuzz project's Rust port, with `read-fonts` for OpenType
@@ -140,7 +140,7 @@ crates/dom/         DOM ownership and mutation routing
 crates/webapi/      script-facing APIs, observers, File API, and WebGL
 crates/resource/    resource lifecycle, fetch policy, and network helpers
 crates/style/       style parsing, resolution, and ComputedStyle ownership
-crates/layoutng/layoutng_*/  layout algorithms and fragment output
+crates/layout/layoutng_*/  layout algorithms and fragment output
 crates/paint/       pre-paint state and PaintArtifact generation
 crates/compositor/  retained layers, tiling, raster scheduling, and CompositorFrame output
 crates/raster/      RasterEngine, command vocabulary, and private backend

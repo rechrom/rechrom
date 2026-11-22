@@ -35,7 +35,7 @@ pub fn Parse(value: &str, system: bool) -> Result<Option<Color>, RequiredInputCo
             if let Some(color) = value::NamedColor(identifier.0) {
                 return Ok((!system).then_some(color));
             }
-            if system && layoutng_style::css::style_color::StyleColor::IsSystemColorIncludingDeprecatedKeyword(identifier.0) {
+            if system && layout_style::css::style_color::StyleColor::IsSystemColorIncludingDeprecatedKeyword(identifier.0) {
                 Err(RequiredInputColorMechanism::SystemColorLightPalette)
             } else {
                 Ok(None)

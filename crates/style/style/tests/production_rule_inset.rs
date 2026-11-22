@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, CSSValueID as V, Length, String};
-use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{

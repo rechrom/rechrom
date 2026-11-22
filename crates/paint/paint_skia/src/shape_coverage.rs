@@ -1,7 +1,7 @@
 //! Source Shape::ExtractPathData, core/layout/shapes/shape.cc:265-301.
 //! Independent AA coverage service: immutable neutral path in, alpha bytes out.
 use foundation::gfx;
-use layoutng_geometry::{
+use layout_geometry::{
     shape_coverage::{ShapeCoverage, ShapeCoverageRasterizer},
     shape_path::{PathVerb, ShapePath},
 };

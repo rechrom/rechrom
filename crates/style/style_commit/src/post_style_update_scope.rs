@@ -23,7 +23,7 @@
 // There is no scroll-snapshot or Dispose operation in this source pair.
 
 use foundation::Persistent;
-use layoutng_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style::ComputedStyle;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

@@ -5,7 +5,7 @@
 //! Page connects DOM mutation notifications and the style/layout/paint lifecycle;
 //! each engine owns its state and invalidation, like LocalFrameView lifecycle wiring.
 pub(crate) mod canvas_2d;
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use crate::interaction_services::PageInteraction;
 pub use compositor::CompositorMainThreadEffect;
 use compositor::{
@@ -42,9 +42,9 @@ use javascript::javascript_runtime::{
 };
 use javascript::script_engine::ScriptEngine;
 use layout_fragment::LayoutResultHandle;
-use layoutng_assembly::layout_boundary_support::LayoutUpdateKind;
-use layoutng_assembly::layout_engine::{LayoutPaintOutput, PaintFragmentCursor};
-use layoutng_assembly::{
+use layout_assembly::layout_boundary_support::LayoutUpdateKind;
+use layout_assembly::layout_engine::{LayoutPaintOutput, PaintFragmentCursor};
+use layout_assembly::{
     editing_state::DocumentSelection,
     fragment_tree::{FragmentKind, FragmentPaintData, PaintResources},
     internal::{
@@ -2711,7 +2711,7 @@ struct PageState {
     document: Rc<DocumentEngine>,
     style_engine: RefCell<style::StyleEngine>,
     style_font_metrics: Rc<crate::style_services::StyleFontMetricsResolver>,
-    layout_engine: RefCell<layoutng_assembly::layout_engine::LayoutEngine>,
+    layout_engine: RefCell<layout_assembly::layout_engine::LayoutEngine>,
     paint_engine: RefCell<paint::PaintEngine>,
     /// Embedder/default faces plus decoded @font-face resources. System faces
     /// stay in FontEngine's versioned query cache and are never promoted into
@@ -2720,7 +2720,7 @@ struct PageState {
     document_font_inputs: PageDocumentFontInputs,
     system_fonts: RefCell<crate::font_session::SystemFontSession>,
     interaction: Rc<RefCell<UserInteractionState>>,
-    layout_editing: Rc<layoutng_assembly::editing_state::LayoutEditingState>,
+    layout_editing: Rc<layout_assembly::editing_state::LayoutEditingState>,
     resident_frame_selection:
         RefCell<Weak<interaction::adapter::page_frame_selection::PageFrameSelection>>,
     interaction_text_settings:
@@ -2765,7 +2765,7 @@ struct PageState {
         Vec<(
             u64,
             Offset,
-            layoutng_style::style::scroll_enums::mojom::blink::ScrollType,
+            layout_style::style::scroll_enums::mojom::blink::ScrollType,
         )>,
     >,
     // Ownership travels with the queued offsets and is cleared only when the
@@ -2837,7 +2837,7 @@ impl interaction::scroll::core::scroll::scroll_animator::UserScrollAnimatorSink
                 x: f64::from(mutation.offset.x()),
                 y: f64::from(mutation.offset.y()),
             },
-            scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kUser,
+            scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType::kUser,
         });
     }
 
@@ -2885,8 +2885,8 @@ impl PageInteractionScrollRuntime {
 impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageInteractionScrollRuntime {
     fn UserAnimationState(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-    ) -> layoutng_assembly::native_user_scroll_source::NativeUserScrollAnimationState {
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+    ) -> layout_assembly::native_user_scroll_source::NativeUserScrollAnimationState {
         let enabled = self
             .owner
             .Page()
@@ -2895,7 +2895,7 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
             .animators
             .GetOrCreate(area.Identity(), enabled)
             .Snapshot();
-        layoutng_assembly::native_user_scroll_source::NativeUserScrollAnimationState {
+        layout_assembly::native_user_scroll_source::NativeUserScrollAnimationState {
             enabled: snapshot.enabled,
             has_running_animation: snapshot.has_running_animation,
             desired_target_offset: snapshot.desired_target_offset,
@@ -2904,15 +2904,15 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
 
     fn SnapAnimationState(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-    ) -> layoutng_assembly::native_scroll_source::NativeSnapAnimationState {
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+    ) -> layout_assembly::native_scroll_source::NativeSnapAnimationState {
         let user = self.UserAnimationState(area);
         let scroll_element_id = area.GetScrollElementId();
         let programmatic_target = self
             .owner
             .WithProgrammaticAnimations(|animations| animations.TargetForElement(scroll_element_id))
             .flatten();
-        layoutng_assembly::native_scroll_source::NativeSnapAnimationState {
+        layout_assembly::native_scroll_source::NativeSnapAnimationState {
             scroll_element_id,
             has_running_animation: user.has_running_animation,
             programmatic_target,
@@ -2925,8 +2925,8 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
 
     fn ApplySnapPlan(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        plan: layoutng_assembly::native_scroll_source::NativeLayoutSnapPlan,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        plan: layout_assembly::native_scroll_source::NativeLayoutSnapPlan,
     ) {
         let Some(_state) = self.owner.Page() else {
             return;
@@ -2941,7 +2941,7 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
         }
         if let Some(request) = plan.request {
             let behavior = if request.behavior
-                == layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior::kSmooth
+                == layout_style::style::scroll_enums::mojom::blink::ScrollBehavior::kSmooth
             {
                 ViewportScrollBehavior::Smooth
             } else {
@@ -2961,7 +2961,7 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
 
     fn ApplyImmediateUserScrollActions(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
         cancel_programmatic_animation: bool,
         finish_previous_animation: bool,
     ) {
@@ -2980,8 +2980,8 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
 
     fn StartUserScrollAnimation(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        request: layoutng_assembly::native_user_scroll_source::NativeUserScrollAnimationRequest,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        request: layout_assembly::native_user_scroll_source::NativeUserScrollAnimationRequest,
         completion: interaction::scroll::core::input::scroll_manager::ScrollCompletion,
     ) -> Result<(), interaction::scroll::core::input::scroll_manager::ScrollCompletion> {
         use interaction::scroll::core::input::scroll_manager::ScrollGranularity;
@@ -2994,11 +2994,11 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
             return Err(completion);
         };
         let granularity = match request.granularity {
-            layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity::PrecisePixel => ScrollGranularity::kScrollByPrecisePixel,
-            layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity::Pixel => ScrollGranularity::kScrollByPixel,
-            layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity::Line => ScrollGranularity::kScrollByLine,
-            layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity::Page => ScrollGranularity::kScrollByPage,
-            layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity::Document => ScrollGranularity::kScrollByDocument,
+            layout_assembly::native_user_scroll_source::NativeUserScrollGranularity::PrecisePixel => ScrollGranularity::kScrollByPrecisePixel,
+            layout_assembly::native_user_scroll_source::NativeUserScrollGranularity::Pixel => ScrollGranularity::kScrollByPixel,
+            layout_assembly::native_user_scroll_source::NativeUserScrollGranularity::Line => ScrollGranularity::kScrollByLine,
+            layout_assembly::native_user_scroll_source::NativeUserScrollGranularity::Page => ScrollGranularity::kScrollByPage,
+            layout_assembly::native_user_scroll_source::NativeUserScrollGranularity::Document => ScrollGranularity::kScrollByDocument,
         };
         let Some(state) = self.owner.Page() else {
             return Err(completion);
@@ -3026,8 +3026,8 @@ impl interaction::adapter::page_scroll_manager::PageScrollRuntime for PageIntera
 
     fn ApplyScrollFinished(
         &self,
-        _area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        plan: layoutng_assembly::native_user_scroll_source::NativeScrollFinishedPlan,
+        _area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        plan: layout_assembly::native_user_scroll_source::NativeScrollFinishedPlan,
     ) {
         if plan.mark_hover_state_dirty {
             if let Some(state) = self.owner.Page() {
@@ -3049,9 +3049,9 @@ struct PageInteractionScrollFrameState {
 impl PageInteractionScrollLayout {
     fn WithAutoscroll<T>(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
         query: impl FnOnce(
-            &layoutng_assembly::native_autoscroll_source::NativeAutoscrollSource<'_>,
+            &layout_assembly::native_autoscroll_source::NativeAutoscrollSource<'_>,
         ) -> T,
     ) -> Option<T> {
         self.0.WithLayout(|engine| {
@@ -3062,9 +3062,9 @@ impl PageInteractionScrollLayout {
 
     fn WithUserScroll<T>(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
         query: impl FnOnce(
-            &mut layoutng_assembly::native_user_scroll_source::NativeUserScrollSource<'_>,
+            &mut layout_assembly::native_user_scroll_source::NativeUserScrollSource<'_>,
         ) -> T,
     ) -> Option<T> {
         self.0.WithLayout(|engine| {
@@ -3135,113 +3135,113 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
     fn LayoutForNode(
         &self,
         node_id: u64,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.0
             .WithLayout(|layout| layout.LogicalScrollLayoutFor(node_id))?
     }
 
     fn LayoutView(
         &self,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.0
             .WithLayout(|layout| layout.LogicalScrollLayoutView())?
     }
 
     fn NodeFacts(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeLogicalScrollNodeFacts> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeLogicalScrollNodeFacts> {
         self.WithAutoscroll(layout, |source| source.LogicalScrollNodeFacts())?
     }
 
     fn EnclosingBox(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.WithAutoscroll(layout, |source| source.EnclosingBox())?
     }
 
     fn LayoutBox(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.WithAutoscroll(layout, |source| source.LogicalLayoutBox())?
     }
 
     fn LayoutBoxForScrolling(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.WithAutoscroll(layout, |source| source.LayoutBoxForScrolling())?
     }
 
     fn BoxFacts(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> layoutng_assembly::native_autoscroll_source::NativeLogicalScrollBoxFacts {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> layout_assembly::native_autoscroll_source::NativeLogicalScrollBoxFacts {
         self.WithAutoscroll(layout, |source| source.LogicalScrollBoxFacts())
             .expect("retained logical-scroll layout remains attached")
     }
 
     fn BoxNode(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.WithAutoscroll(layout, |source| source.LogicalNode())?
     }
 
     fn ContainingBlock(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeAutoscrollLayout> {
         self.WithAutoscroll(layout, |source| source.ContainingBlock())?
     }
 
     fn ScrollableArea(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeLogicalScrollArea> {
         self.WithAutoscroll(layout, |source| source.LogicalScrollableArea())?
     }
 
     fn AreaForScrolling(
         &self,
-        layout: &layoutng_assembly::native_autoscroll_source::NativeAutoscrollLayout,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeLogicalScrollingArea> {
+        layout: &layout_assembly::native_autoscroll_source::NativeAutoscrollLayout,
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeLogicalScrollingArea> {
         self.WithAutoscroll(layout, |source| source.LogicalAreaForScrolling())?
     }
 
     fn LayoutViewportArea(
         &self,
-    ) -> Option<layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea> {
+    ) -> Option<layout_assembly::native_autoscroll_source::NativeLogicalScrollArea> {
         self.0
             .WithLayout(|layout| layout.LayoutViewportLogicalScrollArea())?
     }
 
     fn AreaFacts(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-    ) -> Option<layoutng_assembly::native_user_scroll_source::NativeUserScrollAreaFacts> {
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+    ) -> Option<layout_assembly::native_user_scroll_source::NativeUserScrollAreaFacts> {
         self.WithUserScroll(area, |source| source.Facts())
     }
 
     fn AreaOffset(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
     ) -> Option<foundation::gfx::Vector2dF> {
         self.WithUserScroll(area, |source| source.GetScrollOffset())
     }
 
     fn PlanSnapForUserScroll(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        kind: layoutng_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        kind: layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind,
         direction: foundation::PhysicalDirection,
         line_step: f32,
-        animation: layoutng_assembly::native_scroll_source::NativeSnapAnimationState,
+        animation: layout_assembly::native_scroll_source::NativeSnapAnimationState,
     ) -> Option<(
         bool,
-        layoutng_assembly::native_scroll_source::NativeLayoutSnapPlan,
+        layout_assembly::native_scroll_source::NativeLayoutSnapPlan,
     )> {
         self.WithUserScroll(area, |source| {
             source.PlanSnapForUserScroll(kind, direction, line_step, animation)
@@ -3250,12 +3250,12 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
 
     fn UserScroll(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        granularity: layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        granularity: layout_assembly::native_user_scroll_source::NativeUserScrollGranularity,
         delta: foundation::gfx::Vector2dF,
         source_type: interaction::scroll::core::input::scroll_manager::ScrollSourceType,
-        animation: layoutng_assembly::native_user_scroll_source::NativeUserScrollAnimationState,
-    ) -> Option<layoutng_assembly::native_user_scroll_source::NativeUserScrollPlan> {
+        animation: layout_assembly::native_user_scroll_source::NativeUserScrollAnimationState,
+    ) -> Option<layout_assembly::native_user_scroll_source::NativeUserScrollPlan> {
         self.WithUserScroll(area, |source| {
             source.UserScroll(granularity, delta, source_type, animation)
         })
@@ -3263,10 +3263,10 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
 
     fn WillConsumeUserScroll(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
-        granularity: layoutng_assembly::native_user_scroll_source::NativeUserScrollGranularity,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        granularity: layout_assembly::native_user_scroll_source::NativeUserScrollGranularity,
         delta: foundation::gfx::Vector2dF,
-        animation: layoutng_assembly::native_user_scroll_source::NativeUserScrollAnimationState,
+        animation: layout_assembly::native_user_scroll_source::NativeUserScrollAnimationState,
     ) -> Option<bool> {
         self.WithUserScroll(area, |source| {
             source.WillConsumeUserScroll(granularity, delta, animation)
@@ -3275,9 +3275,9 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
 
     fn OnScrollFinished(
         &self,
-        area: &layoutng_assembly::native_autoscroll_source::NativeLogicalScrollArea,
+        area: &layout_assembly::native_autoscroll_source::NativeLogicalScrollArea,
         enqueue_scrollend: bool,
-    ) -> Option<layoutng_assembly::native_user_scroll_source::NativeScrollFinishedPlan> {
+    ) -> Option<layout_assembly::native_user_scroll_source::NativeScrollFinishedPlan> {
         self.WithUserScroll(area, |source| source.OnScrollFinished(enqueue_scrollend))?
     }
 
@@ -3286,7 +3286,7 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
         target_node_id: u64,
     ) -> Box<
         dyn Iterator<
-            Item = layoutng_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableArea,
+            Item = layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableArea,
         >,
     > {
         self.0
@@ -3449,7 +3449,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
     fn DragLayout(
         &self,
         node_id: u64,
-    ) -> Option<layoutng_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
+    ) -> Option<layout_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout> {
         let state = self.0.upgrade()?;
         state.EnsureLayoutOutput();
         let result = state.layout_engine.borrow().MouseCoordinateLayout(node_id);
@@ -3657,7 +3657,7 @@ impl interaction::adapter::page_focus_navigation::FocusNavigationLayout for Page
     fn Facts(
         &self,
         node_id: u64,
-    ) -> Option<layoutng_assembly::layout_engine::LayoutFocusNavigationFacts> {
+    ) -> Option<layout_assembly::layout_engine::LayoutFocusNavigationFacts> {
         let state = self.0.upgrade()?;
         let layout = state.layout_engine.borrow();
         layout
@@ -3801,7 +3801,7 @@ impl PageMouseFrameGeometry {
 
     fn CurrentSelection(
         state: &PageState,
-    ) -> Option<layoutng_assembly::editing_state::DOMSelection> {
+    ) -> Option<layout_assembly::editing_state::DOMSelection> {
         let owner = state.document.borrow();
         interaction::adapter::page_frame_selection::CurrentDOMSelectionForFocus(
             owner.GetDocument(),
@@ -3811,7 +3811,7 @@ impl PageMouseFrameGeometry {
 
     fn CaretBounds(
         state: &PageState,
-        selection: Option<layoutng_assembly::editing_state::DOMSelection>,
+        selection: Option<layout_assembly::editing_state::DOMSelection>,
         extent: interaction::default::core::editing::frame_selection::RevealExtentOption,
     ) -> foundation::gfx::Rect {
         state.EnsureLayoutOutput();
@@ -4073,11 +4073,11 @@ impl PageState {
     }
 
     fn CSSAnimationTiming(
-        data: &layoutng_style::style::css_timing_data::CSSAnimationData,
+        data: &layout_style::style::css_timing_data::CSSAnimationData,
         index: usize,
     ) -> animation::CSSAnimationTiming {
         use animation::{CSSFillMode, CSSPlayState, CSSPlaybackDirection, CSSTimingFunction};
-        use layoutng_style::style::{
+        use layout_style::style::{
             computed_style_constants::EAnimPlayState,
             css_timing_data::{
                 EaseType, FillMode, PlaybackDirection, StepPosition, TimingFunction,
@@ -4125,7 +4125,7 @@ impl PageState {
             iterations: timing.iteration_count,
             direction,
             fill,
-            play_state: if *layoutng_style::style::css_timing_data::CSSTimingData::GetRepeated(
+            play_state: if *layout_style::style::css_timing_data::CSSTimingData::GetRepeated(
                 data.PlayStateList(),
                 index,
             ) == EAnimPlayState::kPaused
@@ -4347,7 +4347,7 @@ impl PageState {
 
     fn WithEngines(
         document: Rc<DocumentEngine>,
-        layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
+        layout_engine: layout_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
         rendering: PageRenderPipeline,
         constraints: ConstraintSpace,
@@ -4383,7 +4383,7 @@ impl PageState {
         constraints.font_queries = Some(font_engine::FontQueryCollector::default());
         Self::WithDocumentEngines(
             document,
-            layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            layout_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
             paint::PaintEngine::new(),
             None,
             constraints,
@@ -4395,7 +4395,7 @@ impl PageState {
 
     fn WithDocumentEngines(
         document: Rc<DocumentEngine>,
-        layout_engine: layoutng_assembly::layout_engine::LayoutEngine,
+        layout_engine: layout_assembly::layout_engine::LayoutEngine,
         paint_engine: paint::PaintEngine,
         rendering: Option<PageRenderPipeline>,
         mut constraints: ConstraintSpace,
@@ -4611,7 +4611,7 @@ impl PageState {
     fn new(constraints: ConstraintSpace, client: Rc<RefCell<dyn PageClient>>) -> Rc<Self> {
         Self::WithEngines(
             Rc::new(DocumentEngine::new()),
-            layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            layout_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly()),
             paint::PaintEngine::new(),
             PageRenderPipeline::default(),
             constraints,
@@ -4625,7 +4625,7 @@ impl PageState {
     /// programmatic animator owner.
     fn ApplyNativeScrollResult(
         &self,
-        result: layoutng_assembly::native_scroll_source::NativeScrollResult,
+        result: layout_assembly::native_scroll_source::NativeScrollResult,
     ) {
         let did_scroll = result.did_scroll;
         for update in result.offsets {
@@ -4641,7 +4641,7 @@ impl PageState {
         }
         for request in result.programmatic_requests {
             let behavior = if request.behavior
-                == layoutng_style::style::scroll_enums::mojom::blink::ScrollBehavior::kSmooth
+                == layout_style::style::scroll_enums::mojom::blink::ScrollBehavior::kSmooth
             {
                 ViewportScrollBehavior::Smooth
             } else {
@@ -5342,7 +5342,7 @@ impl PageState {
                     page_mutation::ScrollMutation {
                         target_node_id,
                         offset,
-                        scroll_type: layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                        scroll_type: layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
                     },
                 ));
             })),
@@ -5424,7 +5424,7 @@ impl PageState {
                 if !metric.EnsureLayoutOutputForNode(id) {
                     return None;
                 }
-                let query = layoutng_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
+                let query = layout_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
                 let layout = metric.layout_engine.borrow();
                 let output = layout.Output()?;
                 output.Node(id).map_or(Some(0.0), |node| node.Metric(query))
@@ -5720,7 +5720,7 @@ impl PageState {
                 }
                 let layout = self.layout_engine.borrow();
                 let _svg_resources =
-                    layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                    layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
                         layout
                             .GetLayoutTree()
                             .expect("scroll Paint retains native SVG resources"),
@@ -6981,7 +6981,7 @@ impl Page {
     ) -> io::Result<bool> {
         fn collect(
             node: PaintFragmentCursor<'_>,
-            images: &[layoutng_assembly::internal::layout_input::PaintImage],
+            images: &[layout_assembly::internal::layout_input::PaintImage],
             device_pixel_ratio: f64,
             preferred_color_scheme: u8,
             output: &mut BTreeMap<u64, Vec<image_resource::ContainerKey>>,
@@ -7296,7 +7296,7 @@ impl Page {
         ));
         let document = Rc::new(DocumentEngine::new());
         let layout_engine =
-            layoutng_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
+            layout_assembly::layout_engine::LayoutEngine::new(&crate::CreateLayoutAssembly());
         let paint_engine = paint::PaintEngine::new();
         let rendering = PageRenderPipeline::new_with_executors(
             if threads.raster {
@@ -7489,7 +7489,7 @@ impl Page {
     pub fn SetTrackedElementSubRect(
         &mut self,
         node_id: u64,
-        tracked: layoutng_assembly::internal::layout_input::TrackedElementSubRect,
+        tracked: layout_assembly::internal::layout_input::TrackedElementSubRect,
     ) -> bool {
         let changed = self
             .state
@@ -8175,7 +8175,7 @@ impl Page {
         }
         self.Apply(PageMutation::ViewportMutation(
             page_mutation::ViewportMutation {
-                size: layoutng_assembly::internal::layout_input::Size { width, height },
+                size: layout_assembly::internal::layout_input::Size { width, height },
             },
         ))
     }
@@ -8502,7 +8502,7 @@ impl Page {
                 .collect::<HashSet<_>>()
             {
                 layout.ApplyMutation(
-                    layoutng_assembly::layout_engine::LayoutMutation::SelectionPaint { node_id },
+                    layout_assembly::layout_engine::LayoutMutation::SelectionPaint { node_id },
                 );
             }
         }
@@ -8666,7 +8666,7 @@ impl Page {
             affected_nodes.dedup();
             for node_id in affected_nodes {
                 layout.ApplyMutation(
-                    layoutng_assembly::layout_engine::LayoutMutation::SelectionPaint { node_id },
+                    layout_assembly::layout_engine::LayoutMutation::SelectionPaint { node_id },
                 );
             }
         }
@@ -9033,7 +9033,7 @@ impl Page {
     #[doc(hidden)]
     pub fn GetLayoutEngine(
         &self,
-    ) -> std::cell::Ref<'_, layoutng_assembly::layout_engine::LayoutEngine> {
+    ) -> std::cell::Ref<'_, layout_assembly::layout_engine::LayoutEngine> {
         self.state.layout_engine.borrow()
     }
     /// Last semantic alert/visibility event, shared by native and headless hosts.
@@ -9990,7 +9990,7 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                    layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
                         layout
                             .GetLayoutTree()
                             .expect("PrePaint retains native SVG resource owners"),
@@ -10298,7 +10298,7 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                    layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
                         layout
                             .GetLayoutTree()
                             .expect("Paint retains native SVG resource owners"),
@@ -10362,7 +10362,7 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layoutng_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
+                    layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope::new(
                         layout
                             .GetLayoutTree()
                             .expect("Paint retains native SVG resource owners"),
@@ -10552,7 +10552,7 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
                 target_node_id: scroller,
                 offset: Offset { x: 0.0, y: 20.0 },
                 scroll_type:
-                    layoutng_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
+                    layout_style::style::scroll_enums::mojom::blink::ScrollType::kProgrammatic,
             },
         ));
         page.UpdateFrameIfNeeded().unwrap();

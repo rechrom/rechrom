@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layoutng_assembly::internal::layout_input::{
+use layout_assembly::internal::layout_input::{
     BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, TextDirection, WritingMode,
 };
-use layoutng_assembly::internal::layout_input_types::Color;
-use layoutng_style::style::appearance::AppearanceValue;
+use layout_assembly::internal::layout_input_types::Color;
+use layout_style::style::appearance::AppearanceValue;
 
 use crate::contoured_border_geometry::UniformCornerRadii;
 use crate::paint_context::PaintContext;

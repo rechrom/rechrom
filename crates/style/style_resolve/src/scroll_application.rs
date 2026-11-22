@@ -3,8 +3,8 @@
 #![allow(non_snake_case)]
 use super::*;
 use foundation::{EOverscrollBehavior, MakeGarbageCollected, Member};
-use layoutng_style::style::computed_style_constants::ScrollbarGutter;
-use layoutng_style::style::{scroll_snap_data::cc, style_scrollbar_color::StyleScrollbarColor};
+use layout_style::style::computed_style_constants::ScrollbarGutter;
+use layout_style::style::{scroll_snap_data::cc, style_scrollbar_color::StyleScrollbarColor};
 
 pub(super) fn IsScrollProperty(id: CSSPropertyID) -> bool {
     use CSSPropertyID::*;

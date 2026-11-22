@@ -1,5 +1,5 @@
 use foundation::{CSSPropertyID as P, Color, EOverscrollBehavior, String};
-use layoutng_style::style::{computed_style::ComputedStyle, scroll_snap_data::cc};
+use layout_style::style::{computed_style::ComputedStyle, scroll_snap_data::cc};
 use style::{
     media_queries::MediaValuesCachedData,
     parser::{
@@ -249,7 +249,7 @@ fn scroll_consumers_reject_invalid_values_and_preserve_runtime_boundaries() {
     );
     let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
     let mut builder =
-        layoutng_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
+        layout_style::style::computed_style::ComputedStyleBuilder::from_style(initial);
     for (text, expected) in [("2", 2.0), ("calc(2 + 3)", 5.0)] {
         let value = ParseProperty(
             P::kScrollMarginBlockStart,

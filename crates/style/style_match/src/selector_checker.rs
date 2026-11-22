@@ -36,8 +36,8 @@ use crate::css_selector::{
 use crate::css_selector_list::CSSSelectorList;
 use crate::match_flags::{MatchFlag, MatchFlags};
 use foundation::{AtomicString, Persistent};
-use layoutng_style::style::computed_style::ComputedStyle;
-use layoutng_style::style::computed_style_constants::PseudoId;
+use layout_style::style::computed_style::ComputedStyle;
+use layout_style::style::computed_style_constants::PseudoId;
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -2726,7 +2726,7 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
                 } else {
                     c.pseudo_id
                 };
-                if layoutng_style::style::computed_style_constants::IsTransitionPseudoElement(id) {
+                if layout_style::style::computed_style_constants::IsTransitionPseudoElement(id) {
                     let Some(t) = b.TransitionForElement(e) else {
                         return false;
                     };

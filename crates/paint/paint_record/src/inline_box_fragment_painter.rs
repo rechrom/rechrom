@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use crate::box_decoration_data::BoxDecorationData;
@@ -141,8 +141,8 @@ impl<'n, 'f, 'c, 'o> LineBoxFragmentPainter<'n, 'f, 'c, 'o> {
 mod tests {
     use std::cell::RefCell;
 
-    use layoutng_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-    use layoutng_assembly::internal::layout_input::{Offset, Size, TrackedElementSubRect};
+    use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
+    use layout_assembly::internal::layout_input::{Offset, Size, TrackedElementSubRect};
 
     use crate::box_fragment_painter::BoxFragmentPainter;
     use crate::paint_context::PaintContext;

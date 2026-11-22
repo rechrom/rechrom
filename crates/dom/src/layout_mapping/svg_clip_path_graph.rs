@@ -1,7 +1,7 @@
 //! Document-owned snapshots for local SVG <clipPath> resources.
 use crate::{persistent_document::DOMNamespace, Child, Element};
-use layoutng_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
-use layoutng_assembly::internal::paint_input::{
+use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
+use layout_assembly::internal::paint_input::{
     SvgClipGeometry, SvgClipLength, SvgClipPathChild, SvgClipPathGraph, SvgClipPathUnits,
     SvgClipResourceEntry, SvgClipResourceSnapshot, SvgClipResourceVersion, SvgClipText,
     SvgClipTextAnchor, SvgClipTextPath, SvgClipTransform, SvgClipTransformStep,
@@ -118,7 +118,7 @@ struct GraphDocument<'a> {
     computed_geometry: HashMap<usize, Result<Option<SvgClipGeometry>, String>>,
     computed_use_offsets: HashMap<usize, Result<(SvgClipLength, SvgClipLength), String>>,
     unavailable_targets: HashSet<usize>,
-    mask_graphs: HashMap<usize, Arc<layoutng_assembly::internal::paint_input::SvgMaskGraph>>,
+    mask_graphs: HashMap<usize, Arc<layout_assembly::internal::paint_input::SvgMaskGraph>>,
     use_instances: HashMap<usize, Result<Option<usize>, String>>,
 }
 
@@ -304,7 +304,7 @@ fn clip_length(value: &foundation::Length, zoom: f32) -> Result<SvgClipLength, S
 
 fn computed_shape_geometry(
     tag: &str,
-    style: &layoutng_style::style::computed_style::ComputedStyle,
+    style: &layout_style::style::computed_style::ComputedStyle,
 ) -> Result<Option<SvgClipGeometry>, String> {
     let zoom = style.EffectiveZoom().max(f32::MIN_POSITIVE);
     let length = |value: &foundation::Length| clip_length(value, zoom);
@@ -514,9 +514,9 @@ fn transform(element: &Element) -> Result<SvgClipTransform, String> {
     Ok(result)
 }
 fn computed_css_transform(
-    style: &layoutng_style::style::computed_style::ComputedStyle,
+    style: &layout_style::style::computed_style::ComputedStyle,
 ) -> Result<String, String> {
-    use layoutng_style::style::style_transform::{
+    use layout_style::style::style_transform::{
         ApplyIndependentTransformProperties, ApplyMotionPath, ApplyTransformOperations,
         ApplyTransformOrigin,
     };
@@ -1630,7 +1630,7 @@ mod tests {
         use foundation::{
             CalculationValue, Length, LengthValueRange, PixelsAndPercent, TransformOperations,
         };
-        use layoutng_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+        use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
         let _heap = foundation::LayoutHeapScope::new();
         let initial = unsafe { &*ComputedStyle::GetInitialStyleSingleton() };
         let mut builder = ComputedStyleBuilder::from_style(initial);
@@ -1751,9 +1751,9 @@ mod tests {
 pub fn SVGMaskShape(
     document: &crate::Document,
     index: usize,
-    source: &layoutng_style::style::computed_style::ComputedStyle,
-) -> Result<Option<layoutng_assembly::internal::layout_input::SvgShapeData>, String> {
-    use layoutng_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
+    source: &layout_style::style::computed_style::ComputedStyle,
+) -> Result<Option<layout_assembly::internal::layout_input::SvgShapeData>, String> {
+    use layout_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
     let node = document.Node(index);
     if matches!(node.Name(), "path" | "line" | "polyline" | "polygon") {
         if node.Name() == "path" && !source.D().is_null() {

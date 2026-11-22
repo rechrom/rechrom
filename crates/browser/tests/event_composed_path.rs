@@ -51,7 +51,7 @@ fn evaluate(page: &mut Page, script: &str) {
 fn fixture() -> Page {
     let assembly = browser::CreateLayoutAssembly();
     let mut constraints = browser::CreateBrowserConstraints(640, 800);
-    constraints.fonts = vec![layoutng_assembly::internal::layout_input::FontFace {
+    constraints.fonts = vec![layout_assembly::internal::layout_input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
             .as_slice()
