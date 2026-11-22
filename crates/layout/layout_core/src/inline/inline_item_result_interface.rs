@@ -3,7 +3,7 @@
 use super::super::algorithm_forward::InlineItemResultRubyColumn;
 use font_engine::ShapeResultView;
 use foundation::{HeapVector, LayoutUnit, Member, String, Visitor};
-use layout_fragment::layout_result::LayoutResult;
+use crate::layout_result::LayoutResult;
 use layout_geometry::geometry::box_strut::LineBoxStrut;
 
 use super::super::exclusions::exclusion_space::ExclusionSpace;

@@ -22,10 +22,10 @@ use foundation::{
     LayoutUnit, MakeGarbageCollected, Member, RuntimeEnabledFeatures, String, TextDirection,
     TextOffsetMap, To, UnicodeBidi, WritingMode,
 };
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::inline_items_data::{InlineItemsData, InlineItemsDataWithOffsetMap};
-use layout_fragment::layout_result::LayoutResult;
+use crate::break_token::BreakToken;
+use crate::inline_break_token::InlineBreakToken;
+use crate::inline_items_data::{InlineItemsData, InlineItemsDataWithOffsetMap};
+use crate::layout_result::LayoutResult;
 use layout_core::internal::algorithm_forward::InlineChildLayoutContext as ForwardInlineChildLayoutContext;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::column_spanner_path::ColumnSpannerPath;

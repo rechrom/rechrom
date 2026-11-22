@@ -14,8 +14,8 @@ use foundation::{
     TextDirection, To, Visitor,
 };
 use icu_bidi::UBiDiLevel;
-use layout_fragment::logical_line_item::{LogicalLineItem, LogicalLineItems};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::style_variant::StyleVariant;
 use layout_core::internal::text_offset_range::TextOffsetRange;
 use layout_geometry::geometry::logical_rect::LogicalRect;

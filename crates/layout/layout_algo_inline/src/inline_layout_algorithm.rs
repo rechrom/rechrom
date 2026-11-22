@@ -11,18 +11,18 @@ use foundation::{
     kIndefiniteSize, ClearCollectionScope, DynamicTo, IsFlippedLinesWritingMode, IsLtr, LayoutUnit,
     MarginStrut, Member, RuntimeEnabledFeatures, String, TextDirection, To, WritingDirectionMode,
 };
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::layout_result::{EStatus, LayoutResult};
-use layout_fragment::logical_box_fragment::LogicalBoxFragment;
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::logical_line_container::LogicalLineContainer;
-use layout_fragment::logical_line_item::{LogicalLineItem, LogicalLineItems};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::inline_break_token::InlineBreakToken;
+use crate::layout_result::{EStatus, LayoutResult};
+use crate::logical_box_fragment::LogicalBoxFragment;
+use crate::logical_fragment::LogicalFragment;
+use crate::logical_line_container::LogicalLineContainer;
+use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::column_spanner_path::ColumnSpannerPath;
 use layout_core::internal::constraint_space::{AdjoiningObjectTypeValue, ConstraintSpace};
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunity;
+use layout_core::internal::exclusions::layout_opportunity::{LayoutOpportunity, LayoutOpportunityExt};
 use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
 use layout_core::internal::form_control_types::FormControlType;
 use layout_core::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
@@ -1335,7 +1335,7 @@ impl InlineLayoutAlgorithm {
         self.apply_text_fit_ = ShouldApplyTextFit(&self.base_.node_);
 
         let items_builder = context.ItemsBuilder()
-            as *mut layout_fragment::fragment_items_builder::FragmentItemsBuilder;
+            as *mut crate::fragment_items_builder::FragmentItemsBuilder;
         let line_container = unsafe { &mut *items_builder }.AcquireLogicalLineContainer();
         debug_assert!(!line_container.is_null());
         let mut line_break_strategy = LineBreakStrategy::new(

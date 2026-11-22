@@ -85,12 +85,12 @@ pub(crate) fn PropertyFragmentUniqueId(
 
 pub(super) fn ExportPrePaintInvalidation(
     object: *const LayoutObject,
-) -> layout_fragment::fragment_tree::PrePaintInvalidation {
+) -> crate::fragment_tree::PrePaintInvalidation {
     if object.is_null() {
         return Default::default();
     }
     let object = unsafe { &*object };
-    layout_fragment::fragment_tree::PrePaintInvalidation {
+    crate::fragment_tree::PrePaintInvalidation {
         blocking_wheel_event_handler_changed: object.GetPrePaintSubtreeWalkReasons().contains(crate::internal::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kBlockingWheelEventHandler),
         descendant_blocking_wheel_event_handler_changed: object.GetDescendantPrePaintSubtreeWalkReasons().contains(crate::internal::pre_paint_subtree_walk_reasons::PrePaintSubtreeWalkReason::kBlockingWheelEventHandler),
         needs_paint_property_update: object.NeedsPaintPropertyUpdate(),
@@ -507,7 +507,7 @@ mod tests {
 /// `PaintProperties::LivePrePaintInvalidation`.
 pub(crate) fn ExportSelectionPrePaintInvalidation(
     object: *const LayoutObject,
-) -> layout_fragment::fragment_tree::PrePaintInvalidation {
+) -> crate::fragment_tree::PrePaintInvalidation {
     ExportPrePaintInvalidation(object)
 }
 
@@ -728,7 +728,7 @@ pub(crate) fn LiveTextControlHost(object: &LayoutObject) -> Option<Option<u64>> 
 /// the resident SVG queries outside a pass.
 pub(crate) fn LivePreviousBoxGeometry(
     object: &LayoutObject,
-) -> Option<Option<layout_fragment::fragment_tree::PreviousBoxGeometry>> {
+) -> Option<Option<crate::fragment_tree::PreviousBoxGeometry>> {
     Some(ExportPreviousBoxGeometry(object))
 }
 
@@ -736,12 +736,12 @@ pub(crate) fn LivePreviousBoxGeometry(
 /// replaced content rect; valid inside a layout pass.
 pub(crate) fn ExportPreviousBoxGeometry(
     object: &LayoutObject,
-) -> Option<layout_fragment::fragment_tree::PreviousBoxGeometry> {
+) -> Option<crate::fragment_tree::PreviousBoxGeometry> {
     let object_ptr = object as *const LayoutObject;
     let box_ = unsafe { DynamicTo::<LayoutBox>(object_ptr).as_ref() }?;
     let previous_size = box_.PreviousSize();
     let replaced = DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(object_ptr);
-    Some(layout_fragment::fragment_tree::PreviousBoxGeometry {
+    Some(crate::fragment_tree::PreviousBoxGeometry {
         size: Size {
             width: Number(previous_size.width),
             height: Number(previous_size.height),
@@ -775,7 +775,7 @@ pub(crate) fn LivePreviousViewBackgroundRect(object: &LayoutObject) -> Option<Fr
 /// overrides.
 pub(crate) fn LiveRasterEffectOutset(
     object: &LayoutObject,
-) -> layout_fragment::fragment_tree::RasterEffectOutset {
+) -> crate::fragment_tree::RasterEffectOutset {
     let object_ptr = object as *const LayoutObject;
     if let Some(box_) = unsafe { DynamicTo::<LayoutBox>(object_ptr).as_ref() } {
         return box_.VisualRectOutsetForRasterEffects();
@@ -786,9 +786,9 @@ pub(crate) fn LiveRasterEffectOutset(
             unsafe { &*(object_ptr as *const DisplayItemClient) }
                 .VisualRectOutsetForRasterEffects()
         } else if style.CapStyle() == foundation::LineCap::kButtCap {
-            layout_fragment::fragment_tree::RasterEffectOutset::kHalfPixel
+            crate::fragment_tree::RasterEffectOutset::kHalfPixel
         } else {
-            layout_fragment::fragment_tree::RasterEffectOutset::kWholePixel
+            crate::fragment_tree::RasterEffectOutset::kWholePixel
         };
     }
     unsafe { &*(object_ptr as *const DisplayItemClient) }.VisualRectOutsetForRasterEffects()
@@ -935,7 +935,7 @@ pub(crate) fn LiveScrollOffset(object: &LayoutObject) -> Offset {
 /// (core/paint/text_combine_painter.cc:35-48).
 pub(crate) fn LiveTextCombine(
     object: &LayoutObject,
-) -> Option<layout_fragment::fragment_tree::TextCombinePaintData> {
+) -> Option<crate::fragment_tree::TextCombinePaintData> {
     let text_combine =
         unsafe { DynamicTo::<LayoutTextCombine>(object as *const LayoutObject).as_ref() }?;
     let parent_style = unsafe { &*text_combine.Parent() }.StyleRef();
@@ -951,7 +951,7 @@ pub(crate) fn LiveTextCombine(
             primary_font.GetFontMetrics().FloatAscent() - primary_font.InternalLeading() / 2.0,
         ))
     };
-    Some(layout_fragment::fragment_tree::TextCombinePaintData {
+    Some(crate::fragment_tree::TextCombinePaintData {
         scale_x,
         inline_spacing,
         text_top_offset,
@@ -987,7 +987,7 @@ pub(crate) fn LiveSvgPaintGeometry(
     object: &LayoutObject,
 ) -> Option<(
     Option<crate::internal::layout_input::TransformMatrix>,
-    Option<layout_fragment::fragment_tree::SvgViewportGeometry>,
+    Option<crate::fragment_tree::SvgViewportGeometry>,
     Option<FragmentPaintRect>,
 )> {
     LiveSourceNode(object)?;
@@ -1083,7 +1083,7 @@ pub(crate) fn LiveItemInkOverflow(item: &FragmentItem) -> [Option<FragmentPaintR
 /// text, symbol markers and items without a ShapeResult.
 pub(crate) fn LiveTextGlyphInk(
     item: &FragmentItem,
-    items: &layout_fragment::fragment_items::FragmentItems,
+    items: &crate::fragment_items::FragmentItems,
 ) -> Option<FragmentPaintRect> {
     if !item.IsText() || item.IsSvgText() || item.IsSymbolMarker() {
         return None;

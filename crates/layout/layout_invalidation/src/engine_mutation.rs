@@ -433,8 +433,8 @@ impl EngineMutation for LayoutEngine {
                 resources,
                 clip_resource_version,
             } => {
-                let mut trace = layout_fragment_boundary::trace::span(
-                    layout_fragment_boundary::trace::TracePhase::PaintStyle,
+                let mut trace = layout_fragment::trace::span(
+                    layout_fragment::trace::TracePhase::PaintStyle,
                 );
                 trace.set(
                     "cached_objects_before",
@@ -481,8 +481,8 @@ impl EngineMutation for LayoutEngine {
                 resources,
                 element,
             } => {
-                let mut trace = layout_fragment_boundary::trace::span(
-                    layout_fragment_boundary::trace::TracePhase::PaintInput,
+                let mut trace = layout_fragment::trace::span(
+                    layout_fragment::trace::TracePhase::PaintInput,
                 );
                 trace.set(
                     "cached_objects_before",

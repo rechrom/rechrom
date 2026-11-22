@@ -17,7 +17,7 @@ use foundation::{
     Visitor, WeakHeapHashMap, WeakMember,
 };
 use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
-use layout_fragment::layout_result::LayoutResult;
+use crate::layout_result::LayoutResult;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_style::style::computed_style::ComputedStyle;
 

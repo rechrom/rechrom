@@ -90,7 +90,7 @@ pub enum DecorationPercentageResolutionType {
 // The source stores all common constraints in one unsigned bitfield word.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Bitfields(pub(crate) u32);
+pub struct Bitfields(pub u32);
 
 impl Bitfields {
     const WRITING_MODE_SHIFT: u32 = 3;
@@ -99,32 +99,32 @@ impl Bitfields {
     const HIDDEN_FOR_PAINT_BIT: u32 = 11;
 
     // cpp: layoutng/internal/constraint_space.h:1587-1624
-    pub(crate) fn MaySkipLayout(self, other: Self) -> bool {
+    pub fn MaySkipLayout(self, other: Self) -> bool {
         // The source compares fields through baseline_algorithm_type (bits
         // 0..=19), excluding cache slot and all size constraints.
         const MASK: u32 = (1 << 20) - 1;
         (self.0 & MASK) == (other.0 & MASK)
     }
 
-    pub(crate) fn AreInlineSizeConstraintsEqual(self, other: Self) -> bool {
+    pub fn AreInlineSizeConstraintsEqual(self, other: Self) -> bool {
         const MASK: u32 = (0b11 << 21) | (1 << 25);
         (self.0 & MASK) == (other.0 & MASK)
     }
 
-    pub(crate) fn AreBlockSizeConstraintsEqual(self, other: Self) -> bool {
+    pub fn AreBlockSizeConstraintsEqual(self, other: Self) -> bool {
         const MASK: u32 = (0b11 << 23) | (0b1111 << 26);
         (self.0 & MASK) == (other.0 & MASK)
     }
 
     // cpp: layoutng/internal/constraint_space.h:1581-1585
-    pub(crate) fn new(writing_direction: WritingDirectionMode) -> Self {
+    pub fn new(writing_direction: WritingDirectionMode) -> Self {
         Self(
             ((writing_direction.GetWritingMode() as u32) << Self::WRITING_MODE_SHIFT)
                 | ((writing_direction.Direction() as u32) << Self::DIRECTION_SHIFT),
         )
     }
 
-    pub(crate) fn writing_mode(self) -> WritingMode {
+    pub fn writing_mode(self) -> WritingMode {
         match (self.0 >> Self::WRITING_MODE_SHIFT) & 0b111 {
             0 => WritingMode::kHorizontalTb,
             1 => WritingMode::kVerticalRl,
@@ -135,7 +135,7 @@ impl Bitfields {
         }
     }
 
-    pub(crate) fn direction(self) -> TextDirection {
+    pub fn direction(self) -> TextDirection {
         if (self.0 >> Self::DIRECTION_SHIFT) & 1 == 0 {
             TextDirection::kLtr
         } else {
@@ -143,24 +143,24 @@ impl Bitfields {
         }
     }
 
-    pub(crate) fn is_orthogonal_writing_mode_root(self) -> bool {
+    pub fn is_orthogonal_writing_mode_root(self) -> bool {
         self.0 & (1 << Self::ORTHOGONAL_ROOT_BIT) != 0
     }
 
-    pub(crate) fn is_hidden_for_paint(self) -> bool {
+    pub fn is_hidden_for_paint(self) -> bool {
         self.0 & (1 << Self::HIDDEN_FOR_PAINT_BIT) != 0
     }
 
-    pub(crate) fn bit(self, index: u32) -> bool {
+    pub fn bit(self, index: u32) -> bool {
         self.0 & (1 << index) != 0
     }
 
-    pub(crate) fn set_bit(&mut self, index: u32, value: bool) {
+    pub fn set_bit(&mut self, index: u32, value: bool) {
         let mask = 1 << index;
         self.0 = (self.0 & !mask) | ((value as u32) << index);
     }
 
-    pub(crate) fn set_bits(&mut self, shift: u32, width: u32, value: u32) {
+    pub fn set_bits(&mut self, shift: u32, width: u32, value: u32) {
         let mask = ((1 << width) - 1) << shift;
         debug_assert_eq!(value << shift & !mask, 0);
         self.0 = (self.0 & !mask) | ((value << shift) & mask);
@@ -968,12 +968,12 @@ impl RareData {
 // cpp: layoutng/internal/constraint_space.h:1670-1676
 #[repr(C)]
 pub struct ConstraintSpace {
-    pub(crate) available_size_: LogicalSize,
-    pub(crate) percentage_size_: LogicalSize,
-    pub(crate) bfc_offset_: BfcOffset,
-    pub(crate) exclusion_space_: ExclusionSpace,
-    pub(crate) rare_data_: Member<RareData>,
-    pub(crate) bitfields_: Bitfields,
+    pub available_size_: LogicalSize,
+    pub percentage_size_: LogicalSize,
+    pub bfc_offset_: BfcOffset,
+    pub exclusion_space_: ExclusionSpace,
+    pub rare_data_: Member<RareData>,
+    pub bitfields_: Bitfields,
 }
 
 impl Clone for ConstraintSpace {
@@ -991,10 +991,10 @@ impl Clone for ConstraintSpace {
     }
 }
 
-#[path = "../../../layout_core/src/fragmentation/constraint_space_fragmentation.rs"]
+#[path = "constraint_space_fragmentation.rs"]
 mod layout_algo_fragmentation_constraint_space_fragmentation;
 
-#[path = "../../../layout_core/src/inline/constraint_space_block_in_inline.rs"]
+#[path = "constraint_space_block_in_inline.rs"]
 mod layout_algo_inline_constraint_space_block_in_inline;
 
 impl ConstraintSpace {

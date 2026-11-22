@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_style::style::computed_style::ComputedStyle;
 

@@ -168,8 +168,8 @@ pub(super) fn paint_input_plan(
     element: &Option<ElementData>,
 ) -> Option<(std::collections::HashSet<u64>, Vec<u64>)> {
     use layout_style::style::computed_style_base::{ComputedStyleBase, FieldDifference as F};
-    let mut trace = layout_fragment_boundary::trace::span(
-        layout_fragment_boundary::trace::TracePhase::ValidatePaintInput,
+    let mut trace = layout_fragment::trace::span(
+        layout_fragment::trace::TracePhase::ValidatePaintInput,
     );
     trace.set("node_id", id as f64);
     let storage = unsafe { &*tree.storage_ };

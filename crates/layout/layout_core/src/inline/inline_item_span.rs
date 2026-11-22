@@ -2,7 +2,7 @@
 
 use super::super::inline_item::InlineItem;
 use foundation::{Member, Visitor};
-use layout_fragment::inline_items_data::InlineItemsData;
+use crate::inline_items_data::InlineItemsData;
 
 // cpp: layoutng/internal/inline_item_span.h:12-21,64-67
 // Hold the GC owner, not the vector's address: the vector is owned by data_.

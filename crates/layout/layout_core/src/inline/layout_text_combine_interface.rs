@@ -7,8 +7,8 @@ use foundation::{
     IsHorizontalTypographicMode, Member, PhysicalOffset, PhysicalRect, PhysicalSize, String,
     Visitor, WritingMode,
 };
-use layout_fragment::fragment_item::FragmentItem;
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::fragment_item::FragmentItem;
+use crate::inline_cursor::InlineCursor;
 use layout_style::style::computed_style::ComputedStyle;
 
 use super::super::layout_block_flow::LayoutBlockFlow;

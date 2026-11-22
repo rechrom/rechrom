@@ -6,7 +6,7 @@ use foundation::{
     gfx, Color, DecorationLineBounds, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize,
     TextDecorationLine, TextDirection, TextEmphasisMark, WritingDirectionMode, WritingMode,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;

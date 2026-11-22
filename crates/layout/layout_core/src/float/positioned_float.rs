@@ -1,8 +1,8 @@
 //! Float-algorithm result retained after placement.
 
 use foundation::{LayoutUnit, Member, Visitor};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::layout_result::LayoutResult;
+use crate::block_break_token::BlockBreakToken;
+use crate::layout_result::LayoutResult;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 
 // cpp: layoutng/internal/positioned_float.h:16-46

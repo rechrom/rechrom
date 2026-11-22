@@ -4,11 +4,11 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{HeapVector, LayoutUnit, MakeGarbageCollectedDefault, Member};
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::fragment_items_builder::FragmentItemsBuilder;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::logical_line_item::LogicalLineItems;
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::break_token::BreakToken;
+use crate::fragment_items_builder::FragmentItemsBuilder;
+use crate::inline_break_token::InlineBreakToken;
+use crate::logical_line_item::LogicalLineItems;
 use layout_core::internal::inline_item::InlineItems;
 use layout_core::internal::inline_node::InlineNode;
 

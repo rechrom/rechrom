@@ -4,10 +4,10 @@ use foundation::{
     gfx, DynamicTo, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize, RuntimeEnabledFeatures,
     To, WritingDirectionMode,
 };
-use layout_fragment::fragment_item::FragmentItem;
-use layout_fragment::fragment_items::FragmentItems;
-use layout_fragment::fragment_items_builder::ItemWithOffset;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::fragment_item::FragmentItem;
+use crate::fragment_items::FragmentItems;
+use crate::fragment_items_builder::ItemWithOffset;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, kOverflowClipX, kOverflowClipY, OverflowClipAxes,
@@ -19,7 +19,7 @@ use super::super::layout_box::LayoutBox;
 use super::super::layout_object::{AncestorSkipInfo, LayoutObject};
 use super::super::transform_utils::GetTransformForChildFragment;
 
-#[path = "../../layout_core/src/fragment/scrollable_overflow_calculation.rs"]
+#[path = "scrollable_overflow_calculation.rs"]
 mod layout_fragment_scrollable_overflow_calculation;
 
 // The source stores a value-copy of BlockNode. Recreating it from the same

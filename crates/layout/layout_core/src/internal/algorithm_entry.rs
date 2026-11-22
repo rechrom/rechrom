@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layout_fragment::layout_result::LayoutResult;
+use crate::layout_result::LayoutResult;
 
 use super::layout_algorithm::LayoutAlgorithmParams;
 use super::layout_algorithm_set::LayoutAlgorithmEntry;

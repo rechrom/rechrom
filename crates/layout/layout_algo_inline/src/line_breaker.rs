@@ -26,21 +26,22 @@ use foundation::{
     MakeGarbageCollected, Member, MinimumValueForLength, RubyPosition, RuntimeEnabledFeatures,
     String, StringBuilder, StringView, TextDirection, To, UnicodeBidi,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::fragment_item::ItemType as FragmentItemType;
-use layout_fragment::inline_break_token::{
+use crate::block_break_token::BlockBreakToken;
+use crate::fragment_item::ItemType as FragmentItemType;
+use crate::inline_break_token::{
     AnnotationBreakTokenData, InlineBreakToken, InlineBreakTokenFlag, RubyBreakTokenData,
 };
-use layout_fragment::inline_cursor::InlineCursor;
-use layout_fragment::inline_items_data::{InlineItemsData, OpenTagItems};
-use layout_fragment::layout_result::EStatus;
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::inline_cursor::InlineCursor;
+use crate::inline_items_data::{InlineItemsData, OpenTagItems};
+use crate::layout_result::EStatus;
+use crate::logical_fragment::LogicalFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::column_spanner_path::ColumnSpannerPath;
 use layout_core::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
 use layout_core::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunityExt;
 use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
 use layout_core::internal::fragmentation_utils::FollowColumnSpannerPath;
 use layout_core::internal::hyphen_result::HyphenResult;

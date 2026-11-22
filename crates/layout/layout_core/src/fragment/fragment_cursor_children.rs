@@ -10,7 +10,7 @@ enum FragmentChildrenState<'a> {
     Empty,
     Inline {
         item: &'a FragmentItem,
-        items: &'a layout_fragment::fragment_items::FragmentItems,
+        items: &'a crate::fragment_items::FragmentItems,
         container: &'a PhysicalBoxFragment,
         next: usize,
         end: usize,

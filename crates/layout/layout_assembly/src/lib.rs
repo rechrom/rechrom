@@ -1,9 +1,10 @@
-// LayoutNG and its fragment tree are mutually recursive C++ packages. Cargo
-// cannot express that cycle between two crates, so compile their translated
-// modules once in one assembly crate. The include paths point to the owning
-// crates' source files and do not copy or relocate implementations.
+// LayoutNG and the fragment-tree types that still call LayoutObject behaviour
+// are mutually recursive C++ packages. Cargo cannot express that cycle
+// between two crates, so compile their translated modules once in one
+// assembly crate. The include paths point to the owning crates' source files
+// and do not copy or relocate implementations. Fragment data that needs no
+// base type is the real `layout_fragment` crate, a dependency of this one.
 extern crate self as layout_algo_inline;
-extern crate self as layout_fragment;
 extern crate self as layout_core;
 extern crate self as layout_assembly;
 
@@ -14,9 +15,7 @@ include!("../../layout_core/src/lib.rs");
 /// Keep mutually recursive translated sources in their owning module paths.
 /// Root re-exports preserve the existing assembly API while profiler symbols
 /// identify the source package instead of flattening everything into assembly.
-pub mod layout_fragment_package {
-    include!("../../layout_fragment/src/lib.rs");
-}
+pub mod layout_fragment_package;
 pub use layout_fragment_package::*;
 
 pub mod layout_algo_inline_package {
@@ -59,19 +58,13 @@ mod layout_invalidation_reason_symbols;
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 
-// Grid-owned sources whose only compile unit is this assembly. They stay in
-// `layout_algo_grid/src/` for profiler attribution; `layout_algo_grid/src/lib.rs`
-// re-exports these modules and does not compile the files. Core needs them:
-// gap_segment_state_aggregator.rs holds trait and inherent impls on the
-// core-declared `GapSegmentStateAggregator` (coherence requires the declaring
-// crate), and grid_track_collection.rs defines the `#[no_mangle]` bodies that
-// core's `internal::grid_track_collection` declares as `extern "Rust"`, so
-// they must link with every layout_assembly user, including its own tests.
-#[path = "../../layout_algo_grid/src/gap_segment_state_aggregator.rs"]
-pub mod grid_gap_segment_state_aggregator;
-
-#[path = "../../layout_algo_grid/src/grid_track_collection.rs"]
-pub mod grid_track_collection_implementation;
+// Grid-track-collection and gap-segment-aggregation bodies of fragment data
+// types compile in `layout_fragment` with the types they implement (coherence
+// requires the declaring crate, and the `#[no_mangle]` bodies link with every
+// user of the crate). `layout_algo_grid/src/lib.rs` reaches them through these
+// re-exports.
+pub use layout_fragment::grid_gap_segment_state_aggregator;
+pub use layout_fragment::grid_track_collection_implementation;
 
 #[cfg(test)]
 mod package_contract_tests {
@@ -276,13 +269,7 @@ mod package_contract_tests {
                     continue;
                 }
                 let dependency_key = dependency_key.trim();
-                let assembly_fragment_boundary = manifest_path
-                    .parent()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name.to_string_lossy().ends_with("_assembly"))
-                    && dependency_key == "layout_fragment_boundary"
-                    && target == "layout_fragment";
-                if dependency_key != target && !assembly_fragment_boundary {
+                if dependency_key != target {
                     violations.push(format!(
                         "{} aliases performance owner {target} as {dependency_key}",
                         manifest_path

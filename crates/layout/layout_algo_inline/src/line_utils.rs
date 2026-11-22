@@ -3,7 +3,7 @@
 
 use font_engine::fonts::font_height::FontHeight;
 use foundation::{EPosition, LayoutUnit};
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::editing::forward::PositionWithAffinity;
 use layout_core::internal::relative_utils::ComputeRelativeOffset;

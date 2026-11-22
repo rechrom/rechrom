@@ -9,7 +9,7 @@ use crate::internal::editing::forward::{
 };
 use crate::internal::map_coordinates_flags::{MapCoordinatesFlags, MapCoordinatesMode};
 use foundation::{LayoutUnit, PhysicalOffset, PhysicalSize, TextDirection, WritingDirectionMode};
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 

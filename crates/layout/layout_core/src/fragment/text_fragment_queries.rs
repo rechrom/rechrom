@@ -7,7 +7,7 @@ use super::*;
 #[inline(never)]
 pub(super) fn paint_glyph_runs(
     cursor: PaintFragmentCursor<'_>,
-) -> Option<std::sync::Arc<Vec<layout_fragment::fragment_tree::PaintGlyphRun>>> {
+) -> Option<std::sync::Arc<Vec<crate::fragment_tree::PaintGlyphRun>>> {
     let FragmentCursor::Inline { item, .. } = cursor.Cursor() else {
         return None;
     };
@@ -129,7 +129,7 @@ pub(super) fn text_selection_range_rect(
     if start > end {
         return None;
     }
-    let mut inline = layout_fragment::inline_cursor::InlineCursor::new_with_items(container, items);
+    let mut inline = crate::inline_cursor::InlineCursor::new_with_items(container, items);
     inline.MoveToFragmentItem(item);
     let rect = inline.CurrentLocalSelectionRectForText(
         start,
@@ -182,7 +182,7 @@ pub(super) fn text_offset_for_point(
     let FragmentCursor::Inline { item, items, .. } = cursor.Cursor() else {
         return None;
     };
-    if item.Type() != layout_fragment::fragment_item::ItemType::kText {
+    if item.Type() != crate::fragment_item::ItemType::kText {
         return None;
     }
     Some(item.TextOffsetForPoint(

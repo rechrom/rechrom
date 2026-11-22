@@ -12,7 +12,7 @@ pub trait GridSubtreeTree {
 
 // cpp: layoutng/internal/grid_subtree.h:50-96
 pub struct GridSubtree<GridTree: GridSubtreeTree> {
-    pub(crate) subtree_root_: u32,
+    pub subtree_root_: u32,
     parent_end_index_: u32,
     tree_: PhantomData<GridTree>,
 }

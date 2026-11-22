@@ -5,11 +5,13 @@ use layout_geometry::geometry::bfc_offset::BfcDelta;
 use layout_geometry::geometry::bfc_rect::BfcRect;
 use layout_geometry::geometry::box_strut::BoxStrut;
 
-use crate::internal::layout_box::LayoutBox;
+use crate::opaque::OpaqueLayoutObject;
 
 // cpp: layoutng/internal/exclusions/exclusion_area.h:19-35
 pub struct ExclusionShapeData {
-    pub layout_box: Member<LayoutBox>,
+    // The float's LayoutBox. Base reads its ShapeOutsideInfo
+    // (`LayoutOpportunityExt::ComputeLineLayoutOpportunity`).
+    pub layout_box: Member<OpaqueLayoutObject>,
     pub margins: BoxStrut,
     pub shape_insets: BoxStrut,
 }
@@ -18,9 +20,9 @@ pub struct ExclusionShapeData {
 impl ExclusionShapeData {
     // cpp: layoutng/internal/exclusions/exclusion_area.h:21-24
     #[inline(always)]
-    pub fn new(layout_box: *const LayoutBox, margins: &BoxStrut, shape_insets: &BoxStrut) -> Self {
+    pub fn new(layout_box: *const OpaqueLayoutObject, margins: &BoxStrut, shape_insets: &BoxStrut) -> Self {
         Self {
-            layout_box: Member::from_ptr(layout_box as *mut LayoutBox),
+            layout_box: Member::from_ptr(layout_box.cast_mut()),
             margins: *margins,
             shape_insets: *shape_insets,
         }

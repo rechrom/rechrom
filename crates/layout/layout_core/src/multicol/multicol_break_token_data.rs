@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use foundation::LayoutUnit;
-use layout_fragment::break_token_algorithm_data::{
+use crate::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
 

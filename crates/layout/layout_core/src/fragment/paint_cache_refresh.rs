@@ -47,8 +47,8 @@ pub(super) fn ensure_style_indices(cache: &mut LayoutBoundaryCache) {
         return;
     }
     cache.style_indices_stale = false;
-    let mut trace = layout_fragment_boundary::trace::span(
-        layout_fragment_boundary::trace::TracePhase::RefreshBoundaryCache,
+    let mut trace = layout_fragment::trace::span(
+        layout_fragment::trace::TracePhase::RefreshBoundaryCache,
     );
     trace.set("objects", cache.objects.len() as f64);
     trace.set("sources", cache.source_objects.len() as f64);

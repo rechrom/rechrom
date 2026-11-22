@@ -4,7 +4,7 @@ use foundation::{
     kIndefiniteSize, EPosition, LayoutUnit, Length, MinimumValueForLength, WritingDirectionMode,
     WritingMode,
 };
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToPhysicalSize};
 use layout_style::style::computed_style::ComputedStyle;

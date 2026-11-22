@@ -12,7 +12,7 @@ use foundation::{
     vtt_geometry::{VTTCueLayoutFacts, VTTLayoutObjectId},
     DynamicTo, PhysicalSize,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 impl LayoutEngine {
     pub fn VTTCueLayoutObject(&self, node: u64) -> Option<VTTLayoutObjectId> {
         let object = self.GetLayoutTree()?.GetLayoutObjectForNode(node)?;

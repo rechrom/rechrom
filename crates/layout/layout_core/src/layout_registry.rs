@@ -7,14 +7,14 @@ use crate::layout_boundary_support::LayoutBoundarySupport;
 struct LayoutPublication<'a> {
     boundary: LayoutBoundarySupport,
     root: &'a mut crate::internal::layout_object::LayoutObject,
-    result: &'a layout_fragment::layout_result::LayoutResult,
+    result: &'a crate::layout_result::LayoutResult,
     space: &'a crate::internal::layout_input::ConstraintSpace,
     cache: &'a mut crate::layout_boundary_support::LayoutBoundaryCache,
 }
 
 impl layout_commit::LayoutPublicationBackend for LayoutPublication<'_> {
     type Environment = Box<dyn crate::layout_boundary_support::LayoutBoundaryEnvironment>;
-    type Output = layout_fragment::fragment_tree::LayoutResultHandle;
+    type Output = crate::fragment_tree::LayoutResultHandle;
 
     fn CachedObjects(&self) -> usize {
         self.cache.objects.len()
@@ -69,8 +69,8 @@ impl LayoutRegistry {
         root: &mut crate::internal::layout_object::LayoutObject,
         cache: &mut crate::layout_boundary_support::LayoutBoundaryCache,
     ) {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::RebuildBoundaryObjectIndex,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::RebuildBoundaryObjectIndex,
         );
         let _heap = foundation::LayoutHeapScope::new();
         let _pass = crate::internal::layout_pass_scope::LayoutPassScope::new(
@@ -87,7 +87,7 @@ impl LayoutRegistry {
     pub fn RefreshScrollPaintProperties(
         &self,
         root: &mut crate::internal::layout_object::LayoutObject,
-        fragments: &layout_fragment::fragment_tree::LayoutResultHandle,
+        fragments: &crate::fragment_tree::LayoutResultHandle,
         reuse_sticky_constraints: bool,
     ) {
         let mut heap = foundation::LayoutHeapScope::new();
@@ -114,7 +114,7 @@ impl LayoutRegistry {
         root: &mut crate::internal::layout_object::LayoutObject,
         space: &crate::internal::layout_input::ConstraintSpace,
         cache: &mut crate::layout_boundary_support::LayoutBoundaryCache,
-    ) -> layout_fragment::fragment_tree::LayoutResultHandle {
+    ) -> crate::fragment_tree::LayoutResultHandle {
         use crate::internal::{layout_box::LayoutBox, layout_pass_scope::LayoutPassScope};
         let _heap = foundation::LayoutHeapScope::new();
         let _pass = LayoutPassScope::new(&self.algorithms, &self.objects);

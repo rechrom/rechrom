@@ -4,7 +4,7 @@ use foundation::{
     gfx, DynamicTo, GCedHeapHashSet, HeapHashMap, MakeGarbageCollected, Member, PhysicalOffset,
     PhysicalRect, PhysicalSize, TransformState, Visitor,
 };
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::physical_fragment::PhysicalFragment;
 
 use super::super::anchor_map_services::anchor_map_internal::HasRunningTransformAnimation;
 use super::super::anchor_scope::AnchorScopedName;

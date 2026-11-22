@@ -229,9 +229,10 @@ old `layoutng_*` source-package names at the repository boundary.
   scoped-name lookup live in `naming_scope.rs`; the complete lookup uses
   one invalidation frame without per-ancestor trace events.
   The fragment-retained trigger scoped-name alias and named-trigger map live in
-  `layout_fragment/src/trigger_scoped_name.rs`; its wrapper stays
-  inlineable so ancestor lookup is still charged to the invalidation-owned
-  `NamingScope` frame.
+  `layout_fragment/src/trigger_scoped_name.rs`; `ToTriggerScopedName` and
+  the ancestor lookup (`NamingScopeExt::FindScopeElement`) are base code in
+  `layout_core/src/internal/{trigger_scoped_name,naming_scope}.rs`, and the
+  lookup keeps one non-inlined frame.
   Empty timeline-trigger metadata remains an inline no-op; nonempty name
   validation and scoped-name allocation live in
   `timeline_trigger_metadata.rs` under an invalidation sampling frame.
@@ -571,7 +572,22 @@ old `layoutng_*` source-package names at the repository boundary.
   Inline containing-block geometry, its traced map, and provider entry points
   are colocated in `inline_containing_block_utils_interface.rs`, so future provider
   sampling and allocation cost resolve directly to the out-of-flow package.
-- `layout_fragment` owns the source-result lifetime handle and fragment-local
+- `layout_fragment` is a real crate (`src/lib.rs`) holding fragment data
+  only. It depends on the shared roots (`foundation`, `layout_geometry`,
+  `layout_style`, `paint_input_types`) and never on base; base
+  (`layout_core`, compiled in `layout_assembly`) depends on it and
+  re-exports its modules at their old `internal::` paths. Fragment data names
+  a LayoutObject, Node or PaintLayer only through the opaque handles in
+  `src/opaque.rs` (`OpaqueLayoutObject`, `OpaqueNode`, `OpaquePaintLayer`);
+  behaviour that dereferences them is a base extension trait implemented on
+  the fragment type (`LayoutOpportunityExt`, `NamingScopeExt`, `SnapAreaExt`)
+  so calls stay direct. The fragment-tree types whose methods still call
+  LayoutObject behaviour (PhysicalFragment, PhysicalBoxFragment,
+  FragmentItem(s), InlineCursor, LayoutResult, break tokens, ...) are still
+  compiled by the assembly through
+  `layout_assembly/src/layout_fragment_package.rs`; `PACKAGE_MAP.md` §7
+  (R4 status) lists every file's side and what blocks the rest.
+  The package owns the source-result lifetime handle and fragment-local
   revision policy, plus engine-neutral retained-paint boundary values such as
   fragment identity/geometry, sticky and scroll geometry, inline client
   geometry, collapsed-table section geometry, scrollbar-axis client state,
@@ -965,11 +981,9 @@ that distinction instead of describing composition modules as independently
 compiled packages. Cargo package names, library names, dependency keys, source
 paths, and trace prefixes deliberately use the same names where a real package
 boundary exists; compatibility aliases are not allowed because they make
-profiles and dependency reports ambiguous. The composition-only dependency key
-`layout_fragment_boundary` is a temporary exception in the two `_assembly`
-crates: it distinguishes the real standalone crate from their
-`extern crate self as layout_fragment` source-translation alias, and is not
-re-exported as a compatibility package.
+profiles and dependency reports ambiguous. The two `_assembly` crates depend on
+`layout_fragment` under its own name; the former `layout_fragment_boundary`
+key and the `extern crate self as layout_fragment` alias are gone.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs

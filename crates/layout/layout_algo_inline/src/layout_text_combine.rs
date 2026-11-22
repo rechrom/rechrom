@@ -9,7 +9,7 @@ use foundation::{
     EDisplay, LayoutUnit, MakeGarbageCollected, PhysicalOffset, PhysicalRect, PhysicalSize,
     TextDecorationLine, TextDirection, TextEmphasisMark, WritingDirectionMode, WritingMode,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_core::internal::layout_block_flow::LayoutBlockFlow;
 use layout_core::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_core::internal::layout_text::LayoutText;
@@ -227,7 +227,7 @@ pub extern "Rust" fn LayoutTextCombineAdjustRectForBoundingBox(
 #[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextCombineComputeTextBoundsRectForHitTest(
     this: &LayoutTextCombine,
-    text_item: &layout_fragment::fragment_item::FragmentItem,
+    text_item: &crate::fragment_item::FragmentItem,
     inline_root_offset: &PhysicalOffset,
 ) -> PhysicalRect {
     debug_assert!(text_item.IsText());

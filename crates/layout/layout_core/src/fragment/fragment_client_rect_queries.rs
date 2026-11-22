@@ -36,7 +36,7 @@ fn find_path<'a>(
         }
         if let Some(items) = unsafe { fragment.Items().as_ref() } {
             for item in items.Items() {
-                if item.Type() != layout_fragment::fragment_item::ItemType::kBox {
+                if item.Type() != crate::fragment_item::ItemType::kBox {
                     continue;
                 }
                 if let Some(box_) = unsafe { item.BoxFragment().as_ref() } {
@@ -160,7 +160,7 @@ pub(super) fn client_rects(node: &LayoutNode<'_>) -> Vec<LayoutRect> {
         &node.output.engine.algorithms_,
         &node.output.engine.objects_,
     );
-    let mut trace = layout_fragment_boundary::trace::client_rects();
+    let mut trace = layout_fragment::trace::client_rects();
     if node.object.IsSVGHiddenContainer() {
         return Vec::new();
     }

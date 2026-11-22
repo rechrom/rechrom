@@ -13,7 +13,7 @@ use foundation::{
     Visitor,
 };
 use graphics_types::graphics::dom_node_id::{kInvalidDOMNodeId, DOMNodeId};
-use layout_fragment::inline_items_data::InlineItemsData;
+use crate::inline_items_data::InlineItemsData;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;
@@ -575,7 +575,7 @@ impl LayoutText {
         if !self.IsInLayoutNGInlineFormattingContext() || !self.IsFirstInlineFragmentSafe() {
             return PhysicalOffset::default();
         }
-        let mut cursor = layout_fragment::inline_cursor::InlineCursor::default();
+        let mut cursor = crate::inline_cursor::InlineCursor::default();
         cursor.MoveToLayoutObject(self);
         if cursor.IsNotNull() {
             cursor.Current().OffsetInContainerFragment()

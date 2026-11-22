@@ -7,21 +7,13 @@ use crate::internal::anchor_map::{AnchorMap, PhysicalAnchorReference};
 use crate::internal::anchor_position_scroll_data::{AdjustmentData, AnchorPositionScrollData};
 use crate::internal::block_node::BlockNode;
 use crate::internal::column_spanner_path::ColumnSpannerPath;
-use crate::internal::constraint_space::{ConstraintSpace, RareData};
 use crate::internal::css::counters_attachment_context::CounterEntry;
 use crate::internal::css::out_of_flow_data::ScrollOffsetPair;
 use crate::internal::css::out_of_flow_data::{OutOfFlowData, RememberedScrollOffsets};
 use crate::internal::css::successful_position_fallback::SuccessfulPositionFallback;
 use crate::internal::custom_scrollbar::CustomScrollbar;
-use crate::internal::devtools_flex_info::DevtoolsFlexInfo;
 use crate::internal::document_marker::DocumentMarker;
 use crate::internal::early_break::EarlyBreak;
-use crate::internal::exclusions::exclusion_area::{ExclusionArea, ExclusionShapeData};
-use crate::internal::exclusions::exclusion_space::{
-    ClosedArea, DerivedGeometry, ExclusionSpace, ExclusionSpaceInternal, Shelf,
-};
-use crate::internal::exclusions::layout_opportunity::LayoutOpportunity;
-use crate::internal::exclusions::shape_exclusions::ShapeExclusions;
 use crate::internal::form_node_metadata::{
     HTMLAreaElement, HTMLButtonElement, HTMLDivElement, HTMLElement, HTMLFieldSetElement,
     HTMLFormControlElement, HTMLFormControlElementWithState, HTMLImageElement, HTMLInputElement,
@@ -33,10 +25,6 @@ use crate::internal::fragmentation_utils::FlexColumnBreakInfo;
 use crate::internal::gap::gap_geometry::GapGeometry;
 use crate::internal::grid_item::{GridItemData, GridItemDataVirtualItemContributions, GridItems};
 use crate::internal::grid_lanes_item_group::{GridLanesItemGroup, VirtualItems};
-use crate::internal::grid_layout_data::{
-    GridLayoutData, GridLayoutSubtree, GridLayoutTree, GridTreeNode,
-};
-use crate::internal::grid_track_collection::{GridLayoutTrackCollection, GridTrackBaselines};
 use crate::internal::hyphen_result::HyphenResult;
 use crate::internal::inline_item::InlineItem;
 use crate::internal::inline_item_result::{InlineItemResult, OptionalPositionedFloat};
@@ -61,12 +49,8 @@ use crate::internal::layout_scrollable_area::PaintLayerScrollableArea;
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_view::LayoutView;
-use crate::internal::line_clamp_data::LineClampAncestorChain;
-use crate::internal::mathml_paint_info::MathMLPaintInfo;
 use crate::internal::measure_cache::MeasureCache;
-use crate::internal::naming_scope::NamingScope;
 use crate::internal::node_rare_data_field::NodeRareDataField;
-use crate::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
 use crate::internal::oof_positioned_node::{
     FragmentedOofData, MulticolWithPendingOofs, OofContainingBlock, OofInlineContainer,
     OofPositionedNode, PhysicalOofNodeForFragmentation,
@@ -74,17 +58,13 @@ use crate::internal::oof_positioned_node::{
 use crate::internal::overflow_model::BoxOverflowModel;
 use crate::internal::positioned_float::PositionedFloat;
 use crate::internal::shapes::shape_outside_info::ShapeOutsideInfo;
-use crate::internal::snap_area::SnapArea;
-use crate::internal::split_axis_item::SplitAxisItem;
 use crate::internal::sticky_position_scrolling_constraints::PerAxisData;
 use crate::internal::svg_inline_node_data::{SvgInlineNodeData, SvgTextContentRange};
 use crate::internal::table_borders::{Edge, TableBorders};
 use crate::internal::table_fragment_data::TableColumnGeometry;
 use crate::internal::table_layout_algorithm_types::TableGroupedChildren;
-use crate::internal::text_fit_scale::TextFitScale;
 use crate::internal::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
 use crate::internal::unpositioned_list_marker::UnpositionedListMarker;
-use crate::internal::used_font::UsedFont;
 use crate::internal::variable_length_transform_result::VariableLengthTransformResult;
 use foundation::PhysicalOffset;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
@@ -108,18 +88,7 @@ trace_source_method!(
     LayoutBlock,
     LayoutBlockFlow,
     LayoutView,
-    ConstraintSpace,
-    RareData,
     EarlyBreak,
-    ExclusionArea,
-    ExclusionShapeData,
-    ClosedArea,
-    DerivedGeometry,
-    ExclusionSpace,
-    ExclusionSpaceInternal,
-    Shelf,
-    LayoutOpportunity,
-    ShapeExclusions,
     LayoutBoxRareData,
     LayoutObjectChildList,
     BoxOverflowModel,
@@ -133,7 +102,6 @@ trace_source_method!(
     RememberedScrollOffsets,
     SuccessfulPositionFallback,
     CustomScrollbar,
-    DevtoolsFlexInfo,
     DocumentMarker,
     FlexColumnBreakInfo,
     GapGeometry,
@@ -142,12 +110,6 @@ trace_source_method!(
     GridItems,
     GridLanesItemGroup,
     VirtualItems,
-    GridLayoutData,
-    GridLayoutSubtree,
-    GridLayoutTree,
-    GridTreeNode,
-    GridLayoutTrackCollection,
-    GridTrackBaselines,
     HyphenResult,
     InlineItemResult,
     OptionalPositionedFloat,
@@ -161,24 +123,17 @@ trace_source_method!(
     Node,
     PaintLayerScrollableArea,
     LayoutTextCombine,
-    LineClampAncestorChain,
-    MathMLPaintInfo,
     MeasureCache,
-    NamingScope,
     NodeRareDataField,
-    NonOverflowingScrollRange,
     PositionedFloat,
     ShapeOutsideInfo,
-    SnapArea,
     PerAxisData,
     Edge,
     TableBorders,
     TableColumnGeometry,
     TableGroupedChildren,
-    TextFitScale,
     TextOverflowPostLayoutSnapshot,
     UnpositionedListMarker,
-    UsedFont,
     LayoutInputNode,
     FragmentedOofData,
 );
@@ -225,12 +180,6 @@ impl<T: Copy + Default + AddAssign> Traceable for OofInlineContainer<T> {
 impl<T: Copy + Default + AddAssign> Traceable for MulticolWithPendingOofs<T> {
     fn Trace(&self, visitor: &mut Visitor<'_>) {
         MulticolWithPendingOofs::Trace(self, visitor);
-    }
-}
-
-impl<T> Traceable for SplitAxisItem<T> {
-    fn Trace(&self, visitor: &mut Visitor<'_>) {
-        SplitAxisItem::Trace(self, visitor);
     }
 }
 

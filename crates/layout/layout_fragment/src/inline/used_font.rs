@@ -6,7 +6,7 @@
 
 use font_engine::FontBaseline;
 use foundation::LayoutUnit;
-use layout_core::internal::used_font::UsedFont;
+use crate::internal::used_font::UsedFont;
 
 // cpp: layoutng_inline/used_font.cc:9-15
 #[no_mangle]

@@ -4,9 +4,9 @@
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::FontHeight;
 use foundation::{EFloat, ETextOrientation, LayoutUnit, To};
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::logical_line_item::LogicalLineItems;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::logical_fragment::LogicalFragment;
+use crate::logical_line_item::LogicalLineItems;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::exclusions::exclusion_area::ExclusionArea;
 use layout_core::internal::inline_item::InlineItemType;
 use layout_geometry::geometry::bfc_offset::BfcOffset;

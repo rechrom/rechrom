@@ -829,3 +829,20 @@ impl ConstraintSpaceBuilder {
         self.space_
     }
 }
+
+impl ConstraintSpaceBuilder {
+    // cpp: layoutng/internal/constraint_space_custom_data.cc:23-33
+    pub fn SetCustomLayoutData(
+        &mut self,
+        custom_layout_data: Option<Arc<super::custom_layout_payload::SerializedScriptValue>>,
+    ) {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.is_custom_layout_data_set_);
+            self.is_custom_layout_data_set_ = true;
+        }
+        if let Some(data) = custom_layout_data {
+            unsafe { &mut *self.EnsureRareData() }.SetCustomLayoutData(Some(data));
+        }
+    }
+}

@@ -7,7 +7,7 @@ use foundation::{
     PaintInvalidationReason, PhysicalOffset, RuntimeEnabledFeatures, String as BlinkString, To,
     UnsupportedLayout,
 };
-use layout_fragment::fragment_items::FragmentItems;
+use crate::fragment_items::FragmentItems;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::computed_style_constants::{
     ContentDistributionType, ContentPosition, PseudoId,

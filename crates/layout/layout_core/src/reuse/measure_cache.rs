@@ -1,5 +1,5 @@
 use foundation::{Member, Visitor};
-use layout_fragment::layout_result::LayoutResult;
+use crate::layout_result::LayoutResult;
 use layout_reuse::RecentEntries;
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
 

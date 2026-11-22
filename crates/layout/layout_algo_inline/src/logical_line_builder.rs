@@ -10,11 +10,11 @@ use foundation::{
     RubyPosition, RuntimeEnabledFeatures, String, TextDirection, To, WritingDirectionMode,
 };
 use icu_bidi::UBiDiLevel;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::inline_items_data::OpenTagItems;
-use layout_fragment::logical_box_fragment::LogicalBoxFragment;
-use layout_fragment::logical_line_item::{LogicalLineItem, LogicalLineItems};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::inline_break_token::InlineBreakToken;
+use crate::inline_items_data::OpenTagItems;
+use crate::logical_box_fragment::LogicalBoxFragment;
+use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};

@@ -6,8 +6,8 @@ use foundation::{
     HeapHashMap, HeapVector, LayoutUnit, Member, PhysicalOffset, PhysicalSize,
     RuntimeEnabledFeatures, Traceable, Visitor, WritingDirectionMode,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::physical_fragment::{OofData, PhysicalFragment};
+use crate::block_break_token::BlockBreakToken;
+use crate::physical_fragment::{OofData, PhysicalFragment};
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::static_position::{LogicalStaticPosition, PhysicalStaticPosition};
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;

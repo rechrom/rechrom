@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapVector, LayoutUnit, Member, RubyPosition, Traceable, Visitor};
-use layout_fragment::inline_break_token::RubyBreakTokenData;
+use crate::inline_break_token::RubyBreakTokenData;
 
 use crate::line_info::LineInfo;
 

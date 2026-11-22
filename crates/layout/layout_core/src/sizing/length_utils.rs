@@ -6,7 +6,7 @@ use foundation::{
     MinimumValueForLength, PhysicalSize, TextDirection, ValueForLength, WritingDirectionMode,
     WritingMode,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
+use crate::block_break_token::BlockBreakToken;
 use layout_geometry::geometry::box_strut::{BoxStrut, LineBoxStrut, PhysicalBoxStrut};
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToLogicalSize, ToPhysicalSize};

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use super::super::constraint_space::RareData;
-use super::super::constraint_space_builder::ConstraintSpaceBuilder;
 use super::super::custom_layout_payload::SerializedScriptValue;
 
 // cpp: layoutng/internal/constraint_space_custom_data.cc:14-16
@@ -36,16 +35,6 @@ impl RareData {
     }
 }
 
-impl ConstraintSpaceBuilder {
-    // cpp: layoutng/internal/constraint_space_custom_data.cc:23-33
-    pub fn SetCustomLayoutData(&mut self, custom_layout_data: Option<Arc<SerializedScriptValue>>) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.is_custom_layout_data_set_);
-            self.is_custom_layout_data_set_ = true;
-        }
-        if let Some(data) = custom_layout_data {
-            unsafe { &mut *self.EnsureRareData() }.SetCustomLayoutData(Some(data));
-        }
-    }
-}
+// `ConstraintSpaceBuilder::SetCustomLayoutData`
+// (constraint_space_custom_data.cc:23-33) is builder code and lives with the
+// builder in base (`layout_core/src/internal/constraint_space_builder.rs`).

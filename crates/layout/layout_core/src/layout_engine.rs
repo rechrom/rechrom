@@ -4,8 +4,8 @@ use foundation::{
     DynamicTo, InitStringStatics, LayoutHeapScope, Length, PrepareLayoutHeapForPointerQueries,
     UnsupportedLayout,
 };
-use layout_fragment::fragment_tree::{FragmentPaintData, LayoutResultHandle};
-use layout_fragment::layout_result::EStatus;
+use crate::fragment_tree::{FragmentPaintData, LayoutResultHandle};
+use crate::layout_result::EStatus;
 use std::{collections::HashSet, marker::PhantomData, rc::Rc, sync::Arc};
 
 use crate::editing_state::LayoutEditingState;
@@ -261,7 +261,7 @@ pub struct LayoutPaintScope<'a> {
 
 impl LayoutPaintOutput {
     /// Canonical pointer-preserving LayoutNG output.
-    pub fn FragmentRoot(&self) -> &layout_fragment::physical_fragment::PhysicalFragment {
+    pub fn FragmentRoot(&self) -> &crate::physical_fragment::PhysicalFragment {
         layout_output::RootForHandle(&self.fragments)
     }
 
@@ -287,7 +287,7 @@ impl LayoutPaintOutput {
     /// The document paint resources this output's fragments paint with.
     pub fn DocumentResources(
         &self,
-    ) -> Option<&Arc<layout_fragment::fragment_tree::PaintResources>> {
+    ) -> Option<&Arc<crate::fragment_tree::PaintResources>> {
         self.PaintCursor().DocumentResources()
     }
 
@@ -296,7 +296,7 @@ impl LayoutPaintOutput {
     /// whether they differ from the resources the output painted with.
     pub fn SetDocumentResources(
         &mut self,
-        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+        resources: Arc<crate::fragment_tree::PaintResources>,
     ) -> bool {
         self.fragments
             .PaintState::<LayoutPaintState>()
@@ -1017,8 +1017,8 @@ impl LayoutEngine {
     /// newer resource catalog to the move-only output. This walks the existing
     /// source graph by reference; it creates no fragment snapshot or Paint copy.
     pub fn RefreshOutputPrePaintInputs(&mut self, output: &mut LayoutPaintOutput) {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::UpdatePrePaintInputs,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::UpdatePrePaintInputs,
         );
         let nodes = UpdatePrePaintInputs(&output.fragments, &self.objects_);
         trace.set("nodes", nodes as f64);
@@ -1048,8 +1048,8 @@ impl LayoutEngine {
     /// RefreshOutputPrePaintInputs, which exports the new dirty bits.
     pub fn NotifyPaintResourcesChanged(
         &mut self,
-        previous: &[Arc<layout_fragment::fragment_tree::PaintResources>],
-        current: &layout_fragment::fragment_tree::PaintResources,
+        previous: &[Arc<crate::fragment_tree::PaintResources>],
+        current: &crate::fragment_tree::PaintResources,
     ) -> usize {
         let _scope = LayoutPassScope::new(&self.algorithms_, &self.objects_);
         let Some(tree) = self.tree_.as_mut() else {

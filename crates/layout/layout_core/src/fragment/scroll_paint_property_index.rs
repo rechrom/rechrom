@@ -109,8 +109,8 @@ impl ScrollPaintPropertyIndex {
     /// All admission checks precede updates; failure keeps the full refresh.
     #[inline(never)]
     pub(crate) fn refresh(&self, root: &mut LayoutObject, changed_ids: &HashSet<u64>) -> bool {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::RefreshScrollPaintIndex,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::RefreshScrollPaintIndex,
         );
         trace.set("changed_ids", changed_ids.len() as f64);
         if changed_ids.is_empty() || self.root != root as *mut LayoutObject {

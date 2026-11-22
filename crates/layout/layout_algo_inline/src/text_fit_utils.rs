@@ -13,10 +13,10 @@ use foundation::{
     DynamicTo, LayoutUnit, Length, MakeGarbageCollected, Member, RuntimeEnabledFeatures,
     WritingMode,
 };
-use layout_fragment::inline_cursor::InlineCursor;
-use layout_fragment::inline_items_data::InlineItemsData;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::inline_cursor::InlineCursor;
+use crate::inline_items_data::InlineItemsData;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::PhysicalFragment;
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};
 use layout_core::internal::inline_node::InlineNode;
 use layout_core::internal::text_fit_scale::TextFitScale;

@@ -2,7 +2,7 @@
 // cpp: layoutng_grid/grid_track_collection.cc:14-19
 const _: () = assert!(std::mem::size_of::<GridRange>() == 7 * std::mem::size_of::<u32>());
 
-// Compiled once in layout_assembly beside the shared header's owning types.
+// Compiled once in layout_fragment beside the shared header's owning types.
 use crate::internal::grid_track_collection::*;
 use foundation::{
     kIndefiniteSize, LayoutUnit, Length, MakeGarbageCollected, MinimumValueForLength,
