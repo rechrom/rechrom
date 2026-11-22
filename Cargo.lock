@@ -2301,7 +2301,6 @@ dependencies = [
  "layout_algo_table",
  "layout_assembly",
  "layout_commit",
- "layout_fragment",
  "layout_geometry",
  "layout_style",
  "paint_input_types",
@@ -2395,7 +2394,6 @@ dependencies = [
  "layout_algo_custom",
  "layout_algo_mathml",
  "layout_commit",
- "layout_fragment",
  "layout_geometry",
  "layout_invalidation",
  "layout_reuse",
@@ -2499,7 +2497,6 @@ dependencies = [
  "layout_algo_custom",
  "layout_algo_mathml",
  "layout_commit",
- "layout_fragment",
  "layout_geometry",
  "layout_invalidation",
  "layout_reuse",
@@ -2516,22 +2513,6 @@ name = "layout_commit"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layout_fragment",
-]
-
-[[package]]
-name = "layout_fragment"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "canvas",
- "font_engine",
- "foundation",
- "image_resource",
- "layout_geometry",
- "layout_style",
- "paint_input_types",
- "scroll_snap",
 ]
 
 [[package]]
