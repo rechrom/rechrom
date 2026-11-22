@@ -6,11 +6,11 @@ use crate::{
 };
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::{gfx, Traceable, Visitor};
-use layout_assembly::fragment_tree::SvgViewportGeometry;
-use layout_assembly::internal::layout_input::SvgViewportLength;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::fragment_tree::SvgViewportGeometry;
+use layout_base::internal::layout_input::SvgViewportLength;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use std::ops::{Deref, DerefMut};
 
 #[repr(C)]

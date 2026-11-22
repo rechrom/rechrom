@@ -3,10 +3,10 @@
 use foundation::{
     DowncastFrom, EBreakBetween, HeapVector, LayoutUnit, Member, Traceable, Visitor, WtfSizeT,
 };
-use layout_assembly::break_token_algorithm_data::{
+use layout_base::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
-use layout_assembly::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_box::LayoutBox;
 
 use crate::flex_line::FlexLineVector;
 

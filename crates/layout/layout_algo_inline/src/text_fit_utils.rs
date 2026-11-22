@@ -19,10 +19,10 @@ use crate::inline_cursor::InlineCursor;
 use crate::inline_items_data::InlineItemsData;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 use crate::physical_fragment::PhysicalFragment;
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::text_fit_scale::TextFitScale;
-use layout_core::internal::text_item_type::TextItemType;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType};
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::text_fit_scale::TextFitScale;
+use layout_base::internal::text_item_type::TextItemType;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_style::style::text_fit::{TextFitMethod, TextFitTarget, TextFitType};
 
@@ -81,7 +81,7 @@ fn shape_for_fit(
     end_offset: u32,
     shaper: &HarfBuzzShaper,
     font: &Font,
-    segments: *const layout_core::internal::inline_item_segment::InlineItemSegments,
+    segments: *const layout_base::internal::inline_item_segment::InlineItemSegments,
     is_start_of_paragraph: bool,
 ) -> *mut ShapeResult {
     let mut options = ShapeOptions::default();

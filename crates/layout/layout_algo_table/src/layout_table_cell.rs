@@ -6,7 +6,7 @@ use crate::{
     layout_table_section::LayoutTableSection, table_constants::*,
 };
 use foundation::{DynamicTo, EDisplay, MakeGarbageCollected, To, Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_block::LayoutBlock,
     layout_block_flow::LayoutBlockFlow,
     layout_box::LayoutBox,
@@ -22,13 +22,13 @@ use layout_style::style::{
 use std::ops::{Deref, DerefMut};
 // cpp: layoutng_table/layout_table_cell.cc:22-30
 pub fn LayoutInputNodeTableCellColspanFromTable(
-    node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
+    node: &layout_base::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(unsafe { &*node.GetLayoutBox() }.IsTableCell());
     unsafe { &*To::<LayoutTableCell>(node.GetLayoutBox()) }.ColSpan()
 }
 pub fn LayoutInputNodeTableCellRowspanFromTable(
-    node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
+    node: &layout_base::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(unsafe { &*node.GetLayoutBox() }.IsTableCell());
     unsafe { &*To::<LayoutTableCell>(node.GetLayoutBox()) }.ComputedRowSpan()

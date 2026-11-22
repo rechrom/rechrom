@@ -4,16 +4,16 @@ use font_engine::FontBaseline;
 use foundation::{
     LayoutUnit, RuntimeEnabledFeatures, TextDirection, To, UnsupportedLayout,
 };
-use layout_core::box_fragment_builder::BoxFragmentBuilder;
-use layout_core::layout_result::LayoutResult;
-use layout_core::logical_box_fragment::LogicalBoxFragment;
-use layout_core::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::physical_fragment::PhysicalFragment;
-use layout_core::physical_line_box_fragment::PhysicalLineBoxFragment;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::unpositioned_list_marker::UnpositionedListMarker;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::layout_result::LayoutResult;
+use layout_base::logical_box_fragment::LogicalBoxFragment;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::physical_fragment::PhysicalFragment;
+use layout_base::physical_line_box_fragment::PhysicalLineBoxFragment;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::unpositioned_list_marker::UnpositionedListMarker;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::box_strut::{BoxStrut, LineBoxStrut};
 use layout_geometry::geometry::logical_offset::LogicalOffset;
@@ -166,7 +166,7 @@ impl UnpositionedListMarkerAlgorithms for UnpositionedListMarker {
 // cpp: layoutng_block/unpositioned_list_marker.cc:20-23
 pub fn UnpositionedListMarkerConstructFromBlock(
     node: &BlockNode,
-) -> *mut layout_core::internal::layout_box::LayoutBox {
+) -> *mut layout_base::internal::layout_box::LayoutBox {
     let marker = node.GetLayoutBox();
     debug_assert!(!marker.is_null() && unsafe { &*marker }.IsLayoutOutsideListMarker());
     marker

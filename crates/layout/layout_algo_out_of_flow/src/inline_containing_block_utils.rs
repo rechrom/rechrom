@@ -1,16 +1,16 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapHashMap, LayoutUnit, Member, PhysicalOffset, PhysicalRect, PhysicalSize, To};
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::fragment_item::FragmentItem;
-use layout_assembly::fragment_items_builder::FragmentItemWithOffset;
-use layout_assembly::internal::inline_containing_block_utils::{
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::fragment_item::FragmentItem;
+use layout_base::fragment_items_builder::FragmentItemWithOffset;
+use layout_base::internal::inline_containing_block_utils::{
     InlineContainingBlockGeometry, InlineContainingBlockMap, InlineContainingBlockUtils,
 };
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
-use layout_assembly::physical_line_box_fragment::PhysicalLineBoxFragment;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::physical_line_box_fragment::PhysicalLineBoxFragment;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::logical_size::ToPhysicalSize;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;

@@ -2,7 +2,7 @@ use crate::{grid_data::GridPlacementData, grid_placement::GridPlacement};
 use foundation::{
     IsParallelWritingMode, LayoutUnit, LogicalToLogical, LogicalToPhysical, PhysicalToLogical,
 };
-use layout_assembly::internal::{
+use layout_base::internal::{
     baseline_utils::{BaselineGroup, DetermineBaselineGroupDefault, DetermineBaselineWritingMode},
     block_node::BlockNode,
     constraint_space::AutoSizeBehavior,

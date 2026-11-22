@@ -167,9 +167,9 @@ impl<'a> LineFlexer<'a> {
 mod tests {
     use super::*;
     use foundation::WritingMode;
-    use layout_assembly::internal::baseline_utils::BaselineGroup;
-    use layout_assembly::internal::block_node::BlockNode;
-    use layout_assembly::internal::min_max_sizes::MinMaxSizes;
+    use layout_base::internal::baseline_utils::BaselineGroup;
+    use layout_base::internal::block_node::BlockNode;
+    use layout_base::internal::min_max_sizes::MinMaxSizes;
     use layout_geometry::geometry::box_strut::{BoxStrut, PhysicalBoxStrut};
     use layout_style::style::computed_style_constants::ItemPosition;
 

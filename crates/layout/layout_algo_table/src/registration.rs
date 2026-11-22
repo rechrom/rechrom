@@ -7,12 +7,12 @@ use crate::{
     layout_table_row::LayoutTableRow, layout_table_section::LayoutTableSection,
 };
 use foundation::{EDisplay, MakeGarbageCollected, To};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_node_metadata::{Element, Node},
     layout_object::LayoutObject,
     layout_object_factory_set::LayoutObjectFactorySet,
 };
-use layout_assembly::{
+use layout_base::{
     internal::{
         algorithm_entry::LayoutAlgorithmEntryFor, layout_algorithm_set::TableLayoutSupport,
     },
@@ -72,7 +72,7 @@ pub fn Register(registry: &mut LayoutRegistry) {
 // cpp: layoutng_table/assembly.cc:71-71
 fn FinalizeCell(
     size: foundation::LayoutUnit,
-    builder: *mut layout_assembly::box_fragment_builder::BoxFragmentBuilder,
+    builder: *mut layout_base::box_fragment_builder::BoxFragmentBuilder,
 ) {
     crate::table_row_measurement::FinalizeTableCellLayout(size, unsafe { &mut *builder });
 }

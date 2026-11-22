@@ -1,13 +1,13 @@
 use foundation::{
     DowncastFrom, EBreakBetween, HeapVector, LayoutUnit, Member, Traceable, Vector, Visitor,
 };
-use layout_assembly::break_token_algorithm_data::{
+use layout_base::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
-use layout_assembly::internal::gap::gap_geometry::GapGeometry;
-use layout_assembly::internal::grid_item::GridItems;
-use layout_assembly::internal::grid_layout_data::GridLayoutSubtree;
-use layout_assembly::internal::layout_box::LayoutBox;
+use layout_base::internal::gap::gap_geometry::GapGeometry;
+use layout_base::internal::grid_item::GridItems;
+use layout_base::internal::grid_layout_data::GridLayoutSubtree;
+use layout_base::internal::layout_box::LayoutBox;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 
 // cpp: layoutng_grid/grid_break_token_data.h:25-44
@@ -139,7 +139,7 @@ impl Traceable for GridBreakTokenData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::internal::gap::gap_geometry::ContainerType;
+    use layout_base::internal::gap::gap_geometry::ContainerType;
 
     #[test]
     fn base_virtual_dispatch_reads_full_geometry_gap_count() {

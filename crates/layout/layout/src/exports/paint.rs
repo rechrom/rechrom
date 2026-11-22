@@ -11,7 +11,7 @@ pub mod lifecycle {}
 pub mod mutation {}
 
 pub mod input {
-    pub use layout_assembly::internal::layout_input::{
+    pub use layout_base::internal::layout_input::{
         BorderLineStyle, BoxDecorationBreak, Display, Edges, FloatSide, FocusedImageMapArea,
         FontFace, FontSmoothing, FontVariation, ImageMapAreaShape, ListStyleType, NodeKind, Offset,
         Overflow, OverscrollBehavior, PaintClipPathChild, PaintImage, PaintPathCommand,
@@ -20,29 +20,29 @@ pub mod input {
         TrackedElementFrameToken, TrackedElementSubRect, TrackedElementSubRectType,
         TransformMatrix, ViewportGeometry, WritingMode,
     };
-    pub use layout_assembly::internal::layout_input_types::{Color, IntSize};
-    pub use layout_assembly::internal::style_variant::{StyleVariant, ToParentStyleVariant};
-    pub use layout_assembly::internal::used_font::UsedFont;
+    pub use layout_base::internal::layout_input_types::{Color, IntSize};
+    pub use layout_base::internal::style_variant::{StyleVariant, ToParentStyleVariant};
+    pub use layout_base::internal::used_font::UsedFont;
 }
 
 pub mod output {
-    pub use layout_assembly::layout_engine::FragmentCursor;
+    pub use layout_base::layout_engine::FragmentCursor;
 }
 
 pub mod fragment {
-    pub use layout_assembly::fragment_item::{FragmentItem, ItemType};
-    pub use layout_assembly::fragment_tree::{
+    pub use layout_base::fragment_item::{FragmentItem, ItemType};
+    pub use layout_base::fragment_tree::{
         FragmentKind, PrePaintSourceObject, PreviousBoxGeometry, ResidentBoxGeometry,
     };
-    pub use layout_assembly::inline_cursor::InlineCursor;
-    pub use layout_assembly::internal::layout_text_combine::layout_text_combine_members::DispatchIsLayoutTextCombine;
+    pub use layout_base::inline_cursor::InlineCursor;
+    pub use layout_base::internal::layout_text_combine::layout_text_combine_members::DispatchIsLayoutTextCombine;
 }
 
 pub mod paint {
-    pub use layout_assembly::fragment_tree::paint_resource_usage::{
+    pub use layout_base::fragment_tree::paint_resource_usage::{
         PaintResourceUsage, SamePaintResourcesFor,
     };
-    pub use layout_assembly::fragment_tree::{
+    pub use layout_base::fragment_tree::{
         BackgroundPaintLocation, CanvasBackgroundPaintData, CanvasBackgroundPaintView,
         CollapsedTablePaintData, CollapsedTableSection, FieldsetPaintData, FormControlPaintData,
         FragmentBoxSides, FragmentPaintData, FragmentPaintRect, GapRule, GapRulePaintData,
@@ -54,32 +54,32 @@ pub mod paint {
         StitchedDecorationData, SvgViewportGeometry, TablePaintColumn,
         TextCombineEmphasisPaintData, TextCombinePaintData,
     };
-    pub use layout_assembly::layout_engine::{
+    pub use layout_base::layout_engine::{
         LayoutPaintOutput, PaintClientCommit, PaintCommitOutput, PaintFragmentCursor,
         PaintFragmentLease, PaintLayoutObjectIdentity,
     };
-    pub use layout_assembly::text_decoration_info::{
+    pub use layout_base::text_decoration_info::{
         CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness,
     };
     // Plain value enum: a LayoutObject's selection state as painters and
     // selection bounds recording read it (core/layout/selection_state.h:13-33).
-    pub use layout_assembly::internal::selection_state::SelectionState;
+    pub use layout_base::internal::selection_state::SelectionState;
     // Chromium's text decoration painting reads LayoutTheme's platform
     // spelling/grammar marker colours directly
     // (core/paint/text_decoration_info.cc:637-656). This stateless colour
     // theme is the only LayoutTheme surface Paint names.
-    pub use layout_assembly::internal::layout_theme::LayoutTheme;
-    pub use layout_assembly::{
+    pub use layout_base::internal::layout_theme::LayoutTheme;
+    pub use layout_base::{
         decorating_box, inline_paint_context, line_relative_rect, svg_filter_geometry,
         text_decoration_info,
     };
 }
 
 pub mod paint_input {
-    pub use layout_assembly::internal::background_bleed_avoidance::{
+    pub use layout_base::internal::background_bleed_avoidance::{
         BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
     };
-    pub use layout_assembly::internal::paint_input::{
+    pub use layout_base::internal::paint_input::{
         BackgroundAttachment, BackgroundBox, BackgroundImageLayer, BackgroundRepeat,
         BackgroundRepeatRule, BackgroundSizeMode, ClipPathCircle, ClipPathLength, ClipPathPaint,
         ClipPathRadius, ClipPathRadiusKind, ClipPathReferenceBox, ClipPathShapeRadius,
@@ -100,17 +100,17 @@ pub mod paint_input {
         SvgPatternCommand, SvgPatternData, SvgPatternImage, SvgStrokeLineCap, SvgStrokeLineJoin,
         SvgTurbulenceType,
     };
-    pub use layout_assembly::internal::text_decoration_offset::TextDecorationOffset;
+    pub use layout_base::internal::text_decoration_offset::TextDecorationOffset;
 }
 
 pub mod editing {
-    pub use layout_assembly::caret::geometry::LocalCaretRect;
-    pub use layout_assembly::caret::CaretPaintState;
-    pub use layout_assembly::editing_state::{
+    pub use layout_base::caret::geometry::LocalCaretRect;
+    pub use layout_base::caret::CaretPaintState;
+    pub use layout_base::editing_state::{
         DocumentCompositionMarker, DocumentSelection, EditingPaintState,
         TextControlSelectionPaintState,
     };
-    pub use layout_assembly::internal::caret_rect::CaretShape;
+    pub use layout_base::internal::caret_rect::CaretShape;
 }
 
 pub mod scroll {}

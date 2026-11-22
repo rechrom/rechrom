@@ -4,7 +4,7 @@ use crate::{
     subgrid_min_max_sizes_cache::SubgridMinMaxSizesCache,
 };
 use foundation::{LayoutUnit, MakeGarbageCollected, Member, Traceable, Visitor};
-use layout_assembly::{
+use layout_base::{
     internal::{
         block_node::BlockNode,
         fragmentation_utils::FindPreviousBreakToken,

@@ -2,7 +2,7 @@
 //! Native SVGLengthContext over the retained CSS primitive and live style/font.
 //! Source: svg_length_context.cc:99-118,147-221; svg_length.cc:165-178,190-200.
 use foundation::{FloatValueForLength, RuntimeEnabledFeatures};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_object::LayoutObject, layout_pass_scope::LayoutPassScope, layout_view::LayoutView,
 };
 use layout_style::css::{

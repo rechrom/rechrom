@@ -3,8 +3,8 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{Traceable, Visitor};
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::layout_svg_group::LayoutSVGGroup;
@@ -21,9 +21,9 @@ pub struct LayoutSVGForeignObject {
 impl LayoutSVGForeignObject {
     pub fn UpdateSVGLayout(
         &mut self,
-        _info: &layout_assembly::internal::svg_layout_info::SVGLayoutInfo,
-    ) -> layout_assembly::internal::svg_layout_info::SVGLayoutResult {
-        use layout_assembly::internal::{
+        _info: &layout_base::internal::svg_layout_info::SVGLayoutInfo,
+    ) -> layout_base::internal::svg_layout_info::SVGLayoutResult {
+        use layout_base::internal::{
             block_node::BlockNode, constraint_space_builder::ConstraintSpaceBuilder,
         };
         self.local_transform = crate::svg_viewport::LocalTransform(self);
@@ -76,7 +76,7 @@ impl LayoutSVGForeignObject {
             std::ptr::null(),
             std::ptr::null(),
         );
-        layout_assembly::internal::svg_layout_info::SVGLayoutResult::new(true, true)
+        layout_base::internal::svg_layout_info::SVGLayoutResult::new(true, true)
     }
 
     pub fn ObjectBoundingBox(&self) -> foundation::gfx::RectF {

@@ -2,8 +2,8 @@
 
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::WeakMember;
-use layout_assembly::internal::layout_block::LayoutBlock;
-use layout_assembly::internal::layout_invalidation_reason::kStyleChange;
+use layout_base::internal::layout_block::LayoutBlock;
+use layout_base::internal::layout_invalidation_reason::kStyleChange;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_svg/block_style.h:9-9

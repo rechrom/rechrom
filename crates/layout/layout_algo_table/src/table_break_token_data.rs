@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{DowncastFrom, LayoutUnit, Traceable, Visitor};
-use layout_assembly::{
+use layout_base::{
     break_token_algorithm_data::{
         BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
     },

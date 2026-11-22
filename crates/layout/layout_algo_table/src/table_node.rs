@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #[allow(unused_imports)]
 use crate::algorithms::*;
-use layout_assembly::internal::table_node::TableNode;
+use layout_base::internal::table_node::TableNode;
 
 // cpp: layoutng_table/table_node.cc:60-81
 pub fn TableNodeAllowColumnPercentagesFromTable(
@@ -28,11 +28,11 @@ pub fn TableNodeAllowColumnPercentagesFromTable(
 // cpp: layoutng_table/table_node.cc:13-30
 pub fn TableNodeGetTableBordersFromTable(
     node: &TableNode,
-) -> *const layout_assembly::internal::table_borders::TableBorders {
+) -> *const layout_base::internal::table_borders::TableBorders {
     let _trace = browser_tracing::span("layout", "layout_algo_table.ResolveBorders");
     use crate::layout_table::LayoutTable;
     use foundation::To;
-    use layout_assembly::internal::table_borders::TableBorders;
+    use layout_base::internal::table_borders::TableBorders;
     let table = unsafe { &mut *To::<LayoutTable>(node.GetLayoutBox()) };
     let mut borders = table.GetCachedTableBorders();
     if borders.is_null() {
@@ -56,9 +56,9 @@ pub fn TableNodeGetTableBordersStrutFromTable(
 // cpp: layoutng_table/table_node.cc:36-49
 pub fn TableNodeGetColumnConstraintsFromTable(
     node: &TableNode,
-    grouped: &layout_assembly::internal::table_layout_algorithm_types::TableGroupedChildren,
+    grouped: &layout_base::internal::table_layout_algorithm_types::TableGroupedChildren,
     border_padding: &layout_geometry::geometry::box_strut::BoxStrut,
-) -> Option<std::sync::Arc<layout_assembly::internal::table_layout_algorithm_types::Columns>> {
+) -> Option<std::sync::Arc<layout_base::internal::table_layout_algorithm_types::Columns>> {
     let _trace = browser_tracing::span("layout", "layout_algo_table.ResolveColumnConstraints");
     let table =
         unsafe { &mut *foundation::To::<crate::layout_table::LayoutTable>(node.GetLayoutBox()) };
@@ -78,7 +78,7 @@ pub fn TableNodeGetColumnConstraintsFromTable(
 // cpp: layoutng_table/table_node.cc:47-51
 pub fn TableNodeComputeTableInlineSizeFromTable(
     node: &TableNode,
-    space: &layout_assembly::internal::constraint_space::ConstraintSpace,
+    space: &layout_base::internal::constraint_space::ConstraintSpace,
     border_padding: &layout_geometry::geometry::box_strut::BoxStrut,
 ) -> foundation::LayoutUnit {
     let _trace = browser_tracing::span("layout", "layout_algo_table.ComputeInlineSize");
@@ -87,10 +87,10 @@ pub fn TableNodeComputeTableInlineSizeFromTable(
 // cpp: layoutng_table/table_node.cc:53-58
 pub fn TableNodeComputeCaptionBlockSizeFromTable(
     node: &TableNode,
-    space: &layout_assembly::internal::constraint_space::ConstraintSpace,
+    space: &layout_base::internal::constraint_space::ConstraintSpace,
 ) -> foundation::LayoutUnit {
     let _trace = browser_tracing::span("layout", "layout_algo_table.ComputeCaptionBlockSize");
-    let geometry = layout_assembly::internal::length_utils::CalculateInitialFragmentGeometry(
+    let geometry = layout_base::internal::length_utils::CalculateInitialFragmentGeometry(
         space,
         node,
         std::ptr::null(),

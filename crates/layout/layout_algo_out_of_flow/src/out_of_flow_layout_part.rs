@@ -6,55 +6,55 @@ use foundation::{
     HeapVector, IsParallelWritingMode, LayoutUnit, Member, PhysicalSize, RuntimeEnabledFeatures,
     TextDirection, To, Visitor, WritingDirectionMode, WritingMode,
 };
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::fragment_builder::FragmentBuilder;
-use layout_assembly::internal::anchor_map::AnchorMap;
-use layout_assembly::internal::anchor_scope::ToAnchorScopedName;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::break_appeal::BreakAppeal;
-use layout_assembly::internal::constraint_space::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::fragment_builder::FragmentBuilder;
+use layout_base::internal::anchor_map::AnchorMap;
+use layout_base::internal::anchor_scope::ToAnchorScopedName;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::break_appeal::BreakAppeal;
+use layout_base::internal::constraint_space::{
     AutoSizeBehavior, ConstraintSpace, FragmentationType, LayoutResultCacheSlot,
 };
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::css::out_of_flow_data::RememberedScrollOffsets;
-use layout_assembly::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_assembly::internal::fragmentation_utils::{
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::css::out_of_flow_data::RememberedScrollOffsets;
+use layout_base::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use layout_base::internal::fragmentation_utils::{
     CalculateSpaceShortage, ClampedToValidFragmentainerCapacity,
     CreateConstraintSpaceForFragmentainer, FragmentainerSpaceLeft,
     InvolvedInBlockFragmentationForBuilder, IsBreakInside,
     SetupSpaceBuilderForFragmentationFromBuilder, SetupSpaceBuilderForFragmentationFromSpace,
     UpdateMinimalSpaceShortage,
 };
-use layout_assembly::internal::inline_containing_block_utils::{
+use layout_base::internal::inline_containing_block_utils::{
     InlineContainingBlockGeometry, InlineContainingBlockMap, InlineContainingBlockUtils,
 };
-use layout_assembly::internal::layout_algorithm::LayoutAlgorithmParams;
+use layout_base::internal::layout_algorithm::LayoutAlgorithmParams;
 use crate::inline_containing_block_utils::InlineContainingBlockUtilsAlgorithms;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::layout_pass_scope::LayoutPassScope;
-use layout_assembly::internal::layout_view::LayoutView;
-use layout_assembly::internal::length_utils::{
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::layout_view::LayoutView;
+use layout_base::internal::length_utils::{
     AddScrollbarFreeze, CalculateInitialFragmentGeometry, ColumnInlineProgression, ComputeBorders,
     ComputeBordersForInline, ComputePadding, ComputeReplacedSize, ComputeScrollbarsForNonAnonymous,
     ReplacedSizeMode, ShrinkLogicalSize,
 };
-use layout_assembly::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
-use layout_assembly::internal::oof_positioned_node::{
+use layout_base::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
+use layout_base::internal::oof_positioned_node::{
     LogicalOofNodeForFragmentation, LogicalOofPositionedNode, MulticolWithPendingOofs,
     OofContainingBlock, OofInlineContainer,
 };
-use layout_assembly::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
-use layout_assembly::internal::paint_layer::LayerPositionVisibility;
-use layout_assembly::internal::scroll_layout_scope::FreezeScrollbarsRootScope;
-use layout_assembly::layout_result::EStatus;
-use layout_assembly::layout_result::LayoutResult;
-use layout_assembly::logical_fragment::LogicalFragment;
-use layout_assembly::logical_fragment_link::{LogicalFragmentLink, LogicalFragmentLinkVector};
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
-use layout_assembly::physical_fragment::{BoxType, PhysicalFragment};
+use layout_base::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
+use layout_base::internal::paint_layer::LayerPositionVisibility;
+use layout_base::internal::scroll_layout_scope::FreezeScrollbarsRootScope;
+use layout_base::layout_result::EStatus;
+use layout_base::layout_result::LayoutResult;
+use layout_base::logical_fragment::LogicalFragment;
+use layout_base::logical_fragment_link::{LogicalFragmentLink, LogicalFragmentLinkVector};
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::physical_fragment::{BoxType, PhysicalFragment};
 use layout_geometry::geometry::box_sides::{LogicalBoxSides, PhysicalBoxSides};
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
@@ -935,7 +935,7 @@ impl OutOfFlowLayoutPart {
                     let offset = unsafe { &*offsets }
                         .GetOffset(
                             non_overflowing_range.anchor_element.Get(),
-                            layout_assembly::internal::css::out_of_flow_data::RememberedScrollOffsetType::kRangeAdjustment,
+                            layout_base::internal::css::out_of_flow_data::RememberedScrollOffsetType::kRangeAdjustment,
                             anchor_evaluator.NeedsScrollAdjustmentInX(),
                             anchor_evaluator.NeedsScrollAdjustmentInY(),
                         )
@@ -3028,7 +3028,7 @@ impl OutOfFlowLayoutPart {
         }
         let view = To::<LayoutView>(box_ptr);
         let layout_size = unsafe { &*view }.GetLayoutSize(
-            layout_assembly::internal::scroll_types::IncludeScrollbarsInRect::kIncludeScrollbars,
+            layout_base::internal::scroll_types::IncludeScrollbarsInRect::kIncludeScrollbars,
         );
         Some(ToLogicalSize(
             PhysicalSize::new(

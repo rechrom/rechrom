@@ -5,13 +5,13 @@ use std::ops::{Deref, DerefMut};
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::native_path::{NativePath, ShapeFillGeometry, ShapeStrokeGeometry, StrokeData};
 use foundation::{gfx, DynamicTo, Traceable, Visitor};
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_input::SvgShapeData;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_input::SvgShapeData;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layout_geometry::geometry::logical_size::LogicalSize;
 use std::sync::Arc;
 
@@ -73,7 +73,7 @@ impl LayoutSVGShape {
         self.path.as_deref()
     }
     pub fn IsShapeEmpty(&self) -> bool {
-        use layout_assembly::internal::layout_input::SvgShapeGeometry;
+        use layout_base::internal::layout_input::SvgShapeGeometry;
         let Some(shape) = self.shape.as_ref() else {
             return true;
         };
@@ -87,7 +87,7 @@ impl LayoutSVGShape {
     /// LayoutSVGRect::ShapeDependentFillContains (137-145) and
     /// LayoutSVGEllipse::ShapeDependentFillContains (164-172).
     pub fn FillGeometry(&self) -> ShapeFillGeometry {
-        use layout_assembly::internal::layout_input::SvgShapeGeometry;
+        use layout_base::internal::layout_input::SvgShapeGeometry;
         let Some(shape) = self.shape.as_ref() else {
             return ShapeFillGeometry::Path;
         };
@@ -112,7 +112,7 @@ impl LayoutSVGShape {
         self.shape.as_ref()
     }
     pub fn ObjectBoundingBox(&self) -> gfx::RectF {
-        use layout_assembly::internal::layout_input::SvgShapeGeometry;
+        use layout_base::internal::layout_input::SvgShapeGeometry;
         if let Some(shape) = self
             .shape
             .as_ref()
@@ -202,7 +202,7 @@ impl LayoutSVGShape {
         let mut delta = width / 2.;
         let style = self.StyleRef();
         if self.shape.as_ref().is_some_and(|s| {
-            s.geometry == layout_assembly::internal::layout_input::SvgShapeGeometry::kPath
+            s.geometry == layout_base::internal::layout_input::SvgShapeGeometry::kPath
         }) {
             let is_line = self.GetPath().is_some_and(|p| p.IsLine());
             if !is_line && style.JoinStyle() == foundation::LineJoin::kMiterJoin {
@@ -339,7 +339,7 @@ impl LayoutSVGShape {
         self.marker_positions.clear();
         if !self.StyleRef().HasMarkers()
             || !self.shape.as_ref().is_some_and(|shape| {
-                shape.geometry == layout_assembly::internal::layout_input::SvgShapeGeometry::kPath
+                shape.geometry == layout_base::internal::layout_input::SvgShapeGeometry::kPath
             })
         {
             return;
@@ -384,11 +384,11 @@ impl LayoutSVGShape {
     // native resources and source cycle owner at Paint time.
     pub(crate) fn MarkerPaints(
         &self,
-    ) -> Vec<layout_assembly::internal::paint_input::SvgMarkerPaint> {
+    ) -> Vec<layout_base::internal::paint_input::SvgMarkerPaint> {
         if self.marker_positions.is_empty() {
             return Vec::new();
         }
-        layout_assembly::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(|tree| {
+        layout_base::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(|tree| {
             let style = self.StyleRef();
             let markers = [
                 crate::svg_resources::ResolveMarker(tree, self, style.MarkerStartResource()),
@@ -407,13 +407,13 @@ impl LayoutSVGShape {
                 let client = unsafe { &*(object as *const LayoutObject as *const
                     foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient) };
                 let viewport = marker.Viewport();
-                Some(layout_assembly::internal::paint_input::SvgMarkerPaint {
+                Some(layout_base::internal::paint_input::SvgMarkerPaint {
                     resource_client_id: client.Id() as u64,
                     transform: crate::svg_viewport::Matrix(marker.MarkerTransformation(position, width)),
                     viewport_clip: matches!(marker.StyleRef().OverflowX(), foundation::EOverflow::kHidden | foundation::EOverflow::kClip | foundation::EOverflow::kScroll).then(||
-                        layout_assembly::fragment_tree::FragmentPaintRect {
-                            offset: layout_assembly::internal::layout_input::Offset {x: viewport.x() as f64,y:viewport.y() as f64},
-                            size: layout_assembly::internal::layout_input::Size {width:viewport.width() as f64,height:viewport.height() as f64},
+                        layout_base::fragment_tree::FragmentPaintRect {
+                            offset: layout_base::internal::layout_input::Offset {x: viewport.x() as f64,y:viewport.y() as f64},
+                            size: layout_base::internal::layout_input::Size {width:viewport.width() as f64,height:viewport.height() as f64},
                         }),
                 })
             }).collect()
@@ -425,7 +425,7 @@ impl LayoutSVGShape {
             return;
         }
         let bounds =
-            layout_assembly::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(
+            layout_base::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(
                 |tree| {
                     let style = self.StyleRef();
                     let markers = [
@@ -540,7 +540,7 @@ pub fn SvgShapeStyleDidChange(
     difference: layout_style::style::style_difference::StyleDifference,
     old: *const layout_style::style::computed_style::ComputedStyle,
     new: &layout_style::style::computed_style::ComputedStyle,
-    context: &layout_assembly::internal::layout_object::StyleChangeContext,
+    context: &layout_base::internal::layout_object::StyleChangeContext,
 ) {
     flow.StyleDidChange(difference, old, new, context);
     let shape = unsafe { &mut *(flow as *mut LayoutBlockFlow).cast::<LayoutSVGShape>() };

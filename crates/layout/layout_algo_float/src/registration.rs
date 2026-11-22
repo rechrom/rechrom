@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::layout_registry::LayoutRegistry;
 
 use crate::float_layout_algorithm::{
     ComputeMarginBoxInlineSizeForUnpositionedFloat, PositionFloat,

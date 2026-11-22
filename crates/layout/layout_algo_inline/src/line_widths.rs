@@ -6,10 +6,10 @@ use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::{LayoutUnit, Member, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;
-use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunity;
-use layout_core::internal::inline_item::InlineItemType;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::text_fit_scale::TextFitBlockScale;
+use layout_base::internal::exclusions::layout_opportunity::LayoutOpportunity;
+use layout_base::internal::inline_item::InlineItemType;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::text_fit_scale::TextFitBlockScale;
 use layout_style::style::computed_style_constants::EVerticalAlign;
 
 use crate::inline_box_state::InlineBoxState;

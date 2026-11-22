@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 
 use foundation::{IsLtr, LayoutUnit, MinimumValueForLength};
-use layout_core::block_break_token::BlockBreakToken;
-use layout_core::box_fragment_builder::BoxFragmentBuilder;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::fragmentation_utils::{IsBreakInside, ShouldIncludeBlockEndBorderPadding};
-use layout_core::internal::layout_alignment_utils::BlockContentAlignment;
-use layout_core::internal::layout_utils::ResolveContentAlignment;
-use layout_core::internal::length_utils::LineOffsetForTextAlign;
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::fragmentation_utils::{IsBreakInside, ShouldIncludeBlockEndBorderPadding};
+use layout_base::internal::layout_alignment_utils::BlockContentAlignment;
+use layout_base::internal::layout_utils::ResolveContentAlignment;
+use layout_base::internal::length_utils::LineOffsetForTextAlign;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_style::style::computed_style::ComputedStyle;
 

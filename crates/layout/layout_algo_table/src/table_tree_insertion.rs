@@ -3,7 +3,7 @@
 use crate::algorithms::*;
 use crate::layout_table::LayoutTable;
 use foundation::EDisplay;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObject;
 // cpp: layoutng_table/table_tree_insertion.cc:10-26
 fn RequiresAnonymousTableWrappers(parent: &LayoutObject, child: &LayoutObject) -> bool {
     if child.IsLayoutTableCol() {

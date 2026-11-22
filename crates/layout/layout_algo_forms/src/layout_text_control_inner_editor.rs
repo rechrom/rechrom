@@ -3,12 +3,12 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{DynamicTo, IsA, To, Traceable, Visitor};
-use layout_assembly::internal::form_node_metadata::HTMLTextAreaElement;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_assembly::internal::layout_invalidation_reason;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{
+use layout_base::internal::form_node_metadata::HTMLTextAreaElement;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+use layout_base::internal::layout_invalidation_reason;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{
     LayoutObject, LayoutObjectClass, StyleChangeContext,
 };
 use layout_style::style::computed_style::ComputedStyle;

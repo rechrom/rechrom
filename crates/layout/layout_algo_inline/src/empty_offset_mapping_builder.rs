@@ -5,7 +5,7 @@
 
 #[allow(unused_imports)]
 use crate::algorithms::*;
-use layout_core::internal::layout_text::LayoutText;
+use layout_base::internal::layout_text::LayoutText;
 use std::ffi::c_void;
 
 // cpp: layoutng_inline/empty_offset_mapping_builder.h:18-40

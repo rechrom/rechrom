@@ -6,7 +6,7 @@ use crate::{
     layout_table_section::LayoutTableSection,
 };
 use foundation::{EDisplay, MakeGarbageCollected, To, Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_block::LayoutBlock,
     layout_box::LayoutBox,
     layout_node_metadata::Element,

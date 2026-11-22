@@ -9,40 +9,40 @@ use foundation::{
     EBoxSizing, EBreakBetween, EReadingFlow, HashMap, HeapVector, IsHorizontalWritingMode,
     LayoutUnit, Length, MakeGarbageCollected, Member, PhysicalRect, To, WtfSizeT,
 };
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::internal::algorithm_entry::LayoutAlgorithmImplementation;
-use layout_assembly::internal::baseline_utils::BaselineGroup;
-use layout_assembly::internal::baseline_utils::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::algorithm_entry::LayoutAlgorithmImplementation;
+use layout_base::internal::baseline_utils::BaselineGroup;
+use layout_base::internal::baseline_utils::{
     DetermineBaselineGroup, DetermineBaselineWritingMode,
 };
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::break_appeal::BreakAppeal;
-use layout_assembly::internal::constraint_space::{
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::break_appeal::BreakAppeal;
+use layout_base::internal::constraint_space::{
     AutoSizeBehavior, ConstraintSpace, LayoutResultCacheSlot,
 };
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
-use layout_assembly::internal::devtools_flex_info::{
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
+use layout_base::internal::devtools_flex_info::{
     DevtoolsFlexInfo, DevtoolsFlexInfoItem, DevtoolsFlexInfoLine,
 };
-use layout_assembly::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_assembly::internal::early_break::{BreakType, EarlyBreak};
-use layout_assembly::internal::fragmentation_utils::{
+use layout_base::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use layout_base::internal::early_break::{BreakType, EarlyBreak};
+use layout_base::internal::fragmentation_utils::{
     AttemptSoftBreak, BreakBeforeChild, BreakBeforeChildIfNeededFull, BreakStatus,
     CalculateBreakAppealBeforeStatus, ClonedBlockStartDecoration, EnterEarlyBreakInChild,
     FinishFragmentation, FlexColumnBreakInfo, InvolvedInBlockFragmentationForBuilder,
     IsBreakInside, IsBreakableAtStartOfResumedContainer, IsEarlyBreakTarget, IsForcedBreakValue,
     JoinFragmentainerBreakValues, SetupSpaceBuilderForFragmentationFromBuilder,
 };
-use layout_assembly::internal::gap::gap_geometry::FlexGapPlacementReversal;
-use layout_assembly::internal::layout_algorithm::{
+use layout_base::internal::gap::gap_geometry::FlexGapPlacementReversal;
+use layout_base::internal::layout_algorithm::{
     LayoutAlgorithm, LayoutAlgorithmParams, RelayoutAlgorithm, RelayoutType,
 };
-use layout_assembly::internal::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
-use layout_assembly::internal::layout_node_metadata::Node;
-use layout_assembly::internal::layout_pass_scope::LayoutPassScope;
-use layout_assembly::internal::length_utils::{
+use layout_base::internal::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
+use layout_base::internal::layout_node_metadata::Node;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::length_utils::{
     BlockSizeFromAspectRatio, CalculateChildPercentageSize, CalculateInitialFragmentGeometry,
     CalculateIntrinsicBlockSizeIgnoringChildren, CalculateMinMaxSizesIgnoringChildren,
     ClampIntrinsicBlockSize, ComputeBlockSizeForFragment, ComputeBorders,
@@ -53,15 +53,15 @@ use layout_assembly::internal::length_utils::{
     ReplacedSizeMode, ResolveMainBlockLength, ResolveMainInlineLength, ShrinkLogicalSize, SizeType,
     TransferredSizesMode,
 };
-use layout_assembly::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
-use layout_assembly::internal::scroll_layout_scope::{
+use layout_base::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
+use layout_base::internal::scroll_layout_scope::{
     DelayScrollOffsetClampScope, FreezeScrollbarsScope,
 };
-use layout_assembly::internal::space_utils::SetOrthogonalFallbackInlineSizeIfNeeded;
-use layout_assembly::internal::table_node::TableNode;
-use layout_assembly::layout_result::{EStatus, LayoutResult};
-use layout_assembly::logical_box_fragment::LogicalBoxFragment;
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::internal::space_utils::SetOrthogonalFallbackInlineSizeIfNeeded;
+use layout_base::internal::table_node::TableNode;
+use layout_base::layout_result::{EStatus, LayoutResult};
+use layout_base::logical_box_fragment::LogicalBoxFragment;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToPhysicalSize};
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_geometry::geometry::static_position::{
@@ -660,7 +660,7 @@ impl FlexLayoutAlgorithm {
     pub fn HandleOutOfFlowPositionedItems(
         &mut self,
         total_intrinsic_block_size: LayoutUnit,
-        oof_children: &mut HeapVector<Member<layout_assembly::internal::layout_box::LayoutBox>>,
+        oof_children: &mut HeapVector<Member<layout_base::internal::layout_box::LayoutBox>>,
     ) {
         if oof_children.is_empty() {
             return;
@@ -780,7 +780,7 @@ impl FlexLayoutAlgorithm {
         &mut self,
         phase: Phase,
         mut oof_children: Option<
-            &mut HeapVector<Member<layout_assembly::internal::layout_box::LayoutBox>>,
+            &mut HeapVector<Member<layout_base::internal::layout_box::LayoutBox>>,
         >,
     ) {
         let mut item_index: WtfSizeT = 0;
@@ -1212,7 +1212,7 @@ impl FlexLayoutAlgorithm {
         phase: Phase,
         flex_lines: &mut FlexLineVector,
         oof_children: Option<
-            &mut HeapVector<Member<layout_assembly::internal::layout_box::LayoutBox>>,
+            &mut HeapVector<Member<layout_base::internal::layout_box::LayoutBox>>,
         >,
         total_intrinsic_block_size_out: Option<&mut LayoutUnit>,
     ) {

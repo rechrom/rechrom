@@ -6,8 +6,7 @@
 use std::path::{Path, PathBuf};
 
 const INTERNAL: &[&str] = &[
-    "layout_assembly",
-    "layout_core",
+    "layout_base",
     "layout_commit",
     "layout_invalidation",
     "layout_reuse",

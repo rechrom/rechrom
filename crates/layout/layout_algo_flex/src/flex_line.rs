@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapVector, LayoutUnit, Traceable, Visitor, WtfSizeT};
-use layout_assembly::internal::block_node::BlockNode;
+use layout_base::internal::block_node::BlockNode;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::computed_style_constants::ItemPosition;

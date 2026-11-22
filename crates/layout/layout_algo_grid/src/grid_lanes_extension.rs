@@ -2,7 +2,7 @@ use crate::{
     grid_line_resolver::GridLineResolver,
     grid_sizing_tree::{GridSizingTree, SubgriddedItemData},
 };
-use layout_assembly::internal::{block_node::BlockNode, constraint_space::ConstraintSpace};
+use layout_base::internal::{block_node::BlockNode, constraint_space::ConstraintSpace};
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
 use layout_style::style::{computed_style::ComputedStyle, grid_area::GridArea};
 

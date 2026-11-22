@@ -6,9 +6,9 @@
 //! `ScrollSelectOptionIntoView` returns the scroll result Page applies, so it
 //! is a borrowed view method instead.
 
-pub use layout_assembly::layout_engine::FormControlMutation;
-use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
-use layout_assembly::engine::scroll::scroll_source::NativeScrollResult;
+pub use layout_base::layout_engine::FormControlMutation;
+use layout_base::layout_engine::LayoutEngine as CoreLayoutEngine;
+use layout_base::engine::scroll::scroll_source::NativeScrollResult;
 
 use crate::LayoutEngine;
 

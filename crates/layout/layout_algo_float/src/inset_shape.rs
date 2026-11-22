@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{gfx, LayoutUnit};
-use layout_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
+use layout_base::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
 use layout_geometry::geometry::logical_rect::LogicalRect;
 
 // cpp: layoutng_float/inset_shape.h:41-66

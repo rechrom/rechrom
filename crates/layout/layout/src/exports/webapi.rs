@@ -11,13 +11,13 @@ pub mod lifecycle {}
 pub mod mutation {}
 
 pub mod input {
-    pub use layout_assembly::css_color_parser::ParseCSSColor;
-    pub use layout_assembly::internal::css_zoom::ZoomedStyle;
-    pub use layout_assembly::internal::layout_input::{
+    pub use layout_base::css_color_parser::ParseCSSColor;
+    pub use layout_base::internal::css_zoom::ZoomedStyle;
+    pub use layout_base::internal::layout_input::{
         Display, ExtendedStyle, Offset, PaintPathVerb, Position, TextAlign, TextAlignLast,
         TextDirection,
     };
-    pub use layout_assembly::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
+    pub use layout_base::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }
 
 pub mod output {}
@@ -27,7 +27,7 @@ pub mod fragment {}
 pub mod paint {}
 
 pub mod paint_input {
-    pub use layout_assembly::internal::boundary::paint_style_export::{
+    pub use layout_base::internal::boundary::paint_style_export::{
         Export, ExportGeneratedImageShader, SvgColor,
     };
 }
@@ -35,7 +35,7 @@ pub mod paint_input {
 pub mod editing {}
 
 pub mod scroll {
-    pub use layout_assembly::internal::layout_scrollable_area::{
+    pub use layout_base::internal::layout_scrollable_area::{
         ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
     };
 }

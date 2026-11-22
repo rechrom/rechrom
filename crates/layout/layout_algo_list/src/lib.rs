@@ -12,7 +12,7 @@ pub mod list_marker;
 /// class and its lazily resolved ordinal; base editing borrows only its scalar
 /// through the `list_support.list_item_value` registry slot.
 pub fn LayoutEditingListItemValue(
-    object: *const layout_assembly::internal::layout_object::LayoutObject,
+    object: *const layout_base::internal::layout_object::LayoutObject,
 ) -> Option<i32> {
     let object = unsafe { object.as_ref() }?;
     unsafe { foundation::DynamicTo::<layout_list_item::LayoutListItem>(object).as_ref() }

@@ -9,13 +9,13 @@ use foundation::{
     gfx, DynamicTo, IsHorizontalWritingMode, LayoutUnit, MakeGarbageCollected, PhysicalDirection,
     PhysicalRect, PhysicalSize, StringView, TextDirection, To, WritingDirectionMode, WritingMode,
 };
-use layout_assembly::fragment_item::{ItemType, TextFragmentRareData};
-use layout_assembly::fragment_items_builder::{FragmentItemsBuilder, ItemWithOffsetList};
-use layout_assembly::internal::inline_node::InlineNode;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::resolved_text_layout_attributes_iterator::ResolvedTextLayoutAttributesIterator;
-use layout_assembly::internal::svg_inline_node_data::SvgTextContentRange;
-use layout_assembly::internal::svg_length_adjust_type::SVGLengthAdjustType;
+use layout_base::fragment_item::{ItemType, TextFragmentRareData};
+use layout_base::fragment_items_builder::{FragmentItemsBuilder, ItemWithOffsetList};
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::resolved_text_layout_attributes_iterator::ResolvedTextLayoutAttributesIterator;
+use layout_base::internal::svg_inline_node_data::SvgTextContentRange;
+use layout_base::internal::svg_length_adjust_type::SVGLengthAdjustType;
 
 fn ClampToFloat(value: f32) -> f32 {
     value.clamp(f32::MIN, f32::MAX)

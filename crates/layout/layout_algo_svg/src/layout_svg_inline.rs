@@ -3,12 +3,12 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{gfx, DowncastFrom, Traceable, Visitor};
-use layout_assembly::inline_cursor::InlineCursor;
-use layout_assembly::internal::layout_box_model_object::PaintLayerType;
-use layout_assembly::internal::layout_inline::LayoutInline;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::layout_text::LayoutText;
+use layout_base::inline_cursor::InlineCursor;
+use layout_base::internal::layout_box_model_object::PaintLayerType;
+use layout_base::internal::layout_inline::LayoutInline;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_text::LayoutText;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_svg/layout_svg_inline.h:30-51

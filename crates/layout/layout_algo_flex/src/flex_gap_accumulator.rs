@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{kNotFound, LayoutUnit, MakeGarbageCollected, Persistent, WtfSizeT};
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::internal::gap::cross_gap::EdgeIntersectionState;
-use layout_assembly::internal::gap::gap_geometry::{
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::gap::cross_gap::EdgeIntersectionState;
+use layout_base::internal::gap::gap_geometry::{
     ContainerType, FlexGapPlacementReversal, GapGeometry,
 };
 use layout_geometry::geometry::logical_offset::LogicalOffset;

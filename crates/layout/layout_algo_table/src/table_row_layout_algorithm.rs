@@ -10,7 +10,7 @@ use foundation::{
     Traceable, Visitor,
 };
 use layout_algo_block::block_child_iterator::BlockChildIterator;
-use layout_assembly::internal::{
+use layout_base::internal::{
     algorithm_entry::LayoutAlgorithmImplementation,
     block_node::BlockNode,
     constraint_space::{ConstraintSpace, LayoutResultCacheSlot},
@@ -25,7 +25,7 @@ use layout_assembly::internal::{
     min_max_sizes::MinMaxSizesResult,
     table_constraint_space_data::{Cell, Row, TableConstraintSpaceData},
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     layout_result::{EStatus, LayoutResult},

@@ -3,7 +3,6 @@
 // The block package sees both original C++ package namespaces through the
 // one compilation unit that resolves their mutually recursive types. With
 // `inline_extension`, `layout_algo_inline` is the real inline crate.
-extern crate layout_assembly as layout_core;
 
 pub mod registration;
 pub mod block_child_iterator;
@@ -19,14 +18,14 @@ mod excluded_block_boundaries;
 #[cfg(all(test, feature = "constructed_fixture"))]
 mod block_fixture_test {
     use super::registration::Register as RegisterBlock;
-    use layout_core::internal::boundary::registration::Register as RegisterLayoutBoundary;
-    use layout_core::internal::layout_input::{
+    use layout_base::internal::boundary::registration::Register as RegisterLayoutBoundary;
+    use layout_base::internal::layout_input::{
         ComputedStyle, ConstraintSpace, Edges, FontFace, Offset, Size,
     };
-    use layout_core::internal::layout_input_types::Color;
-    use layout_core::internal::layout_object_builder::LayoutObjectTree;
-    use layout_core::layout_registry::LayoutRegistry;
-    use layout_core::layout_engine::{LayoutEngine, LayoutMutation};
+    use layout_base::internal::layout_input_types::Color;
+    use layout_base::internal::layout_object_builder::LayoutObjectTree;
+    use layout_base::layout_registry::LayoutRegistry;
+    use layout_base::layout_engine::{LayoutEngine, LayoutMutation};
 
     #[test]
     fn constructed_block_tree_matches_reference_fragments() {

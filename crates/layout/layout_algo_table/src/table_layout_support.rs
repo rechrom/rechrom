@@ -13,7 +13,7 @@ use foundation::{
     kIndefiniteSize, EBorderCollapse, HeapVector, LayoutUnit, Member, To, Traceable, Vector,
     Visitor,
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{

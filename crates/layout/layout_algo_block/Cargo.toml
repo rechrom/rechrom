@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
-layout_assembly = { path = "../layout_assembly" }
+layout_base = { path = "../layout_base" }
 # block_inline_layout.rs (Chromium layoutng_block/block_inline_layout.cc)
 # drives the inline child contexts; only with `inline_extension`.
 layout_algo_inline = { path = "../layout_algo_inline", optional = true }
@@ -21,7 +21,7 @@ raster = { path = "../../raster" }
 default = []
 # Matches //src/layoutng_block:inline_extension. The block-only C++ render
 # profile links the algorithm target but does not install inline support.
-inline_extension = ["dep:layout_algo_inline", "layout_assembly/translation_in_progress"]
+inline_extension = ["dep:layout_algo_inline", "layout_base/translation_in_progress"]
 block_only_host = []
 # The full browser supplies the replaced-content implementation separately.
 replaced_extension = []

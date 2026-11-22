@@ -3,30 +3,30 @@
 use std::ptr;
 
 use foundation::{EFloat, LayoutUnit, MakeGarbageCollected, TextDirection};
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::break_appeal::kBreakAppealPerfect;
-use layout_assembly::internal::constraint_space::{ConstraintSpace, FragmentationType};
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::exclusions::exclusion_area::{ExclusionArea, ExclusionShapeData};
-use layout_assembly::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_assembly::internal::exclusions::layout_opportunity::LayoutOpportunity;
-use layout_assembly::internal::fragmentation_utils::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::break_appeal::kBreakAppealPerfect;
+use layout_base::internal::constraint_space::{ConstraintSpace, FragmentationType};
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::exclusions::exclusion_area::{ExclusionArea, ExclusionShapeData};
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::exclusions::layout_opportunity::LayoutOpportunity;
+use layout_base::internal::fragmentation_utils::{
     AdjustMarginsForFragmentation, CalculateSpaceShortage, CalculateUnbreakableBlockSize,
     IsBreakInside, MovePastBreakpointFull, SetupSpaceBuilderForFragmentationFromSpace,
     ShouldAvoidBreakInside,
 };
-use layout_assembly::internal::length_utils::{
+use layout_base::internal::length_utils::{
     ComputeBorders, ComputeMarginsFor, ComputeMarginsForInlineSize, ComputePadding,
 };
-use layout_assembly::internal::positioned_float::PositionedFloat;
-use layout_assembly::internal::space_utils::{
+use layout_base::internal::positioned_float::PositionedFloat;
+use layout_base::internal::space_utils::{
     AdjustToClearance, SetOrthogonalFallbackInlineSizeIfNeeded,
 };
-use layout_assembly::internal::unpositioned_float::UnpositionedFloat;
-use layout_assembly::layout_result::{EStatus, LayoutResult};
-use layout_assembly::logical_fragment::LogicalFragment;
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::internal::unpositioned_float::UnpositionedFloat;
+use layout_base::layout_result::{EStatus, LayoutResult};
+use layout_base::logical_fragment::LogicalFragment;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::bfc_rect::BfcRect;
 use layout_geometry::geometry::box_strut::BoxStrut;

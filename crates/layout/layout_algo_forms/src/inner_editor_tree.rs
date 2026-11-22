@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use foundation::To;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+use layout_base::internal::layout_object::LayoutObject;
 
 // cpp: layoutng_forms/inner_editor_tree.h:8-9
 // cpp: layoutng_forms/inner_editor_tree.cc:8-22

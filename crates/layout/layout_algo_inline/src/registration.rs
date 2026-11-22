@@ -10,29 +10,29 @@ use foundation::{MakeGarbageCollected, PhysicalRect, To, WritingMode};
 use crate::break_token::BreakToken;
 use crate::inline_cursor::InlineCursor;
 use crate::layout_result::LayoutResult;
-use layout_core::internal::algorithm_forward::InlineChildLayoutContext;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_core::internal::layout_node_metadata::{Element, Node, Text};
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
-use layout_core::internal::min_max_sizes::MinMaxSizesResult;
-use layout_core::internal::selection_state::SelectionState;
-use layout_core::internal::text_combine_style_service::{
+use layout_base::internal::algorithm_forward::InlineChildLayoutContext;
+use layout_base::internal::column_spanner_path::ColumnSpannerPath;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_inline::LayoutInline;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::layout_node_metadata::{Element, Node, Text};
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_text::LayoutText;
+use layout_base::internal::layout_text_combine::LayoutTextCombine;
+use layout_base::internal::min_max_sizes::MinMaxSizesResult;
+use layout_base::internal::selection_state::SelectionState;
+use layout_base::internal::text_combine_style_service::{
     AdjustStyleForCombinedText, AdjustStyleForTextCombine,
 };
-use layout_core::layout_registry::LayoutRegistry;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
 use crate::inline_child_layout_context::InlineChildLayoutContextParallelFlowBreakTokens;
 use crate::layout_br::LayoutBR;
 use crate::layout_ruby_as_block::LayoutRubyAsBlock;
-use layout_core::internal::layout_text::layout_text_members::layout_text_is_selected;
+use layout_base::internal::layout_text::layout_text_members::layout_text_is_selected;
 use crate::layout_word_break::LayoutWordBreak;
 use crate::text_combine_tree::InsertInlineTextChild;
 
@@ -128,13 +128,13 @@ fn AdjustCombinedTextStyle(builder: &mut ComputedStyleBuilder) {
 
 fn TextFragmentSelectionFacts(
     text: &LayoutText,
-) -> layout_core::internal::layout_object_factory_set::TextFragmentSelectionFacts {
+) -> layout_base::internal::layout_object_factory_set::TextFragmentSelectionFacts {
     let fragment = unsafe { &*To::<crate::layout_text_fragment::LayoutTextFragment>(text) };
     let node = unsafe { fragment.AssociatedTextNode().as_ref() };
     let state = node
         .and_then(|n| unsafe { n.GetLayoutObject().as_ref() })
         .map_or(SelectionState::kNone, |o| o.GetSelectionState());
-    layout_core::internal::layout_object_factory_set::TextFragmentSelectionFacts {
+    layout_base::internal::layout_object_factory_set::TextFragmentSelectionFacts {
         node_length: node.map(|n| n.length()),
         state,
         start: fragment.Start(),

@@ -1,6 +1,6 @@
 use crate::{grid_layout_algorithm::GridLayoutAlgorithm, layout_grid::LayoutGrid};
 use foundation::{MakeGarbageCollected, To};
-use layout_assembly::{
+use layout_base::{
     internal::{
         algorithm_entry::LayoutAlgorithmEntryFor,
         layout_block::LayoutBlock,

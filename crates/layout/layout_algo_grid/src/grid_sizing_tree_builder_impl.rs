@@ -12,7 +12,7 @@ use crate::{
     grid_track_sizing_algorithm::SizingConstraint,
 };
 use foundation::{HeapVector, MakeGarbageCollected, Member, UnsupportedLayout};
-use layout_assembly::internal::{
+use layout_base::internal::{
     constraint_space::ConstraintSpace,
     grid_item::{GridItemData, GridItems},
     grid_lanes_item_group::VirtualItems,

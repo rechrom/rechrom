@@ -4,9 +4,9 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{DynamicTo, To};
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_text::LayoutText;
+use layout_base::internal::layout_text_combine::LayoutTextCombine;
 
 // cpp: layoutng_inline/text_combine_tree.h:5-8
 // cpp: layoutng_inline/text_combine_tree.cc:10-46

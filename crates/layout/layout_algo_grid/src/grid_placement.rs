@@ -1,7 +1,7 @@
 use crate::{grid_data::GridPlacementData, grid_line_resolver::GridLineResolver};
 use foundation::doubly_linked_list::{DoublyLinkedList, DoublyLinkedListNode};
 use foundation::{HashMap, IntWithZeroKeyHashTraits};
-use layout_assembly::internal::{
+use layout_base::internal::{
     grid_item::GridItems, grid_track_collection::GridLayoutTrackCollection,
 };
 use layout_style::style::{

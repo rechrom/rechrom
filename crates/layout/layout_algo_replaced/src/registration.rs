@@ -1,19 +1,19 @@
 #![allow(non_snake_case)]
 
 use foundation::{MakeGarbageCollected, To};
-use layout_assembly::internal::algorithm_entry::LayoutAlgorithmEntryFor;
-use layout_assembly::internal::layout_input_node::LayoutInputNode;
-use layout_assembly::internal::layout_node_metadata::{Element, Node};
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::layout_replaced::{
+use layout_base::internal::algorithm_entry::LayoutAlgorithmEntryFor;
+use layout_base::internal::layout_input_node::LayoutInputNode;
+use layout_base::internal::layout_node_metadata::{Element, Node};
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_replaced::{
     LayoutInputReplaced, LayoutMedia, LayoutReplaced, LayoutVideo,
 };
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 
-use layout_assembly::internal::layout_replaced::layout_replaced_core::LayoutReplacedRespectsCSSOverflow;
-use layout_assembly::internal::layout_replaced::layout_video;
+use layout_base::internal::layout_replaced::layout_replaced_core::LayoutReplacedRespectsCSSOverflow;
+use layout_base::internal::layout_replaced::layout_video;
 use crate::replaced_layout_algorithm::ReplacedLayoutAlgorithm;
 
 // cpp: layoutng_replaced/assembly.cc:14-18
@@ -98,11 +98,11 @@ fn UseBrokenImageResource(
 
 fn ImageResourceFacts(
     replaced: &LayoutReplaced,
-) -> layout_assembly::internal::layout_object_factory_set::ReplacedImageResourceFacts {
+) -> layout_base::internal::layout_object_factory_set::ReplacedImageResourceFacts {
     assert!(replaced.IsLayoutImage());
     let image = unsafe { &*(replaced as *const LayoutReplaced).cast::<LayoutInputReplaced>() };
     let resource = image.ImageResource();
-    layout_assembly::internal::layout_object_factory_set::ReplacedImageResourceFacts {
+    layout_base::internal::layout_object_factory_set::ReplacedImageResourceFacts {
         has_image: resource.HasImage(),
         metadata: resource.Metadata(),
         error: resource.ErrorOccurred(),

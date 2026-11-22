@@ -5,7 +5,7 @@ use crate::{
     grid_sizing_tree::GridSizingSubtree, layout_grid::LayoutGrid,
 };
 use foundation::{HeapVector, LayoutUnit, MakeGarbageCollected, Member, Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     constraint_space::ConstraintSpace,
     grid_item::{GridItemData, GridItems},
@@ -279,19 +279,19 @@ fn TranslateSpan(subgrid: &GridItemData, span: &mut GridSpan, direction: GridTra
 
 // Adapter for the original LayoutAlgorithm<GridNode, BoxFragmentBuilder, BlockBreakToken> specialization.
 impl
-    layout_assembly::internal::layout_algorithm::LayoutAlgorithmBuilder<
+    layout_base::internal::layout_algorithm::LayoutAlgorithmBuilder<
         GridNode,
-        layout_assembly::block_break_token::BlockBreakToken,
-    > for layout_assembly::box_fragment_builder::BoxFragmentBuilder
+        layout_base::block_break_token::BlockBreakToken,
+    > for layout_base::box_fragment_builder::BoxFragmentBuilder
 {
     fn New(
         node: GridNode,
         style: *const ComputedStyle,
         space: &ConstraintSpace,
         direction: foundation::WritingDirectionMode,
-        break_token: *const layout_assembly::block_break_token::BlockBreakToken,
+        break_token: *const layout_base::block_break_token::BlockBreakToken,
     ) -> Self {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::new(
+        layout_base::box_fragment_builder::BoxFragmentBuilder::new(
             node.base.base,
             style,
             space,
@@ -299,52 +299,52 @@ impl
             break_token,
         )
     }
-    fn GetGapGeometry(&self) -> *const layout_assembly::internal::gap::gap_geometry::GapGeometry {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::GetGapGeometry(self)
+    fn GetGapGeometry(&self) -> *const layout_base::internal::gap::gap_geometry::GapGeometry {
+        layout_base::box_fragment_builder::BoxFragmentBuilder::GetGapGeometry(self)
     }
     fn GetConstraintSpace(&self) -> &ConstraintSpace {
-        layout_assembly::fragment_builder::FragmentBuilder::GetConstraintSpace(
+        layout_base::fragment_builder::FragmentBuilder::GetConstraintSpace(
             std::ops::Deref::deref(self),
         )
     }
     fn BfcLineOffset(&self) -> LayoutUnit {
-        layout_assembly::fragment_builder::FragmentBuilder::BfcLineOffset(std::ops::Deref::deref(
+        layout_base::fragment_builder::FragmentBuilder::BfcLineOffset(std::ops::Deref::deref(
             self,
         ))
     }
     fn BfcBlockOffset(&self) -> Option<LayoutUnit> {
-        *layout_assembly::fragment_builder::FragmentBuilder::BfcBlockOffset(
+        *layout_base::fragment_builder::FragmentBuilder::BfcBlockOffset(
             std::ops::Deref::deref(self),
         )
     }
-    fn PreviousBreakToken(&self) -> *const layout_assembly::block_break_token::BlockBreakToken {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::PreviousBreakToken(self)
+    fn PreviousBreakToken(&self) -> *const layout_base::block_break_token::BlockBreakToken {
+        layout_base::box_fragment_builder::BoxFragmentBuilder::PreviousBreakToken(self)
     }
     fn Borders(&self) -> &layout_geometry::geometry::box_strut::BoxStrut {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::Borders(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::Borders(self)
     }
     fn Scrollbar(&self) -> &layout_geometry::geometry::box_strut::BoxStrut {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::Scrollbar(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::Scrollbar(self)
     }
     fn Padding(&self) -> &layout_geometry::geometry::box_strut::BoxStrut {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::Padding(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::Padding(self)
     }
     fn BorderPadding(&self) -> &layout_geometry::geometry::box_strut::BoxStrut {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::BorderPadding(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::BorderPadding(self)
     }
     fn BorderScrollbarPadding(&self) -> &layout_geometry::geometry::box_strut::BoxStrut {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::BorderScrollbarPadding(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::BorderScrollbarPadding(self)
     }
     fn OriginalBorderScrollbarPaddingBlockStart(&self) -> LayoutUnit {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::OriginalBorderScrollbarPaddingBlockStart(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::OriginalBorderScrollbarPaddingBlockStart(self)
     }
     fn ChildAvailableSize(&self) -> &layout_geometry::geometry::logical_size::LogicalSize {
-        layout_assembly::box_fragment_builder::BoxFragmentBuilder::ChildAvailableSize(self)
+        layout_base::box_fragment_builder::BoxFragmentBuilder::ChildAvailableSize(self)
     }
     fn GetExclusionSpace(
         &mut self,
-    ) -> &mut layout_assembly::internal::exclusions::exclusion_space::ExclusionSpace {
-        layout_assembly::fragment_builder::FragmentBuilder::GetExclusionSpace(
+    ) -> &mut layout_base::internal::exclusions::exclusion_space::ExclusionSpace {
+        layout_base::fragment_builder::FragmentBuilder::GetExclusionSpace(
             std::ops::DerefMut::deref_mut(self),
         )
     }

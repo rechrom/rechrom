@@ -3,7 +3,7 @@ pub mod column_layout_algorithm;
 mod column_spanner_invalidation;
 pub mod registration {
     use crate::column_layout_algorithm::ColumnLayoutAlgorithm;
-    use layout_assembly::{
+    use layout_base::{
         internal::algorithm_entry::LayoutAlgorithmEntryFor, layout_registry::LayoutRegistry,
     };
     pub fn Register(registry: &mut LayoutRegistry) {

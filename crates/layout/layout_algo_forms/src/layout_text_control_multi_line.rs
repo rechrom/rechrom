@@ -3,9 +3,9 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{Traceable, Visitor};
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObjectClass;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObjectClass;
 
 // cpp: layoutng_forms/layout_text_control_multi_line.h:12-13
 #[repr(C)]

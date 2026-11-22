@@ -7,29 +7,29 @@
 use std::rc::Rc;
 
 use foundation::{gfx, CompositorElementId, PhysicalOffset};
-use layout_assembly::editing_state::LayoutEditingState;
-use layout_assembly::layout_registry::LayoutRegistry;
-use layout_assembly::fragment_tree::LayoutResultHandle;
-use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData};
-use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
-use layout_assembly::internal::scrollbar::Scrollbar;
-use layout_assembly::layout_engine::{
+use layout_base::editing_state::LayoutEditingState;
+use layout_base::layout_registry::LayoutRegistry;
+use layout_base::fragment_tree::LayoutResultHandle;
+use layout_base::internal::layout_input::{ConstraintSpace, ElementData};
+use layout_base::internal::layout_object_builder::LayoutObjectTree;
+use layout_base::internal::scrollbar::Scrollbar;
+use layout_base::layout_engine::{
     ContainerQuerySizeSnapshot, LayoutEngine as CoreLayoutEngine,
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
     NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate,
 };
-use layout_assembly::engine::scroll::autoscroll_source::NativeLogicalScrollArea;
-use layout_assembly::engine::pointer::mouse_coordinates::{
+use layout_base::engine::scroll::autoscroll_source::NativeLogicalScrollArea;
+use layout_base::engine::pointer::mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
-use layout_assembly::engine::scroll::page_scale_geometry::NativePageScaleGeometry;
-use layout_assembly::engine::pointer::pointer_scroll_controls::{
+use layout_base::engine::scroll::page_scale_geometry::NativePageScaleGeometry;
+use layout_base::engine::pointer::pointer_scroll_controls::{
     NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
     NativeResizePlan, NativeScrollbarInteraction,
 };
-use layout_assembly::engine::scroll::scroll_source::NativeCompositorScrollArea;
-use layout_assembly::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
-use layout_assembly::style_projection::StyleResourceBindings;
+use layout_base::engine::scroll::scroll_source::NativeCompositorScrollArea;
+use layout_base::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
+use layout_base::style_projection::StyleResourceBindings;
 use layout_style::style::computed_style::ComputedStyle;
 
 /// Owns the resident LayoutObject tree, its constraints and published result

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapVector, Traceable, Visitor, WtfSizeT};
-use layout_assembly::internal::block_node::BlockNode;
+use layout_base::internal::block_node::BlockNode;
 use layout_style::style::computed_style_initial_values::ComputedStyleInitialValues;
 
 // cpp: layoutng_flex/flex_child_iterator.h:36-48

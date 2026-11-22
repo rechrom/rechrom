@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, RuntimeEnabledFeatures, To};
-use layout_core::block_break_token::BlockBreakToken;
-use layout_core::break_token::BreakToken;
-use layout_core::inline_break_token::InlineBreakToken;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::layout_input_node::LayoutInputNode;
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::break_token::BreakToken;
+use layout_base::inline_break_token::InlineBreakToken;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::layout_input_node::LayoutInputNode;
 
 // STACK_ALLOCATED maps to a value type. The iterator holds node handles and
 // borrowed GC token pointers, and does not own either layout tree.

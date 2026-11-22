@@ -10,37 +10,37 @@ use foundation::{
     LogicalToLogical, MakeGarbageCollected, MarginStrut, RuntimeEnabledFeatures, TextDirection, To,
     UnsupportedLayout,
 };
-use layout_core::block_break_token::BlockBreakToken;
-use layout_core::box_fragment_builder::BoxFragmentBuilder;
-use layout_core::break_token::BreakToken;
-use layout_core::fragment_builder::FragmentBuilder;
-use layout_core::inline_break_token::InlineBreakToken;
-use layout_core::layout_result::{EStatus, LayoutResult};
-use layout_core::logical_box_fragment::LogicalBoxFragment;
-use layout_core::logical_fragment::LogicalFragment;
-use layout_core::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::physical_fragment::BoxType;
-use layout_core::physical_fragment::PhysicalFragment;
-use layout_core::physical_line_box_fragment::PhysicalLineBoxFragment;
-use layout_core::internal::algorithm_entry::LayoutAlgorithmImplementation;
-use layout_core::internal::algorithm_forward::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::break_token::BreakToken;
+use layout_base::fragment_builder::FragmentBuilder;
+use layout_base::inline_break_token::InlineBreakToken;
+use layout_base::layout_result::{EStatus, LayoutResult};
+use layout_base::logical_box_fragment::LogicalBoxFragment;
+use layout_base::logical_fragment::LogicalFragment;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::physical_fragment::BoxType;
+use layout_base::physical_fragment::PhysicalFragment;
+use layout_base::physical_line_box_fragment::PhysicalLineBoxFragment;
+use layout_base::internal::algorithm_entry::LayoutAlgorithmImplementation;
+use layout_base::internal::algorithm_forward::{
     BlockLayoutAlgorithm as ForwardBlockLayoutAlgorithm, InlineChildLayoutContext,
     PreviousInflowPosition as ForwardPreviousInflowPosition,
 };
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::break_appeal::BreakAppeal;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::{
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::break_appeal::BreakAppeal;
+use layout_base::internal::column_spanner_path::ColumnSpannerPath;
+use layout_base::internal::constraint_space::{
     AdjoiningObjectTypeValue, AdjoiningObjectTypes, AutoSizeBehavior, BaselineAlgorithmType,
     ConstraintSpace,
 };
-use layout_core::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_core::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
-use layout_core::internal::early_break::EarlyBreak;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::form_control_sizing_service::ComputedStyleControlSizingExt;
-use layout_core::internal::fragmentation_utils::IsEarlyBreakTarget;
-use layout_core::internal::fragmentation_utils::{
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
+use layout_base::internal::early_break::EarlyBreak;
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::form_control_sizing_service::ComputedStyleControlSizingExt;
+use layout_base::internal::fragmentation_utils::IsEarlyBreakTarget;
+use layout_base::internal::fragmentation_utils::{
     AdjustMarginsForFragmentation, AdjustedMarginAfterFinalChildFragment, AttemptSoftBreakDefault,
     BreakBeforeChild, BreakStatus, CalculateBreakAppealBeforeChild, CalculateBreakBetweenValue,
     EnterEarlyBreakInChild, FinishFragmentation, FinishFragmentationForFragmentainer,
@@ -49,17 +49,17 @@ use layout_core::internal::fragmentation_utils::{
     IsForcedBreakValue, PropagateSpaceShortageDefault,
     SetupSpaceBuilderForFragmentationFromBuilder, ShouldIncludeBlockEndBorderPadding,
 };
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_algorithm::{
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_algorithm::{
     LayoutAlgorithm, LayoutAlgorithmParams, RelayoutAlgorithm, RelayoutType,
 };
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::layout_utils::{BlockStaticPositionEdge, InlineStaticPositionEdge};
-use layout_core::internal::length_utils::{
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::layout_utils::{BlockStaticPositionEdge, InlineStaticPositionEdge};
+use layout_base::internal::length_utils::{
     CalculateChildPercentageSize, CalculateMinMaxSizesIgnoringChildren,
     CalculateReplacedChildPercentageSize, ClampIntrinsicBlockSize, ComputeBlockSizeForFragment,
     ComputeBorders, ComputeInitialBlockSizeForFragment, ComputeInitialMinMaxBlockSizes,
@@ -67,18 +67,18 @@ use layout_core::internal::length_utils::{
     ComputeMarginsForSelf, ComputeMinAndMaxContentContribution, ComputePadding,
     ResolveInlineAutoMargins,
 };
-use layout_core::internal::line_clamp_data::{
+use layout_base::internal::line_clamp_data::{
     LineClampAncestorChain, LineClampData, State as LineClampState,
 };
-use layout_core::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
-use layout_core::internal::space_utils::{
+use layout_base::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
+use layout_base::internal::space_utils::{
     AdjustToClearance, SetOrthogonalFallbackInlineSize,
     SetTextBoxTrimOnChildSpaceBuilderWithKnownContent,
     ShouldBlockContainerChildStretchAutoInlineSize,
 };
-use layout_core::internal::style_variant::StyleVariant;
-use layout_core::internal::unpositioned_float::UnpositionedFloat;
-use layout_core::internal::unpositioned_list_marker::UnpositionedListMarker;
+use layout_base::internal::style_variant::StyleVariant;
+use layout_base::internal::unpositioned_float::UnpositionedFloat;
+use layout_base::internal::unpositioned_list_marker::UnpositionedListMarker;
 use crate::unpositioned_list_marker::UnpositionedListMarkerAlgorithms;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::box_sides::LogicalBoxSides;
@@ -669,7 +669,7 @@ impl DerefMut for BlockLayoutAlgorithm {
 // cpp: layoutng_block/block_layout_algorithm.h:482-486
 pub struct PlaceholderLayoutResult {
     pub logical_block_offset: LayoutUnit,
-    pub status: layout_core::layout_result::EStatus,
+    pub status: layout_base::layout_result::EStatus,
 }
 
 impl BlockLayoutAlgorithm {

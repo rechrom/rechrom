@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{DowncastFrom, LayoutUnit, Traceable, Visitor};
-use layout_assembly::break_token_algorithm_data::{
+use layout_base::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
 // cpp: layoutng_table/table_row_break_token_data.h:12-21

@@ -1425,11 +1425,11 @@ direction):
 "Rust" fn` → `pub fn` and `layout_assembly::` → `crate::`):
 
 - `layout_algo_replaced/src/layout_replaced.rs` →
-  `layout_core/src/replaced/layout_replaced_core.rs`
+  `layout_base/src/internal/replaced/layout_replaced_core.rs`
 - `layout_algo_replaced/src/layout_video.rs` →
-  `layout_core/src/replaced/layout_video.rs`
+  `layout_base/src/internal/replaced/layout_video.rs`
 - `layout_algo_replaced/src/layout_media.rs` →
-  `layout_core/src/replaced/layout_media.rs`
+  `layout_base/src/internal/replaced/layout_media.rs`
 
 They are `pub mod layout_replaced_core`, `layout_video` and `layout_media` of
 `internal::layout_replaced`, beside the interface file. The replaced crate
@@ -1615,6 +1615,62 @@ blocks); the block-only host's remaining excluded stubs (`ContentDataClone`,
 - `LayoutText::ScaledFont`/`SvgScalingFactor` call `self.FactorySet()` through
   `Deref`; `object_factories` panics for an object created without a factory
   scope (previously the OnceLocks were global).
+
+### Status: R7b `layout_base` is the real base crate (done, not built)
+
+Layout's base is one ordinary crate, `crates/layout/layout_base` (package
+`layout_base`), compiled from its own `src/lib.rs`. The former
+`layout_core` source tree moved there unchanged in content; the
+`layout_assembly` package that compiled it through `include!` is deleted,
+together with its `extern crate self as layout_core` /
+`extern crate self as layout_assembly` aliases. Its own files
+(`block_virtual_dispatch.rs`, `untranslated_symbols.rs`,
+`out_of_flow_element_data.rs`, `layout_fragment_package.rs`) are base
+modules in `layout_base/src/`. `layout_fragment_package`,
+`layout_reuse_package`, `layout_commit_package` and the `layout_fragment_*`
+/ `layout_<owner>_*` module names are profiler attribution names and stay;
+the four `layout_core_*` shim modules became `layout_base_*`.
+
+- **Paths:** 1046 `layout_assembly::`/`layout_core::` paths outside base became
+  `layout_base::`, 259 inside base became `crate::`; the
+  `extern crate layout_assembly as layout_core` aliases of
+  `layout_algo_block` and `layout_algo_inline` are gone. Every manifest names
+  `layout_base = { path = "../layout_base" }` and forwards
+  `layout_base/translation_in_progress` / `layout_base/expensive_dchecks`.
+- **No `..` module paths:** rustc on macOS/Linux resolves `..` in `#[path]`
+  through the real filesystem, so the 284 parent-relative `#[path]`s (many
+  climbing out of an inline module's virtual directory) moved their files
+  under the declaring module's own directory as
+  `<original directory>/<file name>` (305 files, children kept at the same
+  relative position). In practice the files mounted under `crate::internal`
+  now live in `src/internal/<category>/` (for example
+  `src/internal/block/layout_block.rs`,
+  `src/internal/boundary/fragment/*_export.rs`). The module tree, module
+  names and therefore symbol paths are unchanged. Base no longer compiles
+  files of other packages: `slider_track_geometry.rs` and
+  `spin_button_geometry.rs` (from `layout_algo_forms`) are in
+  `layout_base/src/forms/`, `grid_track_list_input.rs` (from
+  `layout_algo_grid`) in `layout_base/src/internal/grid/`. Appendix A is the
+  pre-R7b inventory.
+- **Guards:** `layout/tests/source_layout.rs` fails on any workspace
+  `#[path]` with `..` or `include!` of a `.rs` file (allow-listed prefixes
+  outside Layout: `crates/browser/tests/`, `crates/browser/url_formatter/`,
+  `crates/compositor/`, `crates/dom/`, `crates/foundation/`,
+  `crates/javascript/`, `crates/quickjs*`, `crates/skia/`); walks every Layout
+  package's module tree (targets inside the package, every directory on the
+  way present, each file compiled once, no orphan under `src/`); and fails on a
+  `#[no_mangle]` item of one Layout package whose name another Layout package
+  declares in an `extern` block. The only exception is
+  `layout_base/src/untranslated_symbols.rs`: 51 of its aborting stubs define
+  names `layout_style` declares (moving those stubs into `layout_style` would
+  remove the exception). The package contract tests (trace-name ownership,
+  performance-owner identity) moved to `layout_base/tests/package_contracts.rs`.
+  `layout/tests/dependency_boundary.rs` lists `layout_base` as internal.
+- **Not done here:** `Cargo.lock` still names `layout_assembly` (the next
+  cargo run rewrites it; `--locked` fails until then). Comments and docs that
+  cite pre-R7b file locations of moved files (`fragment/…`, `block/…`,
+  `invalidation/…` under `layout_base/src/`) are stale outside the
+  crate-qualified references rewritten in this map, README and DEAD_CODE.
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

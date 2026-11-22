@@ -1,8 +1,0 @@
-//! Compatibility facade for the table-algorithm node interface.
-
-#![allow(non_snake_case)]
-
-#[path = "../table/table_node_interface.rs"]
-mod layout_algo_table_table_node_interface;
-
-pub use layout_algo_table_table_node_interface::*;

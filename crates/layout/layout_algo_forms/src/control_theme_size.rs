@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{gfx, PhysicalSize, UnsupportedLayout};
-use layout_assembly::internal::layout_input_types::ControlThemeMetrics;
+use layout_base::internal::layout_input_types::ControlThemeMetrics;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToLogicalSize};
 use layout_style::style::appearance::AppearanceValue;
 use layout_style::style::computed_style::ComputedStyle;

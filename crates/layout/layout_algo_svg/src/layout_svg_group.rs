@@ -3,10 +3,10 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{Traceable, Visitor};
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_svg/layout_svg_group.h:11-28
@@ -112,7 +112,7 @@ impl LayoutSVGGroup {
             .and_then(|element| element.svg_use);
         let mut relative = false;
         if let Some(use_data) = use_data {
-            use layout_assembly::internal::layout_input::SvgUseData;
+            use layout_base::internal::layout_input::SvgUseData;
             match use_data {
                 SvgUseData::Local => {}
                 SvgUseData::UnsupportedReference => crate::svg_viewport::Unsupported(
@@ -214,18 +214,18 @@ pub fn SvgContainerStyleDidChange(
     difference: layout_style::style::style_difference::StyleDifference,
     old_style: *const ComputedStyle,
     new_style: &ComputedStyle,
-    context: &layout_assembly::internal::layout_object::StyleChangeContext,
+    context: &layout_base::internal::layout_object::StyleChangeContext,
 ) {
     flow.StyleDidChange(difference, old_style, new_style, context);
     if !old_style.is_null() && difference.transform_changed() {
         flow.SetNeedsLayout(
-            &raw const layout_assembly::internal::layout_invalidation_reason::kStyleChange,
+            &raw const layout_base::internal::layout_invalidation_reason::kStyleChange,
         );
     }
     if let Some(old) = unsafe { old_style.as_ref() } {
         if old.X() != new_style.X() || old.Y() != new_style.Y() {
             flow.SetNeedsLayout(
-                &raw const layout_assembly::internal::layout_invalidation_reason::kStyleChange,
+                &raw const layout_base::internal::layout_invalidation_reason::kStyleChange,
             );
         }
         if old.OverflowX() != new_style.OverflowX() {

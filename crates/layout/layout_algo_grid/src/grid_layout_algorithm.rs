@@ -18,7 +18,7 @@ use foundation::{
     kIndefiniteSize, DynamicTo, EBoxDecorationBreak, EBreakBetween, EReadingFlow, HeapVector,
     IsHorizontalWritingMode, IsParallelWritingMode, LayoutUnit, MakeGarbageCollected, Member, To,
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
@@ -1946,7 +1946,7 @@ impl GridLayoutAlgorithm {
                 && area.offset.block_offset >= fragmentainer_space
             {
                 if space.IsInsideBalancedColumns() && !space.IsInitialColumnBalancingPass() {
-                    let _disable = layout_assembly::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope::new();
+                    let _disable = layout_base::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope::new();
                     let result =
                         item.node
                             .Layout(&child_space, token, std::ptr::null(), std::ptr::null());
@@ -2192,7 +2192,7 @@ impl GridLayoutAlgorithm {
         }
         // cpp: layoutng_grid/grid_layout_algorithm.cc:2356-2499
         if !full_gap_geometry.is_null() && fragmentainer_space != kIndefiniteSize {
-            use layout_assembly::internal::gap::main_gap::MainGap;
+            use layout_base::internal::gap::main_gap::MainGap;
             let geometry = unsafe { &*full_gap_geometry };
             let initial_first_gap = *first_gap;
             let mut main_gaps = Vec::new();

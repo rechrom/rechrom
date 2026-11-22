@@ -11,7 +11,7 @@ use foundation::{
     EBorderCollapse, EBorderStyle, HeapVector, LayoutUnit, MakeGarbageCollected, Member,
     PhysicalToLogical, Vector, WritingDirectionMode,
 };
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     constraint_space_builder::ConstraintSpaceBuilder,
     length_utils::{ComputeBorders, ComputeNonCollapsedTableBorders, ComputePadding},

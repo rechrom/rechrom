@@ -2,7 +2,7 @@
 //! Native SVG resource clients share the existing translated FilterEffect
 //! forward mapper with Paint; cache identity follows the immutable resource.
 use foundation::{gfx, paint_rect::PaintRect};
-use layout_assembly::{
+use layout_base::{
     internal::{layout_object::LayoutObject, paint_input::SvgFilterGraph},
     svg_filter_geometry::{
         map_svg_filter_forward_bounds, resolve_svg_filter_geometry, ResolvedSvgFilterGeometry,
@@ -37,7 +37,7 @@ fn native(r: PaintRect) -> gfx::RectF {
 impl SvgEffectBoundsCache {
     pub fn ApplyFiltersToRect(
         &self,
-        tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+        tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
         object: &LayoutObject,
         mut rect: gfx::RectF,
     ) -> gfx::RectF {

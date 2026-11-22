@@ -16,7 +16,7 @@ members = [
     "crates/layout/layout_invalidation",
     "crates/layout/layout_reuse",
     "crates/layout/layout_commit",
-    "crates/layout/layout_assembly",
+    "crates/layout/layout_base",
     "crates/layout/layout",
     "crates/layout/layout_algo_block",
     "crates/layout/layout_algo_multicol",
@@ -110,9 +110,7 @@ members = [
     "crates/browser",
     "apps/rechrom",
 ]
-# The remaining LayoutNG core source tree has reciprocal translated C++
-# dependencies and compiles through layout_assembly.
-exclude = ["vendor/smithay-clipboard", "crates/layout/layout_core", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d", "vendor/hyper-util"]
+exclude = ["vendor/smithay-clipboard", "vendor/softbuffer", "vendor/winit", "vendor/crabby-avif", "vendor/rav1d", "vendor/hyper-util"]
 resolver = "2"
 
 [profile.release]

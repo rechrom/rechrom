@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use foundation::{LayoutUnit, WritingDirectionMode};
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     constraint_space::ConstraintSpace,
     layout_input_node::LayoutInputNode,

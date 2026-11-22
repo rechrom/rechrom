@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use foundation::UnsupportedLayout;
-use layout_assembly::internal::layout_input::PaintImage;
-use layout_assembly::internal::shapes::shape_image_services::CurrentShapeImageResolver;
+use layout_base::internal::layout_input::PaintImage;
+use layout_base::internal::shapes::shape_image_services::CurrentShapeImageResolver;
 
 // cpp: layoutng_float/shape_image_services.cc:8-19
 pub fn CurrentShapeImage(resource_id: u64) -> *const PaintImage {

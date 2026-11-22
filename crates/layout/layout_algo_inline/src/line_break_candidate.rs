@@ -7,9 +7,9 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use foundation::{LayoutUnit, RuntimeEnabledFeatures, WtfSizeT};
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_item_result::InlineItemResult;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType};
+use layout_base::internal::inline_item_result::InlineItemResult;
+use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
 
 use crate::line_break_point::LineBreakPoint;
 use crate::line_info::LineInfo;

@@ -6,10 +6,10 @@ use crate::algorithms::*;
 use font_engine::fonts::simple_font_data::SimpleFontData;
 use foundation::{LayoutUnit, RuntimeEnabledFeatures, String, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
-use layout_core::internal::inline_node::InlineNode;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
+use layout_base::internal::inline_node::InlineNode;
 
 use crate::inline_layout_algorithm::InlineLayoutAlgorithm;
 use crate::leading_floats::LeadingFloats;

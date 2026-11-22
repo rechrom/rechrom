@@ -14,8 +14,8 @@ use font_engine::{
     RunSegmenterRange, ShapeOptions, ShapeResult,
 };
 use foundation::{HeapVector, MakeGarbageCollected, Member, String, TextDirection, TextOffsetMap};
-use layout_core::internal::inline_item::InlineItem;
-use layout_core::internal::inline_item_segment::{
+use layout_base::internal::inline_item::InlineItem;
+use layout_base::internal::inline_item_segment::{
     InlineItemSegment, InlineItemSegments, InlineItemSegmentsIterator, RunSegmenterRanges,
 };
 

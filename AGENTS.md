@@ -34,7 +34,7 @@ URL / input
   -> Loader      resource, url_loader, document_loader, open, html
   -> DOM         dom, cssom
   -> Style       style_*
-  -> Layout      layout (facade) over layout_core, layout_*
+  -> Layout      layout (facade) over layout_base, layout_*
   -> Paint       prepaint, paint_*
   -> Compositor  compositor_*        (layerization, layers, tiles, raster scheduling)
   -> Viz         viz                 (surface aggregation, display scheduling)
@@ -124,10 +124,10 @@ may depend on (besides the shared roots below). Its `LayoutEngine` wraps the
 core engine and exposes only grouped entry points (construction, mutation,
 lifecycle, paint, queries); boundary types are re-exported explicitly by topic,
 never as whole packages or `internal` modules. Internally: `LayoutMutation`
-applied by `layout_assembly` (attach, style binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
+applied by the base crate `layout_base` (attach, style binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
 (`layout_algo_block`, `_inline`, `_flex`, `_grid`, `_table`, `_multicol`,
 `_float`, `_out_of_flow`, `_replaced`, `_svg`, `_forms`, `_list`) →
-the resident fragment tree (base modules in `layout_core/src/fragment/`;
+the resident fragment tree (base modules of `layout_base`;
 published to Paint and Interaction through `layout::result`) →
 `layout_commit` (typed publication). Shared roots: `layout_geometry`, `layout_style` (the single
 `ComputedStyle` owner), `paint_input_types` (plain paint values Layout

@@ -7,5 +7,5 @@ edition = "2021"
 browser_tracing = { path = "../../tracing" }
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
-layout_assembly = { path = "../layout_assembly" }
+layout_base = { path = "../layout_base" }
 layout_style = { path = "../layout_style" }

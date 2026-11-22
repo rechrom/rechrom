@@ -4,7 +4,7 @@
 //! pattern.cc:49-79,115-124; resource_container.cc:73-92,276-299.
 use crate::layout_svg_resource_clipper::LayoutSVGResourceContainer;
 use foundation::{Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_node_metadata::Element,
     layout_object::{LayoutObject, LayoutObjectClass},
 };

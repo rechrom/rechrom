@@ -11,9 +11,9 @@
 
 // Values exchanged with hit-test queries (no Layout ownership).
 /// Source core/layout/hit_test_phase.h.
-pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
+pub use layout_base::internal::hit_test_phase::HitTestPhase;
 /// Source LayoutObject::GetCursor's result (layout_object.h `CursorDirective`).
-pub use layout_assembly::internal::layout_object::CursorDirective;
+pub use layout_base::internal::layout_object::CursorDirective;
 
 // Chromium reads these owners directly while hit testing:
 // paint_layer.cc PaintLayer::HitTestLayer / HitTestFragmentsWithPhase walks
@@ -26,9 +26,9 @@ pub use layout_assembly::internal::layout_object::CursorDirective;
 // EventHandler::SelectCursor / SelectAutoCursor read LayoutObject::GetCursor,
 // EnclosingLayer()->GetLayoutBox(), GetScrollableArea() and LayoutBox
 // geometry (AbsoluteContentQuad, PhysicalBorderBoxRect).
-pub use layout_assembly::internal::layout_box::LayoutBox;
-pub use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-pub use layout_assembly::internal::layout_object::LayoutObject;
-pub use layout_assembly::internal::layout_replaced::LayoutInputReplaced;
-pub use layout_assembly::internal::layout_view::LayoutView;
-pub use layout_assembly::internal::paint_layer::PaintLayer;
+pub use layout_base::internal::layout_box::LayoutBox;
+pub use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+pub use layout_base::internal::layout_object::LayoutObject;
+pub use layout_base::internal::layout_replaced::LayoutInputReplaced;
+pub use layout_base::internal::layout_view::LayoutView;
+pub use layout_base::internal::paint_layer::PaintLayer;

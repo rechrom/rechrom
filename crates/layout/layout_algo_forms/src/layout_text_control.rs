@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 use font_engine::fonts::font::Font;
 use font_engine::fonts::shaping::text_width::ComputeTextWidth;
 use foundation::{AtomicString, StringView};
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::scrollbar_theme_metrics::ScrollbarThemeThickness;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::scrollbar_theme_metrics::ScrollbarThemeThickness;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_forms/layout_text_control.h:34-34

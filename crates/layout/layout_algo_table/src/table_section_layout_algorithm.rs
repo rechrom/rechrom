@@ -3,7 +3,7 @@
 use crate::algorithms::*;
 use foundation::{kIndefiniteSize, LayoutUnit, To, Vector};
 use layout_algo_block::block_child_iterator::BlockChildIterator;
-use layout_assembly::internal::{
+use layout_base::internal::{
     algorithm_entry::LayoutAlgorithmImplementation,
     block_node::BlockNode,
     break_appeal::kBreakAppealPerfect,
@@ -16,7 +16,7 @@ use layout_assembly::internal::{
     layout_input_node::MinMaxSizesFloatInput,
     min_max_sizes::MinMaxSizesResult,
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken, box_fragment_builder::BoxFragmentBuilder,
     layout_result::LayoutResult, logical_box_fragment::LogicalBoxFragment,
     physical_box_fragment::PhysicalBoxFragment,

@@ -14,16 +14,16 @@
 use std::ops::Deref;
 
 use foundation::CompositorElementId;
-use layout_assembly::internal::layout_input::Offset;
-use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity;
-use layout_assembly::layout_engine::SuppressScrollAnchorScope;
-use layout_assembly::engine::scroll::autoscroll_source::{
+use layout_base::internal::layout_input::Offset;
+use layout_base::internal::layout_scrollable_area::NativeScrollbarActivity;
+use layout_base::layout_engine::SuppressScrollAnchorScope;
+use layout_base::engine::scroll::autoscroll_source::{
     NativeAutoscrollLayout, NativeAutoscrollSource, NativeLogicalScrollArea,
 };
-use layout_assembly::engine::scroll::scroll_source::{
+use layout_base::engine::scroll::scroll_source::{
     NativeCompositorScrollUpdate, NativeScrollFrameGeometry, NativeScrollSource,
 };
-use layout_assembly::engine::scroll::user_scroll_source::NativeUserScrollSource;
+use layout_base::engine::scroll::user_scroll_source::NativeUserScrollSource;
 
 use crate::LayoutEngine;
 

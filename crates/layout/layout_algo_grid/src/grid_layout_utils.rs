@@ -8,10 +8,10 @@ use crate::{
 use font_engine::FontBaseline;
 use foundation::LayoutUnit;
 use foundation::{kIndefiniteSize, HashMap, LengthType, MinimumValueForLength, WritingMode};
-use layout_assembly::internal::grid_item::GridItemData;
-use layout_assembly::internal::grid_track_collection::GridLayoutTrackCollection;
-use layout_assembly::logical_box_fragment::LogicalBoxFragment;
-use layout_assembly::{
+use layout_base::internal::grid_item::GridItemData;
+use layout_base::internal::grid_track_collection::GridLayoutTrackCollection;
+use layout_base::logical_box_fragment::LogicalBoxFragment;
+use layout_base::{
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
         baseline_utils::BaselineGroup,

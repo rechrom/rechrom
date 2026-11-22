@@ -4,10 +4,10 @@
 //!
 //! `layout` is the only Layout package other engines depend on, as `paint`
 //! is for `prepaint`/`paint_*`. It owns no algorithm: [`LayoutEngine`] wraps
-//! the core engine of `layout_core` (compiled once in `layout_assembly`) and
+//! the core engine of the base crate `layout_base` and
 //! forwards a chosen set of methods, and the modules below re-export the
 //! Layout values that crossing code names. The core engine's remaining
-//! methods and the assembly's `internal` module stay private to Layout.
+//! methods and base's `internal` module stay private to Layout.
 //!
 //! # Module scheme
 //!
@@ -24,7 +24,7 @@
 //! | [`result`] | what Layout produces for Paint/Interaction: `LayoutResultHandle`, `LayoutPaintOutput`, `PaintFragmentCursor`, fragment views (`ResidentBoxGeometry`, `FragmentCursor`), fragment Paint sidecars, `PaintResources` |
 //! | [`output`] | borrowed `LayoutOutput` access, `LayoutNode`, hit-test cursors, intersection roots |
 //! | [`fragment`] | the resident fragment tree: `LayoutResultHandle`, `PhysicalFragment`, `FragmentItem`, inline cursors |
-//! | [`paint`] | boundary 4: `LayoutPaintOutput`, `PaintFragmentCursor`, fragment Paint sidecars, Paint-owned sources compiled in the assembly |
+//! | [`paint`] | boundary 4: `LayoutPaintOutput`, `PaintFragmentCursor`, fragment Paint sidecars, Paint-owned sources compiled in `layout_base` |
 //! | [`paint_input`] | fragment paint-input value schema (`paint_input_types`) and paint style export |
 //! | [`editing`] | editing positions, selection/caret state, password echo |
 //! | [`scroll`] | native scroll, scrollbar, autoscroll, pointer-resize and mouse-coordinate sources |
@@ -67,7 +67,7 @@ mod exports {
 
 
 pub use engine::LayoutEngine;
-pub use layout_assembly::layout_registry::LayoutRegistry;
+pub use layout_base::layout_registry::LayoutRegistry;
 
 macro_rules! topic {
     ($(#[$doc:meta])* $topic:ident) => {
@@ -122,33 +122,33 @@ topic!(
 /// walk its resident fragments, and the fragment-local Paint sidecars those
 /// views lend out.
 ///
-/// The fragment tree is part of Layout's base (`layout_core/src/fragment/`,
-/// compiled in `layout_assembly`); nothing here copies it. Every item is also
+/// The fragment tree is part of Layout's base (`layout_base/src/fragment/`);
+/// nothing here copies it. Every item is also
 /// reachable at its older topic path (`fragment`, `paint`, `output`), which
 /// names the same re-export.
 pub mod result {
     // The retained source result: a lifetime handle for Chromium's canonical
     // LayoutResult plus its result-local Paint state.
-    pub use layout_assembly::fragment_tree::LayoutResultHandle;
+    pub use layout_base::fragment_tree::LayoutResultHandle;
     // Boundary 4: the published paint output and its fragment cursor, the
     // lease that keeps borrowed fragments alive, and the LayoutObject
     // identity Paint keys display-item clients by.
-    pub use layout_assembly::layout_engine::{
+    pub use layout_base::layout_engine::{
         LayoutPaintOutput, PaintFragmentCursor, PaintFragmentLease, PaintLayoutObjectIdentity,
     };
     // The borrowed fragment view Interaction hit-tests through.
-    pub use layout_assembly::layout_engine::FragmentCursor;
+    pub use layout_base::layout_engine::FragmentCursor;
     // Fragment views: the resident box-geometry reader, fragment kind,
     // PrePaint's previous geometry and delayed-invalidation source object.
-    pub use layout_assembly::fragment_tree::{
+    pub use layout_base::fragment_tree::{
         FragmentKind, PrePaintSourceObject, PreviousBoxGeometry, ResidentBoxGeometry,
     };
     // Fragment-local Paint sidecars and the resources they reference.
-    pub use layout_assembly::fragment_tree::{
+    pub use layout_base::fragment_tree::{
         FragmentPaintData, FragmentPaintRect, PaintProperties, PaintResources, SvgTextPaintData,
     };
     // The receipt Paint hands back when its artifact is complete.
-    pub use layout_assembly::layout_engine::{PaintClientCommit, PaintCommitOutput};
+    pub use layout_base::layout_engine::{PaintClientCommit, PaintCommitOutput};
 }
 topic!(
     /// Editing positions, selection and caret state.
@@ -172,24 +172,24 @@ topic!(
 #[doc(hidden)]
 pub mod testing {
     pub use layout_algo_grid::layout_grid::LayoutGrid;
-    pub use layout_assembly::internal::block_node::BlockNode;
-    pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
-    pub use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-    pub use layout_assembly::internal::layout_box::LayoutBox;
-    pub use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-    pub use layout_assembly::internal::layout_object::{LayoutObject, StyleChangeContext};
-    pub use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
-    pub use layout_assembly::internal::layout_pass_scope::{
+    pub use layout_base::internal::block_node::BlockNode;
+    pub use layout_base::internal::hit_test_phase::HitTestPhase;
+    pub use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+    pub use layout_base::internal::layout_box::LayoutBox;
+    pub use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+    pub use layout_base::internal::layout_object::{LayoutObject, StyleChangeContext};
+    pub use layout_base::internal::layout_object_builder::LayoutObjectTree;
+    pub use layout_base::internal::layout_pass_scope::{
         LayoutObjectFactoryScope, LayoutPassScope,
     };
-    pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
-    pub use layout_assembly::internal::layout_view::LayoutView;
-    pub use layout_assembly::internal::layout_block_flow::text_overflow_members::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
-    pub use layout_assembly::internal::css_zoom::ZoomedStyle;
-    pub use layout_assembly::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
+    pub use layout_base::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
+    pub use layout_base::internal::layout_view::LayoutView;
+    pub use layout_base::internal::layout_block_flow::text_overflow_members::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    pub use layout_base::internal::css_zoom::ZoomedStyle;
+    pub use layout_base::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }
 
-/// Platform services the embedding injects into the Layout assembly. They are
+/// Platform services the embedding injects into Layout. They are
 /// implemented by Paint's Skia geometry package, which depends on Layout, so
 /// the facade receives them as values instead of linking them.
 #[derive(Clone, Copy, Default)]
@@ -197,7 +197,7 @@ pub struct LayoutPlatformServices {
     /// Injected platform Path construction; SVG Layout owns the returned path.
     pub svg_shape_path: Option<
         fn(
-            &layout_assembly::internal::layout_input::SvgShapeData,
+            &layout_base::internal::layout_input::SvgShapeData,
         ) -> std::sync::Arc<dyn foundation::native_path::NativePath>,
     >,
     /// Shape coverage rasterizer for `shape-outside` image/shape thresholds.
@@ -228,7 +228,7 @@ pub struct LayoutPlatformServices {
 ///     `registration::Register` (the `layout_algo_inline` crate), then
 ///     `layout_algo_block::block_inline_layout::RegisterInlineSupport`, then
 ///     `layout_algo_out_of_flow::registration::Register`
-/// 13. the base boundary, `layout_core`'s
+/// 13. the base boundary, `layout_base`'s
 ///     `internal::boundary::registration::Register`
 pub fn CreateLayoutRegistry(services: LayoutPlatformServices) -> LayoutRegistry {
     let mut registry = LayoutRegistry::default();
@@ -250,6 +250,6 @@ pub fn CreateLayoutRegistry(services: LayoutPlatformServices) -> LayoutRegistry 
         layout_algo_block::block_inline_layout::RegisterInlineSupport(&mut registry);
         layout_algo_out_of_flow::registration::Register(&mut registry);
     }
-    layout_assembly::internal::boundary::registration::Register(&mut registry);
+    layout_base::internal::boundary::registration::Register(&mut registry);
     registry
 }

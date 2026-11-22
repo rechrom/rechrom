@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{gfx, To};
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObject;
 
 use crate::layout_svg_inline::LayoutSVGInline;
 use crate::layout_svg_text::LayoutSVGText;

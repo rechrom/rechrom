@@ -5,12 +5,12 @@
 // exports those children; they are not CSS inline/block children of this box.
 #![allow(non_snake_case)]
 use foundation::{gfx, LayoutUnit};
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layout_geometry::geometry::{fragment_geometry::FragmentGeometry, logical_size::LogicalSize};
 
 pub(crate) fn LayoutContainer(
@@ -82,7 +82,7 @@ pub(crate) fn VisualRect(object: &LayoutObject) -> gfx::RectF {
     }
     if object.IsSVGText() || object.IsSVGInline() || object.IsSVGInlineText() {
         let algorithms =
-            layout_assembly::internal::layout_pass_scope::LayoutPassScope::Algorithms();
+            layout_base::internal::layout_pass_scope::LayoutPassScope::Algorithms();
         if let Some(query) = unsafe { algorithms.as_ref() }
             .and_then(|algorithms| algorithms.svg_support.text_visual_rect)
         {
@@ -126,7 +126,7 @@ pub(crate) fn ContentVisualOverflowIncludingFilters(root: &LayoutObject) -> gfx:
             crate::svg_resources::DecoratedBoundingBox(object)
         };
         let filtered =
-            layout_assembly::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(
+            layout_base::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(
                 |tree| crate::svg_resources::ApplyFiltersToRect(tree, object, local),
             )
             .unwrap_or_else(|| {

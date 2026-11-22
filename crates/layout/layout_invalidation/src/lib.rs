@@ -4,7 +4,7 @@
 //! tree-agnostic propagation over traits and the `layout_invalidation.*`
 //! trace phases. It names no base type. Chromium `LayoutObject` mutation and
 //! the engine's tree-update / node-input / mutation phases are base modules
-//! (`layout_core/src/invalidation/`) that call this crate's trace phases, so
+//! (`layout_base/src/invalidation/`) that call this crate's trace phases, so
 //! profiles still attribute structural work to invalidation.
 
 pub mod content_change_type;

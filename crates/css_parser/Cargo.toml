@@ -10,7 +10,7 @@ paint_input_types = { path = "../layout/paint_input_types", optional = true }
 [features]
 tokenizer = []
 # The colour parser names only paint_input_types values; this crate is its only
-# compile unit and Layout re-exports it as `layout_assembly::css_color_parser`.
+# compile unit and Layout re-exports it as `layout_base::css_color_parser`.
 color_parser = ["dep:paint_input_types"]
 layoutng_values = ["color_parser", "tokenizer"]
 translation_in_progress = ["tokenizer", "layoutng_values"]

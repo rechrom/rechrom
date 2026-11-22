@@ -3,8 +3,8 @@
 use std::cell::OnceCell;
 
 use foundation::{gfx, LayoutUnit};
-use layout_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
-use layout_assembly::internal::shapes::shape_interval::IntShapeInterval;
+use layout_base::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
+use layout_base::internal::shapes::shape_interval::IntShapeInterval;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 
 // cpp: layoutng_float/raster_shape.h:40-74

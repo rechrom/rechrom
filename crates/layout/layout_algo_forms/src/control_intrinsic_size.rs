@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 
 use foundation::{kIndefiniteSize, DynamicTo, EOverflow, LayoutUnit, To};
-use layout_assembly::internal::form_control_sizing_service::ComputedStyleControlSizingExt;
-use layout_assembly::internal::form_control_types::FormControlType;
-use layout_assembly::internal::form_node_metadata::{
+use layout_base::internal::form_control_sizing_service::ComputedStyleControlSizingExt;
+use layout_base::internal::form_control_types::FormControlType;
+use layout_base::internal::form_node_metadata::{
     FormNodeMetadataExternal, HTMLInputElement, HTMLTextAreaElement,
 };
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_node_metadata::Element;
 use layout_style::style::appearance::AppearanceValue;
 
 use crate::control_theme_size::ThemePartIntrinsicSize;
