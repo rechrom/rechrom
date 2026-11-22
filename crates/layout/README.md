@@ -8,7 +8,7 @@ old `layoutng_*` source-package names at the repository boundary.
   private `LayoutObject` identity; container-chain, intrinsic-width, anchor,
   inline-collection, multicol, subtree-listener, spanner/out-of-flow parent,
   layout-caused paint, and paint-only ancestor walks execute from the
-  invalidation package. Its assembly-only source tree-update module also owns
+  invalidation package. Its base module `layout_core/src/invalidation/tree_update.rs` owns
   subtree collection/preparation, full update begin/finish, object retirement,
   and failed-transaction cleanup. The cached resident-tree facts scan is
   likewise an out-of-line `layout_invalidation_tree_facts` traversal,
@@ -266,8 +266,8 @@ old `layoutng_*` source-package names at the repository boundary.
   geometry is supplied through core fact adapters rather than pulling
   `LayoutObject`, `ConstraintSpace`, or fragment implementation types into the
   standalone package. The complete source `CachedLayoutResult` decision tree
-  is physically owned by `layout_reuse/src/cache_lookup.rs` and compiled
-  only at the reciprocal assembly boundary; `LayoutBox` retains a thin entry
+  is physically owned by the base module `layout_core/src/reuse/cache_lookup.rs`
+  (one direct call per box on the layout hot path); `LayoutBox` retains a thin entry
   method for source compatibility. Reusable font-environment snapshot matching,
   cache transfer, and per-pass resolver binding are physically owned by
   `layout_environment_cache.rs`; one low-cardinality
@@ -947,7 +947,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_fragment.RefreshBoundaryCache` phase and package-owned symbols.
 - `layout_commit` owns the typed Layout-to-Paint publication contract and the
   ordered transactions for environment publication and completed Paint
-  client commit. Its assembly-only `client_commit.rs` owns the hot
+  client commit. Its base module `commit/client_commit.rs` owns the hot
   source-client and retained-fragment traversals; the core entry is a narrow
   adapter. Per-box layout-result append/replace/truncate, fragment-item
   finalization, validation, and post-layout spine rebuilding are physically
@@ -982,6 +982,16 @@ profiles and dependency reports ambiguous. Fragments compile as base modules,
 so there is no fragment crate, dependency key or alias; the
 `layout_fragment.` trace prefix and the `layout_fragment_*` sampling module
 names are kept for profile continuity.
+
+`layout_invalidation`, `layout_reuse` and `layout_commit` are vocabulary
+crates below base: values, traits, tree-agnostic policy and their trace
+phases, with no base type and no dependency on base, and each compiles only
+its own `src/` files. Their LayoutObject, LayoutObjectTree and LayoutEngine
+members (tree update, node input, mutation admission, cached-result lookup,
+publication, client commit) are base modules in
+`layout_core/src/{invalidation,reuse,commit}/`. Those modules keep their
+`layout_<owner>_*` names and call the owner's trace API, so profiles still
+attribute the work to the lifecycle package.
 
 `layout_algo_inline` is a real crate above base, like the other algorithm
 packages: it depends on `layout_assembly` and registers through

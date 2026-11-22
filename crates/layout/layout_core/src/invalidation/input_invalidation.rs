@@ -1,8 +1,9 @@
 //! Chromium input-triggered invalidation for the resident LayoutObject tree.
 //!
-//! Included by `layout_object_builder` so the standalone package remains free
-//! of concrete source object types while the traversals keep invalidation
-//! sampling and trace ownership.
+//! A base module (child of `layout_object_builder`): the traversals mutate
+//! LayoutObjects in place. The `layout_invalidation_input_updates` module
+//! name and the `layout_invalidation` trace phases keep sampling and trace
+//! ownership with invalidation.
 
 use super::*;
 

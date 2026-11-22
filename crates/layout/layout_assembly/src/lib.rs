@@ -48,7 +48,6 @@ pub use block_virtual_dispatch::{
 pub use block_virtual_dispatch::{
     RegisterFlexStitchedRowGapIndex, RegisterFlexTotalRowGapCount, RegisterGridTotalRowGapCount,
 };
-mod layout_invalidation_reason_symbols;
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 

@@ -1743,7 +1743,7 @@ pub struct ElementData {
     pub document_role: DocumentRole,
 }
 
-#[path = "../../../layout_invalidation/src/element_data_equivalence.rs"]
+#[path = "../invalidation/element_data_equivalence.rs"]
 mod layout_invalidation_element_data_equivalence;
 
 impl Default for ElementData {

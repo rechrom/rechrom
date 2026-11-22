@@ -10,6 +10,13 @@ pub fn retain_tree_span() -> browser_tracing::Span {
     browser_tracing::span("layout", "layout_reuse.RetainTree")
 }
 
+/// Trace the per-pass font environment binding (snapshot admission, cache
+/// transfer and resolver lifetime) done by the base layout boundary.
+#[inline(never)]
+pub fn font_environment_span() -> browser_tracing::Span {
+    browser_tracing::span("layout", "layout_reuse.FontEnvironment")
+}
+
 /// Aggregate cache work for one source layout pass. Per-node trace events are
 /// intentionally avoided: they would flood the timeline and perturb the hot
 /// path that this telemetry is meant to diagnose.

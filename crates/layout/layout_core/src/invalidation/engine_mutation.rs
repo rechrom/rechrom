@@ -68,7 +68,7 @@ impl EngineMutation for LayoutEngine {
         element: &Option<crate::internal::layout_input::ElementData>,
     ) -> bool {
         let mut trace =
-            browser_tracing::span("layout", "layout_invalidation.GeometryInputMatches");
+            layout_invalidation::trace_span(layout_invalidation::TracePhase::GeometryInputMatches);
         trace.set("node_id", id as f64);
         let Some(tree) = self.tree_.as_ref() else {
             trace.set("tree_present", 0.0);
@@ -233,7 +233,7 @@ impl EngineMutation for LayoutEngine {
             LayoutMutation::FontFallbackChanged => {
                 retain_invalidated_layout_result(self);
                 let mut trace =
-                    browser_tracing::span("layout", "layout_invalidation.FontFallbackChanged");
+                    layout_invalidation::trace_span(layout_invalidation::TracePhase::FontFallbackChanged);
                 let (objects, text_objects) = self
                     .tree_
                     .as_mut()

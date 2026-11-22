@@ -19,6 +19,8 @@ pub enum TracePhase {
     RebindFonts,
     RefreshImageInputs,
     PrepareInlineFragments,
+    GeometryInputMatches,
+    FontFallbackChanged,
 }
 
 impl TracePhase {
@@ -41,6 +43,8 @@ impl TracePhase {
             Self::RebindFonts => "layout_invalidation.RebindFonts",
             Self::RefreshImageInputs => "layout_invalidation.RefreshImageInputs",
             Self::PrepareInlineFragments => "layout_invalidation.PrepareInlineFragments",
+            Self::GeometryInputMatches => "layout_invalidation.GeometryInputMatches",
+            Self::FontFallbackChanged => "layout_invalidation.FontFallbackChanged",
         }
     }
 }
