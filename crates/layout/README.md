@@ -4,7 +4,7 @@ Layout is being separated by lifecycle responsibility instead of mirroring the
 old `layoutng_*` source-package names at the repository boundary.
 
 - `layout_invalidation` owns stable invalidation vocabulary and tree-agnostic
-  propagation policy. The core assembly implements a narrow adapter for its
+  propagation policy. The base crate implements a narrow adapter for its
   private `LayoutObject` identity; container-chain, intrinsic-width, anchor,
   inline-collection, multicol, subtree-listener, spanner/out-of-flow parent,
   layout-caused paint, and paint-only ancestor walks execute from the
@@ -116,7 +116,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_object_factory.rs`, giving text, SVG, form, table, flex/grid
   and custom object creation invalidation-owned sampling entries inside the
   tree-update transaction. Tree preparation invokes initial-letter cap-height
-  fitting through `layout_core/inline/initial_letter_style.rs`; the
+  fitting through `layout_base/inline/initial_letter_style.rs`; the
   traversal remains invalidation work while the typography policy and its
   decreasing-size font-resolution loop remain part of the inline algorithm.
   Incremental attachment placement and sibling scanning now live with the rest
@@ -266,7 +266,7 @@ old `layoutng_*` source-package names at the repository boundary.
   geometry is supplied through core fact adapters rather than pulling
   `LayoutObject`, `ConstraintSpace`, or fragment implementation types into the
   standalone package. The complete source `CachedLayoutResult` decision tree
-  is physically owned by the base module `layout_core/src/reuse/cache_lookup.rs`
+  is physically owned by the base module `layout_base/src/reuse/cache_lookup.rs`
   (one direct call per box on the layout hot path); `LayoutBox` retains a thin entry
   method for source compatibility. Reusable font-environment snapshot matching,
   cache transfer, and per-pass resolver binding are physically owned by
@@ -305,7 +305,7 @@ old `layoutng_*` source-package names at the repository boundary.
   Chromium style reconstruction keeps its object-identity fast return in the
   facade. Font-family validation and request construction remain part of the
   input projection transaction in
-  `layout_core/invalidation/style_font_resolution.rs`; the resolver delegates
+  `layout_base/invalidation/style_font_resolution.rs`; the resolver delegates
   selection and caching to FontEngine.
   Paint-only source-style replacement preserves the previously resolved font
   through `paint_only_font_binding.rs`, so the occasional style clone is
@@ -313,17 +313,17 @@ old `layoutng_*` source-package names at the repository boundary.
   LayoutObject regular/first-line fallback validity admission is likewise owned
   by `layout_object_font_validity.rs`, giving stale-font cache misses a
   reuse-qualified sampling frame without per-object trace events.
-- `layout_core/src/engine/` holds the core `LayoutEngine`'s method families,
+- `layout_base/src/engine/` holds the core `LayoutEngine`'s method families,
   one directory per family (`scroll`, `pointer`, `selection`, `form_control`,
   `observers`, `frame_view`, `event_registry`, `hit_test`), matching the
   facade's `layout::views::<family>` views and `LayoutMutation` family
   variants. The module is a child of `layout_engine`, re-exported as
-  `layout_assembly::engine`, so the families keep the engine's private state;
+  `layout_base::engine`, so the families keep the engine's private state;
   files that extend `LayoutNode` are declared from `layout_output.rs`.
 - `layout_algo_*` owns concrete formatting and replaced-content algorithms.
   Shared page/column breaking policy is a base library in
-  `layout_core/src/fragmentation/` (its control data, `BreakAppeal` and
-  `EarlyBreak`, in `layout_core/src/fragment/fragmentation/`); the former
+  `layout_base/src/fragmentation/` (its control data, `BreakAppeal` and
+  `EarlyBreak`, in `layout_base/src/fragment/fragmentation/`); the former
   `layout_algo_fragmentation` package was folded in because nothing dispatches
   into it (PACKAGE_MAP.md §5.2). Fragment-builder setup, finalization,
   child-break selection, breakpoint advancement, soft-break attempts,
@@ -334,7 +334,7 @@ old `layoutng_*` source-package names at the repository boundary.
   allocating `ConstraintSpace::CloneWithoutFragmentation` projection also
   forwards to a package-qualified fragmentation sampling function.
   Cross-format intrinsic and used-size policy is likewise a base library in
-  `layout_core/src/sizing/` (formerly the `layout_algo_sizing` package).
+  `layout_base/src/sizing/` (formerly the `layout_algo_sizing` package).
   Min/max block and inline resolution, fragment inline/block sizing,
   replaced-size resolution, initial fragment geometry, and content contribution calculation retain sizing-owned sampling frames. This
   separates regressions in common CSS sizing from the concrete block, flex,
@@ -358,7 +358,7 @@ old `layoutng_*` source-package names at the repository boundary.
   the `core/layout/*.cc` object model (LayoutText, LayoutInline,
   LayoutTextCombine, LayoutBR, LayoutWordBreak, LayoutCounter,
   LayoutRubyAsBlock and their member bodies) is base code in
-  `layout_core/src/inline/`; the `core/layout/inline/*` algorithms (InlineNode
+  `layout_base/src/inline/`; the `core/layout/inline/*` algorithms (InlineNode
   preparation, item building, segmentation, shaping, line breaking, inline
   layout) stay in `layout_algo_inline`. Members of base-declared inline types
   whose bodies are inline algorithms are extension traits
@@ -587,10 +587,10 @@ old `layoutng_*` source-package names at the repository boundary.
   space, grid track data, used fonts, scoped names, snap areas, ...) and the
   fragment tree (PhysicalFragment, PhysicalBoxFragment, FragmentItem(s),
   InlineCursor, LayoutResult, break tokens, builders) live in
-  `layout_core/src/fragment/` and compile with the rest of base in
-  `layout_assembly`. Data modules mount at `crate::internal::<module>`
-  (declared in `layout_core/src/lib.rs`), the fragment tree at the assembly
-  root through `layout_assembly/src/layout_fragment_package.rs`. Fragment
+  `layout_base` and compile with the rest of base. Data modules mount at
+  `crate::internal::<module>` (declared in `layout_base/src/lib.rs`, their
+  files under `src/internal/`), the fragment tree at the crate root through
+  `layout_base/src/layout_fragment_package.rs` (a profiler attribution name). Fragment
   data holds the real base types (`Member<LayoutBox>`, `Member<Element>`,
   ...) and keeps its behaviour as inherent methods with Chromium's names.
   Paint and Interaction name the result through the facade's `layout::result`
@@ -902,7 +902,7 @@ old `layoutng_*` source-package names at the repository boundary.
   Post-layout scrollbar client state remains fragment-owned. Per-box scrollbar
   struts, stable-gutter admission, overlay policy, and hypothetical theme
   thickness affect the available layout space and therefore live in
-  `layout_core/sizing/layout_box_scrollbars.rs`.
+  `layout_base/sizing/layout_box_scrollbars.rs`.
   Chromium scrollbar and scroll-corner display-client identity is colocated in
   `scrollbar_identity.rs`; the old core module is re-export-only.
   Custom scrollbar part lifetime, style mutation, button/track rectangles,
@@ -980,9 +980,12 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_environment.rs`, because environment creation precedes the
   algorithm pass. Each concrete resolver retains its functional owner.
 
-`layout_assembly` remains the temporary composition boundary for translated
-LayoutNG and fragment-tree sources that still have reciprocal C++ type
-dependencies. A source directory or `#[path]` module records functional source
+`layout_base` is Layout's base crate: the LayoutObject tree, the LayoutNG
+shared runtime, the fragment tree and the `LayoutEngine` boundary compile
+from its own `src/lib.rs` (R7b). No Layout package compiles another
+package's files: there is no `include!` of Rust sources and no `#[path]`
+climbing with `..`; `layout/tests/source_layout.rs` guards both, the
+module trees and link-time pairs. A source directory or `#[path]` module records functional source
 ownership; only a Cargo manifest compiled as a dependency establishes an
 independent crate boundary. Documentation and ownership tests must preserve
 that distinction instead of describing composition modules as independently
@@ -1000,12 +1003,12 @@ phases, with no base type and no dependency on base, and each compiles only
 its own `src/` files. Their LayoutObject, LayoutObjectTree and LayoutEngine
 members (tree update, node input, mutation admission, cached-result lookup,
 publication, client commit) are base modules in
-`layout_core/src/{invalidation,reuse,commit}/`. Those modules keep their
+`layout_base/src/{invalidation,reuse,commit}/`. Those modules keep their
 `layout_<owner>_*` names and call the owner's trace API, so profiles still
 attribute the work to the lifecycle package.
 
 `layout_algo_inline` is a real crate above base, like the other algorithm
-packages: it depends on `layout_assembly` and registers through
+packages: it depends on `layout_base` and registers through
 `registration::Register`. Base reaches it only through registry slots and
 never names the crate; there is no `extern "Rust"`/`#[no_mangle]` coupling
 (R5 part 2). The facade depends on it, and registers it, under
@@ -1029,7 +1032,7 @@ installed, and `validate_performance_ownership` requires the slots and
 `layout_algo_replaced` holds only `ReplacedLayoutAlgorithm` (Chromium
 `core/layout/replaced_layout_algorithm.cc`) and its registration. LayoutReplaced,
 LayoutImage, LayoutMedia and LayoutVideo are object-model classes in base
-(`layout_core/src/replaced/`, R7a); base never names the replaced crate and there
+(`layout_base/src/replaced/`, R7a); base never names the replaced crate and there
 is no `extern "Rust"`/`#[no_mangle]` coupling. Replaced slots, all filled by
 `layout_algo_replaced::registration::Register`:
 
@@ -1210,15 +1213,15 @@ TLS scope, and current-resolver contract are colocated in
   package boundaries. Leaf work must use one of the package prefixes above.
 - Hot tree policy is also kept out-of-line in its owner package, so sampling
   profilers resolve propagation to `layout_invalidation::propagation::*` even
-  when the concrete tree adapter lives in `layout_assembly`.
+  when the concrete tree adapter lives in `layout_base`.
 - LayoutObject update entry points delegate to the out-of-line
   `layout_invalidation_package::{update_subtree,begin_update,finish_update}`
   transaction. Consequently `CollectSubtree`, `PrepareSubtree`, and
   `RetireObjects` spans contain package-qualified sampling frames instead of
   core `layout_object_builder` loops.
 - The opaque source result owner resolves to
-  `layout_assembly::layout_result_handle::LayoutResultHandle`
-  (`layout_core/src/fragment/layout_result_handle.rs`). The `layout_fragment.*`
+  `layout_base::layout_result_handle::LayoutResultHandle`
+  (`layout_base/src/fragment/layout_result_handle.rs`). The `layout_fragment.*`
   trace constructors (`PublishFragmentTree`, `UpdatePrePaintInputs`, ...) are
   declared in `layout_commit/src/fragment_trace.rs`, keeping their historical
   names; base adapters only add source traversal work and statistics. Revision counters are package-owned and split into a main
@@ -1232,6 +1235,6 @@ TLS scope, and current-resolver contract are colocated in
   owner.
 
 The fragment tree has reciprocal concrete-type dependencies with LayoutNG
-and compiles as base modules composed by `layout_assembly`, nested under
+and compiles as base modules composed by `layout_base`, nested under
 `layout_fragment_package` so demangled sampling symbols retain their owner.
 The inline implementation is the `layout_algo_inline` crate.

@@ -5,7 +5,7 @@ edition = "2021"
 
 # The public Layout facade, like `paint` over `prepaint`/`paint_*`. Other
 # engines depend on this crate only; the core engine, its translated
-# algorithms and their assembly stay private Layout packages.
+# algorithms and the base crate stay private Layout packages.
 [dependencies]
 foundation = { path = "../../foundation" }
 image_resource = { path = "../../image_resource" }
@@ -37,7 +37,7 @@ layout_algo_out_of_flow = { path = "../layout_algo_out_of_flow", optional = true
 [features]
 default = ["inline_layout"]
 # The browser's full algorithm set: inline formatting, block-inline support
-# and out-of-flow positioning. Without it the assembly keeps the source
+# and out-of-flow positioning. Without it the base crate keeps the source
 # capability errors for those slots.
 inline_layout = [
     "dep:layout_algo_inline",

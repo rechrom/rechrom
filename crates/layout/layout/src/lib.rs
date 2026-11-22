@@ -24,7 +24,7 @@
 //! | [`result`] | what Layout produces for Paint/Interaction: `LayoutResultHandle`, `LayoutPaintOutput`, `PaintFragmentCursor`, fragment views (`ResidentBoxGeometry`, `FragmentCursor`), fragment Paint sidecars, `PaintResources` |
 //! | [`output`] | borrowed `LayoutOutput` access, `LayoutNode`, hit-test cursors, intersection roots |
 //! | [`fragment`] | the resident fragment tree: `LayoutResultHandle`, `PhysicalFragment`, `FragmentItem`, inline cursors |
-//! | [`paint`] | boundary 4: `LayoutPaintOutput`, `PaintFragmentCursor`, fragment Paint sidecars, Paint-owned sources compiled in the assembly |
+//! | [`paint`] | boundary 4: `LayoutPaintOutput`, `PaintFragmentCursor`, fragment Paint sidecars, Paint-owned sources compiled in `layout_base` |
 //! | [`paint_input`] | fragment paint-input value schema (`paint_input_types`) and paint style export |
 //! | [`editing`] | editing positions, selection/caret state, password echo |
 //! | [`scroll`] | native scroll, scrollbar, autoscroll, pointer-resize and mouse-coordinate sources |
@@ -189,7 +189,7 @@ pub mod testing {
     pub use layout_base::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }
 
-/// Platform services the embedding injects into the Layout assembly. They are
+/// Platform services the embedding injects into Layout. They are
 /// implemented by Paint's Skia geometry package, which depends on Layout, so
 /// the facade receives them as values instead of linking them.
 #[derive(Clone, Copy, Default)]
