@@ -88,6 +88,15 @@ impl EngineMutation for LayoutEngine {
 
     #[inline(never)]
     fn apply_mutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
+        // Wave E: scroll. Scroll-family commands run exactly their former
+        // direct entry point and skip the generic bookkeeping below.
+        if let LayoutMutation::Scroll(scroll) = mutation {
+            return match scroll {
+                ScrollMutation::UpdateScrollbarsHiddenIfOverlay { node_id, hidden } => {
+                    self.UpdateScrollbarsHiddenIfOverlay(node_id, hidden)
+                }
+            };
+        }
         // A cancelled/restarted timer has no source mutation. Reject it before
         // clearing any retained paint/scroll/local-layout bookkeeping.
         if let LayoutMutation::PasswordEchoTimerFired(token) = &mutation {
@@ -568,6 +577,7 @@ impl EngineMutation for LayoutEngine {
                     false
                 }
             }
+            LayoutMutation::Scroll(_) => unreachable!("scroll mutations return at entry"),
         }
     }
 }

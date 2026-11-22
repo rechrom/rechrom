@@ -3048,7 +3048,7 @@ impl PageInteractionScrollLayout {
         ) -> T,
     ) -> Option<T> {
         self.0.WithLayout(|engine| {
-            let source = engine.NativeAutoscrollSource(layout, Default::default())?;
+            let source = engine.ScrollMut().NativeAutoscrollSource(layout, Default::default())?;
             Some(query(&source))
         })?
     }
@@ -3061,7 +3061,7 @@ impl PageInteractionScrollLayout {
         ) -> T,
     ) -> Option<T> {
         self.0.WithLayout(|engine| {
-            let mut source = engine.NativeUserScrollSource(area)?;
+            let mut source = engine.ScrollMut().NativeUserScrollSource(area)?;
             Some(query(&mut source))
         })?
     }
@@ -3130,14 +3130,14 @@ impl interaction::adapter::page_scroll_manager::PageLogicalScrollLayout
         node_id: u64,
     ) -> Option<layout::scroll::NativeAutoscrollLayout> {
         self.0
-            .WithLayout(|layout| layout.LogicalScrollLayoutFor(node_id))?
+            .WithLayout(|layout| layout.Scroll().LogicalScrollLayoutFor(node_id))?
     }
 
     fn LayoutView(
         &self,
     ) -> Option<layout::scroll::NativeAutoscrollLayout> {
         self.0
-            .WithLayout(|layout| layout.LogicalScrollLayoutView())?
+            .WithLayout(|layout| layout.Scroll().LogicalScrollLayoutView())?
     }
 
     fn NodeFacts(
@@ -3406,6 +3406,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
             state
                 .layout_engine
                 .borrow()
+                .Scroll()
                 .LogicalScrollLayoutView()
                 .is_some()
         })
@@ -3782,7 +3783,7 @@ impl PageMouseFrameGeometry {
             layout.UpdateEditingNodeFactsForFocus(node_id, facts);
         }
         for node_id in update.snap_container_candidates {
-            if let Some(mut source) = layout.NativeScrollSource(node_id) {
+            if let Some(mut source) = layout.ScrollMut().NativeScrollSource(node_id) {
                 source.UpdateFocusDataForSnapAreas();
             }
         }
@@ -3904,6 +3905,7 @@ impl interaction::adapter::page_focus_controller::DocumentFocusLifecycle
         let result = {
             let mut layout = state.layout_engine.borrow_mut();
             layout
+                .ScrollMut()
                 .NativeScrollSource(node_id)
                 .map(|mut source| source.ScrollFocusIntoView(true))
         };
@@ -8804,6 +8806,7 @@ impl Page {
             .state
             .layout_engine
             .borrow_mut()
+            .ScrollMut()
             .TakeNativeScrollbarActivities();
         self.interaction
             .HandleNativeScrollbarActivities(activities)

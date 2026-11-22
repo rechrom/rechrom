@@ -52,6 +52,11 @@ mod exports {
     pub mod webapi;
 }
 
+/// Borrowed query views over [`LayoutEngine`], one per consumer family.
+pub mod views {
+    pub mod scroll;
+}
+
 pub use engine::LayoutEngine;
 pub use layout_assembly::engine_assembly::LayoutAssembly;
 

@@ -1793,6 +1793,7 @@ impl NavigationWindowEnvironment {
             let result = runtime
                 .layout
                 .borrow_mut()
+                .ScrollMut()
                 .NativeScrollSource(target)
                 .map(|mut source| source.ScrollFragmentAnchorIntoView());
             if let Some(result) = result {
@@ -1804,6 +1805,7 @@ impl NavigationWindowEnvironment {
             let result = page
                 .layout_engine
                 .borrow_mut()
+                .ScrollMut()
                 .NativeScrollSource(target)
                 .map(|mut source| source.ScrollFragmentAnchorIntoView());
             if let Some(result) = result {

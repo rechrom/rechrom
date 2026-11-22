@@ -512,6 +512,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
         let scope = owners
             .Layout()
             .borrow()
+            .Scroll()
             .SuppressScrollAnchoringForNode(node);
         scope
     }
@@ -1010,7 +1011,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
         };
         let result = {
             let mut layout = state.Layout().borrow_mut();
-            layout.NativeScrollSource(node_id).map(|mut source| {
+            layout.ScrollMut().NativeScrollSource(node_id).map(|mut source| {
                 source.ScrollRectToVisible(
                     layout::output::LayoutRect {
                         x: rect.x() as f64,

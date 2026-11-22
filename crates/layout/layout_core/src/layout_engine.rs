@@ -198,6 +198,17 @@ pub enum LayoutMutation<'a> {
     },
     EditingState(Rc<LayoutEditingState>),
     PasswordEchoTimerFired(crate::password_echo::PasswordEchoTimerToken),
+    // Wave E: scroll
+    /// Scroll-family commands. `apply_mutation` runs them before any generic
+    /// mutation bookkeeping, exactly as their former direct entry points did.
+    Scroll(ScrollMutation),
+}
+
+/// Scroll-family commands carried by [`LayoutMutation::Scroll`].
+pub enum ScrollMutation {
+    /// ScrollableArea::SetScrollbarsHiddenIfOverlay on the resident scrollable
+    /// area of `node_id`; `ApplyMutation` returns whether the state changed.
+    UpdateScrollbarsHiddenIfOverlay { node_id: u64, hidden: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
