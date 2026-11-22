@@ -6,7 +6,7 @@ use crate::{
         scroll_types::IncludeScrollbarsInRect, scrollbar_orientation::ScrollbarOrientation,
     },
     layout_engine::LayoutEngine,
-    native_autoscroll_source::NativeLogicalScrollArea,
+    engine::scroll::autoscroll_source::NativeLogicalScrollArea,
 };
 use foundation::{gfx, DynamicTo, PhysicalRect};
 use layout_geometry::geometry::axis::{kPhysicalAxesHorizontal, kPhysicalAxesVertical};
@@ -447,8 +447,8 @@ impl NativeUserScrollSource<'_> {
         kind: crate::internal::layout_scrollable_area::NativeUserSnapScrollKind,
         direction: foundation::PhysicalDirection,
         line_step: f32,
-        animation: crate::native_scroll_source::NativeSnapAnimationState,
-    ) -> (bool, crate::native_scroll_source::NativeLayoutSnapPlan) {
+        animation: crate::engine::scroll::scroll_source::NativeSnapAnimationState,
+    ) -> (bool, crate::engine::scroll::scroll_source::NativeLayoutSnapPlan) {
         unsafe { &mut *self.native.AreaPointer() }
             .PlanSnapForUserScroll(kind, direction, line_step, animation)
     }
@@ -639,7 +639,7 @@ impl NativeUserScrollSource<'_> {
     pub fn ApplyPendingHistoryRestoreScrollOffset(
         &mut self,
         selector_matches: &[u64],
-    ) -> crate::native_scroll_source::NativeScrollResult {
+    ) -> crate::engine::scroll::scroll_source::NativeScrollResult {
         let candidates = selector_matches
             .iter()
             .filter_map(|&id| {
@@ -652,7 +652,7 @@ impl NativeUserScrollSource<'_> {
         let area = unsafe { &mut *self.native.AreaPointer() };
         let old = area.GetScrollOffset();
         let request = area.ApplyPendingHistoryRestoreScrollOffset(&candidates);
-        let mut result = crate::native_scroll_source::NativeScrollResult::default();
+        let mut result = crate::engine::scroll::scroll_source::NativeScrollResult::default();
         if let Some(request) = request {
             result.did_scroll = !request.is_noop;
             result.programmatic_requests.push(request);
@@ -664,7 +664,7 @@ impl NativeUserScrollSource<'_> {
             if let Some(node) = unsafe { node.as_ref() } {
                 result
                     .offsets
-                    .push(crate::native_scroll_source::NativeScrollOffset {
+                    .push(crate::engine::scroll::scroll_source::NativeScrollOffset {
                     node_id: node.InputId(),
                     offset: crate::internal::layout_input::Offset {
                         x: current.x() as f64,

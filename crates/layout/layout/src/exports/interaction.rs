@@ -70,23 +70,23 @@ pub mod scroll {
     pub use layout_assembly::internal::scrollbar_orientation::ScrollbarOrientation;
     pub use layout_assembly::internal::scrollbar_part::ScrollbarPart;
     pub use layout_assembly::layout_engine::SuppressScrollAnchorScope;
-    pub use layout_assembly::native_autoscroll_source::{
+    pub use layout_assembly::engine::scroll::autoscroll_source::{
         NativeAutoscrollLayout, NativeLogicalScrollArea, NativeLogicalScrollBoxFacts,
         NativeLogicalScrollNodeFacts, NativeLogicalScrollingArea,
     };
-    pub use layout_assembly::native_mouse_coordinates::NativeMouseCoordinateLayout;
-    pub use layout_assembly::native_pointer_scroll_controls::{
+    pub use layout_assembly::engine::pointer::mouse_coordinates::NativeMouseCoordinateLayout;
+    pub use layout_assembly::engine::pointer::pointer_scroll_controls::{
         NativePointerResizeArea, NativeScrollbarInteraction,
     };
-    pub use layout_assembly::native_scroll_source::{
+    pub use layout_assembly::engine::scroll::scroll_source::{
         NativeLayoutSnapPlan, NativeSnapAnimationState,
     };
-    pub use layout_assembly::native_user_scroll_source::{
+    pub use layout_assembly::engine::scroll::user_scroll_source::{
         NativeScrollCompletionMode, NativeScrollConsumption, NativeScrollFinishedPlan,
         NativeUserScrollAnimationRequest, NativeUserScrollAnimationState,
         NativeUserScrollAreaFacts, NativeUserScrollGranularity, NativeUserScrollPlan,
     };
-    pub use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableArea;
+    pub use layout_assembly::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableArea;
 }
 
 // Hit-test owners and values moved to `layout::views::hit_test`.

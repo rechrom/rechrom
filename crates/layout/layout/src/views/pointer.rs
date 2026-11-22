@@ -15,10 +15,10 @@ use layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope;
 use layout_assembly::internal::layout_view::LayoutView;
 use layout_assembly::internal::scrollbar::Scrollbar;
 use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
-use layout_assembly::native_mouse_coordinates::{
+use layout_assembly::engine::pointer::mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
-use layout_assembly::native_pointer_scroll_controls::{
+use layout_assembly::engine::pointer::pointer_scroll_controls::{
     NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
     NativeResizePlan, NativeScrollbarInteraction,
 };

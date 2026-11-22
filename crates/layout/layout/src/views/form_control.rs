@@ -8,7 +8,7 @@
 
 pub use layout_assembly::layout_engine::FormControlMutation;
 use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
-use layout_assembly::native_scroll_source::NativeScrollResult;
+use layout_assembly::engine::scroll::scroll_source::NativeScrollResult;
 
 use crate::LayoutEngine;
 

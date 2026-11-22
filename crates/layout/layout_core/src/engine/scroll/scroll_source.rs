@@ -282,7 +282,7 @@ impl LayoutEngine {
     pub fn NativeScrollSource(&mut self, id: u64) -> Option<NativeScrollSource<'_>> {
         self.NativeScrollSourceInFrame(id, NativeScrollFrameGeometry::default())
     }
-    pub fn NativeScrollSourceInFrame(
+    pub(crate) fn NativeScrollSourceInFrame(
         &mut self,
         id: u64,
         frame: NativeScrollFrameGeometry,
@@ -405,7 +405,7 @@ impl NativeScrollSource<'_> {
     }
     /// Element::BoundingBoxForScrollIntoView consumes this exact resident
     /// object's source geometry. Alignment comes from the DOM/editing caller.
-    pub fn ScrollElementBoundingBoxToVisible(
+    pub(crate) fn ScrollElementBoundingBoxToVisible(
         &mut self,
         params: ScrollIntoViewParams,
     ) -> NativeScrollResult {
@@ -607,7 +607,7 @@ impl NativeScrollSource<'_> {
     }
 }
 
-#[path = "native_overscroll_source.rs"]
+#[path = "overscroll_source.rs"]
 mod overscroll_source;
 
 /// Source PLSA.cc:3527-3567. The native style chooses the logical axes;
@@ -693,7 +693,7 @@ impl NativeScrollSource<'_> {
     pub fn SpatialScrollableArea(
         &mut self,
     ) -> Option<(
-        crate::native_autoscroll_source::NativeLogicalScrollArea,
+        crate::engine::scroll::autoscroll_source::NativeLogicalScrollArea,
         bool,
         bool,
         bool,
@@ -710,7 +710,7 @@ impl NativeScrollSource<'_> {
             object.StyleRef().OverflowY() == foundation::EOverflow::kHidden,
         );
         let scrolling = self.BoxForScrolling()?;
-        let area = crate::native_autoscroll_source::NativeLogicalScrollArea::FromPointer(
+        let area = crate::engine::scroll::autoscroll_source::NativeLogicalScrollArea::FromPointer(
             scrolling.GetScrollableArea(),
         )?;
         Some((area, facts.0, facts.1, facts.2, facts.3, facts.4))

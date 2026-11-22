@@ -1,6 +1,6 @@
 //! Native password-view invalidation on the retained LayoutObject.
 //! Source: core/html/forms/password_input_type.cc:141-145.
-use super::*;
+use crate::layout_engine::*;
 
 impl LayoutEngine {
     pub fn InvalidateInputCapsLockIndicatorPaint(&mut self, id: u64) -> bool {

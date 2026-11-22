@@ -1,5 +1,5 @@
 //! Thin HTML-control routes to the canonical LayoutObject/ComputedStyle owner.
-use super::*;
+use crate::layout_engine::*;
 
 /// Form-control commands carried by `LayoutMutation::FormControl`. Each
 /// variant runs exactly the engine route named after it.
@@ -35,8 +35,8 @@ impl LayoutEngine {
         &mut self,
         container: u64,
         option: u64,
-    ) -> crate::native_scroll_source::NativeScrollResult {
-        use crate::native_scroll_source::{
+    ) -> crate::engine::scroll::scroll_source::NativeScrollResult {
+        use crate::engine::scroll::scroll_source::{
             NativeScrollResult, ScrollAlignment, ScrollIntoViewParams,
         };
         let rect = self.BoundingBoxForScrollIntoView(option);

@@ -7,7 +7,7 @@ use crate::{
         scrollbar_orientation::ScrollbarOrientation,
     },
     layout_engine::LayoutEngine,
-    native_scroll_source::{NativeScrollFrameGeometry, NativeScrollResult},
+    engine::scroll::scroll_source::{NativeScrollFrameGeometry, NativeScrollResult},
 };
 use foundation::{gfx, DynamicTo, LayoutUnit, Persistent, PhysicalOffset};
 
