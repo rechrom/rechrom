@@ -11,7 +11,6 @@ use layout_assembly::internal::layout_invalidation_reason;
 use layout_assembly::internal::layout_node_metadata::Element;
 use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
-use layout_assembly::RegisterFlexStitchedRowGapIndex;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::grid_enums::GridTrackSizingDirection;
 
@@ -26,7 +25,6 @@ pub struct LayoutFlexibleBox {
 impl LayoutFlexibleBox {
     // cpp: layoutng_flex/layout_flexible_box.cc:16
     pub fn new(element: *mut Element) -> Self {
-        RegisterFlexStitchedRowGapIndex(DispatchFlexStitchedRowGapIndex);
         let block = LayoutBlock::new(element.cast());
         block.SetRuntimeClass(LayoutObjectClass::FlexibleBox);
         Self { block }
@@ -118,7 +116,7 @@ impl LayoutFlexibleBox {
 // C++ virtual dispatch calls LayoutFlexibleBox even when the caller holds a
 // LayoutObject pointer. LayoutFlexibleBox is base-first and repr(C).
 // cpp: layoutng_flex/layout_flexible_box.cc:100-146
-fn DispatchFlexStitchedRowGapIndex(
+pub(crate) fn DispatchFlexStitchedRowGapIndex(
     object: *const LayoutObject,
     fragment: &PhysicalBoxFragment,
     gap_index: usize,

@@ -401,6 +401,7 @@ impl LayoutEngine {
     // cpp: layoutng/layout_engine.h:21-23
     pub fn new(registry: &LayoutRegistry) -> Self {
         registry.algorithms.validate_performance_ownership();
+        registry.objects.validate_virtual_overrides();
         Self {
             fragments: None,
             invalidated_fragments_: None,

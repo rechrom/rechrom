@@ -4,214 +4,71 @@
 
 use foundation::{kIndefiniteSize, LayoutUnit, Length, Vector, Visitor};
 use layout_geometry::geometry::box_strut::BoxStrut;
-use layout_geometry::geometry::logical_size::LogicalSize;
-use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::grid_enums::GridTrackSizingDirection::{self, kForColumns};
 use layout_style::style::grid_track_list::GridTrackList;
 use layout_style::style::grid_track_size::GridTrackSize;
 
 // Definitions of these non-inline methods belong to //src/layoutng_grid.
-unsafe extern "Rust" {
-    fn GridRangeIsCollapsed(this: &GridRange) -> bool;
-    fn GridRangeIsImplicit(this: &GridRange) -> bool;
-    fn GridRangeIsAutoRepeat(this: &GridRange) -> bool;
-    fn GridRangeSetIsCollapsed(this: &mut GridRange);
-    fn GridRangeSetIsImplicit(this: &mut GridRange);
-    fn GridRangeSetIsAutoRepeat(this: &mut GridRange);
-    fn GridLayoutTrackCollectionFirstNonCollapsedLineIndex(this: &GridLayoutTrackCollection)
-        -> u32;
-    fn GridLayoutTrackCollectionHasIndefiniteSet(this: &GridLayoutTrackCollection) -> bool;
-    fn GridRangeBuilderNew(
-        style: &ComputedStyle,
-        direction: GridTrackSizingDirection,
-        auto_repetitions: u32,
-        start_offset: u32,
-    ) -> GridRangeBuilder;
-    fn GridRangeBuilderNewFromTracks(
-        explicit_tracks: &GridTrackList,
-        implicit_tracks: &GridTrackList,
-        auto_repetitions: u32,
-        start_offset: u32,
-    ) -> GridRangeBuilder;
-    fn GridRangeBuilderEnsureTrackCoverage(
-        this: &mut GridRangeBuilder,
-        start_line: u32,
-        span_length: u32,
-        start_index: *mut u32,
-        end_index: *mut u32,
-    );
-    fn GridRangeBuilderFinalizeRanges(
-        this: &mut GridRangeBuilder,
-        needs_intrinsic_track_size: bool,
-    ) -> GridRangeVector;
-    fn GridLayoutTrackCollectionRangeStartLine(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeTrackCount(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeEndLine(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeIndexFromGridLine(
-        this: &GridLayoutTrackCollection,
-        grid_line: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeSetCount(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeBeginSetIndex(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionRangeProperties(
-        this: &GridLayoutTrackCollection,
-        range_index: u32,
-    ) -> TrackSpanProperties;
-    fn GridLayoutTrackCollectionEndLineOfImplicitGrid(this: &GridLayoutTrackCollection) -> u32;
-    fn GridLayoutTrackCollectionIsGridLineWithinImplicitGrid(
-        this: &GridLayoutTrackCollection,
-        grid_line: u32,
-    ) -> bool;
-    fn GridLayoutTrackCollectionGetSetCount(this: &GridLayoutTrackCollection) -> u32;
-    fn GridLayoutTrackCollectionGetSetOffset(
-        this: &GridLayoutTrackCollection,
-        set_index: u32,
-    ) -> LayoutUnit;
-    fn GridLayoutTrackCollectionGetSetTrackCount(
-        this: &GridLayoutTrackCollection,
-        set_index: u32,
-    ) -> u32;
-    fn GridLayoutTrackCollectionStartExtraMargin(
-        this: &GridLayoutTrackCollection,
-        set_index: u32,
-    ) -> LayoutUnit;
-    fn GridLayoutTrackCollectionEndExtraMargin(
-        this: &GridLayoutTrackCollection,
-        set_index: u32,
-    ) -> LayoutUnit;
-    fn GridLayoutTrackCollectionAdjustSingleSetOffset(
-        this: &mut GridLayoutTrackCollection,
-        set_index: u32,
-        delta: LayoutUnit,
-    );
-    fn GridLayoutTrackCollectionAdjustSetOffsets(
-        this: &mut GridLayoutTrackCollection,
-        set_index: u32,
-        delta: LayoutUnit,
-    );
-    fn GridLayoutTrackCollectionCalculateSetSpanSize(
-        this: &GridLayoutTrackCollection,
-    ) -> LayoutUnit;
-    fn GridLayoutTrackCollectionCalculateSetSpanSizeRange(
-        this: &GridLayoutTrackCollection,
-        begin_set_index: u32,
-        end_set_index: u32,
-    ) -> LayoutUnit;
-    fn GridLayoutTrackCollectionCreateSubgridTrackCollection(
-        this: &GridLayoutTrackCollection,
-        begin_range_index: u32,
-        end_range_index: u32,
-        gutter_size: LayoutUnit,
-        margin: &BoxStrut,
-        border_scrollbar_padding: &BoxStrut,
-        direction: GridTrackSizingDirection,
-        opposite_direction: bool,
-        auto_placed: bool,
-    ) -> *mut GridLayoutTrackCollection;
-    fn GridLayoutTrackCollectionCreateSubgridBaselines(
-        this: &GridLayoutTrackCollection,
-        begin_range_index: u32,
-        end_range_index: u32,
-        gutter_size: LayoutUnit,
-        margin: &BoxStrut,
-        border_scrollbar_padding: &BoxStrut,
-        direction: GridTrackSizingDirection,
-        opposite_direction: bool,
-        parent_baselines: &GridTrackBaselines,
-    ) -> *mut GridTrackBaselines;
-    fn GridLayoutTrackCollectionHasFlexibleTrack(this: &GridLayoutTrackCollection) -> bool;
-    fn GridLayoutTrackCollectionHasIntrinsicTrack(this: &GridLayoutTrackCollection) -> bool;
-    fn GridLayoutTrackCollectionHasNonDefiniteTrack(this: &GridLayoutTrackCollection) -> bool;
-    fn GridLayoutTrackCollectionIsDependentOnAvailableSize(
-        this: &GridLayoutTrackCollection,
-    ) -> bool;
-    fn GridLayoutTrackCollectionIsSpanningIndefiniteSet(
-        this: &GridLayoutTrackCollection,
-        begin_set_index: u32,
-        end_set_index: u32,
-    ) -> bool;
-    fn GridSetNewWithDefinition(
-        track_count: u32,
-        track_definition: &GridTrackSize,
-        is_available_size_indefinite: bool,
-    ) -> GridSet;
-    fn GridSetFlexFactor(this: &GridSet) -> f32;
-    fn GridSetBaseSize(this: &GridSet) -> LayoutUnit;
-    fn GridSetGrowthLimit(this: &GridSet) -> LayoutUnit;
-    fn GridSetInitBaseSize(this: &mut GridSet, new_base_size: LayoutUnit);
-    fn GridSetIncreaseBaseSize(this: &mut GridSet, new_base_size: LayoutUnit);
-    fn GridSetIncreaseGrowthLimit(this: &mut GridSet, new_growth_limit: LayoutUnit);
-    fn GridSetEnsureGrowthLimitIsNotLessThanBaseSize(this: &mut GridSet);
-    fn GridSetIsGrowthLimitLessThanBaseSize(this: &GridSet) -> bool;
-    fn GridSizingTrackCollectionNew(
-        ranges: GridRangeVector,
-        direction: GridTrackSizingDirection,
-        should_store_collapsed_track_indexes: bool,
-    ) -> GridSizingTrackCollection;
-    fn GridSizingTrackCollectionGetSetAt(
-        this: &mut GridSizingTrackCollection,
-        set_index: u32,
-    ) -> *mut GridSet;
-    fn GridSizingTrackCollectionGetSetAtConst(
-        this: &GridSizingTrackCollection,
-        set_index: u32,
-    ) -> *const GridSet;
-    fn GridSizingTrackCollectionGetSetIterator(this: &mut GridSizingTrackCollection)
-        -> SetIterator;
-    fn GridSizingTrackCollectionGetConstSetIterator(
-        this: &GridSizingTrackCollection,
-    ) -> ConstSetIterator;
-    fn GridSizingTrackCollectionGetSetIteratorRange(
-        this: &mut GridSizingTrackCollection,
-        begin_set_index: u32,
-        end_set_index: u32,
-    ) -> SetIterator;
-    fn GridSizingTrackCollectionTotalTrackSize(this: &GridSizingTrackCollection) -> LayoutUnit;
-    fn GridSizingTrackCollectionBuildSets(
-        this: &mut GridSizingTrackCollection,
-        style: &ComputedStyle,
-        available_size: &LogicalSize,
-    );
-    fn GridSizingTrackCollectionBuildSetsFromLists(
-        this: &mut GridSizingTrackCollection,
-        explicit_tracks: &GridTrackList,
-        implicit_tracks: &GridTrackList,
-        is_grid_lanes: bool,
-        is_available_size_indefinite: bool,
-    );
-    fn GridSizingTrackCollectionSetIndefiniteGrowthLimitsToBaseSize(
-        this: &mut GridSizingTrackCollection,
-    );
-    fn GridSizingTrackCollectionCacheDefiniteSetsGeometry(this: &mut GridSizingTrackCollection);
-    fn GridSizingTrackCollectionCacheInitializedSetsGeometry(
-        this: &mut GridSizingTrackCollection,
-        first_set_offset: LayoutUnit,
-    );
-    fn GridSizingTrackCollectionFinalizeSetsGeometry(
-        this: &mut GridSizingTrackCollection,
-        first_set_offset: LayoutUnit,
-        override_gutter_size: LayoutUnit,
-    );
-    fn GridSizingTrackCollectionInitializeSets(
-        this: &mut GridSizingTrackCollection,
-        grid_available_size: LayoutUnit,
-    );
-}
+use crate::grid_track_collection_implementation::{
+    GridLayoutTrackCollectionAdjustSetOffsets,
+    GridLayoutTrackCollectionAdjustSingleSetOffset,
+    GridLayoutTrackCollectionCalculateSetSpanSize,
+    GridLayoutTrackCollectionCalculateSetSpanSizeRange,
+    GridLayoutTrackCollectionCreateSubgridBaselines,
+    GridLayoutTrackCollectionCreateSubgridTrackCollection,
+    GridLayoutTrackCollectionEndExtraMargin,
+    GridLayoutTrackCollectionEndLineOfImplicitGrid,
+    GridLayoutTrackCollectionFirstNonCollapsedLineIndex,
+    GridLayoutTrackCollectionGetSetCount,
+    GridLayoutTrackCollectionGetSetOffset,
+    GridLayoutTrackCollectionGetSetTrackCount,
+    GridLayoutTrackCollectionHasFlexibleTrack,
+    GridLayoutTrackCollectionHasIndefiniteSet,
+    GridLayoutTrackCollectionHasIntrinsicTrack,
+    GridLayoutTrackCollectionHasNonDefiniteTrack,
+    GridLayoutTrackCollectionIsDependentOnAvailableSize,
+    GridLayoutTrackCollectionIsGridLineWithinImplicitGrid,
+    GridLayoutTrackCollectionIsSpanningIndefiniteSet,
+    GridLayoutTrackCollectionRangeBeginSetIndex,
+    GridLayoutTrackCollectionRangeEndLine,
+    GridLayoutTrackCollectionRangeIndexFromGridLine,
+    GridLayoutTrackCollectionRangeProperties,
+    GridLayoutTrackCollectionRangeSetCount,
+    GridLayoutTrackCollectionRangeStartLine,
+    GridLayoutTrackCollectionRangeTrackCount,
+    GridLayoutTrackCollectionStartExtraMargin,
+    GridRangeBuilderEnsureTrackCoverage,
+    GridRangeBuilderFinalizeRanges,
+    GridRangeBuilderNewFromTracks,
+    GridRangeIsAutoRepeat,
+    GridRangeIsCollapsed,
+    GridRangeIsImplicit,
+    GridRangeSetIsAutoRepeat,
+    GridRangeSetIsCollapsed,
+    GridRangeSetIsImplicit,
+    GridSetBaseSize,
+    GridSetEnsureGrowthLimitIsNotLessThanBaseSize,
+    GridSetFlexFactor,
+    GridSetGrowthLimit,
+    GridSetIncreaseBaseSize,
+    GridSetIncreaseGrowthLimit,
+    GridSetInitBaseSize,
+    GridSetIsGrowthLimitLessThanBaseSize,
+    GridSetNewWithDefinition,
+    GridSizingTrackCollectionBuildSetsFromLists,
+    GridSizingTrackCollectionCacheDefiniteSetsGeometry,
+    GridSizingTrackCollectionCacheInitializedSetsGeometry,
+    GridSizingTrackCollectionFinalizeSetsGeometry,
+    GridSizingTrackCollectionGetConstSetIterator,
+    GridSizingTrackCollectionGetSetAt,
+    GridSizingTrackCollectionGetSetAtConst,
+    GridSizingTrackCollectionGetSetIterator,
+    GridSizingTrackCollectionGetSetIteratorRange,
+    GridSizingTrackCollectionInitializeSets,
+    GridSizingTrackCollectionNew,
+    GridSizingTrackCollectionSetIndefiniteGrowthLimitsToBaseSize,
+    GridSizingTrackCollectionTotalTrackSize,
+};
 
 // cpp: layoutng/internal/grid_track_collection.h:27-41
 pub trait GridTrackCollectionBase {
@@ -372,14 +229,10 @@ impl GridRangeBuilder {
         }
     }
     // cpp: layoutng/internal/grid_track_collection.h:125-128
-    pub fn new(
-        style: &ComputedStyle,
-        direction: GridTrackSizingDirection,
-        auto_repetitions: u32,
-        start_offset: u32,
-    ) -> Self {
-        unsafe { GridRangeBuilderNew(style, direction, auto_repetitions, start_offset) }
-    }
+    // The ComputedStyle constructor is grid code
+    // (layoutng_grid/grid_track_collection_style.cc) only the grid package
+    // calls: `layout_algo_grid::grid_track_collection_style::
+    // GridRangeBuilderStyleAlgorithms`.
 
     // cpp: layoutng/internal/grid_track_collection.h:159-162
     pub fn new_from_tracks(
@@ -953,9 +806,10 @@ impl GridSizingTrackCollection {
         unsafe { GridSizingTrackCollectionTotalTrackSize(self) }
     }
 
-    pub fn BuildSets(&mut self, style: &ComputedStyle, available_size: &LogicalSize) {
-        unsafe { GridSizingTrackCollectionBuildSets(self, style, available_size) }
-    }
+    // BuildSets(const ComputedStyle&, ...) is grid code
+    // (layoutng_grid/grid_track_collection_style.cc:43-58): the extension trait
+    // `layout_algo_grid::grid_track_collection_style::
+    // GridSizingTrackCollectionStyleAlgorithms`.
 
     pub fn SetIndefiniteGrowthLimitsToBaseSize(&mut self) {
         unsafe { GridSizingTrackCollectionSetIndefiniteGrowthLimitsToBaseSize(self) }

@@ -29,16 +29,7 @@ fn CollapseLoneAnonymousBlockChild(parent: *mut LayoutBox, child: *mut LayoutObj
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:327-355
-unsafe extern "Rust" {
-    fn DispatchLayoutBoxModelObjectMoveChildrenTo(
-        owner: *mut LayoutBoxModelObject,
-        to: *mut LayoutBoxModelObject,
-        start_child: *mut LayoutObject,
-        end_child: *mut LayoutObject,
-        before_child: *mut LayoutObject,
-        full_remove_insert: bool,
-    );
-}
+use crate::block_virtual_dispatch::DispatchLayoutBoxModelObjectMoveChildrenTo;
 
 impl LayoutBoxModelObject {
     // cpp: layoutng/internal/layout_box_model_object.h:298-303

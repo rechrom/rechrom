@@ -113,4 +113,5 @@ pub fn Register(registry: &mut LayoutRegistry) {
         .algorithms
         .list_support
         .outside_marker_inline_offset = Some(OutsideMarkerInlineOffset);
+    registry.algorithms.list_support.list_item_value = Some(crate::LayoutEditingListItemValue);
 }

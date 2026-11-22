@@ -7,7 +7,6 @@ use super::super::layout_input::DocumentRole;
 use super::super::layout_node_metadata::{ContainerNode, Element, Node};
 
 // Source: third_party/blink/renderer/core/layout/layout_box_model_object.cc:1123-1151.
-#[unsafe(no_mangle)]
 #[inline(never)]
 pub(super) fn LayoutBoxModelObjectBackgroundTransfersToView(
     this: &LayoutBoxModelObject,

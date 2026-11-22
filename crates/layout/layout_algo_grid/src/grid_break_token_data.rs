@@ -8,7 +8,6 @@ use layout_assembly::internal::gap::gap_geometry::GapGeometry;
 use layout_assembly::internal::grid_item::GridItems;
 use layout_assembly::internal::grid_layout_data::GridLayoutSubtree;
 use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::RegisterGridTotalRowGapCount;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 
 // cpp: layoutng_grid/grid_break_token_data.h:25-44
@@ -67,9 +66,11 @@ impl GridBreakTokenData {
         cumulative_gap_offset_adjustment: LayoutUnit,
         first_unprocessed_row_gap_idx: u32,
     ) -> Self {
-        RegisterGridTotalRowGapCount(DispatchGridTotalRowGapCount);
         Self {
-            base: BreakTokenAlgorithmData::new(BreakTokenAlgorithmDataType::kGridData),
+            base: BreakTokenAlgorithmData::NewWithTotalRowGapCount(
+                BreakTokenAlgorithmDataType::kGridData,
+                DispatchGridTotalRowGapCount,
+            ),
             grid_items: Member::from_ptr(grid_items),
             grid_layout_subtree: Member::from_ptr(grid_layout_subtree.cast_mut()),
             intrinsic_block_size,

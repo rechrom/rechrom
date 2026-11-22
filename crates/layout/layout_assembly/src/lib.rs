@@ -5,6 +5,10 @@
 // and do not copy or relocate implementations. Fragment data and the
 // fragment tree are base modules (`layout_core/src/fragment/`); the inline
 // algorithm package is the real `layout_algo_inline` crate above it.
+//
+// R7a turned base's link-time pairs into direct calls; the callers' former
+// `unsafe { Extern(...) }` blocks now wrap safe functions.
+#![allow(unused_unsafe)]
 extern crate self as layout_core;
 extern crate self as layout_assembly;
 
@@ -40,13 +44,6 @@ pub mod text_decoration_info;
 pub use css_parser::color_parser as css_color_parser;
 
 mod block_virtual_dispatch;
-pub use block_virtual_dispatch::{
-    GridObjectVirtuals, RegisterGridObjectVirtuals, RegisterGridStyleDidChange,
-    RegisterSvgRootChildren,
-};
-pub use block_virtual_dispatch::{
-    RegisterFlexStitchedRowGapIndex, RegisterFlexTotalRowGapCount, RegisterGridTotalRowGapCount,
-};
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 

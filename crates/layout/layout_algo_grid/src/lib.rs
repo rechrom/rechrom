@@ -1,5 +1,6 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
+pub mod algorithms;
 pub mod grid_baseline_accumulator;
 pub mod grid_break_token_data;
 pub mod grid_layout_utils;

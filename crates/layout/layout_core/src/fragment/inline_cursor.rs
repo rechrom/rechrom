@@ -29,13 +29,11 @@ use crate::physical_box_fragment::PhysicalBoxFragment;
 // here as free functions for that crate to forward to.
 // cpp: layoutng_fragment_tree/inline_cursor.cc:28-42
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutInlineHasInlineFragments(inline: &LayoutInline) -> bool {
     inline.FirstInlineFragmentItemIndex() != 0
 }
 
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutInlinePhysicalLinesBoundingBox(inline: &LayoutInline) -> PhysicalRect {
     inline.CheckIsNotDestroyed();
     if !inline.IsInLayoutNGInlineFormattingContext() {
@@ -58,7 +56,6 @@ pub extern "Rust" fn LayoutInlinePhysicalLinesBoundingBox(inline: &LayoutInline)
 // read from the resident FragmentItems through InlineCursor, with no shadow
 // copy of text layout state.
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextPhysicalLinesBoundingBox(text: &LayoutText) -> PhysicalRect {
     text.CheckIsNotDestroyed();
     if !text.IsInLayoutNGInlineFormattingContext() {
@@ -77,7 +74,6 @@ pub extern "Rust" fn LayoutTextPhysicalLinesBoundingBox(text: &LayoutText) -> Ph
 // Source: core/layout/layout_text.cc:1154-1160. Mutate the canonical
 // fragment-local Paint sidecar through the resident InlineCursor.
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextInvalidateVisualOverflow(text: &mut LayoutText) {
     debug_assert!(text.IsInLayoutNGInlineFormattingContext());
     let mut cursor = InlineCursor::default();
@@ -92,7 +88,6 @@ pub extern "Rust" fn LayoutTextInvalidateVisualOverflow(text: &mut LayoutText) {
 
 // cpp: core/layout/layout_inline.cc:727-744
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutInlineLinesVisualOverflowBoundingBox(
     inline: &LayoutInline,
 ) -> PhysicalRect {
@@ -136,7 +131,6 @@ fn IsInChildRubyText(start_object: &LayoutInline, target: *const LayoutObject) -
 
 // cpp: core/layout/layout_inline.cc:401-418
 #[allow(non_snake_case)]
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutInlineCollectLineBoxRects(
     inline: &LayoutInline,
     collector: &mut dyn FnMut(&PhysicalRect),

@@ -615,19 +615,107 @@ pub fn LayoutObjectPointerEqualsReference(
 // virtual call. The concrete layout-object family must provide this dispatch
 // when its owners are connected; a base-only call would skip derived cleanup.
 // cpp: layoutng/internal/layout_object_fragment_data.cc:89-102
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectAddOutlineRects,
+    DispatchLayoutObjectCanHaveChildren,
+    DispatchLayoutObjectClearFirstInlineFragmentItemIndex,
+    DispatchLayoutObjectFirstInlineFragmentItemIndex,
+    DispatchLayoutObjectHasInlineFragments,
+    DispatchLayoutObjectIsBR,
+    DispatchLayoutObjectIsBox,
+    DispatchLayoutObjectIsBoxModelObject,
+    DispatchLayoutObjectIsCanvas,
+    DispatchLayoutObjectIsChildAllowed,
+    DispatchLayoutObjectIsCounter,
+    DispatchLayoutObjectIsCustomLayoutLoaded,
+    DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment,
+    DispatchLayoutObjectIsEmbeddedObject,
+    DispatchLayoutObjectIsFieldset,
+    DispatchLayoutObjectIsFlexibleBox,
+    DispatchLayoutObjectIsFragmentLessBox,
+    DispatchLayoutObjectIsFrameSet,
+    DispatchLayoutObjectIsImage,
+    DispatchLayoutObjectIsInitialLetterBox,
+    DispatchLayoutObjectIsInlineListItem,
+    DispatchLayoutObjectIsLayoutBlock,
+    DispatchLayoutObjectIsLayoutBlockFlow,
+    DispatchLayoutObjectIsLayoutCustom,
+    DispatchLayoutObjectIsLayoutEmbeddedContent,
+    DispatchLayoutObjectIsLayoutGrid,
+    DispatchLayoutObjectIsLayoutGridLanes,
+    DispatchLayoutObjectIsLayoutIFrame,
+    DispatchLayoutObjectIsLayoutImage,
+    DispatchLayoutObjectIsLayoutInline,
+    DispatchLayoutObjectIsLayoutInsideListMarker,
+    DispatchLayoutObjectIsLayoutListItem,
+    DispatchLayoutObjectIsLayoutOutsideListMarker,
+    DispatchLayoutObjectIsLayoutReplaced,
+    DispatchLayoutObjectIsLayoutTableCol,
+    DispatchLayoutObjectIsLayoutTextCombine,
+    DispatchLayoutObjectIsLayoutView,
+    DispatchLayoutObjectIsMathML,
+    DispatchLayoutObjectIsMedia,
+    DispatchLayoutObjectIsQuote,
+    DispatchLayoutObjectIsReplacedNormalFlowStackingContext,
+    DispatchLayoutObjectIsRuby,
+    DispatchLayoutObjectIsSVG,
+    DispatchLayoutObjectIsSVGContainer,
+    DispatchLayoutObjectIsSVGHiddenContainer,
+    DispatchLayoutObjectIsSVGImage,
+    DispatchLayoutObjectIsSVGInlineText,
+    DispatchLayoutObjectIsSVGResourceContainer,
+    DispatchLayoutObjectIsSVGRoot,
+    DispatchLayoutObjectIsSVGShape,
+    DispatchLayoutObjectIsSVGTSpan,
+    DispatchLayoutObjectIsSVGTextPath,
+    DispatchLayoutObjectIsSVGTransformableContainer,
+    DispatchLayoutObjectIsSVGViewportContainer,
+    DispatchLayoutObjectIsTable,
+    DispatchLayoutObjectIsTableCaption,
+    DispatchLayoutObjectIsTableCell,
+    DispatchLayoutObjectIsTableRow,
+    DispatchLayoutObjectIsTableSection,
+    DispatchLayoutObjectIsText,
+    DispatchLayoutObjectIsTextArea,
+    DispatchLayoutObjectIsTextControlInnerEditor,
+    DispatchLayoutObjectIsTextField,
+    DispatchLayoutObjectIsValidColumnSpannerInTree,
+    DispatchLayoutObjectIsVideo,
+    DispatchLayoutObjectIsViewTransitionRoot,
+    DispatchLayoutObjectLocalToSVGParentTransform,
+    DispatchLayoutObjectOffsetFromContainerInternal,
+    DispatchLayoutObjectQuadsInAncestorInternal,
+    DispatchLayoutObjectRespectsCSSOverflow,
+    DispatchLayoutObjectSetFirstInlineFragmentItemIndex,
+    DispatchLayoutObjectSetNeedsTextMetricsUpdate,
+    DispatchLayoutObjectStitchedRowGapIndex,
+    DispatchLayoutObjectUpdateFromElement,
+    DispatchLayoutObjectVirtualChildren,
+    DispatchLayoutObjectVisualRectRespectsVisibility,
+    DispatchLayoutObjectWillBeDestroyed,
+    LayoutObjectAdditionalCompositingReasonsProvider,
+    LayoutObjectCanHaveAdditionalCompositingReasonsProvider,
+    LayoutObjectIsEligibleForSizeContainmentProvider,
+};
+use self::layout_fragment_layout_object_effective_style::LayoutObjectHasClipRelatedPropertyProvider;
+use self::layout_fragment_layout_object_paint_state::{
+    LayoutObjectBackgroundIsKnownToBeObscuredProvider,
+    LayoutObjectSetBackgroundIsKnownToBeObscuredProvider,
+    LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider,
+};
+use self::layout_invalidation_layout_object_prepaint_invalidation::{
+    LayoutObjectClearShouldDelayFullPaintInvalidationProvider,
+    LayoutObjectEnsureIsReadyForPaintInvalidationProvider,
+    LayoutObjectMarkBlockingWheelEventHandlerChangedProvider,
+    LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider,
+    LayoutObjectMaybeClearIsScrollAnchorObjectProvider,
+    LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider,
+    LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider,
+    LayoutObjectSetNeedsPrePaintSubtreeWalkProvider,
+    LayoutObjectSetShouldInvalidatePaintForHitTestProvider,
+    LayoutObjectSetShouldInvalidateSelectionProvider,
+};
 unsafe extern "Rust" {
-    fn LayoutObjectIsEligibleForSizeContainmentProvider(object: &LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(object: &LayoutObject) -> bool;
-    fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsVideo(object: &LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutEmbeddedContent(object: &LayoutObject) -> bool;
-    fn DispatchLayoutObjectQuadsInAncestorInternal(
-        object: &LayoutObject,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-        box_type: BoxQuadType,
-    );
     fn LayoutObjectGetCachedPseudoElementStyleProvider(
         object: &LayoutObject,
         pseudo_id: PseudoId,
@@ -659,26 +747,11 @@ unsafe extern "Rust" {
     fn ShowTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeWithSecondProvider(object1: *const LayoutObject, object2: *const LayoutObject);
-    fn DispatchLayoutObjectIsLayoutTextCombine(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsMedia(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTable(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTextArea(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTextField(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsImage(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsFragmentLessBox(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectHasInlineFragments(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectFirstInlineFragmentItemIndex(object: *const LayoutObject) -> usize;
-    fn DispatchLayoutObjectClearFirstInlineFragmentItemIndex(object: *mut LayoutObject);
-    fn DispatchLayoutObjectSetFirstInlineFragmentItemIndex(object: *mut LayoutObject, index: usize);
     fn LayoutObjectPaintProvider(object: &LayoutObject, info: &PaintInfo);
     fn LayoutObjectAddDraggableRegionsProvider(
         object: &mut LayoutObject,
         regions: &mut Vector<DraggableRegionValue>,
     );
-    fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(object: &LayoutObject) -> bool;
-    fn LayoutObjectAdditionalCompositingReasonsProvider(
-        object: &LayoutObject,
-    ) -> CompositingReasons;
     fn LayoutObjectHitTestAllPhasesProvider(
         object: &mut LayoutObject,
         result: &mut HitTestResult,
@@ -697,106 +770,18 @@ unsafe extern "Rust" {
         accumulated_offset: &PhysicalOffset,
         phase: HitTestPhase,
     ) -> bool;
-    fn DispatchLayoutObjectAddOutlineRects(
-        object: &LayoutObject,
-        collector: &mut dyn OutlineRectCollector,
-        info: *mut LayoutOutlineInfo,
-        additional_offset: &PhysicalOffset,
-        outline_type: OutlineType,
-    );
     fn LayoutObjectInvalidatePaintProvider(
         object: &LayoutObject,
         context: &PaintInvalidatorContext,
     );
     fn LayoutObjectDebugRectProvider(object: &LayoutObject) -> PhysicalRect;
-    fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObject);
-    fn DispatchLayoutObjectVirtualChildren(
-        object: *const LayoutObject,
-    ) -> *mut LayoutObjectChildList;
-    fn DispatchLayoutObjectIsLayoutInline(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsBoxModelObject(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsText(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutView(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutIFrame(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsFlexibleBox(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsMathML(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutGrid(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutGridLanes(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsCustomLayoutLoaded(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsFieldset(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsFrameSet(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectOffsetFromContainerInternal(
-        object: *const LayoutObject,
-        container: *const LayoutObject,
-        mode: MapCoordinatesFlags,
-    ) -> PhysicalOffset;
-    fn DispatchLayoutObjectIsSVGInlineText(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutTableCol(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTableCaption(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTableCell(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTableRow(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTableSection(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutListItem(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsInlineListItem(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutInsideListMarker(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutOutsideListMarker(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
-        object: *const LayoutObject,
-        style: &ComputedStyle,
-    ) -> bool;
-    fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGRoot(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGShape(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGImage(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsValidColumnSpannerInTree(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectSetNeedsTextMetricsUpdate(object: *mut LayoutObject);
     fn DispatchLayoutObjectHasNonIsolatedBlendingDescendants(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectLocalToSVGParentTransform(
-        object: *const LayoutObject,
-    ) -> AffineTransform;
-    fn DispatchLayoutObjectIsInitialLetterBox(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsBR(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsCounter(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsEmbeddedObject(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsMathMLRoot(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsQuote(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutCustom(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutImage(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsRuby(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsTextControlInnerEditor(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsViewTransitionRoot(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGTransformableContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGViewportContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGTextPath(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGTSpan(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGResourceContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectVisualRectRespectsVisibility(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject);
-    fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsChildAllowed(
-        object: *const LayoutObject,
-        child: *mut LayoutObject,
-        style: &ComputedStyle,
-    ) -> bool;
-    fn DispatchLayoutObjectStitchedRowGapIndex(
-        object: *const LayoutObject,
-        fragment: &PhysicalBoxFragment,
-        gap_index: usize,
-        line_index: Option<usize>,
-    ) -> usize;
     fn LayoutObjectAssertClearedPaintInvalidationFlagsProvider(object: *const LayoutObject);
     fn LayoutObjectSetShouldInheritContainerTimingRootProvider(
         object: *mut LayoutObject,
         inherit: bool,
     );
-    fn LayoutObjectEnsureIsReadyForPaintInvalidationProvider(object: *mut LayoutObject);
     fn LayoutObjectAddLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
     fn LayoutObjectFindNextLayerProvider(
         object: *mut LayoutObject,
@@ -805,27 +790,10 @@ unsafe extern "Rust" {
         check_parent: bool,
     ) -> *mut PaintLayer;
     fn LayoutObjectIsMenuListProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectHasClipRelatedPropertyProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectVisibleToHitTestRequestProvider(
         object: *const LayoutObject,
         request: &HitTestRequest,
     ) -> bool;
-    fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(object: *mut LayoutObject);
-    fn LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider(
-        object: *mut LayoutObject,
-    );
-    fn LayoutObjectClearShouldDelayFullPaintInvalidationProvider(object: *mut LayoutObject);
-    fn LayoutObjectSetShouldInvalidateSelectionProvider(object: *mut LayoutObject);
-    fn LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(
-        object: *mut LayoutObject,
-        reasons: PrePaintSubtreeWalkReasons,
-    );
-    fn LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider(
-        object: *mut LayoutObject,
-        reasons: PrePaintSubtreeWalkReasons,
-    );
-    fn LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(object: *mut LayoutObject);
     fn MutableForPaintingSetShouldDoFullPaintInvalidationProvider(
         object: *mut LayoutObject,
         reason: PaintInvalidationReason,
@@ -834,17 +802,10 @@ unsafe extern "Rust" {
         object: *mut LayoutObject,
         reason: PaintInvalidationReason,
     );
-    fn LayoutObjectMaybeClearIsScrollAnchorObjectProvider(object: *mut LayoutObject);
-    fn LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider(
-        object: *mut LayoutObject,
-        value: bool,
-    );
     fn LayoutObjectSetCanCompositeBackgroundAttachmentFixedProvider(
         object: *mut LayoutObject,
         value: bool,
     );
-    fn LayoutObjectBackgroundIsKnownToBeObscuredProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectSetBackgroundIsKnownToBeObscuredProvider(object: *mut LayoutObject, value: bool);
     fn LayoutObjectFirstLineStyleWithoutFallbackProvider(
         object: *const LayoutObject,
     ) -> *const ComputedStyle;

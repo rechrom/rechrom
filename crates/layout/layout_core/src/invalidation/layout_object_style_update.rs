@@ -6,13 +6,11 @@ use layout_style::style::computed_style_base::{
 };
 use layout_style::style::computed_style_constants::PseudoId;
 
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectAnonymousHasStylePropagationOverride,
+    DispatchLayoutObjectUpdateAnonymousChildStyle,
+};
 unsafe extern "Rust" {
-    fn DispatchLayoutObjectAnonymousHasStylePropagationOverride(object: *mut LayoutObject) -> bool;
-    fn DispatchLayoutObjectUpdateAnonymousChildStyle(
-        object: *const LayoutObject,
-        child: *const LayoutObject,
-        builder: &mut ComputedStyleBuilder,
-    );
     fn LayoutObjectAdjustStyleDifferenceProvider(
         object: *const LayoutObject,
         difference: StyleDifference,

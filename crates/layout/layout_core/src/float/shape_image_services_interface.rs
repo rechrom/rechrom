@@ -79,8 +79,5 @@ pub fn CurrentShapeImageResolver() -> Option<ResolverPtr> {
 }
 
 // cpp: layoutng/internal/shapes/shape_image_services.h:35-35
-// Defined in //src/layoutng_float/shape_image_services.cc, outside the
-// selected packages. Its non-null result remains an external contract.
-unsafe extern "Rust" {
-    pub fn CurrentShapeImage(resource_id: u64) -> *const PaintImage;
-}
+// CurrentShapeImage() is defined in layoutng_float/shape_image_services.cc and
+// only the float package calls it: `layout_algo_float::shape_image_services`.

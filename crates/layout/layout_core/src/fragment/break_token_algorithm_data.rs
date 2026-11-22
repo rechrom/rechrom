@@ -20,13 +20,37 @@ pub enum BreakTokenAlgorithmDataType {
 // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:64-65
 pub struct BreakTokenAlgorithmData {
     data_type: BreakTokenAlgorithmDataType,
+    // The source declares GetTotalRowGapCount() virtual and the flex and grid
+    // subclasses (other packages) override it. Like the C++ vptr, the concrete
+    // constructor stores its override here: no global or link-time dispatch,
+    // and the call also works after layout (paint export).
+    total_row_gap_count_: Option<TotalRowGapCountOverride>,
 }
+
+// The argument is the address of the concrete subclass, whose first field is
+// this base (each subclass asserts `offset_of!(.., base) == 0`).
+pub type TotalRowGapCountOverride = fn(*const BreakTokenAlgorithmData) -> u32;
 
 #[allow(non_snake_case)]
 impl BreakTokenAlgorithmData {
     // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:33-34
     pub fn new(data_type: BreakTokenAlgorithmDataType) -> Self {
-        Self { data_type }
+        Self {
+            data_type,
+            total_row_gap_count_: None,
+        }
+    }
+
+    // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:33-34,50
+    // Constructor of the subclasses that override GetTotalRowGapCount().
+    pub fn NewWithTotalRowGapCount(
+        data_type: BreakTokenAlgorithmDataType,
+        total_row_gap_count: TotalRowGapCountOverride,
+    ) -> Self {
+        Self {
+            data_type,
+            total_row_gap_count_: Some(total_row_gap_count),
+        }
     }
 
     // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:31
@@ -70,18 +94,15 @@ impl BreakTokenAlgorithmData {
     }
 
     // cpp: layoutng_fragment_tree/break_token_algorithm_data.h:50
-    // Concrete flex/grid data lives in downstream algorithm packages. The
-    // assembly boundary restores the source virtual call without introducing
-    // a Cargo dependency cycle from fragments back to those packages.
+    // Concrete flex/grid data lives in downstream algorithm packages; their
+    // constructors install the override (NewWithTotalRowGapCount). Other
+    // types keep the source NOTREACHED.
     pub fn GetTotalRowGapCount(&self) -> u32 {
-        unsafe { DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(self) }
+        match self.total_row_gap_count_ {
+            Some(total_row_gap_count) => total_row_gap_count(self),
+            None => std::process::abort(),
+        }
     }
-}
-
-unsafe extern "Rust" {
-    fn DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(
-        data: *const BreakTokenAlgorithmData,
-    ) -> u32;
 }
 
 // A trait object represents calls through the C++ virtual base pointer.

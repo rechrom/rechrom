@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 
-use foundation::{HeapHashMap, Member, PhysicalRect, PhysicalSize, Traceable, Visitor};
-use crate::box_fragment_builder::BoxFragmentBuilder;
+use foundation::{HeapHashMap, Member, PhysicalRect, Traceable, Visitor};
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 
-use super::super::layout_box::LayoutBox;
 use super::super::layout_object::LayoutObject;
 
 // cpp: layoutng/internal/inline_containing_block_utils.h:25-37
@@ -27,47 +25,11 @@ pub type InlineContainingBlockMap =
     HeapHashMap<Member<LayoutObject>, Option<InlineContainingBlockGeometry>>;
 
 // cpp: layoutng/internal/inline_containing_block_utils.h:21-24
+// The static members ComputeInlineContainerGeometry(ForFragmentainer) are
+// out-of-flow algorithms (layoutng_out_of_flow/inline_containing_block_utils.cc)
+// that only the out-of-flow package calls: the extension trait
+// `layout_algo_out_of_flow::inline_containing_block_utils::
+// InlineContainingBlockUtilsAlgorithms`.
 pub struct InlineContainingBlockUtils {
     _private: (),
-}
-
-impl InlineContainingBlockUtils {
-    // cpp: layoutng/internal/inline_containing_block_utils.h:44-50
-    pub fn ComputeInlineContainerGeometry(
-        inline_containing_block_map: *mut InlineContainingBlockMap,
-        container_builder: *mut BoxFragmentBuilder,
-    ) {
-        unsafe {
-            ComputeInlineContainerGeometryProvider(inline_containing_block_map, container_builder)
-        }
-    }
-
-    // cpp: layoutng/internal/inline_containing_block_utils.h:52-61
-    pub fn ComputeInlineContainerGeometryForFragmentainer(
-        box_: *const LayoutBox,
-        accumulated_containing_block_size: PhysicalSize,
-        inline_containing_block_map: *mut InlineContainingBlockMap,
-    ) {
-        unsafe {
-            ComputeInlineContainerGeometryForFragmentainerProvider(
-                box_,
-                accumulated_containing_block_size,
-                inline_containing_block_map,
-            )
-        }
-    }
-}
-
-// Implementations belong to //src/layoutng_out_of_flow.
-unsafe extern "Rust" {
-    fn ComputeInlineContainerGeometryProvider(
-        inline_containing_block_map: *mut InlineContainingBlockMap,
-        container_builder: *mut BoxFragmentBuilder,
-    );
-
-    fn ComputeInlineContainerGeometryForFragmentainerProvider(
-        box_: *const LayoutBox,
-        accumulated_containing_block_size: PhysicalSize,
-        inline_containing_block_map: *mut InlineContainingBlockMap,
-    );
 }

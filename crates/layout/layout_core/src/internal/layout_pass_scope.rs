@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::layout_algorithm_set::{
-    FloatLayoutSupport, InlineLayoutSupport, LayoutAlgorithmSet, MathMLSupport, SvgLayoutSupport,
+    FloatLayoutSupport, InlineLayoutSupport, LayoutAlgorithmSet, ListLayoutSupport, MathMLSupport,
+    SvgLayoutSupport,
 };
 use super::layout_object_factory_set::LayoutObjectFactorySet;
 use foundation::UnsupportedLayout;
@@ -71,6 +72,9 @@ thread_local! {
     // last installed set is the one that laid the document out.
     static RESIDENT_INLINE_SUPPORT: Cell<InlineLayoutSupport> =
         Cell::new(InlineLayoutSupport::default());
+    // Likewise the list queries editing reads after layout (list item value).
+    static RESIDENT_LIST_SUPPORT: Cell<ListLayoutSupport> =
+        Cell::new(ListLayoutSupport::default());
 }
 
 // cpp: layoutng/internal/layout_pass_scope.h:38-61
@@ -107,6 +111,8 @@ impl LayoutPassScope {
             RESIDENT_MATHML_SUPPORT.with(|resident| resident.set(mathml_support));
             let inline_support = unsafe { &*algorithms }.inline_support;
             RESIDENT_INLINE_SUPPORT.with(|resident| resident.set(inline_support));
+            let list_support = unsafe { &*algorithms }.list_support;
+            RESIDENT_LIST_SUPPORT.with(|resident| resident.set(list_support));
         }
         Self {
             previous_algorithms_: previous_algorithms,
@@ -142,6 +148,16 @@ impl LayoutPassScope {
             RESIDENT_INLINE_SUPPORT.with(Cell::get)
         } else {
             unsafe { &*algorithms }.inline_support
+        }
+    }
+
+    /// The list queries for post-layout readers (see ResidentSvgSupport).
+    pub fn ResidentListSupport() -> ListLayoutSupport {
+        let algorithms = Self::Algorithms();
+        if algorithms.is_null() {
+            RESIDENT_LIST_SUPPORT.with(Cell::get)
+        } else {
+            unsafe { &*algorithms }.list_support
         }
     }
 

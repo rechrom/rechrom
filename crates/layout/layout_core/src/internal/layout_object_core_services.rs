@@ -48,47 +48,27 @@ mod layout_algo_svg_layout_object_svg_dispatch;
 
 // The concrete hierarchy must supply each virtual dispatch entry.
 // cpp: layoutng/internal/layout_object_core_services.cc:107-162
-unsafe extern "Rust" {
-    fn DispatchLayoutObjectAddChild(
-        object: *mut LayoutObject,
-        new_child: *mut LayoutObject,
-        before_child: *mut LayoutObject,
-    );
-    fn DispatchLayoutObjectRemoveChild(object: *mut LayoutObject, old_child: *mut LayoutObject);
-    fn DispatchLayoutObjectInsertedIntoTree(object: *mut LayoutObject);
-    fn DispatchLayoutObjectWillBeRemovedFromTree(object: *mut LayoutObject);
-}
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectAddChild,
+    DispatchLayoutObjectInsertedIntoTree,
+    DispatchLayoutObjectRemoveChild,
+    DispatchLayoutObjectWillBeRemovedFromTree,
+};
 
 // cpp: layoutng/internal/layout_object_core_services.cc:164-203
-unsafe extern "Rust" {
-    fn DispatchLayoutObjectStyleWillChange(
-        object: *mut LayoutObject,
-        difference: StyleDifference,
-        old_style: *const ComputedStyle,
-        new_style: &ComputedStyle,
-        context: &mut StyleChangeContext,
-    );
-    fn DispatchLayoutObjectStyleDidChange(
-        object: *mut LayoutObject,
-        difference: StyleDifference,
-        old_style: *const ComputedStyle,
-        new_style: &ComputedStyle,
-        context: &StyleChangeContext,
-    );
-}
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectStyleDidChange,
+    DispatchLayoutObjectStyleWillChange,
+};
 
 // cpp: layoutng/internal/layout_object_core_services.cc:280-300
-unsafe extern "Rust" {
-    fn DispatchLayoutObjectRecalcScrollableOverflow(
-        object: *mut LayoutObject,
-    ) -> RecalcScrollableOverflowResult;
-    fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut LayoutObject);
-}
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectRecalcScrollableOverflow,
+    DispatchLayoutObjectRecalcVisualOverflow,
+};
 
 // cpp: layoutng/internal/layout_object.h:321-321
-unsafe extern "Rust" {
-    fn DispatchLayoutObjectGetName(object: *const LayoutObject) -> &'static str;
-}
+use crate::block_virtual_dispatch::DispatchLayoutObjectGetName;
 
 impl LayoutObject {
     // cpp: layoutng/internal/layout_object_core_services.cc:315-318

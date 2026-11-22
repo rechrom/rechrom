@@ -111,15 +111,13 @@ use crate::internal::layout_input::{
 };
 use crate::internal::paint_input::{PaintBlendMode, PaintFilterType, PaintTransformOperationKind};
 
-// Object constructors owned by foundation/style-values remain typed links.
-unsafe extern "Rust" {
-    fn FoundationTextTransformFromBits(bits: u32) -> ETextTransform;
-    fn RoundForImpreciseConversionI16(value: f64) -> i16;
-    fn InitialLetterOmitted(size: f32) -> StyleInitialLetter;
-    fn InitialLetterInteger(size: f32, sink: i32) -> StyleInitialLetter;
-    fn InitialLetterDrop(size: f32) -> StyleInitialLetter;
-    fn InitialLetterRaise(size: f32) -> StyleInitialLetter;
-}
+// Object constructors owned by foundation/style-values: foundation is a
+// dependency, so these are direct calls (they were link-time symbols).
+use foundation::numeric_conversion::RoundForImpreciseConversionI16;
+use foundation::style_flags::FoundationTextTransformFromBits;
+use foundation::style_initial_letter::{
+    InitialLetterDrop, InitialLetterInteger, InitialLetterOmitted, InitialLetterRaise,
+};
 
 // cpp: layoutng/internal/boundary/input.cc:49-51
 #[derive(Debug)]

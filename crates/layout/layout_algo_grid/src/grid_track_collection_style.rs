@@ -10,8 +10,7 @@ use layout_style::style::{
 };
 
 // cpp: layoutng_grid/grid_track_collection_style.cc:10-41
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridRangeBuilderNew(
+pub fn GridRangeBuilderNew(
     style: &ComputedStyle,
     direction: GridTrackSizingDirection,
     repetitions: u32,
@@ -38,8 +37,7 @@ pub extern "Rust" fn GridRangeBuilderNew(
 }
 
 // cpp: layoutng_grid/grid_track_collection_style.cc:43-58
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridSizingTrackCollectionBuildSets(
+pub fn GridSizingTrackCollectionBuildSets(
     this: &mut GridSizingTrackCollection,
     style: &ComputedStyle,
     available: &LogicalSize,
@@ -61,4 +59,38 @@ pub extern "Rust" fn GridSizingTrackCollectionBuildSets(
         size == kIndefiniteSize,
     );
     this.InitializeSets(size);
+}
+
+// GridRangeBuilder / GridSizingTrackCollection members declared with the base
+// types (layoutng/internal/grid_track_collection.h:125-128,509-539) whose
+// ComputedStyle bodies are this grid file. Rust cannot add inherent methods to
+// a base type from this crate; only this crate calls them.
+pub trait GridRangeBuilderStyleAlgorithms: Sized {
+    fn new(
+        style: &ComputedStyle,
+        direction: GridTrackSizingDirection,
+        auto_repetitions: u32,
+        start_offset: u32,
+    ) -> Self;
+}
+
+impl GridRangeBuilderStyleAlgorithms for GridRangeBuilder {
+    fn new(
+        style: &ComputedStyle,
+        direction: GridTrackSizingDirection,
+        auto_repetitions: u32,
+        start_offset: u32,
+    ) -> Self {
+        GridRangeBuilderNew(style, direction, auto_repetitions, start_offset)
+    }
+}
+
+pub trait GridSizingTrackCollectionStyleAlgorithms {
+    fn BuildSets(&mut self, style: &ComputedStyle, available_size: &LogicalSize);
+}
+
+impl GridSizingTrackCollectionStyleAlgorithms for GridSizingTrackCollection {
+    fn BuildSets(&mut self, style: &ComputedStyle, available_size: &LogicalSize) {
+        GridSizingTrackCollectionBuildSets(self, style, available_size)
+    }
 }

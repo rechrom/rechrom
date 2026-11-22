@@ -82,12 +82,14 @@ unsafe extern "Rust" {
     fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(flow: *const LayoutBlockFlow)
         -> bool;
 }
+use crate::block_virtual_dispatch::{
+    DispatchLayoutBlockFlowAllowsColumns,
+    DispatchLayoutBlockFlowAllowsInlineChildren,
+    DispatchLayoutBlockFlowCreatesNewFormattingContext,
+    DispatchLayoutBlockFlowIsFragmentationContextRoot,
+    DispatchLayoutBlockFlowWillCollectInlines,
+};
 unsafe extern "Rust" {
-    fn DispatchLayoutBlockFlowAllowsInlineChildren(flow: *const LayoutBlockFlow) -> bool;
-    fn DispatchLayoutBlockFlowAllowsColumns(flow: *const LayoutBlockFlow) -> bool;
-    fn DispatchLayoutBlockFlowCreatesNewFormattingContext(flow: *const LayoutBlockFlow) -> bool;
-    fn DispatchLayoutBlockFlowIsFragmentationContextRoot(flow: *const LayoutBlockFlow) -> bool;
-    fn DispatchLayoutBlockFlowWillCollectInlines(flow: *mut LayoutBlockFlow);
 
     fn LayoutBlockFlowPositionForPoint(
         flow: *const LayoutBlockFlow,

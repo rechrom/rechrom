@@ -1,3 +1,4 @@
+use crate::algorithms::*;
 use crate::{
     grid_data::GridPlacementData, grid_oof_placement::ComputeGridOutOfFlowItemContainingRect,
     subgrid_min_max_sizes_cache::SubgridMinMaxSizesCache,
@@ -52,32 +53,6 @@ impl Traceable for LayoutGrid {
 impl LayoutGrid {
     // cpp: layoutng_grid/layout_grid.cc:20-20
     pub fn new(element: *mut Element) -> Self {
-        // Preserve the downstream LayoutGrid override at the assembly's
-        // LayoutObject virtual call site, without a Cargo dependency cycle.
-        layout_assembly::RegisterGridStyleDidChange(
-            |object, difference, old_style, new_style, context| {
-                unsafe { &mut *object.cast::<LayoutGrid>() }
-                    .StyleDidChange(difference, old_style, new_style, context);
-            },
-        );
-        use layout_assembly::{GridObjectVirtuals, RegisterGridObjectVirtuals};
-        RegisterGridObjectVirtuals(GridObjectVirtuals {
-            add_child: |o, child, before| {
-                unsafe { &mut *o.cast::<LayoutGrid>() }.AddChild(child, before)
-            },
-            remove_child: |o, child| unsafe { &mut *o.cast::<LayoutGrid>() }.RemoveChild(child),
-            stitched_row_gap_index: |o, fragment, gap, line| {
-                unsafe { &*o.cast::<LayoutGrid>() }.StitchedRowGapIndex(
-                    fragment,
-                    gap as u32,
-                    line.map(|v| v as u32),
-                ) as usize
-            },
-            adjust_anchor_containing_block: |o, data, style, padding, query| {
-                unsafe { &*(o as *const LayoutBox).cast::<LayoutGrid>() }
-                    .AdjustOutOfFlowContainingBlockForAnchor(data, style, padding, query)
-            },
-        });
         let block = LayoutBlock::new(element.cast());
         block.SetRuntimeClass(LayoutObjectClass::Grid);
         Self {

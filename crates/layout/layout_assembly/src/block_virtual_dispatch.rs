@@ -4,7 +4,6 @@
 // implement their own dispatch before they can execute through this host.
 #![allow(non_snake_case)]
 
-use crate::break_token_algorithm_data::{BreakTokenAlgorithmData, BreakTokenAlgorithmDataType};
 use crate::internal::layout_block::LayoutBlock;
 use crate::internal::layout_block_flow::LayoutBlockFlow;
 use crate::internal::layout_box::LayoutBox;
@@ -15,7 +14,7 @@ use crate::internal::layout_node_metadata::{Element, ElementType, Node};
 use crate::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use crate::internal::layout_object::{RecalcScrollableOverflowResult, StyleChangeContext};
 use crate::internal::layout_object_child_list::LayoutObjectChildList;
-use crate::internal::layout_object_factory_set::SvgRootChildren;
+use crate::internal::layout_object_factory_set::{GridObjectVirtuals, LayoutObjectFactorySet};
 use crate::internal::layout_pass_scope::LayoutObjectFactoryScope;
 use crate::internal::layout_replaced::{
     LayoutInputReplaced, LayoutMedia, LayoutReplaced, LayoutVideo, VideoDisplayMode,
@@ -32,77 +31,26 @@ use layout_geometry::geometry::box_strut::{BoxStrut, PhysicalBoxStrut};
 use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use layout_style::style::outline_type::OutlineType;
 use layout_style::style::style_difference::StyleDifference;
-use std::sync::OnceLock;
 
-// The flex object lives in a downstream crate, while LayoutObject's virtual
-// call site lives here. Registration preserves the C++ most-derived override
-// without introducing a Cargo dependency cycle.
-type FlexStitchedRowGapIndex =
-    fn(*const LayoutObject, &PhysicalBoxFragment, usize, Option<usize>) -> usize;
-static FLEX_STITCHED_ROW_GAP_INDEX: OnceLock<FlexStitchedRowGapIndex> = OnceLock::new();
-type BreakTokenTotalRowGapCount = fn(*const BreakTokenAlgorithmData) -> u32;
-static FLEX_TOTAL_ROW_GAP_COUNT: OnceLock<BreakTokenTotalRowGapCount> = OnceLock::new();
-static GRID_TOTAL_ROW_GAP_COUNT: OnceLock<BreakTokenTotalRowGapCount> = OnceLock::new();
+// The flex, grid and SVG objects live in downstream crates, while
+// LayoutObject's virtual call sites live here. Their overrides are
+// LayoutObjectFactorySet fields filled by each package's
+// `registration::Register`; every object keeps the factory set it was
+// created with (`LayoutObject::FactorySet()`), as a C++ object keeps its vptr,
+// so these calls also work outside a layout pass. LayoutReplaced, LayoutImage
+// and LayoutVideo are base objects, so their overrides are direct calls.
 
-type GridStyleDidChange = fn(
-    *mut LayoutObject,
-    StyleDifference,
-    *const ComputedStyle,
-    &ComputedStyle,
-    &StyleChangeContext,
-);
-static GRID_STYLE_DID_CHANGE: OnceLock<GridStyleDidChange> = OnceLock::new();
-static SVG_ROOT_CHILDREN: OnceLock<SvgRootChildren> = OnceLock::new();
-
-pub fn RegisterGridStyleDidChange(callback: GridStyleDidChange) {
-    let existing = GRID_STYLE_DID_CHANGE.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterFlexStitchedRowGapIndex(callback: FlexStitchedRowGapIndex) {
-    let existing = FLEX_STITCHED_ROW_GAP_INDEX.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterFlexTotalRowGapCount(callback: BreakTokenTotalRowGapCount) {
-    let existing = FLEX_TOTAL_ROW_GAP_COUNT.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterGridTotalRowGapCount(callback: BreakTokenTotalRowGapCount) {
-    let existing = GRID_TOTAL_ROW_GAP_COUNT.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn DispatchBreakTokenAlgorithmDataGetTotalRowGapCount(
-    data: *const BreakTokenAlgorithmData,
-) -> u32 {
-    assert!(!data.is_null());
-    let callback = match unsafe { &*data }.Type() {
-        BreakTokenAlgorithmDataType::kFlexData => FLEX_TOTAL_ROW_GAP_COUNT
-            .get()
-            .expect("flex break-token virtual dispatch is not registered"),
-        BreakTokenAlgorithmDataType::kGridData => GRID_TOTAL_ROW_GAP_COUNT
-            .get()
-            .expect("grid break-token virtual dispatch is not registered"),
-        _ => std::process::abort(),
-    };
-    callback(data)
-}
-
-/// LayoutSVGRoot owns its child list in the downstream SVG package. Chromium
-/// fragment cursors may walk that list after the layout factory scope has
-/// ended, just as Chromium can call the object's vtable at any lifecycle
-/// stage. Register the concrete override once with the assembled engine.
-pub fn RegisterSvgRootChildren(callback: SvgRootChildren) {
-    let existing = SVG_ROOT_CHILDREN.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
+// The factory set the object was created with (its "vptr"): package objects
+// are created by their factory under a LayoutObjectFactoryScope. An object
+// constructed outside one falls back to the active scope's set.
+fn object_factories<'a>(object: *const LayoutObject) -> &'a LayoutObjectFactorySet {
+    unsafe { (&*object).FactorySet().as_ref() }
+        .or_else(|| unsafe { LayoutObjectFactoryScope::Objects().as_ref() })
+        .expect("LayoutObject has no factory set and no LayoutObjectFactoryScope is active")
 }
 
 // cpp: layoutng/internal/layout_object.h:2023-2029
 // cpp: layoutng_flex/layout_flexible_box.h:33-37
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectStitchedRowGapIndex(
     object: *const LayoutObject,
     fragment: &PhysicalBoxFragment,
@@ -110,12 +58,12 @@ pub extern "Rust" fn DispatchLayoutObjectStitchedRowGapIndex(
     line_index: Option<usize>,
 ) -> usize {
     if class(object) == LayoutObjectClass::FlexibleBox {
-        let callback = FLEX_STITCHED_ROW_GAP_INDEX
-            .get()
+        let callback = object_factories(object)
+            .flex_stitched_row_gap_index
             .expect("flex stitched row-gap virtual dispatch is not registered");
         callback(object, fragment, gap_index, line_index)
     } else if class(object) == LayoutObjectClass::Grid {
-        (grid_virtuals().stitched_row_gap_index)(object, fragment, gap_index, line_index)
+        (grid_virtuals(object).stitched_row_gap_index)(object, fragment, gap_index, line_index)
     } else {
         unsafe { &*object }.StitchedRowGapIndexBase(fragment, gap_index, line_index)
     }
@@ -134,7 +82,6 @@ fn class(object: *const LayoutObject) -> LayoutObjectClass {
 
 // cpp: layoutng/internal/layout_object.h:835-842
 // cpp: layoutng/internal/layout_box_model_object.h:362-365
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsBoxModelObject(object: *const LayoutObject) -> bool {
     !matches!(
         class(object),
@@ -143,7 +90,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsBoxModelObject(object: *const LayoutO
 }
 
 // cpp: layoutng/internal/layout_box.h:1286-1289
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> bool {
     if class(object).IsTableClass() {
         return true;
@@ -183,7 +129,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsBox(object: *const LayoutObject) -> b
 
 // cpp: third_party/blink/renderer/core/layout/layout_object.h:2052-2055
 // cpp: third_party/blink/renderer/core/layout/layout_box.h:600-603
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsFragmentLessBox(object: *const LayoutObject) -> bool {
     if DispatchLayoutObjectIsBox(object) {
         unsafe { &*object.cast::<LayoutBox>() }.IsFragmentLessBox()
@@ -193,7 +138,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsFragmentLessBox(object: *const Layout
 }
 
 // cpp: layoutng/internal/layout_block.h:225-228
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObject) -> bool {
     if class(object).IsTableClass() {
         return class(object) != LayoutObjectClass::TableColumn;
@@ -229,7 +173,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlock(object: *const LayoutObje
 }
 
 // cpp: layoutng/internal/layout_block_flow.h:70-73
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -258,13 +201,11 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutBlockFlow(object: *const Layout
 }
 
 // cpp: layoutng/internal/layout_view.h:107-110
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutView(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::View
 }
 
 // cpp: layoutng/internal/layout_object.h:1033-1036,1044-1047
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutInline(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -277,7 +218,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutInline(object: *const LayoutObj
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsText(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -290,7 +230,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsText(object: *const LayoutObject) -> 
 // class is rejected by class() until its actual override is connected.
 macro_rules! block_false_predicates {
     ($($name:ident),* $(,)?) => {$ (
-        #[unsafe(no_mangle)]
         pub extern "Rust" fn $name(object: *const LayoutObject) -> bool {
             class(object);
             false
@@ -323,23 +262,19 @@ fn EmbeddedIdentity(
 // Source layout_embedded_content.h:75-78, layout_iframe.h:48-51,
 // layout_embedded_object.h:62-65. Preserve the native derived identity just
 // as LayoutImage does below, independently of whether a child frame exists.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutEmbeddedContent(
     object: *const LayoutObject,
 ) -> bool {
     EmbeddedIdentity(object).is_some()
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutIFrame(object: *const LayoutObject) -> bool {
     EmbeddedIdentity(object) == Some(crate::internal::layout_input::EmbeddedContentKind::Frame)
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsEmbeddedObject(object: *const LayoutObject) -> bool {
     EmbeddedIdentity(object) == Some(crate::internal::layout_input::EmbeddedContentKind::Object)
 }
 
 // cpp: core/layout/layout_media.h:76-78
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsMedia(object: *const LayoutObject) -> bool {
     if class(object) != LayoutObjectClass::Replaced {
         return false;
@@ -351,7 +286,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsMedia(object: *const LayoutObject) ->
 }
 
 // cpp: core/layout/layout_video.h:83-85
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsVideo(object: *const LayoutObject) -> bool {
     if class(object) != LayoutObjectClass::Replaced {
         return false;
@@ -407,12 +341,10 @@ fn IsLayoutImage(object: *const LayoutObject) -> bool {
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutImage(object: *const LayoutObject) -> bool {
     IsLayoutImage(object)
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsImage(object: *const LayoutObject) -> bool {
     IsLayoutImage(object)
 }
@@ -469,7 +401,6 @@ mod layout_image_identity_tests {
 }
 
 // cpp: core/layout/layout_html_canvas.h:48-48
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -> bool {
     class(object);
     let node = unsafe { &*object }.GetNode();
@@ -479,7 +410,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -
 // cpp: third_party/blink/renderer/core/layout/layout_object.h:2160-2161
 // cpp: third_party/blink/renderer/core/layout/layout_object.cc:4514-4522
 // cpp: third_party/blink/renderer/core/layout/layout_view.h:179-183
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(
     object: &LayoutObject,
 ) -> bool {
@@ -494,7 +424,6 @@ pub extern "Rust" fn LayoutObjectCanHaveAdditionalCompositingReasonsProvider(
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectAdditionalCompositingReasonsProvider(
     object: &LayoutObject,
 ) -> foundation::CompositingReasons {
@@ -519,8 +448,11 @@ pub extern "Rust" fn LayoutObjectAdditionalCompositingReasonsProvider(
 // cpp: third_party/blink/renderer/core/layout/layout_object.h:3615-3618
 // cpp: third_party/blink/renderer/core/layout/layout_text.h:396-398
 // cpp: third_party/blink/renderer/core/layout/layout_image.h:149-152
-#[unsafe(no_mangle)]
-pub extern "Rust" fn DispatchLayoutObjectCanBeSelectionLeafInternal(
+// Not referenced: `LayoutObject::CanBeSelectionLeafInternal` calls the private
+// dispatch in `inline/layout_object_editing_queries.rs`. It was an exported
+// symbol nobody declared; kept as the source-aligned override set.
+#[allow(dead_code)]
+pub fn DispatchLayoutObjectCanBeSelectionLeafInternal(
     object: *const LayoutObject,
 ) -> bool {
     match class(object) {
@@ -534,7 +466,6 @@ pub extern "Rust" fn DispatchLayoutObjectCanBeSelectionLeafInternal(
 
 // cpp: third_party/blink/renderer/core/layout/layout_box.h:214-217
 // cpp: third_party/blink/renderer/core/layout/layout_image.h:168-171
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxBackgroundShouldAlwaysBeClippedProvider(box_: &LayoutBox) -> bool {
     let object = box_ as *const LayoutBox as *const LayoutObject;
     if IsLayoutImage(object) {
@@ -544,39 +475,32 @@ pub extern "Rust" fn LayoutBoxBackgroundShouldAlwaysBeClippedProvider(box_: &Lay
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutTableCol(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TableColumn
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTable(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::Table
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTableCaption(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TableCaption
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTableCell(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TableCell
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTableRow(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TableRow
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTableSection(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TableSection
 }
 
 // cpp: layoutng_svg/layout_svg_group.h:26-29
 // cpp: layoutng_svg/layout_svg_shape.h:20-21
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -598,7 +522,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> b
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -615,7 +538,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGContainer(object: *const LayoutObj
 
 // core/layout/svg/layout_svg_hidden_container.h and
 // layout_svg_resource_container.h: most-derived source SVG resource kinds.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -627,7 +549,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGHiddenContainer(object: *const Lay
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGResourceContainer(
     object: *const LayoutObject,
 ) -> bool {
@@ -640,7 +561,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGResourceContainer(
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGShape(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgShape
 }
@@ -648,23 +568,19 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGShape(object: *const LayoutObject)
 // The authored SVG <image> layout object is not installed by the current
 // factory set. Keep the virtual result false until that concrete source class
 // is connected; document-image SVG decoding is a separate resource path.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGImage(object: *const LayoutObject) -> bool {
     class(object);
     false
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGRoot(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgRoot
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGForeignObject(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgForeignObject
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGInline(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -672,17 +588,14 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGInline(object: *const LayoutObject
     )
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGText(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgText
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGInlineText(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgInlineText
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectLocalToSVGParentTransform(
     object: *const LayoutObject,
 ) -> AffineTransform {
@@ -709,7 +622,6 @@ pub extern "Rust" fn DispatchLayoutObjectLocalToSVGParentTransform(
     unsafe { &*object }.LocalToSVGParentTransformBase()
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectSetNeedsTextMetricsUpdate(object: *mut LayoutObject) {
     if class(object) == LayoutObjectClass::SvgText {
         let objects = LayoutObjectFactoryScope::Objects();
@@ -722,17 +634,14 @@ pub extern "Rust" fn DispatchLayoutObjectSetNeedsTextMetricsUpdate(object: *mut 
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGTSpan(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgTSpan
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGTextPath(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::SvgTextPath
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGTransformableContainer(
     object: *const LayoutObject,
 ) -> bool {
@@ -745,14 +654,12 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGTransformableContainer(
 }
 
 // cpp: layoutng_flex/layout_flexible_box.h:57-60
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsFlexibleBox(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::FlexibleBox
 }
 
 // LayoutBR shares LayoutText's runtime class in the translated hierarchy.
 // Its source node preserves the more specific kind needed by IsBR().
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsBR(object: *const LayoutObject) -> bool {
     if !matches!(
         class(object),
@@ -765,7 +672,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsBR(object: *const LayoutObject) -> bo
 }
 
 // cpp: core/layout/layout_replaced.h:163-166
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutObject) -> bool {
     matches!(
         class(object),
@@ -777,7 +683,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutReplaced(object: *const LayoutO
 // in the source hierarchy are SVGForeignObject and LayoutVideo.
 // cpp: core/layout/layout_object.h:737-740
 // cpp: core/layout/svg/layout_svg_foreign_object.h:62-65
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
     object: *const LayoutObject,
     style: &ComputedStyle,
@@ -798,7 +703,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsReplacedNormalFlowStackingContext(
 }
 
 // cpp: core/layout/layout_replaced.h:70-73
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool {
     if unsafe { &*object }.IsMedia() {
         return true;
@@ -817,7 +721,6 @@ pub extern "Rust" fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutOb
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsChildAllowed(
     object: *const LayoutObject,
     child: *mut LayoutObject,
@@ -859,19 +762,16 @@ pub extern "Rust" fn DispatchLayoutObjectIsChildAllowed(
 }
 
 // cpp: layoutng_forms/layout_text_control_multi_line.h:18-21
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTextArea(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TextControlMultiLine
 }
 
 // cpp: layoutng_forms/layout_text_control_single_line.h:18-21
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTextField(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TextControlSingleLine
 }
 
 // cpp: layoutng_forms/layout_text_control_inner_editor.h:23-26
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsTextControlInnerEditor(
     object: *const LayoutObject,
 ) -> bool {
@@ -879,25 +779,21 @@ pub extern "Rust" fn DispatchLayoutObjectIsTextControlInnerEditor(
 }
 
 // cpp: layoutng_forms/layout_fieldset.h:44-47
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsFieldset(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::Fieldset
 }
 
 // cpp: layoutng_list/layout_list_item.h:50-53
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutListItem(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::ListItem
 }
 
 // cpp: layoutng_list/layout_inline_list_item.h:32-34
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsInlineListItem(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::InlineListItem
 }
 
 // cpp: layoutng_list/layout_inside_list_marker.h:43-47
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutInsideListMarker(
     object: *const LayoutObject,
 ) -> bool {
@@ -905,7 +801,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutInsideListMarker(
 }
 
 // cpp: layoutng_list/layout_outside_list_marker.h:39-43
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutOutsideListMarker(
     object: *const LayoutObject,
 ) -> bool {
@@ -915,18 +810,15 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutOutsideListMarker(
 // The registered block and inline host classes inherit this no-op base
 // implementation. The list-item package will supply its override when added.
 // cpp: layoutng/internal/layout_block_flow.h:133-133
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBlockFlowWillCollectInlines(flow: *mut LayoutBlockFlow) {
     unsafe { &mut *flow }.WillCollectInlinesBase();
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutTextCombine(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::TextCombine
 }
 
 // cpp: layoutng/internal/layout_box.h:1181-1184
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(
     object: *const LayoutObject,
 ) -> bool {
@@ -972,7 +864,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsEligibleForPaintOrLayoutContainment(
 }
 
 // cpp: layoutng/internal/layout_block_flow.cc:147-151
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsInitialLetterBox(object: *const LayoutObject) -> bool {
     match class(object) {
         LayoutObjectClass::BlockFlow
@@ -1003,7 +894,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsInitialLetterBox(object: *const Layou
 }
 
 // cpp: layoutng/internal/layout_box.h:624-627
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsValidColumnSpannerInTree(
     object: *const LayoutObject,
 ) -> bool {
@@ -1048,7 +938,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsValidColumnSpannerInTree(
 // cpp: layoutng/internal/layout_block.cc:102-135
 // cpp: layoutng/internal/layout_block_flow.cc:214-291
 // cpp: layoutng/internal/layout_view_layout.cc:59-65
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectAddChild(
     object: *mut LayoutObject,
     child: *mut LayoutObject,
@@ -1143,7 +1032,7 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
         | LayoutObjectClass::TextControlMultiLine => {
             unsafe { &mut *object.cast::<LayoutBlockFlow>() }.AddChild(child, before_child)
         }
-        LayoutObjectClass::Grid => (grid_virtuals().add_child)(object, child, before_child),
+        LayoutObjectClass::Grid => (grid_virtuals(object).add_child)(object, child, before_child),
         LayoutObjectClass::Block | LayoutObjectClass::FlexibleBox => {
             unsafe { &mut *object.cast::<LayoutBlock>() }.AddChildBase(child, before_child)
         }
@@ -1152,7 +1041,6 @@ pub extern "Rust" fn DispatchLayoutObjectAddChild(
 }
 
 // cpp: layoutng/internal/layout_block.h:180-183
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
     object: *const LayoutObject,
 ) -> *mut LayoutObjectChildList {
@@ -1168,7 +1056,7 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
             let objects = LayoutObjectFactoryScope::Objects();
             let children = unsafe { objects.as_ref() }
                 .and_then(|objects| objects.svg_root_children)
-                .or_else(|| SVG_ROOT_CHILDREN.get().copied())
+                .or_else(|| object_factories(object).svg_root_children)
                 .expect("SVG root children are not installed");
             children(unsafe { &*object })
         }
@@ -1214,7 +1102,6 @@ pub extern "Rust" fn DispatchLayoutObjectVirtualChildren(
 // cpp: layoutng/internal/layout_block.h:96-99
 // cpp: layoutng/internal/layout_block_flow.h:107-110
 // cpp: layoutng/internal/layout_view.h:102-105
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) -> &'static str {
     match class(object) {
         LayoutObjectClass::Table => return "LayoutTable",
@@ -1274,7 +1161,6 @@ pub extern "Rust" fn DispatchLayoutObjectGetName(object: *const LayoutObject) ->
 }
 
 // cpp: layoutng/internal/layout_block_flow.cc:132-135,565-603
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBlockFlowAllowsInlineChildren(
     flow: *const LayoutBlockFlow,
 ) -> bool {
@@ -1291,14 +1177,12 @@ pub extern "Rust" fn DispatchLayoutBlockFlowAllowsInlineChildren(
 
 // cpp: layoutng/internal/layout_block_flow.h:95-95
 // cpp: layoutng/internal/layout_block_flow.cc:536-563
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBlockFlowAllowsColumns(flow: *const LayoutBlockFlow) -> bool {
     assert!(!flow.is_null());
     class(flow.cast::<LayoutObject>());
     unsafe { &*flow }.AllowsColumnsBase()
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBlockFlowCreatesNewFormattingContext(
     flow: *const LayoutBlockFlow,
 ) -> bool {
@@ -1328,7 +1212,6 @@ pub extern "Rust" fn DispatchLayoutBlockFlowCreatesNewFormattingContext(
 
 // cpp: layoutng/internal/layout_block_flow.h:87-90
 // cpp: layoutng/internal/layout_view_layout.cc:223-226
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBlockFlowIsFragmentationContextRoot(
     flow: *const LayoutBlockFlow,
 ) -> bool {
@@ -1341,7 +1224,6 @@ pub extern "Rust" fn DispatchLayoutBlockFlowIsFragmentationContextRoot(
 }
 
 // cpp: layoutng/internal/layout_box.h:773-787
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutBox) -> bool {
     match class(box_ as *const LayoutBox as *const LayoutObject) {
         LayoutObjectClass::TextControlSingleLine
@@ -1371,7 +1253,6 @@ pub extern "Rust" fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutB
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBox) -> bool {
     let object = box_ as *const LayoutBox as *const LayoutObject;
     match class(object) {
@@ -1408,7 +1289,6 @@ pub extern "Rust" fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBo
 
 // cpp: layoutng/internal/layout_object.h:634-637
 // cpp: layoutng/internal/layout_box.h:1195-1198
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectIsEligibleForSizeContainmentProvider(
     object: &LayoutObject,
 ) -> bool {
@@ -1421,7 +1301,6 @@ pub extern "Rust" fn LayoutObjectIsEligibleForSizeContainmentProvider(
 
 // cpp: layoutng/internal/layout_box.h:718-721
 // cpp: layoutng/internal/layout_view_layout.cc:184-187
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxShouldPlaceBlockDirectionScrollbarOnLogicalLeftProvider(
     box_: &LayoutBox,
 ) -> bool {
@@ -1432,7 +1311,6 @@ pub extern "Rust" fn LayoutBoxShouldPlaceBlockDirectionScrollbarOnLogicalLeftPro
 }
 
 // cpp: layoutng/internal/layout_box_geometry.cc:244-252
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxEffectiveRootScrollerViewportSizeProvider(
     box_: &LayoutBox,
 ) -> PhysicalSize {
@@ -1444,7 +1322,6 @@ pub extern "Rust" fn LayoutBoxEffectiveRootScrollerViewportSizeProvider(
 
 // cpp: layoutng/internal/layout_box_model_tree.cc:200-203
 // cpp: layoutng/internal/layout_box_geometry.cc:376-387
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectContainingBlockLogicalWidthForContent(
     owner: *const LayoutBoxModelObject,
 ) -> LayoutUnit {
@@ -1457,7 +1334,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectContainingBlockLogicalWidthForC
 }
 
 // cpp: layoutng/internal/layout_box_model_tree.cc:77-92
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectMoveChildrenTo(
     owner: *mut LayoutBoxModelObject,
     to: *mut LayoutBoxModelObject,
@@ -1477,7 +1353,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectMoveChildrenTo(
 }
 
 // cpp: layoutng/internal/layout_sticky_constraints.cc:103-106
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectStickyContainer(
     owner: *const LayoutBoxModelObject,
 ) -> *mut LayoutBlock {
@@ -1494,7 +1369,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectStickyContainer(
 // cpp: layoutng/internal/layout_object_core_services.cc:436-446
 // cpp: layoutng/internal/layout_sticky_constraints.cc:137-149
 // cpp: layoutng/internal/layout_box_geometry.cc:389-402
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectOffsetFromContainerInternal(
     object: *const LayoutObject,
     container: *const LayoutObject,
@@ -1511,7 +1385,6 @@ pub extern "Rust" fn DispatchLayoutObjectOffsetFromContainerInternal(
 
 // cpp: layoutng/internal/layout_object_core_services.cc:280-292
 // cpp: layoutng/internal/layout_block.cc:334-338
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectRecalcScrollableOverflow(
     object: *mut LayoutObject,
 ) -> RecalcScrollableOverflowResult {
@@ -1561,7 +1434,6 @@ fn IsLayoutBlockClass(runtime_class: LayoutObjectClass) -> bool {
 // core/layout/layout_block.cc:629-641, core/layout/layout_text.cc:1486-1495,
 // core/layout/layout_replaced.cc:301-319 and
 // core/layout/svg/layout_svg_root.cc:215-220.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut LayoutObject) {
     let runtime_class = class(object);
     // LayoutSVGRoot derives from LayoutReplaced and its source override begins
@@ -1600,7 +1472,6 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut Layou
 
 // cpp: core/layout/layout_box_model_object.h:173-173,
 // core/layout/layout_box.h:326-326 and core/layout/layout_inline.h:155-155.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectVisualOverflowRect(
     object: &LayoutBoxModelObject,
 ) -> PhysicalRect {
@@ -1642,7 +1513,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectVisualOverflowRect(
 }
 
 // cpp: third_party/blink/renderer/core/layout/layout_box_model_object.cc:522-543
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
     object: &LayoutBoxModelObject,
 ) -> PhysicalRect {
@@ -1656,7 +1526,6 @@ pub extern "Rust" fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
 }
 
 // cpp: third_party/blink/renderer/core/layout/layout_box_model_object.cc:526-543
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxModelObjectApplyFiltersToRect(
     object: &LayoutBoxModelObject,
     rect: &PhysicalRect,
@@ -1681,7 +1550,6 @@ pub extern "Rust" fn LayoutBoxModelObjectApplyFiltersToRect(
 
 // cpp: core/layout/layout_object.h:2812-2816. The concrete methods retain
 // their source-package implementations; this is only the C++ vtable edge.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectAddOutlineRects(
     object: &LayoutObject,
     collector: &mut dyn OutlineRectCollector,
@@ -1748,7 +1616,6 @@ pub extern "Rust" fn DispatchLayoutObjectAddOutlineRects(
 }
 
 // cpp: layoutng/internal/layout_object.h:2854-2857
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectUpdateAnonymousChildStyle(
     object: *const LayoutObject,
     child: *const LayoutObject,
@@ -1771,7 +1638,6 @@ pub extern "Rust" fn DispatchLayoutObjectUpdateAnonymousChildStyle(
 
 // cpp: layoutng_forms/layout_fieldset.h:48-48
 // cpp: layoutng_forms/layout_fieldset.cc:68-114
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectInsertedIntoTree(object: *mut LayoutObject) {
     if class(object).IsTableClass() {
         (table_virtuals(object).inserted_into_tree)(unsafe { &mut *object });
@@ -1795,7 +1661,6 @@ pub extern "Rust" fn DispatchLayoutObjectInsertedIntoTree(object: *mut LayoutObj
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectWillBeRemovedFromTree(object: *mut LayoutObject) {
     if class(object).IsTableClass() {
         (table_virtuals(object).will_be_removed_from_tree)(unsafe { &mut *object });
@@ -1814,7 +1679,6 @@ pub extern "Rust" fn DispatchLayoutObjectWillBeRemovedFromTree(object: *mut Layo
 }
 
 // cpp: layoutng_forms/layout_fieldset.h:30-35
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxContentLayoutBoxProvider(box_: &mut LayoutBox) -> *mut LayoutBox {
     if class(box_ as *mut LayoutBox as *mut LayoutObject) == LayoutObjectClass::Fieldset {
         let objects = LayoutObjectFactoryScope::Objects();
@@ -1829,7 +1693,6 @@ pub extern "Rust" fn LayoutBoxContentLayoutBoxProvider(box_: &mut LayoutBox) -> 
 
 // cpp: layoutng_forms/layout_fieldset.h:65-67
 // cpp: layoutng_forms/layout_fieldset.cc:214-226
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxScrollWidthProvider(box_: &LayoutBox) -> LayoutUnit {
     if class(box_ as *const LayoutBox as *const LayoutObject) == LayoutObjectClass::Fieldset {
         let objects = LayoutObjectFactoryScope::Objects();
@@ -1842,7 +1705,6 @@ pub extern "Rust" fn LayoutBoxScrollWidthProvider(box_: &LayoutBox) -> LayoutUni
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxScrollHeightProvider(box_: &LayoutBox) -> LayoutUnit {
     if class(box_ as *const LayoutBox as *const LayoutObject) == LayoutObjectClass::Fieldset {
         let objects = LayoutObjectFactoryScope::Objects();
@@ -1860,7 +1722,6 @@ pub extern "Rust" fn LayoutBoxScrollHeightProvider(box_: &LayoutBox) -> LayoutUn
 // cpp: layoutng/internal/layout_block.cc:340-379
 // cpp: layoutng/internal/layout_block_flow.cc:605-624
 // cpp: layoutng/internal/layout_view_layout.cc:214-221
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectStyleWillChange(
     object: *mut LayoutObject,
     difference: StyleDifference,
@@ -1890,7 +1751,6 @@ pub extern "Rust" fn DispatchLayoutObjectStyleWillChange(
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
     object: *mut LayoutObject,
     difference: StyleDifference,
@@ -1899,9 +1759,7 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
     context: &StyleChangeContext,
 ) {
     match class(object) {
-        LayoutObjectClass::Grid => GRID_STYLE_DID_CHANGE
-            .get()
-            .expect("grid StyleDidChange virtual dispatch is not registered")(
+        LayoutObjectClass::Grid => (grid_virtuals(object).style_did_change)(
             object, difference, old_style, new_style, context,
         ),
         LayoutObjectClass::Table
@@ -2037,7 +1895,6 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
 // cpp: layoutng/internal/layout_box_lifecycle.cc:33-38
 // cpp: layoutng/internal/layout_block.cc:63-67
 // cpp: layoutng/internal/layout_view_layout.cc:194-202
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObject) {
     match class(object) {
         LayoutObjectClass::Grid => unsafe { &mut *object.cast::<LayoutBlock>() }.WillBeDestroyed(),
@@ -2110,7 +1967,6 @@ pub extern "Rust" fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObje
 }
 
 // cpp: layoutng/internal/layout_object.h:3398-3402
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectAnonymousHasStylePropagationOverride(
     object: *mut LayoutObject,
 ) -> bool {
@@ -2120,7 +1976,6 @@ pub extern "Rust" fn DispatchLayoutObjectAnonymousHasStylePropagationOverride(
 
 // cpp: layoutng/internal/layout_object_core_services.cc:150-162
 // cpp: layoutng/internal/layout_block_flow.cc:293-348
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
     object: *mut LayoutObject,
     old_child: *mut LayoutObject,
@@ -2136,7 +1991,7 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
     }
 
     match class(object) {
-        LayoutObjectClass::Grid => (grid_virtuals().remove_child)(object, old_child),
+        LayoutObjectClass::Grid => (grid_virtuals(object).remove_child)(object, old_child),
         LayoutObjectClass::SvgRoot => {
             let objects = LayoutObjectFactoryScope::Objects();
             let remove = unsafe { objects.as_ref() }
@@ -2179,7 +2034,6 @@ pub extern "Rust" fn DispatchLayoutObjectRemoveChild(
 
 // cpp: layoutng/internal/layout_box_model_object.h:350-353
 // cpp: layoutng/internal/layout_block_flow.cc:350-358
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectCanMergeWith(
     owner: *const LayoutBoxModelObject,
     other: &LayoutBoxModelObject,
@@ -2221,7 +2075,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectCanMergeWith(
 }
 
 // cpp: layoutng/internal/layout_block.cc:254-258
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
     box_: &LayoutBox,
     parent: *const LayoutObject,
@@ -2263,7 +2116,6 @@ pub extern "Rust" fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
 }
 
 // cpp: layoutng/internal/layout_box.h:909-921
-#[unsafe(no_mangle)]
 pub extern "Rust" fn InvalidateLayoutResultCacheAfterMeasureProvider(box_: &LayoutBox) {
     if class(box_ as *const LayoutBox as *const LayoutObject).IsTableClass() {
         (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).invalidate_after_measure)(
@@ -2278,7 +2130,6 @@ pub extern "Rust" fn InvalidateLayoutResultCacheAfterMeasureProvider(box_: &Layo
     box_.InvalidateLayoutResultCacheAfterMeasureBase()
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(
     box_: &LayoutBox,
 ) -> *const BoxStrut {
@@ -2294,7 +2145,6 @@ pub extern "Rust" fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(
     box_.IntrinsicLogicalWidthsBorderSizesBase()
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
     box_: &mut LayoutBox,
     borders: &BoxStrut,
@@ -2313,7 +2163,6 @@ pub extern "Rust" fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:192-203
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectPaddingOutsets(
     owner: *const LayoutBoxModelObject,
 ) -> PhysicalBoxStrut {
@@ -2327,7 +2176,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelObjectPaddingOutsets(
     unsafe { &*owner }.PaddingOutsetsBase()
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelObjectBorderOutsets(
     owner: *const LayoutBoxModelObject,
 ) -> PhysicalBoxStrut {
@@ -2381,7 +2229,6 @@ fn is_box_class(class: LayoutObjectClass) -> bool {
 // cpp: layoutng/internal/layout_box_model_lifecycle.cc:63
 // cpp: layoutng/internal/layout_box.h:1220
 // cpp: layoutng/internal/layout_view.h:355
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutBoxModelUpdateFromStyle(object: *mut LayoutBoxModelObject) {
     match class(object.cast::<LayoutObject>()) {
         LayoutObjectClass::Grid => unsafe { &mut *object.cast::<LayoutBox>() }.UpdateFromStyle(),
@@ -2437,7 +2284,6 @@ pub extern "Rust" fn DispatchLayoutBoxModelUpdateFromStyle(object: *mut LayoutBo
 }
 
 // cpp: layoutng/internal/layout_box_fragment_data.cc:133-155
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectHasInlineFragments(object: *const LayoutObject) -> bool {
     match class(object) {
         #[cfg(feature = "translation_in_progress")]
@@ -2460,7 +2306,6 @@ pub extern "Rust" fn DispatchLayoutObjectHasInlineFragments(object: *const Layou
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectFirstInlineFragmentItemIndex(
     object: *const LayoutObject,
 ) -> usize {
@@ -2485,7 +2330,6 @@ pub extern "Rust" fn DispatchLayoutObjectFirstInlineFragmentItemIndex(
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectClearFirstInlineFragmentItemIndex(
     object: *mut LayoutObject,
 ) {
@@ -2510,7 +2354,6 @@ pub extern "Rust" fn DispatchLayoutObjectClearFirstInlineFragmentItemIndex(
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectSetFirstInlineFragmentItemIndex(
     object: *mut LayoutObject,
     index: usize,
@@ -2536,7 +2379,6 @@ pub extern "Rust" fn DispatchLayoutObjectSetFirstInlineFragmentItemIndex(
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectInlineFormattingContextWillChange(
     object: *mut LayoutObject,
     new_value: bool,
@@ -2562,7 +2404,6 @@ pub extern "Rust" fn DispatchLayoutObjectInlineFormattingContextWillChange(
 }
 
 // cpp: layoutng/internal/layout_block.cc:63-67
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObject) -> bool {
     if matches!(
         class(object),
@@ -2622,7 +2463,6 @@ fn table_virtuals(
         .and_then(|o| o.table_virtuals)
         .expect("source table virtual dispatch is not installed")
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> PhysicalSize {
     if box_.RuntimeClass().IsTableClass() {
         (table_virtuals(box_ as *const LayoutBox as *const LayoutObject).stitched_size)(box_)
@@ -2630,7 +2470,6 @@ pub extern "Rust" fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> Physical
         box_.StitchedSizeBase()
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxPhysicalLocationProvider(box_: &LayoutBox) -> PhysicalOffset {
     if box_.IsSVGForeignObject() {
         let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
@@ -2644,7 +2483,6 @@ pub extern "Rust" fn LayoutBoxPhysicalLocationProvider(box_: &LayoutBox) -> Phys
         box_.PhysicalLocationBase()
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxOverflowClipRectProvider(
     box_: &LayoutBox,
     behavior: foundation::OverlayScrollbarClipBehavior,
@@ -2661,7 +2499,6 @@ pub extern "Rust" fn LayoutBoxOverflowClipRectProvider(
         box_.OverflowClipRectWithBehaviorBase(behavior)
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectVisualRectRespectsVisibility(
     object: *const LayoutObject,
 ) -> bool {
@@ -2677,7 +2514,6 @@ pub extern "Rust" fn DispatchLayoutObjectVisualRectRespectsVisibility(
         unsafe { &*object }.VisualRectRespectsVisibilityBase()
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject) {
     if unsafe { &*object }.IsVideo() {
         unsafe { &mut *object.cast::<LayoutVideo>() }.UpdateFromElement();
@@ -2691,36 +2527,16 @@ pub extern "Rust" fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutOb
 }
 
 // cpp: layoutng_grid/layout_grid.h:87-96,108-109
-pub struct GridObjectVirtuals {
-    pub add_child: fn(*mut LayoutObject, *mut LayoutObject, *mut LayoutObject),
-    pub remove_child: fn(*mut LayoutObject, *mut LayoutObject),
-    pub stitched_row_gap_index:
-        fn(*const LayoutObject, &PhysicalBoxFragment, usize, Option<usize>) -> usize,
-    pub adjust_anchor_containing_block:
-        fn(
-            &LayoutBox,
-            *const crate::internal::grid_layout_data::GridLayoutData,
-            &ComputedStyle,
-            &layout_geometry::geometry::logical_rect::LogicalRect,
-            &LayoutBox,
-        ) -> layout_geometry::geometry::logical_rect::LogicalRect,
-}
-static GRID_OBJECT_VIRTUALS: OnceLock<GridObjectVirtuals> = OnceLock::new();
-pub fn RegisterGridObjectVirtuals(callbacks: GridObjectVirtuals) {
-    GRID_OBJECT_VIRTUALS.get_or_init(|| callbacks);
-}
-fn grid_virtuals() -> &'static GridObjectVirtuals {
-    GRID_OBJECT_VIRTUALS
-        .get()
+fn grid_virtuals(object: *const LayoutObject) -> GridObjectVirtuals {
+    object_factories(object)
+        .grid_virtuals
         .expect("grid virtual dispatch is not registered")
 }
 // cpp: layoutng_grid/layout_grid.h:102-105
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutGrid(object: *const LayoutObject) -> bool {
     class(object) == LayoutObjectClass::Grid
 }
 // cpp: layoutng/internal/layout_object.h:943-945
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsLayoutGridOrGridLanes(
     object: *const LayoutObject,
 ) -> bool {
@@ -2728,7 +2544,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsLayoutGridOrGridLanes(
 }
 // cpp: layoutng/internal/layout_box_geometry.cc:61-67
 // cpp: layoutng_grid/layout_grid.cc:27-38
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxAdjustOutOfFlowContainingBlockForAnchorProvider(
     box_: &LayoutBox,
     data: *const crate::internal::grid_layout_data::GridLayoutData,
@@ -2737,13 +2552,13 @@ pub extern "Rust" fn LayoutBoxAdjustOutOfFlowContainingBlockForAnchorProvider(
     query: &LayoutBox,
 ) -> layout_geometry::geometry::logical_rect::LogicalRect {
     if box_.RuntimeClass() == LayoutObjectClass::Grid {
-        (grid_virtuals().adjust_anchor_containing_block)(box_, data, style, padding, query)
+        let object = box_ as *const LayoutBox as *const LayoutObject;
+        (grid_virtuals(object).adjust_anchor_containing_block)(box_, data, style, padding, query)
     } else {
         *padding
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectIsSVGViewportContainer(
     object: *const LayoutObject,
 ) -> bool {
@@ -2752,7 +2567,6 @@ pub extern "Rust" fn DispatchLayoutObjectIsSVGViewportContainer(
 
 // Source: core/layout/layout_object.h:2496-2510,3628-3634. The native
 // object class selects the same most-derived source quad override.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn DispatchLayoutObjectQuadsInAncestorInternal(
     object: &LayoutObject,
     quads: &mut foundation::Vector<foundation::gfx::QuadF>,

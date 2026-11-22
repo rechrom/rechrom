@@ -156,6 +156,40 @@ pub struct TableObjectVirtuals {
     pub text_iterator_table_facts: fn(&LayoutObject) -> (bool, bool, bool),
 }
 
+// C++ LayoutGrid overrides these LayoutObject/LayoutBox virtuals; the class
+// lives in the grid package. Filled by `layout_algo_grid::registration::Register`
+// and read through the object's own factory set (`LayoutObject::FactorySet()`).
+// cpp: layoutng_grid/layout_grid.h:87-96,108-109
+#[derive(Clone, Copy)]
+pub struct GridObjectVirtuals {
+    pub add_child: fn(*mut LayoutObject, *mut LayoutObject, *mut LayoutObject),
+    pub remove_child: fn(*mut LayoutObject, *mut LayoutObject),
+    pub style_did_change: fn(
+        *mut LayoutObject,
+        StyleDifference,
+        *const ComputedStyle,
+        &ComputedStyle,
+        &super::layout_object::StyleChangeContext,
+    ),
+    pub stitched_row_gap_index: StitchedRowGapIndex,
+    pub adjust_anchor_containing_block: fn(
+        &LayoutBox,
+        *const super::grid_layout_data::GridLayoutData,
+        &ComputedStyle,
+        &layout_geometry::geometry::logical_rect::LogicalRect,
+        &LayoutBox,
+    ) -> layout_geometry::geometry::logical_rect::LogicalRect,
+}
+
+// LayoutObject::StitchedRowGapIndex, overridden by LayoutFlexibleBox and
+// LayoutGrid. cpp: layoutng/internal/layout_object.h:2023-2029
+pub type StitchedRowGapIndex = fn(
+    *const LayoutObject,
+    &crate::physical_box_fragment::PhysicalBoxFragment,
+    usize,
+    Option<usize>,
+) -> usize;
+
 // cpp: layoutng/internal/layout_object_factory_set.h:45-85
 #[derive(Clone, Copy, Default)]
 pub struct LayoutObjectFactorySet {
@@ -184,7 +218,10 @@ pub struct LayoutObjectFactorySet {
     pub replaced_image_resource_facts: Option<ReplacedImageResourceFactsQuery>,
     pub replaced_video_state_updater: Option<ReplacedVideoStateUpdater>,
     pub flex: Option<LayoutObjectFactory>,
+    /// LayoutFlexibleBox::StitchedRowGapIndex (layoutng_flex/layout_flexible_box.h:33-37).
+    pub flex_stitched_row_gap_index: Option<StitchedRowGapIndex>,
     pub grid: Option<LayoutObjectFactory>,
+    pub grid_virtuals: Option<GridObjectVirtuals>,
     pub grid_lanes: Option<LayoutObjectFactory>,
     pub table: Option<LayoutObjectFactory>,
     pub custom: Option<LayoutObjectFactory>,
@@ -243,4 +280,32 @@ pub struct LayoutObjectFactorySet {
     pub forms_metadata: Option<ElementMetadataFactory>,
     pub frameset_metadata: Option<ElementMetadataFactory>,
     pub mathml_metadata: Option<ElementMetadataFactory>,
+}
+
+impl LayoutObjectFactorySet {
+    /// Reject an object factory installed without the virtual overrides its
+    /// objects dispatch to. A missing override would otherwise surface only
+    /// when the first such object reaches that virtual call.
+    pub fn validate_virtual_overrides(&self) {
+        let grid_objects = self.grid.is_some() || self.anonymous_grid.is_some();
+        assert_eq!(
+            grid_objects,
+            self.grid_virtuals.is_some(),
+            "LayoutGrid factories and grid_virtuals must be installed together"
+        );
+        let flex_objects = self.flex.is_some() || self.anonymous_flex.is_some();
+        assert_eq!(
+            flex_objects,
+            self.flex_stitched_row_gap_index.is_some(),
+            "LayoutFlexibleBox factories and flex_stitched_row_gap_index must be installed together"
+        );
+        if self.svg.is_some() {
+            assert!(
+                self.svg_root_children.is_some()
+                    && self.svg_inline_text_scaled_font.is_some()
+                    && self.svg_inline_text_scaling_factor.is_some(),
+                "the SVG factory requires svg_root_children and the SVG inline text font overrides"
+            );
+        }
+    }
 }

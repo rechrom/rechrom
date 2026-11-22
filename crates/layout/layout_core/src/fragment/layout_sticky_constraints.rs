@@ -20,14 +20,10 @@ use super::super::sticky_position_scrolling_constraints::{
     StickyConstraintsData, StickyPositionScrollingConstraints,
 };
 
-// LayoutInline's bounds and table-specific StickyContainer overrides are
-// provided by their owning packages during hierarchy assembly.
-unsafe extern "Rust" {
-    fn DispatchLayoutInlinePhysicalLinesBoundingBox(inline: *const LayoutObject) -> PhysicalRect;
-    fn DispatchLayoutBoxModelObjectStickyContainer(
-        object: *const LayoutBoxModelObject,
-    ) -> *mut LayoutBlock;
-}
+// The table-specific StickyContainer overrides are dispatched through the
+// object's factory set by the LayoutObject virtual dispatch.
+use crate::block_virtual_dispatch::DispatchLayoutBoxModelObjectStickyContainer;
+use super::super::layout_inline::LayoutInline;
 
 #[inline(never)]
 fn MapRectToAncestorIgnoringPaintGeometry(
@@ -175,11 +171,12 @@ impl LayoutBoxModelObject {
 
         let container = self.Container();
         let sticky_box_rect = if self.IsLayoutInline() {
-            unsafe {
-                DispatchLayoutInlinePhysicalLinesBoundingBox(
-                    self as *const _ as *const LayoutObject,
-                )
-            }
+            // LayoutInline is base object model (Chromium core/layout/
+            // layout_inline.cc); call it directly. This was a link-time
+            // symbol whose only definition was the block-only host's
+            // "excluded package" panic stub.
+            let inline = To::<LayoutInline>(self as *const _ as *const LayoutObject);
+            unsafe { &*inline }.PhysicalLinesBoundingBox()
         } else {
             let box_ = To::<LayoutBox>(self as *const _ as *const LayoutObject);
             let box_ = unsafe { &*box_ };

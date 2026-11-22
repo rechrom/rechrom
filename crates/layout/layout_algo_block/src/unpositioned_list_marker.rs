@@ -2,7 +2,7 @@
 
 use font_engine::FontBaseline;
 use foundation::{
-    LayoutUnit, RuntimeEnabledFeatures, TextDirection, To, UnsupportedLayout, Visitor,
+    LayoutUnit, RuntimeEnabledFeatures, TextDirection, To, UnsupportedLayout,
 };
 use layout_core::box_fragment_builder::BoxFragmentBuilder;
 use layout_core::layout_result::LayoutResult;
@@ -20,10 +20,150 @@ use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_style::style::computed_style::ComputedStyle;
 
-// C++ defines these methods on the layoutng-owned class in this package.
-// Rust keeps the owner there and provides the typed bodies through symbols.
+// C++ defines these methods on the base-declared class in this package. Rust
+// cannot add inherent methods to a type of another crate, so they are this
+// extension trait; only the block algorithm calls them, as direct static calls.
+// cpp: layoutng/internal/unpositioned_list_marker.h:55-106
+pub trait UnpositionedListMarkerAlgorithms: Sized {
+    // cpp: layoutng/internal/unpositioned_list_marker.h:55
+    fn new(node: &BlockNode) -> Self;
+    // cpp: layoutng/internal/unpositioned_list_marker.h:64-67
+    fn ContentAlignmentBaseline(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        content: &PhysicalFragment,
+    ) -> Option<LayoutUnit>;
+    // cpp: layoutng/internal/unpositioned_list_marker.h:69-76
+    #[allow(clippy::too_many_arguments)]
+    fn AddToBox(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        content: &PhysicalFragment,
+        border_scrollbar_padding: &BoxStrut,
+        marker_layout_result: &LayoutResult,
+        content_baseline: LayoutUnit,
+        block_offset: &mut LayoutUnit,
+        builder: *mut BoxFragmentBuilder,
+    );
+    // cpp: layoutng/internal/unpositioned_list_marker.h:81-86
+    fn AddToBoxWithoutLineBoxes(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        marker_layout_result: &LayoutResult,
+        builder: *mut BoxFragmentBuilder,
+        intrinsic_block_size: &mut LayoutUnit,
+    );
+    fn InlineOffset(&self, marker_inline_size: LayoutUnit) -> LayoutUnit;
+    // cpp: layoutng/internal/unpositioned_list_marker.h:92-94
+    fn Layout(
+        &self,
+        parent_space: &ConstraintSpace,
+        parent_style: &ComputedStyle,
+        baseline: FontBaseline,
+    ) -> *const LayoutResult;
+    // cpp: layoutng/internal/unpositioned_list_marker.h:96-100
+    #[cfg(debug_assertions)]
+    fn CheckMargin(&self);
+    // cpp: layoutng/internal/unpositioned_list_marker.h:103-106
+    fn ComputeIntrudedFloatOffset(
+        &self,
+        space: &ConstraintSpace,
+        builder: *const BoxFragmentBuilder,
+        border_scrollbar_padding: &BoxStrut,
+        marker_block_offset: LayoutUnit,
+    ) -> LayoutUnit;
+}
+
+impl UnpositionedListMarkerAlgorithms for UnpositionedListMarker {
+    fn new(node: &BlockNode) -> Self {
+        UnpositionedListMarker::FromMarkerLayoutObject(UnpositionedListMarkerConstructFromBlock(
+            node,
+        ))
+    }
+    fn ContentAlignmentBaseline(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        content: &PhysicalFragment,
+    ) -> Option<LayoutUnit> {
+        UnpositionedListMarkerContentAlignmentBaselineFromBlock(self, space, baseline, content)
+    }
+    fn AddToBox(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        content: &PhysicalFragment,
+        border_scrollbar_padding: &BoxStrut,
+        marker_layout_result: &LayoutResult,
+        content_baseline: LayoutUnit,
+        block_offset: &mut LayoutUnit,
+        builder: *mut BoxFragmentBuilder,
+    ) {
+        UnpositionedListMarkerAddToBoxFromBlock(
+            self,
+            space,
+            baseline,
+            content,
+            border_scrollbar_padding,
+            marker_layout_result,
+            content_baseline,
+            block_offset,
+            builder,
+        )
+    }
+    fn AddToBoxWithoutLineBoxes(
+        &self,
+        space: &ConstraintSpace,
+        baseline: FontBaseline,
+        marker_layout_result: &LayoutResult,
+        builder: *mut BoxFragmentBuilder,
+        intrinsic_block_size: &mut LayoutUnit,
+    ) {
+        UnpositionedListMarkerAddToBoxWithoutLineBoxesFromBlock(
+            self,
+            space,
+            baseline,
+            marker_layout_result,
+            builder,
+            intrinsic_block_size,
+        )
+    }
+    fn InlineOffset(&self, marker_inline_size: LayoutUnit) -> LayoutUnit {
+        UnpositionedListMarkerInlineOffsetFromBlock(self, marker_inline_size)
+    }
+    fn Layout(
+        &self,
+        parent_space: &ConstraintSpace,
+        parent_style: &ComputedStyle,
+        baseline: FontBaseline,
+    ) -> *const LayoutResult {
+        UnpositionedListMarkerLayoutFromBlock(self, parent_space, parent_style, baseline)
+    }
+    #[cfg(debug_assertions)]
+    fn CheckMargin(&self) {
+        UnpositionedListMarkerCheckMarginFromBlock(self)
+    }
+    fn ComputeIntrudedFloatOffset(
+        &self,
+        space: &ConstraintSpace,
+        builder: *const BoxFragmentBuilder,
+        border_scrollbar_padding: &BoxStrut,
+        marker_block_offset: LayoutUnit,
+    ) -> LayoutUnit {
+        UnpositionedListMarkerComputeIntrudedFloatOffsetFromBlock(
+            self,
+            space,
+            builder,
+            border_scrollbar_padding,
+            marker_block_offset,
+        )
+    }
+}
+
 // cpp: layoutng_block/unpositioned_list_marker.cc:20-23
-#[no_mangle]
 pub fn UnpositionedListMarkerConstructFromBlock(
     node: &BlockNode,
 ) -> *mut layout_core::internal::layout_box::LayoutBox {
@@ -33,7 +173,6 @@ pub fn UnpositionedListMarkerConstructFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:25-37
-#[no_mangle]
 pub fn UnpositionedListMarkerInlineOffsetFromBlock(
     marker: &UnpositionedListMarker,
     marker_inline_size: LayoutUnit,
@@ -57,7 +196,6 @@ pub fn UnpositionedListMarkerInlineOffsetFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:39-53
-#[no_mangle]
 #[inline(never)]
 pub fn UnpositionedListMarkerLayoutFromBlock(
     marker: &UnpositionedListMarker,
@@ -79,7 +217,6 @@ pub fn UnpositionedListMarkerLayoutFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:55-79
-#[no_mangle]
 pub fn UnpositionedListMarkerContentAlignmentBaselineFromBlock(
     _marker: &UnpositionedListMarker,
     space: &ConstraintSpace,
@@ -98,7 +235,6 @@ pub fn UnpositionedListMarkerContentAlignmentBaselineFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:81-129
-#[no_mangle]
 #[inline(never)]
 pub fn UnpositionedListMarkerAddToBoxFromBlock(
     marker: &UnpositionedListMarker,
@@ -155,7 +291,6 @@ pub fn UnpositionedListMarkerAddToBoxFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:131-163
-#[no_mangle]
 #[inline(never)]
 pub fn UnpositionedListMarkerAddToBoxWithoutLineBoxesFromBlock(
     marker: &UnpositionedListMarker,
@@ -185,7 +320,6 @@ pub fn UnpositionedListMarkerAddToBoxWithoutLineBoxesFromBlock(
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:165-202
-#[no_mangle]
 #[inline(never)]
 pub fn UnpositionedListMarkerComputeIntrudedFloatOffsetFromBlock(
     marker: &UnpositionedListMarker,
@@ -224,7 +358,6 @@ pub fn UnpositionedListMarkerComputeIntrudedFloatOffsetFromBlock(
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:204-214
 #[cfg(debug_assertions)]
-#[no_mangle]
 pub fn UnpositionedListMarkerCheckMarginFromBlock(marker: &UnpositionedListMarker) {
     let object = marker.MarkerLayoutObject();
     debug_assert!(!object.is_null());
@@ -232,10 +365,5 @@ pub fn UnpositionedListMarkerCheckMarginFromBlock(marker: &UnpositionedListMarke
 }
 
 // cpp: layoutng_block/unpositioned_list_marker.cc:216-218
-#[no_mangle]
-pub fn UnpositionedListMarkerTraceFromBlock(
-    marker: &UnpositionedListMarker,
-    visitor: &mut Visitor,
-) {
-    marker.TraceMarkerMember(visitor);
-}
+// UnpositionedListMarker::Trace is a record member defined with the type in
+// base (`unpositioned_list_marker_interface.rs`).

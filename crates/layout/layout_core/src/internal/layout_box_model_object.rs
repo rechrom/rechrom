@@ -35,15 +35,12 @@ mod layout_fragment_empty_element_caret;
 mod layout_invalidation_layout_box_model_layer_invalidation;
 
 // Declarations without supplied bodies remain typed external contracts.
+use crate::block_virtual_dispatch::{
+    DispatchLayoutBoxModelObjectVisualOverflowRect,
+    LayoutBoxModelObjectApplyFiltersToRect,
+    LayoutBoxModelObjectVisualOverflowRectIncludingFilters,
+};
 unsafe extern "Rust" {
-    fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
-        this: &LayoutBoxModelObject,
-    ) -> PhysicalRect;
-    fn DispatchLayoutBoxModelObjectVisualOverflowRect(this: &LayoutBoxModelObject) -> PhysicalRect;
-    fn LayoutBoxModelObjectApplyFiltersToRect(
-        this: &LayoutBoxModelObject,
-        rect: &PhysicalRect,
-    ) -> PhysicalRect;
     fn LayoutBoxModelObjectAdjustedPositionRelativeTo(
         this: &LayoutBoxModelObject,
         offset: &PhysicalOffset,
@@ -86,14 +83,10 @@ const _: () = assert!(std::mem::offset_of!(LayoutBoxModelObject, object_) == 0);
 // Padding and borders are virtual because LayoutBox and LayoutInline can
 // replace the base computations.
 // cpp: layoutng/internal/layout_box_model_object.h:192-203
-unsafe extern "Rust" {
-    fn DispatchLayoutBoxModelObjectPaddingOutsets(
-        owner: *const LayoutBoxModelObject,
-    ) -> PhysicalBoxStrut;
-    fn DispatchLayoutBoxModelObjectBorderOutsets(
-        owner: *const LayoutBoxModelObject,
-    ) -> PhysicalBoxStrut;
-}
+use crate::block_virtual_dispatch::{
+    DispatchLayoutBoxModelObjectBorderOutsets,
+    DispatchLayoutBoxModelObjectPaddingOutsets,
+};
 
 impl LayoutBoxModelObject {
     // cpp: layoutng/internal/layout_box_model_tree.cc:33-35

@@ -132,18 +132,18 @@ unsafe extern "Rust" {
         value: bool,
     );
 }
+use crate::layout_algo_inline_editing_caret::LayoutInlinePositionForPoint;
+use crate::layout_fragment_package::inline_cursor::{
+    LayoutInlineCollectLineBoxRects,
+    LayoutInlineHasInlineFragments,
+    LayoutInlineLinesVisualOverflowBoundingBox,
+    LayoutInlinePhysicalLinesBoundingBox,
+};
 unsafe extern "Rust" {
     fn LayoutInlineLocalBoundingBoxRectForAccessibility(
         this: &LayoutInline,
         include_descendants: IncludeDescendants,
     ) -> gfx::RectF;
-    fn LayoutInlinePhysicalLinesBoundingBox(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlineLinesVisualOverflowBoundingBox(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlineCollectLineBoxRects(
-        this: &LayoutInline,
-        collector: &mut dyn FnMut(&PhysicalRect),
-    );
-    fn LayoutInlineHasInlineFragments(this: &LayoutInline) -> bool;
     fn LayoutInlineHitTestCulledInline(
         this: &mut LayoutInline,
         result: &mut HitTestResult,
@@ -165,10 +165,6 @@ unsafe extern "Rust" {
     fn LayoutInlineLayerTypeRequired(this: &LayoutInline) -> PaintLayerType;
     fn LayoutInlineOffsetPoint(this: &LayoutInline, element: *const Element) -> PhysicalOffset;
     fn LayoutInlineBoundingBoxRelativeToFirstFragment(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlinePositionForPoint(
-        this: &LayoutInline,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity;
     fn LayoutInlineDirtyLinesFromChangedChild(this: &mut LayoutInline, child: *mut LayoutObject);
     fn LayoutInlineUpdateHitTestResult(
         this: &LayoutInline,

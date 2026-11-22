@@ -11,18 +11,26 @@ use layout_assembly::internal::layout_node_metadata::Element;
 use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_style::style::computed_style::ComputedStyleBuilder;
 
-// cpp: layoutng_forms/layout_fieldset.cc:13-19
-#[unsafe(no_mangle)]
-pub extern "Rust" fn BlockNodeGetFieldsetContentFromForms(node: &BlockNode) -> BlockNode {
-    if !node.IsFieldsetContainer() {
-        return BlockNode::null();
+// BlockNode members whose bodies Chromium defines in the forms package. Rust
+// cannot add inherent methods to the base type here; only this crate calls it.
+// cpp: layoutng/internal/block_node.h:125
+pub trait BlockNodeFormsAlgorithms {
+    fn GetFieldsetContent(&self) -> BlockNode;
+}
+
+impl BlockNodeFormsAlgorithms for BlockNode {
+    // cpp: layoutng_forms/layout_fieldset.cc:13-19
+    fn GetFieldsetContent(&self) -> BlockNode {
+        if !self.IsFieldsetContainer() {
+            return BlockNode::null();
+        }
+        let fieldset = To::<LayoutFieldset>(self.GetLayoutBox());
+        BlockNode::new(
+            unsafe { &*fieldset }
+                .FindAnonymousFieldsetContentBox()
+                .cast(),
+        )
     }
-    let fieldset = To::<LayoutFieldset>(node.GetLayoutBox());
-    BlockNode::new(
-        unsafe { &*fieldset }
-            .FindAnonymousFieldsetContentBox()
-            .cast(),
-    )
 }
 
 // cpp: layoutng_forms/layout_fieldset.h:13-13

@@ -7,7 +7,6 @@ use layout_assembly::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
 use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::RegisterFlexTotalRowGapCount;
 
 use crate::flex_line::FlexLineVector;
 
@@ -59,9 +58,11 @@ impl FlexBreakTokenData {
         break_before_row: FlexBreakBeforeRow,
         gap_data: FlexGapBreakTokenData,
     ) -> Self {
-        RegisterFlexTotalRowGapCount(DispatchFlexTotalRowGapCount);
         Self {
-            base: BreakTokenAlgorithmData::new(BreakTokenAlgorithmDataType::kFlexData),
+            base: BreakTokenAlgorithmData::NewWithTotalRowGapCount(
+                BreakTokenAlgorithmDataType::kFlexData,
+                DispatchFlexTotalRowGapCount,
+            ),
             flex_lines: flex_lines.clone(),
             row_break_between: row_break_between.to_vec(),
             oof_children: oof_children.clone(),

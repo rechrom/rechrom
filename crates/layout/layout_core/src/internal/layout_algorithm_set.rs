@@ -207,6 +207,11 @@ pub struct ListLayoutSupport {
     pub symbol_marker_text: Option<fn(*const LayoutObject) -> *const LayoutObject>,
     pub symbol_width: Option<fn(&ComputedStyle, &AtomicString) -> LayoutUnit>,
     pub outside_marker_inline_offset: Option<fn(&LayoutObject, LayoutUnit) -> LayoutUnit>,
+    // LayoutListItem::Value() (layoutng_list/layout_list_item.cc) as read by
+    // editing/commands/break_blockquote_command.cc:51-62; `None` when the
+    // object is not a LayoutListItem. Editing reads it after layout, also
+    // outside a layout pass, through `LayoutPassScope::ResidentListSupport()`.
+    pub list_item_value: Option<fn(*const LayoutObject) -> Option<i32>>,
 }
 
 // cpp: layoutng/internal/layout_algorithm_set.h:168-175
@@ -483,7 +488,8 @@ impl LayoutAlgorithmSet {
                 || self.list_support.marker_occupies_whole_line.is_some()
                 || self.list_support.symbol_marker_text.is_some()
                 || self.list_support.symbol_width.is_some()
-                || self.list_support.outside_marker_inline_offset.is_some(),
+                || self.list_support.outside_marker_inline_offset.is_some()
+                || self.list_support.list_item_value.is_some(),
         );
         validate_support_performance_owner(
             "forms_support",

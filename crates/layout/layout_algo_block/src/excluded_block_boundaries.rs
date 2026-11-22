@@ -8,8 +8,7 @@ use font_engine::Font;
 use foundation::transform_operations::{
     RotateTransformOperation, ScaleTransformOperation, TranslateTransformOperation,
 };
-use foundation::{gfx, Length, PhysicalRect, TextDirection, TransformOperations};
-use layout_core::internal::layout_object::LayoutObject;
+use foundation::{gfx, Length, TextDirection, TransformOperations};
 use layout_style::style::content_data::ContentData;
 use std::ffi::c_void;
 
@@ -24,7 +23,6 @@ macro_rules! excluded {
 
 excluded! {
     fn ContentDataClone(value: &dyn ContentData) -> *mut dyn ContentData;
-    fn DispatchLayoutInlinePhysicalLinesBoundingBox(inline: *const LayoutObject) -> PhysicalRect;
     fn RotateTransformOperationApply(operation: &RotateTransformOperation, transform: &mut gfx::Transform, size: &gfx::SizeF) -> ();
     fn RotateTransformOperationEqual(a: &RotateTransformOperation, b: &RotateTransformOperation) -> bool;
     fn ScaleTransformOperationApply(operation: &ScaleTransformOperation, transform: &mut gfx::Transform, size: &gfx::SizeF) -> ();

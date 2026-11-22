@@ -5,7 +5,6 @@
 
 use super::*;
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectBackgroundIsKnownToBeObscuredProvider(
     object: *const LayoutObject,
 ) -> bool {
@@ -14,7 +13,6 @@ pub extern "Rust" fn LayoutObjectBackgroundIsKnownToBeObscuredProvider(
     object.bitfields_.background_is_known_to_be_obscured_
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetBackgroundIsKnownToBeObscuredProvider(
     object: *mut LayoutObject,
     value: bool,
@@ -27,7 +25,6 @@ pub extern "Rust" fn LayoutObjectSetBackgroundIsKnownToBeObscuredProvider(
 // Source: LayoutObject::SetIsBackgroundAttachmentFixedObject
 // (core/layout/layout_object.cc). The LayoutView carries LocalFrameView's
 // fixed-background object set in this assembly.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider(
     object: *mut LayoutObject,
     value: bool,

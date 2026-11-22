@@ -34,7 +34,6 @@ impl LayoutObject {
     }
 }
 
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectMaybeClearIsScrollAnchorObjectProvider(object: *mut LayoutObject) {
     let object = unsafe { &mut *object };
     object.CheckIsNotDestroyed();
@@ -66,7 +65,6 @@ impl LayoutObject {
 
 // The C++ call is virtual.  Preserve that dispatch before entering the exact
 // base body above or LayoutBox's background-obscuration work would be skipped.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectEnsureIsReadyForPaintInvalidationProvider(
     object: *mut LayoutObject,
 ) {
@@ -79,7 +77,6 @@ pub extern "Rust" fn LayoutObjectEnsureIsReadyForPaintInvalidationProvider(
 }
 
 // cpp: layoutng/internal/layout_object.h:2802-2802
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider(
     object: *mut LayoutObject,
 ) {
@@ -91,7 +88,6 @@ pub extern "Rust" fn LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundIm
 }
 
 // cpp: layoutng/internal/layout_object.h:2821-2821
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectClearShouldDelayFullPaintInvalidationProvider(
     object: *mut LayoutObject,
 ) {
@@ -268,7 +264,6 @@ impl LayoutObject {
 // the invalidation owner even though LayoutSelection calls it through the
 // native LayoutObject API. The package split previously left only the extern
 // declaration, so changing focus jumped through an unresolved provider.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetShouldInvalidateSelectionProvider(object: *mut LayoutObject) {
     let object = unsafe { &mut *object };
     object.CheckIsNotDestroyed();
@@ -285,7 +280,6 @@ pub extern "Rust" fn LayoutObjectSetShouldInvalidateSelectionProvider(object: *m
 }
 
 // Chromium layout_object.cc:5218-5227.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(
     object: *mut LayoutObject,
 ) {
@@ -301,7 +295,6 @@ pub extern "Rust" fn LayoutObjectSetShouldInvalidatePaintForHitTestProvider(
 
 // Chromium layout_object.cc:5468-5512. The flags belong to the original
 // LayoutObject and propagate through its live parent chain, stopping at a lock.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(
     object: *mut LayoutObject,
     reasons: PrePaintSubtreeWalkReasons,
@@ -318,7 +311,6 @@ pub extern "Rust" fn LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(
         parent.SetDescendantNeedsPrePaintSubtreeWalk(reasons);
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider(
     mut object: *mut LayoutObject,
     reasons: PrePaintSubtreeWalkReasons,
@@ -339,7 +331,6 @@ pub extern "Rust" fn LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider(
         object = current.Parent();
     }
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(
     object: *mut LayoutObject,
 ) {
@@ -349,7 +340,6 @@ pub extern "Rust" fn LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(
         ),
     );
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(
     object: *mut LayoutObject,
 ) {
