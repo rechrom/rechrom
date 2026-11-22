@@ -527,6 +527,11 @@ each new log.
   (Visual Studio Build Tools on Windows, Xcode command-line tools on macOS).
   Text, fonts and Unicode run on pure-Rust crates (HarfRust, read-fonts/skrifa,
   ICU4X); do not add system-library dependencies.
+- Modules follow the file layout their path implies; no `#[path]`, no
+  `include!` of source files; only build-script output via
+  `include!(concat!(env!("OUT_DIR"), …))`. rustc resolves `#[path]` through
+  the real filesystem on macOS/Linux but lexically on Windows;
+  `crates/layout/layout/tests/source_layout.rs` guards the rule.
 - Dependencies come from crates.io, pinned in `Cargo.lock`; no git
   dependencies. A third-party crate is vendored only when its local patch is
   necessary; `vendor/README.md` lists each one, and `vendor/patches/` holds
