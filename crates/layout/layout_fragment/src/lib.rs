@@ -1,3 +1,8 @@
+// Not a crate root: `layout_assembly` `include!`s this file as
+// `layout_fragment_package`. The standalone `layout_fragment` crate is
+// `package.rs` (+ `boundary_types.rs`, `trace.rs`); see its top comment for
+// which compile unit owns each file in this directory.
+//
 // `api`, `internal_headers`, and `runtime` are Bazel targets of one package.
 // This crate keeps their modules together; callers should use only interfaces
 // allowed by the original target visibility.

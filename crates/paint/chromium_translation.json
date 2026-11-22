@@ -18106,7 +18106,7 @@
               1092
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_item.rs; crates/layoutng/layout_fragment/src/ink_overflow.rs; crates/paint/paint_record/src/inline_paint_context.rs; crates/layoutng/layout_algo_inline/src/layout_text_interface.rs; crates/layoutng/layout_algo_inline/src/assembly.rs; crates/layoutng/layout_algo_svg/src/layout_svg_inline_text.rs; crates/layoutng/layout_algo_svg/src/assembly.rs; crates/layoutng/layoutng/src/internal/layout_object_factory_set.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_item.rs; crates/layoutng/layout_fragment/src/ink_overflow.rs; crates/layout/layout_fragment/src/inline_paint_context.rs; crates/layoutng/layout_algo_inline/src/layout_text_interface.rs; crates/layoutng/layout_algo_inline/src/assembly.rs; crates/layoutng/layout_algo_svg/src/layout_svg_inline_text.rs; crates/layoutng/layout_algo_svg/src/assembly.rs; crates/layoutng/layoutng/src/internal/layout_object_factory_set.rs",
           "note": "SVG bounding-box transform, scaling-factor/scaled-font dispatch, SVG shaped-text ink overflow, cursor traversal, cached/unshaped and ordinary shaped text storage, scoped inline and line decoration contexts, block and inline box fragments, nested-line handling, text-combine bounding-box adjustment and descendant coordinate conversion"
         }
       ]
@@ -19383,7 +19383,7 @@
               69
             ]
           ],
-          "rust": "crates/paint/paint_record/src/decorating_box.rs",
+          "rust": "crates/layout/layout_fragment/src/decorating_box.rs",
           "note": "decorating-box offset, used-font, style and applied-decoration identity plus GC tracing and FragmentItem constructors"
         },
         {
@@ -19415,7 +19415,7 @@
               141
             ]
           ],
-          "rust": "crates/paint/paint_record/src/inline_paint_context.rs",
+          "rust": "crates/layout/layout_fragment/src/inline_paint_context.rs",
           "note": "decorating-box stack, line cursor, paint offset and all four RAII scopes retain their Paint-owned input/output boundary"
         },
         {
@@ -19463,7 +19463,7 @@
               360
             ]
           ],
-          "rust": "crates/paint/paint_record/src/inline_paint_context.rs; crates/paint/paint_record/src/decorating_box.rs",
+          "rust": "crates/layout/layout_fragment/src/inline_paint_context.rs; crates/layout/layout_fragment/src/decorating_box.rs",
           "note": "pointer-identity decoration synchronization, propagation-stop restoration, culled-inline lookup and debug integrity diagnostics, ancestor order, line-box anonymous decorating boxes and scoped state restoration"
         },
         {
@@ -20087,7 +20087,7 @@
               188
             ]
           ],
-          "rust": "crates/paint/paint_record/src/line_relative_rect.rs; crates/paint/paint_record/src/box_fragment_painter.rs",
+          "rust": "crates/layout/layout_fragment/src/line_relative_rect.rs; crates/paint/paint_record/src/box_fragment_painter.rs",
           "note": "type-safe fixed-point line-relative offset and rect geometry, physical/rotated conversion, writing-mode transforms, snapping, union, inflation and FragmentItem ink-overflow adjustment; the live text-decoration path constructs its logical geometry through CreateFromLineBox"
         },
         {
@@ -20119,7 +20119,7 @@
               154
             ]
           ],
-          "rust": "crates/paint/paint_record/src/line_relative_rect.rs; crates/paint/paint_record/src/box_fragment_painter.rs",
+          "rust": "crates/layout/layout_fragment/src/line_relative_rect.rs; crates/paint/paint_record/src/box_fragment_painter.rs",
           "note": "outer-edge enclosure, writing-mode transforms, line-relative enclosure, inflation, union and FragmentItem ink-overflow edge adjustment are translated in the owning Paint source and CreateFromLineBox feeds live decoration recording"
         },
         {
@@ -20163,7 +20163,7 @@
               248
             ]
           ],
-          "rust": "crates/paint/paint_record/src/text_decoration_info.rs; crates/layoutng/layoutng_foundation/src/resolved_underline_position.rs",
+          "rust": "crates/layout/layout_fragment/src/text_decoration_info.rs; crates/layoutng/layoutng_foundation/src/resolved_underline_position.rs",
           "note": "fragment context, one shared resolved-underline-position identity, resolved decoration, style/decorating-box resolution, all decoration line geometry and line-color declarations, run metrics, insets, thickness, core accessors and retained state"
         },
         {
@@ -20199,7 +20199,7 @@
               686
             ]
           ],
-          "rust": "crates/paint/paint_record/src/text_decoration_info.rs; crates/layoutng/layoutng/src/internal/layout_theme.rs; crates/layoutng/layoutng/src/internal/text_decoration_offset.rs; crates/font_engine/src/fonts/font_description.rs; crates/font_engine/src/text/native/layout_locale.rs; crates/layoutng/layoutng_assembly/src/lib.rs",
+          "rust": "crates/layout/layout_fragment/src/text_decoration_info.rs; crates/layoutng/layoutng/src/internal/layout_theme.rs; crates/layoutng/layoutng/src/internal/text_decoration_offset.rs; crates/font_engine/src/fonts/font_description.rs; crates/font_engine/src/text/native/layout_locale.rs; crates/layoutng/layoutng_assembly/src/lib.rs",
           "note": "underline-position resolution, fragment adjacency/run metrics, exact style/decorating-box resolution, inset semantics and its runtime-feature invariant, underline/overline/line-through/spelling/grammar geometry, platform marker/highlight/selection/applied line-color precedence, Android native-spellcheck FeatureList state, platform thickness and highlight override; real LayoutTheme, UsedFont and TextDecorationOffset methods are linked once at the existing reciprocal assembly boundary"
         },
         {
@@ -20521,13 +20521,13 @@
               1131
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs; crates/layoutng/layoutng/src/layout_output.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/line_relative_rect.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/browser/tests/text_decoration_selection_clip.rs; crates/browser/tests/text_controls.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs; crates/layoutng/layoutng/src/layout_output.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/layout/layout_fragment/src/line_relative_rect.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/browser/tests/text_decoration_selection_clip.rs; crates/browser/tests/text_controls.rs",
           "note": "the retained Paint equivalent records the originating shadow before the resolved selection background and selection shadow, omits fully transparent selection backgrounds, slices selected glyph clusters, skips transform-defeated SVG selection clips, and obtains native line-relative range geometry from FragmentItem/ShapeResult before stroke inflation, fragment-start/end ink-overflow adjustment, exact unit/non-unit UsedFont block geometry and writing-mode rotation; text-fit and decoration ordering stay in the existing TextFragmentPainter mapping; overlay part merging remains unclaimed"
         },
         {
           "status": "translated",
           "lines": [[61,65],[67,82],[276,348],[415,445],[663,670],[831,831],[842,853],[957,960],[987,987],[1000,1000],[1006,1028],[1071,1116],[1132,1132]],
-          "rust": "crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/paint/paint_record/src/line_relative_rect.rs; crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs",
+          "rust": "crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/paint_auto_dark_mode.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/layout/layout_fragment/src/line_relative_rect.rs; crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs",
           "note": "Selection state/style/range geometry, transparent and empty-background rejection, pixel-snapped background recording with selection-role automatic darkening and minimum visible contrast, ligature-aware selected glyphs, stroke-inflated clipping, fragment-edge ink-overflow adjustment and used-font/SVG decoration clipping are retained."
         },
         {
@@ -24828,7 +24828,7 @@
               727
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/ink_overflow.rs; crates/layoutng/layout_fragment/src/fragment_item.rs; crates/paint/paint_record/src/inline_paint_context.rs; crates/paint/paint_record/src/text_decoration_info.rs; crates/layoutng/layoutng/src/internal/text_decoration_offset.rs; crates/layoutng/layoutng_foundation/src/text_decoration_geometry.rs; crates/layoutng/layout_algo_inline/src/layout_text_interface.rs; crates/layoutng/layout_algo_inline/src/layout_text_combine.rs; crates/layoutng/layout_algo_inline/src/assembly.rs; crates/layoutng/layout_algo_svg/src/layout_svg_inline_text.rs; crates/layoutng/layout_algo_svg/src/assembly.rs",
+          "rust": "crates/layoutng/layout_fragment/src/ink_overflow.rs; crates/layoutng/layout_fragment/src/fragment_item.rs; crates/layout/layout_fragment/src/inline_paint_context.rs; crates/layout/layout_fragment/src/text_decoration_info.rs; crates/layoutng/layoutng/src/internal/text_decoration_offset.rs; crates/layoutng/layoutng_foundation/src/text_decoration_geometry.rs; crates/layoutng/layout_algo_inline/src/layout_text_interface.rs; crates/layoutng/layout_algo_inline/src/layout_text_combine.rs; crates/layoutng/layout_algo_inline/src/assembly.rs; crates/layoutng/layout_algo_svg/src/layout_svg_inline_text.rs; crates/layoutng/layout_algo_svg/src/assembly.rs",
           "note": "ordinary and SVG shaped-text glyph bounds, applied and selection decoration overflow through the retained InlinePaintContext, exact decoration line bounds, SVG length-adjust/scaling/transform conversion, stroke, emphasis, shadow, writing-mode conversion and compact self-overflow storage, plus the same exact effects used by LayoutTextCombine"
         },
         {
@@ -27314,7 +27314,7 @@
             [38, 41],
             [43, 48]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/text_decoration_info.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/layout/layout_fragment/src/text_decoration_info.rs",
           "note": "The transient C++ aggregate is split across immutable PaintStyleData and fragment selection-decoration snapshots: current/fill/stroke colors, stroke width, used color scheme, shadow list, selection decoration line/color and paint order all cross the boundary and are consumed by glyph, shadow and decoration recording. Rust value equality and retained revision comparison cover the represented fields without a GC member wrapper."
         },
         {
@@ -27442,7 +27442,7 @@
             [282, 292],
             [305, 305]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/line_relative_rect.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/paint/paint_record/src/selection_bounds_recorder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_export_support.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/text_fragment_queries.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/layout/layout_fragment/src/line_relative_rect.rs; crates/paint/paint_record/src/text_decoration_painter.rs; crates/paint/paint_record/src/selection_bounds_recorder.rs",
           "note": "Selection status, style, state, physical/line-relative range geometry, lazy selection rectangles, background painting, selected glyph slicing, originating shadow ordering, selection background clipping and originating-decoration geometry are represented by immutable fragment selection inputs and BoxFragmentPainter's text path. The Rust painter chooses background and foreground work directly rather than retaining the C++ SelectionPaintState wrapper."
         },
         {

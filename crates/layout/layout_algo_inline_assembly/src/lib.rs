@@ -19,8 +19,7 @@ pub mod layout_algo_inline_package {
 }
 pub use layout_algo_inline_package::*;
 
-#[path = "../../../css_parser/src/color_parser.rs"]
-pub mod css_color_parser;
+pub use css_parser::color_parser as css_color_parser;
 
 #[path = "../../layout_assembly/src/block_virtual_dispatch.rs"]
 mod block_virtual_dispatch;
