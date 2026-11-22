@@ -2297,6 +2297,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "layout"
+version = "0.0.1"
+dependencies = [
+ "foundation",
+ "image_resource",
+ "intersection_observer",
+ "layout_algo_block",
+ "layout_algo_flex",
+ "layout_algo_float",
+ "layout_algo_forms",
+ "layout_algo_grid",
+ "layout_algo_list",
+ "layout_algo_multicol",
+ "layout_algo_out_of_flow",
+ "layout_algo_replaced",
+ "layout_algo_svg",
+ "layout_algo_table",
+ "layout_assembly",
+ "layout_commit",
+ "layout_fragment",
+ "layout_geometry",
+ "layout_style",
+ "paint_input_types",
+ "scroll_snap",
+]
+
+[[package]]
 name = "layout_algo_block"
 version = "0.0.1"
 dependencies = [

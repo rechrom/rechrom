@@ -1,0 +1,42 @@
+[package]
+name = "layout"
+version = "0.0.1"
+edition = "2021"
+
+# The public Layout facade, like `paint` over `prepaint`/`paint_*`. Other
+# engines depend on this crate only; the core engine, its translated
+# algorithms and their assembly stay private Layout packages.
+[dependencies]
+foundation = { path = "../../foundation" }
+image_resource = { path = "../../image_resource" }
+intersection_observer = { path = "../../webapi/intersection_observer" }
+scroll_snap = { path = "../../compositor/scroll_snap" }
+# Consumers already compile Layout with the in-progress editing/inline
+# surface (dom, interaction, html); the facade exposes that same surface.
+layout_assembly = { path = "../layout_assembly", features = ["translation_in_progress"] }
+layout_fragment = { path = "../layout_fragment" }
+layout_commit = { path = "../layout_commit" }
+paint_input_types = { path = "../paint_input_types" }
+layout_geometry = { path = "../layout_geometry" }
+layout_style = { path = "../layout_style" }
+layout_algo_block = { path = "../layout_algo_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_multicol = { path = "../layout_algo_multicol" }
+layout_algo_flex = { path = "../layout_algo_flex" }
+layout_algo_grid = { path = "../layout_algo_grid" }
+layout_algo_table = { path = "../layout_algo_table" }
+layout_algo_float = { path = "../layout_algo_float" }
+layout_algo_forms = { path = "../layout_algo_forms" }
+layout_algo_replaced = { path = "../layout_algo_replaced" }
+layout_algo_svg = { path = "../layout_algo_svg" }
+layout_algo_list = { path = "../layout_algo_list" }
+layout_algo_out_of_flow = { path = "../layout_algo_out_of_flow", optional = true }
+
+[features]
+default = ["inline_layout"]
+# The browser's full algorithm set: inline formatting, block-inline support
+# and out-of-flow positioning. Without it the assembly keeps the source
+# capability errors for those slots.
+inline_layout = ["layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
+
+[lib]
+path = "src/lib.rs"
