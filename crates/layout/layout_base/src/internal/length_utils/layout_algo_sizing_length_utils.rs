@@ -2082,7 +2082,7 @@ fn ComputeReplacedSizeInternal(
     };
 
     let mut replaced_inline = None;
-    let mut inline_min_max_sizes = if mode == ReplacedSizeMode::kIgnoreInlineLengths {
+    let inline_min_max_sizes = if mode == ReplacedSizeMode::kIgnoreInlineLengths {
         transferred_min_max_sizes
     } else {
         let mut sizes = MinMaxSizes {

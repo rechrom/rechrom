@@ -2,7 +2,7 @@
 
 use font_engine::{Font, RunSegmenterRange, ShapeResult};
 use foundation::{
-    DirectionFromLevel, HeapVector, MakeGarbageCollected, Member, String, TextDirection, To,
+    DirectionFromLevel, HeapVector, Member, String, TextDirection, To,
     Visitor,
 };
 use layout_style::style::computed_style::ComputedStyle;

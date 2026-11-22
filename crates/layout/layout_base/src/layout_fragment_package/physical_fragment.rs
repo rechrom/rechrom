@@ -2,8 +2,8 @@ use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 
 use foundation::{
-    DynamicTo, GCedHeapVector, HeapVector, IsA, LayoutUnit, MakeGarbageCollected, Member,
-    PhysicalOffset, PhysicalRect, PhysicalSize, String, StringBuilder, TextDirection,
+    DynamicTo, GCedHeapVector, HeapVector, IsA, MakeGarbageCollected, Member,
+    PhysicalOffset, PhysicalRect, PhysicalSize, String, StringBuilder,
     ThreadAffinity, ThreadingTrait, To, Visitor, WritingMode,
 };
 use crate::internal::anchor_map::AnchorMap;
@@ -11,7 +11,6 @@ use crate::internal::block_node::BlockNode;
 use crate::internal::form_node_metadata::TextControlElement;
 use crate::internal::layout_box::LayoutBox;
 use crate::internal::layout_box_model_object::LayoutBoxModelObject;
-use crate::internal::layout_box_model_object::PaintLayer;
 use crate::internal::layout_node_metadata::{Element, Node};
 use crate::internal::layout_object::LayoutObject;
 use crate::internal::oof_positioned_node::FragmentedOofData;

@@ -14,7 +14,7 @@ use layout_geometry::geometry::axis::{
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_style::style::computed_style::ComputedStyle;
-use layout_style::style::computed_style_constants::{PseudoId, ScrollbarGutter};
+use layout_style::style::computed_style_constants::ScrollbarGutter;
 
 use super::super::layout_box::LayoutBox;
 use super::super::layout_node_metadata::{Element, Node};

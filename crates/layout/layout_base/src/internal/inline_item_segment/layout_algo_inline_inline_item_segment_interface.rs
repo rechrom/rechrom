@@ -1,10 +1,9 @@
 #![allow(non_snake_case, unused_unsafe)]
 
 use font_engine::{
-    Font, FontFallbackPriority, HarfBuzzShaper, RenderOrientation, RunSegmenter, RunSegmenterRange,
-    ShapeOptions, ShapeResult,
+    FontFallbackPriority, RenderOrientation, RunSegmenterRange,
 };
-use foundation::{HeapVector, MakeGarbageCollected, Member, String, TextDirection, TextOffsetMap, Vector, Visitor};
+use foundation::{HeapVector, MakeGarbageCollected, Vector, Visitor};
 
 use super::super::inline_item::InlineItem;
 

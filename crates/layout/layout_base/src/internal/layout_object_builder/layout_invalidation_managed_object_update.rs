@@ -352,7 +352,7 @@ fn create_managed_object(
             && old.effective_style.LayoutEquivalent(&effective_style)
     });
     let context = layout_algo_block_fragmentation_context::fragmentation_context(parent);
-    let mut prepare_style = |data: &NodeConstructionData,
+    let prepare_style = |data: &NodeConstructionData,
                              parent_style: *const StyleComputedStyle,
                              parent_kind: NodeKind| {
         // SAFETY: Create runs on one thread, and the TLS scope is restored

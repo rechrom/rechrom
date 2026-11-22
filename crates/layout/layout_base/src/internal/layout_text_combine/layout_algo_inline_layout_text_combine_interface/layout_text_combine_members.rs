@@ -7,7 +7,7 @@ use font_engine::{Font, FontOrientation};
 use foundation::String;
 use foundation::{
     EDisplay, LayoutUnit, MakeGarbageCollected, PhysicalOffset, PhysicalRect, PhysicalSize,
-    TextDecorationLine, TextDirection, TextEmphasisMark, WritingDirectionMode, WritingMode,
+    TextDecorationLine, TextDirection, TextEmphasisMark, WritingDirectionMode,
 };
 use crate::inline_cursor::InlineCursor;
 use crate::internal::layout_block_flow::LayoutBlockFlow;
@@ -20,8 +20,6 @@ use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 use layout_style::style::anonymous_style::CreateAnonymousStyleBuilderWithDisplay;
-use layout_style::style::computed_style::ComputedStyle;
-use layout_style::style::shadow_list::ShadowList;
 
 // InkOverflow helpers (Chromium core/layout/ink_overflow.cc), base like this file.
 use crate::internal::ink_overflow::{

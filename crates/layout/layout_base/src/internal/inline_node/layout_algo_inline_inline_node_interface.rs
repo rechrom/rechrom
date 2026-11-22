@@ -2,29 +2,21 @@
 
 use std::ops::{Deref, DerefMut};
 
-use font_engine::{Font, ShapeResultSpacing};
 use foundation::{
-    HeapVector, LayoutUnit, Member, String, TextDirection, TextOffsetMap, Vector, Visitor,
-    WritingMode, UnsupportedLayout,
+    HeapVector, LayoutUnit, Member, TextDirection, TextOffsetMap, Vector, Visitor,
+    UnsupportedLayout,
 };
-use crate::break_token::BreakToken;
 use crate::inline_items_data::InlineItemsData;
-use crate::layout_result::LayoutResult;
 use layout_style::style::computed_style::ComputedStyle;
 
-use super::super::algorithm_forward::{InlineChildLayoutContext, OffsetMapping, TextDiffRange};
-use super::super::column_spanner_path::ColumnSpannerPath;
-use super::super::constraint_space::ConstraintSpace;
-use super::super::inline_item::{InlineItem, InlineItems};
+use super::super::algorithm_forward::OffsetMapping;
 use super::super::inline_node_data::InlineNodeData;
 use super::super::layout_block_flow::LayoutBlockFlow;
 use super::super::layout_input::TextDirection as InputTextDirection;
-use super::super::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
+use super::super::layout_input_node::LayoutInputNode;
 use super::super::layout_pass_scope::LayoutPassScope;
-use super::super::layout_text::LayoutText;
-use super::super::min_max_sizes::MinMaxSizesResult;
 use super::super::svg_character_data::SvgCharacterData;
-use super::super::svg_inline_node_data::{SvgTextChunkOffsets, SvgTextContentRange};
+use super::super::svg_inline_node_data::SvgTextContentRange;
 
 // R5 split of the snapshot's layoutng_inline/inline_node.cc members:
 // - The one-line InlineNodeData readers (Chromium declares them inline in

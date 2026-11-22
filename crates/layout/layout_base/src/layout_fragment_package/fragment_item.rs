@@ -7,7 +7,7 @@ use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::{
     gfx, DynamicTo, IsHorizontalWritingMode, LayoutUnit, MakeGarbageCollected, Member,
     PhysicalOffset, PhysicalRect, PhysicalSize, String, StringBuilder, StringView, TextDirection,
-    To, UnsupportedLayout, Visitor, WritingMode,
+    To, Visitor, WritingMode,
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use crate::internal::ink_overflow::{InkOverflow, InkOverflowType};

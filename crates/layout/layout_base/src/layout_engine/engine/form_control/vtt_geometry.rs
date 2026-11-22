@@ -2,7 +2,7 @@
 use crate::{
     internal::{
         layout_block_flow::LayoutBlockFlow, layout_box::LayoutBox,
-        layout_box_model_object::LayoutBoxModelObject, layout_node_metadata::Element,
+        layout_box_model_object::LayoutBoxModelObject,
         layout_object::LayoutObject, map_coordinates_flags::MapCoordinatesFlags,
     },
     layout_engine::LayoutEngine,

@@ -1029,7 +1029,7 @@ pub fn ProjectComputedStyle(
     let mut ext = crate::internal::layout_input::ExtendedStyle::default();
     use crate::internal::layout_input::{
         Display, FloatSide, ListStylePosition as LayoutListStylePosition,
-        ListStyleType as LayoutListStyleType, Overflow, Position, WhiteSpace,
+        Overflow, Position, WhiteSpace,
     };
     resolved.display = match computed_style.Display() {
         EDisplay::kInline => Display::kInline,

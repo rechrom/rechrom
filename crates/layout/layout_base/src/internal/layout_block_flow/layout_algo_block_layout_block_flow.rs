@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 use foundation::{
     DynamicTo, EColumnSpan, EDisplay, HeapVector, MakeGarbageCollected, Member,
-    PaintInvalidationReason, PhysicalOffset, RuntimeEnabledFeatures, String as BlinkString, To,
+    PhysicalOffset, RuntimeEnabledFeatures, String as BlinkString, To,
     UnsupportedLayout,
 };
 use crate::fragment_items::FragmentItems;

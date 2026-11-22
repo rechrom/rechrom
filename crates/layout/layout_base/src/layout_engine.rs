@@ -1361,7 +1361,6 @@ impl LayoutEngine {
             ));
         }
 
-        let root_node = root.GetNode();
         let constraints = {
             let _constraints = layout_invalidation::trace_span(
                 layout_invalidation::TracePhase::PrepareConstraints,

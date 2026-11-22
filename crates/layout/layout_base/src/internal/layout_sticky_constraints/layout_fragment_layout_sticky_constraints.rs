@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{
-    EPosition, LayoutUnit, Length, MakeGarbageCollected, Member, MinimumValueForLength,
+    EPosition, LayoutUnit, Length, MakeGarbageCollected, MinimumValueForLength,
     PhysicalOffset, PhysicalRect, RuntimeEnabledFeatures, To,
 };
 use layout_geometry::geometry::axis::{

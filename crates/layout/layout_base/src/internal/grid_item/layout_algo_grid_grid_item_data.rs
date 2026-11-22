@@ -5,7 +5,6 @@ use foundation::{
     HeapVector, LayoutUnit, MakeGarbageCollected, Member, TextDirection, Visitor,
     WritingDirectionMode, WritingMode,
 };
-use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::grid_area::{GridArea, GridSpan};
 use layout_style::style::grid_enums::GridTrackSizingDirection::{self, kForColumns, kForRows};
 
@@ -13,7 +12,7 @@ use super::super::baseline_utils::BaselineGroup;
 use super::super::block_node::BlockNode;
 use super::super::constraint_space::AutoSizeBehavior;
 use super::super::grid_track_collection::{
-    GridLayoutTrackCollection, GridSizingTrackCollection, PropertyId, SetIterator,
+    GridSizingTrackCollection, PropertyId, SetIterator,
     TrackSpanProperties,
 };
 use super::super::min_max_sizes::MinMaxSizes;

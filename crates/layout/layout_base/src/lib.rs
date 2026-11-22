@@ -9,6 +9,8 @@
 //! R7a turned base's former link-time pairs into direct calls; the callers'
 //! former `unsafe { Extern(...) }` blocks now wrap safe functions.
 #![allow(unused_unsafe)]
+// Chromium identifiers (methods, enum variants, kConstants) keep their source spelling.
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 pub use foundation::UnsupportedLayout;
 

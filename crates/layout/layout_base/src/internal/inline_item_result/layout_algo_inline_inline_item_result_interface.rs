@@ -2,7 +2,7 @@
 
 use super::super::algorithm_forward::InlineItemResultRubyColumn;
 use font_engine::ShapeResultView;
-use foundation::{HeapVector, LayoutUnit, Member, String, Visitor};
+use foundation::{HeapVector, LayoutUnit, Member, Visitor};
 use crate::layout_result::LayoutResult;
 use layout_geometry::geometry::box_strut::LineBoxStrut;
 
@@ -11,7 +11,7 @@ use super::super::hyphen_result::HyphenResult;
 use super::super::inline_item::{InlineItem, InlineItemType};
 use super::super::inline_item_text_index::InlineItemTextIndex;
 use super::super::positioned_float::PositionedFloat;
-use super::super::text_fit_scale::{TextFitBlockScale, TextFitScale};
+use super::super::text_fit_scale::TextFitScale;
 use super::super::text_offset_range::TextOffsetRange;
 
 // R5: the out-of-line members (constructor, ShapeHyphen, CheckConsistency,

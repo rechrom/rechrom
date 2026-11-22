@@ -64,7 +64,7 @@ use super::layout_inline::LayoutInline;
 use super::layout_node_data::LayoutBoxRareData;
 use super::layout_node_metadata::{ContainerNode, Element, Node};
 use super::layout_object::{
-    BackgroundPaintLocation, BoxQuadType, HitTestLocation, HitTestResult, IncludeDescendants,
+    BoxQuadType, HitTestLocation, HitTestResult, IncludeDescendants,
     LayoutObject, LayoutObjectClass, LocalRectForBoxQuad,
     MutableForPainting as LayoutObjectMutableForPainting, PaintInfo, PaintInvalidatorContext,
     PositionedState, RecalcScrollableOverflowResult,

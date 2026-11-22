@@ -6,8 +6,8 @@ use foundation::{
     gfx, Color, CompositingReasons, DynamicTo, EBackfaceVisibility, EColumnSpan, EDisplay,
     EOverflow, EOverscrollContainerType, EPosition, EVisibility, IsFullPaintInvalidationReason,
     IsLayoutHeapSweepingOnOwningThread, MakeGarbageCollected, Member, PaintInvalidationReason,
-    PhysicalOffset, PhysicalRect, RespectImageOrientationEnum, RuntimeEnabledFeatures,
-    String as BlinkString, StringBuilder, SubtreePaintPropertyUpdateReason, ThreadAffinity,
+    PhysicalOffset, PhysicalRect, RuntimeEnabledFeatures,
+    StringBuilder, SubtreePaintPropertyUpdateReason, ThreadAffinity,
     ThreadingTrait, TouchAction, TransformState, UniqueObjectId, Vector, Visitor,
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
@@ -18,7 +18,7 @@ use layout_geometry::geometry::axis::PhysicalAxis;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, OverflowClipAxes,
 };
-use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
+use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::computed_style_constants::PseudoId;
 use layout_style::style::cursor_list::CursorList;
 use layout_style::style::fill_layer::FillLayer;
@@ -43,7 +43,6 @@ use super::caret_rect::CaretShape;
 use super::editing::forward::{PositionWithAffinity, TextAffinity};
 use super::hit_test_phase::HitTestPhase;
 use super::layout_block::LayoutBlock;
-use super::layout_block_flow::LayoutBlockFlow;
 use super::layout_box::LayoutBox;
 use super::layout_box_model_object::{LayoutBoxModelObject, PaintLayer};
 use super::layout_input::{CompatibilityMode, DocumentRole, ViewportGeometry};
@@ -676,24 +675,6 @@ use crate::block_virtual_dispatch::{
     LayoutObjectAdditionalCompositingReasonsProvider,
     LayoutObjectCanHaveAdditionalCompositingReasonsProvider,
     LayoutObjectIsEligibleForSizeContainmentProvider,
-};
-use self::layout_fragment_layout_object_effective_style::LayoutObjectHasClipRelatedPropertyProvider;
-use self::layout_fragment_layout_object_paint_state::{
-    LayoutObjectBackgroundIsKnownToBeObscuredProvider,
-    LayoutObjectSetBackgroundIsKnownToBeObscuredProvider,
-    LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider,
-};
-use self::layout_invalidation_layout_object_prepaint_invalidation::{
-    LayoutObjectClearShouldDelayFullPaintInvalidationProvider,
-    LayoutObjectEnsureIsReadyForPaintInvalidationProvider,
-    LayoutObjectMarkBlockingWheelEventHandlerChangedProvider,
-    LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider,
-    LayoutObjectMaybeClearIsScrollAnchorObjectProvider,
-    LayoutObjectSetDescendantNeedsPrePaintSubtreeWalkProvider,
-    LayoutObjectSetMayNeedPaintInvalidationAnimatedBackgroundImageProvider,
-    LayoutObjectSetNeedsPrePaintSubtreeWalkProvider,
-    LayoutObjectSetShouldInvalidatePaintForHitTestProvider,
-    LayoutObjectSetShouldInvalidateSelectionProvider,
 };
 unsafe extern "Rust" {
     fn LayoutObjectGetCachedPseudoElementStyleProvider(

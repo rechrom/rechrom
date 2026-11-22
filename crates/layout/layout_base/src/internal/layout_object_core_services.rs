@@ -3,8 +3,8 @@
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types;
 use foundation::{
-    gfx, DynamicTo, EDisplay, ETextTransform, IsHorizontalTypographicMode, LayoutUnit,
-    PhysicalOffset, String as BlinkString, StringBuilder, To, UnsupportedLayout, ValuesEquivalent,
+    gfx, DynamicTo, EDisplay, ETextTransform, IsHorizontalTypographicMode,
+    String as BlinkString, StringBuilder, UnsupportedLayout, ValuesEquivalent,
 };
 use graphics_types::graphics::dom_node_id::{kInvalidDOMNodeId, DOMNodeId};
 use layout_geometry::geometry::axis::PhysicalAxis;
@@ -22,7 +22,7 @@ use super::layout_object::{
 use super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::layout_pass_scope::LayoutPassScope;
 use super::layout_text::LayoutText;
-use super::map_coordinates_flags::{MapCoordinatesFlags, MapCoordinatesMode};
+use super::map_coordinates_flags::MapCoordinatesFlags;
 use super::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 
 mod layout_invalidation_layout_object_style_update;

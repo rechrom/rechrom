@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::layout_boundary_support::{
-    LayoutBoundaryCache, LayoutBoundaryHashSet,
+    LayoutBoundaryCache,
     LayoutBoundaryStyleSourceEntry, LayoutUpdateKind,
 };
 use std::cell::UnsafeCell;
@@ -20,8 +20,8 @@ use font_engine::text::implementation::phrase_break_services::{
     PhraseBreakResolver, PhraseBreakResolverScope,
 };
 use font_engine::{
-    CanvasRotationInVertical, Font, FontBaseline, FontDescription, FontOrientation,
-    FontSmoothingMode, HarfBuzzShaper, Hyphenation, LayoutLocale, ShapeResultView, SimpleFontData,
+    CanvasRotationInVertical, Font, FontBaseline,
+    FontSmoothingMode, HarfBuzzShaper, Hyphenation, ShapeResultView, SimpleFontData,
 };
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
@@ -35,12 +35,12 @@ use foundation::{
 use crate::block_break_token::BlockBreakToken;
 use crate::fragment_item::{FragmentItem, ItemType};
 use crate::fragment_tree::{
-    BackgroundPaintLocation, CollapsedTableEdge,
+    CollapsedTableEdge,
     CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
-    FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentPaintData,
+    FieldsetPaintData, FormControlPaintData, FragmentPaintData,
     FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
     LayoutResultHandle, MathMLPaintData, MathMLPaintKind, PaintGlyph, PaintGlyphRun,
-    PaintProperties, PaintPropertiesHandle, PaintResources, PrePaintInvalidation,
+    PaintProperties, PaintResources, PrePaintInvalidation,
     ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
     ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
     SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
@@ -51,7 +51,7 @@ use crate::logical_fragment::LogicalFragment;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::axis::{
-    kPhysicalAxesHorizontal, kPhysicalAxesVertical, PhysicalAxes, PhysicalAxis,
+    PhysicalAxis,
 };
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
@@ -70,22 +70,21 @@ use layout_style::text_transform_services::{TextTransformResolver, TextTransform
 
 use crate::internal::boundary::input::{CurrentFontResolver, FontResolverScope};
 use crate::internal::constraint_space::ConstraintSpace as LayoutConstraintSpace;
-use crate::internal::form_control_types::{AutofillState, FormControlType};
+use crate::internal::form_control_types::AutofillState;
 use crate::internal::fragmentation_utils::{
     FindPreviousBreakToken, IsBreakInside, OffsetInStitchedFragments,
 };
 use crate::internal::gap::gap_geometry::ContainerType;
-use crate::internal::layout_block::LayoutBlock;
 use crate::internal::layout_block_flow::LayoutBlockFlow;
 use crate::internal::layout_box::LayoutBox;
 use crate::internal::layout_box_model_object::LayoutBoxModelObject;
 use crate::internal::layout_font_resolver::{FontRequest, FontResolver};
 use crate::internal::layout_inline::LayoutInline;
 use crate::internal::layout_input::{
-    BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Display, Edges,
-    ExtendedStyle, FontSmoothing, FontVariation, HyphenationProvider, NodeConstructionData,
+    BorderLineStyle, BoxDecorationBreak, ComputedStyle, ConstraintSpace, Edges,
+    FontSmoothing, FontVariation, HyphenationProvider, NodeConstructionData,
     NodeKind, Offset, PaintImage, PaintStyle, PhraseBreakProvider, Position, Size,
-    TextDecorationPaint, TextDecorationStyle, TextDirection, TextTransform, TextTransformProvider,
+    TextDecorationPaint, TextDecorationStyle, TextTransform, TextTransformProvider,
     TransformMatrix, WritingMode,
 };
 use crate::internal::layout_invalidation_reason::{kFontsChanged, kStyleChange};
@@ -101,8 +100,6 @@ use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_view::LayoutView;
 use crate::internal::paint_input::PaintBlendMode;
 use crate::internal::relative_utils::ComputeRelativeOffset;
-use crate::internal::scroll_types::IncludeScrollbarsInRect;
-use crate::internal::scrollbar_theme_metrics::ScrollbarThemeThickness;
 use crate::internal::shapes::shape_image_services::{ShapeImageResolver, ShapeImageResolverScope};
 use crate::internal::shapes::shape_outside_info::ShapeOutsideInfo;
 use crate::internal::table_borders::EdgeSide;
@@ -133,7 +130,7 @@ pub(crate) use layout_fragment_fragment_export_support::{
     ExportAppliedTextDecoration, ExportSelectionPaintStyle, ExportSelectionTextDecoration,
 };
 use layout_fragment_fragment_export_support::{
-    ExportAppliedTextDecorations, ExportedStyleCache,
+    ExportedStyleCache,
     InputId,
     Number, PublicWritingMode, StyleSourceEntry,
 };
