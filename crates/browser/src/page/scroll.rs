@@ -300,7 +300,7 @@ impl Page {
         // already the value ScrollingCoordinator must reflect. Multiplying it
         // again here made every main-thread commit reset the active tree to a
         // different offset, observed as a jump or rebound at DPR != 1.
-        let main = self.state.layout_engine.borrow_mut().DidCompositorScroll(
+        let main = self.state.layout_engine.borrow_mut().ScrollMut().DidCompositorScroll(
             native_element,
             offset,
             source_type,
@@ -541,7 +541,12 @@ impl Page {
                         self.state
                             .layout_engine
                             .borrow_mut()
-                            .UpdateScrollbarsHiddenIfOverlay(target, hidden)
+                            .ApplyMutation(layout::mutation::LayoutMutation::Scroll(
+                                layout::mutation::ScrollMutation::UpdateScrollbarsHiddenIfOverlay {
+                                    node_id: target,
+                                    hidden,
+                                },
+                            ))
                     }) {
                         self.state.InvalidateLayoutOutput();
                         self.state.scroll_only.set(true);

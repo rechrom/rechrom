@@ -205,6 +205,17 @@ pub enum LayoutMutation<'a> {
     // Wave E: event_registry
     /// EventHandlerRegistry invalidation of one resident LayoutObject.
     EventRegistry(crate::native_event_registry_source::EventRegistryMutation<'a>),
+    // Wave E: scroll
+    /// Scroll-family commands. `apply_mutation` runs them before any generic
+    /// mutation bookkeeping, exactly as their former direct entry points did.
+    Scroll(ScrollMutation),
+}
+
+/// Scroll-family commands carried by [`LayoutMutation::Scroll`].
+pub enum ScrollMutation {
+    /// ScrollableArea::SetScrollbarsHiddenIfOverlay on the resident scrollable
+    /// area of `node_id`; `ApplyMutation` returns whether the state changed.
+    UpdateScrollbarsHiddenIfOverlay { node_id: u64, hidden: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

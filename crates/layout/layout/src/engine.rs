@@ -10,19 +10,16 @@ use foundation::{gfx, CompositorElementId, PhysicalOffset};
 use layout_assembly::editing_state::LayoutEditingState;
 use layout_assembly::engine_assembly::LayoutAssembly;
 use layout_assembly::fragment_tree::LayoutResultHandle;
-use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData, Offset};
+use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData};
 use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
-use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity;
 use layout_assembly::internal::scrollbar::Scrollbar;
 use layout_assembly::layout_engine::{
     ContainerQuerySizeSnapshot, LayoutEngine as CoreLayoutEngine,
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
-    NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate, SuppressScrollAnchorScope,
+    NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate,
 };
 use layout_assembly::layout_selection::{LayoutSelectionRange, SelectionStyleAndPaintInvalidation};
-use layout_assembly::native_autoscroll_source::{
-    NativeAutoscrollLayout, NativeAutoscrollSource, NativeLogicalScrollArea,
-};
+use layout_assembly::native_autoscroll_source::NativeLogicalScrollArea;
 use layout_assembly::native_mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
@@ -31,11 +28,7 @@ use layout_assembly::native_pointer_scroll_controls::{
     NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
     NativeResizePlan, NativeScrollbarInteraction,
 };
-use layout_assembly::native_scroll_source::{
-    NativeCompositorScrollArea, NativeCompositorScrollUpdate, NativeScrollFrameGeometry,
-    NativeScrollSource,
-};
-use layout_assembly::native_user_scroll_source::NativeUserScrollSource;
+use layout_assembly::native_scroll_source::NativeCompositorScrollArea;
 use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
 use layout_assembly::password_echo::{PasswordEchoLayoutSettings, PasswordEchoTimerScheduler};
 use layout_assembly::style_projection::StyleResourceBindings;
@@ -402,72 +395,6 @@ impl LayoutEngine {
             .MomentarilyRevealLastTypedCharacterIfSecure(node_id, offset, settings, scheduler)
     }
 
-    // Native scroll sources and scroll side effects.
-
-    #[inline]
-    pub fn NativeScrollSource(&mut self, id: u64) -> Option<NativeScrollSource<'_>> {
-        self.engine.NativeScrollSource(id)
-    }
-
-    #[inline]
-    pub fn NativeUserScrollSource<'a>(
-        &'a mut self,
-        native: &'a NativeLogicalScrollArea,
-    ) -> Option<NativeUserScrollSource<'a>> {
-        self.engine.NativeUserScrollSource(native)
-    }
-
-    #[inline]
-    pub fn NativeAutoscrollSource<'a>(
-        &'a mut self,
-        object: &'a NativeAutoscrollLayout,
-        frame: NativeScrollFrameGeometry,
-    ) -> Option<NativeAutoscrollSource<'a>> {
-        self.engine.NativeAutoscrollSource(object, frame)
-    }
-
-    #[inline]
-    pub fn AutoscrollLayoutFor(&self, node_id: u64) -> Option<NativeAutoscrollLayout> {
-        self.engine.AutoscrollLayoutFor(node_id)
-    }
-
-    #[inline]
-    pub fn LogicalScrollLayoutFor(&self, node_id: u64) -> Option<NativeAutoscrollLayout> {
-        self.engine.LogicalScrollLayoutFor(node_id)
-    }
-
-    #[inline]
-    pub fn LogicalScrollLayoutView(&self) -> Option<NativeAutoscrollLayout> {
-        self.engine.LogicalScrollLayoutView()
-    }
-
-    #[inline]
-    pub fn DidCompositorScroll(
-        &mut self,
-        expected: CompositorElementId,
-        position: Offset,
-        source_type: scroll_snap::scroll_source_type::ScrollSourceType,
-    ) -> Option<NativeCompositorScrollUpdate> {
-        self.engine
-            .DidCompositorScroll(expected, position, source_type)
-    }
-
-    #[inline]
-    pub fn SuppressScrollAnchoringForNode(
-        &self,
-        anchor_node: Option<u64>,
-    ) -> SuppressScrollAnchorScope {
-        self.engine.SuppressScrollAnchoringForNode(anchor_node)
-    }
-
-    #[inline]
-    pub fn UpdateScrollbarsHiddenIfOverlay(&mut self, id: u64, hidden: bool) -> bool {
-        self.engine.UpdateScrollbarsHiddenIfOverlay(id, hidden)
-    }
-
-    #[inline]
-    pub fn TakeNativeScrollbarActivities(&mut self) -> Vec<NativeScrollbarActivity> {
-        self.engine.TakeNativeScrollbarActivities()
     }
 
     // Mouse-coordinate sources. The three handle queries are forwarded here

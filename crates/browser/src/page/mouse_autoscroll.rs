@@ -69,7 +69,7 @@ impl PageAutoscrollLayout {
                     y: -(scroll.1 as f64),
                 },
             };
-            let source = engine.NativeAutoscrollSource(&self.native, frame)?;
+            let source = engine.ScrollMut().NativeAutoscrollSource(&self.native, frame)?;
             Some(query(&source))
         })?
     }
@@ -105,7 +105,7 @@ impl PageAutoscrollLayout {
     }
 }
 pub(super) fn LayoutForNode(state: &Rc<PageState>, node: u64) -> Option<Rc<dyn AutoscrollLayout>> {
-    let native = state.layout_engine.borrow().AutoscrollLayoutFor(node)?;
+    let native = state.layout_engine.borrow().Scroll().AutoscrollLayoutFor(node)?;
     Some(Rc::new(PageAutoscrollLayout {
         owner: InteractionScrollOwner::Root(Rc::downgrade(state)),
         native,
@@ -119,7 +119,7 @@ pub(super) fn LayoutForChildNode(
     if !frame.IsCurrentRuntime(runtime) {
         return None;
     }
-    let native = runtime.layout.borrow().AutoscrollLayoutFor(node)?;
+    let native = runtime.layout.borrow().Scroll().AutoscrollLayoutFor(node)?;
     Some(Rc::new(PageAutoscrollLayout {
         owner: InteractionScrollOwner::Child {
             frame: Rc::downgrade(frame),

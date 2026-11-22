@@ -475,6 +475,7 @@ impl LocalFrameDomain {
                 runtime
                     .layout
                     .borrow_mut()
+                    .ScrollMut()
                     .DidCompositorScroll(element, offset, source_type);
             if let Some(update) = update {
                 let target = update.target_node_id;
@@ -523,7 +524,12 @@ impl LocalFrameDomain {
             let changed = runtime
                 .layout
                 .borrow_mut()
-                .UpdateScrollbarsHiddenIfOverlay(target, hidden);
+                .ApplyMutation(layout::mutation::LayoutMutation::Scroll(
+                    layout::mutation::ScrollMutation::UpdateScrollbarsHiddenIfOverlay {
+                        node_id: target,
+                        hidden,
+                    },
+                ));
             if changed {
                 runtime.document.borrow_mut().InvalidatePaint();
                 frame.MarkNavigationDirty();

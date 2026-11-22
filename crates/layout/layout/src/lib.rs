@@ -61,6 +61,7 @@ mod exports {
 pub mod views {
     pub mod event_registry;
     pub mod form_control;
+    pub mod scroll;
 }
 
 pub use engine::LayoutEngine;

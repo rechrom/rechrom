@@ -362,7 +362,7 @@ impl ChildFocusServices {
             layout.UpdateEditingNodeFactsForFocus(id, facts);
         }
         for id in update.snap_container_candidates {
-            if let Some(mut source) = layout.NativeScrollSource(id) {
+            if let Some(mut source) = layout.ScrollMut().NativeScrollSource(id) {
                 source.UpdateFocusDataForSnapAreas();
             }
         }
@@ -516,6 +516,7 @@ impl DocumentFocusLifecycle for ChildFocusServices {
         let result = runtime
             .layout
             .borrow_mut()
+            .ScrollMut()
             .NativeScrollSource(node)
             .map(|mut source| source.ScrollFocusIntoView(true));
         if let Some(result) = result {

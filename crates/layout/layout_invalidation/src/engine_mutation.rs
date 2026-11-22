@@ -88,15 +88,21 @@ impl EngineMutation for LayoutEngine {
 
     #[inline(never)]
     fn apply_mutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
-        // Wave E: form_control / event_registry. These commands are the former
-        // direct engine routes; they run before any retained bookkeeping is
-        // cleared so their side effects match the direct call exactly.
+        // Wave E command families. These are the former direct engine
+        // routes; they run before any retained bookkeeping is cleared so their
+        // side effects match the direct call exactly.
         let mutation = match mutation {
             LayoutMutation::FormControl(mutation) => {
                 return self.ApplyFormControlMutation(mutation);
             }
             LayoutMutation::EventRegistry(mutation) => {
                 return self.ApplyEventRegistryMutation(mutation);
+            }
+            LayoutMutation::Scroll(ScrollMutation::UpdateScrollbarsHiddenIfOverlay {
+                node_id,
+                hidden,
+            }) => {
+                return self.UpdateScrollbarsHiddenIfOverlay(node_id, hidden);
             }
             mutation => mutation,
         };
@@ -580,8 +586,10 @@ impl EngineMutation for LayoutEngine {
                     false
                 }
             }
-            // Wave E: form_control / event_registry (returned above).
-            LayoutMutation::FormControl(_) | LayoutMutation::EventRegistry(_) => {
+            // Wave E command families (returned above).
+            LayoutMutation::FormControl(_)
+            | LayoutMutation::EventRegistry(_)
+            | LayoutMutation::Scroll(_) => {
                 unreachable!("Wave E command mutations return before bookkeeping")
             }
         }

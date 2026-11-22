@@ -80,6 +80,7 @@ impl PageState {
         let element = self
             .layout_engine
             .borrow_mut()
+            .ScrollMut()
             .NativeScrollSource(node)
             .and_then(|mut source| source.ScrollElementIdentity());
         let Some(element) = element else {
@@ -197,6 +198,7 @@ impl local_frame::LocalFrame {
         let element = runtime
             .layout
             .borrow_mut()
+            .ScrollMut()
             .NativeScrollSource(node)
             .and_then(|mut source| source.ScrollElementIdentity());
         let Some(element) = element else {
