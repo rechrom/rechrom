@@ -608,7 +608,8 @@ impl BlockLineClampData {
         }
         if self.data.state == LineClampState::kClampAfterLayoutObject
             && (layout_result.LinesUntilClamp() < 0
-                || self.data.clamp_after_layout_object == fragment.GetLayoutObject())
+                || self.data.clamp_after_layout_object.cast::<()>()
+                    == fragment.GetLayoutObject().cast::<()>())
         {
             debug_assert!(self.previous_inflow_position_when_clamped.is_none());
             self.data.state = LineClampState::kClampByLines;
@@ -752,7 +753,7 @@ impl BlockLayoutAlgorithm {
         } else if relayout_type == RelayoutType::kRelayoutClampingAfterLayoutObject {
             self.line_clamp_data_.data.state = LineClampState::kClampAfterLayoutObject;
             self.line_clamp_data_.data.clamp_after_layout_object =
-                previous.line_clamp_data_.last_layout_object;
+                previous.line_clamp_data_.last_layout_object.cast();
             self.line_clamp_data_.data.block_ellipsis =
                 previous.line_clamp_data_.data.block_ellipsis;
         } else if previous.line_clamp_data_.data.IsClampByLines() {

@@ -33,11 +33,10 @@ pub mod internal {
         pub mod out_of_flow_data;
         pub mod successful_position_fallback;
     }
-    #[path = "../../../layout_fragment/src/core/constraint_space.rs"]
-    pub mod constraint_space;
+    pub use layout_fragment::internal::constraint_space;
     pub mod constraint_space_builder;
     pub mod constraint_space_builder_style;
-    pub mod constraint_space_custom_data;
+    pub use layout_fragment::internal::constraint_space_custom_data;
     pub mod content_change_type;
     pub use layout_fragment::internal::custom_layout_payload;
     pub mod custom_scrollbar;
@@ -49,11 +48,11 @@ pub mod internal {
         pub mod forward;
     }
     pub mod exclusions {
-        pub mod exclusion_area;
-        pub mod exclusion_space;
+        pub use layout_fragment::internal::exclusions::exclusion_area;
+        pub use layout_fragment::internal::exclusions::exclusion_space;
         pub mod layout_opportunity;
         pub use layout_fragment::internal::exclusions::line_layout_opportunity;
-        pub mod shape_exclusions;
+        pub use layout_fragment::internal::exclusions::shape_exclusions;
     }
     pub mod form_control_sizing_service;
     pub use layout_fragment::internal::form_control_types;
@@ -135,7 +134,7 @@ pub mod internal {
     pub mod layout_utils;
     pub mod layout_view;
     pub mod length_utils;
-    pub mod line_clamp_data;
+    pub use layout_fragment::internal::line_clamp_data;
     pub mod motion_path_geometry;
     pub mod paint_client_commit;
     pub mod paint_layer;

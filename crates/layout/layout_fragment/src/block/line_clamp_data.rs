@@ -5,7 +5,7 @@ use foundation::{
     Visitor,
 };
 
-use super::super::layout_object::LayoutObject;
+use crate::opaque::OpaqueLayoutObject;
 use super::super::min_max_sizes::MinMaxSizes;
 
 // cpp: layoutng/internal/line_clamp_data.h:30-53
@@ -27,7 +27,7 @@ pub struct LineClampData {
     pub lines_until_clamp: i32,
     pub clamp_bfc_offset: LayoutUnit,
     // UntracedMember is used only for identity comparison in the source.
-    pub clamp_after_layout_object: *const LayoutObject,
+    pub clamp_after_layout_object: *const OpaqueLayoutObject,
     pub state: State,
     pub block_ellipsis: EBlockEllipsis,
 }
@@ -181,7 +181,7 @@ impl Eq for LineClampData {}
 struct SameSizeAsLineClampData {
     lines_until_clamp: i32,
     clamp_bfc_offset: LayoutUnit,
-    clamp_after_layout_object: *const LayoutObject,
+    clamp_after_layout_object: *const OpaqueLayoutObject,
     states: [u8; 2],
 }
 const _: () =

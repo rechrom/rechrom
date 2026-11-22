@@ -6,11 +6,19 @@
 // cpp: foundation/blink_base/heap/trace_traits.h:20-28
 use foundation::{Traceable, Visitor};
 
+use crate::internal::constraint_space::{ConstraintSpace, RareData};
 use crate::internal::devtools_flex_info::DevtoolsFlexInfo;
+use crate::internal::exclusions::exclusion_area::{ExclusionArea, ExclusionShapeData};
+use crate::internal::exclusions::exclusion_space::{
+    ClosedArea, DerivedGeometry, ExclusionSpace, ExclusionSpaceInternal, Shelf,
+};
+use crate::internal::exclusions::layout_opportunity::LayoutOpportunity;
+use crate::internal::exclusions::shape_exclusions::ShapeExclusions;
 use crate::internal::grid_layout_data::{
     GridLayoutData, GridLayoutSubtree, GridLayoutTree, GridTreeNode,
 };
 use crate::internal::grid_track_collection::{GridLayoutTrackCollection, GridTrackBaselines};
+use crate::internal::line_clamp_data::LineClampAncestorChain;
 use crate::internal::mathml_paint_info::MathMLPaintInfo;
 use crate::internal::split_axis_item::SplitAxisItem;
 use crate::internal::text_fit_scale::TextFitScale;
@@ -27,6 +35,18 @@ macro_rules! trace_source_method {
 }
 
 trace_source_method!(
+    ConstraintSpace,
+    RareData,
+    ExclusionArea,
+    ExclusionShapeData,
+    ClosedArea,
+    DerivedGeometry,
+    ExclusionSpace,
+    ExclusionSpaceInternal,
+    Shelf,
+    LayoutOpportunity,
+    ShapeExclusions,
+    LineClampAncestorChain,
     DevtoolsFlexInfo,
     GridLayoutData,
     GridLayoutSubtree,

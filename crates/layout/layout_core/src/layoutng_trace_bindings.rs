@@ -7,7 +7,6 @@ use crate::internal::anchor_map::{AnchorMap, PhysicalAnchorReference};
 use crate::internal::anchor_position_scroll_data::{AdjustmentData, AnchorPositionScrollData};
 use crate::internal::block_node::BlockNode;
 use crate::internal::column_spanner_path::ColumnSpannerPath;
-use crate::internal::constraint_space::{ConstraintSpace, RareData};
 use crate::internal::css::counters_attachment_context::CounterEntry;
 use crate::internal::css::out_of_flow_data::ScrollOffsetPair;
 use crate::internal::css::out_of_flow_data::{OutOfFlowData, RememberedScrollOffsets};
@@ -15,12 +14,6 @@ use crate::internal::css::successful_position_fallback::SuccessfulPositionFallba
 use crate::internal::custom_scrollbar::CustomScrollbar;
 use crate::internal::document_marker::DocumentMarker;
 use crate::internal::early_break::EarlyBreak;
-use crate::internal::exclusions::exclusion_area::{ExclusionArea, ExclusionShapeData};
-use crate::internal::exclusions::exclusion_space::{
-    ClosedArea, DerivedGeometry, ExclusionSpace, ExclusionSpaceInternal, Shelf,
-};
-use crate::internal::exclusions::layout_opportunity::LayoutOpportunity;
-use crate::internal::exclusions::shape_exclusions::ShapeExclusions;
 use crate::internal::form_node_metadata::{
     HTMLAreaElement, HTMLButtonElement, HTMLDivElement, HTMLElement, HTMLFieldSetElement,
     HTMLFormControlElement, HTMLFormControlElementWithState, HTMLImageElement, HTMLInputElement,
@@ -56,7 +49,6 @@ use crate::internal::layout_scrollable_area::PaintLayerScrollableArea;
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_view::LayoutView;
-use crate::internal::line_clamp_data::LineClampAncestorChain;
 use crate::internal::measure_cache::MeasureCache;
 use crate::internal::naming_scope::NamingScope;
 use crate::internal::node_rare_data_field::NodeRareDataField;
@@ -99,18 +91,7 @@ trace_source_method!(
     LayoutBlock,
     LayoutBlockFlow,
     LayoutView,
-    ConstraintSpace,
-    RareData,
     EarlyBreak,
-    ExclusionArea,
-    ExclusionShapeData,
-    ClosedArea,
-    DerivedGeometry,
-    ExclusionSpace,
-    ExclusionSpaceInternal,
-    Shelf,
-    LayoutOpportunity,
-    ShapeExclusions,
     LayoutBoxRareData,
     LayoutObjectChildList,
     BoxOverflowModel,
@@ -145,7 +126,6 @@ trace_source_method!(
     Node,
     PaintLayerScrollableArea,
     LayoutTextCombine,
-    LineClampAncestorChain,
     MeasureCache,
     NamingScope,
     NodeRareDataField,

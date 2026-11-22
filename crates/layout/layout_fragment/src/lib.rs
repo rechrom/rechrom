@@ -36,6 +36,8 @@ mod trace_bindings;
 /// shape here (a private source module plus a glob re-export), so the
 /// translated `super::` paths inside the source files resolve unchanged.
 pub mod internal {
+    #[path = "../core/constraint_space.rs"]
+    pub mod constraint_space;
     #[path = "../core/disable_layout_side_effects_scope.rs"]
     pub mod disable_layout_side_effects_scope;
     #[path = "../core/hit_test_phase.rs"]
@@ -56,8 +58,30 @@ pub mod internal {
     pub mod text_offset_range;
 
     pub mod exclusions {
+        pub mod exclusion_area {
+            #[path = "../../../float/exclusion_area.rs"]
+            mod layout_algo_float_exclusion_area;
+            pub use layout_algo_float_exclusion_area::*;
+        }
+        pub mod exclusion_space {
+            #[path = "../../../float/exclusion_space.rs"]
+            mod layout_algo_float_exclusion_space;
+            pub use layout_algo_float_exclusion_space::*;
+        }
+        // The shape-aware line bounds of a LayoutOpportunity read the float's
+        // LayoutBox; base adds them as `LayoutOpportunityExt`.
+        pub mod layout_opportunity {
+            #[path = "../../../float/layout_opportunity.rs"]
+            mod layout_algo_float_layout_opportunity;
+            pub use layout_algo_float_layout_opportunity::*;
+        }
         #[path = "../../core/exclusions/line_layout_opportunity.rs"]
         pub mod line_layout_opportunity;
+        pub mod shape_exclusions {
+            #[path = "../../../float/shape_exclusions.rs"]
+            mod layout_algo_float_shape_exclusions;
+            pub use layout_algo_float_shape_exclusions::*;
+        }
     }
 
     pub mod gap {
@@ -96,6 +120,11 @@ pub mod internal {
         #[path = "../../fragmentation/break_appeal.rs"]
         mod layout_algo_fragmentation_break_appeal;
         pub use layout_algo_fragmentation_break_appeal::*;
+    }
+    pub mod constraint_space_custom_data {
+        #[path = "../../custom/constraint_space_custom_data.rs"]
+        mod layout_algo_custom_constraint_space_custom_data;
+        pub use layout_algo_custom_constraint_space_custom_data::*;
     }
     pub mod custom_layout_payload {
         #[path = "../../custom/custom_layout_payload.rs"]
@@ -137,10 +166,18 @@ pub mod internal {
         mod layout_algo_inline_inline_item_text_index;
         pub use layout_algo_inline_inline_item_text_index::*;
     }
+    pub mod line_clamp_data {
+        #[path = "../../block/line_clamp_data.rs"]
+        mod layout_algo_block_line_clamp_data;
+        pub use layout_algo_block_line_clamp_data::*;
+    }
     pub mod mathml_paint_info {
         #[path = "../../mathml_paint_info.rs"]
         mod layout_fragment_mathml_paint_info;
         pub use layout_fragment_mathml_paint_info::*;
+    }
+    pub mod min_max_sizes {
+        pub use layout_geometry::geometry::min_max_sizes::*;
     }
     pub mod outline_info {
         #[path = "../../outline_info.rs"]
