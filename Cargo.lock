@@ -2360,10 +2360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "layout_algo_fragmentation"
-version = "0.0.1"
-
-[[package]]
 name = "layout_algo_grid"
 version = "0.0.1"
 dependencies = [
@@ -2457,10 +2453,6 @@ dependencies = [
  "layout_geometry",
  "layout_style",
 ]
-
-[[package]]
-name = "layout_algo_sizing"
-version = "0.0.1"
 
 [[package]]
 name = "layout_algo_svg"
