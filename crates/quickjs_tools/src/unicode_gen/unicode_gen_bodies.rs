@@ -1,7 +1,8 @@
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:73. Bellard/Gordon MIT.
+use super::*;
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn mallocz(mut size: usize) -> *mut c_void {
+pub(crate) unsafe fn mallocz(mut size: usize) -> *mut c_void {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut ptr: *mut c_void = core::mem::zeroed();
 let mut vm_block: usize = 3;
@@ -31,7 +32,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:81. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_field(mut p: *const c_char, mut n: i32) -> *const c_char {
+pub(crate) unsafe fn get_field(mut p: *const c_char, mut n: i32) -> *const c_char {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 9;
@@ -87,7 +88,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:94. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_field_buf(mut buf: *mut c_char, mut buf_size: usize, mut p: *const c_char, mut n: i32) -> *const c_char {
+pub(crate) unsafe fn get_field_buf(mut buf: *mut c_char, mut buf_size: usize, mut p: *const c_char, mut n: i32) -> *const c_char {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut q: *mut c_char = core::mem::zeroed();
 let mut vm_block: usize = 8;
@@ -140,7 +141,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:108. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn add_char(mut pbuf: *mut *mut i32, mut psize: *mut i32, mut plen: *mut i32, mut c: i32) -> () {
+pub(crate) unsafe fn add_char(mut pbuf: *mut *mut i32, mut psize: *mut i32, mut plen: *mut i32, mut c: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut len: i32 = core::mem::zeroed();
 let mut size: i32 = core::mem::zeroed();
@@ -212,7 +213,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:125. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_field_str(mut plen: *mut i32, mut str: *const c_char, mut n: i32) -> *mut i32 {
+pub(crate) unsafe fn get_field_str(mut plen: *mut i32, mut str: *const c_char, mut n: i32) -> *mut i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut p: *const c_char = core::mem::zeroed();
 let mut buf: *mut i32 = core::mem::zeroed();
@@ -299,7 +300,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:148. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_line(mut buf: *mut c_char, mut buf_size: i32, mut f: *mut FILE) -> *mut c_char {
+pub(crate) unsafe fn get_line(mut buf: *mut c_char, mut buf_size: i32, mut f: *mut FILE) -> *mut c_char {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut len: i32 = core::mem::zeroed();
 let mut vm_block: usize = 6;
@@ -341,7 +342,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:174. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_hash(mut len: i32, mut buf: *const u32) -> u32 {
+pub(crate) unsafe fn re_string_hash(mut len: i32, mut buf: *const u32) -> u32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut h: u32 = core::mem::zeroed();
@@ -386,7 +387,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:184. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_list_init(mut s: *mut REStringList) -> () {
+pub(crate) unsafe fn re_string_list_init(mut s: *mut REStringList) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 4;
 loop { match vm_block {
@@ -421,7 +422,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:192. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_list_free(mut s: *mut REStringList) -> () {
+pub(crate) unsafe fn re_string_list_free(mut s: *mut REStringList) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut p: *mut REString = core::mem::zeroed();
 let mut p_next: *mut REString = core::mem::zeroed();
@@ -482,7 +483,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:205. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn lre_print_char(mut c: i32, mut is_range: i32) -> () {
+pub(crate) unsafe fn lre_print_char(mut c: i32, mut is_range: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 5;
 loop { match vm_block {
@@ -520,7 +521,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:217. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_list_dump(mut str: *const c_char, mut s: *const REStringList) -> () {
+pub(crate) unsafe fn re_string_list_dump(mut str: *const c_char, mut s: *const REStringList) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut p: *mut REString = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -611,7 +612,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:237. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_find2(mut s: *mut REStringList, mut len: i32, mut buf: *const u32, mut h0: u32, mut add_flag: i32) -> *mut REString {
+pub(crate) unsafe fn re_string_find2(mut s: *mut REStringList, mut len: i32, mut buf: *const u32, mut h0: u32, mut add_flag: i32) -> *mut REString {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut h: u32 = core::mem::zeroed();
 let mut p: *mut REString = core::mem::zeroed();
@@ -834,7 +835,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:293. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_find(mut s: *mut REStringList, mut len: i32, mut buf: *const u32, mut add_flag: i32) -> *mut REString {
+pub(crate) unsafe fn re_string_find(mut s: *mut REStringList, mut len: i32, mut buf: *const u32, mut add_flag: i32) -> *mut REString {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut h0: u32 = core::mem::zeroed();
 let mut vm_block: usize = 2;
@@ -859,7 +860,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:301. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn re_string_add(mut s: *mut REStringList, mut len: i32, mut buf: *const u32) -> () {
+pub(crate) unsafe fn re_string_add(mut s: *mut REStringList, mut len: i32, mut buf: *const u32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -879,7 +880,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:424. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn find_name(mut tab: *mut *const c_char, mut tab_len: i32, mut name: *const c_char) -> i32 {
+pub(crate) unsafe fn find_name(mut tab: *mut *const c_char, mut tab_len: i32, mut name: *const c_char) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut len: i32 = core::mem::zeroed();
@@ -971,7 +972,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:448. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_prop(mut c: u32, mut prop_idx: i32) -> i32 {
+pub(crate) unsafe fn get_prop(mut c: u32, mut prop_idx: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -990,7 +991,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:453. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn set_prop(mut c: u32, mut prop_idx: i32, mut val: i32) -> () {
+pub(crate) unsafe fn set_prop(mut c: u32, mut prop_idx: i32, mut val: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut mask: u32 = core::mem::zeroed();
 let mut vm_block: usize = 4;
@@ -1025,7 +1026,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:463. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_unicode_data(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_unicode_data(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 1024] = core::mem::zeroed();
@@ -1421,7 +1422,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:600. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_special_casing(mut tab: *mut CCInfo, mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_special_casing(mut tab: *mut CCInfo, mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 1024] = core::mem::zeroed();
@@ -1661,7 +1662,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:676. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_case_folding(mut tab: *mut CCInfo, mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_case_folding(mut tab: *mut CCInfo, mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 1024] = core::mem::zeroed();
@@ -1863,7 +1864,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:739. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_composition_exclusions(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_composition_exclusions(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -1955,7 +1956,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:766. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_derived_core_properties(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_derived_core_properties(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -2159,7 +2160,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:823. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_derived_norm_properties(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_derived_norm_properties(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -2339,7 +2340,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:872. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_prop_list(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_prop_list(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -2535,7 +2536,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:928. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_emoji_modifier(mut c: u32) -> i32 {
+pub(crate) unsafe fn is_emoji_modifier(mut c: u32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -2554,7 +2555,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:933. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn add_sequence_prop(mut idx: i32, mut seq_len: i32, mut seq: *mut i32) -> () {
+pub(crate) unsafe fn add_sequence_prop(mut idx: i32, mut seq_len: i32, mut seq: *mut i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut code: i32 = core::mem::zeroed();
@@ -2746,7 +2747,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:992. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_sequence_prop_list(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_sequence_prop_list(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -3020,7 +3021,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1067. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_scripts(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_scripts(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -3216,7 +3217,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1120. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_script_extensions(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_script_extensions(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();
@@ -3471,7 +3472,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1187. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_cc_info(mut ci: *mut CCInfo, mut i: i32) -> () {
+pub(crate) unsafe fn dump_cc_info(mut ci: *mut CCInfo, mut i: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut j: i32 = core::mem::zeroed();
 let mut vm_block: usize = 20;
@@ -3581,7 +3582,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1209. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_unicode_data(mut tab: *mut CCInfo) -> () {
+pub(crate) unsafe fn dump_unicode_data(mut tab: *mut CCInfo) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut ci: *mut CCInfo = core::mem::zeroed();
@@ -3626,7 +3627,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1221. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_complicated_case(mut ci: *const CCInfo) -> i32 {
+pub(crate) unsafe fn is_complicated_case(mut ci: *const CCInfo) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -3645,7 +3646,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1275. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn simple_to_lower(mut tab: *mut CCInfo, mut c: i32) -> i32 {
+pub(crate) unsafe fn simple_to_lower(mut tab: *mut CCInfo, mut c: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 3;
 loop { match vm_block {
@@ -3672,7 +3673,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1284. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn find_run_type(mut te: *mut TableEntry, mut tab: *mut CCInfo, mut code: i32) -> () {
+pub(crate) unsafe fn find_run_type(mut te: *mut TableEntry, mut tab: *mut CCInfo, mut code: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut is_lower: i32 = core::mem::zeroed();
 let mut len: i32 = core::mem::zeroed();
@@ -4347,7 +4348,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1514. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_case_conv_table1() -> () {
+pub(crate) unsafe fn dump_case_conv_table1() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -4418,7 +4419,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1531. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn find_data_index(mut local_conv_table: *const TableEntry, mut len: i32, mut data: i32) -> i32 {
+pub(crate) unsafe fn find_data_index(mut local_conv_table: *const TableEntry, mut len: i32, mut data: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut te: *const TableEntry = core::mem::zeroed();
@@ -4466,7 +4467,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1543. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn find_ext_data_index(mut data: i32) -> i32 {
+pub(crate) unsafe fn find_ext_data_index(mut data: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 8;
@@ -4519,7 +4520,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1555. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_conv_table(mut tab: *mut CCInfo) -> () {
+pub(crate) unsafe fn build_conv_table(mut tab: *mut CCInfo) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut code: i32 = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -4861,7 +4862,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1555. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_conv_table(mut tab: *mut CCInfo) -> () {
+pub(crate) unsafe fn build_conv_table(mut tab: *mut CCInfo) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut code: i32 = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -5207,7 +5208,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1661. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_case_conv_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn dump_case_conv_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: u32 = core::mem::zeroed();
@@ -5399,7 +5400,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1707. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn sp_cc_cmp(mut p1: *const c_void, mut p2: *const c_void) -> i32 {
+pub(crate) unsafe fn sp_cc_cmp(mut p1: *const c_void, mut p2: *const c_void) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut c1: *mut CCInfo = core::mem::zeroed();
 let mut c2: *mut CCInfo = core::mem::zeroed();
@@ -5446,7 +5447,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1722. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_case_folding_special_cases(mut tab: *mut CCInfo) -> () {
+pub(crate) unsafe fn dump_case_folding_special_cases(mut tab: *mut CCInfo) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut len: i32 = core::mem::zeroed();
@@ -5569,7 +5570,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1752. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn tabcmp(mut tab1: *const i32, mut tab2: *const i32, mut n: i32) -> i32 {
+pub(crate) unsafe fn tabcmp(mut tab1: *const i32, mut tab2: *const i32, mut n: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 6;
@@ -5611,7 +5612,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1762. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_str(mut str: *const c_char, mut buf: *const i32, mut len: i32) -> () {
+pub(crate) unsafe fn dump_str(mut str: *const c_char, mut buf: *const i32, mut len: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 6;
@@ -5656,7 +5657,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1771. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn compute_internal_props() -> () {
+pub(crate) unsafe fn compute_internal_props() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut has_ul: i32 = core::mem::zeroed();
@@ -5742,7 +5743,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1812. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_byte_table(mut f: *mut FILE, mut cname: *const c_char, mut tab: *const u8, mut len: i32) -> () {
+pub(crate) unsafe fn dump_byte_table(mut f: *mut FILE, mut cname: *const c_char, mut tab: *const u8, mut len: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 10;
@@ -5806,7 +5807,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1827. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_index_table(mut f: *mut FILE, mut cname: *const c_char, mut tab: *const u8, mut len: i32) -> () {
+pub(crate) unsafe fn dump_index_table(mut f: *mut FILE, mut cname: *const c_char, mut tab: *const u8, mut len: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut code: i32 = core::mem::zeroed();
@@ -5879,7 +5880,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1846. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_prop_table(mut f: *mut FILE, mut name: *const c_char, mut prop_index: i32, mut add_index: i32) -> () {
+pub(crate) unsafe fn build_prop_table(mut f: *mut FILE, mut name: *const c_char, mut prop_index: i32, mut add_index: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -6231,7 +6232,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1846. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_prop_table(mut f: *mut FILE, mut name: *const c_char, mut prop_index: i32, mut add_index: i32) -> () {
+pub(crate) unsafe fn build_prop_table(mut f: *mut FILE, mut name: *const c_char, mut prop_index: i32, mut add_index: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -6587,7 +6588,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1954. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_flags_tables(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_flags_tables(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 4;
 loop { match vm_block {
@@ -6622,7 +6623,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1962. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_name_table(mut f: *mut FILE, mut cname: *const c_char, mut tab_name: *mut *const c_char, mut len: i32, mut tab_short_name: *mut *const c_char) -> () {
+pub(crate) unsafe fn dump_name_table(mut f: *mut FILE, mut cname: *const c_char, mut tab_name: *mut *const c_char, mut len: i32, mut tab_short_name: *mut *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut w: i32 = core::mem::zeroed();
@@ -6731,7 +6732,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1990. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_general_category_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_general_category_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -6980,7 +6981,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1990. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_general_category_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_general_category_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -7300,7 +7301,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2076. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_script_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_script_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -7515,7 +7516,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2076. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_script_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_script_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -7801,7 +7802,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2152. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_script_ext_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_script_ext_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -7969,7 +7970,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2152. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_script_ext_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_script_ext_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -8157,7 +8158,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2207. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_prop_list_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_prop_list_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 26;
@@ -8298,7 +8299,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2245. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_emoji_hair_color(mut c: u32) -> i32 {
+pub(crate) unsafe fn is_emoji_hair_color(mut c: u32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -8317,7 +8318,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2255. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn mark_zwj_string(mut sl: *mut REStringList, mut buf: *mut u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32, mut mark_flag: i32) -> i32 {
+pub(crate) unsafe fn mark_zwj_string(mut sl: *mut REStringList, mut buf: *mut u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32, mut mark_flag: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut p: *mut REString = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -8516,7 +8517,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2322. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn zwj_encode_string(mut dbuf: *mut DynBuf, mut buf: *const u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32) -> () {
+pub(crate) unsafe fn zwj_encode_string(mut dbuf: *mut DynBuf, mut buf: *const u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -8654,7 +8655,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2363. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_rgi_emoji_zwj_sequence(mut f: *mut FILE, mut sl: *mut REStringList) -> () {
+pub(crate) unsafe fn build_rgi_emoji_zwj_sequence(mut f: *mut FILE, mut sl: *mut REStringList) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut mod_pos: [i32; 2] = core::mem::zeroed();
 let mut mod_count: i32 = core::mem::zeroed();
@@ -8863,7 +8864,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2440. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_sequence_prop_list_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_sequence_prop_list_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 10;
@@ -8929,7 +8930,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2458. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_conv(mut res: *mut u32, mut c: u32, mut conv_type: i32) -> i32 {
+pub(crate) unsafe fn check_conv(mut res: *mut u32, mut c: u32, mut conv_type: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -8949,7 +8950,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2463. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_case_conv() -> () {
+pub(crate) unsafe fn check_case_conv() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut tab: *mut CCInfo = core::mem::zeroed();
 let mut res: [u32; 3] = core::mem::zeroed();
@@ -9125,7 +9126,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2520. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_flags() -> () {
+pub(crate) unsafe fn check_flags() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut c: i32 = core::mem::zeroed();
 let mut flag_ref: i32 = core::mem::zeroed();
@@ -9254,7 +9255,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2520. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_flags() -> () {
+pub(crate) unsafe fn check_flags() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut c: i32 = core::mem::zeroed();
 let mut flag_ref: i32 = core::mem::zeroed();
@@ -9439,7 +9440,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2579. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_cc_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_cc_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut cc: i32 = core::mem::zeroed();
@@ -9723,7 +9724,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2579. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_cc_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_cc_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut cc: i32 = core::mem::zeroed();
@@ -10083,7 +10084,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2579. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_cc_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_cc_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut cc: i32 = core::mem::zeroed();
@@ -10438,7 +10439,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2579. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_cc_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_cc_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut cc: i32 = core::mem::zeroed();
@@ -10797,7 +10798,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2798. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_decomp_run_size(mut de: *const DecompEntry) -> i32 {
+pub(crate) unsafe fn get_decomp_run_size(mut de: *const DecompEntry) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut s: i32 = core::mem::zeroed();
 let mut vm_block: usize = 22;
@@ -10912,7 +10913,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2832. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_short_code(mut c: i32) -> i32 {
+pub(crate) unsafe fn get_short_code(mut c: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 10;
@@ -10970,7 +10971,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2848. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_short(mut code: i32) -> i32 {
+pub(crate) unsafe fn is_short(mut code: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 1;
 loop { match vm_block {
@@ -10989,7 +10990,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2853. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_short_tab(mut tab: *const i32, mut len: i32) -> i32 {
+pub(crate) unsafe fn is_short_tab(mut tab: *const i32, mut len: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 6;
@@ -11031,7 +11032,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2863. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn is_16bit(mut tab: *const i32, mut len: i32) -> i32 {
+pub(crate) unsafe fn is_16bit(mut tab: *const i32, mut len: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut vm_block: usize = 6;
@@ -11073,7 +11074,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2873. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn to_lower_simple(mut c: u32) -> u32 {
+pub(crate) unsafe fn to_lower_simple(mut c: u32) -> u32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 4;
 loop { match vm_block {
@@ -11106,7 +11107,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2884. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn find_decomp_run(mut tab_de: *mut DecompEntry, mut i: i32) -> () {
+pub(crate) unsafe fn find_decomp_run(mut tab_de: *mut DecompEntry, mut i: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut de_s: DecompEntry = core::mem::zeroed();
 let mut de: *mut DecompEntry = core::mem::zeroed();
@@ -11939,7 +11940,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3148. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn put16(mut data_buf: *mut u8, mut pidx: *mut i32, mut c: u16) -> () {
+pub(crate) unsafe fn put16(mut data_buf: *mut u8, mut pidx: *mut i32, mut c: u16) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut idx: i32 = core::mem::zeroed();
 let mut vm_block: usize = 4;
@@ -11975,7 +11976,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3157. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn add_decomp_data(mut data_buf: *mut u8, mut pidx: *mut i32, mut de: *mut DecompEntry) -> () {
+pub(crate) unsafe fn add_decomp_data(mut data_buf: *mut u8, mut pidx: *mut i32, mut de: *mut DecompEntry) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -12619,7 +12620,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3292. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn dump_large_char() -> () {
+pub(crate) unsafe fn dump_large_char() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut j: i32 = core::mem::zeroed();
@@ -12680,7 +12681,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3307. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_decompose_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_decompose_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut array_len: i32 = core::mem::zeroed();
@@ -12995,7 +12996,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3307. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_decompose_table(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_decompose_table(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut array_len: i32 = core::mem::zeroed();
@@ -13369,7 +13370,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3417. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn ce_cmp(mut p1: *const c_void, mut p2: *const c_void) -> i32 {
+pub(crate) unsafe fn ce_cmp(mut p1: *const c_void, mut p2: *const c_void) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut ce1: *const ComposeEntry = core::mem::zeroed();
 let mut ce2: *const ComposeEntry = core::mem::zeroed();
@@ -13431,7 +13432,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3433. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn get_decomp_pos(mut tab_de: *const DecompEntry, mut c: i32) -> i32 {
+pub(crate) unsafe fn get_decomp_pos(mut tab_de: *const DecompEntry, mut c: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -13520,7 +13521,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3456. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_compose_table(mut f: *mut FILE, mut tab_de: *const DecompEntry) -> () {
+pub(crate) unsafe fn build_compose_table(mut f: *mut FILE, mut tab_de: *const DecompEntry) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -13677,7 +13678,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3506. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_decompose_table() -> () {
+pub(crate) unsafe fn check_decompose_table() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut c: i32 = core::mem::zeroed();
 let mut ci: *mut CCInfo = core::mem::zeroed();
@@ -13781,7 +13782,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3533. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_compose_table() -> () {
+pub(crate) unsafe fn check_compose_table() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut p: i32 = core::mem::zeroed();
@@ -13842,7 +13843,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3561. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_str(mut msg: *const c_char, mut num: i32, mut in_buf: *const i32, mut in_len: i32, mut buf1: *const i32, mut len1: i32, mut buf2: *const i32, mut len2: i32) -> () {
+pub(crate) unsafe fn check_str(mut msg: *const c_char, mut num: i32, mut in_buf: *const i32, mut in_len: i32, mut buf1: *const i32, mut len1: i32, mut buf2: *const i32, mut len2: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut vm_block: usize = 6;
 loop { match vm_block {
@@ -13887,7 +13888,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3574. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_cc_table() -> () {
+pub(crate) unsafe fn check_cc_table() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut cc: i32 = core::mem::zeroed();
 let mut cc_ref: i32 = core::mem::zeroed();
@@ -13944,7 +13945,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3574. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn check_cc_table() -> () {
+pub(crate) unsafe fn check_cc_table() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut cc: i32 = core::mem::zeroed();
 let mut cc_ref: i32 = core::mem::zeroed();
@@ -14052,7 +14053,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3606. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn normalization_test(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn normalization_test(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 4096] = core::mem::zeroed();

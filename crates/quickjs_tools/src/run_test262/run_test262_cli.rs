@@ -1,4 +1,5 @@
 // run-test262.c:2196..2315. Byte argv and the original two-pass option scan.
+use super::*;
 pub struct RunnerOptions {
     pub config: RunnerConfig,
     pub optind: usize,

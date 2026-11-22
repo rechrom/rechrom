@@ -1,6 +1,6 @@
 //! quickjs-libc.c Windows branch, QuickJS 2026-06-04 (Bellard/Gordon, MIT).
-//! Win32 and MinGW-w64 CRT calls are tool-only. This module is independently
-//! metadata-checkable on the host; it is not evidence of Windows execution.
+//! Win32 and MinGW-w64 CRT calls are tool-only. tests/windows_libc_metadata.rs
+//! checks its layouts; that is not evidence of Windows execution.
 pub use super::quickjs_libc::{
     create_json_module, get_bool_option, js_loadScript, js_module_check_attributes,
     js_module_loader, js_module_set_import_meta, js_std_exit, js_std_gc, js_std_loadFile,
@@ -706,8 +706,15 @@ pub unsafe fn js_os_poll(ctx: *mut JSContext) -> i32 {
     }
     0
 }
-include!("quickjs_libc_windows_loop.rs");
-include!("quickjs_libc_windows_stdio.rs");
+use crt as libc;
+mod quickjs_libc_windows_loop;
+pub use quickjs_libc_windows_loop::*;
+use quickjs::{
+    cutils::{dbuf_free, dbuf_init2, dbuf_put, dbuf_putstr, unicode_from_utf8, unicode_to_utf8},
+    cutils_header::{dbuf_error, DynBuf, UTF8_CHAR_LEN_MAX},
+};
+mod quickjs_libc_windows_stdio;
+pub use quickjs_libc_windows_stdio::*;
 
 // C:750..851: common environment JS entry points must use the same narrow CRT
 // environment as the Windows setenv/unsetenv helpers (not Rust wide env APIs).
@@ -811,8 +818,10 @@ unsafe extern "C" fn os_signal_handler(sig: i32) {
 pub unsafe fn js_os_now(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     JS_NewFloat64(ctx, get_time_ns() as f64 / 1e6)
 }
-include!("quickjs_libc_windows_os_common.rs");
-include!("quickjs_libc_windows_os_tables.rs");
+mod quickjs_libc_windows_os_common;
+pub use quickjs_libc_windows_os_common::*;
+mod quickjs_libc_windows_os_tables;
+pub use quickjs_libc_windows_os_tables::*;
 unsafe fn js_os_init(ctx: *mut JSContext, m: *mut JSModuleDef) -> i32 {
     js_os_enable_poll();
     js_worker_init(ctx, m);

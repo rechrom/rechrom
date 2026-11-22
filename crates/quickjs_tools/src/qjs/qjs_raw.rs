@@ -1,5 +1,6 @@
 // qjs.c argv is a byte array. POSIX filenames, source expressions and script
 // arguments retain all bytes; no Unicode decoder intervenes at the CLI boundary.
+use super::*;
 #[derive(Debug)]
 pub struct ByteCliError {
     pub message: Vec<u8>,
@@ -7,7 +8,7 @@ pub struct ByteCliError {
     pub exit: i32,
 }
 impl ByteCliError {
-    fn new(message: impl Into<Vec<u8>>, exit: i32) -> Self {
+    pub(crate) fn new(message: impl Into<Vec<u8>>, exit: i32) -> Self {
         Self {
             message: message.into(),
             help: false,

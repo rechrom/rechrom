@@ -1,5 +1,6 @@
 // run-test262.c:1362..1558. Original negative, async and known-error reporting.
 // FILE services are host-only; the engine retains its platform-neutral writer.
+use super::*;
 pub struct RunnerExecutionState {
     pub outfile: *mut libc::FILE,
     pub error_out: *mut libc::FILE,
@@ -12,7 +13,7 @@ pub struct RunnerExecutionState {
 // POSIX FILE streams serialize each native call exactly as the original host.
 unsafe impl Send for RunnerExecutionState {}
 unsafe impl Sync for RunnerExecutionState {}
-fn runner_atoi(bytes: &[u8]) -> i32 {
+pub(crate) fn runner_atoi(bytes: &[u8]) -> i32 {
     let mut p = 0;
     while bytes.get(p).is_some_and(|c| c_space(*c)) {
         p += 1;
@@ -32,12 +33,12 @@ fn runner_atoi(bytes: &[u8]) -> i32 {
         n
     }
 }
-unsafe fn runner_write(file: *mut libc::FILE, bytes: &[u8]) {
+pub(crate) unsafe fn runner_write(file: *mut libc::FILE, bytes: &[u8]) {
     if !file.is_null() {
         libc::fwrite(bytes.as_ptr().cast(), 1, bytes.len(), file);
     }
 }
-unsafe fn runner_report(
+pub(crate) unsafe fn runner_report(
     file: *mut libc::FILE,
     filename: &[u8],
     line: i32,
@@ -56,22 +57,22 @@ unsafe fn runner_report(
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 extern "C" {
     #[link_name = "__stdoutp"]
-    static mut RUNNER_STDOUT: *mut libc::FILE;
+    pub(crate) static mut RUNNER_STDOUT: *mut libc::FILE;
     #[link_name = "__stderrp"]
-    static mut RUNNER_STDERR: *mut libc::FILE;
+    pub(crate) static mut RUNNER_STDERR: *mut libc::FILE;
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 extern "C" {
     #[link_name = "stdout"]
-    static mut RUNNER_STDOUT: *mut libc::FILE;
+    pub(crate) static mut RUNNER_STDOUT: *mut libc::FILE;
     #[link_name = "stderr"]
-    static mut RUNNER_STDERR: *mut libc::FILE;
+    pub(crate) static mut RUNNER_STDERR: *mut libc::FILE;
 }
-unsafe fn runner_stdout() -> *mut libc::FILE {
+pub(crate) unsafe fn runner_stdout() -> *mut libc::FILE {
     #[cfg(unix)] { RUNNER_STDOUT }
     #[cfg(windows)] { crate::quickjs_libc_windows::stdio_stdout() }
 }
-unsafe fn runner_stderr() -> *mut libc::FILE {
+pub(crate) unsafe fn runner_stderr() -> *mut libc::FILE {
     #[cfg(unix)] { RUNNER_STDERR }
     #[cfg(windows)] { crate::quickjs_libc_windows::stdio_stderr() }
 }

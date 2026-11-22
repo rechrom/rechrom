@@ -1,5 +1,6 @@
 // Bellard/Gordon MIT. quickjs-libc.c:2131..2159.
 // These OS calls belong to the tool host, never to the engine.
+use super::*;
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 pub fn get_time_ms() -> i64 {
     unsafe {

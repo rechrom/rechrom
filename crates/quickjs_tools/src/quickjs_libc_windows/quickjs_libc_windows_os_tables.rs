@@ -1,6 +1,7 @@
 // quickjs-libc.c:3927..4010, Windows branch.
-const OS_PLATFORM: &std::ffi::CStr = c"win32";
-const js_os_funcs: [JSCFunctionListEntry; 47] = [
+use super::*;
+pub(crate) const OS_PLATFORM: &std::ffi::CStr = c"win32";
+pub(crate) const js_os_funcs: [JSCFunctionListEntry; 47] = [
     JS_CFUNC_DEF(c"open".as_ptr(), 2, Some(js_os_open)),
     JS_PROP_INT32_DEF(
         c"O_RDONLY".as_ptr(),

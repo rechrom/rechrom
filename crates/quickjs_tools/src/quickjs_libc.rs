@@ -12,13 +12,32 @@ use std::{
 };
 
 #[cfg(unix)]
-include!("quickjs_libc_loop.rs");
+use super::{quickjs_libc_state::*, quickjs_libc_worker::*};
 #[cfg(unix)]
-include!("quickjs_libc_stdio.rs");
+use quickjs::list::*;
 #[cfg(unix)]
-include!("quickjs_libc_os.rs");
-include!("quickjs_libc_loader.rs");
-include!("host_args.rs");
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(unix)]
+mod quickjs_libc_loop;
+#[cfg(unix)]
+pub use quickjs_libc_loop::*;
+#[cfg(unix)]
+use quickjs::{
+    cutils::{dbuf_free, dbuf_init2, dbuf_put, dbuf_putstr, unicode_from_utf8, unicode_to_utf8},
+    cutils_header::{dbuf_error, DynBuf, UTF8_CHAR_LEN_MAX},
+};
+#[cfg(unix)]
+mod quickjs_libc_stdio;
+#[cfg(unix)]
+pub use quickjs_libc_stdio::*;
+#[cfg(unix)]
+mod quickjs_libc_os;
+#[cfg(unix)]
+pub use quickjs_libc_os::*;
+mod quickjs_libc_loader;
+pub use quickjs_libc_loader::*;
+mod host_args;
+pub use host_args::*;
 
 #[cfg(windows)]
 use super::quickjs_libc_windows::crt as libc;
@@ -513,7 +532,9 @@ pub unsafe fn get_bool_option(
 
 // Platform-selected clocks and the original portable POSIX fallback.
 #[cfg(unix)]
-include!("quickjs_libc_clock.rs");
+mod quickjs_libc_clock;
+#[cfg(unix)]
+pub use quickjs_libc_clock::*;
 
 // quickjs-libc.c:2162-2166.
 #[cfg(unix)]

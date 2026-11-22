@@ -1,6 +1,7 @@
 // Official quickjs-libc.c:486..546,684..735. Host module loading.
+use super::*;
 #[cfg(unix)]
-unsafe fn js_module_loader_so(ctx: *mut JSContext, name: *const c_char) -> *mut JSModuleDef {
+pub(crate) unsafe fn js_module_loader_so(ctx: *mut JSContext, name: *const c_char) -> *mut JSModuleDef {
     let bytes = CStr::from_ptr(name).to_bytes();
     let filename = if bytes.contains(&b'/') { name.cast_mut() } else {
         let allocated = js_malloc(ctx, bytes.len() + 3).cast::<c_char>();
@@ -32,7 +33,7 @@ unsafe fn js_module_loader_so(ctx: *mut JSContext, name: *const c_char) -> *mut 
     module
 }
 #[cfg(windows)]
-unsafe fn js_module_loader_so(ctx: *mut JSContext, _name: *const c_char) -> *mut JSModuleDef {
+pub(crate) unsafe fn js_module_loader_so(ctx: *mut JSContext, _name: *const c_char) -> *mut JSModuleDef {
     JS_ThrowReferenceError(ctx, c"shared library modules are not supported yet".as_ptr());
     ptr::null_mut()
 }

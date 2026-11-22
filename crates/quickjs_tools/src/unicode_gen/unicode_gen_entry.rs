@@ -1,6 +1,7 @@
 // c: unicode_gen.c:3663..3779. Bellard/Gordon MIT.
 // This executable has the upstream generator's process-lifetime global state.
-unsafe fn unicode_gen_main(argc:i32,argv:*mut *mut c_char)->i32 {
+use super::*;
+pub(crate) unsafe fn unicode_gen_main(argc:i32,argv:*mut *mut c_char)->i32 {
  let mut filename=[0 as c_char;1024];let mut arg=1;
  if arg>=argc || strcmp(*argv.add(arg as usize),c"-h".as_ptr())==0 || strcmp(*argv.add(arg as usize),c"--help".as_ptr())==0 {
   tool_printf(c"usage: %s PATH [OUTPUT]\n  PATH    path to the Unicode database directory\n  OUTPUT  name of the output file.  If omitted, a self test is performed\n          using the files from the Unicode library\n".as_ptr(),&[ToolPrintArg::Str(*argv)]);return 1;

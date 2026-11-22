@@ -1,4 +1,5 @@
 // run-test262.c:2092..2150. Same 50 ms condition wait and final snapshot.
+use super::*;
 pub unsafe fn pthread_cond_timedwait2(
     cond: *mut libc::pthread_cond_t,
     mutex: *mut libc::pthread_mutex_t,
@@ -14,11 +15,11 @@ pub unsafe fn pthread_cond_timedwait2(
     }
     libc::pthread_cond_timedwait(cond, mutex, &ts)
 }
-struct RunnerProgress {
-    exit: std::sync::Mutex<bool>,
-    cond: std::sync::Condvar,
+pub(crate) struct RunnerProgress {
+    pub(crate) exit: std::sync::Mutex<bool>,
+    pub(crate) cond: std::sync::Condvar,
 }
-fn show_progress(
+pub(crate) fn show_progress(
     state: std::sync::Arc<RunState>,
     progress: std::sync::Arc<RunnerProgress>,
     compact: bool,
@@ -109,7 +110,7 @@ pub unsafe fn run_test_dir_list(cases: Vec<(usize, Vec<u8>)>, s: &RunState, thre
     }
     free_thread_local_storage(&mut tls);
 }
-unsafe fn runner_open_file(name: &[u8], mode: &CStr) -> Result<*mut libc::FILE, RunnerError> {
+pub(crate) unsafe fn runner_open_file(name: &[u8], mode: &CStr) -> Result<*mut libc::FILE, RunnerError> {
     let filename = CString::new(name).unwrap();
     let file = libc::fopen(filename.as_ptr(), mode.as_ptr());
     if file.is_null() {
@@ -118,10 +119,10 @@ unsafe fn runner_open_file(name: &[u8], mode: &CStr) -> Result<*mut libc::FILE, 
         Ok(file)
     }
 }
-unsafe fn runner_print_stream(opaque: *mut c_void, buffer: *const c_char, len: usize) -> usize {
+pub(crate) unsafe fn runner_print_stream(opaque: *mut c_void, buffer: *const c_char, len: usize) -> usize {
     libc::fwrite(buffer.cast(), 1, len, opaque.cast())
 }
-unsafe fn dump_runner_memory(stats: &JSMemoryUsage) {
+pub(crate) unsafe fn dump_runner_memory(stats: &JSMemoryUsage) {
     let mut stream = QuickJSPrintStream {
         write_func: runner_print_stream,
         write_opaque: runner_stdout().cast(),

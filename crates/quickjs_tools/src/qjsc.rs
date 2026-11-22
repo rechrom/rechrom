@@ -1293,7 +1293,8 @@ pub fn executable_argv(
     .collect()
 }
 
-include!("qjsc_rust.rs");
+mod qjsc_rust;
+pub use qjsc_rust::*;
 // qjsc.c:576..876.
 pub fn main_entry() -> i32 {
     let argv = match crate::quickjs_libc::args_bytes() {

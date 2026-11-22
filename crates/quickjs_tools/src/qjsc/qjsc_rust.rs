@@ -1,10 +1,11 @@
 // Native Rust host output for qjsc executable mode. The original parser,
 // module compiler, bytecode writer, feature selection and C output stay intact.
-fn rust_source(state: &CompilerState) -> Vec<u8> {
+use super::*;
+pub(crate) fn rust_source(state: &CompilerState) -> Vec<u8> {
     let mut src=b"#![allow(non_snake_case,non_upper_case_globals,unused_imports)]\nuse quickjs::{quickjs::*,quickjs_header::*};\nuse quickjs_tools::quickjs_libc::*;\nuse std::{ffi::CString,ptr};\n".to_vec();
     // Embed the native argv adapter so emitted programs remain self-contained
     // and preserve C's byte arguments on both Unix and Windows.
-    src.extend_from_slice(include_str!("host_args.rs").as_bytes());
+    src.extend_from_slice(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/quickjs_libc/host_args.rs")).as_bytes());
     for obj in &state.objects {
         src.extend_from_slice(b"static ");
         src.extend_from_slice(&obj.name);
@@ -93,7 +94,7 @@ fn rust_source(state: &CompilerState) -> Vec<u8> {
     );
     src
 }
-fn rust_dependency_dir(use_lto: bool) -> Result<std::path::PathBuf, ToolError> {
+pub(crate) fn rust_dependency_dir(use_lto: bool) -> Result<std::path::PathBuf, ToolError> {
     if use_lto {
         if let Some(path) = std::env::var_os("QJSC_RUST_LTO_DEPS") {
             return Ok(path.into());
@@ -117,7 +118,7 @@ fn rust_dependency_dir(use_lto: bool) -> Result<std::path::PathBuf, ToolError> {
         Err(ToolError::new("qjsc: Rust dependencies not found; set QJSC_RUST_DEPS to the built Cargo deps directory\n"))
     }
 }
-fn newest_rlib(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, ToolError> {
+pub(crate) fn newest_rlib(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, ToolError> {
     let prefix = format!("lib{name}-");
     let dir_bytes = os_bytes(dir.as_os_str().to_os_string())?;
     fs::read_dir(dir)?
@@ -137,7 +138,7 @@ fn newest_rlib(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, 
             )
         })
 }
-fn output_rust_executable(
+pub(crate) fn output_rust_executable(
     state: &CompilerState,
     out: &[u8],
     use_lto: bool,

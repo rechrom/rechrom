@@ -1,7 +1,8 @@
 // quickjs-libc.c:3927..4010. All POSIX entries in source order.
-#[cfg(target_os = "macos")] const OS_PLATFORM: &CStr = c"darwin";
-#[cfg(not(target_os = "macos"))] const OS_PLATFORM: &CStr = c"linux";
-const js_os_funcs: [JSCFunctionListEntry; 71] = [
+use super::*;
+#[cfg(target_os = "macos")] pub(crate) const OS_PLATFORM: &CStr = c"darwin";
+#[cfg(not(target_os = "macos"))] pub(crate) const OS_PLATFORM: &CStr = c"linux";
+pub(crate) const js_os_funcs: [JSCFunctionListEntry; 71] = [
 JS_CFUNC_DEF(c"open".as_ptr(), 2, Some(js_os_open)),
 JS_PROP_INT32_DEF(c"O_RDONLY".as_ptr(), libc::O_RDONLY as i32, JS_PROP_CONFIGURABLE),
 JS_PROP_INT32_DEF(c"O_WRONLY".as_ptr(), libc::O_WRONLY as i32, JS_PROP_CONFIGURABLE),

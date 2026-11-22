@@ -1,4 +1,5 @@
 // Same official C CFG; native functions map to Windows CRT.
+use super::*;
 pub unsafe fn js_os_close(
     mut ctx: *mut JSContext,
     mut this_val: JSValue,

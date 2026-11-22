@@ -1,42 +1,39 @@
-// quickjs-libc.c std/FILE/printf host functions (included in quickjs_libc).
+// quickjs-libc.c std/FILE/printf host functions (a submodule of quickjs_libc).
 // Native stdio/errno/popen/curl are tool services, never engine dependencies.
-use quickjs::{
-    cutils::{dbuf_free, dbuf_init2, dbuf_put, dbuf_putstr, unicode_from_utf8, unicode_to_utf8},
-    cutils_header::{dbuf_error, DynBuf, UTF8_CHAR_LEN_MAX},
-};
+use super::*;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 extern "C" {
     #[link_name = "__stdinp"]
-    static mut STDIO_HOST_IN: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_IN: *mut libc::FILE;
     #[link_name = "__stdoutp"]
-    static mut STDIO_HOST_OUT: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_OUT: *mut libc::FILE;
     #[link_name = "__stderrp"]
-    static mut STDIO_HOST_ERR: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_ERR: *mut libc::FILE;
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 extern "C" {
     #[link_name = "stdin"]
-    static mut STDIO_HOST_IN: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_IN: *mut libc::FILE;
     #[link_name = "stdout"]
-    static mut STDIO_HOST_OUT: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_OUT: *mut libc::FILE;
     #[link_name = "stderr"]
-    static mut STDIO_HOST_ERR: *mut libc::FILE;
+    pub(crate) static mut STDIO_HOST_ERR: *mut libc::FILE;
 }
-unsafe fn stdio_stdin() -> *mut libc::FILE {
+pub(crate) unsafe fn stdio_stdin() -> *mut libc::FILE {
     STDIO_HOST_IN
 }
-unsafe fn stdio_stdout() -> *mut libc::FILE {
+pub(crate) unsafe fn stdio_stdout() -> *mut libc::FILE {
     STDIO_HOST_OUT
 }
-unsafe fn stdio_stderr() -> *mut libc::FILE {
+pub(crate) unsafe fn stdio_stderr() -> *mut libc::FILE {
     STDIO_HOST_ERR
 }
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
-unsafe fn stdio_errno_pointer() -> *mut i32 {
+pub(crate) unsafe fn stdio_errno_pointer() -> *mut i32 {
     libc::__error()
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
-unsafe fn stdio_errno_pointer() -> *mut i32 {
+pub(crate) unsafe fn stdio_errno_pointer() -> *mut i32 {
     libc::__errno_location()
 }
 // C:949..954. Shared return/errno adapter used by std and OS callbacks.
@@ -47,7 +44,7 @@ pub unsafe fn js_get_errno(ret: isize) -> isize {
         ret
     }
 }
-unsafe fn stdio_bool_option(
+pub(crate) unsafe fn stdio_bool_option(
     ctx: *mut JSContext,
     result: *mut i32,
     obj: JSValueConst,
@@ -55,17 +52,17 @@ unsafe fn stdio_bool_option(
 ) -> i32 {
     get_bool_option(ctx, &mut *result, obj, name)
 }
-unsafe fn stdio_realloc(opaque: *mut c_void, p: *mut c_void, size: usize) -> *mut c_void {
+pub(crate) unsafe fn stdio_realloc(opaque: *mut c_void, p: *mut c_void, size: usize) -> *mut c_void {
     js_realloc_rt(opaque.cast(), p, size)
 }
 // C:166..178.
-unsafe fn js_std_dbuf_init(ctx: *mut JSContext, s: *mut DynBuf) {
+pub(crate) unsafe fn js_std_dbuf_init(ctx: *mut JSContext, s: *mut DynBuf) {
     dbuf_init2(s, JS_GetRuntime(ctx).cast(), Some(stdio_realloc));
 }
-unsafe fn stdio_dbuf_putc(s: *mut DynBuf, c: u8) -> i32 {
+pub(crate) unsafe fn stdio_dbuf_putc(s: *mut DynBuf, c: u8) -> i32 {
     quickjs::cutils::__dbuf_putc(s, c as u8)
 }
-unsafe fn stdio_dbuf_printf_string(
+pub(crate) unsafe fn stdio_dbuf_printf_string(
     s: *mut DynBuf,
     fmt: *const c_char,
     value: *const c_char,
@@ -73,13 +70,13 @@ unsafe fn stdio_dbuf_printf_string(
     quickjs::cutils::dbuf_printf(s, |out, cap| libc::snprintf(out.cast(), cap, fmt, value))
 }
 #[repr(C)]
-struct JSSTDFile {
-    f: *mut libc::FILE,
-    close_in_finalizer: i32,
-    is_popen: i32,
+pub(crate) struct JSSTDFile {
+    pub(crate) f: *mut libc::FILE,
+    pub(crate) close_in_finalizer: i32,
+    pub(crate) is_popen: i32,
 }
-static STDIO_FILE_CLASS_ID: std::sync::OnceLock<JSClassID> = std::sync::OnceLock::new();
-unsafe fn stdio_file_class_id() -> JSClassID {
+pub(crate) static STDIO_FILE_CLASS_ID: std::sync::OnceLock<JSClassID> = std::sync::OnceLock::new();
+pub(crate) unsafe fn stdio_file_class_id() -> JSClassID {
     *STDIO_FILE_CLASS_ID.get_or_init(|| {
         let mut id = 0;
         JS_NewClassID(&mut id);
@@ -4150,7 +4147,7 @@ pub unsafe fn js_std_urlGet(
     }
 }
 // C:1653..1669: exact errno properties, in declaration order.
-const js_std_error_props: [JSCFunctionListEntry; 11] = [
+pub(crate) const js_std_error_props: [JSCFunctionListEntry; 11] = [
     JS_PROP_INT32_DEF(c"EINVAL".as_ptr(), libc::EINVAL, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF(c"EIO".as_ptr(), libc::EIO, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF(c"EACCES".as_ptr(), libc::EACCES, JS_PROP_CONFIGURABLE),
@@ -4163,7 +4160,7 @@ const js_std_error_props: [JSCFunctionListEntry; 11] = [
     JS_PROP_INT32_DEF(c"EPIPE".as_ptr(), libc::EPIPE, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF(c"EBADF".as_ptr(), libc::EBADF, JS_PROP_CONFIGURABLE),
 ];
-const js_std_funcs: [JSCFunctionListEntry; 24] = [
+pub(crate) const js_std_funcs: [JSCFunctionListEntry; 24] = [
     JS_CFUNC_DEF(c"exit".as_ptr(), 1, Some(js_std_exit)),
     JS_CFUNC_DEF(c"gc".as_ptr(), 0, Some(js_std_gc)),
     JS_CFUNC_DEF(c"evalScript".as_ptr(), 1, Some(js_evalScript)),
@@ -4194,7 +4191,7 @@ const js_std_funcs: [JSCFunctionListEntry; 24] = [
     ),
     JS_CFUNC_DEF(c"__printObject".as_ptr(), 1, Some(js_std_file_printObject)),
 ];
-const js_std_file_proto_funcs: [JSCFunctionListEntry; 17] = [
+pub(crate) const js_std_file_proto_funcs: [JSCFunctionListEntry; 17] = [
     JS_CFUNC_DEF(c"close".as_ptr(), 0, Some(js_std_file_close)),
     JS_CFUNC_MAGIC_DEF(c"puts".as_ptr(), 1, Some(js_std_file_puts), 1),
     JS_CFUNC_DEF(c"printf".as_ptr(), 1, Some(js_std_file_printf)),
@@ -4214,7 +4211,7 @@ const js_std_file_proto_funcs: [JSCFunctionListEntry; 17] = [
     JS_CFUNC_DEF(c"putByte".as_ptr(), 1, Some(js_std_file_putByte)),
 ];
 // C:1710..1750. FILE wrappers own closeable handles; standard streams do not.
-unsafe fn js_std_init(ctx: *mut JSContext, m: *mut JSModuleDef) -> i32 {
+pub(crate) unsafe fn js_std_init(ctx: *mut JSContext, m: *mut JSModuleDef) -> i32 {
     let class = stdio_file_class_id();
     let definition = JSClassDef {
         class_name: c"FILE".as_ptr(),

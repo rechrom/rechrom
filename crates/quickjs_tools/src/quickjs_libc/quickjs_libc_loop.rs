@@ -1,11 +1,9 @@
 // POSIX host state/loop from official quickjs-libc.c; MIT, see LICENSE.
-// Included into quickjs_libc so original private helper scope is preserved.
-use super::{quickjs_libc_state::*, quickjs_libc_worker::*};
-use quickjs::list::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+// A submodule of quickjs_libc; `use super::*` keeps the original helper scope.
+use super::*;
 
 pub static OS_PENDING_SIGNALS: AtomicU64 = AtomicU64::new(0);
-static OS_POLL_ENABLED: AtomicBool = AtomicBool::new(false);
+pub(crate) static OS_POLL_ENABLED: AtomicBool = AtomicBool::new(false);
 // The original process-global pointer only ever holds js_os_poll on POSIX.
 pub fn js_os_enable_poll() { OS_POLL_ENABLED.store(true, Ordering::Relaxed); }
 pub unsafe fn interrupt_handler(_rt: *mut JSRuntime, _opaque: *mut c_void) -> i32 {
@@ -40,7 +38,7 @@ pub unsafe fn call_handler(ctx: *mut JSContext, function: JSValueConst) {
 }
 
 // quickjs-libc.c:2517..2528.
-unsafe fn js_poll_expand(state: *mut JSThreadState) -> i32 {
+pub(crate) unsafe fn js_poll_expand(state: *mut JSThreadState) -> i32 {
     let size = ((*state).poll_fds_size + (*state).poll_fds_size / 2).max(16);
     let data: *mut libc::pollfd = libc::realloc((*state).poll_fds.cast(), size as usize * std::mem::size_of::<libc::pollfd>()).cast();
     if data.is_null() { return -1; }
@@ -49,7 +47,7 @@ unsafe fn js_poll_expand(state: *mut JSThreadState) -> i32 {
     0
 }
 // quickjs-libc.c:2530..2545.
-unsafe fn js_poll_add_poll_fd(state: *mut JSThreadState, count: &mut i32, fd: i32, events: i32) -> i32 {
+pub(crate) unsafe fn js_poll_add_poll_fd(state: *mut JSThreadState, count: &mut i32, fd: i32, events: i32) -> i32 {
     if *count >= (*state).poll_fds_size && js_poll_expand(state) != 0 { return -1; }
     let poll = (*state).poll_fds.add(*count as usize);
     *count += 1;
@@ -175,7 +173,7 @@ pub unsafe fn js_std_free_handlers(rt: *mut JSRuntime) {
 }
 
 // quickjs-libc.c:4227..4269. Match by actual promise identity, never by reason.
-unsafe fn find_rejected_promise(ctx: *mut JSContext, state: *mut JSThreadState, promise: JSValueConst) -> *mut JSRejectedPromiseEntry {
+pub(crate) unsafe fn find_rejected_promise(ctx: *mut JSContext, state: *mut JSThreadState, promise: JSValueConst) -> *mut JSRejectedPromiseEntry {
     for link in ListIter::new(ptr::addr_of_mut!((*state).rejected_promise_list), false, false) {
         let entry = link.cast::<JSRejectedPromiseEntry>();
         if JS_SameValue(ctx, (*entry).promise, promise) != 0 { return entry; }

@@ -1,7 +1,7 @@
 // run-test262.c:55..85,225..234,515..943 (QuickJS 2026-06-04).
 // Bellard/Gordon MIT. Included in run_test262's namespace. Engine/JSValue
 // ownership is unchanged; POSIX threads/mutexes/condition variables are host-only.
-use quickjs::list::{init_list_head, list_add_tail, list_del, list_empty, list_head, ListIter};
+use super::*;
 #[repr(C)]
 pub struct ThreadLocalStorage {
     pub agent_mutex: libc::pthread_mutex_t,
@@ -29,7 +29,7 @@ pub struct AgentReport {
     pub link: list_head,
     pub str_: *mut c_char,
 }
-static TEST262_OUTFILE: std::sync::atomic::AtomicPtr<libc::FILE> =
+pub(crate) static TEST262_OUTFILE: std::sync::atomic::AtomicPtr<libc::FILE> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 /// Same process-wide optional FILE stream as the C runner. Caller owns the
 /// stream and must retain it until all agents have joined.
@@ -58,7 +58,7 @@ pub unsafe fn free_thread_local_storage(tls: *mut ThreadLocalStorage) {
     libc::pthread_cond_destroy(&mut (*tls).agent_cond);
     libc::pthread_mutex_destroy(&mut (*tls).agent_mutex);
 }
-unsafe fn js_print_value_write(opaque: *mut c_void, buf: *const c_char, len: usize) {
+pub(crate) unsafe fn js_print_value_write(opaque: *mut c_void, buf: *const c_char, len: usize) {
     libc::fwrite(buf.cast(), 1, len, opaque.cast());
 }
 pub unsafe fn js_print(ctx: *mut JSContext, _: JSValue, argc: i32, argv: *mut JSValue) -> JSValue {
@@ -103,7 +103,7 @@ pub unsafe fn js_print(ctx: *mut JSContext, _: JSValue, argc: i32, argv: *mut JS
     }
     JS_UNDEFINED
 }
-unsafe fn js_detachArrayBuffer(
+pub(crate) unsafe fn js_detachArrayBuffer(
     ctx: *mut JSContext,
     _: JSValue,
     _: i32,
@@ -112,7 +112,7 @@ unsafe fn js_detachArrayBuffer(
     JS_DetachArrayBuffer(ctx, *argv);
     JS_UNDEFINED
 }
-unsafe fn js_evalScript(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_evalScript(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
     let mut len = 0;
     let s = JS_ToCStringLen(ctx, &mut len, *argv);
     if s.is_null() {
@@ -122,7 +122,7 @@ unsafe fn js_evalScript(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSVa
     JS_FreeCString(ctx, s);
     ret
 }
-extern "C" fn agent_start(arg: *mut c_void) -> *mut c_void {
+pub(crate) extern "C" fn agent_start(arg: *mut c_void) -> *mut c_void {
     unsafe {
         let agent = arg.cast::<Test262Agent>();
         let tls = (*agent).tls;
@@ -207,7 +207,7 @@ extern "C" fn agent_start(arg: *mut c_void) -> *mut c_void {
         std::ptr::null_mut()
     }
 }
-unsafe fn js_agent_start(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_agent_start(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
     if !JS_GetContextOpaque(ctx).is_null() {
         return JS_ThrowTypeError(ctx, c"cannot be called inside an agent".as_ptr());
     }
@@ -256,17 +256,17 @@ pub unsafe fn js_agent_free(ctx: *mut JSContext) {
         libc::free(agent.cast());
     }
 }
-unsafe fn js_agent_leaving(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_agent_leaving(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     if JS_GetContextOpaque(ctx).is_null() {
         return JS_ThrowTypeError(ctx, c"must be called inside an agent".as_ptr());
     }
     JS_UNDEFINED
 }
-unsafe fn is_broadcast_pending(tls: *mut ThreadLocalStorage) -> bool {
+pub(crate) unsafe fn is_broadcast_pending(tls: *mut ThreadLocalStorage) -> bool {
     ListIter::new(&mut (*tls).agent_list, false, false)
         .any(|el| (*el.cast::<Test262Agent>()).broadcast_pending != 0)
 }
-unsafe fn js_agent_broadcast(
+pub(crate) unsafe fn js_agent_broadcast(
     ctx: *mut JSContext,
     _: JSValue,
     _: i32,
@@ -302,7 +302,7 @@ unsafe fn js_agent_broadcast(
     libc::pthread_mutex_unlock(&mut (*tls).agent_mutex);
     JS_UNDEFINED
 }
-unsafe fn js_agent_receiveBroadcast(
+pub(crate) unsafe fn js_agent_receiveBroadcast(
     ctx: *mut JSContext,
     _: JSValue,
     _: i32,
@@ -319,7 +319,7 @@ unsafe fn js_agent_receiveBroadcast(
     (*agent).broadcast_func = JS_DupValue(ctx, *argv);
     JS_UNDEFINED
 }
-unsafe fn js_agent_sleep(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_agent_sleep(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
     let mut duration = 0;
     if JS_ToUint32(ctx, &mut duration, *argv) != 0 {
         return JS_EXCEPTION;
@@ -327,14 +327,14 @@ unsafe fn js_agent_sleep(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSV
     libc::usleep(duration.wrapping_mul(1000));
     JS_UNDEFINED
 }
-unsafe fn get_clock_ms() -> i64 {
+pub(crate) unsafe fn get_clock_ms() -> i64 {
     let mut ts: libc::timespec = std::mem::zeroed();
     libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
     (ts.tv_sec as u64)
         .wrapping_mul(1000)
         .wrapping_add((ts.tv_nsec / 1_000_000) as u64) as i64
 }
-unsafe fn js_agent_monotonicNow(
+pub(crate) unsafe fn js_agent_monotonicNow(
     ctx: *mut JSContext,
     _: JSValue,
     _: i32,
@@ -342,7 +342,7 @@ unsafe fn js_agent_monotonicNow(
 ) -> JSValue {
     JS_NewInt64(ctx, get_clock_ms())
 }
-unsafe fn js_agent_getReport(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_agent_getReport(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     let tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx)).cast::<ThreadLocalStorage>();
     libc::pthread_mutex_lock(&mut (*tls).report_mutex);
     let rep = if list_empty(&mut (*tls).report_list) != 0 {
@@ -362,7 +362,7 @@ unsafe fn js_agent_getReport(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JS
         v
     }
 }
-unsafe fn js_agent_report(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_agent_report(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JSValue) -> JSValue {
     let tls = JS_GetRuntimeOpaque(JS_GetRuntime(ctx)).cast::<ThreadLocalStorage>();
     let s = JS_ToCString(ctx, *argv);
     if s.is_null() {
@@ -384,7 +384,7 @@ unsafe fn js_agent_report(ctx: *mut JSContext, _: JSValue, _: i32, argv: *mut JS
     libc::pthread_mutex_unlock(&mut (*tls).report_mutex);
     JS_UNDEFINED
 }
-const JS_AGENT_FUNCS: [JSCFunctionListEntry; 8] = [
+pub(crate) const JS_AGENT_FUNCS: [JSCFunctionListEntry; 8] = [
     JS_CFUNC_DEF(c"start".as_ptr(), 1, Some(js_agent_start)),
     JS_CFUNC_DEF(c"getReport".as_ptr(), 0, Some(js_agent_getReport)),
     JS_CFUNC_DEF(c"broadcast".as_ptr(), 2, Some(js_agent_broadcast)),
@@ -398,12 +398,12 @@ const JS_AGENT_FUNCS: [JSCFunctionListEntry; 8] = [
     JS_CFUNC_DEF(c"sleep".as_ptr(), 1, Some(js_agent_sleep)),
     JS_CFUNC_DEF(c"monotonicNow".as_ptr(), 0, Some(js_agent_monotonicNow)),
 ];
-unsafe fn js_new_agent(ctx: *mut JSContext) -> JSValue {
+pub(crate) unsafe fn js_new_agent(ctx: *mut JSContext) -> JSValue {
     let agent = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, agent, JS_AGENT_FUNCS.as_ptr(), 8);
     agent
 }
-unsafe fn js_createRealm(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_createRealm(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     let ctx1 = JS_NewContext(JS_GetRuntime(ctx));
     if ctx1.is_null() {
         return JS_ThrowOutOfMemory(ctx);
@@ -412,10 +412,10 @@ unsafe fn js_createRealm(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValu
     JS_FreeContext(ctx1);
     ret
 }
-unsafe fn js_IsHTMLDDA(_: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_IsHTMLDDA(_: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     JS_NULL
 }
-unsafe fn js_gc(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
+pub(crate) unsafe fn js_gc(ctx: *mut JSContext, _: JSValue, _: i32, _: *mut JSValue) -> JSValue {
     JS_RunGC(JS_GetRuntime(ctx));
     JS_UNDEFINED
 }

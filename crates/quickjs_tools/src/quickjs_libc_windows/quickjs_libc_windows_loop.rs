@@ -1,6 +1,6 @@
 // Shared C4133..4402 algorithms, Windows state has no POSIX pollfd allocation.
-use crt as libc;
 // quickjs-libc.c:4133..4163.
+use super::*;
 pub unsafe fn js_std_init_handlers(rt: *mut JSRuntime) {
     let state = libc::calloc(1, std::mem::size_of::<JSThreadState>()).cast::<JSThreadState>();
     if state.is_null() {
@@ -55,7 +55,7 @@ pub unsafe fn js_std_free_handlers(rt: *mut JSRuntime) {
 }
 
 // quickjs-libc.c:4227..4269. Match by actual promise identity, never by reason.
-unsafe fn find_rejected_promise(
+pub(crate) unsafe fn find_rejected_promise(
     ctx: *mut JSContext,
     state: *mut JSThreadState,
     promise: JSValueConst,

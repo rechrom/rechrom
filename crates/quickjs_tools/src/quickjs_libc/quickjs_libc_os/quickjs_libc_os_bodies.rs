@@ -1,5 +1,6 @@
 // Generated from the official C AST; original goto CFG retained.
 // c: quickjs-libc.c:1735. Bellard/Gordon MIT.
+use super::*;
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
 pub unsafe fn js_os_open(mut ctx: *mut JSContext, mut this_val: JSValue, mut argc: i32, mut argv: *mut JSValue) -> JSValue {
 

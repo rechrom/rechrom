@@ -1,31 +1,34 @@
 // POSIX adapters for original quickjs-libc.c host algorithms.
-const OS_PATH_MAX: usize = libc::PATH_MAX as usize;
-include!("quickjs_libc_os_bodies.rs");
-include!("quickjs_libc_os_tables.rs");
+use super::*;
+pub(crate) const OS_PATH_MAX: usize = libc::PATH_MAX as usize;
+mod quickjs_libc_os_bodies;
+pub use quickjs_libc_os_bodies::*;
+mod quickjs_libc_os_tables;
+pub use quickjs_libc_os_tables::*;
 
 #[cfg(target_os = "macos")]
-extern "C" { fn _NSGetEnviron() -> *mut *mut *mut c_char; }
+extern "C" { pub(crate) fn _NSGetEnviron() -> *mut *mut *mut c_char; }
 #[cfg(not(target_os = "macos"))]
-extern "C" { static mut environ: *mut *mut c_char; }
-unsafe fn os_environ_pointer() -> *mut *mut *mut c_char {
+extern "C" { pub(crate) static mut environ: *mut *mut c_char; }
+pub(crate) unsafe fn os_environ_pointer() -> *mut *mut *mut c_char {
     #[cfg(target_os = "macos")] { _NSGetEnviron() }
     #[cfg(not(target_os = "macos"))] { ptr::addr_of_mut!(environ) }
 }
-unsafe fn os_execve(filename: *const c_char, argv: *mut *mut c_char, envp: *mut *mut c_char) -> i32 {
+pub(crate) unsafe fn os_execve(filename: *const c_char, argv: *mut *mut c_char, envp: *mut *mut c_char) -> i32 {
     libc::execve(filename, argv.cast(), envp.cast())
 }
 // glibc 2.34+ supplies this API, although the Rust libc dependency does not
 // currently expose its declaration. This is a host OS binding, not a fallback.
 #[cfg(all(feature = "host-have-closefrom", target_os = "linux", target_env = "gnu"))]
-extern "C" { #[link_name = "closefrom"] fn OS_HOST_CLOSEFROM(fd: i32); }
+extern "C" { #[link_name = "closefrom"] pub(crate) fn OS_HOST_CLOSEFROM(fd: i32); }
 #[cfg(feature = "host-have-closefrom")]
-unsafe fn os_closefrom(fd: i32) {
+pub(crate) unsafe fn os_closefrom(fd: i32) {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     { OS_HOST_CLOSEFROM(fd); }
     #[cfg(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))]
     { let _ = libc::closefrom(fd); }
 }
-unsafe extern "C" fn os_signal_handler(number: i32) {
+pub(crate) unsafe extern "C" fn os_signal_handler(number: i32) {
     OS_PENDING_SIGNALS.fetch_or(1u64 << number, Ordering::Relaxed);
 }
 
@@ -42,8 +45,8 @@ pub unsafe fn js_os_ttyGetWinSize(ctx: *mut JSContext, _this: JSValueConst,
     JS_DefinePropertyValueUint32(ctx, array, 1, JS_NewInt32(ctx, size.ws_row as i32), JS_PROP_C_W_E);
     array
 }
-static mut OS_OLD_TTY: libc::termios = unsafe { std::mem::zeroed() };
-extern "C" fn term_exit() { unsafe { libc::tcsetattr(0, libc::TCSANOW, ptr::addr_of!(OS_OLD_TTY)); } }
+pub(crate) static mut OS_OLD_TTY: libc::termios = unsafe { std::mem::zeroed() };
+pub(crate) extern "C" fn term_exit() { unsafe { libc::tcsetattr(0, libc::TCSANOW, ptr::addr_of!(OS_OLD_TTY)); } }
 // C:1901..1935. Same process-global restoration and fd=0 atexit behavior.
 pub unsafe fn js_os_ttySetRaw(ctx: *mut JSContext, _this: JSValueConst,
                              _argc: i32, argv: *mut JSValueConst) -> JSValue {
@@ -91,7 +94,7 @@ pub unsafe fn js_os_stat(ctx: *mut JSContext, _this: JSValueConst,
     make_obj_error(ctx, object, error)
 }
 // C:4012..4059. Exact module export table and production Worker class.
-unsafe fn js_os_init(ctx: *mut JSContext, module: *mut JSModuleDef) -> i32 {
+pub(crate) unsafe fn js_os_init(ctx: *mut JSContext, module: *mut JSModuleDef) -> i32 {
     js_os_enable_poll();
     js_worker_init(ctx, module);
     JS_SetModuleExportList(ctx, module, js_os_funcs.as_ptr(), js_os_funcs.len() as i32)

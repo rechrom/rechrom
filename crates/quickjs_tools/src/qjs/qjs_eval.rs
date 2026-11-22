@@ -1,5 +1,6 @@
 // qjs.c:49..76. Bellard/Gordon, MIT. Included after the host await helper
 // is registered; no substitute promise loop or exception handler is used.
+use super::*;
 pub unsafe fn eval_buf(
     ctx: *mut JSContext,
     buffer: *const c_void,

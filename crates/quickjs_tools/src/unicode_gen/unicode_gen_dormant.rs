@@ -1,8 +1,9 @@
 // Original #if 0 alternatives: compiled, but intentionally never called by the CLI.
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:463 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
+use super::*;
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn parse_unicode_data_dormant(mut filename: *const c_char) -> () {
+pub(crate) unsafe fn parse_unicode_data_dormant(mut filename: *const c_char) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut f: *mut FILE = core::mem::zeroed();
 let mut line: [c_char; 1024] = core::mem::zeroed();
@@ -440,7 +441,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1555 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_conv_table_dormant(mut tab: *mut CCInfo, mut RUN_TYPE_TODO: i32) -> () {
+pub(crate) unsafe fn build_conv_table_dormant(mut tab: *mut CCInfo, mut RUN_TYPE_TODO: i32) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut code: i32 = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -795,7 +796,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:1771 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn compute_internal_props_dormant() -> () {
+pub(crate) unsafe fn compute_internal_props_dormant() -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut has_ul: i32 = core::mem::zeroed();
@@ -892,7 +893,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2255 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn mark_zwj_string_dormant(mut sl: *mut REStringList, mut buf: *mut u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32, mut mark_flag: i32) -> i32 {
+pub(crate) unsafe fn mark_zwj_string_dormant(mut sl: *mut REStringList, mut buf: *mut u32, mut len: i32, mut mod_type: i32, mut mod_pos: *mut i32, mut hc_pos: i32, mut mark_flag: i32) -> i32 {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut p: *mut REString = core::mem::zeroed();
 let mut i: i32 = core::mem::zeroed();
@@ -1100,7 +1101,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:2363 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_rgi_emoji_zwj_sequence_dormant(mut f: *mut FILE, mut sl: *mut REStringList) -> () {
+pub(crate) unsafe fn build_rgi_emoji_zwj_sequence_dormant(mut f: *mut FILE, mut sl: *mut REStringList) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut mod_pos: [i32; 2] = core::mem::zeroed();
 let mut mod_count: i32 = core::mem::zeroed();
@@ -1366,7 +1367,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // c: unicode_gen.c:3456 original #if 0 block retained in unused copy. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_compose_table_dormant(mut f: *mut FILE, mut tab_de: *const DecompEntry) -> () {
+pub(crate) unsafe fn build_compose_table_dormant(mut f: *mut FILE, mut tab_de: *const DecompEntry) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut v: i32 = core::mem::zeroed();
@@ -1551,7 +1552,7 @@ _ => std::process::abort(),
 // Generated from the official C AST; original goto CFG retained.
 // Test-only copy of unicode_gen.c build_decompose_table constructs original table then calls dormant composition dump. Bellard/Gordon MIT.
 #[allow(unused_parens, unused_mut, unused_assignments, unreachable_code)]
-unsafe fn build_decompose_table_with_dormant_composition(mut f: *mut FILE) -> () {
+pub(crate) unsafe fn build_decompose_table_with_dormant_composition(mut f: *mut FILE) -> () {
 let mut vm_local_storage = Vec::<u64>::new();
 let mut i: i32 = core::mem::zeroed();
 let mut array_len: i32 = core::mem::zeroed();

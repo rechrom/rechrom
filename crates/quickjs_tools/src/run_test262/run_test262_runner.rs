@@ -1,4 +1,5 @@
 // run-test262.c:1667..1770. Statistics retain every original averaged field.
+use super::*;
 pub struct MemoryStats {
     pub count: i32,
     pub all: JSMemoryUsage,
@@ -85,7 +86,7 @@ pub unsafe fn update_stats(rt: *mut JSRuntime, filename: &[u8], state: &RunState
         update!(fast_array_elements);
     }
 }
-fn runner_fatal(exit: i32, text: &[u8]) -> RunnerError {
+pub(crate) fn runner_fatal(exit: i32, text: &[u8]) -> RunnerError {
     let mut message = b"run-test262: ".to_vec();
     message.extend_from_slice(text);
     message.push(b'\n');
