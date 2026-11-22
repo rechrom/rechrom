@@ -509,7 +509,6 @@ The remaining 4 "unused fn" warnings are real bodies:
   - `ScoreLineBreaker::Node`
   - `ShapeOutsideInfo::ReferenceBoxPhysicalSize`
   - `SvgTextLayoutAlgorithm::IsVerticalUpward`
-  - Table `Advance*ToNonEmptySection`
   - `MapToVisualRectInAncestorSpaceInternalFastPath`
   - `LayoutObject::AdjustStyleDifference`, `ApplyPseudoElementStyleChanges`,
     `ApplyFirstLineChanges`, `FirstLineStyleWithoutFallback` and
