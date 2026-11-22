@@ -2,6 +2,8 @@
 // child truncation algorithms remain in this source-owned module.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result::ShapeResult;
 use font_engine::fonts::shaping::shape_result_types::AdjustMidCluster;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;

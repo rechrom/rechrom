@@ -1,6 +1,8 @@
 // C++: layoutng_inline/physical_line_box_fragment_builder.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{LayoutUnit, MakeGarbageCollected, TextDirection};
 use crate::physical_fragment::{FragmentType, PhysicalFragment, PhysicalFragmentFlags};
 use crate::physical_line_box_fragment::PhysicalLineBoxFragment;
@@ -8,8 +10,7 @@ use crate::physical_line_box_fragment::PhysicalLineBoxFragment;
 use crate::line_box_fragment_builder::LineBoxFragmentBuilder;
 
 // cpp: layoutng_inline/physical_line_box_fragment_builder.cc:10-15
-#[unsafe(no_mangle)]
-pub extern "Rust" fn PhysicalLineBoxFragmentCreateFromInline(
+pub fn PhysicalLineBoxFragmentCreateFromInline(
     builder: &mut LineBoxFragmentBuilder,
 ) -> *const PhysicalLineBoxFragment {
     debug_assert_eq!(builder.base_.children_.len(), 0);

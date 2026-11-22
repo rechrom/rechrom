@@ -1,6 +1,8 @@
 // C++: layoutng_inline/line_info_list.h.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use std::ops::{Index, IndexMut};
 
 use foundation::WtfSizeT;

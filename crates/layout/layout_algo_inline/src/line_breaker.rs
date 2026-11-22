@@ -3,6 +3,8 @@
 // here. Shared inline assembly and external owner interfaces remain pending.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::canvas_rotation_in_vertical::CanvasRotationInVertical;
 use font_engine::fonts::shaping::harfbuzz_shaper::HarfBuzzShaper;
 use font_engine::fonts::shaping::shape_options::ShapeOptions;

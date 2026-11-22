@@ -1,6 +1,8 @@
 // C++: layoutng_inline/inline_child_layout_context.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use std::ops::{Deref, DerefMut};
 
 use foundation::{HeapVector, LayoutUnit, MakeGarbageCollectedDefault, Member};

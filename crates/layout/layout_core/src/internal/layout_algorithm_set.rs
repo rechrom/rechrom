@@ -8,6 +8,7 @@ use crate::break_token::BreakToken;
 use crate::fragment_items_builder::FragmentItemsBuilder;
 use crate::inline_break_token::InlineBreakToken;
 use crate::layout_result::LayoutResult;
+use crate::offset_mapping::OffsetMapping;
 use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::logical_size::LogicalSize;
@@ -26,6 +27,7 @@ use super::fragment_item_with_offset_fwd::FragmentItemWithOffsetList;
 use super::grid_item::GridItems;
 use super::inline_node::InlineNode;
 use super::layout_algorithm::LayoutAlgorithmParams;
+use super::layout_block_flow::LayoutBlockFlow;
 use super::layout_box::LayoutBox;
 use super::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
 use super::layout_object::LayoutObject;
@@ -126,6 +128,11 @@ pub struct InlineLayoutSupport {
     // inline-owned context; `layout_algo_inline` is its only definition.
     pub parallel_flow_break_tokens:
         Option<fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>>,
+    // cpp: layoutng_inline/inline_node.cc:1128-1145
+    // `InlineNode::GetOffsetMapping(LayoutBlockFlow*)`. Base editing, selection
+    // and OffsetMapping call it after layout, also outside a layout pass, so
+    // readers take it from `LayoutPassScope::ResidentInlineSupport()`.
+    pub get_offset_mapping: Option<fn(*mut LayoutBlockFlow) -> *const OffsetMapping>,
 }
 
 // cpp: layoutng/internal/layout_algorithm_set.h:87-99
@@ -427,7 +434,8 @@ impl LayoutAlgorithmSet {
                 || self.inline_support.reuse_fragments.is_some()
                 || self.inline_support.layout.is_some()
                 || self.inline_support.measure.is_some()
-                || self.inline_support.parallel_flow_break_tokens.is_some(),
+                || self.inline_support.parallel_flow_break_tokens.is_some()
+                || self.inline_support.get_offset_mapping.is_some(),
         );
         validate_support_performance_owner(
             "table_support",

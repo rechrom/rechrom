@@ -91,18 +91,44 @@ impl InlineItemsData {
     }
 
     // cpp: layoutng_fragment_tree/inline_items_data.h:65-75
-    // The bodies are exported by //src/layoutng_inline after shared assembly.
+    // Bodies from snapshot layoutng_inline/inline_items_data_algorithm.cc.
+    // They only read this fragment-tree record, so they stay with it in base
+    // (R5 exception C).
+    // cpp: layoutng_inline/inline_items_data_algorithm.cc:15-28
     pub fn GetOpenTagItems(&self, start_index: u32, size: u32, open_items: &mut OpenTagItems) {
-        unsafe { InlineItemsDataGetOpenTagItems(self, start_index, size, open_items) }
+        assert!(size <= self.items.size());
+        let end = start_index
+            .checked_add(size)
+            .expect("inline item range overflow");
+        assert!(end <= self.items.size());
+        for item_ptr in &self.items[start_index as usize..end as usize] {
+            let item = unsafe { &*item_ptr.Get() };
+            if item.Type() == layout_core::internal::inline_item::InlineItemType::kOpenTag {
+                open_items.push_back(*item_ptr);
+            } else if item.Type() == layout_core::internal::inline_item::InlineItemType::kCloseTag
+            {
+                open_items.pop();
+            }
+        }
     }
 
+    // cpp: layoutng_inline/inline_items_data_algorithm.cc:38-45
     pub fn OffsetMap(&self) -> &Option<TextOffsetMap> {
-        unsafe { InlineItemsDataOffsetMap(self) }
+        if self.IsWithOffsetMap() {
+            let with_offset =
+                unsafe { &*(self as *const InlineItemsData as *const InlineItemsDataWithOffsetMap) };
+            return &with_offset.offset_map;
+        }
+        static EMPTY: Option<TextOffsetMap> = None;
+        &EMPTY
     }
 
+    // cpp: layoutng_inline/inline_items_data_algorithm.cc:30-36
     #[cfg(debug_assertions)]
     pub fn CheckConsistency(&self) {
-        unsafe { InlineItemsDataCheckConsistency(self) }
+        for item in &self.items {
+            unsafe { &*item.Get() }.CheckTextType(&self.text_content);
+        }
     }
 
     // cpp: layoutng_fragment_tree/inline_items_data.h:79
@@ -137,18 +163,6 @@ impl InlineItemsData {
     pub fn IsWithOffsetMap(&self) -> bool {
         self.data_type_ == InlineItemsDataType::kWithOffsetMap
     }
-}
-
-unsafe extern "Rust" {
-    fn InlineItemsDataGetOpenTagItems(
-        data: &InlineItemsData,
-        start_index: u32,
-        size: u32,
-        open_items: &mut OpenTagItems,
-    );
-    fn InlineItemsDataOffsetMap(data: &InlineItemsData) -> &Option<TextOffsetMap>;
-    #[cfg(debug_assertions)]
-    fn InlineItemsDataCheckConsistency(data: &InlineItemsData);
 }
 
 // The C++ body belongs to this source file but is a member of a type owned

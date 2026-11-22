@@ -4,6 +4,8 @@
 // linked in the shared LayoutNG/inline assembly before enabling this module.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{MakeGarbageCollected, PhysicalRect, To, WritingMode};
 use crate::break_token::BreakToken;
 use crate::inline_cursor::InlineCursor;
@@ -184,4 +186,6 @@ pub fn Register(registry: &mut LayoutRegistry) {
     registry.algorithms.inline_support.measure = Some(MeasureInline);
     registry.algorithms.inline_support.parallel_flow_break_tokens =
         Some(InlineChildLayoutContextParallelFlowBreakTokens);
+    registry.algorithms.inline_support.get_offset_mapping =
+        Some(crate::inline_node::InlineNodeGetOffsetMapping);
 }

@@ -73,6 +73,13 @@ Scope: every package under `crates/layout/`, including `paint_input_types` and
    - `InlineItemResultToString` (`inline_item_result.rs:89`)
    - `InlineItemToString` (`layout_core/src/fragment/logical_line_item.rs:581`)
 
+   *R5 part 2 (2026-11-22):* the base wrappers and `extern` declarations of
+   `InlineNodeSetTextWithOffset`, `InlineNodeFindSvgTextChunks`,
+   `InlineNodeComputeOffsetMapping`, `InlineNodeCheckConsistency` and
+   `InlineItemResultToString` are gone (the last is reachable through
+   `InlineItemResultAlgorithms::ToString`), and so are their 5 stubs; the
+   counts below predate that.
+
    Their `*_interface.rs` wrappers call an `extern` with the same name. Because
    the body is mangled, that resolves to the abort stub. Code in the same module
    calls the body directly, which is why layout works. Through the interface,

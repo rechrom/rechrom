@@ -1,6 +1,8 @@
 // C++: layoutng_inline/line_break_candidate.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 

@@ -25,7 +25,7 @@ use std::sync::Arc;
 #[path = "engine/hit_test/hit_test.rs"]
 mod hit_test;
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/spatial_navigation_geometry.rs"]
+#[path = "editing/spatial_navigation_geometry.rs"]
 mod spatial_navigation_geometry;
 pub use hit_test::{
     NativeHitTestChildren, NativeHitTestCursor, NativeHitTestInlineItem, NativeHitTestInlineItems,
@@ -56,18 +56,18 @@ mod layout_fragment_layout_metrics;
 mod layout_fragment_text_fragment_queries;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_text_runs.rs"]
+#[path = "editing/editing_text_runs.rs"]
 mod layout_algo_inline_editing_text_runs;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_algo_inline_editing_text_runs::{
     EditingTextIteratorBehavior, EditingTextRun, EditingTextRunCursor,
 };
 
-#[path = "../../layout_algo_inline/src/layout_output_editing_queries.rs"]
+#[path = "editing/layout_output_editing_queries.rs"]
 mod layout_algo_inline_layout_output_editing_queries;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/visual_caret_movement.rs"]
+#[path = "editing/visual_caret_movement.rs"]
 mod layout_algo_inline_visual_caret_movement;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_algo_inline_visual_caret_movement::{
@@ -75,16 +75,16 @@ pub use layout_algo_inline_visual_caret_movement::{
 };
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_line_movement.rs"]
+#[path = "editing/editing_line_movement.rs"]
 mod layout_algo_inline_editing_line_movement;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_algo_inline_editing_line_movement::EditingLinePositionResult;
 
-#[path = "../../layout_algo_inline/src/editing_text_offset_mapping.rs"]
+#[path = "editing/editing_text_offset_mapping.rs"]
 mod layout_algo_inline_editing_text_offset_mapping;
 pub use layout_algo_inline_editing_text_offset_mapping::EditingInlineContentsBlockIdentity;
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_text_iterator_facts.rs"]
+#[path = "editing/editing_text_iterator_facts.rs"]
 mod layout_algo_inline_editing_text_iterator_facts;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_algo_inline_editing_text_iterator_facts::{
@@ -94,13 +94,13 @@ pub use layout_algo_inline_editing_text_iterator_facts::{
 };
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_inner_text.rs"]
+#[path = "editing/editing_inner_text.rs"]
 mod editing_inner_text;
 #[cfg(feature = "translation_in_progress")]
 pub use editing_inner_text::InnerTextLayoutFacts;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_visible_bounds.rs"]
+#[path = "editing/editing_visible_bounds.rs"]
 mod editing_visible_bounds;
 
 #[derive(Clone, Copy)]
@@ -2140,7 +2140,7 @@ mod layout_fragment_grid_focusgroup_cursor;
 pub use layout_fragment_grid_focusgroup_cursor::TableFocusgroupCursor;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_bidi_range.rs"]
+#[path = "editing/editing_bidi_range.rs"]
 mod editing_bidi_range;
 #[cfg(feature = "translation_in_progress")]
 pub use editing_bidi_range::EditingBidiRangeAdjustment;
@@ -2301,7 +2301,7 @@ impl LayoutNode<'_> {
 mod input_control_geometry;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_find_buffer.rs"]
+#[path = "editing/editing_find_buffer.rs"]
 mod layout_algo_inline_editing_find_buffer;
 #[cfg(feature = "translation_in_progress")]
 pub use layout_algo_inline_editing_find_buffer::{
@@ -2315,7 +2315,7 @@ mod resize_observer_geometry;
 mod range_geometry;
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_algo_inline/src/editing_apply_style_facts.rs"]
+#[path = "editing/editing_apply_style_facts.rs"]
 mod editing_apply_style_facts;
 
 impl LayoutOutput<'_> {

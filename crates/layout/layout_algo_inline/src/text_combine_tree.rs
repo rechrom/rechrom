@@ -1,6 +1,8 @@
 // C++: layoutng_inline/text_combine_tree.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{DynamicTo, To};
 use layout_core::internal::layout_object::LayoutObject;
 use layout_core::internal::layout_text::LayoutText;

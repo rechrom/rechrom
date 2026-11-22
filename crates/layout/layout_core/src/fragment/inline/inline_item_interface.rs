@@ -13,41 +13,15 @@ use super::super::layout_object::LayoutObject;
 use super::super::style_variant::StyleVariant;
 use super::super::text_item_type::TextItemType;
 
-// Non-inline definitions are owned by //src/layoutng_inline/inline_item.cc.
+// R5: the record members of this fragment-tree data (copy, trace, index and
+// consistency checks; snapshot layoutng_inline/inline_item.cc) are defined
+// here. The item-building members (constructor with ComputeBoxProperties,
+// Split, SetSegmentData, SetBidiLevelForItems) are inline-algorithm code:
+// `layout_algo_inline::inline_item::InlineItemAlgorithms`.
+// Declarations without a translated body (untranslated stubs).
 unsafe extern "Rust" {
-    fn InlineItemNew(
-        type_: InlineItemType,
-        start: u32,
-        end: u32,
-        layout_object: *mut LayoutObject,
-    ) -> InlineItem;
-    fn InlineItemCloneAdjusted(
-        item: &InlineItem,
-        adjusted_start: u32,
-        adjusted_end: u32,
-        shape_result: *const ShapeResult,
-    ) -> InlineItem;
-    fn InlineItemClone(item: &InlineItem) -> InlineItem;
     fn InlineItemTypeToStringFromInline(type_: InlineItemType) -> &'static str;
-    fn InlineItemIndexInItems(item: &InlineItem, items: &[Member<InlineItem>]) -> u32;
-    fn InlineItemFontWithSvgScaling(item: &InlineItem) -> *const Font;
-    fn InlineItemSplit(items: &mut InlineItems, index: u32, offset: u32);
-    fn InlineItemSetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems);
-    fn InlineItemSetBidiLevelForItems(
-        items: &mut InlineItems,
-        index: u32,
-        end_offset: u32,
-        level: u8,
-        num_out_of_flow: u32,
-    ) -> u32;
-    fn InlineItemUpdateIndex(items: &mut [Member<InlineItem>]);
-    #[cfg(feature = "expensive_dchecks")]
-    fn InlineItemCheckIndex(items: &mut [Member<InlineItem>]);
-    #[cfg(debug_assertions)]
-    fn InlineItemCheckTextType(item: &InlineItem, text_content: &String);
     fn InlineItemToString(item: &InlineItem) -> String;
-    fn InlineItemTrace(item: &InlineItem, visitor: &mut Visitor);
-    fn InlineItemComputeBoxProperties(item: &mut InlineItem);
 }
 
 // cpp: layoutng/internal/inline_item.h:31-52
@@ -172,29 +146,27 @@ impl InlineItem {
 }
 
 impl Clone for InlineItem {
+    // cpp: layoutng_inline/inline_item.cc:110-114
     fn clone(&self) -> Self {
-        unsafe { InlineItemClone(self) }
+        self.clone_adjusted(self.start_offset_, self.end_offset_, self.shape_result_.Get())
     }
 }
 
 impl InlineItem {
-    // cpp: layoutng/internal/inline_item.h:66-78
-    pub fn new(
-        type_: InlineItemType,
-        start: u32,
-        end: u32,
-        layout_object: *mut LayoutObject,
-    ) -> Self {
-        unsafe { InlineItemNew(type_, start, end, layout_object) }
-    }
+    // cpp: layoutng/internal/inline_item.h:66-78 (the constructor is
+    // `InlineItemAlgorithms::new` in layout_algo_inline).
 
+    // cpp: layoutng_inline/inline_item.cc:85-108
     pub fn clone_adjusted(
         &self,
         adjusted_start: u32,
         adjusted_end: u32,
         shape_result: *const ShapeResult,
     ) -> Self {
-        unsafe { InlineItemCloneAdjusted(self, adjusted_start, adjusted_end, shape_result) }
+        let clone =
+            Self::clone_adjusted_base_for_inline(self, adjusted_start, adjusted_end, shape_result);
+        debug_assert!(adjusted_end >= adjusted_start);
+        clone
     }
 
     // cpp: layoutng/internal/inline_item.h:80-82
@@ -248,8 +220,16 @@ impl InlineItem {
     pub fn Index(&self) -> u32 {
         self.index_
     }
+    // cpp: layoutng_inline/inline_item.cc:231-240
     pub fn IndexInItems(&self, items: &[Member<InlineItem>]) -> u32 {
-        unsafe { InlineItemIndexInItems(self, items) }
+        let mut index = 0;
+        for candidate in items {
+            if std::ptr::eq(self, unsafe { &*candidate.Get() }) {
+                return index;
+            }
+            index += 1;
+        }
+        index
     }
     pub fn TextShapeResult(&self) -> *const ShapeResult {
         self.shape_result_.Get()
@@ -272,9 +252,41 @@ impl InlineItem {
     pub fn SetUnsafeToReuseShapeResult(&mut self) {
         self.is_unsafe_to_reuse_shape_result_ = true;
     }
+    // cpp: layoutng_inline/inline_item.cc:276-307
     #[cfg(debug_assertions)]
     pub fn CheckTextType(&self, text_content: &String) {
-        unsafe { InlineItemCheckTextType(self, text_content) }
+        let character = if self.Length() != 0 {
+            text_content.Span16().expect("text content is null")[self.StartOffset() as usize]
+        } else {
+            0
+        };
+        match character {
+            0x000a => {
+                debug_assert_eq!(self.Length(), 1);
+                debug_assert_eq!(self.Type(), InlineItemType::kControl);
+                debug_assert_eq!(self.TextType(), TextItemType::kForcedLineBreak);
+            }
+            0x0009 => {
+                debug_assert_eq!(self.Type(), InlineItemType::kControl);
+                debug_assert_eq!(self.TextType(), TextItemType::kFlowControl);
+            }
+            0x000d | 0x000c | 0x200b => {
+                if self.Type() == InlineItemType::kControl {
+                    debug_assert_eq!(self.Length(), 1);
+                    debug_assert_eq!(self.TextType(), TextItemType::kFlowControl);
+                } else {
+                    debug_assert_eq!(self.Type(), InlineItemType::kText);
+                    debug_assert_eq!(self.TextType(), TextItemType::kNormal);
+                }
+            }
+            _ => {
+                debug_assert_ne!(self.Type(), InlineItemType::kControl);
+                debug_assert!(matches!(
+                    self.TextType(),
+                    TextItemType::kNormal | TextItemType::kSymbolMarker
+                ));
+            }
+        }
     }
 
     // cpp: layoutng/internal/inline_item.h:140-156
@@ -377,8 +389,14 @@ impl InlineItem {
         debug_assert!(!self.layout_object_.Get().is_null());
         unsafe { &*self.layout_object_.Get() }.EffectiveStyle(self.GetStyleVariant())
     }
+    // cpp: layoutng_inline/inline_item.cc:222-229
     pub fn FontWithSvgScaling(&self) -> *const Font {
-        unsafe { InlineItemFontWithSvgScaling(self) }
+        let object = self.layout_object_.Get();
+        if !object.is_null() && unsafe { &*object }.IsSVGInlineText() {
+            let text = To::<super::super::layout_text::LayoutText>(object);
+            return unsafe { &*text }.ScaledFont();
+        }
+        unsafe { &*self.Style() }.GetFont()
     }
 
     // cpp: layoutng/internal/inline_item.h:234-255
@@ -416,9 +434,6 @@ impl InlineItem {
         self.SetEndCollapseType(value);
         self.is_end_collapsible_newline_ = is_newline;
     }
-    pub fn Split(items: &mut InlineItems, index: u32, offset: u32) {
-        unsafe { InlineItemSplit(items, index, offset) }
-    }
 
     // cpp: layoutng/internal/inline_item.h:276-292
     pub fn SegmentData(&self) -> u32 {
@@ -430,9 +445,7 @@ impl InlineItem {
     pub fn SetPackedSegmentDataForInline(&mut self, value: u32) {
         self.segment_data_ = value;
     }
-    pub fn SetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems) {
-        unsafe { InlineItemSetSegmentData(range, items) }
-    }
+
     pub fn CreateRunSegmenterRange(&self) -> RunSegmenterRange {
         debug_assert_eq!(self.Type(), InlineItemType::kText);
         InlineItemSegment::UnpackSegmentData(
@@ -452,29 +465,23 @@ impl InlineItem {
         }
         self.bidi_level_ = level;
     }
-    pub fn SetBidiLevelForItems(
-        items: &mut InlineItems,
-        index: u32,
-        end_offset: u32,
-        level: u8,
-        num_out_of_flow: u32,
-    ) -> u32 {
-        unsafe { InlineItemSetBidiLevelForItems(items, index, end_offset, level, num_out_of_flow) }
-    }
-    pub fn SetBidiLevelForItemsDefault(
-        items: &mut InlineItems,
-        index: u32,
-        end_offset: u32,
-        level: u8,
-    ) -> u32 {
-        Self::SetBidiLevelForItems(items, index, end_offset, level, 0)
-    }
+    // SetBidiLevelForItems(Default): `InlineItemAlgorithms` in layout_algo_inline.
+    // cpp: layoutng_inline/inline_item.cc:242-247
     pub fn UpdateIndex(items: &mut [Member<InlineItem>]) {
-        unsafe { InlineItemUpdateIndex(items) }
+        let mut index = 0;
+        for item in items {
+            unsafe { &mut *item.Get() }.index_ = index;
+            index += 1;
+        }
     }
+    // cpp: layoutng_inline/inline_item.cc:249-257
     #[cfg(feature = "expensive_dchecks")]
     pub fn CheckIndex(items: &mut [Member<InlineItem>]) {
-        unsafe { InlineItemCheckIndex(items) }
+        let mut index = 0;
+        for item in items {
+            debug_assert_eq!(unsafe { &*item.Get() }.index_, index);
+            index += 1;
+        }
     }
 
     // cpp: layoutng/internal/inline_item.h:312-320
@@ -488,11 +495,10 @@ impl InlineItem {
     pub fn ToString(&self) -> String {
         unsafe { InlineItemToString(self) }
     }
+    // cpp: layoutng_inline/inline_item.cc:309-312
     pub fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { InlineItemTrace(self, visitor) }
-    }
-    pub fn ComputeBoxProperties(&mut self) {
-        unsafe { InlineItemComputeBoxProperties(self) }
+        visitor.Trace(&self.shape_result_);
+        visitor.Trace(&self.layout_object_);
     }
 
     // cpp: layoutng/internal/inline_item.h:328-337

@@ -2,6 +2,8 @@
 // integration awaits completion of the layoutng_inline package.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result_spacing::{ExpansionSetup, ShapeResultSpacing};
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::blink_geometry::geometry::TextRunLayoutUnit;

@@ -1,6 +1,8 @@
 // C++: layoutng_inline/inline_item_result.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{Member, String, StringView, Visitor};
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};
 use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
@@ -10,8 +12,7 @@ use layout_core::internal::text_offset_range::TextOffsetRange;
 use crate::inline_item_result_ruby_column::InlineItemResultRubyColumn;
 
 // cpp: layoutng_inline/inline_item_result.cc:15-26
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemResultNew(
+pub fn InlineItemResultNew(
     item: &InlineItem,
     index: u32,
     text_offset: &TextOffsetRange,
@@ -31,8 +32,7 @@ pub extern "Rust" fn InlineItemResultNew(
 }
 
 // cpp: layoutng_inline/inline_item_result.cc:28-33
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemResultShapeHyphen(result: &mut InlineItemResult) {
+pub fn InlineItemResultShapeHyphen(result: &mut InlineItemResult) {
     debug_assert!(!result.hyphen.IsPresent());
     let item = result.item.Get();
     debug_assert!(!item.is_null());
@@ -43,8 +43,7 @@ pub extern "Rust" fn InlineItemResultShapeHyphen(result: &mut InlineItemResult) 
 
 // cpp: layoutng_inline/inline_item_result.cc:35-60
 #[cfg(debug_assertions)]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemResultCheckConsistency(
+pub fn InlineItemResultCheckConsistency(
     result: &InlineItemResult,
     allow_null_shape_result: bool,
 ) {
@@ -70,19 +69,6 @@ pub extern "Rust" fn InlineItemResultCheckConsistency(
         debug_assert_eq!(result.StartOffset(), unsafe { &*shape }.StartIndex());
         debug_assert_eq!(result.EndOffset(), unsafe { &*shape }.EndIndex());
     }
-}
-
-// cpp: layoutng_inline/inline_item_result.cc:62-71
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemResultTrace(result: &InlineItemResult, visitor: &mut Visitor<'_>) {
-    visitor.Trace(&result.item);
-    visitor.Trace(&result.shape_result);
-    visitor.Trace(&result.hyphen);
-    visitor.Trace(&result.layout_result);
-    visitor.Trace(&result.ruby_column);
-    visitor.Trace(&result.positioned_float);
-    visitor.Trace(&result.exclusion_space_before_position_float);
-    visitor.Trace(&result.text_fit_scale);
 }
 
 // cpp: layoutng_inline/inline_item_result.cc:73-114
@@ -144,8 +130,7 @@ pub fn InlineItemResultToString(
 }
 
 // cpp: layoutng_inline/inline_item_result.cc:116-139
-#[unsafe(no_mangle)]
-pub extern "Rust" fn FindTextScaleInternalFromInline(
+pub fn FindTextScaleInternalFromInline(
     line_items: &InlineItemResults,
     start_index: u32,
     initial_nesting_level: u32,
@@ -175,4 +160,86 @@ pub extern "Rust" fn FindTextScaleInternalFromInline(
         paint_scale: 1.0,
         scaled_font: std::ptr::null(),
     }
+}
+
+// cpp: layoutng/internal/inline_item_result.h:73-78,99-110
+// Out-of-line members of base's InlineItemResult record. Rust cannot add
+// inherent methods to a base type, so the line breaker reaches them through
+// this trait (imported with `crate::algorithms`).
+pub trait InlineItemResultAlgorithms {
+    fn new(
+        item: &InlineItem,
+        index: u32,
+        text_offset: &TextOffsetRange,
+        break_anywhere_if_overflow: bool,
+        should_create_line_box: bool,
+        has_unpositioned_floats: bool,
+    ) -> InlineItemResult;
+    fn ShapeHyphen(&mut self);
+    #[cfg(debug_assertions)]
+    fn CheckConsistency(&self, allow_null_shape_result: bool);
+    #[cfg(debug_assertions)]
+    fn CheckConsistencyDefault(&self);
+    fn ToString(&self, ifc_text_content: &String, indent: &String) -> String;
+    fn ToStringDefaultIndent(&self, ifc_text_content: &String) -> String;
+}
+
+impl InlineItemResultAlgorithms for InlineItemResult {
+    fn new(
+        item: &InlineItem,
+        index: u32,
+        text_offset: &TextOffsetRange,
+        break_anywhere_if_overflow: bool,
+        should_create_line_box: bool,
+        has_unpositioned_floats: bool,
+    ) -> InlineItemResult {
+        InlineItemResultNew(
+            item,
+            index,
+            text_offset,
+            break_anywhere_if_overflow,
+            should_create_line_box,
+            has_unpositioned_floats,
+        )
+    }
+    fn ShapeHyphen(&mut self) {
+        InlineItemResultShapeHyphen(self)
+    }
+
+    #[cfg(debug_assertions)]
+    fn CheckConsistency(&self, allow_null_shape_result: bool) {
+        InlineItemResultCheckConsistency(self, allow_null_shape_result)
+    }
+    #[cfg(debug_assertions)]
+    fn CheckConsistencyDefault(&self) {
+        InlineItemResultCheckConsistency(self, false)
+    }
+    fn ToString(&self, ifc_text_content: &String, indent: &String) -> String {
+        InlineItemResultToString(self, ifc_text_content, indent)
+    }
+    fn ToStringDefaultIndent(&self, ifc_text_content: &String) -> String {
+        InlineItemResultToString(self, ifc_text_content, &String::from(""))
+    }
+}
+
+// cpp: layoutng/internal/inline_item_result.h:215-217
+pub fn FindTextScaleInternal(
+    line_items: &InlineItemResults,
+    start_index: u32,
+    initial_nesting_level: u32,
+) -> TextFitBlockScale {
+    FindTextScaleInternalFromInline(line_items, start_index, initial_nesting_level)
+}
+
+// cpp: layoutng/internal/inline_item_result.h:226-236
+pub fn FindTextScale(
+    should_scale: bool,
+    line_items: &InlineItemResults,
+    start_index: u32,
+    initial_nesting_level: u32,
+) -> TextFitBlockScale {
+    if !should_scale {
+        return TextFitBlockScale::default();
+    }
+    FindTextScaleInternal(line_items, start_index, initial_nesting_level)
 }

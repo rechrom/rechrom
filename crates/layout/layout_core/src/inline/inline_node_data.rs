@@ -93,9 +93,11 @@ impl InlineNodeData {
     }
 
     // cpp: layoutng/internal/inline_node_data.h:28
-    // Defined in //src/layoutng_inline/inline_items_data_algorithm.cc.
+    // cpp: layoutng_inline/inline_items_data_algorithm.cc:10-13 (a record
+    // member of this fragment-tree data, base since R5).
     pub fn DisableBidi(&mut self) {
-        unsafe { InlineNodeDataDisableBidi(self) }
+        self.is_bidi_enabled_ = false;
+        self.SetBaseDirection(TextDirection::kLtr);
     }
 
     // cpp: layoutng/internal/inline_node_data.h:30
@@ -179,8 +181,4 @@ impl InlineNodeData {
     pub fn AllowFrom(value: &InlineItemsData) -> bool {
         value.IsNodeData()
     }
-}
-
-unsafe extern "Rust" {
-    fn InlineNodeDataDisableBidi(data: &mut InlineNodeData);
 }

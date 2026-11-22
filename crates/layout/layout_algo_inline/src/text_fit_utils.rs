@@ -2,6 +2,8 @@
 // bodies are source-mapped here; shared inline assembly remains pending.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::font_description::FontDescription;
 use font_engine::fonts::shaping::shape_options::ShapeOptions;
 use font_engine::fonts::shaping::shape_result::{OffsetWithSpacing, ShapeResult};
@@ -268,8 +270,7 @@ fn compute_additional_paint_time_scale(
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:226-240
-#[unsafe(no_mangle)]
-pub extern "Rust" fn ShouldApplyTextFitFromInline(node: &InlineNode) -> bool {
+pub fn ShouldApplyTextFitFromInline(node: &InlineNode) -> bool {
     if !RuntimeEnabledFeatures::CssTextFitEnabled() {
         return false;
     }
@@ -314,8 +315,7 @@ pub fn MeasurePerBlockScale(
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:242-372
-#[unsafe(no_mangle)]
-pub extern "Rust" fn MeasurePerBlockScaleFromInline(
+pub fn MeasurePerBlockScaleFromInline(
     node: &InlineNode,
     fragment: &PhysicalFragment,
     available_width: LayoutUnit,
@@ -511,8 +511,7 @@ impl LineFitter {
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:374-381
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LineFitterNewFromInline(
+pub fn LineFitterNewFromInline(
     node: &InlineNode,
     line_info: *mut LineInfo,
 ) -> LineFitter {
@@ -530,8 +529,7 @@ pub extern "Rust" fn LineFitterNewFromInline(
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:383-441
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LineFitterMeasureScaleFromInline(fitter: &mut LineFitter) -> f32 {
+pub fn LineFitterMeasureScaleFromInline(fitter: &mut LineFitter) -> f32 {
     let line_info = unsafe { &mut *fitter.line_info_ };
     let original_width = line_info.Width();
     let container_width = line_info.AvailableWidth();
@@ -606,8 +604,7 @@ pub extern "Rust" fn LineFitterMeasureScaleFromInline(fitter: &mut LineFitter) -
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:443-546
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LineFitterFitLineFromInline(
+pub fn LineFitterFitLineFromInline(
     fitter: &mut LineFitter,
     scale_factor: f32,
     additional_paint_time_scale: Option<f32>,
@@ -731,8 +728,7 @@ pub extern "Rust" fn LineFitterFitLineFromInline(
 }
 
 // cpp: layoutng_inline/text_fit_utils.cc:548-552
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LineFitterMeasureAndFitLineFromInline(fitter: &mut LineFitter) -> bool {
+pub fn LineFitterMeasureAndFitLineFromInline(fitter: &mut LineFitter) -> bool {
     let scale_factor = fitter.MeasureScale();
     scale_factor.is_finite() && scale_factor != 1.0 && fitter.FitLine(scale_factor, None)
 }

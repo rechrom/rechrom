@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use font_engine::{Font, ShapeResultSpacing};
 use foundation::{
     HeapVector, LayoutUnit, Member, String, TextDirection, TextOffsetMap, Vector, Visitor,
-    WritingMode,
+    WritingMode, UnsupportedLayout,
 };
 use crate::break_token::BreakToken;
 use crate::inline_items_data::InlineItemsData;
@@ -18,108 +18,26 @@ use super::super::constraint_space::ConstraintSpace;
 use super::super::inline_item::{InlineItem, InlineItems};
 use super::super::inline_node_data::InlineNodeData;
 use super::super::layout_block_flow::LayoutBlockFlow;
+use super::super::layout_input::TextDirection as InputTextDirection;
 use super::super::layout_input_node::{LayoutInputNode, MinMaxSizesFloatInput};
+use super::super::layout_pass_scope::LayoutPassScope;
 use super::super::layout_text::LayoutText;
 use super::super::min_max_sizes::MinMaxSizesResult;
 use super::super::svg_character_data::SvgCharacterData;
 use super::super::svg_inline_node_data::{SvgTextChunkOffsets, SvgTextContentRange};
 
-// Non-inline implementation is in //src/layoutng_inline/inline_node.cc.
-unsafe extern "Rust" {
-    fn InlineNodeLayout(
-        this: &InlineNode,
-        space: &ConstraintSpace,
-        break_token: *const BreakToken,
-        spanner: *const ColumnSpannerPath,
-        context: *mut InlineChildLayoutContext,
-    ) -> *const LayoutResult;
-    fn InlineNodeComputeMinMaxSizes(
-        this: &InlineNode,
-        mode: WritingMode,
-        space: &ConstraintSpace,
-        floats: &MinMaxSizesFloatInput,
-    ) -> MinMaxSizesResult;
-    fn InlineNodeItemsData(this: &InlineNode, first_line: bool) -> *const InlineItemsData;
-    fn InlineNodeFirstLineOffsetMap(this: &InlineNode) -> *const Option<TextOffsetMap>;
-    fn InlineNodeUseFirstLineStyleItemsData(this: &InlineNode) -> bool;
-    fn InlineNodeIsStickyImagesQuirkForContentSize(this: &InlineNode) -> bool;
-    fn InlineNodeTextContentForStickyImagesQuirk(data: &InlineItemsData) -> String;
-    fn InlineNodeSetTextWithOffset(
-        text: *mut LayoutText,
-        new_text: String,
-        diff: &TextDiffRange,
-    ) -> bool;
-    fn InlineNodeComputeOffsetMappingIfNeeded(this: &InlineNode) -> *const OffsetMapping;
-    fn InlineNodeGetOffsetMapping(block: *mut LayoutBlockFlow) -> *const OffsetMapping;
-    fn InlineNodeIsBidiEnabled(this: &InlineNode) -> bool;
-    fn InlineNodeBaseDirection(this: &InlineNode) -> TextDirection;
-    fn InlineNodeHasFloats(this: &InlineNode) -> bool;
-    fn InlineNodeHasInitialLetterBox(this: &InlineNode) -> bool;
-    fn InlineNodeHasRuby(this: &InlineNode) -> bool;
-    fn InlineNodeHasTextEmphasis(this: &InlineNode) -> bool;
-    fn InlineNodeIsBisectLineBreakDisabled(this: &InlineNode) -> bool;
-    fn InlineNodeIsScoreLineBreakDisabled(this: &InlineNode) -> bool;
-    fn InlineNodeCanContainFirstFormattedLine(this: &InlineNode) -> bool;
-    fn InlineNodeCheckConsistency(this: &InlineNode);
-    fn InlineNodeSvgCharacterDataList(this: &InlineNode) -> *const Vector<(u32, SvgCharacterData)>;
-    fn InlineNodeSvgTextLengthRangeList(
-        this: &InlineNode,
-    ) -> *const HeapVector<SvgTextContentRange>;
-    fn InlineNodeSvgTextPathRangeList(this: &InlineNode) -> *const HeapVector<SvgTextContentRange>;
-    fn InlineNodeFontForTab(this: &InlineNode) -> *const Font;
-    fn InlineNodeMinimumFontPhysicalSize(this: &InlineNode) -> Option<f32>;
-    fn InlineNodePrepareLayoutIfNeeded(this: &InlineNode);
-    fn InlineNodeIsPrepareLayoutFinished(this: &InlineNode) -> bool;
-    fn InlineNodePrepareLayout(this: &InlineNode, previous: *mut InlineNodeData);
-    fn InlineNodeCollectInlines(
-        this: &InlineNode,
-        data: *mut InlineNodeData,
-        previous: *mut InlineNodeData,
-    );
-    fn InlineNodeFindSvgTextChunks(
-        this: &InlineNode,
-        block: &mut LayoutBlockFlow,
-        data: &mut InlineNodeData,
-    ) -> *const SvgTextChunkOffsets;
-    fn InlineNodeSegmentText(
-        this: &InlineNode,
-        data: *mut InlineNodeData,
-        previous: *mut InlineNodeData,
-    );
-    fn InlineNodeSegmentScriptRuns(
-        this: &InlineNode,
-        data: *mut InlineNodeData,
-        previous: *mut InlineNodeData,
-    );
-    fn InlineNodeSegmentFontOrientation(this: &InlineNode, data: *mut InlineNodeData);
-    fn InlineNodeSegmentBidiRuns(this: &InlineNode, data: *mut InlineNodeData);
-    fn InlineNodeShapeText(
-        this: &InlineNode,
-        data: *mut InlineItemsData,
-        previous_text: *const String,
-        previous_items: *const InlineItems,
-        override_font: *const Font,
-    );
-    fn InlineNodeShapeTextForFirstLineIfNeeded(this: &InlineNode, data: *mut InlineNodeData);
-    fn InlineNodeShapeTextIncludingFirstLine(
-        this: &InlineNode,
-        data: *mut InlineNodeData,
-        previous_text: *const String,
-        previous_items: *const InlineItems,
-    );
-    fn InlineNodeAssociateItemsWithInlines(this: &InlineNode, data: *mut InlineNodeData);
-    fn InlineNodeIsNGShapeCacheAllowed(
-        this: &InlineNode,
-        text: &String,
-        font: *const Font,
-        items: &InlineItems,
-        spacing: &mut ShapeResultSpacing,
-    ) -> bool;
-    fn InlineNodeMutableData(this: &InlineNode) -> *mut InlineNodeData;
-    fn InlineNodeData(this: &InlineNode) -> *const InlineNodeData;
-    fn InlineNodeAdjustFontForTextCombineUprightAll(this: &InlineNode);
-    fn InlineNodeComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut InlineNodeData);
-}
+// R5 split of the snapshot's layoutng_inline/inline_node.cc members:
+// - The one-line InlineNodeData readers (Chromium declares them inline in
+//   core/layout/inline/inline_node.h, so every includer, core/layout/*.cc and
+//   SVG text included, calls them directly) are defined below with the
+//   declaration base owns.
+// - GetOffsetMapping is called by base editing, selection and OffsetMapping
+//   code, also outside a layout pass, so it goes through the
+//   `InlineLayoutSupport::get_offset_mapping` slot (resident support).
+// - Everything else (Layout, ComputeMinMaxSizes, PrepareLayout, CollectInlines,
+//   segmentation, shaping, ...) is inline-algorithm code that only the inline
+//   package and block's inline extension call:
+//   `layout_algo_inline::inline_node::InlineNodeAlgorithms`.
 
 // cpp: layoutng/internal/inline_node.h:39-202
 #[repr(C)]
@@ -198,187 +116,103 @@ impl InlineNode {
 }
 
 impl InlineNode {
-    // cpp: layoutng/internal/inline_node.h:48-68
-    pub fn Layout(
-        &self,
-        space: &ConstraintSpace,
-        break_token: *const BreakToken,
-        spanner: *const ColumnSpannerPath,
-        context: *mut InlineChildLayoutContext,
-    ) -> *const LayoutResult {
-        unsafe { InlineNodeLayout(self, space, break_token, spanner, context) }
-    }
-    pub fn ComputeMinMaxSizes(
-        &self,
-        mode: WritingMode,
-        space: &ConstraintSpace,
-        floats: &MinMaxSizesFloatInput,
-    ) -> MinMaxSizesResult {
-        unsafe { InlineNodeComputeMinMaxSizes(self, mode, space, floats) }
-    }
+    // cpp: layoutng_inline/inline_node.cc:85-87 (inline_node.h accessor)
     pub fn ItemsData(&self, first_line: bool) -> &InlineItemsData {
-        unsafe { &*InlineNodeItemsData(self, first_line) }
+        self.Data().ItemsData(first_line)
     }
+    // cpp: layoutng_inline/inline_node.cc:89-95
     pub fn FirstLineOffsetMap(&self) -> &Option<TextOffsetMap> {
-        unsafe { &*InlineNodeFirstLineOffsetMap(self) }
+        static EMPTY: Option<TextOffsetMap> = None;
+        if self.Data().HasFirstLineItems() {
+            return self.Data().ItemsData(true).OffsetMap();
+        }
+        &EMPTY
     }
+    // cpp: layoutng_inline/inline_node.cc:2400-2404
     pub fn UseFirstLineStyleItemsData(&self) -> bool {
-        unsafe { InlineNodeUseFirstLineStyleItemsData(self) }
+        let box_ptr = self.GetLayoutBox();
+        !box_ptr.is_null()
+            && unsafe { &*box_ptr }.HasFirstLineStylesForLayout()
+            && self.Data().HasFirstLineItems()
     }
 
-    // cpp: layoutng/internal/inline_node.h:70-103
-    pub fn IsStickyImagesQuirkForContentSize(&self) -> bool {
-        unsafe { InlineNodeIsStickyImagesQuirkForContentSize(self) }
-    }
-    pub fn TextContentForStickyImagesQuirk(data: &InlineItemsData) -> String {
-        unsafe { InlineNodeTextContentForStickyImagesQuirk(data) }
-    }
-    pub fn SetTextWithOffset(
-        text: *mut LayoutText,
-        new_text: String,
-        diff: &TextDiffRange,
-    ) -> bool {
-        unsafe { InlineNodeSetTextWithOffset(text, new_text, diff) }
-    }
-    pub fn ComputeOffsetMappingIfNeeded(&self) -> *const OffsetMapping {
-        unsafe { InlineNodeComputeOffsetMappingIfNeeded(self) }
-    }
+    // cpp: layoutng_inline/inline_node.cc:1128-1145 (body in layout_algo_inline)
+    // Reached through the resident inline support: editing and selection
+    // query offset mappings after layout, outside a layout pass.
     pub fn GetOffsetMapping(block: *mut LayoutBlockFlow) -> *const OffsetMapping {
-        unsafe { InlineNodeGetOffsetMapping(block) }
+        let callback = LayoutPassScope::ResidentInlineSupport()
+            .get_offset_mapping
+            .unwrap_or_else(|| {
+                std::panic::panic_any(UnsupportedLayout::new(
+                    "inline layout module is not installed",
+                ))
+            });
+        callback(block)
     }
+
+    // cpp: layoutng_inline/inline_node.cc:97-119 (inline_node.h accessors)
     pub fn IsBidiEnabled(&self) -> bool {
-        unsafe { InlineNodeIsBidiEnabled(self) }
+        self.Data().IsBidiEnabled()
     }
     pub fn BaseDirection(&self) -> TextDirection {
-        unsafe { InlineNodeBaseDirection(self) }
+        match self.Data().BaseDirection() {
+            InputTextDirection::kLtr => TextDirection::kLtr,
+            InputTextDirection::kRtl => TextDirection::kRtl,
+        }
     }
-
-    // cpp: layoutng/internal/inline_node.h:105-139
     pub fn HasFloats(&self) -> bool {
-        unsafe { InlineNodeHasFloats(self) }
+        self.Data().HasFloats()
     }
     pub fn HasInitialLetterBox(&self) -> bool {
-        unsafe { InlineNodeHasInitialLetterBox(self) }
+        self.Data().HasInitialLetterBox()
     }
     pub fn HasRuby(&self) -> bool {
-        unsafe { InlineNodeHasRuby(self) }
+        self.Data().HasRuby()
     }
     pub fn HasTextEmphasis(&self) -> bool {
-        unsafe { InlineNodeHasTextEmphasis(self) }
+        self.Data().HasTextEmphasis()
     }
     pub fn IsBisectLineBreakDisabled(&self) -> bool {
-        unsafe { InlineNodeIsBisectLineBreakDisabled(self) }
+        self.Data().IsBisectLineBreakDisabled()
     }
     pub fn IsScoreLineBreakDisabled(&self) -> bool {
-        unsafe { InlineNodeIsScoreLineBreakDisabled(self) }
+        self.Data().IsScoreLineBreakDisabled()
     }
     pub fn CanContainFirstFormattedLine(&self) -> bool {
-        unsafe { InlineNodeCanContainFirstFormattedLine(self) }
+        let block = self.GetLayoutBlockFlow();
+        debug_assert!(!block.is_null());
+        unsafe { &*block }.CanContainFirstFormattedLine()
     }
-    pub fn CheckConsistency(&self) {
-        unsafe { InlineNodeCheckConsistency(self) }
-    }
+
+    // cpp: layoutng_inline/inline_node.cc:2417-2433
     pub fn SvgCharacterDataList(&self) -> &Vector<(u32, SvgCharacterData)> {
-        unsafe { &*InlineNodeSvgCharacterDataList(self) }
+        debug_assert!(self.IsSvgText());
+        &unsafe { &*self.Data().svg_node_data_.Get() }.character_data_list
     }
     pub fn SvgTextLengthRangeList(&self) -> &HeapVector<SvgTextContentRange> {
-        unsafe { &*InlineNodeSvgTextLengthRangeList(self) }
+        debug_assert!(self.IsSvgText());
+        &unsafe { &*self.Data().svg_node_data_.Get() }.text_length_range_list
     }
     pub fn SvgTextPathRangeList(&self) -> &HeapVector<SvgTextContentRange> {
-        unsafe { &*InlineNodeSvgTextPathRangeList(self) }
+        debug_assert!(self.IsSvgText());
+        &unsafe { &*self.Data().svg_node_data_.Get() }.text_path_range_list
     }
-    pub fn FontForTab(&self) -> &Font {
-        unsafe { &*InlineNodeFontForTab(self) }
-    }
-    pub fn MinimumFontPhysicalSize(&self) -> Option<f32> {
-        unsafe { InlineNodeMinimumFontPhysicalSize(self) }
-    }
-    pub fn PrepareLayoutIfNeeded(&self) {
-        unsafe { InlineNodePrepareLayoutIfNeeded(self) }
-    }
-}
 
-impl InlineNode {
-    // cpp: layoutng/internal/inline_node.h:160-183
+    // cpp: layoutng_inline/inline_node.cc:658-660
     pub fn IsPrepareLayoutFinished(&self) -> bool {
-        unsafe { InlineNodeIsPrepareLayoutFinished(self) }
-    }
-    pub fn PrepareLayout(&self, previous: *mut InlineNodeData) {
-        unsafe { InlineNodePrepareLayout(self, previous) }
-    }
-    pub fn CollectInlines(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
-        unsafe { InlineNodeCollectInlines(self, data, previous) }
-    }
-    pub fn CollectInlinesDefault(&self, data: *mut InlineNodeData) {
-        self.CollectInlines(data, std::ptr::null_mut())
-    }
-    pub fn FindSvgTextChunks(
-        &self,
-        block: &mut LayoutBlockFlow,
-        data: &mut InlineNodeData,
-    ) -> *const SvgTextChunkOffsets {
-        unsafe { InlineNodeFindSvgTextChunks(self, block, data) }
-    }
-    pub fn SegmentText(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
-        unsafe { InlineNodeSegmentText(self, data, previous) }
-    }
-    pub fn SegmentScriptRuns(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
-        unsafe { InlineNodeSegmentScriptRuns(self, data, previous) }
-    }
-    pub fn SegmentFontOrientation(&self, data: *mut InlineNodeData) {
-        unsafe { InlineNodeSegmentFontOrientation(self, data) }
-    }
-    pub fn SegmentBidiRuns(&self, data: *mut InlineNodeData) {
-        unsafe { InlineNodeSegmentBidiRuns(self, data) }
-    }
-    pub fn ShapeText(
-        &self,
-        data: *mut InlineItemsData,
-        previous_text: *const String,
-        previous_items: *const InlineItems,
-        override_font: *const Font,
-    ) {
-        unsafe { InlineNodeShapeText(self, data, previous_text, previous_items, override_font) }
-    }
-    pub fn ShapeTextDefault(&self, data: *mut InlineItemsData) {
-        self.ShapeText(data, std::ptr::null(), std::ptr::null(), std::ptr::null())
-    }
-    pub fn ShapeTextForFirstLineIfNeeded(&self, data: *mut InlineNodeData) {
-        unsafe { InlineNodeShapeTextForFirstLineIfNeeded(self, data) }
-    }
-    pub fn ShapeTextIncludingFirstLine(
-        &self,
-        data: *mut InlineNodeData,
-        previous_text: *const String,
-        previous_items: *const InlineItems,
-    ) {
-        unsafe { InlineNodeShapeTextIncludingFirstLine(self, data, previous_text, previous_items) }
-    }
-    pub fn AssociateItemsWithInlines(&self, data: *mut InlineNodeData) {
-        unsafe { InlineNodeAssociateItemsWithInlines(self, data) }
+        let data = unsafe { &*self.GetLayoutBlockFlow() }.GetInlineNodeData();
+        !data.is_null() && !unsafe { &*data }.text_content.IsNull()
     }
 
-    // cpp: layoutng/internal/inline_node.h:184-198
-    pub fn IsNGShapeCacheAllowed(
-        &self,
-        text: &String,
-        font: *const Font,
-        items: &InlineItems,
-        spacing: &mut ShapeResultSpacing,
-    ) -> bool {
-        unsafe { InlineNodeIsNGShapeCacheAllowed(self, text, font, items, spacing) }
-    }
+    // cpp: layoutng_inline/inline_node.cc:121-130 (inline_node.h accessors)
     pub fn MutableData(&self) -> *mut InlineNodeData {
-        unsafe { InlineNodeMutableData(self) }
+        unsafe { &*self.GetLayoutBlockFlow() }.GetInlineNodeData()
     }
     pub fn Data(&self) -> &InlineNodeData {
-        unsafe { &*InlineNodeData(self) }
-    }
-    pub fn AdjustFontForTextCombineUprightAll(&self) {
-        unsafe { InlineNodeAdjustFontForTextCombineUprightAll(self) }
-    }
-    pub fn ComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut InlineNodeData) {
-        unsafe { InlineNodeComputeOffsetMapping(block, data) }
+        debug_assert!(self.IsPrepareLayoutFinished());
+        let block = self.GetLayoutBlockFlow();
+        debug_assert!(!unsafe { &*block }.NeedsCollectInlines());
+        unsafe { &*(&*block).GetInlineNodeData() }
     }
 }
 

@@ -1,6 +1,8 @@
 // C++: layoutng_inline/score_line_breaker.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{ETextAlign, LayoutUnit, RuntimeEnabledFeatures, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;
 use layout_core::internal::constraint_space::ConstraintSpace;

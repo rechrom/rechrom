@@ -2,6 +2,8 @@
 // mapped; same-package callees and the shared inline assembly remain pending.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::harfbuzz_shaper::HarfBuzzShaper;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::text::implementation::character::Character;

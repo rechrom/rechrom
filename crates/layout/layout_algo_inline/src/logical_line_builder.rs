@@ -2,6 +2,8 @@
 // integration awaits completion of the layoutng_inline package.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::text::implementation::bidi_paragraph::BidiParagraph;
 use font_engine::FontBaseline;
@@ -18,7 +20,8 @@ use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_item_result::{FindTextScale, InlineItemResult, InlineItemResults};
+use crate::inline_item_result::FindTextScale;
+use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
 use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
 use layout_core::internal::inline_node::InlineNode;
 use layout_core::internal::layout_box::LayoutBox;

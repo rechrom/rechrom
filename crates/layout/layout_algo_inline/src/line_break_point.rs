@@ -1,6 +1,8 @@
 // C++: layoutng_inline/line_break_point.h.
 // The source's InlineItemTextIndex is owned by //src/layoutng. Its Cargo
 // connection is pending the mutual LayoutNG/inline assembly, not copied here.
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::LayoutUnit;
 use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
 

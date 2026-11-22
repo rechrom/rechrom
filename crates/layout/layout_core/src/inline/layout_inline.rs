@@ -2,7 +2,7 @@
 #[path = "../fragment/layout_inline_visual_rect.rs"]
 mod visual_rect;
 
-#[path = "../../../layout_algo_inline/src/layout_inline_caret.rs"]
+#[path = "../editing/layout_inline_caret.rs"]
 mod layout_inline_caret;
 
 use foundation::graphics_types;

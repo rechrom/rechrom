@@ -3,6 +3,8 @@
 // UTF-16 snapshot because Rust cannot safely borrow a C++ StringImpl here.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::StringView;
 
 // cpp: layoutng_inline/transformed_string.h:16-22,42-46

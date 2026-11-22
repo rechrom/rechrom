@@ -1,6 +1,8 @@
 // C++: layoutng_inline/initial_letter_utils.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use font_engine::FontHeight;
 use foundation::{EFloat, ETextOrientation, LayoutUnit, To};

@@ -3,6 +3,8 @@
 // kerning interfaces remain cross-package dependencies.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::font_baseline::FontBaseline;
 use font_engine::fonts::font_height::FontHeight;
 use font_engine::fonts::shaping::han_kerning::HanKerning;

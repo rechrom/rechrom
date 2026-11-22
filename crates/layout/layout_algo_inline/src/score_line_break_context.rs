@@ -1,6 +1,8 @@
 // C++: layoutng_inline/score_line_break_context.h.
 #![allow(non_snake_case, non_upper_case_globals)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::WtfSizeT;
 
 use crate::line_break_point::LineBreakPoint;

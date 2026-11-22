@@ -2,6 +2,8 @@
 // instantiations share this Rust generic and retain their mapping modes.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::text::implementation::character::Character;
 use font_engine::FontHeight;
 use foundation::{

@@ -3,6 +3,8 @@
 // no-offset-map instantiation. These empty methods are its actual behavior.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use layout_core::internal::layout_text::LayoutText;
 use std::ffi::c_void;
 
