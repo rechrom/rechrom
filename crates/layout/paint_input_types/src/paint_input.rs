@@ -1,7 +1,7 @@
 //! Retained paint boundary schema: the plain values Layout publishes with
 //! fragments and Paint, Raster and Style consume. `PaintStyle`, the view over
 //! the canonical ComputedStyle whose accessors read Layout's projections,
-//! stays in Layout (`layout_base/src/internal/fragment/paint_input.rs`).
+//! stays in Layout (`layout_base/src/internal/paint_input/layout_fragment_paint_input.rs`).
 
 #![allow(non_camel_case_types)]
 

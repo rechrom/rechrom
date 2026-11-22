@@ -23,21 +23,14 @@ use super::layout_object::LayoutObject;
 use super::scroll_types::ScrollOffset;
 use super::svg_length_adjust_type::SVGLengthAdjustType;
 
-#[path = "svg/svg_metadata_validation.rs"]
 mod layout_algo_svg_metadata_validation;
 use layout_algo_svg_metadata_validation::ValidateSvgElementInput;
-#[path = "invalidation/timeline_trigger_metadata.rs"]
 mod layout_invalidation_timeline_trigger_metadata;
 use layout_invalidation_timeline_trigger_metadata::PopulateTimelineTriggerNames;
-#[path = "list/list_marker_lookup.rs"]
 mod layout_algo_list_marker_lookup;
-#[path = "invalidation/element_metadata_input.rs"]
 mod layout_invalidation_element_metadata_input;
-#[path = "invalidation/metadata_append.rs"]
 mod layout_invalidation_metadata_append;
-#[path = "invalidation/node_input_state.rs"]
 mod layout_invalidation_node_input_state;
-#[path = "invalidation/node_metadata_tree.rs"]
 mod layout_invalidation_node_metadata_tree;
 
 // This header mapping remains in progress while cross-file declarations and

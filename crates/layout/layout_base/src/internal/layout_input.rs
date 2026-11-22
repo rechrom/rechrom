@@ -816,7 +816,6 @@ pub struct GridTrackListInput {
     pub line_names: Vec<GridNamedLineInput>,
 }
 
-#[path = "grid/grid_track_list_input.rs"]
 mod layout_algo_grid_grid_track_list_input;
 
 // cpp: layoutng/internal/layout_input.h:380-397
@@ -1743,7 +1742,6 @@ pub struct ElementData {
     pub document_role: DocumentRole,
 }
 
-#[path = "invalidation/element_data_equivalence.rs"]
 mod layout_invalidation_element_data_equivalence;
 
 impl Default for ElementData {
@@ -1924,7 +1922,6 @@ pub struct ComputedStyle {
     pub paint: PaintStyle,
 }
 
-#[path = "invalidation/computed_style_equivalence.rs"]
 mod layout_invalidation_computed_style_equivalence;
 pub(crate) use layout_invalidation_computed_style_equivalence::StyleReferencesSvgResource;
 

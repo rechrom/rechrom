@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
-#[path = "fragment/layout_box_visual_rect.rs"]
 mod layout_fragment_visual_rect;
 
-#[path = "fragment/layout_box_caret.rs"]
 mod layout_fragment_box_caret;
 
 use foundation::graphics_types;
@@ -89,7 +87,6 @@ use super::scroll_layout_scope::ScrollbarFreezeState;
 use super::shapes::shape_outside_info::ShapeOutsideInfo;
 use layout_style::style::outline_type::OutlineType;
 
-#[path = "fragment/layout_box_fragment_geometry.rs"]
 mod layout_fragment_layout_box_fragment_geometry;
 use layout_fragment_layout_box_fragment_geometry::{
     LayoutBoxBoundingBoxRelativeToFirstFragment, LayoutBoxComputeSize,
@@ -98,33 +95,25 @@ use layout_fragment_layout_box_fragment_geometry::{
     LayoutBoxResolvedDirection, LayoutBoxStitchedBlockSize,
 };
 
-#[path = "fragment/layout_box_fragment_access.rs"]
 mod layout_fragment_layout_box_fragment_access;
 
-#[path = "fragment/layout_box_background.rs"]
 mod layout_fragment_layout_box_background;
 
-#[path = "fragment/layout_box_resource_priority.rs"]
 mod layout_fragment_layout_box_resource_priority;
 use layout_fragment_layout_box_resource_priority::LayoutBoxComputeResourcePriorityProvider;
 
-#[path = "fragment/layout_result_overflow.rs"]
 mod layout_fragment_layout_result_overflow;
 use layout_fragment_layout_result_overflow::LayoutBoxSetScrollableOverflowFromLayoutResults;
 
-#[path = "fragment/physical_fragment_list.rs"]
 mod layout_fragment_physical_fragment_list;
 pub use layout_fragment_physical_fragment_list::{PhysicalFragmentIterator, PhysicalFragmentList};
 
-#[path = "invalidation/transform_invalidation.rs"]
 mod layout_invalidation_transform_invalidation;
 use layout_invalidation_transform_invalidation::LayoutBoxTransformsChangeMayRequireLayout;
 
-#[path = "invalidation/layout_box_fragment_retirement.rs"]
 mod layout_invalidation_layout_box_fragment_retirement;
 use layout_invalidation_layout_box_fragment_retirement::LayoutBoxDisassociatePhysicalFragments;
 
-#[path = "reuse/layout_box_result_cache.rs"]
 mod layout_reuse_layout_box_result_cache;
 use layout_reuse_layout_box_result_cache::{
     LayoutBoxAddMeasureLayoutResult, LayoutBoxGetCachedLayoutResult,
@@ -132,21 +121,18 @@ use layout_reuse_layout_box_result_cache::{
     LayoutBoxGetSingleCachedMeasureResultForTesting, LayoutBoxSetCachedLayoutResult,
 };
 
-#[path = "commit/layout_box_result_commit.rs"]
 mod layout_commit_layout_box_result_commit;
 use layout_commit_layout_box_result_commit::{
     LayoutBoxAppendLayoutResult, LayoutBoxFinalizeLayoutResults, LayoutBoxRebuildFragmentTreeSpine,
     LayoutBoxReplaceLayoutResult, LayoutBoxSetLayoutResult, LayoutBoxShrinkLayoutResults,
 };
 
-#[path = "block/column_spanner_admission.rs"]
 mod layout_algo_block_column_spanner_admission;
 use layout_algo_block_column_spanner_admission::{
     LayoutBoxDoesAncestryAllowColumnSpanner, LayoutBoxIsSelfValidColumnSpanner,
     LayoutBoxIsValidColumnSpannerInTree, LayoutBoxShouldPreventColumnSpannerDescendants,
 };
 
-#[path = "block/layout_box_autoscroll.rs"]
 mod layout_algo_block_layout_box_autoscroll;
 use layout_algo_block_layout_box_autoscroll::{
     LayoutBoxAutoscroll, LayoutBoxAutoscrollScrollingBox, LayoutBoxCalculateAutoscrollDirection,

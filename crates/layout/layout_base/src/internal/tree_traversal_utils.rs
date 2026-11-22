@@ -10,6 +10,5 @@ use super::layout_block_flow::LayoutBlockFlow;
 use super::layout_inline::LayoutInline;
 use super::layout_object::LayoutObject;
 
-#[path = "fragment/tree_traversal_utils.rs"]
 mod layout_fragment_tree_traversal_utils;
 pub use layout_fragment_tree_traversal_utils::*;

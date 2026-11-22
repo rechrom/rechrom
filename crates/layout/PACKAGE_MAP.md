@@ -1425,11 +1425,11 @@ direction):
 "Rust" fn` → `pub fn` and `layout_assembly::` → `crate::`):
 
 - `layout_algo_replaced/src/layout_replaced.rs` →
-  `layout_base/src/internal/replaced/layout_replaced_core.rs`
+  `layout_base/src/internal/layout_replaced/layout_replaced_core.rs`
 - `layout_algo_replaced/src/layout_video.rs` →
-  `layout_base/src/internal/replaced/layout_video.rs`
+  `layout_base/src/internal/layout_replaced/layout_video.rs`
 - `layout_algo_replaced/src/layout_media.rs` →
-  `layout_base/src/internal/replaced/layout_media.rs`
+  `layout_base/src/internal/layout_replaced/layout_media.rs`
 
 They are `pub mod layout_replaced_core`, `layout_video` and `layout_media` of
 `internal::layout_replaced`, beside the interface file. The replaced crate
@@ -1671,6 +1671,41 @@ the four `layout_core_*` shim modules became `layout_base_*`.
   cite pre-R7b file locations of moved files (`fragment/…`, `block/…`,
   `invalidation/…` under `layout_base/src/`) are stale outside the
   crate-qualified references rewritten in this map, README and DEAD_CODE.
+
+### Status: no `#[path]` anywhere (done, not built)
+
+Even `#[path]`s without `..` broke the macOS build (rustc there resolves them
+through the real filesystem, Windows lexically), so modules now follow the
+file layout their path implies everywhere in the workspace.
+
+- **Moves:** the 397 `#[path]` attributes of `layout_base` (142 files) and the
+  one in `layout_style_paint` are gone. Each target file moved to the location
+  its module path implies, non-mod-rs style (`parent.rs` + `parent/child.rs`);
+  a file previously loaded through `#[path]` acted as a mod-rs file, so 26 of
+  its plain `mod x;` children moved with it under `parent/`. 424 files moved
+  in all (423 in base, `clip_path_paint_export.rs` →
+  `layout_style_paint/src/paint_style_export/clip_path_export.rs`). Inline
+  wrapper modules (`pub mod gap { pub mod main_gap { mod
+  layout_fragment_main_gap; pub use ...; } }`) keep their profiler-attribution
+  names, so files sit in the matching directories, for example
+  `src/internal/gap/main_gap/layout_fragment_main_gap.rs`; `engine/mod.rs`
+  became `src/layout_engine/engine.rs` (its families keep `mod.rs`). Module
+  names, the module tree and every `crate::` path are unchanged; the only
+  source edits are the deleted attribute lines and comments citing moved
+  paths. No two
+  modules mapped to the same file and no `name.rs` / `name/mod.rs` pair is
+  ambiguous. Crate-qualified `layout_base/src/...` references in this map,
+  README and DEAD_CODE were rewritten; historical inventories (Appendix A) and
+  the R7b example paths above keep their old locations.
+- **Guard:** `layout/tests/source_layout.rs` now fails on any `#[path]`
+  attribute (also through `cfg_attr`) and any `include!` naming a `.rs` file in
+  `apps`, `crates`, `third_party`, `tools` and `vendor`; only
+  `include!(concat!(env!("OUT_DIR"), ...))` is allowed. The allow-list of
+  non-Layout crates is gone (all of them were already clean). The Layout module
+  walk no longer models `#[path]`: each `mod name;` must resolve to exactly
+  one of `name.rs` / `name/mod.rs` inside its package, each file compiles once
+  and nothing under `src/` is an orphan. The link-pair check and its
+  `untranslated_symbols.rs` exception are unchanged.
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

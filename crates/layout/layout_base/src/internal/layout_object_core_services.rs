@@ -25,25 +25,18 @@ use super::layout_text::LayoutText;
 use super::map_coordinates_flags::{MapCoordinatesFlags, MapCoordinatesMode};
 use super::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 
-#[path = "invalidation/layout_object_style_update.rs"]
 mod layout_invalidation_layout_object_style_update;
 
-#[path = "invalidation/layout_object_tree_lifecycle.rs"]
 mod layout_invalidation_layout_object_tree_lifecycle;
 
-#[path = "invalidation/layout_object_child_mutation.rs"]
 mod layout_invalidation_layout_object_child_mutation;
 
-#[path = "fragment/layout_object_overflow_recalc.rs"]
 mod layout_fragment_layout_object_overflow_recalc;
 
-#[path = "fragment/layout_object_geometry_queries.rs"]
 mod layout_fragment_layout_object_geometry_queries;
 
-#[path = "reuse/layout_object_font_validity.rs"]
 mod layout_reuse_layout_object_font_validity;
 
-#[path = "svg/layout_object_svg_dispatch.rs"]
 mod layout_algo_svg_layout_object_svg_dispatch;
 
 // The concrete hierarchy must supply each virtual dispatch entry.

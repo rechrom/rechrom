@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-#[path = "fragment/overflow_model.rs"]
 mod layout_fragment_overflow_model;
 
 pub use layout_fragment_overflow_model::*;

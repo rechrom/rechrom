@@ -1,13 +1,13 @@
-//! Source-layout guards for the Layout packages.
+//! Source-layout guards.
 //!
-//! 1. No `#[path = "..."]` anywhere in the workspace climbs with `..`, and no
-//!    `include!` names a `.rs` file. rustc on macOS and Linux resolves `..`
-//!    through the real filesystem, so a path that leaves an inline module's
-//!    virtual directory fails there while Windows normalises it lexically.
-//!    Packages outside `crates/layout` that still do either are listed in
-//!    [`SOURCE_ESCAPE_ALLOWED`] until their own cleanup removes them.
+//! 1. Modules follow the file layout their path implies. Nothing in the
+//!    workspace carries a `#[path]` attribute (rustc on macOS and Linux
+//!    resolves it through the real filesystem while Windows normalises it
+//!    lexically, so the same tree can build on one host and fail on another),
+//!    and no `include!` names a `.rs` file. The only Rust `include!` allowed
+//!    is build-script output: `include!(concat!(env!("OUT_DIR"), ...))`.
 //! 2. Every Layout package's module tree resolves inside its own package:
-//!    each `#[path]` target and every directory on the way to it exist, each
+//!    each `mod name;` has exactly one of `name.rs` / `name/mod.rs`, each
 //!    source file is compiled exactly once and no file under `src/` is an
 //!    orphan.
 //! 3. No `#[no_mangle]` item of one Layout package defines a name that another
@@ -20,26 +20,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-/// Workspace-relative path prefixes that still contain a parent-relative
-/// `#[path]` or a source `include!`. Keep it shrinking; nothing under
-/// `crates/layout` may be listed.
-const SOURCE_ESCAPE_ALLOWED: &[&str] = &[
-    "crates/browser/tests/",
-    "crates/browser/url_formatter/",
-    "crates/compositor/",
-    "crates/dom/",
-    "crates/foundation/",
-    "crates/javascript/",
-    "crates/quickjs",
-    "crates/skia/",
-];
-
 /// Files allowed to define `#[no_mangle]` symbols that another Layout package
 /// declares. `layout_base`'s untranslated-symbol stubs abort with the symbol
 /// name; they exist only because MSVC link.exe resolves every referenced
 /// external, including `layout_style` declarations whose Chromium bodies are
 /// not translated yet. A translated body replaces its stub.
 const LINK_PAIR_ALLOWED: &[&str] = &["layout_base/src/untranslated_symbols.rs"];
+
+/// Top-level workspace directories that hold Rust sources.
+const SOURCE_ROOTS: &[&str] = &["apps", "crates", "third_party", "tools", "vendor"];
 
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -77,7 +66,9 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
-            if !matches!(name.as_ref(), "target" | ".git" | ".claude" | "node_modules") {
+            if !(name.starts_with("target")
+                || matches!(name.as_ref(), ".git" | ".claude" | "node_modules"))
+            {
                 rust_sources(&path, out);
             }
         } else if name.ends_with(".rs") {
@@ -91,12 +82,18 @@ fn read(path: &Path) -> String {
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// The string of a `#[path = "..."]` attribute line.
-fn path_attribute(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("#[path")?.trim_start().strip_prefix('=')?;
-    let rest = rest.trim_start().strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(&rest[..end])
+/// Whether a trimmed, non-comment line carries a `#[path = ...]` attribute,
+/// directly or through `cfg_attr`.
+fn has_path_attribute(line: &str) -> bool {
+    let compact: String = line
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    if compact.contains("#[path=") || compact.contains("#![path=") {
+        return true;
+    }
+    compact.contains("cfg_attr(")
+        && (compact.contains(",path=") || compact.contains("(path="))
 }
 
 /// The argument text of an `include!(` call starting on `lines[index]`,
@@ -129,23 +126,36 @@ fn include_argument(lines: &[&str], index: usize, start: usize) -> String {
     }
 }
 
+/// Whether an `include!` argument is build-script output:
+/// `concat!(env!("OUT_DIR"), ...)`.
+fn is_out_dir_include(argument: &str) -> bool {
+    let compact: String = argument
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    compact.starts_with("concat!(env!(\"OUT_DIR\")")
+}
+
 #[test]
-fn no_parent_relative_module_paths_or_source_includes() {
+fn no_module_path_attributes_or_source_includes() {
     let root = workspace_root();
     let mut sources = Vec::new();
-    for dir in ["crates", "apps"] {
+    for dir in SOURCE_ROOTS {
         rust_sources(&root.join(dir), &mut sources);
     }
     assert!(!sources.is_empty(), "no sources found under {}", root.display());
+    let this_file = normalize(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("source_layout.rs"),
+    );
     let mut violations = Vec::new();
     for source in sources {
-        let name = relative(&root, &source);
-        if SOURCE_ESCAPE_ALLOWED
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-        {
+        // This guard spells the forbidden forms in its own strings.
+        if normalize(&source) == this_file {
             continue;
         }
+        let name = relative(&root, &source);
         let text = read(&source);
         let lines: Vec<&str> = text.lines().collect();
         for (index, line) in lines.iter().enumerate() {
@@ -153,43 +163,52 @@ fn no_parent_relative_module_paths_or_source_includes() {
             if trimmed.starts_with("//") {
                 continue;
             }
-            if let Some(path) = path_attribute(trimmed) {
-                if path.contains("..") {
-                    violations.push(format!("{name}:{}: #[path = \"{path}\"]", index + 1));
-                }
+            if has_path_attribute(trimmed) {
+                violations.push(format!("{name}:{}: #[path] attribute", index + 1));
             }
-            if let Some(position) = line.find("include!(") {
-                let argument = include_argument(&lines, index, position + "include!(".len());
-                if argument.contains(".rs\"") {
-                    violations.push(format!("{name}:{}: include! of a Rust source", index + 1));
+            let mut search = 0;
+            while let Some(found) = line[search..].find("include!(") {
+                let position = search + found;
+                search = position + "include!(".len();
+                // `include_str!(` / `include_bytes!(` are other macros.
+                if line[..position].ends_with(|character: char| {
+                    character.is_ascii_alphanumeric() || character == '_'
+                }) {
+                    continue;
+                }
+                let argument = include_argument(&lines, index, search);
+                if argument.contains(".rs\"") && !is_out_dir_include(&argument) {
+                    violations
+                        .push(format!("{name}:{}: include! of a Rust source", index + 1));
                 }
             }
         }
     }
     assert!(
         violations.is_empty(),
-        "use the module file layout (or a #[path] below the declaring module's \
-         own directory) instead of `..` paths and source includes:\n{}",
+        "modules follow the file layout their path implies: move the file to \
+         the location its module path implies instead of `#[path]`, and declare \
+         a module instead of `include!` of a source file (only \
+         `include!(concat!(env!(\"OUT_DIR\"), ...))` is allowed):\n{}",
         violations.join("\n")
     );
 }
 
-/// A source file being walked: its path, directory and whether it is a
-/// "mod-rs" file (crate root, `mod.rs`, or loaded through `#[path]`) whose
-/// child modules resolve in its own directory, or a `name.rs` file whose
-/// children resolve in `name/`.
+/// A source file being walked: its path and whether it is a "mod-rs" file
+/// (crate root or `mod.rs`) whose child modules resolve in its own directory,
+/// or a `name.rs` file whose children resolve in `name/`.
 struct ModuleFile {
     file: PathBuf,
     mod_rs: bool,
 }
 
 impl ModuleFile {
-    fn directory(&self) -> PathBuf {
-        self.file.parent().expect("module file directory").to_path_buf()
-    }
-
     fn child_directory(&self, inline: &[String]) -> PathBuf {
-        let mut directory = self.directory();
+        let mut directory = self
+            .file
+            .parent()
+            .expect("module file directory")
+            .to_path_buf();
         if !self.mod_rs {
             directory.push(self.file.file_stem().expect("module file stem"));
         }
@@ -197,14 +216,6 @@ impl ModuleFile {
             directory.push(module);
         }
         directory
-    }
-
-    fn path_attribute_directory(&self, inline: &[String]) -> PathBuf {
-        if inline.is_empty() {
-            self.directory()
-        } else {
-            self.child_directory(inline)
-        }
     }
 }
 
@@ -253,72 +264,48 @@ fn walk_module_file(
     let text = read(&module.file);
     let name = relative(root, &module.file);
     let mut inline: Vec<(String, usize)> = Vec::new();
-    let mut pending_path: Option<String> = None;
     for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
         if let Some((_, open)) = inline.last() {
             if trimmed.starts_with('}') && indent == *open {
                 inline.pop();
-                pending_path = None;
                 continue;
             }
         }
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
-        if let Some(path) = path_attribute(trimmed) {
-            pending_path = Some(path.to_string());
-            continue;
-        }
         let Some((module_name, is_inline)) = module_declaration(trimmed) else {
-            if !trimmed.starts_with("#[") {
-                pending_path = None;
-            }
             continue;
         };
-        let at = format!("{name}:{}", index + 1);
-        let inline_names: Vec<String> = inline.iter().map(|(name, _)| name.clone()).collect();
         if is_inline {
-            if pending_path.take().is_some() {
-                problems.push(format!("{at}: #[path] on inline module {module_name}"));
-            }
             inline.push((module_name, indent));
             continue;
         }
-        let (target, through_path) = match pending_path.take() {
-            Some(path) => {
-                if path.contains("..") {
-                    problems.push(format!("{at}: #[path = \"{path}\"] climbs with `..`"));
-                }
-                let base = module.path_attribute_directory(&inline_names);
-                let joined = base.join(&path);
-                // Without `..`, every directory between the declaring
-                // module's directory and the target must exist on disk.
-                let mut directory = joined.parent().map(Path::to_path_buf);
-                while let Some(current) = directory {
-                    if !current.starts_with(&base) {
-                        break;
-                    }
-                    if !current.is_dir() {
-                        problems.push(format!(
-                            "{at}: #[path = \"{path}\"] passes through missing directory {}",
-                            relative(root, &current)
-                        ));
-                    }
-                    directory = current.parent().map(Path::to_path_buf);
-                }
-                (normalize(&joined), true)
+        let at = format!("{name}:{}", index + 1);
+        let inline_names: Vec<String> = inline.iter().map(|(name, _)| name.clone()).collect();
+        let base = module.child_directory(&inline_names);
+        let file = base.join(format!("{module_name}.rs"));
+        let directory_file = base.join(&module_name).join("mod.rs");
+        let target = match (file.is_file(), directory_file.is_file()) {
+            (true, false) => file,
+            (false, true) => directory_file,
+            (true, true) => {
+                problems.push(format!(
+                    "{at}: mod {module_name} is ambiguous between {} and {}",
+                    relative(root, &file),
+                    relative(root, &directory_file)
+                ));
+                continue;
             }
-            None => {
-                let base = module.child_directory(&inline_names);
-                let file = base.join(format!("{module_name}.rs"));
-                let directory_file = base.join(&module_name).join("mod.rs");
-                if file.is_file() {
-                    (file, false)
-                } else {
-                    (directory_file, false)
-                }
+            (false, false) => {
+                problems.push(format!(
+                    "{at}: mod {module_name} has no file {} or {}",
+                    relative(root, &file),
+                    relative(root, &directory_file)
+                ));
+                continue;
             }
         };
         if !target.starts_with(package) {
@@ -328,19 +315,12 @@ fn walk_module_file(
             ));
             continue;
         }
-        if !target.is_file() {
-            problems.push(format!(
-                "{at}: mod {module_name} has no file {}",
-                relative(root, &target)
-            ));
-            continue;
-        }
         let count = compiled.entry(target.clone()).or_default();
         *count += 1;
         if *count > 1 {
             continue;
         }
-        let mod_rs = through_path || target.file_name().is_some_and(|file| file == "mod.rs");
+        let mod_rs = target.file_name().is_some_and(|file| file == "mod.rs");
         walk_module_file(
             &ModuleFile { file: target, mod_rs },
             package,

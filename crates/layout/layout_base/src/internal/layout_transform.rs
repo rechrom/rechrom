@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-#[path = "fragment/paint_layer_transform.rs"]
 mod layout_fragment_paint_layer_transform;
 
 pub use layout_fragment_paint_layer_transform::*;

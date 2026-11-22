@@ -8,7 +8,6 @@ use super::layout_input::NodeKind;
 use super::layout_node_metadata::Element;
 use super::layout_object::LayoutObject;
 
-#[path = "invalidation/layout_object_hot_invalidation.rs"]
 mod layout_invalidation_layout_object_hot_invalidation;
 
 impl LayoutObject {

@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-#[path = "fragment/text_overflow_post_layout_snapshot.rs"]
 mod layout_fragment_text_overflow_post_layout_snapshot;
 
 pub use layout_fragment_text_overflow_post_layout_snapshot::*;

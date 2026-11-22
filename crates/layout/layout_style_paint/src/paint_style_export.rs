@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 
-#[path = "clip_path_paint_export.rs"]
 pub mod clip_path_export;
 
 use std::sync::Arc;
