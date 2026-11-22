@@ -249,7 +249,7 @@ use interaction_hit_test::core::{
 pub use interaction_hit_test::resident::child_frame_query::{
     PreparedLocalChildFrameQueries, UnavailableLocalChildFrameQueries,
 };
-use layout::object::{LayoutBox, LayoutBoxModelObject, LayoutObject};
+use layout::views::hit_test::{LayoutBox, LayoutBoxModelObject, LayoutObject};
 use layout::input::Node as NativeNode;
 use layout::output::LayoutOutput;
 use layout::paint::PaintFragmentCursor;
@@ -970,7 +970,7 @@ impl hit::HitTestLayout for ResidentDOMCursorNode {
             return None;
         }
         let image = unsafe {
-            foundation::DynamicTo::<layout::object::LayoutInputReplaced>(object).as_ref()
+            foundation::DynamicTo::<layout::views::hit_test::LayoutInputReplaced>(object).as_ref()
         }?;
         let content = image.ImageResource().CachedImage()?;
         Some(Rc::new(super::resident_hit_metadata::ResidentImageContent(
@@ -1131,7 +1131,7 @@ impl source_cursor::CursorLayoutObject for ResidentDOMCursorNode {
         self.view_area.Native().map(|_| &self.view_area as _)
     }
     fn GetCursor(&self, point: source_cursor::PointF) -> source_cursor::CursorDirective {
-        use layout::object::CursorDirective as Native;
+        use layout::views::hit_test::CursorDirective as Native;
         match self
             .value
             .Object()

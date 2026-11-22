@@ -13,7 +13,7 @@ use crate::core::layout::{
     native_hit_test::NativeHitTestRequiredPort,
 };
 use foundation::{gfx, PhysicalOffset, PhysicalRect};
-use ::layout::object::LayoutView;
+use ::layout::views::hit_test::LayoutView;
 use ::layout::paint::PaintFragmentCursor;
 
 /// Implemented by the same live LocalFrame/LocalFrameView owner. PreparedRevision

@@ -30,7 +30,7 @@ use foundation::{gfx, EPointerEvents, EVisibility, PhysicalOffset, PhysicalRect,
 use ::layout::fragment::{
     FragmentItem as NativeItem, PhysicalBoxFragment, PhysicalFragment as NativePhysicalFragment,
 };
-use ::layout::object::LayoutObject;
+use ::layout::views::hit_test::LayoutObject;
 use ::layout::output::FragmentCursor;
 use ::layout::paint::PaintFragmentCursor;
 use std::marker::PhantomData;
@@ -388,10 +388,10 @@ impl<L: ?Sized> PhysicalFragment<L> for ResidentFragment<'_, L> {
     }
     fn IsInSelfHitTestingPhase(&self, phase: HitTestPhase) -> bool {
         let native_phase = match phase {
-            HitTestPhase::kForeground => ::layout::object::HitTestPhase::kForeground,
-            HitTestPhase::kFloat => ::layout::object::HitTestPhase::kFloat,
-            HitTestPhase::kDescendantBlockBackgrounds => ::layout::object::HitTestPhase::kDescendantBlockBackgrounds,
-            HitTestPhase::kSelfBlockBackground => ::layout::object::HitTestPhase::kSelfBlockBackground,
+            HitTestPhase::kForeground => ::layout::views::hit_test::HitTestPhase::kForeground,
+            HitTestPhase::kFloat => ::layout::views::hit_test::HitTestPhase::kFloat,
+            HitTestPhase::kDescendantBlockBackgrounds => ::layout::views::hit_test::HitTestPhase::kDescendantBlockBackgrounds,
+            HitTestPhase::kSelfBlockBackground => ::layout::views::hit_test::HitTestPhase::kSelfBlockBackground,
         };
         self.Physical()
             .is_some_and(|fragment| fragment.IsInSelfHitTestingPhase(native_phase))
@@ -701,7 +701,7 @@ impl<'a> ResidentLayer<'a> {
         unsafe { self.cursor.Cursor().GetLayoutObject().as_ref() }
             .expect("source layer LayoutObject")
     }
-    fn Native(&self) -> &'a ::layout::object::PaintLayer {
+    fn Native(&self) -> &'a ::layout::views::hit_test::PaintLayer {
         self.root
             .LayerForPaintObject(
                 self.resident

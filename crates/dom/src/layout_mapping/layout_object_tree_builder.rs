@@ -13,7 +13,7 @@ use layout::input::{
     SvgShapeData, SvgShapeGeometry, SvgTextPathData, SvgUseData, SvgViewBoxData, SvgViewportData,
     SvgViewportLength, WhiteSpace,
 };
-use layout::object::LayoutObject;
+use layout::mutation::LayoutObject;
 use layout::mutation::LayoutTreeUpdate;
 use layout_style::style::appearance::AppearanceValue;
 
@@ -165,7 +165,7 @@ pub(super) fn svg_text_path_layout_needed(
             return true;
         }
         if current.RuntimeClass()
-            != layout::object::LayoutObjectClass::SvgInline
+            != layout::mutation::LayoutObjectClass::SvgInline
         {
             return false;
         }

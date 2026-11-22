@@ -89,12 +89,5 @@ pub mod scroll {
     pub use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableArea;
 }
 
-pub mod object {
-    pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
-    pub use layout_assembly::internal::layout_box::LayoutBox;
-    pub use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-    pub use layout_assembly::internal::layout_object::{CursorDirective, LayoutObject};
-    pub use layout_assembly::internal::layout_replaced::LayoutInputReplaced;
-    pub use layout_assembly::internal::layout_view::LayoutView;
-    pub use layout_assembly::internal::paint_layer::PaintLayer;
-}
+// Hit-test owners and values moved to `layout::views::hit_test`.
+pub mod object {}

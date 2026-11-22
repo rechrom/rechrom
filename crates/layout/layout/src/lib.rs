@@ -19,7 +19,7 @@
 //! | crate root | [`LayoutEngine`], [`LayoutAssembly`], [`CreateLayoutAssembly`], [`LayoutPlatformServices`] |
 //! | [`assembly`] | the translated algorithm/factory assembly value |
 //! | [`lifecycle`] | lifecycle results and errors (`LayoutEngineError`, `ScrollLayoutUpdate`, `LayoutUpdateKind`) |
-//! | [`mutation`] | boundary 3: `LayoutMutation`, `LayoutTreeUpdate` and mutation results |
+//! | [`mutation`] | boundary 3: `LayoutMutation`, `LayoutTreeUpdate`, the tree builder's parent `LayoutObject`, and mutation results |
 //! | [`input`] | Style/DOM-projected inputs: `ConstraintSpace`, `ElementData`, `NodeKind`, style projection, theme metrics |
 //! | [`output`] | borrowed `LayoutOutput` access, `LayoutNode`, hit-test cursors, intersection roots |
 //! | [`fragment`] | the resident fragment tree: `LayoutResultHandle`, `PhysicalFragment`, `FragmentItem`, inline cursors |
@@ -40,6 +40,7 @@ mod engine;
 pub mod views {
     pub mod event_registry;
     pub mod form_control;
+    pub mod hit_test;
     pub mod pointer;
     pub mod resource;
     pub mod scroll;
