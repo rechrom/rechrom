@@ -226,6 +226,34 @@ impl App {
             let _ = sender.send(command);
         }
     }
+    fn target_drag(&self, event: &winit::event::NativeDragDropEvent, scale: f64) {
+        match crate::native_drag::Target::from_native(event, scale) {
+            Ok(target) => self.send(Command::TargetDrag(target)),
+            Err(error) => {
+                event
+                    .operation
+                    .store(0, std::sync::atomic::Ordering::Release);
+                eprintln!("rechrom-native-drop-error {error}");
+            }
+        }
+    }
+    /// Route the Windows OLE drop-target packets queued on this UI thread
+    /// since the previous callback. Called first in every callback that can
+    /// follow an OLE dispatch, so packets precede later window events.
+    #[cfg(target_os = "windows")]
+    fn route_native_drops(&self) {
+        let events = crate::native_drag::take_drop_events();
+        if events.is_empty() {
+            return;
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+        let scale = window.scale_factor();
+        for event in &events {
+            self.target_drag(event, scale);
+        }
+    }
 }
 impl ApplicationHandler<UserEvent> for App {
     fn open_urls(&mut self, _: &ActiveEventLoop, urls: Vec<String>) {
@@ -260,9 +288,20 @@ impl ApplicationHandler<UserEvent> for App {
                     .with_titlebar_transparent(true)
                     .with_title_hidden(true)
             };
+            // The embedding registers its own OLE drop target on this window.
+            #[cfg(target_os = "windows")]
+            let attributes = {
+                use winit::platform::windows::WindowAttributesExtWindows;
+                attributes.with_drag_and_drop(false)
+            };
             match event_loop.create_window(attributes) {
                 Ok(window) => {
                     window.set_ime_allowed(true);
+                    #[cfg(target_os = "windows")]
+                    if let Err(error) = crate::native_drag::register_drop_target(&window) {
+                        self.fail(event_loop, "app", error);
+                        return;
+                    }
                     self.window = Some(Arc::new(window));
                 }
                 Err(error) => {
@@ -322,6 +361,8 @@ impl ApplicationHandler<UserEvent> for App {
         self.commands = None;
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        #[cfg(target_os = "windows")]
+        self.route_native_drops();
         match event {
             UserEvent::StartSystemDrag(start) => {
                 crate::native_drag::start(self.window.as_deref(), start)
@@ -410,6 +451,8 @@ impl ApplicationHandler<UserEvent> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        #[cfg(target_os = "windows")]
+        self.route_native_drops();
         let Some(window) = &self.window else {
             return;
         };
@@ -448,17 +491,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         match &event {
-            WindowEvent::NativeDragDrop(event) => {
-                match crate::native_drag::Target::from_native(event, window.scale_factor()) {
-                    Ok(target) => self.send(Command::TargetDrag(target)),
-                    Err(error) => {
-                        event
-                            .operation
-                            .store(0, std::sync::atomic::Ordering::Release);
-                        eprintln!("rechrom-native-drop-error {error}");
-                    }
-                }
-            }
+            WindowEvent::NativeDragDrop(event) => self.target_drag(event, window.scale_factor()),
             WindowEvent::CloseRequested => {
                 self.send(Command::Stop);
                 event_loop.exit();
@@ -543,6 +576,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "windows")]
+        self.route_native_drops();
         crate::native_keyboard_modifiers::update(None);
         let drag_deadline = crate::native_drag::poll();
         let now = Instant::now();

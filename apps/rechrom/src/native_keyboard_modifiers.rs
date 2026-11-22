@@ -33,7 +33,46 @@ pub(crate) fn update(event: Option<&WindowEvent>) {
         let flags = unsafe { rechrom_current_keyboard_modifiers() } as u8;
         CURRENT.store(AVAILABLE | flags, Ordering::Release);
     }
-    #[cfg(not(target_os = "macos"))]
+    // Windows: Caps Lock is queried on the native message sequence for every
+    // event winit derives from a message that refreshes its modifier state
+    // (key, mouse move/button/wheel, focus gain). GetKeyState follows this
+    // thread's keyboard message queue, which the document executor does not
+    // pump. A focus loss leaves the state unavailable until the next refresh.
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetKeyState(key: i32) -> i16;
+        }
+        const VK_CAPITAL: i32 = 0x14;
+        let modifier_flags = match event {
+            Some(WindowEvent::ModifiersChanged(modifiers)) => {
+                let state = modifiers.state();
+                u8::from(state.shift_key()) << 1
+                    | u8::from(state.control_key()) << 2
+                    | u8::from(state.alt_key()) << 3
+                    | u8::from(state.super_key()) << 4
+            }
+            Some(WindowEvent::Focused(false)) => {
+                CURRENT.store(0, Ordering::Release);
+                return;
+            }
+            Some(
+                WindowEvent::Focused(true)
+                | WindowEvent::KeyboardInput { .. }
+                | WindowEvent::CursorMoved { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. },
+            ) => CURRENT.load(Ordering::Acquire) & 0b1_1110,
+            _ => return,
+        };
+        let alpha_lock = unsafe { GetKeyState(VK_CAPITAL) } & 1 != 0;
+        CURRENT.store(
+            AVAILABLE | modifier_flags | u8::from(alpha_lock),
+            Ordering::Release,
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     match event {
         Some(WindowEvent::ModifiersChanged(modifiers)) => {
             let Some(alpha_lock) = modifiers.caps_lock_state() else {

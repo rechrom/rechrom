@@ -189,7 +189,7 @@ pub(super) fn read(owner: usize) -> Result<PrimaryClipboardSnapshot, ClipboardHo
     drop(open);
     super::formats::admit_paths(&mut snapshot, paths)?;
     if virtual_files {
-        let offers = winit::platform::windows::clipboard_virtual_files()
+        let offers = crate::native_drag::clipboard_virtual_files()
             .map_err(|_| ClipboardHostError::ReadFailed)?;
         for offer in offers {
             snapshot.files.push(

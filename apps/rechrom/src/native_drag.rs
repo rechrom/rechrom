@@ -17,6 +17,12 @@ mod payload;
 mod wayland;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_target;
+#[cfg(target_os = "windows")]
+pub(crate) use windows_target::{
+    clipboard_virtual_files, register as register_drop_target, take_events as take_drop_events,
+};
 #[cfg(target_os = "linux")]
 mod x11;
 

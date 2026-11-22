@@ -6,31 +6,90 @@ use std::ptr;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, SystemTime};
 
-use windows_sys::core::{GUID, HRESULT};
-use windows_sys::Win32::Foundation::{FILETIME, POINTL};
-use windows_sys::Win32::System::Com::{
-    CoInitializeEx, CoUninitialize, IDataObject,
-    Marshal::{CoMarshalInterThreadInterfaceInStream, CoReleaseMarshalData},
-    StructuredStorage::CoGetInterfaceAndReleaseStream,
-    DVASPECT_CONTENT, FORMATETC, STATSTG, STGMEDIUM, TYMED_HGLOBAL, TYMED_ISTREAM,
+use winit::event::{NativeDragDataReader, NativeDragFileMetadata, NativeDragVirtualFileOffer};
+
+use super::{
+    FileDropHandler, FileTime, FormatEtc, GlobalLock, GlobalSize, GlobalUnlock, Guid,
+    IDataObjectVtbl, IUnknownVtbl, PointL, ReleaseStgMedium, StgMedium, DVASPECT_CONTENT,
+    HRESULT, TYMED_HGLOBAL, TYMED_ISTREAM,
 };
-use windows_sys::Win32::System::Ole::ReleaseStgMedium;
 
-use super::{FileDropHandler, IDataObjectVtbl, IUnknownVtbl};
-use crate::event::{NativeDragDataReader, NativeDragFileMetadata, NativeDragVirtualFileOffer};
-
-const IID_DATA_OBJECT: GUID = GUID {
+const IID_DATA_OBJECT: Guid = Guid {
     data1: 0x10e,
     data2: 0,
     data3: 0,
     data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
 };
+const COINIT_MULTITHREADED: u32 = 0;
+const COINIT_APARTMENTTHREADED: u32 = 2;
+const STATFLAG_NONAME: u32 = 1;
+const PM_REMOVE: u32 = 1;
+const QS_ALLINPUT: u32 = 0x04ff;
+
+/// STATSTG (objidl.h).
+#[repr(C)]
+struct StatStg {
+    name: *mut u16,
+    kind: u32,
+    size: u64,
+    modified: FileTime,
+    created: FileTime,
+    accessed: FileTime,
+    mode: u32,
+    locks_supported: u32,
+    class_id: Guid,
+    state_bits: u32,
+    reserved: u32,
+}
+/// MSG (winuser.h).
+#[repr(C)]
+struct Msg {
+    window: *mut c_void,
+    message: u32,
+    w_param: usize,
+    l_param: isize,
+    time: u32,
+    point: PointL,
+}
+
+#[link(name = "ole32")]
+extern "system" {
+    fn OleGetClipboard(object: *mut *mut c_void) -> HRESULT;
+    fn CoInitializeEx(reserved: *const c_void, flags: u32) -> HRESULT;
+    fn CoUninitialize();
+    fn CoMarshalInterThreadInterfaceInStream(
+        iid: *const Guid,
+        object: *mut c_void,
+        stream: *mut *mut c_void,
+    ) -> HRESULT;
+    fn CoGetInterfaceAndReleaseStream(
+        stream: *mut c_void,
+        iid: *const Guid,
+        object: *mut *mut c_void,
+    ) -> HRESULT;
+    fn CoReleaseMarshalData(stream: *mut c_void) -> HRESULT;
+}
+#[link(name = "user32")]
+extern "system" {
+    fn PeekMessageW(
+        message: *mut Msg,
+        window: *mut c_void,
+        filter_min: u32,
+        filter_max: u32,
+        remove: u32,
+    ) -> i32;
+    fn TranslateMessage(message: *const Msg) -> i32;
+    fn DispatchMessageW(message: *const Msg) -> isize;
+    fn MsgWaitForMultipleObjectsEx(
+        count: u32,
+        handles: *const *mut c_void,
+        milliseconds: u32,
+        wake_mask: u32,
+        flags: u32,
+    ) -> u32;
+}
 
 pub(super) fn clipboard_files() -> io::Result<Vec<NativeDragVirtualFileOffer>> {
-    #[link(name = "ole32")]
-    extern "system" {
-        fn OleGetClipboard(object: *mut *mut IDataObject) -> HRESULT;
-    }
     // Clipboard IDataObject belongs to a live STA. Keep that apartment pumping
     // until the existing content-reader session releases its final proxy.
     struct Apartment;
@@ -43,7 +102,7 @@ pub(super) fn clipboard_files() -> io::Result<Vec<NativeDragVirtualFileOffer>> {
     std::thread::Builder::new()
         .name("clipboard-file-offer".into())
         .spawn(move || unsafe {
-            let result = CoInitializeEx(ptr::null(), 2); // APARTMENTTHREADED
+            let result = CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED);
             if result < 0 {
                 let _ = reply.send(Err(io::Error::other(format!(
                     "clipboard COM apartment: {result:#x}"
@@ -60,7 +119,7 @@ pub(super) fn clipboard_files() -> io::Result<Vec<NativeDragVirtualFileOffer>> {
                 return;
             }
             let admitted = Session::new(object);
-            release(object.cast());
+            release(object);
             let Some((session, files)) = admitted else {
                 let _ = reply.send(Err(io::Error::other(
                     "clipboard virtual-file descriptors unavailable",
@@ -73,13 +132,9 @@ pub(super) fn clipboard_files() -> io::Result<Vec<NativeDragVirtualFileOffer>> {
                 drop(done);
             });
             let _ = reply.send(Ok(files));
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                DispatchMessageW, MsgWaitForMultipleObjectsEx, PeekMessageW, TranslateMessage, MSG,
-                PM_REMOVE, QS_ALLINPUT,
-            };
-            let mut message: MSG = std::mem::zeroed();
+            let mut message: Msg = std::mem::zeroed();
             while matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-                while PeekMessageW(&mut message, 0, 0, 0, PM_REMOVE) != 0 {
+                while PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
                     TranslateMessage(&message);
                     DispatchMessageW(&message);
                 }
@@ -93,17 +148,18 @@ pub(super) fn clipboard_files() -> io::Result<Vec<NativeDragVirtualFileOffer>> {
         )
     })?
 }
+/// FILEDESCRIPTORW (shlobj_core.h).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Descriptor {
     flags: u32,
-    class_id: GUID,
+    class_id: Guid,
     size: [i32; 2],
-    point: POINTL,
+    point: PointL,
     attributes: u32,
-    created: FILETIME,
-    accessed: FILETIME,
-    modified: FILETIME,
+    created: FileTime,
+    accessed: FileTime,
+    modified: FileTime,
     size_high: u32,
     size_low: u32,
     name: [u16; 260],
@@ -176,9 +232,7 @@ pub(super) struct Session {
     format: u16,
 }
 impl Session {
-    pub(super) unsafe fn new(
-        data: *const IDataObject,
-    ) -> Option<(Self, Vec<NativeDragVirtualFileOffer>)> {
+    pub(super) unsafe fn new(data: *mut c_void) -> Option<(Self, Vec<NativeDragVirtualFileOffer>)> {
         let descriptor_format = FileDropHandler::clipboard_format("FileGroupDescriptorW");
         let bytes = unsafe { FileDropHandler::read_global(data, descriptor_format) }?;
         if bytes.len() < 4 {
@@ -189,13 +243,8 @@ impl Session {
             return None;
         }
         let mut stream = ptr::null_mut();
-        let result = unsafe {
-            CoMarshalInterThreadInterfaceInStream(
-                &IID_DATA_OBJECT,
-                data as *mut c_void,
-                &mut stream,
-            )
-        };
+        let result =
+            unsafe { CoMarshalInterThreadInterfaceInStream(&IID_DATA_OBJECT, data, &mut stream) };
         if result < 0 || stream.is_null() {
             return None;
         }
@@ -260,7 +309,7 @@ impl Session {
         std::thread::spawn(move || unsafe { self.run() });
     }
     unsafe fn run(mut self) {
-        let initialized = unsafe { CoInitializeEx(ptr::null(), 0) };
+        let initialized = unsafe { CoInitializeEx(ptr::null(), COINIT_MULTITHREADED) };
         if initialized < 0 {
             return;
         }
@@ -308,28 +357,28 @@ impl Session {
 }
 
 struct Content {
-    medium: Option<STGMEDIUM>,
+    medium: Option<StgMedium>,
     failure: Option<String>,
 }
 impl Content {
     unsafe fn new(object: *mut c_void, format: u16, index: i32) -> Self {
-        let request = FORMATETC {
-            cfFormat: format,
-            ptd: ptr::null_mut(),
-            dwAspect: DVASPECT_CONTENT,
-            lindex: index,
-            tymed: (TYMED_ISTREAM | TYMED_HGLOBAL) as u32,
+        let request = FormatEtc {
+            format,
+            target_device: ptr::null_mut(),
+            aspect: DVASPECT_CONTENT,
+            index,
+            tymed: TYMED_ISTREAM | TYMED_HGLOBAL,
         };
-        let mut medium = unsafe { std::mem::zeroed() };
+        let mut medium: StgMedium = unsafe { std::mem::zeroed() };
         let table = unsafe { *(object as *const *const IDataObjectVtbl) };
-        let result = unsafe { ((*table).GetData)(object.cast(), &request, &mut medium) };
+        let result = unsafe { ((*table).get_data)(object, &request, &mut medium) };
         if result < 0 {
             return Self {
                 medium: None,
                 failure: Some(format!("native FileContents GetData failed: {result:#x}")),
             };
         }
-        if medium.tymed != TYMED_ISTREAM as u32 && medium.tymed != TYMED_HGLOBAL as u32 {
+        if medium.tymed != TYMED_ISTREAM && medium.tymed != TYMED_HGLOBAL {
             unsafe {
                 ReleaseStgMedium(&mut medium);
             }
@@ -343,26 +392,25 @@ impl Content {
             failure: None,
         }
     }
-    fn medium(&self) -> io::Result<&STGMEDIUM> {
+    fn medium(&self) -> io::Result<&StgMedium> {
         self.medium
             .as_ref()
             .ok_or_else(|| io::Error::other(self.failure.clone().unwrap_or_default()))
     }
     unsafe fn metadata(&self) -> io::Result<NativeDragFileMetadata> {
         let medium = self.medium()?;
-        if medium.tymed == TYMED_ISTREAM as u32 {
-            let stream = unsafe { medium.u.pstm };
+        if medium.tymed == TYMED_ISTREAM {
+            let stream = medium.handle;
             let table = unsafe { *(stream as *const *const StreamTable) };
-            let mut stat: STATSTG = unsafe { std::mem::zeroed() };
-            let result = unsafe { ((*table).stat)(stream, &mut stat, 1) };
+            let mut stat: StatStg = unsafe { std::mem::zeroed() };
+            let result = unsafe { ((*table).stat)(stream, &mut stat, STATFLAG_NONAME) };
             check(result)?;
             Ok(NativeDragFileMetadata {
-                length: stat.cbSize,
-                modified: file_time(stat.mtime),
+                length: stat.size,
+                modified: file_time(stat.modified),
             })
         } else {
-            let length =
-                unsafe { windows_sys::Win32::System::Memory::GlobalSize(medium.u.hGlobal) };
+            let length = unsafe { GlobalSize(medium.handle) };
             Ok(NativeDragFileMetadata {
                 length: length as u64,
                 modified: None,
@@ -371,8 +419,8 @@ impl Content {
     }
     unsafe fn read(&mut self, offset: u64, length: usize) -> io::Result<Vec<u8>> {
         let medium = self.medium()?;
-        if medium.tymed == TYMED_ISTREAM as u32 {
-            let stream = unsafe { medium.u.pstm };
+        if medium.tymed == TYMED_ISTREAM {
+            let stream = medium.handle;
             let table = unsafe { *(stream as *const *const StreamTable) };
             let position = i64::try_from(offset).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidInput, "native stream offset overflow")
@@ -404,8 +452,7 @@ impl Content {
             result.truncate(consumed);
             Ok(result)
         } else {
-            use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
-            let memory = unsafe { medium.u.hGlobal };
+            let memory = medium.handle;
             let size = unsafe { GlobalSize(memory) };
             let start = usize::try_from(offset).unwrap_or(usize::MAX).min(size);
             let count = length.min(size - start);
@@ -435,6 +482,7 @@ impl Drop for Content {
         }
     }
 }
+/// IStream vtable (objidl.h); only Read, Seek and Stat are called.
 #[repr(C)]
 struct StreamTable {
     unknown: IUnknownVtbl,
@@ -447,13 +495,13 @@ struct StreamTable {
     revert: usize,
     lock_region: usize,
     unlock_region: usize,
-    stat: unsafe extern "system" fn(*mut c_void, *mut STATSTG, u32) -> HRESULT,
+    stat: unsafe extern "system" fn(*mut c_void, *mut StatStg, u32) -> HRESULT,
     clone: usize,
 }
 unsafe fn release(object: *mut c_void) {
     let table = unsafe { *(object as *const *const IUnknownVtbl) };
     unsafe {
-        ((*table).Release)(object.cast());
+        ((*table).release)(object);
     }
 }
 fn check(result: HRESULT) -> io::Result<()> {
@@ -465,8 +513,8 @@ fn check(result: HRESULT) -> io::Result<()> {
         Ok(())
     }
 }
-fn file_time(time: FILETIME) -> Option<SystemTime> {
-    let ticks = (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+fn file_time(time: FileTime) -> Option<SystemTime> {
+    let ticks = (u64::from(time.high) << 32) | u64::from(time.low);
     let epoch = 116_444_736_000_000_000u64;
     if ticks >= epoch {
         SystemTime::UNIX_EPOCH.checked_add(Duration::from_nanos((ticks - epoch).checked_mul(100)?))

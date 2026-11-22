@@ -26,13 +26,14 @@ change, not an exact line count.
 | zune-jpeg 0.5.15 | crates.io | +606 src lines (+395 license text), all behind opt-in `source_compat` | KEEP: libjpeg-turbo/Skia pixel parity, no upstream equivalent | none |
 | softbuffer 0.4.8 | crates.io | 5 files, +1,186/-11; behaviour change is macOS-only | REPLACE: stock softbuffer on Windows/Linux, with the macOS IOSurface presenter moved into `apps/rechrom` | M |
 | smithay-clipboard 0.7.2 | crates.io | 3 files, about +194/-33 stmt (raw +352/-88) | KEEP for now; fold into the app-owned Wayland data-device module later (see winit) | none now |
-| winit 0.30.13 | crates.io (latest 0.30) | 33 src files, raw +4,330/-943, about +2,550/-620 stmt; 2 new files | KEEP but shrink: move the A items to `apps/rechrom`, turn C items into small hooks, re-evaluate at winit 0.31 stable | M-L |
+| winit 0.30.13 | crates.io (latest 0.30) | 33 src files, raw +4,330/-943, about +2,550/-620 stmt; 2 new files. After the Windows moves (rows 1, 4, 8): 27 src files, `-w` +3,236/-773 (was +4,339/-980 by the same measure); 1 new file | KEEP but shrink: move the A items to `apps/rechrom`, turn C items into small hooks, re-evaluate at winit 0.31 stable | M-L |
 
 Things that surprised me:
 - The ttf-parser patch fixes code Rechrom never calls. Only `font_engine` and
   `web_font` depend on ttf-parser (Cargo.lock), and neither touches GPOS.
   Shaping uses HarfRust/read-fonts.
-- Two `winit/LOCAL_CHANGES.md` claims are stale:
+- Two `winit/LOCAL_CHANGES.md` claims were stale (both corrected there on
+  2026-11-22):
   - The "high-resolution waitable timer" for `WaitUntil` is already upstream.
     The 0.30.0 changelog says "make `ControlFlow::WaitUntil` work more
     precisely using `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`", and the vendored
@@ -324,6 +325,22 @@ Things that surprised me:
   - macOS `window_delegate.rs` (+487/-115) and `view.rs` (+306/-55)
   - shared `event.rs` (+388/-27)
   - Windows `drop_handler.rs` (+305/-64)
+- Progress (2026-11-22, Windows part of step 1): rows 1, 4 (Windows) and 8
+  are done. The OLE drop target and virtual-file reader moved verbatim into
+  `apps/rechrom/src/native_drag/windows_target.rs` (+ `windows_target/
+  virtual_file.rs`), declared directly against ole32/user32/shell32/kernel32;
+  the window is created with upstream `with_drag_and_drop(false)` and the app
+  calls `OleInitialize` + `RegisterDragDrop`. Its packets are the same
+  `NativeDragDropEvent` values, queued on the UI thread and routed by the App
+  before the next winit callback. Caps Lock on Windows is read with
+  `GetKeyState(VK_CAPITAL)` in `native_keyboard_modifiers.rs`. The Windows
+  backend files are stock again except `native: None` on two `MouseWheel`
+  events (shared row 13 type); `virtual_file.rs` and the three windows-sys
+  features it needed (`Com_Marshal`, `Memory`, `DataExchange`) are gone.
+  Remaining patch, measured with `diff -ruN --ignore-all-space` against the
+  published crate (excluding `LOCAL_CHANGES.md`): 27 `src` files + manifest,
+  +3,236/-773, one new file (`wayland/seat/data_device.rs`). Before this step
+  the same measure gave 33 `src` files + manifest, +4,339/-980.
 - Rechrom use: `app.rs` (`open_urls`, `set_ime_text_state`,
   `NativeDragDrop`), `input.rs` (`MacOSMouseWheelMetadata`,
   `KeyEventExtMacOS`, `from_rgba_with_scale_factor`),
@@ -339,14 +356,14 @@ names the smallest generic hook that would let the logic live in the app.
 
 | # | Change | Platform | Size (raw) | Class | Evidence / proposed hook |
 |---|---|---|---|---|---|
-| 1 | `WaitUntil` high-resolution waitable timer | Windows | 0 (already upstream) | B | 0.30.0 changelog; `wait_for_messages_impl(&mut high_resolution_timer, ..)` is identical upstream. Remove the claim from `LOCAL_CHANGES.md`. |
+| 1 | `WaitUntil` high-resolution waitable timer | Windows | 0 (already upstream) | B | 0.30.0 changelog; `wait_for_messages_impl(&mut high_resolution_timer, ..)` is identical upstream. Remove the claim from `LOCAL_CHANGES.md`. DONE: claim removed. |
 | 2 | `native_key_code` on macOS key events | macOS | ~5 | B | `PhysicalKeyExtScancode::to_scancode()` returns the same virtual key code. |
 | 3 | `unmodified_text` (`charactersIgnoringModifiers`) | macOS | ~5 | B, partly | `KeyEventExtModifierSupplement::key_without_modifiers()` exists but yields a `Key`, not the raw string. Keep it only if the exact string is needed, as part of hook C8. |
-| 4 | Caps Lock in `Modifiers` | Windows | ~10 | A | Call `GetKeyState(VK_CAPITAL)` in the app's key/modifier handler. winit 0.30 Windows calls the handler synchronously from the window procedure, so the state is message-time. |
+| 4 | Caps Lock in `Modifiers` | Windows | ~10 | A | Call `GetKeyState(VK_CAPITAL)` in the app's key/modifier handler. winit 0.30 Windows calls the handler synchronously from the window procedure, so the state is message-time. DONE: `native_keyboard_modifiers.rs` re-reads it on the events whose messages refreshed winit's modifiers (key, mouse move/button/wheel, focus gain, `ModifiersChanged`). |
 | 5 | Caps Lock | macOS | ~5 | A | Read `NSEvent.modifierFlags` (class property, current state) in the handler. |
 | 6 | Caps Lock | X11 | shared xkb | A | Call `XkbGetState`/`XkbGetIndicatorState` on the Xlib display from raw-window-handle. |
 | 7 | Caps Lock | Wayland | xkb `state.rs` +10 | C | Locked modifiers exist only in winit's wl_keyboard xkb state. Hook: expose lock state on `Modifiers` (the current 10-line `From<ModifiersState>`). |
-| 8 | OLE `IDropTarget` destination, virtual files (`FileGroupDescriptor`/`FileContents`), `clipboard_virtual_files`, IDropTarget `POINTL` by-value ABI fix | Windows | ~790 | A | Upstream `WindowAttributesExtWindows::with_drag_and_drop(false)` stops winit's `OleInitialize`/`RegisterDragDrop`. The app calls `OleInitialize` and `RegisterDragDrop(hwnd)` with its own IDropTarget (move `drop_handler.rs` + `virtual_file.rs`). Paste already calls the reader directly. |
+| 8 | OLE `IDropTarget` destination, virtual files (`FileGroupDescriptor`/`FileContents`), `clipboard_virtual_files`, IDropTarget `POINTL` by-value ABI fix | Windows | ~790 | A | Upstream `WindowAttributesExtWindows::with_drag_and_drop(false)` stops winit's `OleInitialize`/`RegisterDragDrop`. The app calls `OleInitialize` and `RegisterDragDrop(hwnd)` with its own IDropTarget (move `drop_handler.rs` + `virtual_file.rs`). Paste already calls the reader directly. DONE: `apps/rechrom/src/native_drag/windows_target.rs`; winit's `drop_handler.rs`/`definitions.rs` are stock. |
 | 9 | `application:openURLs:` → `ApplicationHandler::open_urls` | macOS | ~60 | A (fallback C) | Register `NSAppleEventManager` handlers for `kInternetEventClass/kAEGetURL` (and `kAEOpenDocuments` for file URLs) before `run_app`, on the main thread. Fallback hook: winit's delegate forwards `application:openURLs:` to a `Box<dyn Fn(Vec<String>)>` set on the event-loop builder (about 25 lines). winit 0.30 installs its own NSApplicationDelegate, despite its doc comment. |
 | 10 | `wl_data_device` drag destination + outgoing drag, button grab serial, `drag_source_seat` | Wayland | ~750 | A | Bind your own `wl_data_device_manager`, `wl_seat`, `wl_data_device` and a listen-only `wl_pointer` (for the button-press serial) on a private event queue of winit's `wl_display` from raw-window-handle, the same technique smithay-clipboard uses. Match events to winit's `wl_surface` pointer. winit 0.30 binds no data device, so nothing conflicts. Merge with smithay-clipboard. |
 | 11 | XDND destination (XdndAware, Enter/Position/Status/Drop/Finished, action list, MIME selection with INCR) | X11 | ~760 | C | ClientMessage/SelectionNotify for winit's window are consumed by winit's event processor. Hook: `EventLoopBuilderExtX11::with_x11_event_hook(FnMut(*const XEvent) -> bool)` that sees raw events first and can consume them, mirroring upstream Windows `with_msg_hook`. About 20 lines in winit; the XDND logic moves to the app. |
@@ -366,7 +383,8 @@ KEEP, shrinking it in three steps:
    copy: 4, 5, 6, 8, 9, 10, plus the wheel profiler in 13. That removes about
    1,700 lines, including both new files. Drop the stale claim in 1, and use
    the upstream APIs for 2 and 3. Effort: M. Needs Windows and Linux
-   (X11 + Wayland) validation.
+   (X11 + Wayland) validation. Status: 1, 4 (Windows) and 8 done (see
+   Progress above); 5, 6, 9, 10, the wheel profiler, 2 and 3 remain.
 2. Replace the C logic with the generic hooks listed for 7, 11, 12, 13, 14, 15
    and 16. That leaves roughly 150-250 lines of hook code in winit, with the
    drag and IME logic in the app. Effort: M. Needs macOS validation.
