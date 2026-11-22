@@ -148,8 +148,8 @@ impl<'a> GapSegmentStateCursor<'a> {
 }
 
 pub struct GapSegmentStateAggregator {
-    pub(crate) cell_count_: u32,
-    pub(crate) track_to_cell_states_: HashMap<u32, CellStates, IntWithZeroKeyHashTraits<i32>>,
+    pub cell_count_: u32,
+    pub track_to_cell_states_: HashMap<u32, CellStates, IntWithZeroKeyHashTraits<i32>>,
 }
 
 impl Default for GapSegmentStateAggregator {

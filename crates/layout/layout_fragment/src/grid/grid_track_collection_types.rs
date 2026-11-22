@@ -346,13 +346,13 @@ impl TrackBoundaryToRangePair {
 
 // cpp: layoutng/internal/grid_track_collection.h:120-179
 pub struct GridRangeBuilder {
-    pub(crate) auto_repetitions_: u32,
-    pub(crate) start_offset_: u32,
-    pub(crate) must_sort_grid_lines_: bool,
-    pub(crate) explicit_tracks_: *const GridTrackList,
-    pub(crate) implicit_tracks_: *const GridTrackList,
-    pub(crate) start_lines_: Vector<TrackBoundaryToRangePair>,
-    pub(crate) end_lines_: Vector<TrackBoundaryToRangePair>,
+    pub auto_repetitions_: u32,
+    pub start_offset_: u32,
+    pub must_sort_grid_lines_: bool,
+    pub explicit_tracks_: *const GridTrackList,
+    pub implicit_tracks_: *const GridTrackList,
+    pub start_lines_: Vector<TrackBoundaryToRangePair>,
+    pub end_lines_: Vector<TrackBoundaryToRangePair>,
 }
 
 impl GridRangeBuilder {
@@ -382,7 +382,7 @@ impl GridRangeBuilder {
     }
 
     // cpp: layoutng/internal/grid_track_collection.h:159-162
-    pub(crate) fn new_from_tracks(
+    pub fn new_from_tracks(
         explicit_tracks: &GridTrackList,
         implicit_tracks: &GridTrackList,
         auto_repetitions: u32,
@@ -398,7 +398,7 @@ impl GridRangeBuilder {
         }
     }
 
-    pub(crate) fn new_from_tracks_default_offset(
+    pub fn new_from_tracks_default_offset(
         explicit_tracks: &GridTrackList,
         implicit_tracks: &GridTrackList,
         auto_repetitions: u32,
@@ -457,17 +457,17 @@ impl SetGeometry {
 // cpp: layoutng/internal/grid_track_collection.h:182-342
 #[repr(C)]
 pub struct GridLayoutTrackCollection {
-    pub(crate) is_for_sizing_: bool,
-    pub(crate) gutter_size_: LayoutUnit,
-    pub(crate) ranges_: GridRangeVector,
-    pub(crate) properties_: TrackSpanProperties,
-    pub(crate) sets_geometry_: Vector<SetGeometry>,
-    pub(crate) track_direction_: GridTrackSizingDirection,
-    pub(crate) last_indefinite_index_: Vector<u32>,
-    pub(crate) accumulated_gutter_size_delta_: LayoutUnit,
-    pub(crate) accumulated_start_extra_margin_: LayoutUnit,
-    pub(crate) accumulated_end_extra_margin_: LayoutUnit,
-    pub(crate) collapsed_track_indexes_: Vector<u32>,
+    pub is_for_sizing_: bool,
+    pub gutter_size_: LayoutUnit,
+    pub ranges_: GridRangeVector,
+    pub properties_: TrackSpanProperties,
+    pub sets_geometry_: Vector<SetGeometry>,
+    pub track_direction_: GridTrackSizingDirection,
+    pub last_indefinite_index_: Vector<u32>,
+    pub accumulated_gutter_size_delta_: LayoutUnit,
+    pub accumulated_start_extra_margin_: LayoutUnit,
+    pub accumulated_end_extra_margin_: LayoutUnit,
+    pub collapsed_track_indexes_: Vector<u32>,
 }
 
 impl GridLayoutTrackCollection {
@@ -720,7 +720,7 @@ impl GridLayoutTrackCollection {
     pub fn Trace(&self, _visitor: &mut Visitor) {}
 
     // cpp: layoutng/internal/grid_track_collection.h:316-317
-    pub(crate) fn IsSpanningIndefiniteSet(&self, begin_set_index: u32, end_set_index: u32) -> bool {
+    pub fn IsSpanningIndefiniteSet(&self, begin_set_index: u32, end_set_index: u32) -> bool {
         unsafe {
             GridLayoutTrackCollectionIsSpanningIndefiniteSet(self, begin_set_index, end_set_index)
         }
@@ -893,8 +893,8 @@ pub type ConstSetIterator = SetIteratorBase<true>;
 #[repr(C)]
 pub struct GridSizingTrackCollection {
     pub base: GridLayoutTrackCollection,
-    pub(crate) non_collapsed_track_count_: u32,
-    pub(crate) sets_: Vector<GridSet>,
+    pub non_collapsed_track_count_: u32,
+    pub sets_: Vector<GridSet>,
 }
 
 impl GridSizingTrackCollection {
@@ -1002,7 +1002,7 @@ impl GridSizingTrackCollection {
         }
     }
 
-    pub(crate) fn BuildSetsFromListsDefaultAvailableSize(
+    pub fn BuildSetsFromListsDefaultAvailableSize(
         &mut self,
         explicit_tracks: &GridTrackList,
         implicit_tracks: &GridTrackList,
@@ -1015,7 +1015,7 @@ impl GridSizingTrackCollection {
         unsafe { GridSizingTrackCollectionInitializeSets(self, grid_available_size) }
     }
 
-    pub(crate) fn InitializeSetsDefault(&mut self) {
+    pub fn InitializeSetsDefault(&mut self) {
         self.InitializeSets(kIndefiniteSize)
     }
 

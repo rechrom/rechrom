@@ -28,6 +28,166 @@ use std::sync::Arc;
 pub mod boundary_types;
 pub mod opaque;
 pub mod trace;
+mod trace_bindings;
+
+/// Fragment data, mounted at the module paths under which base re-exports it
+/// (`layout_core::internal::<module>`; see `layout_core/src/lib.rs`). A module
+/// that base used to reach through a compatibility facade keeps that facade's
+/// shape here (a private source module plus a glob re-export), so the
+/// translated `super::` paths inside the source files resolve unchanged.
+pub mod internal {
+    #[path = "../core/disable_layout_side_effects_scope.rs"]
+    pub mod disable_layout_side_effects_scope;
+    #[path = "../core/hit_test_phase.rs"]
+    pub mod hit_test_phase;
+    #[path = "../core/layout_theme.rs"]
+    pub mod layout_theme;
+    #[path = "../core/map_coordinates_flags.rs"]
+    pub mod map_coordinates_flags;
+    #[path = "../core/selection_state.rs"]
+    pub mod selection_state;
+    #[path = "../core/split_axis_item.rs"]
+    pub mod split_axis_item;
+    #[path = "../core/style_variant.rs"]
+    pub mod style_variant;
+    #[path = "../core/text_decoration_offset.rs"]
+    pub mod text_decoration_offset;
+    #[path = "../core/text_offset_range.rs"]
+    pub mod text_offset_range;
+
+    pub mod exclusions {
+        #[path = "../../core/exclusions/line_layout_opportunity.rs"]
+        pub mod line_layout_opportunity;
+    }
+
+    pub mod gap {
+        pub mod cross_gap {
+            #[path = "../../../cross_gap.rs"]
+            mod layout_fragment_cross_gap;
+            pub use layout_fragment_cross_gap::*;
+        }
+        pub mod gap_intersection {
+            #[path = "../../../gap_intersection.rs"]
+            mod layout_fragment_gap_intersection;
+            pub use layout_fragment_gap_intersection::*;
+        }
+        #[allow(non_upper_case_globals)]
+        pub mod gap_utils {
+            #[path = "../../../gap_utils.rs"]
+            mod layout_fragment_gap_utils;
+            pub use layout_fragment_gap_utils::*;
+        }
+        pub mod main_gap {
+            #[path = "../../../main_gap.rs"]
+            mod layout_fragment_main_gap;
+            pub use layout_fragment_main_gap::*;
+        }
+    }
+
+    pub mod shapes {
+        pub mod shape {
+            #[path = "../../../float/shape.rs"]
+            mod layout_algo_float_shape;
+            pub use layout_algo_float_shape::*;
+        }
+    }
+
+    pub mod break_appeal {
+        #[path = "../../fragmentation/break_appeal.rs"]
+        mod layout_algo_fragmentation_break_appeal;
+        pub use layout_algo_fragmentation_break_appeal::*;
+    }
+    pub mod custom_layout_payload {
+        #[path = "../../custom/custom_layout_payload.rs"]
+        mod layout_algo_custom_custom_layout_payload;
+        pub use layout_algo_custom_custom_layout_payload::*;
+    }
+    pub mod devtools_flex_info {
+        #[path = "../../flex/devtools_flex_info.rs"]
+        mod layout_algo_flex_devtools_flex_info;
+        pub use layout_algo_flex_devtools_flex_info::*;
+    }
+    pub mod form_control_types {
+        #[path = "../../forms/form_control_types.rs"]
+        mod layout_algo_forms_form_control_types;
+        pub use layout_algo_forms_form_control_types::*;
+    }
+    pub mod frame_set_layout_data {
+        #[path = "../../frame_set_layout_data.rs"]
+        mod layout_fragment_frame_set_layout_data;
+        pub use layout_fragment_frame_set_layout_data::*;
+    }
+    pub mod grid_layout_data {
+        #[path = "../../grid/grid_layout_data.rs"]
+        mod layout_algo_grid_grid_layout_data;
+        pub use layout_algo_grid_grid_layout_data::*;
+    }
+    pub mod grid_subtree {
+        #[path = "../../grid/grid_subtree.rs"]
+        mod layout_algo_grid_grid_subtree;
+        pub use layout_algo_grid_grid_subtree::*;
+    }
+    pub mod grid_track_collection {
+        #[path = "../../grid/grid_track_collection_types.rs"]
+        mod layout_algo_grid_grid_track_collection_types;
+        pub use layout_algo_grid_grid_track_collection_types::*;
+    }
+    pub mod inline_item_text_index {
+        #[path = "../../inline/inline_item_text_index.rs"]
+        mod layout_algo_inline_inline_item_text_index;
+        pub use layout_algo_inline_inline_item_text_index::*;
+    }
+    pub mod mathml_paint_info {
+        #[path = "../../mathml_paint_info.rs"]
+        mod layout_fragment_mathml_paint_info;
+        pub use layout_fragment_mathml_paint_info::*;
+    }
+    pub mod outline_info {
+        #[path = "../../outline_info.rs"]
+        mod layout_fragment_outline_info;
+        pub use layout_fragment_outline_info::*;
+    }
+    pub mod table_column_location {
+        #[path = "../../table/table_column_location.rs"]
+        mod layout_algo_table_table_column_location;
+        pub use layout_algo_table_table_column_location::*;
+    }
+    pub mod table_constraint_space_data {
+        #[path = "../../table/table_constraint_space_data.rs"]
+        mod layout_algo_table_table_constraint_space_data;
+        pub use layout_algo_table_table_constraint_space_data::*;
+    }
+    pub mod text_fit_scale {
+        #[path = "../../inline/text_fit_scale.rs"]
+        mod layout_algo_inline_text_fit_scale;
+        pub use layout_algo_inline_text_fit_scale::*;
+    }
+    pub mod text_item_type {
+        #[path = "../../inline/text_item_type.rs"]
+        mod layout_algo_inline_text_item_type;
+        pub use layout_algo_inline_text_item_type::*;
+    }
+    pub mod used_font {
+        #[path = "../../inline/used_font_interface.rs"]
+        mod layout_algo_inline_used_font_interface;
+        pub use layout_algo_inline_used_font_interface::*;
+    }
+}
+
+// Method bodies of fragment data types that the snapshot declared as
+// link-time symbols (`extern "Rust"` in the type's file, `#[no_mangle]`
+// definition in the algorithm package). Both halves now compile here.
+// cpp: layoutng_grid/grid_track_collection.cc
+#[path = "grid/grid_track_collection.rs"]
+pub mod grid_track_collection_implementation;
+// cpp: layoutng_inline/used_font.cc
+#[path = "inline/used_font.rs"]
+mod used_font_implementation;
+// Gap segment-state aggregation over the fragment-owned gap types
+// (`internal::gap`); its trait and inherent impls must sit in the crate that
+// declares `GapSegmentStateAggregator`.
+#[path = "grid/gap_segment_state_aggregator.rs"]
+pub mod grid_gap_segment_state_aggregator;
 
 #[cfg(test)]
 pub(crate) static TRACE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

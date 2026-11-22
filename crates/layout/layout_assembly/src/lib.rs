@@ -58,19 +58,13 @@ mod layout_invalidation_reason_symbols;
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 
-// Grid-owned sources whose only compile unit is this assembly. They stay in
-// `layout_algo_grid/src/` for profiler attribution; `layout_algo_grid/src/lib.rs`
-// re-exports these modules and does not compile the files. Core needs them:
-// gap_segment_state_aggregator.rs holds trait and inherent impls on the
-// core-declared `GapSegmentStateAggregator` (coherence requires the declaring
-// crate), and grid_track_collection.rs defines the `#[no_mangle]` bodies that
-// core's `internal::grid_track_collection` declares as `extern "Rust"`, so
-// they must link with every layout_assembly user, including its own tests.
-#[path = "../../layout_algo_grid/src/gap_segment_state_aggregator.rs"]
-pub mod grid_gap_segment_state_aggregator;
-
-#[path = "../../layout_algo_grid/src/grid_track_collection.rs"]
-pub mod grid_track_collection_implementation;
+// Grid-track-collection and gap-segment-aggregation bodies of fragment data
+// types compile in `layout_fragment` with the types they implement (coherence
+// requires the declaring crate, and the `#[no_mangle]` bodies link with every
+// user of the crate). `layout_algo_grid/src/lib.rs` reaches them through these
+// re-exports.
+pub use layout_fragment::grid_gap_segment_state_aggregator;
+pub use layout_fragment::grid_track_collection_implementation;
 
 #[cfg(test)]
 mod package_contract_tests {
