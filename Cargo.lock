@@ -2528,6 +2528,8 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
+ "layout_geometry",
+ "layout_style",
  "paint_input_types",
  "scroll_snap",
 ]
