@@ -1041,5 +1041,4 @@ impl std::fmt::Display for InvalidationSet {
 }
 
 #[cfg(test)]
-#[path = "invalidation_set_test.rs"]
 mod tests;

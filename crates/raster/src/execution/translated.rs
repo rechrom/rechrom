@@ -5,10 +5,8 @@
 //! replay vocabulary is returned as an error; there is no alternate receiver.
 
 use super::{backend::*, *};
-#[path = "drag_image.rs"]
 mod drag_image;
 pub use drag_image::{ResizeAndOrientDragImage, ResizeDragImageBitmap, ScaleCachedDragImage};
-#[path = "canvas_2d.rs"]
 mod canvas_2d;
 use crate::convert::{resources, ToSkia};
 use crate::raster_commands::commands::{

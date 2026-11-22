@@ -15,32 +15,19 @@ use javascript::javascript_runtime::{
 };
 use layout::input::PaintPathVerb;
 
-#[path = "dom_attributes.rs"]
 mod attributes;
-#[path = "dom_custom_elements.rs"]
 mod custom_elements;
-#[path = "dom_editor_commands.rs"]
 mod editor_commands;
-#[path = "dom_element_internals.rs"]
 mod element_internals;
-#[path = "dom_form_validation.rs"]
 mod form_validation;
-#[path = "dom_host_graph.rs"]
 mod host_graph;
-#[path = "dom_input_event.rs"]
 mod input_event;
-#[path = "dom_range_selection.rs"]
 mod range_selection;
-#[path = "dom_services.rs"]
 mod services;
-#[path = "dom_text_control_selection.rs"]
 mod text_control_selection;
 use host_graph::{DOMHostGraph, LiveCollectionIds};
-#[path = "dom_abort_signals.rs"]
 mod abort_signals;
-#[path = "dom_event_listener_invocation.rs"]
 mod event_listener_invocation;
-#[path = "dom_event_listeners.rs"]
 mod event_listeners;
 use event_listeners::{Listener, ListenerTargets};
 use interaction::scroll::core::frame::event_handler_registry::EventHandlerRegistryTargets;
@@ -49,10 +36,8 @@ pub use services::{
     DOMWindowViewProjector, DocumentFocusState, FrameProperty, FramePropertyGetter,
     TextControlSelectionHost,
 };
-#[path = "viewport_scroll.rs"]
 mod viewport_scroll;
 pub use viewport_scroll::{ViewportScrollBehavior, ViewportScrollState};
-#[path = "dom_native_mutation_observers.rs"]
 mod native_mutation_observers;
 pub use native_mutation_observers::DOMNativeMutationObservers;
 

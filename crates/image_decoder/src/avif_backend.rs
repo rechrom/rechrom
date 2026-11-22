@@ -217,5 +217,4 @@ fn decode_with_limits(bytes: &[u8], limits: Limits) -> io::Result<DecodedImage> 
 }
 
 #[cfg(test)]
-#[path = "avif_backend_tests.rs"]
 mod tests;

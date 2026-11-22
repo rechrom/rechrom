@@ -452,5 +452,4 @@ impl CascadeMap {
 }
 
 #[cfg(test)]
-#[path = "cascade_map_test.rs"]
 mod tests;

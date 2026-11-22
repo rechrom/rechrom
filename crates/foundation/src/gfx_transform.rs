@@ -481,6 +481,6 @@ mod tests {
     }
 }
 
-include!("gfx_transform_rotation_scale.rs");
+mod rotation_scale;
 
-include!("gfx_transform_compositor.rs");
+mod compositor;

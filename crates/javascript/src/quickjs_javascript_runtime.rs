@@ -7,29 +7,19 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::javascript_runtime::*;
-#[path = "quickjs_adapter.rs"]
 mod adapter;
-#[path = "quickjs_module_worker.rs"]
 mod module_worker;
-#[path = "quickjs_native_microtasks.rs"]
 mod native_microtasks;
 pub use adapter::Value as JsValue;
 use adapter::*;
 
-#[path = "quickjs_console.rs"]
 mod console;
-#[path = "quickjs_intl.rs"]
 mod intl;
-#[path = "quickjs_regexp.rs"]
 mod regexp;
-#[path = "script_regexp.rs"]
 pub mod script_regexp;
 
-#[path = "quickjs_bridge_profile.rs"]
 mod bridge_profile;
-#[path = "quickjs_host_graph.rs"]
 mod host_graph;
-#[path = "quickjs_host_namespaces.rs"]
 mod host_namespaces;
 use host_graph::{HostGraph, SynchronizeHostGraph};
 enum WrapperSlot {

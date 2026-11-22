@@ -28,86 +28,47 @@ use layout_style::{
         style_self_alignment_data::StyleSelfAlignmentData,
     },
 };
-#[path = "anchor_application.rs"]
 mod anchor_application;
-#[path = "animation_application.rs"]
 mod animation_application;
-#[path = "border_application.rs"]
 mod border_application;
-#[path = "box_geometry_application.rs"]
 mod box_geometry_application;
-#[path = "column_rule_application.rs"]
 mod column_rule_application;
-#[path = "corner_application.rs"]
 mod corner_application;
-#[path = "grid_application.rs"]
 mod grid_application;
-#[path = "initial_scope_application.rs"]
 mod initial_scope_application;
-#[path = "layout_misc_application.rs"]
 mod layout_misc_application;
-#[path = "line_application.rs"]
 mod line_application;
-#[path = "list_counter_application.rs"]
 mod list_counter_application;
-#[path = "palette_internal_application.rs"]
 mod palette_internal_application;
-#[path = "reflection_application.rs"]
 mod reflection_application;
-#[path = "rule_inset_application.rs"]
 mod rule_inset_application;
-#[path = "scroll_application.rs"]
 mod scroll_application;
-#[path = "stable_misc_application.rs"]
 mod stable_misc_application;
-#[path = "svg_application.rs"]
 mod svg_application;
-#[path = "svg_presentation_application.rs"]
 mod svg_presentation_application;
-#[path = "text_application.rs"]
 mod text_application;
-#[path = "text_box_application.rs"]
 mod text_box_application;
-#[path = "timeline_application.rs"]
 mod timeline_application;
-#[path = "transform_application.rs"]
 mod transform_application;
-#[path = "typography_application.rs"]
 mod typography_application;
-#[path = "viewport_application.rs"]
 mod viewport_application;
-#[path = "writing_direction_application.rs"]
 mod writing_direction_application;
 
-#[path = "font_core_application.rs"]
 mod font_core_application;
 
-#[path = "font_variant_application.rs"]
 mod font_variant_application;
 
-#[path = "border_image_application.rs"]
 mod border_image_application;
-#[path = "color_application.rs"]
 mod color_application;
-#[path = "color_ui_application.rs"]
 mod color_ui_application;
-#[path = "content_application.rs"]
 mod content_application;
-#[path = "effects_application.rs"]
 mod effects_application;
-#[path = "grid_lanes_application.rs"]
 mod grid_lanes_application;
-#[path = "interaction_application.rs"]
 mod interaction_application;
-#[path = "motion_application.rs"]
 mod motion_application;
-#[path = "render_delay_application.rs"]
 mod render_delay_application;
-#[path = "shape_application.rs"]
 mod shape_application;
-#[path = "timeline_trigger_application.rs"]
 mod timeline_trigger_application;
-#[path = "view_transition_application.rs"]
 mod view_transition_application;
 pub use color_ui_application::ColorSchemeSettings;
 

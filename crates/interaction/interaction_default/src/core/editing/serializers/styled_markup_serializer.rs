@@ -552,5 +552,4 @@ where
 }
 
 #[cfg(test)]
-#[path = "styled_markup_serializer_tests.rs"]
 mod tests;

@@ -79,11 +79,9 @@ use std::{
 use crate::element_rule_collector::SearchTextRequest;
 
 #[cfg(test)]
-#[path = "document_style_selector_service_test.rs"]
 mod selector_service_tests;
 
 #[cfg(test)]
-#[path = "document_style_custom_property_ownership_test.rs"]
 mod custom_property_ownership_tests;
 
 // cpp: style_cascade.cc:2351-2390,2924-2930.  Environment lookup is supplied
@@ -9077,7 +9075,6 @@ fn ContainerConditionsMatch(
     })
 }
 
-#[path = "serialization_style_query_impl.rs"]
 mod serialization_style_query_impl;
 
 /// CSS SnappedQueryScrollSnapshot keeps only its two source target identities;

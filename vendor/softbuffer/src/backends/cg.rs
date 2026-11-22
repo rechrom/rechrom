@@ -1,6 +1,5 @@
 //! Softbuffer implementation using CoreGraphics.
 #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
-#[path = "cg_iosurface.rs"]
 mod iosurface;
 use crate::backend_interface::*;
 use crate::error::InitError;

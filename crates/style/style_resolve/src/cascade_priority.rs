@@ -210,5 +210,4 @@ impl Ord for CascadePriority {
 }
 
 #[cfg(test)]
-#[path = "cascade_priority_test.rs"]
 mod tests;

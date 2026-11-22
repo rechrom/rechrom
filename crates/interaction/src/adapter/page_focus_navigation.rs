@@ -52,7 +52,6 @@ use super::{
     page_focus_controller, page_input_type::DefaultActionState,
 };
 
-#[path = "page_focusgroup.rs"]
 mod focusgroup;
 pub use focusgroup::QueryGridFocusgroup;
 pub use interaction_default::core::page::grid_focusgroup_structure_info::{

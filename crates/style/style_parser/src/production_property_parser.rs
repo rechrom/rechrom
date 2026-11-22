@@ -84,74 +84,41 @@ impl CSSParserContextPlatform for ProductionParserPlatform {
     }
 }
 
-#[path = "production_corner_parser.rs"]
 mod corner_parser;
-#[path = "production_initial_scope_parser.rs"]
 mod initial_scope_parser;
 
-#[path = "production_anchor_parser.rs"]
 mod anchor_parser;
-#[path = "production_column_rule_parser.rs"]
 mod column_rule_parser;
-#[path = "production_layout_misc_parser.rs"]
 mod layout_misc_parser;
-#[path = "production_line_parser.rs"]
 mod line_parser;
-#[path = "production_list_counter_parser.rs"]
 mod list_counter_parser;
-#[path = "production_logical_border_parser.rs"]
 mod logical_border_parser;
-#[path = "production_palette_internal_parser.rs"]
 mod palette_internal_parser;
-#[path = "production_reflect_parser.rs"]
 mod reflect_parser;
-#[path = "production_rule_inset_parser.rs"]
 mod rule_inset_parser;
-#[path = "production_scroll_parser.rs"]
 mod scroll_parser;
-#[path = "production_stable_misc_parser.rs"]
 mod stable_misc_parser;
-#[path = "production_svg_parser.rs"]
 mod svg_parser;
-#[path = "production_svg_presentation_parser.rs"]
 mod svg_presentation_parser;
-#[path = "production_text_box_parser.rs"]
 mod text_box_parser;
-#[path = "production_text_parser.rs"]
 mod text_parser;
-#[path = "production_timeline_parser.rs"]
 mod timeline_parser;
-#[path = "production_transform_parser.rs"]
 mod transform_parser;
-#[path = "production_typography_parser.rs"]
 mod typography_parser;
-#[path = "production_viewport_parser.rs"]
 mod viewport_parser;
 
-#[path = "production_font_parser.rs"]
 mod font_parser;
 
-#[path = "production_border_image_parser.rs"]
 mod border_image_parser;
-#[path = "production_color_ui_parser.rs"]
 mod color_ui_parser;
-#[path = "production_effects_parser.rs"]
 mod effects_parser;
-#[path = "production_grid_lanes_parser.rs"]
 mod grid_lanes_parser;
-#[path = "production_grid_parser.rs"]
 mod grid_parser;
-#[path = "production_interaction_parser.rs"]
 mod interaction_parser;
-#[path = "production_mask_parser.rs"]
 mod mask_parser;
-#[path = "production_motion_parser.rs"]
 mod motion_parser;
-#[path = "production_render_delay_parser.rs"]
 mod render_delay_parser;
-#[path = "production_timeline_trigger_parser.rs"]
 mod timeline_trigger_parser;
-#[path = "production_view_transition_parser.rs"]
 mod view_transition_parser;
 
 type Stream<'a, T = CSSTokenizer> = CSSParserTokenStream<'a, T>;

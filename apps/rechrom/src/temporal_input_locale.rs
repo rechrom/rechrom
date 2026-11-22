@@ -32,7 +32,6 @@ pub(crate) fn current(ui_locale: &CStr) -> io::Result<Option<TemporalInputLocale
     }))
 }
 #[cfg(target_os = "windows")]
-#[path = "temporal_input_locale_windows.rs"]
 mod windows;
 
 #[cfg(target_vendor = "apple")]

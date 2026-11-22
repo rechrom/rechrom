@@ -57,7 +57,6 @@ use paint_model::paint_property_tree::{
 };
 use paint_model::{DisplayMaskLayer, ResolveDocumentImageContainerKey};
 
-#[path = "paint_property_tree_builder.rs"]
 mod paint_property_tree_builder;
 
 use paint_property_tree_builder::PaintPropertyTreeBuilder;

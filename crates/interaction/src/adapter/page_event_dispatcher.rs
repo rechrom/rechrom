@@ -1,43 +1,25 @@
 //! Page contract adapter for the canonical Chromium EventDispatcher.
 //! Propagation, retargeting, activation order and cleanup stay in dispatch.
 
-#[path = "page_clipboard_commands.rs"]
 mod clipboard_commands;
-#[path = "page_editor_command_queries.rs"]
 mod editor_command_queries;
-#[path = "page_editor_commands.rs"]
 mod editor_commands;
-#[path = "page_editor_target_ranges.rs"]
 pub(crate) mod editor_target_ranges;
-#[path = "page_event_handler_frame_services.rs"]
 pub mod event_handler_frame_services;
-#[path = "page_event_handler_pointer.rs"]
 pub mod event_handler_pointer;
-#[path = "page_gesture_mouse_defaults.rs"]
 pub(crate) mod gesture_mouse_defaults;
-#[path = "page_gesture_selection.rs"]
 pub(crate) mod gesture_selection;
-#[path = "page_insert_link_commands.rs"]
 mod insert_link_commands;
-#[path = "page_list_indent_commands.rs"]
 mod list_indent_commands;
-#[path = "page_mouse_selection.rs"]
 pub(crate) mod mouse_selection;
-#[path = "page_mouse_selection_services.rs"]
 pub(crate) mod mouse_selection_services;
-#[path = "page_pointer_dom_effects.rs"]
 pub mod pointer_dom_effects;
-#[path = "page_pointer_event_manager.rs"]
 mod pointer_input;
-#[path = "page_style_commands.rs"]
 mod style_commands;
 pub use pointer_input::PointerInputError;
-#[path = "page_gesture_event_manager.rs"]
 pub mod gesture_input;
-#[path = "page_gesture_mouse_frame_services.rs"]
 pub(crate) mod mouse_frame_services;
 
-#[path = "page_mouse_drag.rs"]
 pub(crate) mod mouse_drag;
 use super::{
     dom_event::{DomEventPaths, DomEventTargets},
@@ -1005,7 +987,6 @@ impl dom::node_removal_observer::DocumentNodeRemovalObserver for PageNodeRemoval
     }
 }
 
-#[path = "page_dispatch_ports.rs"]
 mod ports;
 // cpp: interaction/event_dispatcher.h:16-21
 #[derive(Clone, Copy, Default, Debug)]

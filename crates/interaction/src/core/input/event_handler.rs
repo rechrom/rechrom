@@ -2159,8 +2159,6 @@ impl<'scope, R: EventHandlerHitResult> LocatedContextMenuSource for EventHandler
     }
 }
 
-#[path = "event_handler_gesture.rs"]
 pub mod gesture;
 
-#[path = "event_handler_nonlocated_context_menu.rs"]
 pub mod nonlocated_context_menu;

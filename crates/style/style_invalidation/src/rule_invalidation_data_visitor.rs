@@ -347,5 +347,4 @@ pub enum FeatureInvalidationType {
 }
 
 #[cfg(test)]
-#[path = "rule_invalidation_data_visitor_test.rs"]
 mod tests;

@@ -1149,5 +1149,4 @@ impl SelectorQueryCache {
 }
 
 #[cfg(test)]
-#[path = "selector_query_test.rs"]
 mod tests;

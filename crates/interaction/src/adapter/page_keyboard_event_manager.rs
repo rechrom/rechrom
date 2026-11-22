@@ -11,12 +11,9 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-#[path = "page_keyboard_caps_lock.rs"]
 mod caps_lock;
 pub use caps_lock::UpdatePasswordCapsLockIndicator;
-#[path = "page_editor_key_bindings.rs"]
 mod editing_keyboard;
-#[path = "page_keyboard_keycodes.rs"]
 mod keycodes;
 
 use dom::UserInteractionState;

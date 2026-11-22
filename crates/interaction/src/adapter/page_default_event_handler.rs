@@ -1,5 +1,4 @@
 //! Page-facing default-action adapters over the live DOM and source owners.
-#[path = "page_anchor_default.rs"]
 mod anchor;
 
 use crate::{

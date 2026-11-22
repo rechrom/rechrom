@@ -2,7 +2,6 @@
 //! markup_accumulator.h:55–167; markup_accumulator.cc:93–630,702–785. The adapter borrows
 //! canonical node/attribute storage; traversal never creates another DOM tree.
 use super::markup_formatter::{self as fmt, ResolveUrls, SerializationType};
-#[path = "markup_namespace.rs"]
 mod markup_namespace;
 use markup_namespace::NamespaceState;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,5 +258,4 @@ pub fn CreateMarkup<D: MarkupDocument>(
 }
 
 #[cfg(test)]
-#[path = "markup_accumulator_tests.rs"]
 mod tests;

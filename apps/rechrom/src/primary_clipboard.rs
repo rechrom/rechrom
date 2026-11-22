@@ -338,14 +338,10 @@ mod standard {
 }
 
 #[cfg(target_os = "linux")]
-#[path = "primary_clipboard_x11.rs"]
 mod x11;
 
-#[path = "primary_clipboard_formats.rs"]
 mod formats;
 #[cfg(target_os = "linux")]
-#[path = "primary_clipboard_linux.rs"]
 mod linux;
 #[cfg(target_os = "windows")]
-#[path = "primary_clipboard_windows.rs"]
 mod windows;

@@ -8,7 +8,6 @@ use super::{
     navigate_event::{NavigateEventEnvironment, NavigateEventOwner},
     navigate_event_dispatch_params::*,
 };
-#[path = "navigation_api_methods.rs"]
 mod methods;
 use crate::bindings::core::v8::script_promise::{ScriptInvocation, ScriptNativeObject};
 use crate::core::html::anchor_element_utils::{

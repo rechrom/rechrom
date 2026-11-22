@@ -4144,7 +4144,7 @@
               577
             ]
           ],
-          "rust": "crates/dom/src/layout_mapping/svg_clip_path_graph.rs; crates/layoutng/layout_fragment/src/clip_path_paint_export.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_clip_path.rs",
+          "rust": "crates/dom/src/layout_mapping/svg_clip_path_graph.rs; crates/layoutng/layout_fragment/src/clip_path_paint_export.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_clip_path.rs",
           "note": "TreeScope SVG resource resolution, CSS/SVG paint-offset choice, zoomed reference boxes, static basic-shape and single SVG-shape paths, user/object-space transforms, bounds and property clips are represented on the single Layout-to-PrePaint path"
         },
         {
@@ -4242,7 +4242,7 @@
               95
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/clip_path_paint_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_clip_path.rs",
+          "rust": "crates/layoutng/layout_fragment/src/clip_path_paint_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_clip_path.rs",
           "note": "static path reference boxes, path bounds, authored path construction and the internal path-based clip contract cross Layout into PrePaint and the shared paint model"
         },
         {
@@ -4296,7 +4296,7 @@
               90
             ]
           ],
-          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/geometry.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
+          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/geometry.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
           "note": "infinite/reset state, finite conversion, intersections, radius propagation, movement and rectangle hit containment are carried by optional clips and immutable clip property nodes"
         },
         {
@@ -4332,7 +4332,7 @@
               96
             ]
           ],
-          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/geometry.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
+          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/geometry.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
           "note": "None/property-node identity represents infinity; PaintRect plus clip-node radii represents rect/radius state; intersection, movement and empty/hit containment use shared geometry"
         },
         {
@@ -4404,7 +4404,7 @@
               424
             ]
           ],
-          "rust": "crates/paint/prepaint/src/compositing_reason_finder.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/layoutng/layoutng_foundation/src/graphics_types/graphics/compositing_reasons.rs",
+          "rust": "crates/paint/prepaint/src/compositing_reason_finder.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/layoutng/layoutng_foundation/src/graphics_types/graphics/compositing_reasons.rs",
           "note": "will-change property classification, supported transform-animation object admission, active animation reasons including important-opacity exclusion, 3D transform/translate/rotate/scale reasons, printing suppression, SVG/property-node reason selection, backdrop filters and supported LCD-text preference are translated; builder nodes intersect the complete supported reason set with Chromium property-role combos; native LayoutObject additional compositing reasons cross the fragment boundary unchanged"
         },
         {
@@ -4564,7 +4564,7 @@
               205
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/contoured_border_geometry.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/contoured_border_geometry.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "radius length/percentage resolution, included edges, Chromium corner-curvature export, constrained ordinary round corners, unsnapped outer geometry and border-width inner insets map through the retained fragment style"
         },
         {
@@ -4772,7 +4772,7 @@
               657
             ]
           ],
-          "rust": "crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/layoutng/layout_fragment/src/scroll_paint_property_refresh.rs; crates/browser/src/persistent_layout.rs",
+          "rust": "crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/layoutng/layout_fragment/src/scroll_paint_property_refresh.rs; crates/browser/src/persistent_layout.rs",
           "note": "DPR expansion, retained self/contents culls, previous-PaintResult repaint scheduling on cull change, active-transform and previously-fully-painted non-composited-transform infinite-cull decisions, scroll hysteresis, root/descendant traversal, absolute/fixed contexts, display-lock stopping, fragment mapping, and transform/clip/scroll change admission are carried by the single Layout -> PrePaint retained chain"
         },
         {
@@ -4942,7 +4942,7 @@
               88
             ]
           ],
-          "rust": "crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
+          "rust": "crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
           "note": "the source entity remains in prepaint: PrePaintTreeWalk owns root/recursive traversal and current/absolute/fixed inherited contexts, CullRectUpdater owns self/contents projection and hysteresis, and native fragment revisions carry property-change/forced-descendant work"
         },
         {
@@ -6681,7 +6681,7 @@
               79
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/cc/paint/filter_operation.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/raster/src/native/translated.rs; crates/raster/src/svg_filter_graph.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/paint_model/src/cc/paint/filter_operation.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/raster/src/native/translated.rs; crates/raster/src/svg_filter_graph.rs",
           "note": "the builder inputs and three behavior surfaces are split across the preserved package boundaries: Layout exports already-resolved style/resource values, PrePaint owns reference geometry and canonical Effect publication, Paint owns the immutable filter value, and Raster executes it. Shorthand scale, currentColor, color scheme, SVG fill/stroke paint, and the explicit inherited input_tainted seed are retained before the immutable canonical value is published"
         },
         {
@@ -6993,7 +6993,7 @@
               2892
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/inline_cursor.rs; crates/layoutng/layout_fragment/src/layout_object_scroll_container_queries.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/layoutng/layoutng/src/internal/layout_box_model_object.rs; crates/layoutng/layout_invalidation/src/layout_box_model_layer_invalidation.rs; crates/layoutng/layout_fragment/src/layout_box_model_scrollable_area.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/paint_model/src/paint_result.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs; crates/paint/paint_walk/src/paint_layer_painter.rs; crates/paint/paint_record/src/paint_under_invalidation_checker.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/inline_cursor.rs; crates/layoutng/layout_fragment/src/layout_object_scroll_container_queries.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/layoutng/layoutng/src/internal/layout_box_model_object.rs; crates/layoutng/layout_invalidation/src/layout_box_model_layer_invalidation.rs; crates/layoutng/layout_fragment/src/layout_box_model_scrollable_area.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/paint_model/src/paint_result.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/cull_rect_updater.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs; crates/paint/paint_walk/src/paint_layer_painter.rs; crates/paint/paint_record/src/paint_under_invalidation_checker.rs",
           "note": "construction, DisplayItemClient debug/owner/filter queries, exact filter-moves-pixels/reference-filter computation from authoritative style, retained transform rebuild/style-change core/current transform, exact containing-layer, painting-container, containing-scroll-container and enclosing-self-painting-layer traversal derived from the authoritative LayoutObject tree, block-fragment box admission and enclosing-node lookup, visibility/ancestor descendant-dependent/compositing-input dirtiness, PaintLayer-owned descendant aggregate caches and their prepaint update walk, stacked-child 3D-descendant status, self-painting visual-overflow-recalc admission and consumption through LayoutObject virtual dispatch, self-painting transitions, native backdrop-filter reference boxes from LayoutInline line fragments or LayoutBox border geometry, LocalBoundingBox() from the true LayoutBoxModelObject visual-overflow virtual plus LayoutView viewport union, display-lock-aware self-painting-descendant bounds expansion across non-self-painting layer bridges with native transforms, filter geometry, coordinate mapping and overflow-clip admission, exact inline/stitched-box/SVG-foreign-object filter viewport selection, immutable PrePaint export of the pixel-moving filter reference box and viewport with retained-revision change detection, effective-zoom removal before compositor filter construction, canonical compositor-filter construction and retained reuse keyed by reference geometry, and Chromium's ordered backdrop-filter plus ordinary-filter combination excluding the foreground-only appended box reflection; the native SupportsSubsequenceCaching admission policy now feeds PaintLayerPainter's real scoped subsequence recording/reuse path, while cached visible-content/view-transition query, position-visibility bit updates with layer-client invalidation, exact ancestor-position-visibility traversal to the nearest stacking context, top-layer forwarding, layout admission, PaintLayer-owned scroll-area admission/post-layout update, derived stacking lists, retained cull-dirty propagation and trace ownership are translated without adding another mutable PaintLayer link tree"
         },
         {
@@ -7111,7 +7111,7 @@
         {
           "status": "translated",
           "lines": [[144,150],[258,258],[480,480],[489,490],[492,492],[504,505],[507,511],[514,515],[558,559],[576,576],[700,700],[926,926],[928,937],[940,944],[946,951],[953,954],[965,972],[974,974],[980,981],[985,993],[996,1003],[1005,1007],[1009,1011],[1013,1013],[1015,1019],[1021,1021],[1023,1023],[1025,1028],[1030,1037],[1039,1041],[1043,1044],[1047,1048],[1050,1050],[1052,1055],[1093,1094],[1312,1313],[1316,1317],[1319,1321],[1323,1324],[1332,1340],[1362,1362],[1365,1370],[1372,1377],[1383,1384],[1388,1397],[1400,1405],[1521,1531],[1536,1540],[1545,1548],[1550,1551],[1555,1563],[1566,1574],[1577,1577],[1580,1581],[1584,1586],[1588,1591],[1603,1606],[1609,1610],[1615,1616],[1619,1625],[1629,1637],[1649,1652],[1660,1661],[1663,1689],[1691,1700],[1702,1708],[1711,1719],[1721,1721],[1723,1724],[1731,1743],[1745,1746],[1748,1760],[1762,1763],[1765,1765],[1767,1768],[1771,1780],[1782,1788],[1790,1791],[1793,1802],[1804,1809],[1812,1813],[1822,1830],[1835,1840],[1842,1848],[1850,1863],[1865,1865],[1868,1871],[1873,1873],[1877,1877],[1885,1888],[1909,1923],[1925,1927],[1942,1943],[1945,1956],[1959,1961],[1984,1989],[2014,2034],[2036,2039],[2041,2042],[2086,2086],[2095,2101],[2152,2161],[2163,2172],[2174,2177],[2179,2193],[2329,2329],[2338,2344],[2346,2348],[2357,2363],[2365,2368],[2379,2384],[2395,2402],[2423,2424],[2427,2430],[2432,2433],[2458,2461],[2486,2492],[2495,2497],[2499,2503],[2505,2507],[2509,2510],[2512,2512],[2517,2519],[2527,2531],[2536,2539],[2545,2549],[2551,2555],[2558,2564],[2566,2570],[2596,2604],[2606,2607],[2609,2611],[2614,2616],[2640,2641],[2667,2667],[2678,2678],[2695,2695],[2817,2822],[2824,2825],[2832,2832]],
-          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_invalidation/src/layout_box_model_lifecycle.rs; crates/interaction/interaction_hit_test/src/core/paint/paint_layer_hit_test.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_invalidation/src/layout_box_model_lifecycle.rs; crates/interaction/interaction_hit_test/src/core/paint/paint_layer_hit_test.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
           "note": "Completes source accounting for native fragment collection and ordinary point-event hit testing, inverse paint-layer order, overflow-control priority, 2D transform mapping, fragment phase dispatch, ancestor rounded clipping, immutable style/filter/effect rebuilding, view-transition visibility, derived z-order invalidation, and retained paint-result handling."
         },
         {
@@ -7449,7 +7449,7 @@
         {
           "status": "translated",
           "lines": [[77,78],[83,84],[86,91],[216,216],[229,229],[259,262],[319,321],[330,335],[349,349],[352,352],[363,364],[366,366],[449,449],[455,457],[494,500],[503,507],[533,533],[535,535],[539,539],[549,549],[556,556],[670,670],[689,691],[698,702],[704,704],[734,734],[753,754],[772,772],[775,775],[779,779],[785,785],[858,859],[861,867],[869,869],[871,874]],
-          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_layer.rs; crates/layoutng/layout_fragment/src/paint_layer_transform.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_paint_order_iterator.rs",
           "note": "Paint-order groups, transform update, compositor-filter rebuilding, reference geometry, paint-phase aggregates, derived z-order visibility, bounds expansion, filter facts, overlay-control state and position-visibility ancestor semantics are represented across existing typed package boundaries."
         },
         {
@@ -7489,7 +7489,7 @@
               244
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/geometry_mapper.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/geometry_mapper.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
           "note": "overflow predicates, property-space layer offsets, background/foreground clip separation, root clip choice, overlay-scrollbar modes, visual overflow mapping and embedded-content rounded overflow are represented by retained property states and PaintWalk scopes"
         },
         {
@@ -7547,7 +7547,7 @@
               196
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_walk/src/paint_layer_painter.rs",
           "note": "root/fragment clip context, border-box versus contents properties, layer offsets, background/foreground clips and overflow decisions are retained across the Layout-to-PrePaint boundary rather than recomputed by PaintWalk"
         },
         {
@@ -9067,7 +9067,7 @@
               4701
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
       "note": "manually verified sticky/SVG/effect IDs, mask/filter IDs, native PaintLayer filter-reference update hook, overflow clip, scroll metadata, scrollbar effects and global fixed-background reason"
         },
         {
@@ -9142,7 +9142,7 @@
               880
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs",
           "note": "native box/inline/containment facts, supported NeedsPaintOffsetTranslation branches, axis-aware subpixel propagation, persistent PaintOffsetTranslation slot and invalidator delta handoff"
         },
         {
@@ -9223,7 +9223,7 @@
               1714
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/compositing_reason_finder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_input.rs; crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/compositing_reason_finder.rs",
           "note": "independent Translate, Rotate, Scale, Offset and legacy Transform payloads, property slots, source order, transform origins, per-role compositor element IDs and direct-reason intersections now map one-to-one; motion path exports only the Offset matrix rather than a fabricated combined Transform"
         },
         {
@@ -9262,7 +9262,7 @@
               1694
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "missing-fragment synthetic geometry, compositor animation axis-alignment mutation, exact running-on-compositor animation state, direct cc transform mutation, layout-shift accumulation and deferred update queues remain unsupported; none uses a substitute path"
         },
         {
@@ -9341,7 +9341,7 @@
               2730
             ]
           ],
-          "rust": "crates/paint/prepaint/src/compositing_reason_finder.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
+          "rust": "crates/paint/prepaint/src/compositing_reason_finder.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
           "note": "verified primary Effect and Filter existence from direct reasons, identity-node retention, mask/output-clip ordering, inherited tainted/drawable-canvas state, currentColor origin-taint rejection inside Canvas draw-element subtrees, old/new own-filter taint comparison with isolation-piercing descendant rebuild, authored payloads, native stitched PaintLayer filter-reference geometry and output bounds, per-property compositor IDs, source intersections, additional transform trigger and pixel-moving filter clip-expander wiring"
         },
         {
@@ -9416,7 +9416,7 @@
               2727
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "PaintLayer descendant-blend/SVG isolation, view-transition backdrop hoisting, mask image loading state, direct cc mutation, exact compositor-running animation state and SVG resource-client filter caching are not exported; no substitute branch is used"
         },
         {
@@ -9491,7 +9491,7 @@
               3341
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/boundary_types.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/scrollable_area_painter.rs",
+          "rust": "crates/layoutng/layout_fragment/src/boundary_types.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/scrollable_area_painter.rs",
           "note": "verified CSS clip, replaced/ordinary/SVG overflow-clip predicates, native clip-axis and replaced-type inputs, separate persistent InnerBorderRadiusClip and OverflowClip slots, overflow-control-only clip, background clip, overflow-clip-margin rounded geometry, embedded-content sizing and descendant context ordering"
         },
         {
@@ -9542,7 +9542,7 @@
               3333
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "CSS border-shape paths, LocalFrame::ClipsContent, missing-actual-fragment fallback, stitched-fragment clip offsets, non-round contoured clip paths, video pre-snapping and overscroll clip-parent metadata remain unsupported; no inferred substitute branch is used"
         },
         {
@@ -9557,7 +9557,7 @@
               3418
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
+          "rust": "crates/layoutng/layout_fragment/src/paint_style_export.rs; crates/layoutng/layout_fragment/src/paint_input.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
           "note": "verified perspective origin/depth, child-space ordering, non-flattening descendant context and SVG-root ReplacedContentTransform slot"
         },
         {
@@ -9572,7 +9572,7 @@
               3400
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "frozen-frame LayoutEmbeddedContent transform is not exported; no identity or SVG transform is substituted"
         },
         {
@@ -9655,7 +9655,7 @@
               4627
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/boundary_types.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/compositing_reason_finder.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/boundary_types.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/compositing_reason_finder.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "verified Scroll/ScrollTranslation orchestration and clearing, exact ScrollPosition matrix plus ScrollOrigin child paint offset, main-thread scroll metadata, overlay scrollbar effect creation/clearing, tainted/drawable-canvas state inheritance, Canvas opacity-animation suppression and retained property state"
         },
         {
@@ -9726,7 +9726,7 @@
               3927
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
           "note": "overscroll-area ContentTranslation/parent tracking, scrollbar-gutter origin payload, native snap data, retained scrolling cull rect, view-transition scrollbar parenting, scroll-corner effect, pending anchor adjustment, direct cc scroll mutation, non-root out-of-flow contexts, CssClipFixedPosition and true Transform/Effect/Clip alias isolation nodes remain unsupported; no identity geometry nodes are substituted for aliases"
         },
         {
@@ -9749,7 +9749,7 @@
               530
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/paint_layer_scrollable_area.rs; crates/paint/paint_model/src/paint_property_tree.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/layoutng/layout_fragment/src/fragment_geometry_export.rs; crates/layoutng/layout_fragment/src/paint_layer_scrollable_area.rs; crates/paint/paint_model/src/paint_property_tree.rs",
           "note": "root sentinel context, sticky-ancestor compositor identity, frame-root inherited contexts and the exact Scroll/ScrollTranslation existence predicate are retained; the Layout boundary now exports non-propagating and non-zero scroll owners instead of inferring them from visible overflow"
         },
         {
@@ -9836,7 +9836,7 @@
               4313
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/sticky_paint_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
+          "rust": "crates/layoutng/layout_fragment/src/sticky_paint_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
           "note": "sticky ancestor lookup, rounded PaintOffset-plus-sticky matrix, retained local remainder, compositor constraint geometry/IDs, kCanvasChild drawable-subtree propagation, transform source order and self-property update ordering now follow UpdateForObjectLocation and UpdateStickyTranslation"
         },
         {
@@ -9923,7 +9923,7 @@
               1308
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/compositing_reason_finder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/compositing_reason_finder.rs",
           "note": "ordinary SVG-child transform need, native LocalToSVGParentTransform payload, direct-reason intersection, SVG property identity and descendant flatten/rendering-context reset are retained in the SVG-local transform role"
         },
         {
@@ -9982,7 +9982,7 @@
               469
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs",
           "note": "builder inputs, native actual-fragment traversal, paint-offset reset, per-kind property change retention and stable compositor element IDs are represented by the retained builder and PropertyNodeUpdater store"
         },
         {
@@ -10097,7 +10097,7 @@
               1955
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "verified static clip-path eligibility, style effect fallback, primary-effect orchestration, ordinary no-PaintLayer output-clip use and the default current-clip result; these are retained in BuildNode without a second compatibility path"
         },
         {
@@ -10172,7 +10172,7 @@
               2591
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
           "note": "verified style/effect-mask compositor identity, post-effect and MaskClip context propagation, and the false fallback of the filter-existence predicate"
         },
         {
@@ -10231,7 +10231,7 @@
               2889
             ]
           ],
-          "rust": "crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
           "note": "verified static clip-path bounds/path creation, SVG-child zero paint-offset rule, property-node construction, absent-node clearing by rebuild, and descendant clip-context propagation; SVG foreignObject remains on the CSS box path"
         },
         {
@@ -10458,7 +10458,7 @@
               4433
             ]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_model/src/property_filter_operations.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs",
           "note": "verified common box-model backdrop-filter population, including the printing exclusion, authored operation payload, output bounds, mask compositor identity and origin-taint rejection inside Canvas draw-element subtrees"
         },
         {
@@ -10563,7 +10563,7 @@
               4312
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_reuse/src/pre_paint_state_compare.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_reuse/src/pre_paint_state_compare.rs",
           "note": "verified replaced-content paint-offset eligibility, paint-offset direct reasons/parent, LocalBorderBox state persistence and node-added/removed comparison, SVG-root descendant paint-offset reset, scroll repaint reasons, scrollbar output-clip parenting, ordinary position/fragment offsets, size-dependent property revision, reflection recomputation, paint-offset descendant invalidation and anonymous-node 3D flattening"
         },
         {
@@ -10782,7 +10782,7 @@
               4950
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/paint/prepaint/src/box_paint_invalidator.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_reuse/src/pre_paint_state_compare.rs; crates/paint/paint_record/src/scoped_svg_paint_state.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/paint/prepaint/src/box_paint_invalidator.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/paint_reuse/src/pre_paint_state_compare.rs; crates/paint/paint_record/src/scoped_svg_paint_state.rs",
           "note": "verified child backface/property update order, ordinary OOF child context, supported property-existence predicates, persistent slot ensure/clear and change classification, hidden SVG resource separation, fragment/layer ownership, direct reasons, fixed-background scroll propagation, retained old-scroll state, builder orchestration, subtree property-state invalidation, document background invalidation and cull-rect refresh"
         },
         {
@@ -10978,7 +10978,7 @@
               474
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/paint_model/src/paint_property_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
           "note": "containing-block transform/paint-offset/clip/scroll state, fixed and absolute contexts, subpixel delta, fragmentation occurrence inputs, effect/flatten/backface/3D context, tainted and drawable-Canvas subtree state, subtree-force state, FragmentData occurrence data, property change aggregation and the main self/children builder lifecycle are represented in the retained native-fragment PrePaint builder"
         },
         {
@@ -11152,7 +11152,7 @@
               1583
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/layoutng/layout_fragment/src/fragment_cursor_children.rs; crates/layoutng/layout_fragment/src/fragment_paint_population.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/src/paint_engine.rs; crates/layoutng/layout_commit/src/client_commit.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/layoutng/layout_fragment/src/fragment_cursor_children.rs; crates/layoutng/layout_fragment/src/fragment_paint_population.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/paint/src/paint_engine.rs; crates/layoutng/layout_commit/src/client_commit.rs",
           "note": "root and descendant admission, delayed invalidation commit, tree-builder dirty predicates, stable FragmentData occurrence identity, OOF containing contexts, physical/inline child traversal, missed OOF recovery, multicol fragmentainers, display-lock stopping, retained subtree reuse and paint-flag revision commit are translated over the resident native fragment graph"
         },
         {
@@ -11338,7 +11338,7 @@
               283
             ]
           ],
-          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/layoutng/layout_fragment/src/fragment_cursor_children.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
+          "rust": "crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/paint_invalidator.rs; crates/layoutng/layout_fragment/src/fragment_cursor_children.rs; crates/layoutng/layout_fragment/src/fragment_relationship_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs",
           "note": "the native PhysicalFragment/FragmentItem cursor is the PrePaint traversal source; retained inherited contexts, dirty-revision admission, paint invalidation, stable fragment instances, logical OOF occurrences, and fragmentation-container contexts implement the source walker responsibilities without a copied paint tree input"
         },
         {
@@ -11546,7 +11546,7 @@
               209
             ]
           ],
-          "rust": "crates/paint/paint_record/src/scoped_svg_paint_state.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/svg_container_painter.rs; crates/paint/paint_walk/src/paint_layer_painter.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/paint_record/src/scoped_svg_paint_state.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/box_fragment_painter.rs; crates/paint/paint_record/src/svg_container_painter.rs; crates/paint/paint_walk/src/paint_layer_painter.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "SVG transform/property scope, foreground effect admission, stable reference-filter paint behavior and empty chunk creation, root/foreignObject PaintLayer ownership, property-state selection, and post-content SVG mask recording follow the source lifecycle without synthesizing a CSS PaintLayer"
         },
         {
@@ -13936,7 +13936,7 @@
               444
             ]
           ],
-          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/compositor/src/runtime/paint/conversion_nodes.rs; crates/compositor/src/runtime/paint/artifact_nodes.rs; crates/compositor/src/runtime/paint/property_state.rs; crates/compositor/src/runtime/paint/pending_nodes.rs",
+          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/compositor/src/runtime/paint/conversion_nodes.rs; crates/compositor/src/runtime/paint/artifact_nodes.rs; crates/compositor/src/runtime/paint/property_state.rs; crates/compositor/src/runtime/paint/pending_nodes.rs",
           "note": "Filter/BackdropFilter information and Effect State are published fields; source update/accessor/predicate behavior lives on EffectPaintPropertyNode, including animation/will-change reasons, backdrop/content decisions, validated transition/capture IDs, taint/drawable flags and nested Canvas-child paint/content state, while compositor files only project package-boundary values"
         },
         {
@@ -16728,7 +16728,7 @@
               132
             ]
           ],
-          "rust": "crates/paint/paint_record/src/paint_controller_debug_data.rs; crates/paint/paint_record/src/paint_controller.rs; crates/paint/paint_record/src/paint_under_invalidation_checker.rs",
+          "rust": "crates/paint/paint_record/src/paint_controller/paint_controller_debug_data.rs; crates/paint/paint_record/src/paint_controller.rs; crates/paint/paint_record/src/paint_under_invalidation_checker.rs",
           "note": "PaintArtifactAsJSON walks the source preorder subsequence tree recursively, skips unfinished markers, emits intervening chunks with the selected DisplayItemList JSON option, and labels the retained current and in-progress new artifacts. Compact/default/paint-record entry points retain the source options, and under-invalidation failures include the complete current/new snapshot."
         },
         {
@@ -19207,7 +19207,7 @@
               7293
             ]
           ],
-          "rust": "crates/style/style_parser/src/production_viewport_parser.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
+          "rust": "crates/style/style_parser/src/production_property_parser/viewport_parser.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
           "note": "object-view-box accepts none plus inset(), rect() and xywh(), rejects other basic-shape kinds, and keeps the typed value for computed-style conversion"
         }
       ]
@@ -19225,7 +19225,7 @@
               706
             ]
           ],
-          "rust": "crates/style/style_parser/src/production_effects_parser.rs; crates/style/style_parser/src/production_effects_value.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
+          "rust": "crates/style/style_parser/src/production_property_parser/effects_parser.rs; crates/style/style_parser/src/production_effects_value.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
           "note": "the shared typed basic-rectangle consumers preserve one-to-four inset expansion, exact rect edges including auto, non-negative xywh width/height, common round radii, restoring block consumption and invalid-input rejection"
         }
       ]
@@ -19243,7 +19243,7 @@
               721
             ]
           ],
-          "rust": "crates/style/style_resolve/src/effects_application.rs; crates/style/style_resolve/src/viewport_application.rs; crates/layoutng/layout_algo_replaced/src/layout_replaced.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
+          "rust": "crates/style/style_resolve/src/production_style_builder/effects_application.rs; crates/style/style_resolve/src/production_style_builder/viewport_application.rs; crates/layoutng/layout_algo_replaced/src/layout_replaced.rs; crates/style/style/tests/production_viewport.rs; crates/browser/tests/layout_image_opacity.rs",
           "note": "inset converts directly to BasicShapeInset; rect lowers right/bottom coordinates to complementary insets with auto at the reference-box edge; xywh lowers x/y/width/height to the equivalent inset calculations; all retain corner radii and apply effective zoom once before LayoutReplaced consumes the shape"
         }
       ]
@@ -19261,7 +19261,7 @@
               3509
             ]
           ],
-          "rust": "crates/style/style_resolve/src/viewport_application.rs; crates/style/style_resolve/src/effects_application.rs; crates/style/style/tests/production_viewport.rs",
+          "rust": "crates/style/style_resolve/src/production_style_builder/viewport_application.rs; crates/style/style_resolve/src/production_style_builder/effects_application.rs; crates/style/style/tests/production_viewport.rs",
           "note": "only inset, rect and xywh reach BasicShapeForValue and the native ComputedStyle ObjectViewBox member"
         }
       ]
@@ -19301,7 +19301,7 @@
               493
             ]
           ],
-          "rust": "crates/style/style_parser/src/production_effects_value.rs; crates/style/style_parser/src/production_effects_parser.rs; crates/style/style/tests/production_viewport.rs",
+          "rust": "crates/style/style_parser/src/production_effects_value.rs; crates/style/style_parser/src/production_property_parser/effects_parser.rs; crates/style/style/tests/production_viewport.rs",
           "note": "xywh serialization, value equality and non-negative literal validation match the typed production CSS value; explicit C++ GC TraceAfterDispatch is ownership plumbing rather than a separate Rust runtime behavior"
         }
       ]
@@ -25574,7 +25574,7 @@
               265
             ]
           ],
-          "rust": "crates/paint/paint_record/src/paint_under_invalidation_checker.rs; crates/paint/paint_record/src/paint_controller.rs; crates/paint/paint_record/src/paint_controller_debug_data.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/display_item.rs",
+          "rust": "crates/paint/paint_record/src/paint_under_invalidation_checker.rs; crates/paint/paint_record/src/paint_controller.rs; crates/paint/paint_record/src/paint_controller/paint_controller_debug_data.rs; crates/paint/paint_record/src/paint_context.rs; crates/paint/paint_record/src/display_item.rs",
           "note": "controller-owned checker state avoids a self-reference while retaining the source call direction; cache admission starts forced item checking, exact item/subtype/PaintRecord equality gates replacement, item failures include the source artifact-aware new/old debug strings and current/new artifact snapshot, the repainted flat PaintOp range is discarded, the cached item is moved with a real tombstone, cache skipping resets both match cursors, and subsequence item/chunk/length checks follow the source state machine"
         },
         {
@@ -26224,7 +26224,7 @@
             [44, 58],
             [61, 98]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "Layout exports Chromium's object-wide maximum CSS mask region for boxes, fragmented inline line bounds and SVGForeignObject, including no-clip self-painting descendants and mask-box-image outsets; PrePaint applies the fragment paint offset, uses that exact region for MaskClip, leaves no-clip layers unclipped, and retains the existing SVG resource/visual-bounds path for ordinary SVG children"
         },
         {
@@ -27112,7 +27112,7 @@
             [63, 72],
             [83, 84]
           ],
-          "rust": "crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/layoutng/layout_fragment/src/retained_paint_refresh.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/layoutng/layout_fragment/src/fragment_tree.rs; crates/layoutng/layout_fragment/src/fragment_property_export.rs; crates/layoutng/layout_fragment/src/pre_paint_revision.rs; crates/layoutng/layout_fragment/src/retained_paint_refresh.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "Fragment paint data retains the filter reference box and optional filter viewport in their stitched local coordinate space. Layout snapshots the same PaintLayer-derived values, retained revisions compare them, refresh preserves them, and PrePaint consumes them when building filter effect nodes; None remains meaningful for the viewport."
         },
         {
@@ -28299,7 +28299,7 @@
             [502, 551],
             [576, 592]
           ],
-          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/paint_property_tree_builder.rs",
+          "rust": "crates/paint/paint_model/src/paint_property_tree.rs; crates/paint/prepaint/src/pre_paint_tree_walk.rs; crates/paint/prepaint/src/pre_paint_tree_walk/paint_property_tree_builder.rs",
           "note": "PaintPropertyNodeStore is the retained ObjectPaintProperties owner: fragment owner plus role names one transform/scroll/effect/clip slot, update preserves entity identity and reports the maximum Chromium change category, and finish removes unseen slots as node-add/remove. The supported transform, CSS transform, perspective, replaced-content, scroll, ordinary effect/filter/mask, scrollbar effect and clip roles mirror the source hierarchy; CSS transform roles are built outside-to-inside. Store/type iteration, direct transform-and-origin/opacity updates, getters and ordinary create-or-update semantics are resident, with immutable snapshots replacing in-place mutation while cached artifact references are rebound to current nodes."
         },
         {

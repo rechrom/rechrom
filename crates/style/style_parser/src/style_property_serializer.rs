@@ -680,15 +680,9 @@ impl StylePropertySerializer<'_> {
     }
 }
 
-#[path = "style_property_serializer_basic.rs"]
 mod basic;
-#[path = "style_property_serializer_border.rs"]
 mod border;
-#[path = "style_property_serializer_font.rs"]
 mod font;
-#[path = "style_property_serializer_gap.rs"]
 mod gap;
-#[path = "style_property_serializer_grid.rs"]
 mod grid;
-#[path = "style_property_serializer_layered.rs"]
 mod layered;
