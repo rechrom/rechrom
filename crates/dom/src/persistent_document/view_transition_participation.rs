@@ -9,7 +9,6 @@
 //! implemented here. Their original source commit points admit identities via
 //! the methods below; a CSS name alone never admits an active participant.
 use super::*;
-#[path = "view_transition_css_discovery.rs"]
 mod css_discovery;
 pub use css_discovery::{
     ViewTransitionCSSDiscoveryError, ViewTransitionCSSLayerFacts, ViewTransitionCSSPaintOrder,

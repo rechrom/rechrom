@@ -1,6 +1,6 @@
 //! Mask URL resource lifecycle through the real document/Style/Layout/Paint pipeline.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};

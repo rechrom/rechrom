@@ -1,8 +1,8 @@
 //! Exercise the production DecodeEngine/image_decoder boundary, resource load,
 //! and paint independently. PNG pixels are the pinned libyuv oracle, not a
 //! second invocation of the Rust converter under test.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 use browser::page::Page;
 use image_decoder::{
     image_decoder::{DecodedImage, ImageDecodeInput, ImageDecoder},

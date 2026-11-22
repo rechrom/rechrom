@@ -11,7 +11,6 @@ use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use std::cell::RefMut;
 use std::collections::HashSet;
 
-#[path = "display_lock_forced_scope.rs"]
 mod forced_scope;
 pub use forced_scope::{DisplayLockForcedEffect, DisplayLockForcedScopeHandle};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

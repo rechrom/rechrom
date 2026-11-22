@@ -1,5 +1,5 @@
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use layout::{LayoutEngine, input::{ComputedStyle, Display, ElementData, NodeKind}, testing::{LayoutObject, LayoutObjectTree, LayoutInputReplaced, LayoutView}, mutation::{LayoutMutation, LayoutTreeUpdate}};
 

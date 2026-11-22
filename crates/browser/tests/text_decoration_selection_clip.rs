@@ -1,8 +1,8 @@
 //! Originating text decorations clip out selection while selection-phase
 //! decorations retain the Chromium under-text / glyph / line-through order.
 
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType, Offset};

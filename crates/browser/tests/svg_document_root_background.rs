@@ -1,7 +1,7 @@
 //! SVG document images keep their root background on the SVG element.
 
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use std::sync::Arc;
 

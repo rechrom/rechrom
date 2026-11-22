@@ -130,8 +130,8 @@ fn contextual_fallback_roundtrips_exact_ttc_faces() {
         }
     }
 }
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 #[test]
 fn page_settles_system_font_requests_before_publishing_glyphs() {
     test_thread::run(|| {

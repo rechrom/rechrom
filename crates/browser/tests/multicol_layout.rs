@@ -1,7 +1,7 @@
 //! UA button alignment must survive the canonical cascade and subsequent
 //! author/style mutations. Check both ComputedStyle and published geometry.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::{paint::FragmentPaintData, fragment::ResidentBoxGeometry as _, input::{FontFace, Offset}};

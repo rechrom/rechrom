@@ -1,6 +1,6 @@
 //! Multi-layer sprite geometry must reach native style and document-image replay.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::{Page, PreferredColorScheme};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};

@@ -49,7 +49,6 @@ enum HashAlgorithm {
     Sha512,
     Ed25519,
 }
-#[path = "content_security_policy_trusted_types.rs"]
 mod trusted_types;
 pub use trusted_types::TrustedTypePolicyDetails;
 

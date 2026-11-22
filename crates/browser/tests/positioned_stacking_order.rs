@@ -1,7 +1,7 @@
 //! Derived z-index eligibility must reach native layout and paint order through
 //! the production Style owner, including later style changes.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use foundation::DynamicTo;

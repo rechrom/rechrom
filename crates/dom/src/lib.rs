@@ -3,18 +3,6 @@
 // Test linkage to the real replaced-object provider used by browser layout.
 #[cfg(test)]
 extern crate layout as _;
-
-// Compile the canonical HTML implementation against this unit-test DOM,
-// rather than importing a second non-test DOM through an html dev-dependency.
-#[cfg(test)]
-extern crate self as dom;
-#[cfg(test)]
-#[path = "../../html/src/lib.rs"]
-pub(crate) mod test_html;
-// The shared HTML sources use these original crate-root module paths.
-#[cfg(test)]
-pub(crate) use test_html::{html_parser_host, html_tag_names, parser, text_decoder};
-
 pub mod user_interaction_state;
 pub use user_interaction_state::{InteractionStateMutation, UserInteractionState};
 pub mod use_counter;

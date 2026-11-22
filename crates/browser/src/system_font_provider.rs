@@ -17,13 +17,10 @@ use font_engine::{
 };
 
 #[cfg(target_os = "linux")]
-#[path = "system_font_provider_linux.rs"]
 mod linux;
 #[cfg(target_os = "macos")]
-#[path = "system_font_provider_macos.rs"]
 mod macos;
 #[cfg(target_os = "windows")]
-#[path = "system_font_provider_windows.rs"]
 mod windows;
 
 #[derive(Clone, Debug, PartialEq)]

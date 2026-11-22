@@ -1,8 +1,8 @@
 //! Author properties and native input properties coexist through production Page.
 //! Native HTML construction keeps fragment-parser namespace concerns out of this fixture.
 //! https://webidl.spec.whatwg.org/#es-attributes
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::{Page, PageClient, ScriptEnvironment};
 use javascript::{
