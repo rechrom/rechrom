@@ -974,11 +974,9 @@ that distinction instead of describing composition modules as independently
 compiled packages. Cargo package names, library names, dependency keys, source
 paths, and trace prefixes deliberately use the same names where a real package
 boundary exists; compatibility aliases are not allowed because they make
-profiles and dependency reports ambiguous. The composition-only dependency key
-`layout_fragment_boundary` is a temporary exception in the two `_assembly`
-crates: it distinguishes the real standalone crate from their
-`extern crate self as layout_fragment` source-translation alias, and is not
-re-exported as a compatibility package.
+profiles and dependency reports ambiguous. The two `_assembly` crates depend on
+`layout_fragment` under its own name; the former `layout_fragment_boundary`
+key and the `extern crate self as layout_fragment` alias are gone.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
