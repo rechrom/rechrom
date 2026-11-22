@@ -8,8 +8,7 @@ use layout_core::internal::layout_object::LayoutObject;
 use layout_core::internal::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
 
 // cpp: layoutng_inline/text_overflow_layout_service.cc:41-71
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(
+pub fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(
     flow: *const LayoutBlockFlow,
 ) -> bool {
     let flow = unsafe { &*flow };

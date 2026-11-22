@@ -184,7 +184,7 @@ pub mod testing {
     };
     pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
     pub use layout_assembly::internal::layout_view::LayoutView;
-    pub use layout_algo_inline::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    pub use layout_assembly::internal::layout_block_flow::text_overflow_members::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
     pub use layout_assembly::internal::css_zoom::ZoomedStyle;
     pub use layout_assembly::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }

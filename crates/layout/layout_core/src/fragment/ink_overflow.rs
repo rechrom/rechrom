@@ -868,8 +868,7 @@ fn ExpandForShadowOverflow(
 }
 
 // Source: core/layout/ink_overflow.cc:519-541.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InkOverflowComputeEmphasisMarkOverflowForTextCombine(
+pub fn InkOverflowComputeEmphasisMarkOverflowForTextCombine(
     style: &ComputedStyle,
     size: &PhysicalSize,
     ink_overflow_in: &LogicalRect,
@@ -878,8 +877,7 @@ pub extern "Rust" fn InkOverflowComputeEmphasisMarkOverflowForTextCombine(
 }
 
 // Source: core/layout/ink_overflow.cc:543-554.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InkOverflowExpandForShadowOverflowForTextCombine(
+pub fn InkOverflowExpandForShadowOverflowForTextCombine(
     ink_overflow: &mut LogicalRect,
     text_shadow: &ShadowList,
     writing_mode: WritingMode,
@@ -888,8 +886,7 @@ pub extern "Rust" fn InkOverflowExpandForShadowOverflowForTextCombine(
 }
 
 // Source: core/layout/ink_overflow.cc:557-591,664-727.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InkOverflowComputeDecorationOverflowForTextCombine(
+pub fn InkOverflowComputeDecorationOverflowForTextCombine(
     cursor: &InlineCursor,
     style: &ComputedStyle,
     used_font: &UsedFont,

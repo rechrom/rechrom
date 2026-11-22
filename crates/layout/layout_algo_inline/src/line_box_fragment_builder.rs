@@ -3,6 +3,8 @@
 // physical_line_box_fragment_builder.cc source file.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use std::ops::{Deref, DerefMut};
 
 use font_engine::FontHeight;
@@ -72,13 +74,8 @@ impl LayoutAlgorithmCoreBuilder<InlineBreakToken> for LineBoxFragmentBuilder {
     }
 }
 
-// The PhysicalLineBoxFragment::Create definition belongs to
-// physical_line_box_fragment_builder.cc, which is not yet translated.
-unsafe extern "Rust" {
-    fn PhysicalLineBoxFragmentCreateFromInline(
-        builder: &mut LineBoxFragmentBuilder,
-    ) -> *const PhysicalLineBoxFragment;
-}
+// PhysicalLineBoxFragment::Create (physical_line_box_fragment_builder.cc).
+use crate::physical_line_box_fragment_builder::PhysicalLineBoxFragmentCreateFromInline;
 
 impl LineBoxFragmentBuilder {
     // cpp: layoutng_inline/line_box_fragment_builder.h:27-42
@@ -254,7 +251,7 @@ impl LineBoxFragmentBuilder {
         self.base_.Finalize();
         let writing_mode = ToLineWritingMode(self.base_.GetWritingMode());
         self.base_.writing_direction_.SetWritingMode(writing_mode);
-        let fragment = unsafe { PhysicalLineBoxFragmentCreateFromInline(self) };
+        let fragment = PhysicalLineBoxFragmentCreateFromInline(self);
         MakeGarbageCollected(LayoutResultFromLineBoxFragmentBuilder(
             fragment.cast(),
             self,
@@ -268,8 +265,7 @@ impl LineBoxFragmentBuilder {
 }
 
 // cpp: layoutng_inline/line_box_fragment_builder.cc:24-65
-#[unsafe(no_mangle)]
-pub extern "Rust" fn FragmentBuilderAddOutOfFlowInlineChildCandidate(
+pub fn FragmentBuilderAddOutOfFlowInlineChildCandidate(
     builder: &mut FragmentBuilder,
     child: BlockNode,
     child_offset: &LogicalOffset,
@@ -326,4 +322,36 @@ pub fn LayoutResultFromLineBoxFragmentBuilder(
         result.EnsureRareData().trim_block_end_by_ = trim;
     }
     result
+}
+
+// cpp: layoutng_fragment_tree/fragment_builder.h:250-254
+// FragmentBuilder (base) declares this member; its body lives in
+// line_box_fragment_builder.cc and only inline layout calls it, so the inline
+// package carries it as an extension (imported with `crate::algorithms`).
+pub trait FragmentBuilderInlineAlgorithms {
+    fn AddOutOfFlowInlineChildCandidate(
+        &mut self,
+        child: BlockNode,
+        child_offset: &LogicalOffset,
+        inline_container_writing_direction: WritingDirectionMode,
+        line_box_block_size: LayoutUnit,
+    );
+}
+
+impl FragmentBuilderInlineAlgorithms for FragmentBuilder {
+    fn AddOutOfFlowInlineChildCandidate(
+        &mut self,
+        child: BlockNode,
+        child_offset: &LogicalOffset,
+        inline_container_writing_direction: WritingDirectionMode,
+        line_box_block_size: LayoutUnit,
+    ) {
+        FragmentBuilderAddOutOfFlowInlineChildCandidate(
+            self,
+            child,
+            child_offset,
+            inline_container_writing_direction,
+            line_box_block_size,
+        )
+    }
 }

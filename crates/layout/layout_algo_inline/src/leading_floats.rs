@@ -1,6 +1,8 @@
 // C++: layoutng_inline/leading_floats.h.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{HeapVector, Member, Traceable, Visitor, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;
 use layout_core::internal::positioned_float::PositionedFloat;

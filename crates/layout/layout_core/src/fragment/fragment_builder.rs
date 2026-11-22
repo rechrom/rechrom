@@ -53,15 +53,6 @@ use crate::physical_box_fragment::PhysicalBoxFragment;
 use crate::physical_fragment::{BoxType, FragmentType, PhysicalFragment};
 use crate::physical_line_box_fragment::PhysicalLineBoxFragment;
 
-unsafe extern "Rust" {
-    fn FragmentBuilderAddOutOfFlowInlineChildCandidate(
-        builder: &mut FragmentBuilder,
-        child: BlockNode,
-        child_offset: &LogicalOffset,
-        inline_container_writing_direction: WritingDirectionMode,
-        line_box_block_size: LayoutUnit,
-    );
-}
 
 // cpp: layoutng_fragment_tree/fragment_builder.cc:53-58
 #[allow(non_snake_case)]
@@ -1106,24 +1097,9 @@ impl FragmentBuilder {
     }
 
     // cpp: layoutng_fragment_tree/fragment_builder.h:250-254
-    // The definition belongs to //src/layoutng_inline/line_box_fragment_builder.cc.
-    pub fn AddOutOfFlowInlineChildCandidate(
-        &mut self,
-        child: BlockNode,
-        child_offset: &LogicalOffset,
-        inline_container_writing_direction: WritingDirectionMode,
-        line_box_block_size: LayoutUnit,
-    ) {
-        unsafe {
-            FragmentBuilderAddOutOfFlowInlineChildCandidate(
-                self,
-                child,
-                child_offset,
-                inline_container_writing_direction,
-                line_box_block_size,
-            )
-        }
-    }
+    // AddOutOfFlowInlineChildCandidate is defined by the inline package
+    // (line_box_fragment_builder.cc), only inline layout calls it:
+    // `layout_algo_inline::line_box_fragment_builder::FragmentBuilderInlineAlgorithms`.
 
     // cpp: layoutng_fragment_tree/fragment_builder.h:244-245
     // cpp: layoutng_fragment_tree/fragment_builder.cc:646-653

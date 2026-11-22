@@ -3,6 +3,8 @@
 // C++-style RAII guard is alive; Drop restores the saved annotation and offset.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{DynamicTo, HeapVector, MakeGarbageCollected, Member, String};
 use layout_core::internal::layout_node_metadata::Node;
 use layout_core::internal::layout_object::LayoutObject;

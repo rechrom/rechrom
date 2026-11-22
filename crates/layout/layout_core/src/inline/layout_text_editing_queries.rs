@@ -19,8 +19,7 @@ fn AssociatedNode(text: &LayoutText) -> Option<&Node> {
 fn Mapping(text: &LayoutText) -> Option<&OffsetMapping> {
     unsafe { OffsetMapping::GetForLayoutObject(text as *const _ as *const LayoutObject).as_ref() }
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextPositionForCaretOffset(text: &LayoutText, offset: u32) -> Position {
+pub fn LayoutTextPositionForCaretOffset(text: &LayoutText, offset: u32) -> Position {
     if let Some(fragment) = Fragment(text) {
         return LayoutTextFragmentPositionForCaretOffset(fragment, offset);
     }
@@ -44,8 +43,7 @@ pub extern "Rust" fn LayoutTextPositionForCaretOffset(text: &LayoutText, offset:
         offset.min(text.OriginalTextLength()) as usize,
     )
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCaretOffsetForPosition(
+pub fn LayoutTextCaretOffsetForPosition(
     text: &LayoutText,
     position: &Position,
 ) -> Option<u32> {
@@ -70,8 +68,7 @@ pub extern "Rust" fn LayoutTextCaretOffsetForPosition(
         _ => None,
     }
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextFragmentPositionForCaretOffset(
+pub fn LayoutTextFragmentPositionForCaretOffset(
     fragment: &LayoutTextFragment,
     offset: u32,
 ) -> Position {
@@ -83,8 +80,7 @@ pub extern "Rust" fn LayoutTextFragmentPositionForCaretOffset(
         (fragment.Start() + offset.min(fragment.FragmentLength())) as usize,
     )
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextFragmentCaretOffsetForPosition(
+pub fn LayoutTextFragmentCaretOffsetForPosition(
     fragment: &LayoutTextFragment,
     position: &Position,
 ) -> Option<u32> {
@@ -101,15 +97,13 @@ pub extern "Rust" fn LayoutTextFragmentCaretOffsetForPosition(
     (fragment.Start() <= offset && offset <= fragment.Start() + fragment.FragmentLength())
         .then(|| offset - fragment.Start())
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextNonCollapsedCaretMaxOffset(text: &LayoutText) -> u32 {
+pub fn LayoutTextNonCollapsedCaretMaxOffset(text: &LayoutText) -> u32 {
     if text.IsBR() {
         return 1;
     }
     text.OriginalTextLength()
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCaretMinOffset(text: &LayoutText) -> usize {
+pub fn LayoutTextCaretMinOffset(text: &LayoutText) -> usize {
     if text.IsBR() {
         return 0;
     }
@@ -126,8 +120,7 @@ pub extern "Rust" fn LayoutTextCaretMinOffset(text: &LayoutText) -> usize {
         _ => 0,
     }
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCaretMaxOffset(text: &LayoutText) -> usize {
+pub fn LayoutTextCaretMaxOffset(text: &LayoutText) -> usize {
     if text.IsBR() {
         return 1;
     }
@@ -145,8 +138,7 @@ pub extern "Rust" fn LayoutTextCaretMaxOffset(text: &LayoutText) -> usize {
         _ => length as usize,
     }
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextResolvedTextLength(text: &LayoutText) -> u32 {
+pub fn LayoutTextResolvedTextLength(text: &LayoutText) -> u32 {
     let (Some(mapping), Some(node)) = (Mapping(text), AssociatedNode(text)) else {
         return 0;
     };
@@ -161,12 +153,10 @@ pub extern "Rust" fn LayoutTextResolvedTextLength(text: &LayoutText) -> u32 {
     debug_assert!(start <= end);
     end - start
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextHasNonCollapsedText(text: &LayoutText) -> bool {
+pub fn LayoutTextHasNonCollapsedText(text: &LayoutText) -> bool {
     text.ResolvedTextLength() != 0
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextIsBeforeNonCollapsedCharacter(
+pub fn LayoutTextIsBeforeNonCollapsedCharacter(
     text: &LayoutText,
     offset: u32,
 ) -> bool {
@@ -179,8 +169,7 @@ pub extern "Rust" fn LayoutTextIsBeforeNonCollapsedCharacter(
     let position = text.PositionForCaretOffset(offset);
     !position.IsNull() && mapping.IsAdjacentToNonCollapsedContentForNode(node, &position, true)
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextIsAfterNonCollapsedCharacter(
+pub fn LayoutTextIsAfterNonCollapsedCharacter(
     text: &LayoutText,
     offset: u32,
 ) -> bool {
@@ -193,8 +182,7 @@ pub extern "Rust" fn LayoutTextIsAfterNonCollapsedCharacter(
     let position = text.PositionForCaretOffset(offset);
     !position.IsNull() && mapping.IsAdjacentToNonCollapsedContentForNode(node, &position, false)
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextContainsCaretOffset(text: &LayoutText, offset: i32) -> bool {
+pub fn LayoutTextContainsCaretOffset(text: &LayoutText, offset: i32) -> bool {
     if offset < 0 || offset as u32 > text.NonCollapsedCaretMaxOffset() {
         return false;
     }

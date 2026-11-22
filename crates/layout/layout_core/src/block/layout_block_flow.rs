@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 
 use std::ops::{Deref, DerefMut};
 
@@ -67,15 +67,27 @@ struct SameSizeAsLayoutBlockFlow {
 const _: [(); std::mem::size_of::<LayoutBlockFlow>()] =
     [(); std::mem::size_of::<SameSizeAsLayoutBlockFlow>()];
 
+// Chromium core/layout/layout_block_flow.cc (ShouldTruncateOverflowingText).
+#[cfg(feature = "translation_in_progress")]
+#[path = "text_overflow_layout_service.rs"]
+pub mod text_overflow_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::text_overflow_members::{
+    LayoutBlockFlowShouldTruncateOverflowingTextFromInline,
+};
+#[cfg(not(feature = "translation_in_progress"))]
+unsafe extern "Rust" {
+
+    fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(flow: *const LayoutBlockFlow)
+        -> bool;
+}
 unsafe extern "Rust" {
     fn DispatchLayoutBlockFlowAllowsInlineChildren(flow: *const LayoutBlockFlow) -> bool;
     fn DispatchLayoutBlockFlowAllowsColumns(flow: *const LayoutBlockFlow) -> bool;
     fn DispatchLayoutBlockFlowCreatesNewFormattingContext(flow: *const LayoutBlockFlow) -> bool;
     fn DispatchLayoutBlockFlowIsFragmentationContextRoot(flow: *const LayoutBlockFlow) -> bool;
     fn DispatchLayoutBlockFlowWillCollectInlines(flow: *mut LayoutBlockFlow);
-
-    fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(flow: *const LayoutBlockFlow)
-        -> bool;
 
     fn LayoutBlockFlowPositionForPoint(
         flow: *const LayoutBlockFlow,

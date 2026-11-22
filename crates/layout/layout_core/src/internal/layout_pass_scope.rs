@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::layout_algorithm_set::{
-    FloatLayoutSupport, LayoutAlgorithmSet, MathMLSupport, SvgLayoutSupport,
+    FloatLayoutSupport, InlineLayoutSupport, LayoutAlgorithmSet, MathMLSupport, SvgLayoutSupport,
 };
 use super::layout_object_factory_set::LayoutObjectFactorySet;
 use foundation::UnsupportedLayout;
@@ -66,6 +66,11 @@ thread_local! {
     // Likewise the MathML queries (operator metrics, fraction rule) that
     // MathMLPainter's data reads from the stored MathMLPaintInfo.
     static RESIDENT_MATHML_SUPPORT: Cell<MathMLSupport> = Cell::new(MathMLSupport::default());
+    // Likewise the inline queries base calls after layout (offset mappings for
+    // editing and selection). Layout runs a pass before any such query, so the
+    // last installed set is the one that laid the document out.
+    static RESIDENT_INLINE_SUPPORT: Cell<InlineLayoutSupport> =
+        Cell::new(InlineLayoutSupport::default());
 }
 
 // cpp: layoutng/internal/layout_pass_scope.h:38-61
@@ -100,6 +105,8 @@ impl LayoutPassScope {
             RESIDENT_SVG_SUPPORT.with(|resident| resident.set(svg_support));
             let mathml_support = unsafe { &*algorithms }.mathml_support;
             RESIDENT_MATHML_SUPPORT.with(|resident| resident.set(mathml_support));
+            let inline_support = unsafe { &*algorithms }.inline_support;
+            RESIDENT_INLINE_SUPPORT.with(|resident| resident.set(inline_support));
         }
         Self {
             previous_algorithms_: previous_algorithms,
@@ -125,6 +132,16 @@ impl LayoutPassScope {
             RESIDENT_MATHML_SUPPORT.with(Cell::get)
         } else {
             unsafe { &*algorithms }.mathml_support
+        }
+    }
+
+    /// The inline queries for post-layout readers (see ResidentSvgSupport).
+    pub fn ResidentInlineSupport() -> InlineLayoutSupport {
+        let algorithms = Self::Algorithms();
+        if algorithms.is_null() {
+            RESIDENT_INLINE_SUPPORT.with(Cell::get)
+        } else {
+            unsafe { &*algorithms }.inline_support
         }
     }
 

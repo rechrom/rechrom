@@ -1,84 +1,123 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 
 use font_engine::{
     Font, FontFallbackPriority, HarfBuzzShaper, RenderOrientation, RunSegmenter, RunSegmenterRange,
     ShapeOptions, ShapeResult,
 };
-use foundation::{HeapVector, Member, String, TextDirection, TextOffsetMap, Vector, Visitor};
+use foundation::{HeapVector, MakeGarbageCollected, Member, String, TextDirection, TextOffsetMap, Vector, Visitor};
 
 use super::super::inline_item::InlineItem;
 
-// Non-inline bodies are owned by //src/layoutng_inline/inline_item_segment.cc.
-unsafe extern "Rust" {
-    fn InlineItemSegmentNewFromRange(range: &RunSegmenterRange) -> InlineItemSegment;
-    fn InlineItemSegmentNewFromItem(end_offset: u32, item: &InlineItem) -> InlineItemSegment;
-    fn InlineItemSegmentToRunSegmenterRange(
-        segment: &InlineItemSegment,
-        start_offset: u32,
-        end_offset: u32,
-    ) -> RunSegmenterRange;
-    fn InlineItemSegmentPackSegmentData(range: &RunSegmenterRange) -> u32;
-    fn InlineItemSegmentUnpackSegmentData(
-        start_offset: u32,
-        end_offset: u32,
-        value: u32,
-    ) -> RunSegmenterRange;
-    fn InlineItemSegmentsClone(segments: &InlineItemSegments) -> *mut InlineItemSegments;
-    fn InlineItemSegmentsOffsetForSegment(
-        segments: &InlineItemSegments,
-        segment: &InlineItemSegment,
-    ) -> u32;
-    fn InlineItemSegmentsComputeSegments(
-        segments: &mut InlineItemSegments,
-        segmenter: *mut RunSegmenter,
-        range: *mut RunSegmenterRange,
-    );
-    fn InlineItemSegmentsAppendMixedFontOrientation(
-        segments: &mut InlineItemSegments,
-        text_content: &String,
-        start_offset: u32,
-        end_offset: u32,
-        segment_index: u32,
-    ) -> u32;
-    fn InlineItemSegmentsAdjustOffsets(
-        segments: &mut InlineItemSegments,
-        offset_map: &TextOffsetMap,
-    );
-    fn InlineItemSegmentsComputeItemIndex(
-        segments: &mut InlineItemSegments,
-        items: &HeapVector<Member<InlineItem>>,
-    );
-    fn InlineItemSegmentsRanges<'a>(
-        segments: &'a InlineItemSegments,
-        start_offset: u32,
-        end_offset: u32,
-        item_index: u32,
-    ) -> InlineItemSegmentsIterator<'a>;
-    fn InlineItemSegmentsShapeText(
-        segments: &InlineItemSegments,
-        shaper: *const HarfBuzzShaper,
-        font: *const Font,
-        direction: TextDirection,
-        start_offset: u32,
-        end_offset: u32,
-        item_index: u32,
-        options: ShapeOptions,
-    ) -> *mut ShapeResult;
-    fn InlineItemSegmentsPopulateItemsFromFontOrientation(
-        segments: &mut InlineItemSegments,
-        start_offset: u32,
-        end_offset: u32,
-        orientation: RenderOrientation,
-        segment_index: u32,
-    ) -> u32;
-    fn InlineItemSegmentsSplit(segments: &mut InlineItemSegments, index: u32, offset: u32);
-    #[cfg(debug_assertions)]
-    fn InlineItemSegmentsCheckOffset(
-        segments: &InlineItemSegments,
-        offset: u32,
-        segment: *const InlineItemSegment,
-    );
+// R5: the record members of InlineItemSegment(s) (packing, construction,
+// clone; snapshot layoutng_inline/inline_item_segment.cc) are defined here,
+// with the fragment-tree data that stores them. Segmentation, orientation,
+// splitting and shaping are inline-algorithm code:
+// `layout_algo_inline::inline_item_segment::InlineItemSegmentsAlgorithms`.
+// cpp: layoutng_inline/inline_item_segment.cc:18-34
+const SCRIPT_BITS: u32 = InlineItemSegment::kScriptBits;
+const PRIORITY_BITS: u32 = InlineItemSegment::kFontFallbackPriorityBits;
+const ORIENTATION_BITS: u32 = InlineItemSegment::kRenderOrientationBits;
+const SCRIPT_MASK: u32 = (1 << SCRIPT_BITS) - 1;
+const PRIORITY_MASK: u32 = (1 << PRIORITY_BITS) - 1;
+const ORIENTATION_MASK: u32 = (1 << ORIENTATION_BITS) - 1;
+const _: () =
+    assert!(InlineItemSegment::kSegmentDataBits == SCRIPT_BITS + ORIENTATION_BITS + PRIORITY_BITS);
+
+// cpp: layoutng_inline/inline_item_segment.cc:48-50
+fn InlineItemSegmentNewFromRange(range: &RunSegmenterRange) -> InlineItemSegment {
+    InlineItemSegment::new(range.end, InlineItemSegment::PackSegmentData(range))
 }
+
+// cpp: layoutng_inline/inline_item_segment.cc:52-54
+fn InlineItemSegmentNewFromItem(
+    end_offset: u32,
+    item: &InlineItem,
+) -> InlineItemSegment {
+    InlineItemSegment::new(end_offset, item.SegmentData())
+}
+
+// cpp: layoutng_inline/inline_item_segment.cc:56-72
+fn InlineItemSegmentPackSegmentData(range: &RunSegmenterRange) -> u32 {
+    debug_assert!(range.script == -1 || (range.script >= 0 && range.script as u32 <= SCRIPT_MASK));
+    debug_assert!((range.font_fallback_priority as u32) <= PRIORITY_MASK);
+    debug_assert!((range.render_orientation as u32) <= ORIENTATION_MASK);
+    let mut value = if range.script == -1 {
+        SCRIPT_MASK
+    } else {
+        range.script as u32
+    };
+    value <<= PRIORITY_BITS;
+    value |= range.font_fallback_priority as u32;
+    value <<= ORIENTATION_BITS;
+    value |= range.render_orientation as u32;
+    value
+}
+
+// cpp: layoutng_inline/inline_item_segment.cc:74-89
+fn InlineItemSegmentUnpackSegmentData(
+    start_offset: u32,
+    end_offset: u32,
+    mut value: u32,
+) -> RunSegmenterRange {
+    let orientation = value & ORIENTATION_MASK;
+    value >>= ORIENTATION_BITS;
+    let priority = value & PRIORITY_MASK;
+    value >>= PRIORITY_BITS;
+    let script = value & SCRIPT_MASK;
+    RunSegmenterRange {
+        start: start_offset,
+        end: end_offset,
+        script: if script == SCRIPT_MASK {
+            -1
+        } else {
+            script as i32
+        },
+        render_orientation: match orientation {
+            0 => RenderOrientation::kOrientationKeep,
+            1 => RenderOrientation::kOrientationRotateSideways,
+            _ => panic!("invalid packed render orientation"),
+        },
+        font_fallback_priority: match priority {
+            0 => FontFallbackPriority::kText,
+            1 => FontFallbackPriority::kEmojiText,
+            2 => FontFallbackPriority::kEmojiTextWithVS,
+            3 => FontFallbackPriority::kEmojiEmoji,
+            4 => FontFallbackPriority::kEmojiEmojiWithVS,
+            5 => FontFallbackPriority::kInvalid,
+            _ => panic!("invalid packed font fallback priority"),
+        },
+    }
+}
+
+// cpp: layoutng_inline/inline_item_segment.cc:91-98
+fn InlineItemSegmentToRunSegmenterRange(
+    segment: &InlineItemSegment,
+    start_offset: u32,
+    end_offset: u32,
+) -> RunSegmenterRange {
+    debug_assert!(start_offset < end_offset);
+    debug_assert!(start_offset < segment.end_offset_);
+    InlineItemSegment::UnpackSegmentData(
+        start_offset,
+        end_offset.min(segment.end_offset_),
+        segment.segment_data_,
+    )
+}
+
+// cpp: layoutng_inline/inline_item_segment.cc:100-105
+fn InlineItemSegmentsClone(
+    segments: &InlineItemSegments,
+) -> *mut InlineItemSegments {
+    let clone = MakeGarbageCollected(InlineItemSegments::default());
+    unsafe { &mut *clone }
+        .segments_
+        .extend_from_slice(&segments.segments_);
+    unsafe { &mut *clone }
+        .items_to_segments_
+        .extend_from_slice(&segments.items_to_segments_);
+    clone
+}
+
 
 // cpp: layoutng/internal/inline_item_segment.h:37-77
 #[derive(Clone)]
@@ -172,9 +211,6 @@ impl InlineItemSegments {
         self.segments_.is_empty()
     }
 
-    pub fn OffsetForSegment(&self, segment: &InlineItemSegment) -> u32 {
-        unsafe { InlineItemSegmentsOffsetForSegment(self, segment) }
-    }
 
     pub fn EndOffset(&self) -> u32 {
         self.segments_
@@ -195,89 +231,10 @@ impl InlineItemSegments {
         self.segments_.push(segment);
     }
 
-    // cpp: layoutng/internal/inline_item_segment.h:119-177
-    pub fn ComputeSegments(&mut self, segmenter: *mut RunSegmenter, range: *mut RunSegmenterRange) {
-        unsafe { InlineItemSegmentsComputeSegments(self, segmenter, range) }
-    }
-
-    pub fn AppendMixedFontOrientation(
-        &mut self,
-        text_content: &String,
-        start_offset: u32,
-        end_offset: u32,
-        segment_index: u32,
-    ) -> u32 {
-        unsafe {
-            InlineItemSegmentsAppendMixedFontOrientation(
-                self,
-                text_content,
-                start_offset,
-                end_offset,
-                segment_index,
-            )
-        }
-    }
-
-    pub fn AdjustOffsets(&mut self, offset_map: &TextOffsetMap) {
-        unsafe { InlineItemSegmentsAdjustOffsets(self, offset_map) }
-    }
-
-    pub fn ComputeItemIndex(&mut self, items: &HeapVector<Member<InlineItem>>) {
-        unsafe { InlineItemSegmentsComputeItemIndex(self, items) }
-    }
-
-    pub fn Ranges(
-        &self,
-        start_offset: u32,
-        end_offset: u32,
-        item_index: u32,
-    ) -> InlineItemSegmentsIterator<'_> {
-        unsafe { InlineItemSegmentsRanges(self, start_offset, end_offset, item_index) }
-    }
-
-    pub fn ShapeText(
-        &self,
-        shaper: *const HarfBuzzShaper,
-        font: *const Font,
-        direction: TextDirection,
-        start_offset: u32,
-        end_offset: u32,
-        item_index: u32,
-        options: ShapeOptions,
-    ) -> *mut ShapeResult {
-        unsafe {
-            InlineItemSegmentsShapeText(
-                self,
-                shaper,
-                font,
-                direction,
-                start_offset,
-                end_offset,
-                item_index,
-                options,
-            )
-        }
-    }
-
-    pub fn ShapeTextDefault(
-        &self,
-        shaper: *const HarfBuzzShaper,
-        font: *const Font,
-        direction: TextDirection,
-        start_offset: u32,
-        end_offset: u32,
-        item_index: u32,
-    ) -> *mut ShapeResult {
-        self.ShapeText(
-            shaper,
-            font,
-            direction,
-            start_offset,
-            end_offset,
-            item_index,
-            ShapeOptions::default(),
-        )
-    }
+    // cpp: layoutng/internal/inline_item_segment.h:119-177: ComputeSegments,
+    // AppendMixedFontOrientation, AdjustOffsets, ComputeItemIndex, Ranges,
+    // ShapeText, PopulateItemsFromFontOrientation, Split, CheckOffset and
+    // OffsetForSegment are `InlineItemSegmentsAlgorithms` (layout_algo_inline).
 
     // cpp: layoutng/internal/inline_item_segment.h:157-160
     pub fn Trace(&self, visitor: &mut Visitor) {
@@ -285,35 +242,6 @@ impl InlineItemSegments {
         visitor.Trace(&self.items_to_segments_);
     }
 
-    pub fn PopulateItemsFromFontOrientation(
-        &mut self,
-        start_offset: u32,
-        end_offset: u32,
-        orientation: RenderOrientation,
-        segment_index: u32,
-    ) -> u32 {
-        unsafe {
-            InlineItemSegmentsPopulateItemsFromFontOrientation(
-                self,
-                start_offset,
-                end_offset,
-                orientation,
-                segment_index,
-            )
-        }
-    }
-
-    pub fn Split(&mut self, index: u32, offset: u32) {
-        unsafe { InlineItemSegmentsSplit(self, index, offset) }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn CheckOffset(&self, offset: u32, segment: *const InlineItemSegment) {
-        unsafe { InlineItemSegmentsCheckOffset(self, offset, segment) }
-    }
-
-    #[cfg(not(debug_assertions))]
-    pub fn CheckOffset(&self, _offset: u32, _segment: *const InlineItemSegment) {}
 }
 
 // cpp: layoutng/internal/inline_item_segment.h:123-149,180-212

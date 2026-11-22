@@ -1,6 +1,8 @@
 // C++: layoutng_inline/text_diff_range.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{String, StringView, WtfSizeT};
 
 // cpp: layoutng_inline/text_diff_range.h:18-20,39-43

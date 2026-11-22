@@ -26,7 +26,7 @@ use std::{collections::HashMap, sync::Arc};
 
 #[path = "../block/fragmentation_context.rs"]
 mod layout_algo_block_fragmentation_context;
-#[path = "../../../layout_algo_inline/src/collapsible_whitespace.rs"]
+#[path = "../editing/collapsible_whitespace.rs"]
 mod layout_algo_inline_collapsible_whitespace;
 #[path = "../commit/output_node_lookup.rs"]
 mod layout_commit_output_node_lookup;

@@ -1,6 +1,8 @@
 // C++: layoutng_inline/line_utils.h and layoutng_inline/line_utils.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::font_height::FontHeight;
 use foundation::{EPosition, LayoutUnit};
 use crate::inline_cursor::InlineCursor;

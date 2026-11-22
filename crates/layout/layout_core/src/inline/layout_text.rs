@@ -1,5 +1,6 @@
-// C++: layoutng_inline/layout_text.cc. Non-inline methods of the LayoutText
-// type owned by //src/layout_core; linked in the shared assembly.
+// C++: layoutng_inline/layout_text.cc (Chromium core/layout/layout_text.cc).
+// Out-of-line LayoutText members. Base code since R5: the LayoutText
+// interface (`layout_text_interface.rs`) calls them directly.
 #![allow(non_snake_case)]
 
 use font_engine::text::implementation::character_break_iterator::LengthOfGraphemeCluster;
@@ -36,7 +37,7 @@ fn selection_display_item_clients() -> &'static Mutex<SelectionDisplayItemClient
 }
 
 // cpp: third_party/blink/renderer/core/editing/layout_selection.cc:572-589
-pub(crate) fn layout_text_is_selected(this: &LayoutText) -> bool {
+pub fn layout_text_is_selected(this: &LayoutText) -> bool {
     if this.IsTextFragment() {
         let fragment = unsafe { &*(this as *const LayoutText).cast::<LayoutTextFragment>() };
         let text = fragment.AssociatedTextNode();
@@ -52,28 +53,24 @@ pub(crate) fn layout_text_is_selected(this: &LayoutText) -> bool {
 }
 
 // cpp: layoutng_inline/layout_text.cc:31-41
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextNew(node: *mut Node, text: String) -> LayoutText {
+pub fn LayoutTextNew(node: *mut Node, text: String) -> LayoutText {
     LayoutText::new_base_for_inline(node, text)
 }
 
 // cpp: layoutng_inline/layout_text.cc:43-46
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextTrace(this: &LayoutText, visitor: &mut Visitor<'_>) {
+pub fn LayoutTextTrace(this: &LayoutText, visitor: &mut Visitor<'_>) {
     this.inline_items_.Trace(visitor);
     LayoutObject::Trace(this, visitor);
 }
 
 // cpp: layoutng_inline/layout_text.cc:52-55
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextIsWordBreak(this: &LayoutText) -> bool {
+pub fn LayoutTextIsWordBreak(this: &LayoutText) -> bool {
     this.CheckIsNotDestroyed();
     false
 }
 
 // cpp: layoutng_inline/layout_text.cc:57-81
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextStyleDidChange(
+pub fn LayoutTextStyleDidChange(
     this: &mut LayoutText,
     diff: StyleDifference,
     old_style: *const ComputedStyle,
@@ -120,8 +117,7 @@ pub extern "Rust" fn LayoutTextStyleDidChange(
 }
 
 // cpp: layoutng_inline/layout_text.cc:83-88
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextWillBeDestroyed(this: &mut LayoutText) {
+pub fn LayoutTextWillBeDestroyed(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     selection_display_item_clients()
         .lock()
@@ -134,8 +130,7 @@ pub extern "Rust" fn LayoutTextWillBeDestroyed(this: &mut LayoutText) {
 }
 
 // cpp: third_party/blink/renderer/core/layout/layout_text.cc:1400-1422
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextGetSelectionDisplayItemClient(
+pub fn LayoutTextGetSelectionDisplayItemClient(
     this: &LayoutText,
 ) -> *const DisplayItemClient {
     this.CheckIsNotDestroyed();
@@ -165,8 +160,7 @@ pub extern "Rust" fn LayoutTextGetSelectionDisplayItemClient(
 }
 
 // cpp: layoutng_inline/layout_text.cc:90-97
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextRemoveAndDestroyTextBoxes(this: &mut LayoutText) {
+pub fn LayoutTextRemoveAndDestroyTextBoxes(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     if this.FirstInlineFragmentItemIndex() != 0 {
         FragmentItems::LayoutObjectWillBeDestroyed(this);
@@ -176,23 +170,20 @@ pub extern "Rust" fn LayoutTextRemoveAndDestroyTextBoxes(this: &mut LayoutText) 
 }
 
 // cpp: layoutng_inline/layout_text.cc:99-102
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextDeleteTextBoxes(this: &mut LayoutText) {
+pub fn LayoutTextDeleteTextBoxes(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     this.has_abstract_inline_text_box_ = false;
 }
 
 // cpp: layoutng_inline/layout_text.cc:104-108
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextClearFirstInlineFragmentItemIndex(this: &mut LayoutText) {
+pub fn LayoutTextClearFirstInlineFragmentItemIndex(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     assert!(this.IsInLayoutNGInlineFormattingContext());
     this.first_fragment_item_index_ = 0;
 }
 
 // cpp: layoutng_inline/layout_text.cc:110-115
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetFirstInlineFragmentItemIndex(
+pub fn LayoutTextSetFirstInlineFragmentItemIndex(
     this: &mut LayoutText,
     index: usize,
 ) {
@@ -203,8 +194,7 @@ pub extern "Rust" fn LayoutTextSetFirstInlineFragmentItemIndex(
 }
 
 // cpp: layoutng_inline/layout_text.cc:117-121
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextInLayoutNGInlineFormattingContextWillChange(
+pub fn LayoutTextInLayoutNGInlineFormattingContextWillChange(
     this: &mut LayoutText,
     _: bool,
 ) {
@@ -214,15 +204,13 @@ pub extern "Rust" fn LayoutTextInLayoutNGInlineFormattingContextWillChange(
 }
 
 // cpp: layoutng_inline/layout_text.cc:123-126
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextHasInlineFragments(this: &LayoutText) -> bool {
+pub fn LayoutTextHasInlineFragments(this: &LayoutText) -> bool {
     this.CheckIsNotDestroyed();
     this.IsInLayoutNGInlineFormattingContext() && this.first_fragment_item_index_ != 0
 }
 
 // cpp: layoutng_inline/layout_text.cc:128-132
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextOriginalText(this: &LayoutText) -> String {
+pub fn LayoutTextOriginalText(this: &LayoutText) -> String {
     this.CheckIsNotDestroyed();
     let fragment = DynamicTo::<crate::layout_text_fragment::LayoutTextFragment>(this as *const _);
     if let Some(fragment) = unsafe { fragment.as_ref() } {
@@ -237,16 +225,14 @@ pub extern "Rust" fn LayoutTextOriginalText(this: &LayoutText) -> String {
 }
 
 // cpp: layoutng_inline/layout_text.cc:134-138
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextOriginalTextLength(this: &LayoutText) -> u32 {
+pub fn LayoutTextOriginalTextLength(this: &LayoutText) -> u32 {
     this.CheckIsNotDestroyed();
     debug_assert!(!this.IsBR());
     this.OriginalText().length()
 }
 
 // cpp: layoutng_inline/layout_text.cc:140-152
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextPlainText(this: &LayoutText) -> String {
+pub fn LayoutTextPlainText(this: &LayoutText) -> String {
     this.CheckIsNotDestroyed();
     if this.IsInLayoutNGInlineFormattingContext() {
         let mut result = String::from("");
@@ -264,8 +250,7 @@ pub extern "Rust" fn LayoutTextPlainText(this: &LayoutText) -> String {
 }
 
 // cpp: layoutng_inline/layout_text.cc:154-163
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextIsAllCollapsibleWhitespace(this: &LayoutText) -> bool {
+pub fn LayoutTextIsAllCollapsibleWhitespace(this: &LayoutText) -> bool {
     this.CheckIsNotDestroyed();
     if this.text_.empty() {
         return true;
@@ -279,8 +264,7 @@ pub extern "Rust" fn LayoutTextIsAllCollapsibleWhitespace(this: &LayoutText) -> 
 }
 
 // cpp: layoutng_inline/layout_text.cc:165-173
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextFirstCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> i32 {
+pub fn LayoutTextFirstCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> i32 {
     this.CheckIsNotDestroyed();
     let mut cursor = InlineCursor::default();
     cursor.MoveToLayoutObject(this);
@@ -296,8 +280,7 @@ pub extern "Rust" fn LayoutTextFirstCharacterAfterWhitespaceCollapsing(this: &La
 }
 
 // cpp: layoutng_inline/layout_text.cc:175-183
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextLastCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> i32 {
+pub fn LayoutTextLastCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> i32 {
     this.CheckIsNotDestroyed();
     let mut cursor = InlineCursor::default();
     cursor.MoveToLayoutObject(this);
@@ -313,8 +296,7 @@ pub extern "Rust" fn LayoutTextLastCharacterAfterWhitespaceCollapsing(this: &Lay
 }
 
 // cpp: layoutng_inline/layout_text.cc:185-198
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextPreviousCharacter(this: &LayoutText) -> u16 {
+pub fn LayoutTextPreviousCharacter(this: &LayoutText) -> u16 {
     this.CheckIsNotDestroyed();
     let mut previous = this.PreviousInPreOrderDefault();
     while !previous.is_null()
@@ -334,8 +316,7 @@ pub extern "Rust" fn LayoutTextPreviousCharacter(this: &LayoutText) -> u16 {
 }
 
 // cpp: layoutng_inline/layout_text.cc:200-206
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetTextInternal(this: &mut LayoutText, text: String) {
+pub fn LayoutTextSetTextInternal(this: &mut LayoutText, text: String) {
     this.CheckIsNotDestroyed();
     debug_assert!(!text.IsNull());
     this.text_ = text;
@@ -343,8 +324,7 @@ pub extern "Rust" fn LayoutTextSetTextInternal(this: &mut LayoutText, text: Stri
 }
 
 // cpp: layoutng_inline/layout_text.cc:208-212
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetTextIfNeeded(this: &mut LayoutText, text: String) {
+pub fn LayoutTextSetTextIfNeeded(this: &mut LayoutText, text: String) {
     this.CheckIsNotDestroyed();
     if this.text_ != text {
         this.ForceSetText(text);
@@ -352,16 +332,14 @@ pub extern "Rust" fn LayoutTextSetTextIfNeeded(this: &mut LayoutText, text: Stri
 }
 
 // cpp: layoutng_inline/layout_text.cc:214-218
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextForceSetText(this: &mut LayoutText, text: String) {
+pub fn LayoutTextForceSetText(this: &mut LayoutText, text: String) {
     this.CheckIsNotDestroyed();
     this.SetTextInternal(text);
     this.TextDidChange();
 }
 
 // cpp: layoutng_inline/layout_text.cc:220-224
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextTransformAndSecureOriginalText(this: &mut LayoutText) {
+pub fn LayoutTextTransformAndSecureOriginalText(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     let original = this.OriginalText();
     if !original.IsNull() {
@@ -370,8 +348,7 @@ pub extern "Rust" fn LayoutTextTransformAndSecureOriginalText(this: &mut LayoutT
 }
 
 // cpp: layoutng_inline/layout_text.cc:226-252
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextTransformAndSecureText(
+pub fn LayoutTextTransformAndSecureText(
     this: &LayoutText,
     original: &String,
     offset_map: &mut TextOffsetMap,
@@ -400,8 +377,7 @@ pub extern "Rust" fn LayoutTextTransformAndSecureText(
 }
 
 // cpp: layoutng_inline/layout_text.cc:254-270
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSecureText(
+pub fn LayoutTextSecureText(
     this: &LayoutText,
     plain: &String,
     mask: u16,
@@ -439,8 +415,7 @@ pub extern "Rust" fn LayoutTextSecureText(
 }
 
 // cpp: layoutng_inline/layout_text.cc:272-283
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetVariableLengthTransformResult(
+pub fn LayoutTextSetVariableLengthTransformResult(
     this: &mut LayoutText,
     original_length: usize,
     offset_map: &TextOffsetMap,
@@ -459,8 +434,7 @@ pub extern "Rust" fn LayoutTextSetVariableLengthTransformResult(
 }
 
 // cpp: layoutng_inline/layout_text.cc:285-289
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextGetVariableLengthTransformResult(
+pub fn LayoutTextGetVariableLengthTransformResult(
     this: &LayoutText,
 ) -> VariableLengthTransformResult {
     this.CheckIsNotDestroyed();
@@ -468,8 +442,7 @@ pub extern "Rust" fn LayoutTextGetVariableLengthTransformResult(
 }
 
 // cpp: layoutng_inline/layout_text.cc:291-296
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextClearHasVariableLengthTransform(this: &mut LayoutText) {
+pub fn LayoutTextClearHasVariableLengthTransform(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     if this.has_variable_length_transform_ {
         unsafe { &mut *this.View() }.UnregisterVariableLengthTransformResult(this);
@@ -478,8 +451,7 @@ pub extern "Rust" fn LayoutTextClearHasVariableLengthTransform(this: &mut Layout
 }
 
 // cpp: layoutng_inline/layout_text.cc:298-308
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
+pub fn LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
     this: &mut LayoutText,
     reason: *const c_char,
 ) {
@@ -494,8 +466,7 @@ pub extern "Rust" fn LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPain
 }
 
 // cpp: layoutng_inline/layout_text.cc:310-317
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextTextDidChange(this: &mut LayoutText) {
+pub fn LayoutTextTextDidChange(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     if !this.Parent().is_null() {
         this.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(unsafe {
@@ -506,8 +477,7 @@ pub extern "Rust" fn LayoutTextTextDidChange(this: &mut LayoutText) {
 }
 
 // cpp: layoutng_inline/layout_text.cc:319-328
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextTextDidChangeWithoutInvalidation(this: &mut LayoutText) {
+pub fn LayoutTextTextDidChangeWithoutInvalidation(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     let mut offset_map = TextOffsetMap::default();
     let original = if this.OriginalText().empty() {
@@ -530,8 +500,7 @@ pub extern "Rust" fn LayoutTextTextDidChangeWithoutInvalidation(this: &mut Layou
 }
 
 // cpp: layoutng_inline/layout_text.cc:330-338
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextInvalidateSubtreeLayoutForFontUpdates(this: &mut LayoutText) {
+pub fn LayoutTextInvalidateSubtreeLayoutForFontUpdates(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     if this.IsFontFallbackValid() {
         return;
@@ -544,8 +513,7 @@ pub extern "Rust" fn LayoutTextInvalidateSubtreeLayoutForFontUpdates(this: &mut 
 }
 
 // cpp: layoutng_inline/layout_text.cc:340-350
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetInlineItems(
+pub fn LayoutTextSetInlineItems(
     this: &mut LayoutText,
     data: *mut InlineItemsData,
     begin: usize,
@@ -569,8 +537,7 @@ pub extern "Rust" fn LayoutTextSetInlineItems(
 }
 
 // cpp: layoutng_inline/layout_text.cc:352-357
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextClearInlineItems(this: &mut LayoutText) {
+pub fn LayoutTextClearInlineItems(this: &mut LayoutText) {
     this.CheckIsNotDestroyed();
     this.has_bidi_control_items_ = false;
     this.valid_ng_items_ = false;
@@ -578,8 +545,7 @@ pub extern "Rust" fn LayoutTextClearInlineItems(this: &mut LayoutText) {
 }
 
 // cpp: layoutng_inline/layout_text.cc:359-364
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextInlineItems(this: &LayoutText) -> *const InlineItemSpan {
+pub fn LayoutTextInlineItems(this: &LayoutText) -> *const InlineItemSpan {
     this.CheckIsNotDestroyed();
     debug_assert!(this.valid_ng_items_);
     debug_assert!(!this.inline_items_.empty());
@@ -587,8 +553,7 @@ pub extern "Rust" fn LayoutTextInlineItems(this: &LayoutText) -> *const InlineIt
 }
 
 // cpp: layoutng_inline/layout_text.cc:366-370
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextSetPreviousLogicalStartingPoint(
+pub fn LayoutTextSetPreviousLogicalStartingPoint(
     this: &LayoutText,
     point: &LogicalOffset,
 ) {
@@ -597,15 +562,14 @@ pub extern "Rust" fn LayoutTextSetPreviousLogicalStartingPoint(
 }
 
 #[path = "layout_text_editing_queries.rs"]
-mod editing_queries;
+pub mod editing_queries;
 
 #[path = "layout_text_quad_geometry.rs"]
-mod quad_geometry;
+pub mod quad_geometry;
 
 // Source: core/layout/layout_text.cc:1352-1363, SecureTextTimer::RestartWithNewText
 // cc:126-132. Called before the canonical Text::insertData/replaceData mutation.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextMomentarilyRevealLastTypedCharacter(
+pub fn LayoutTextMomentarilyRevealLastTypedCharacter(
     this: &mut LayoutText,
     offset: u32,
     settings: Option<layout_core::password_echo::PasswordEchoLayoutSettings>,
@@ -627,8 +591,7 @@ pub extern "Rust" fn LayoutTextMomentarilyRevealLastTypedCharacter(
 // Source: SecureTextTimer::Fired, core/layout/layout_text.cc:138-142. Expiry
 // first clears the one-shot's active state, then forces the same source text
 // transform/invalidation path; no substring is retained by the timer.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextPasswordEchoTimerFired(
+pub fn LayoutTextPasswordEchoTimerFired(
     this: &mut LayoutText,
     token: layout_core::password_echo::PasswordEchoTimerToken,
 ) -> bool {
@@ -646,8 +609,7 @@ pub extern "Rust" fn LayoutTextPasswordEchoTimerFired(
 
 // Source core/layout/layout_text.cc1110-1157. Status comes from the same
 // committed LayoutSelection; cursor/shape/fragment owners remain borrowed.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextLocalSelectionVisualRect(
+pub fn LayoutTextLocalSelectionVisualRect(
     this: &LayoutText,
 ) -> foundation::PhysicalRect {
     use foundation::{gfx, PhysicalRect};

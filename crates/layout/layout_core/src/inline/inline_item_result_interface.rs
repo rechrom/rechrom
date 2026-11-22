@@ -14,32 +14,9 @@ use super::super::positioned_float::PositionedFloat;
 use super::super::text_fit_scale::{TextFitBlockScale, TextFitScale};
 use super::super::text_offset_range::TextOffsetRange;
 
-// The non-inline definitions live in //src/layoutng_inline. These signatures
-// retain that package boundary without copying the line-break algorithm here.
-unsafe extern "Rust" {
-    fn InlineItemResultNew(
-        item: &InlineItem,
-        index: u32,
-        text_offset: &TextOffsetRange,
-        break_anywhere_if_overflow: bool,
-        should_create_line_box: bool,
-        has_unpositioned_floats: bool,
-    ) -> InlineItemResult;
-    fn InlineItemResultShapeHyphen(result: &mut InlineItemResult);
-    fn InlineItemResultTrace(result: &InlineItemResult, visitor: &mut Visitor);
-    #[cfg(debug_assertions)]
-    fn InlineItemResultCheckConsistency(result: &InlineItemResult, allow_null_shape_result: bool);
-    fn InlineItemResultToString(
-        result: &InlineItemResult,
-        ifc_text_content: &String,
-        indent: &String,
-    ) -> String;
-    fn FindTextScaleInternalFromInline(
-        line_items: &InlineItemResults,
-        start_index: u32,
-        initial_nesting_level: u32,
-    ) -> TextFitBlockScale;
-}
+// R5: the out-of-line members (constructor, ShapeHyphen, CheckConsistency,
+// ToString) and FindTextScale(Internal) are line-breaker
+// code in layout_algo_inline (`inline_item_result::InlineItemResultAlgorithms`).
 
 // cpp: layoutng/internal/inline_item_result.h:42-70
 #[derive(Clone)]
@@ -149,25 +126,6 @@ impl Default for InlineItemResult {
 
 impl InlineItemResult {
     // cpp: layoutng/internal/inline_item_result.h:73-78
-    pub fn new(
-        item: &InlineItem,
-        index: u32,
-        text_offset: &TextOffsetRange,
-        break_anywhere_if_overflow: bool,
-        should_create_line_box: bool,
-        has_unpositioned_floats: bool,
-    ) -> Self {
-        unsafe {
-            InlineItemResultNew(
-                item,
-                index,
-                text_offset,
-                break_anywhere_if_overflow,
-                should_create_line_box,
-                has_unpositioned_floats,
-            )
-        }
-    }
 
     // cpp: layoutng/internal/inline_item_result.h:80-87
     pub fn TextOffset(&self) -> &TextOffsetRange {
@@ -206,31 +164,20 @@ impl InlineItemResult {
         !self.ruby_column.Get().is_null()
     }
 
-    // cpp: layoutng/internal/inline_item_result.h:99-110
-    pub fn ShapeHyphen(&mut self) {
-        unsafe { InlineItemResultShapeHyphen(self) }
-    }
+    // cpp: layoutng_inline/inline_item_result.cc:62-71
+    // Record member: base's Traceable binding (layoutng_trace_bindings.rs)
+    // calls it, so it stays with the declaration.
     pub fn Trace(&self, visitor: &mut Visitor) {
-        unsafe { InlineItemResultTrace(self, visitor) }
+        visitor.Trace(&self.item);
+        visitor.Trace(&self.shape_result);
+        visitor.Trace(&self.hyphen);
+        visitor.Trace(&self.layout_result);
+        visitor.Trace(&self.ruby_column);
+        visitor.Trace(&self.positioned_float);
+        visitor.Trace(&self.exclusion_space_before_position_float);
+        visitor.Trace(&self.text_fit_scale);
     }
 
-    #[cfg(debug_assertions)]
-    pub fn CheckConsistency(&self, allow_null_shape_result: bool) {
-        unsafe { InlineItemResultCheckConsistency(self, allow_null_shape_result) }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn CheckConsistencyDefault(&self) {
-        self.CheckConsistency(false)
-    }
-
-    pub fn ToString(&self, ifc_text_content: &String, indent: &String) -> String {
-        unsafe { InlineItemResultToString(self, ifc_text_content, indent) }
-    }
-
-    pub fn ToStringDefaultIndent(&self, ifc_text_content: &String) -> String {
-        self.ToString(ifc_text_content, &String::from(""))
-    }
 }
 
 // Preserve the source's 32-item inline capacity. Most lines fit without a
@@ -238,24 +185,4 @@ impl InlineItemResult {
 // cpp: layoutng/internal/inline_item_result.h:204-204
 pub type InlineItemResults = HeapVector<InlineItemResult, 32>;
 
-// cpp: layoutng/internal/inline_item_result.h:215-217
-pub fn FindTextScaleInternal(
-    line_items: &InlineItemResults,
-    start_index: u32,
-    initial_nesting_level: u32,
-) -> TextFitBlockScale {
-    unsafe { FindTextScaleInternalFromInline(line_items, start_index, initial_nesting_level) }
-}
 
-// cpp: layoutng/internal/inline_item_result.h:226-236
-pub fn FindTextScale(
-    should_scale: bool,
-    line_items: &InlineItemResults,
-    start_index: u32,
-    initial_nesting_level: u32,
-) -> TextFitBlockScale {
-    if !should_scale {
-        return TextFitBlockScale::default();
-    }
-    FindTextScaleInternal(line_items, start_index, initial_nesting_level)
-}

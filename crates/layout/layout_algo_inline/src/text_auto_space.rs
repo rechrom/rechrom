@@ -1,6 +1,8 @@
 // C++: layoutng_inline/text_auto_space.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use std::ptr::NonNull;
 
 use font_engine::fonts::shaping::shape_result::OffsetWithSpacing;

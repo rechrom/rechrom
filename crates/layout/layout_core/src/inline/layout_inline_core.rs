@@ -16,8 +16,7 @@ use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;
 
 // cpp: layoutng_inline/layout_inline_core.cc:18-25
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineWillBeDestroyed(this: &mut LayoutInline) {
+pub fn LayoutInlineWillBeDestroyed(this: &mut LayoutInline) {
     this.CheckIsNotDestroyed();
     if this.FirstInlineFragmentItemIndex() != 0 {
         FragmentItems::LayoutObjectWillBeDestroyed(this);
@@ -27,8 +26,7 @@ pub extern "Rust" fn LayoutInlineWillBeDestroyed(this: &mut LayoutInline) {
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:27-45
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineStyleDidChange(
+pub fn LayoutInlineStyleDidChange(
     this: &mut LayoutInline,
     difference: StyleDifference,
     old_style: *const ComputedStyle,
@@ -53,8 +51,7 @@ pub extern "Rust" fn LayoutInlineStyleDidChange(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:47-58
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
+pub fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
     this: &LayoutInline,
     style: &ComputedStyle,
 ) -> bool {
@@ -78,8 +75,7 @@ pub extern "Rust" fn LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:60-71
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineComputeInitialShouldCreateBoxFragment(
+pub fn LayoutInlineComputeInitialShouldCreateBoxFragment(
     this: &LayoutInline,
 ) -> bool {
     this.CheckIsNotDestroyed();
@@ -97,8 +93,7 @@ pub extern "Rust" fn LayoutInlineComputeInitialShouldCreateBoxFragment(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:73-84
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineUpdateShouldCreateBoxFragment(this: &mut LayoutInline) {
+pub fn LayoutInlineUpdateShouldCreateBoxFragment(this: &mut LayoutInline) {
     this.CheckIsNotDestroyed();
     if this.IsInLayoutNGInlineFormattingContext() {
         if this.ShouldCreateBoxFragment() {
@@ -114,8 +109,7 @@ pub extern "Rust" fn LayoutInlineUpdateShouldCreateBoxFragment(this: &mut Layout
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:86-108
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineAddChild(
+pub fn LayoutInlineAddChild(
     this: &mut LayoutInline,
     new_child: *mut LayoutObject,
     mut before_child: *mut LayoutObject,
@@ -156,8 +150,7 @@ pub extern "Rust" fn LayoutInlineAddChild(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:110-133
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineAddChildAsBlockInInline(
+pub fn LayoutInlineAddChildAsBlockInInline(
     this: &mut LayoutInline,
     new_child: *mut LayoutObject,
     before_child: *mut LayoutObject,
@@ -186,8 +179,7 @@ pub extern "Rust" fn LayoutInlineAddChildAsBlockInInline(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:135-144
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineCreateAnonymousContainerForBlockChildren(
+pub fn LayoutInlineCreateAnonymousContainerForBlockChildren(
     this: &LayoutInline,
 ) -> *mut LayoutBlockFlow {
     this.CheckIsNotDestroyed();
@@ -204,8 +196,7 @@ pub extern "Rust" fn LayoutInlineCreateAnonymousContainerForBlockChildren(
 }
 
 // cpp: layoutng_inline/layout_inline_core.cc:146-152
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInlineCreateAnonymousBoxToSplit(
+pub fn LayoutInlineCreateAnonymousBoxToSplit(
     this: &LayoutInline,
     box_to_split: *const LayoutBox,
 ) -> *mut LayoutBox {

@@ -1,10 +1,10 @@
 // The inline layout algorithm package (Chromium core/layout/inline/; snapshot
 // //src/layoutng_inline). It compiles as its own crate above base
 // (`layout_assembly`) and reaches base only through its public API. Base
-// reaches it back through the slots `registration::Register` fills and the
-// `extern "Rust"` declarations of the LayoutText / LayoutInline / InlineNode /
-// InlineItem members whose Chromium bodies live in this package's .cc files
-// (see crates/layout/PACKAGE_MAP.md, R5 status).
+// reaches it back only through the registry slots `registration::Register`
+// fills; there is no link-time (`extern "Rust"` / `#[no_mangle]`) coupling.
+// Members of base-declared types whose bodies live here are extension traits
+// (`algorithms`). See crates/layout/PACKAGE_MAP.md, R5 status.
 #![allow(non_snake_case)]
 
 // The translated sources name base items through Chromium's `layoutng`
@@ -22,10 +22,13 @@ use layout_assembly::{
 // Base LayoutObject / DOM-position classes that the inline sources name
 // beside their own modules.
 pub use layout_assembly::{layout_text_fragment, offset_mapping};
+// LayoutBR, LayoutCounter, LayoutRubyAsBlock and LayoutWordBreak (Chromium
+// core/layout/layout_*.cc) are object-model classes, base since R5.
+pub use layout_assembly::{layout_br, layout_counter, layout_ruby_as_block, layout_word_break};
 
 pub mod registration;
+pub mod algorithms;
 pub mod empty_offset_mapping_builder;
-pub mod fragment_items_builder_inline;
 pub mod hyphen_result;
 pub mod initial_letter_utils;
 pub mod inline_box_state;
@@ -35,18 +38,9 @@ pub mod inline_item_result;
 pub mod inline_item_result_ruby_column;
 pub mod inline_item_segment;
 pub mod inline_items_builder;
-pub mod inline_items_data_algorithm;
 pub mod inline_layout_algorithm;
 pub mod inline_node;
 pub mod justification_utils;
-pub mod layout_br;
-pub mod layout_counter;
-pub mod layout_inline_core;
-pub mod layout_inline_data;
-pub mod layout_ruby_as_block;
-pub mod layout_text;
-pub mod layout_text_combine;
-pub mod layout_word_break;
 pub mod leading_floats;
 pub mod line_box_fragment_builder;
 pub mod line_break_candidate;
@@ -65,9 +59,7 @@ pub mod ruby_utils;
 pub mod score_line_break_context;
 pub mod score_line_breaker;
 pub mod text_auto_space;
-pub mod text_combine_style_service;
 pub mod text_combine_tree;
 pub mod text_diff_range;
 pub mod text_fit_utils;
-pub mod text_overflow_layout_service;
 pub mod transformed_string;

@@ -1,6 +1,8 @@
 // C++: layoutng_inline/paragraph_line_breaker.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::simple_font_data::SimpleFontData;
 use foundation::{LayoutUnit, RuntimeEnabledFeatures, String, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;

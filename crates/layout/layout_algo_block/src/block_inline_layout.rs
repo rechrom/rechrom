@@ -1,6 +1,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{LayoutUnit, RuntimeEnabledFeatures, TextWrapStyle, To};
+// InlineNode members whose bodies are in the inline package (PrepareLayoutIfNeeded).
+#[allow(unused_imports)]
+use layout_algo_inline::algorithms::*;
 use layout_algo_inline::inline_child_layout_context::{
     OptimalInlineChildLayoutContext, SimpleInlineChildLayoutContext,
 };

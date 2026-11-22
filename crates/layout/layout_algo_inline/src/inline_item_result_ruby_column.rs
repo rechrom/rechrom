@@ -1,6 +1,8 @@
 // C++: layoutng_inline/inline_item_result_ruby_column.h.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{HeapVector, LayoutUnit, Member, RubyPosition, Traceable, Visitor};
 use crate::inline_break_token::RubyBreakTokenData;
 

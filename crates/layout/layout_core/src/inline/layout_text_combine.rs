@@ -23,40 +23,20 @@ use layout_style::style::anonymous_style::CreateAnonymousStyleBuilderWithDisplay
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::shadow_list::ShadowList;
 
-// These helpers remain owned by layout_fragment's InkOverflow translation.
-// Text-combine calls them across the reciprocal package boundary instead of
-// reimplementing paint geometry in the inline algorithm package.
-unsafe extern "Rust" {
-    fn InkOverflowComputeDecorationOverflowForTextCombine(
-        cursor: &InlineCursor,
-        style: &ComputedStyle,
-        used_font: &UsedFont,
-        offset: &PhysicalOffset,
-        overflow: &LogicalRect,
-        inline_context: *const (),
-        writing_mode: WritingMode,
-    ) -> LogicalRect;
-    fn InkOverflowComputeEmphasisMarkOverflowForTextCombine(
-        style: &ComputedStyle,
-        size: &PhysicalSize,
-        overflow: &LogicalRect,
-    ) -> LogicalRect;
-    fn InkOverflowExpandForShadowOverflowForTextCombine(
-        overflow: &mut LogicalRect,
-        shadow: &ShadowList,
-        writing_mode: WritingMode,
-    );
-}
+// InkOverflow helpers (Chromium core/layout/ink_overflow.cc), base like this file.
+use crate::internal::ink_overflow::{
+    InkOverflowComputeDecorationOverflowForTextCombine,
+    InkOverflowComputeEmphasisMarkOverflowForTextCombine,
+    InkOverflowExpandForShadowOverflowForTextCombine,
+};
 
 // cpp: layoutng_inline/layout_text_combine.cc:23-25
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineNew() -> LayoutTextCombine {
+pub fn LayoutTextCombineNew() -> LayoutTextCombine {
     LayoutTextCombine::FromInlineBase(LayoutBlockFlow::new(std::ptr::null_mut()))
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:27-41
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineCreateAnonymous(
+pub fn LayoutTextCombineCreateAnonymous(
     text_child: *mut LayoutText,
 ) -> *mut LayoutTextCombine {
     debug_assert!(LayoutTextCombine::ShouldBeParentOf(unsafe { &*text_child }));
@@ -77,8 +57,7 @@ pub extern "Rust" fn LayoutTextCombineCreateAnonymous(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:43-47
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineGetTextContent(this: &LayoutTextCombine) -> String {
+pub fn LayoutTextCombineGetTextContent(this: &LayoutTextCombine) -> String {
     this.CheckIsNotDestroyed();
     debug_assert!(!this.NeedsCollectInlines() && !this.GetInlineNodeData().is_null());
     unsafe { &*this.GetInlineNodeData() }
@@ -88,8 +67,7 @@ pub extern "Rust" fn LayoutTextCombineGetTextContent(this: &LayoutTextCombine) -
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:49-65
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineDesiredWidth(this: &LayoutTextCombine) -> f32 {
+pub fn LayoutTextCombineDesiredWidth(this: &LayoutTextCombine) -> f32 {
     this.CheckIsNotDestroyed();
     let style = this.StyleRef();
     debug_assert_eq!(
@@ -109,8 +87,7 @@ pub extern "Rust" fn LayoutTextCombineDesiredWidth(this: &LayoutTextCombine) -> 
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:67-74
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineComputeInlineSpacing(this: &LayoutTextCombine) -> f32 {
+pub fn LayoutTextCombineComputeInlineSpacing(this: &LayoutTextCombine) -> f32 {
     this.CheckIsNotDestroyed();
     debug_assert_eq!(
         unsafe { &*this.StyleRef().GetFont() }
@@ -127,8 +104,7 @@ pub extern "Rust" fn LayoutTextCombineComputeInlineSpacing(this: &LayoutTextComb
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:76-83
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineApplyScaleXOffset(
+pub fn LayoutTextCombineApplyScaleXOffset(
     this: &LayoutTextCombine,
     offset: &PhysicalOffset,
 ) -> PhysicalOffset {
@@ -142,8 +118,7 @@ pub extern "Rust" fn LayoutTextCombineApplyScaleXOffset(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:85-89
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineApplyScaleXRect(
+pub fn LayoutTextCombineApplyScaleXRect(
     this: &LayoutTextCombine,
     rect: &PhysicalRect,
 ) -> PhysicalRect {
@@ -156,8 +131,7 @@ pub extern "Rust" fn LayoutTextCombineApplyScaleXRect(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:91-95
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineApplyScaleXSize(
+pub fn LayoutTextCombineApplyScaleXSize(
     this: &LayoutTextCombine,
     size: &PhysicalSize,
 ) -> PhysicalSize {
@@ -170,8 +144,7 @@ pub extern "Rust" fn LayoutTextCombineApplyScaleXSize(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:97-104
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineUnapplyScaleX(
+pub fn LayoutTextCombineUnapplyScaleX(
     this: &LayoutTextCombine,
     offset: &PhysicalOffset,
 ) -> PhysicalOffset {
@@ -185,8 +158,7 @@ pub extern "Rust" fn LayoutTextCombineUnapplyScaleX(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:106-113
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineAdjustOffsetForHitTest(
+pub fn LayoutTextCombineAdjustOffsetForHitTest(
     this: &LayoutTextCombine,
     offset: &PhysicalOffset,
 ) -> PhysicalOffset {
@@ -198,8 +170,7 @@ pub extern "Rust" fn LayoutTextCombineAdjustOffsetForHitTest(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:115-122
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineAdjustOffsetForLocalCaretRect(
+pub fn LayoutTextCombineAdjustOffsetForLocalCaretRect(
     this: &LayoutTextCombine,
     offset: &PhysicalOffset,
 ) -> PhysicalOffset {
@@ -211,8 +182,7 @@ pub extern "Rust" fn LayoutTextCombineAdjustOffsetForLocalCaretRect(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:124-132
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineAdjustRectForBoundingBox(
+pub fn LayoutTextCombineAdjustRectForBoundingBox(
     this: &LayoutTextCombine,
     rect: &PhysicalRect,
 ) -> PhysicalRect {
@@ -224,8 +194,7 @@ pub extern "Rust" fn LayoutTextCombineAdjustRectForBoundingBox(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:134-143
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineComputeTextBoundsRectForHitTest(
+pub fn LayoutTextCombineComputeTextBoundsRectForHitTest(
     this: &LayoutTextCombine,
     text_item: &crate::fragment_item::FragmentItem,
     inline_root_offset: &PhysicalOffset,
@@ -239,8 +208,7 @@ pub extern "Rust" fn LayoutTextCombineComputeTextBoundsRectForHitTest(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:151-197
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineRecalcContentsInkOverflow(
+pub fn LayoutTextCombineRecalcContentsInkOverflow(
     this: &LayoutTextCombine,
     cursor: &InlineCursor,
 ) -> PhysicalRect {
@@ -307,15 +275,13 @@ pub extern "Rust" fn LayoutTextCombineRecalcContentsInkOverflow(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:145-149
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineResetLayout(this: &mut LayoutTextCombine) {
+pub fn LayoutTextCombineResetLayout(this: &mut LayoutTextCombine) {
     this.CheckIsNotDestroyed();
     this.ResetScaleAndFontForInline();
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:199-207
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineSetScaleX(this: &mut LayoutTextCombine, scale: f32) {
+pub fn LayoutTextCombineSetScaleX(this: &mut LayoutTextCombine, scale: f32) {
     this.CheckIsNotDestroyed();
     debug_assert!(scale > 0.0);
     debug_assert!(this.ScaleXForInline().is_none());
@@ -324,8 +290,7 @@ pub extern "Rust" fn LayoutTextCombineSetScaleX(this: &mut LayoutTextCombine, sc
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:209-214
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineSetCompressedFont(
+pub fn LayoutTextCombineSetCompressedFont(
     this: &mut LayoutTextCombine,
     font: *const Font,
 ) {
@@ -336,8 +301,7 @@ pub extern "Rust" fn LayoutTextCombineSetCompressedFont(
 }
 
 // cpp: layoutng_inline/layout_text_combine.cc:216-223
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineUsingSyntheticOblique(this: &LayoutTextCombine) -> bool {
+pub fn LayoutTextCombineUsingSyntheticOblique(this: &LayoutTextCombine) -> bool {
     this.CheckIsNotDestroyed();
     unsafe { &*unsafe { &*this.Parent() }.StyleRef().GetFont() }
         .GetFontDescription()
@@ -347,7 +311,6 @@ pub extern "Rust" fn LayoutTextCombineUsingSyntheticOblique(this: &LayoutTextCom
 // The C++ dynamic cast is virtual; the owner records the most-derived type
 // because Rust does not have a C++ vtable for LayoutObject.
 // cpp: layoutng/internal/layout_text_combine.h:131-136
-#[unsafe(no_mangle)]
-pub extern "Rust" fn DispatchIsLayoutTextCombine(object: &LayoutObject) -> bool {
+pub fn DispatchIsLayoutTextCombine(object: &LayoutObject) -> bool {
     object.RuntimeClass() == LayoutObjectClass::TextCombine
 }

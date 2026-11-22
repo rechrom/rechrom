@@ -1,15 +1,19 @@
-// C++: layoutng_inline/inline_item.cc. Non-inline methods of the InlineItem
-// type owned by //src/layout_core; linked in the shared assembly.
+// C++: layoutng_inline/inline_item.cc (Chromium core/layout/inline/inline_item.cc).
+// The item-building members of base's InlineItem record (constructor with
+// ComputeBoxProperties, Split, SetSegmentData, SetBidiLevelForItems). Rust
+// cannot add inherent methods to a base type, so `InlineItemAlgorithms`
+// carries them; the inline sources import it through `crate::algorithms`.
+// The record members (copy, trace, index, checks) are base code (R5).
 #![allow(non_snake_case)]
 
-use font_engine::{Font, RunSegmenterRange, ShapeResult};
-use foundation::{MakeGarbageCollected, Member, String, To, Visitor};
+#[allow(unused_imports)]
+use crate::algorithms::*;
+use font_engine::RunSegmenterRange;
+use foundation::{MakeGarbageCollected, Member};
 use layout_core::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
 use layout_core::internal::inline_item_segment::InlineItemSegment;
 use layout_core::internal::layout_invalidation_reason;
 use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::text_item_type::TextItemType;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_inline/inline_item.cc:17-24
@@ -39,8 +43,7 @@ fn IsInlineBoxEndEmpty(style: &ComputedStyle, object: &LayoutObject) -> bool {
 }
 
 // cpp: layoutng_inline/inline_item.cc:71-83
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemNew(
+fn InlineItemNew(
     type_: InlineItemType,
     start: u32,
     end: u32,
@@ -52,36 +55,8 @@ pub extern "Rust" fn InlineItemNew(
     item
 }
 
-// cpp: layoutng_inline/inline_item.cc:85-108
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemCloneAdjusted(
-    item: &InlineItem,
-    start: u32,
-    end: u32,
-    shape_result: *const ShapeResult,
-) -> InlineItem {
-    let clone = InlineItem::clone_adjusted_base_for_inline(item, start, end, shape_result);
-    debug_assert!(end >= start);
-    clone
-}
-
-// cpp: layoutng_inline/inline_item.cc:110-114
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemClone(item: &InlineItem) -> InlineItem {
-    InlineItemCloneAdjusted(
-        item,
-        item.start_offset_,
-        item.end_offset_,
-        item.shape_result_.Get(),
-    )
-}
-
-// cpp: layoutng_inline/inline_item.cc:116-116
-// Rust's field-owning drop is the source's default destructor.
-
 // cpp: layoutng_inline/inline_item.cc:118-151
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemComputeBoxProperties(item: &mut InlineItem) {
+fn InlineItemComputeBoxProperties(item: &mut InlineItem) {
     debug_assert!(!item.is_empty_item_);
     if matches!(
         item.type_,
@@ -117,8 +92,7 @@ pub extern "Rust" fn InlineItemComputeBoxProperties(item: &mut InlineItem) {
 }
 
 // cpp: layoutng_inline/inline_item.cc:153-162
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemSetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems) {
+fn InlineItemSetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems) {
     let segment_data = InlineItemSegment::PackSegmentData(range);
     for item_ptr in items.iter_mut() {
         let item = unsafe { &mut *item_ptr.Get() };
@@ -129,8 +103,7 @@ pub extern "Rust" fn InlineItemSetSegmentData(range: &RunSegmenterRange, items: 
 }
 
 // cpp: layoutng_inline/inline_item.cc:164-220
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemSetBidiLevelForItems(
+fn InlineItemSetBidiLevelForItems(
     items: &mut InlineItems,
     mut index: u32,
     end_offset: u32,
@@ -177,56 +150,8 @@ pub extern "Rust" fn InlineItemSetBidiLevelForItems(
     index
 }
 
-// cpp: layoutng_inline/inline_item.cc:222-229
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemFontWithSvgScaling(item: &InlineItem) -> *const Font {
-    let object = item.layout_object_.Get();
-    if !object.is_null() && unsafe { &*object }.IsSVGInlineText() {
-        let text = To::<LayoutText>(object);
-        return unsafe { &*text }.ScaledFont();
-    }
-    unsafe { &*item.Style() }.GetFont()
-}
-
-// cpp: layoutng_inline/inline_item.cc:231-240
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemIndexInItems(
-    item: &InlineItem,
-    items: &[Member<InlineItem>],
-) -> u32 {
-    let mut index = 0;
-    for candidate in items {
-        if std::ptr::eq(item, unsafe { &*candidate.Get() }) {
-            return index;
-        }
-        index += 1;
-    }
-    index
-}
-
-// cpp: layoutng_inline/inline_item.cc:242-247
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemUpdateIndex(items: &mut [Member<InlineItem>]) {
-    let mut index = 0;
-    for item in items {
-        unsafe { &mut *item.Get() }.index_ = index;
-        index += 1;
-    }
-}
-
-// cpp: layoutng_inline/inline_item.cc:249-257
-#[cfg(feature = "expensive_dchecks")]
-pub fn InlineItemCheckIndex(items: &mut [Member<InlineItem>]) {
-    let mut index = 0;
-    for item in items {
-        debug_assert_eq!(unsafe { &*item.Get() }.index_, index);
-        index += 1;
-    }
-}
-
 // cpp: layoutng_inline/inline_item.cc:259-274
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemSplit(items: &mut InlineItems, index: u32, offset: u32) {
+fn InlineItemSplit(items: &mut InlineItems, index: u32, offset: u32) {
     let source = items[index as usize].Get();
     debug_assert!(offset > unsafe { &*source }.start_offset_);
     debug_assert!(offset < unsafe { &*source }.end_offset_);
@@ -237,47 +162,66 @@ pub extern "Rust" fn InlineItemSplit(items: &mut InlineItems, index: u32, offset
     items.insert(index as usize + 1, Member::from_ptr(copy));
 }
 
-// cpp: layoutng_inline/inline_item.cc:276-307
-#[cfg(debug_assertions)]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemCheckTextType(item: &InlineItem, text_content: &String) {
-    let character = if item.Length() != 0 {
-        text_content.Span16().expect("text content is null")[item.StartOffset() as usize]
-    } else {
-        0
-    };
-    match character {
-        0x000a => {
-            debug_assert_eq!(item.Length(), 1);
-            debug_assert_eq!(item.Type(), InlineItemType::kControl);
-            debug_assert_eq!(item.TextType(), TextItemType::kForcedLineBreak);
-        }
-        0x0009 => {
-            debug_assert_eq!(item.Type(), InlineItemType::kControl);
-            debug_assert_eq!(item.TextType(), TextItemType::kFlowControl);
-        }
-        0x000d | 0x000c | 0x200b => {
-            if item.Type() == InlineItemType::kControl {
-                debug_assert_eq!(item.Length(), 1);
-                debug_assert_eq!(item.TextType(), TextItemType::kFlowControl);
-            } else {
-                debug_assert_eq!(item.Type(), InlineItemType::kText);
-                debug_assert_eq!(item.TextType(), TextItemType::kNormal);
-            }
-        }
-        _ => {
-            debug_assert_ne!(item.Type(), InlineItemType::kControl);
-            debug_assert!(matches!(
-                item.TextType(),
-                TextItemType::kNormal | TextItemType::kSymbolMarker
-            ));
-        }
-    }
+
+// cpp: layoutng/internal/inline_item.h:66-78,140-156,264-292
+pub trait InlineItemAlgorithms {
+    fn new(
+        type_: InlineItemType,
+        start: u32,
+        end: u32,
+        layout_object: *mut LayoutObject,
+    ) -> InlineItem;
+    fn ComputeBoxProperties(&mut self);
+    fn Split(items: &mut InlineItems, index: u32, offset: u32);
+    fn SetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems);
+    fn SetBidiLevelForItems(
+        items: &mut InlineItems,
+        index: u32,
+        end_offset: u32,
+        level: u8,
+        num_out_of_flow: u32,
+    ) -> u32;
+    fn SetBidiLevelForItemsDefault(
+        items: &mut InlineItems,
+        index: u32,
+        end_offset: u32,
+        level: u8,
+    ) -> u32;
 }
 
-// cpp: layoutng_inline/inline_item.cc:309-312
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineItemTrace(item: &InlineItem, visitor: &mut Visitor<'_>) {
-    visitor.Trace(&item.shape_result_);
-    visitor.Trace(&item.layout_object_);
+impl InlineItemAlgorithms for InlineItem {
+    fn new(
+        type_: InlineItemType,
+        start: u32,
+        end: u32,
+        layout_object: *mut LayoutObject,
+    ) -> InlineItem {
+        InlineItemNew(type_, start, end, layout_object)
+    }
+    fn ComputeBoxProperties(&mut self) {
+        InlineItemComputeBoxProperties(self)
+    }
+    fn Split(items: &mut InlineItems, index: u32, offset: u32) {
+        InlineItemSplit(items, index, offset)
+    }
+    fn SetSegmentData(range: &RunSegmenterRange, items: &mut InlineItems) {
+        InlineItemSetSegmentData(range, items)
+    }
+    fn SetBidiLevelForItems(
+        items: &mut InlineItems,
+        index: u32,
+        end_offset: u32,
+        level: u8,
+        num_out_of_flow: u32,
+    ) -> u32 {
+        InlineItemSetBidiLevelForItems(items, index, end_offset, level, num_out_of_flow)
+    }
+    fn SetBidiLevelForItemsDefault(
+        items: &mut InlineItems,
+        index: u32,
+        end_offset: u32,
+        level: u8,
+    ) -> u32 {
+        InlineItemSetBidiLevelForItems(items, index, end_offset, level, 0)
+    }
 }

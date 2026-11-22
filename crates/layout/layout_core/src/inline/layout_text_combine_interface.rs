@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 
 use std::ops::{Deref, DerefMut};
 
@@ -15,7 +15,35 @@ use super::super::layout_block_flow::LayoutBlockFlow;
 use super::super::layout_object::{LayoutObject, LayoutObjectClass};
 use super::super::layout_text::LayoutText;
 
-// These non-inline bodies belong to //src/layoutng_inline.
+// Out-of-line members (snapshot layoutng_inline/layout_text_combine.cc) are base code.
+// Chromium core/layout/layout_text_combine.cc: the LayoutTextCombine member bodies are base code (R5).
+#[cfg(feature = "translation_in_progress")]
+#[path = "layout_text_combine.rs"]
+pub mod layout_text_combine_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::layout_text_combine_members::{
+    LayoutTextCombineNew,
+    LayoutTextCombineDesiredWidth,
+    LayoutTextCombineGetTextContent,
+    LayoutTextCombineSetCompressedFont,
+    LayoutTextCombineAdjustOffsetForHitTest,
+    LayoutTextCombineAdjustOffsetForLocalCaretRect,
+    LayoutTextCombineAdjustRectForBoundingBox,
+    LayoutTextCombineComputeTextBoundsRectForHitTest,
+    LayoutTextCombineRecalcContentsInkOverflow,
+    LayoutTextCombineResetLayout,
+    LayoutTextCombineSetScaleX,
+    LayoutTextCombineCreateAnonymous,
+    LayoutTextCombineApplyScaleXOffset,
+    LayoutTextCombineApplyScaleXRect,
+    LayoutTextCombineApplyScaleXSize,
+    LayoutTextCombineUnapplyScaleX,
+    LayoutTextCombineComputeInlineSpacing,
+    LayoutTextCombineUsingSyntheticOblique,
+    DispatchIsLayoutTextCombine,
+};
+#[cfg(not(feature = "translation_in_progress"))]
 unsafe extern "Rust" {
     fn LayoutTextCombineNew() -> LayoutTextCombine;
     fn LayoutTextCombineDesiredWidth(this: &LayoutTextCombine) -> f32;
@@ -44,7 +72,6 @@ unsafe extern "Rust" {
     ) -> PhysicalRect;
     fn LayoutTextCombineResetLayout(this: &mut LayoutTextCombine);
     fn LayoutTextCombineSetScaleX(this: &mut LayoutTextCombine, new_scale_x: f32);
-    fn LayoutTextCombineAssertStyleIsValid(style: &ComputedStyle);
     fn LayoutTextCombineCreateAnonymous(text_child: *mut LayoutText) -> *mut LayoutTextCombine;
     fn LayoutTextCombineApplyScaleXOffset(
         this: &LayoutTextCombine,
@@ -65,6 +92,14 @@ unsafe extern "Rust" {
     fn LayoutTextCombineComputeInlineSpacing(this: &LayoutTextCombine) -> f32;
     fn LayoutTextCombineUsingSyntheticOblique(this: &LayoutTextCombine) -> bool;
     fn DispatchIsLayoutTextCombine(object: &LayoutObject) -> bool;
+}
+#[cfg(feature = "translation_in_progress")]
+use crate::internal::text_combine_style_service::text_combine_style_members::{
+    LayoutTextCombineAssertStyleIsValid,
+};
+#[cfg(not(feature = "translation_in_progress"))]
+unsafe extern "Rust" {
+    fn LayoutTextCombineAssertStyleIsValid(style: &ComputedStyle);
 }
 
 // cpp: layoutng/internal/layout_text_combine.h:23-115

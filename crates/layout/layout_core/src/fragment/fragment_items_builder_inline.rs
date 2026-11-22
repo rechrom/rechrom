@@ -20,8 +20,7 @@ use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 
 // cpp: layoutng_inline/fragment_items_builder_inline.cc:14-45
-#[unsafe(no_mangle)]
-pub extern "Rust" fn FragmentItemsBuilderNewForInline(
+pub fn FragmentItemsBuilderNewForInline(
     node: &InlineNode,
     writing_direction: WritingDirectionMode,
     is_block_fragmented: bool,
@@ -45,8 +44,7 @@ pub extern "Rust" fn FragmentItemsBuilderNewForInline(
 }
 
 // cpp: layoutng_inline/fragment_items_builder_inline.cc:47-169
-#[unsafe(no_mangle)]
-pub extern "Rust" fn FragmentItemsBuilderAddPreviousItemsFromInline(
+pub fn FragmentItemsBuilderAddPreviousItemsFromInline(
     builder: &mut FragmentItemsBuilder,
     container: &PhysicalBoxFragment,
     items: &FragmentItems,

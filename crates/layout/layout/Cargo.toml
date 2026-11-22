@@ -28,10 +28,10 @@ layout_algo_forms = { path = "../layout_algo_forms" }
 layout_algo_replaced = { path = "../layout_algo_replaced" }
 layout_algo_svg = { path = "../layout_algo_svg" }
 layout_algo_list = { path = "../layout_algo_list" }
-# Always linked: base declares the LayoutText/LayoutInline/InlineNode/InlineItem
-# members whose bodies inline defines (`extern "Rust"`), as when inline was
-# compiled inside the assembly. Its registration stays behind `inline_layout`.
-layout_algo_inline = { path = "../layout_algo_inline" }
+# Inline formatting (registration behind `inline_layout`). Base has no
+# link-time references into it (R5 part 2): it calls inline only through the
+# registry slots `registration::Register` fills.
+layout_algo_inline = { path = "../layout_algo_inline", optional = true }
 layout_algo_out_of_flow = { path = "../layout_algo_out_of_flow", optional = true }
 
 [features]
@@ -39,7 +39,11 @@ default = ["inline_layout"]
 # The browser's full algorithm set: inline formatting, block-inline support
 # and out-of-flow positioning. Without it the assembly keeps the source
 # capability errors for those slots.
-inline_layout = ["layout_algo_block/inline_extension", "dep:layout_algo_out_of_flow"]
+inline_layout = [
+    "dep:layout_algo_inline",
+    "layout_algo_block/inline_extension",
+    "dep:layout_algo_out_of_flow",
+]
 
 [lib]
 path = "src/lib.rs"

@@ -24,12 +24,8 @@ impl Default for HyphenResult {
 }
 
 impl HyphenResult {
-    // cpp: layoutng/internal/hyphen_result.h:22-22
-    pub fn new(style: &ComputedStyle) -> Self {
-        let mut result = Self::default();
-        result.Shape(style);
-        result
-    }
+    // cpp: layoutng/internal/hyphen_result.h:22-22,34-34: the shaping
+    // constructor and Shape are `HyphenResultAlgorithms` (layout_algo_inline).
 
     // cpp: layoutng/internal/hyphen_result.h:24-24
     pub fn Trace(&self, visitor: &mut Visitor) {
@@ -55,15 +51,4 @@ impl HyphenResult {
     pub fn InlineSize(&self) -> LayoutUnit {
         self.GetShapeResult().SnappedWidth().ClampNegativeToZero()
     }
-
-    // cpp: layoutng/internal/hyphen_result.h:34-34
-    // Defined in //src/layoutng_inline/hyphen_result.cc. The selected
-    // package retains this call but does not copy the inline package's body.
-    pub fn Shape(&mut self, style: &ComputedStyle) {
-        unsafe { ShapeHyphenResult(self, style) }
-    }
-}
-
-unsafe extern "Rust" {
-    fn ShapeHyphenResult(result: &mut HyphenResult, style: &ComputedStyle);
 }

@@ -391,6 +391,22 @@ pub mod layout_fragment_sticky_offsets;
 #[cfg(feature = "translation_in_progress")]
 #[path = "inline/layout_text_fragment.rs"]
 pub mod layout_text_fragment;
+// LayoutBR, LayoutCounter, LayoutRubyAsBlock and LayoutWordBreak (Chromium
+// core/layout/layout_br.cc, layout_counter.cc, layout_ruby_as_block.cc,
+// layout_word_break.cc) are object-model classes: base since R5 part 2.
+// `layout_algo_inline::registration` still constructs them.
+#[cfg(feature = "translation_in_progress")]
+#[path = "inline/layout_br.rs"]
+pub mod layout_br;
+#[cfg(feature = "translation_in_progress")]
+#[path = "inline/layout_counter.rs"]
+pub mod layout_counter;
+#[cfg(feature = "translation_in_progress")]
+#[path = "inline/layout_ruby_as_block.rs"]
+pub mod layout_ruby_as_block;
+#[cfg(feature = "translation_in_progress")]
+#[path = "inline/layout_word_break.rs"]
+pub mod layout_word_break;
 #[path = "inline/offset_mapping.rs"]
 pub mod offset_mapping;
 
@@ -428,10 +444,10 @@ pub use internal::editing::forward::{
     PositionWithAffinity as EditingPositionWithAffinity, TextAffinity as EditingTextAffinity,
 };
 
-#[path = "../../layout_algo_inline/src/editing_caret.rs"]
+#[path = "editing/editing_caret.rs"]
 pub(crate) mod layout_algo_inline_editing_caret;
 
-#[path = "../../layout_algo_inline/src/editing_caret_rect.rs"]
+#[path = "editing/editing_caret_rect.rs"]
 pub(crate) mod layout_algo_inline_editing_caret_rect;
 
 

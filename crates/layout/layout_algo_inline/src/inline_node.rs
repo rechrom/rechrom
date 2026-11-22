@@ -3,6 +3,8 @@
 // source-mapped. Shared assembly and external font interfaces remain pending.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::font_description::FontDescription;
 use font_engine::fonts::font_width_variant::FontWidthVariant;
 use font_engine::fonts::shaping::ng_shape_cache::{ShapeCacheKey, ShaperResult};
@@ -495,8 +497,7 @@ fn collect_inlines_internal<MappingMode: InlineItemsMappingMode>(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1148-1186
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeCollectInlines(
+pub fn InlineNodeCollectInlines(
     this: &InlineNode,
     data: *mut InlineNodeData,
     mut previous_data: *mut InlineNodeData,
@@ -615,8 +616,7 @@ pub fn InlineNodeFindSvgTextChunks(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1078-1089
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeComputeOffsetMappingIfNeeded(
+pub fn InlineNodeComputeOffsetMappingIfNeeded(
     this: &InlineNode,
 ) -> *const OffsetMapping {
     debug_assert!(unsafe { &*this.GetLayoutBlockFlow() }.HasPreparedLayoutInput());
@@ -665,8 +665,7 @@ pub fn InlineNodeComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut In
 }
 
 // cpp: layoutng_inline/inline_node.cc:1128-1145
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeGetOffsetMapping(
+pub fn InlineNodeGetOffsetMapping(
     block: *mut LayoutBlockFlow,
 ) -> *const OffsetMapping {
     debug_assert!(unsafe { &*block }.HasPreparedLayoutInput());
@@ -1133,8 +1132,7 @@ fn truncate_or_pad_text(text: &mut String, length: u32) {
 }
 
 // cpp: layoutng_inline/inline_node.cc:66-77
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsStickyImagesQuirkForContentSize(this: &InlineNode) -> bool {
+pub fn InlineNodeIsStickyImagesQuirkForContentSize(this: &InlineNode) -> bool {
     if unsafe { &*this.GetLayoutBox() }.InQuirksModeForLayout() {
         let style = this.Style();
         if style.Display() == EDisplay::kTableCell && style.LogicalWidth().IsAuto() {
@@ -1151,101 +1149,14 @@ pub fn InlineNodeInvalidatePrepareLayoutForTest(this: &mut InlineNode) {
     debug_assert!(!this.IsPrepareLayoutFinished());
 }
 
-// cpp: layoutng_inline/inline_node.cc:85-87
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeItemsData(
-    this: &InlineNode,
-    first_line: bool,
-) -> *const InlineItemsData {
-    this.Data().ItemsData(first_line)
-}
-
-// cpp: layoutng_inline/inline_node.cc:89-95
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeFirstLineOffsetMap(
-    this: &InlineNode,
-) -> *const Option<TextOffsetMap> {
-    static EMPTY: Option<TextOffsetMap> = None;
-    if this.Data().HasFirstLineItems() {
-        return this.Data().ItemsData(true).OffsetMap();
-    }
-    &EMPTY
-}
-
-// cpp: layoutng_inline/inline_node.cc:97-119
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsBidiEnabled(this: &InlineNode) -> bool {
-    this.Data().IsBidiEnabled()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeBaseDirection(this: &InlineNode) -> foundation::TextDirection {
-    match this.Data().BaseDirection() {
-        InputTextDirection::kLtr => TextDirection::kLtr,
-        InputTextDirection::kRtl => TextDirection::kRtl,
-    }
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeHasFloats(this: &InlineNode) -> bool {
-    this.Data().HasFloats()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeHasInitialLetterBox(this: &InlineNode) -> bool {
-    this.Data().HasInitialLetterBox()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeHasRuby(this: &InlineNode) -> bool {
-    this.Data().HasRuby()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeHasTextEmphasis(this: &InlineNode) -> bool {
-    this.Data().HasTextEmphasis()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsBisectLineBreakDisabled(this: &InlineNode) -> bool {
-    this.Data().IsBisectLineBreakDisabled()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsScoreLineBreakDisabled(this: &InlineNode) -> bool {
-    this.Data().IsScoreLineBreakDisabled()
-}
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeCanContainFirstFormattedLine(this: &InlineNode) -> bool {
-    let block = this.GetLayoutBlockFlow();
-    debug_assert!(!block.is_null());
-    unsafe { &*block }.CanContainFirstFormattedLine()
-}
-
-// cpp: layoutng_inline/inline_node.cc:121-124
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeMutableData(this: &InlineNode) -> *mut InlineNodeData {
-    unsafe { &*this.GetLayoutBlockFlow() }.GetInlineNodeData()
-}
-
-// cpp: layoutng_inline/inline_node.cc:125-130
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeData(this: &InlineNode) -> *const InlineNodeData {
-    debug_assert!(this.IsPrepareLayoutFinished());
-    let block = this.GetLayoutBlockFlow();
-    debug_assert!(!unsafe { &*block }.NeedsCollectInlines());
-    unsafe { &*block }.GetInlineNodeData()
-}
-
 // cpp: layoutng_inline/inline_node.cc:131-135
 pub fn InlineNodeMaybeDirtyData(this: &InlineNode) -> *const InlineNodeData {
     debug_assert!(this.IsPrepareLayoutFinished());
     unsafe { &*this.GetLayoutBlockFlow() }.GetInlineNodeData()
 }
 
-// cpp: layoutng_inline/inline_node.cc:658-660
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsPrepareLayoutFinished(this: &InlineNode) -> bool {
-    let data = unsafe { &*this.GetLayoutBlockFlow() }.GetInlineNodeData();
-    !data.is_null() && !unsafe { &*data }.text_content.IsNull()
-}
-
 // cpp: layoutng_inline/inline_node.cc:662-686
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodePrepareLayoutIfNeeded(this: &InlineNode) {
+pub fn InlineNodePrepareLayoutIfNeeded(this: &InlineNode) {
     let mut previous_data: *mut InlineNodeData = std::ptr::null_mut();
     let block_flow = unsafe { &mut *this.GetLayoutBlockFlow() };
     if this.IsPrepareLayoutFinished() {
@@ -1272,8 +1183,7 @@ pub extern "Rust" fn InlineNodePrepareLayoutIfNeeded(this: &InlineNode) {
 }
 
 // cpp: layoutng_inline/inline_node.cc:688-720
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodePrepareLayout(
+pub fn InlineNodePrepareLayout(
     this: &InlineNode,
     previous_data: *mut InlineNodeData,
 ) {
@@ -1307,8 +1217,7 @@ pub extern "Rust" fn InlineNodePrepareLayout(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1239-1246
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSegmentText(
+pub fn InlineNodeSegmentText(
     this: &InlineNode,
     data: *mut InlineNodeData,
     previous_data: *mut InlineNodeData,
@@ -1323,8 +1232,7 @@ pub extern "Rust" fn InlineNodeSegmentText(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1249-1313
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSegmentScriptRuns(
+pub fn InlineNodeSegmentScriptRuns(
     this: &InlineNode,
     data: *mut InlineNodeData,
     previous_data: *mut InlineNodeData,
@@ -1403,8 +1311,7 @@ pub extern "Rust" fn InlineNodeSegmentScriptRuns(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1315-1355
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSegmentFontOrientation(
+pub fn InlineNodeSegmentFontOrientation(
     this: &InlineNode,
     data: *mut InlineNodeData,
 ) {
@@ -1462,8 +1369,7 @@ pub extern "Rust" fn InlineNodeSegmentFontOrientation(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1357-1487
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSegmentBidiRuns(this: &InlineNode, data: *mut InlineNodeData) {
+pub fn InlineNodeSegmentBidiRuns(this: &InlineNode, data: *mut InlineNodeData) {
     let data = unsafe { &mut *data };
     if !data.is_bidi_enabled_ {
         data.SetBaseDirection(InputTextDirection::kLtr);
@@ -1600,8 +1506,7 @@ pub extern "Rust" fn InlineNodeSegmentBidiRuns(this: &InlineNode, data: *mut Inl
 }
 
 // cpp: layoutng_inline/inline_node.cc:1489-1575
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeIsNGShapeCacheAllowed(
+pub fn InlineNodeIsNGShapeCacheAllowed(
     _this: &InlineNode,
     text_content: &String,
     override_font: *const Font,
@@ -1665,8 +1570,7 @@ pub extern "Rust" fn InlineNodeIsNGShapeCacheAllowed(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1577-1817
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeShapeText(
+pub fn InlineNodeShapeText(
     this: &InlineNode,
     data: *mut InlineItemsData,
     previous_text: *const String,
@@ -1912,8 +1816,7 @@ pub extern "Rust" fn InlineNodeShapeText(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1819-1910
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeShapeTextForFirstLineIfNeeded(
+pub fn InlineNodeShapeTextForFirstLineIfNeeded(
     this: &InlineNode,
     data: *mut InlineNodeData,
 ) {
@@ -2006,8 +1909,7 @@ pub extern "Rust" fn InlineNodeShapeTextForFirstLineIfNeeded(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1912-1919
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeShapeTextIncludingFirstLine(
+pub fn InlineNodeShapeTextIncludingFirstLine(
     this: &InlineNode,
     data: *mut InlineNodeData,
     previous_text: *const String,
@@ -2020,8 +1922,7 @@ pub extern "Rust" fn InlineNodeShapeTextIncludingFirstLine(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1921-1953
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeAssociateItemsWithInlines(
+pub fn InlineNodeAssociateItemsWithInlines(
     _this: &InlineNode,
     data: *mut InlineNodeData,
 ) {
@@ -2064,8 +1965,7 @@ pub extern "Rust" fn InlineNodeAssociateItemsWithInlines(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1955-1966
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeLayout(
+pub fn InlineNodeLayout(
     this: &InlineNode,
     space: &ConstraintSpace,
     break_token: *const BreakToken,
@@ -2108,8 +2008,7 @@ fn create_text_content_for_sticky_images_quirk(
 }
 
 // cpp: layoutng_inline/inline_node.cc:1989-2007
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeTextContentForStickyImagesQuirk(data: &InlineItemsData) -> String {
+pub fn InlineNodeTextContentForStickyImagesQuirk(data: &InlineItemsData) -> String {
     for (index, item) in data.items.iter().enumerate() {
         let item = unsafe { &*item.Get() };
         if item.Type() == InlineItemType::kAtomicInline && item.IsImage() {
@@ -2523,8 +2422,7 @@ fn compute_content_size(
 }
 
 // cpp: layoutng_inline/inline_node.cc:2362-2398
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeComputeMinMaxSizes(
+pub fn InlineNodeComputeMinMaxSizes(
     this: &InlineNode,
     container_writing_mode: WritingMode,
     space: &ConstraintSpace,
@@ -2579,15 +2477,6 @@ pub extern "Rust" fn InlineNodeComputeMinMaxSizes(
     MinMaxSizesResult::new(sizes, depends_on_block_constraints)
 }
 
-// cpp: layoutng_inline/inline_node.cc:2400-2404
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeUseFirstLineStyleItemsData(this: &InlineNode) -> bool {
-    let box_ptr = this.GetLayoutBox();
-    !box_ptr.is_null()
-        && unsafe { &*box_ptr }.HasFirstLineStylesForLayout()
-        && this.Data().HasFirstLineItems()
-}
-
 // cpp: layoutng_inline/inline_node.cc:2497-2499
 pub fn InlineNodeNeedsShapingForTesting(item: &InlineItem) -> bool {
     needs_shaping(item)
@@ -2608,36 +2497,8 @@ pub fn InlineNodeCheckConsistency(this: &InlineNode) {
     }
 }
 
-// cpp: layoutng_inline/inline_node.cc:2417-2421
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSvgCharacterDataList(
-    this: &InlineNode,
-) -> *const Vec<(u32, SvgCharacterData)> {
-    debug_assert!(this.IsSvgText());
-    &unsafe { &*this.Data().svg_node_data_.Get() }.character_data_list
-}
-
-// cpp: layoutng_inline/inline_node.cc:2423-2427
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSvgTextLengthRangeList(
-    this: &InlineNode,
-) -> *const HeapVector<SvgTextContentRange> {
-    debug_assert!(this.IsSvgText());
-    &unsafe { &*this.Data().svg_node_data_.Get() }.text_length_range_list
-}
-
-// cpp: layoutng_inline/inline_node.cc:2429-2433
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeSvgTextPathRangeList(
-    this: &InlineNode,
-) -> *const HeapVector<SvgTextContentRange> {
-    debug_assert!(this.IsSvgText());
-    &unsafe { &*this.Data().svg_node_data_.Get() }.text_path_range_list
-}
-
 // cpp: layoutng_inline/inline_node.cc:2435-2443
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeFontForTab(this: &InlineNode) -> *const Font {
+pub fn InlineNodeFontForTab(this: &InlineNode) -> *const Font {
     let layout_box_node = this.GetDOMNode();
     let is_first_letter =
         !layout_box_node.is_null() && unsafe { &*layout_box_node }.IsFirstLetterPseudoElement();
@@ -2651,14 +2512,12 @@ pub extern "Rust" fn InlineNodeFontForTab(this: &InlineNode) -> *const Font {
 }
 
 // cpp: layoutng_inline/inline_node.cc:2445-2447
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeMinimumFontPhysicalSize(this: &InlineNode) -> Option<f32> {
+pub fn InlineNodeMinimumFontPhysicalSize(this: &InlineNode) -> Option<f32> {
     unsafe { &*this.GetLayoutBox() }.MinimumFontPhysicalSizeForLayout()
 }
 
 // cpp: layoutng_inline/inline_node.cc:2449-2495
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineNodeAdjustFontForTextCombineUprightAll(this: &InlineNode) {
+pub fn InlineNodeAdjustFontForTextCombineUprightAll(this: &InlineNode) {
     debug_assert!(this.IsTextCombine());
     debug_assert!(this.IsPrepareLayoutFinished());
     let content_width = calculate_width_for_text_combine(this.ItemsData(false));
@@ -2706,4 +2565,167 @@ pub extern "Rust" fn InlineNodeAdjustFontForTextCombineUprightAll(this: &InlineN
     );
     debug_assert_ne!(content_width, 0.0);
     text_combine_ref.SetScaleX(desired_width / content_width);
+}
+
+// cpp: layoutng/internal/inline_node.h:48-198
+// The out-of-line InlineNode members (Chromium core/layout/inline/inline_node.cc).
+// InlineNode is declared by base (LayoutInputNode subtype); Rust cannot add
+// inherent methods there from this crate, so the inline sources and block's
+// inline extension reach them through this trait (`crate::algorithms`).
+// Base calls only the header accessors (defined with the declaration) and
+// GetOffsetMapping (registry slot `InlineLayoutSupport::get_offset_mapping`).
+pub trait InlineNodeAlgorithms {
+    fn Layout(
+        &self,
+        space: &ConstraintSpace,
+        break_token: *const BreakToken,
+        spanner: *const ColumnSpannerPath,
+        context: *mut ForwardInlineChildLayoutContext,
+    ) -> *const LayoutResult;
+    fn ComputeMinMaxSizes(
+        &self,
+        mode: WritingMode,
+        space: &ConstraintSpace,
+        floats: &MinMaxSizesFloatInput,
+    ) -> MinMaxSizesResult;
+    fn IsStickyImagesQuirkForContentSize(&self) -> bool;
+    fn TextContentForStickyImagesQuirk(data: &InlineItemsData) -> String;
+    fn ComputeOffsetMappingIfNeeded(&self) -> *const OffsetMapping;
+    fn FontForTab(&self) -> &Font;
+    fn MinimumFontPhysicalSize(&self) -> Option<f32>;
+    fn PrepareLayoutIfNeeded(&self);
+    fn PrepareLayout(&self, previous: *mut InlineNodeData);
+    fn CollectInlines(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData);
+    fn CollectInlinesDefault(&self, data: *mut InlineNodeData);
+    fn SegmentText(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData);
+    fn SegmentScriptRuns(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData);
+    fn SegmentFontOrientation(&self, data: *mut InlineNodeData);
+    fn SegmentBidiRuns(&self, data: *mut InlineNodeData);
+    fn ShapeText(
+        &self,
+        data: *mut InlineItemsData,
+        previous_text: *const String,
+        previous_items: *const InlineItems,
+        override_font: *const Font,
+    );
+    fn ShapeTextDefault(&self, data: *mut InlineItemsData);
+    fn ShapeTextForFirstLineIfNeeded(&self, data: *mut InlineNodeData);
+    fn ShapeTextIncludingFirstLine(
+        &self,
+        data: *mut InlineNodeData,
+        previous_text: *const String,
+        previous_items: *const InlineItems,
+    );
+    fn AssociateItemsWithInlines(&self, data: *mut InlineNodeData);
+    fn IsNGShapeCacheAllowed(
+        &self,
+        text: &String,
+        font: *const Font,
+        items: &InlineItems,
+        spacing: &mut ShapeResultSpacing,
+    ) -> bool;
+    fn AdjustFontForTextCombineUprightAll(&self);
+}
+
+impl InlineNodeAlgorithms for InlineNode {
+    fn Layout(
+        &self,
+        space: &ConstraintSpace,
+        break_token: *const BreakToken,
+        spanner: *const ColumnSpannerPath,
+        context: *mut ForwardInlineChildLayoutContext,
+    ) -> *const LayoutResult {
+        InlineNodeLayout(self, space, break_token, spanner, context)
+    }
+    fn ComputeMinMaxSizes(
+        &self,
+        mode: WritingMode,
+        space: &ConstraintSpace,
+        floats: &MinMaxSizesFloatInput,
+    ) -> MinMaxSizesResult {
+        InlineNodeComputeMinMaxSizes(self, mode, space, floats)
+    }
+    fn IsStickyImagesQuirkForContentSize(&self) -> bool {
+        InlineNodeIsStickyImagesQuirkForContentSize(self)
+    }
+    fn TextContentForStickyImagesQuirk(data: &InlineItemsData) -> String {
+        InlineNodeTextContentForStickyImagesQuirk(data)
+    }
+    fn ComputeOffsetMappingIfNeeded(&self) -> *const OffsetMapping {
+        InlineNodeComputeOffsetMappingIfNeeded(self)
+    }
+    fn FontForTab(&self) -> &Font {
+        unsafe { &*InlineNodeFontForTab(self) }
+    }
+    fn MinimumFontPhysicalSize(&self) -> Option<f32> {
+        InlineNodeMinimumFontPhysicalSize(self)
+    }
+    fn PrepareLayoutIfNeeded(&self) {
+        InlineNodePrepareLayoutIfNeeded(self)
+    }
+    fn PrepareLayout(&self, previous: *mut InlineNodeData) {
+        InlineNodePrepareLayout(self, previous)
+    }
+    fn CollectInlines(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
+        InlineNodeCollectInlines(self, data, previous)
+    }
+    fn CollectInlinesDefault(&self, data: *mut InlineNodeData) {
+        InlineNodeCollectInlines(self, data, std::ptr::null_mut())
+    }
+    fn SegmentText(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
+        InlineNodeSegmentText(self, data, previous)
+    }
+    fn SegmentScriptRuns(&self, data: *mut InlineNodeData, previous: *mut InlineNodeData) {
+        InlineNodeSegmentScriptRuns(self, data, previous)
+    }
+    fn SegmentFontOrientation(&self, data: *mut InlineNodeData) {
+        InlineNodeSegmentFontOrientation(self, data)
+    }
+    fn SegmentBidiRuns(&self, data: *mut InlineNodeData) {
+        InlineNodeSegmentBidiRuns(self, data)
+    }
+    fn ShapeText(
+        &self,
+        data: *mut InlineItemsData,
+        previous_text: *const String,
+        previous_items: *const InlineItems,
+        override_font: *const Font,
+    ) {
+        InlineNodeShapeText(self, data, previous_text, previous_items, override_font)
+    }
+    fn ShapeTextDefault(&self, data: *mut InlineItemsData) {
+        InlineNodeShapeText(
+            self,
+            data,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    }
+    fn ShapeTextForFirstLineIfNeeded(&self, data: *mut InlineNodeData) {
+        InlineNodeShapeTextForFirstLineIfNeeded(self, data)
+    }
+    fn ShapeTextIncludingFirstLine(
+        &self,
+        data: *mut InlineNodeData,
+        previous_text: *const String,
+        previous_items: *const InlineItems,
+    ) {
+        InlineNodeShapeTextIncludingFirstLine(self, data, previous_text, previous_items)
+    }
+    fn AssociateItemsWithInlines(&self, data: *mut InlineNodeData) {
+        InlineNodeAssociateItemsWithInlines(self, data)
+    }
+    fn IsNGShapeCacheAllowed(
+        &self,
+        text: &String,
+        font: *const Font,
+        items: &InlineItems,
+        spacing: &mut ShapeResultSpacing,
+    ) -> bool {
+        InlineNodeIsNGShapeCacheAllowed(self, text, font, items, spacing)
+    }
+    fn AdjustFontForTextCombineUprightAll(&self) {
+        InlineNodeAdjustFontForTextCombineUprightAll(self)
+    }
 }

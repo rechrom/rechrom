@@ -1512,7 +1512,7 @@ impl LayoutEngine {
     }
 }
 
-#[path = "../../layout_algo_inline/src/engine_password_echo.rs"]
+#[path = "editing/engine_password_echo.rs"]
 mod layout_algo_inline_engine_password_echo;
 
 #[path = "../../layout_algo_forms/src/slider_track_geometry.rs"]

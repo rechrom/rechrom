@@ -2,6 +2,8 @@
 // inline_box_state.cc are pending in this same package.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::font_baseline::FontBaseline;
 use font_engine::fonts::font_height::FontHeight;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;

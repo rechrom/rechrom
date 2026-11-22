@@ -1,6 +1,8 @@
 // C++: layoutng_inline/line_widths.h/.cc.
 #![allow(non_snake_case)]
 
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::{LayoutUnit, Member, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;

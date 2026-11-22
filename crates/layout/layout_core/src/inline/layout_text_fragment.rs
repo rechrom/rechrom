@@ -1,6 +1,6 @@
 // C++: layoutng_inline/layout_text_fragment.h and layout_text_fragment_layout.cc.
 // The few declarations with no source definition retain typed unresolved providers.
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 
 use std::ops::{Deref, DerefMut};
 
@@ -14,6 +14,12 @@ use layout_core::internal::layout_node_metadata::{Element, Node, Text};
 use layout_core::internal::layout_object::{HitTestResult, LayoutObject};
 use layout_core::internal::layout_text::LayoutText;
 
+#[cfg(feature = "translation_in_progress")]
+use crate::internal::layout_text::layout_text_members::editing_queries::{
+    LayoutTextFragmentPositionForCaretOffset,
+    LayoutTextFragmentCaretOffsetForPosition,
+};
+#[cfg(not(feature = "translation_in_progress"))]
 unsafe extern "Rust" {
     // These declarations have no definitions in the supplied source checkout.
     // cpp: layoutng_inline/layout_text_fragment.h:54-57,119-124
@@ -23,6 +29,8 @@ unsafe extern "Rust" {
         this: &LayoutTextFragment,
         position: &Position,
     ) -> Option<u32>;
+}
+unsafe extern "Rust" {
     fn LayoutTextFragmentUpdateHitTestResult(
         this: &LayoutTextFragment,
         result: &mut HitTestResult,

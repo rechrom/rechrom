@@ -350,16 +350,21 @@ old `layoutng_*` source-package names at the repository boundary.
   keeps an inline fast path plus an out-of-line, package-qualified
   `layout_algo_inline` slow-path frame.
   Inline collapsible-whitespace predecessor lookup, including floating/out-of-flow
-  sibling skipping and transformed-text tail inspection, is physically owned by
-  `layout_algo_inline/src/collapsible_whitespace.rs`; its linear sibling
-  walk retains an inline-algorithm sampling frame instead of generic tree self time.
-  Inline items, shaping segments, per-item results, item spans/text indices,
-  `InlineNode` state and behavior, and text-combine layout are physically owned by
-  `layout_algo_inline/src/inline_*.rs` and
-  `layout_text_combine_interface.rs`. The old core paths are re-export-only facades
-  (or a loader for the `InlineNode` impl), while expensive shaping, segmentation,
-  and layout calls continue through the inline package providers; profiles can
-  therefore distinguish inline work from shared LayoutNG infrastructure.
+  sibling skipping and transformed-text tail inspection, is base code in
+  `layout_core/src/editing/collapsible_whitespace.rs` (with the other 18
+  editing-query files, R5 part 2); its linear sibling walk retains its
+  sampling frame instead of generic tree self time.
+  Ownership follows Chromium's directories (R5 part 2, `PACKAGE_MAP.md` §7):
+  the `core/layout/*.cc` object model (LayoutText, LayoutInline,
+  LayoutTextCombine, LayoutBR, LayoutWordBreak, LayoutCounter,
+  LayoutRubyAsBlock and their member bodies) is base code in
+  `layout_core/src/inline/`; the `core/layout/inline/*` algorithms (InlineNode
+  preparation, item building, segmentation, shaping, line breaking, inline
+  layout) stay in `layout_algo_inline`. Members of base-declared inline types
+  whose bodies are inline algorithms are extension traits
+  (`layout_algo_inline::algorithms`), so calls inside the inline package stay
+  direct. Base reaches inline behaviour only through registry slots; no
+  `extern "Rust"`/`#[no_mangle]` link joins the two crates.
   `HyphenResult` is colocated in `hyphen_result_interface.rs`, and its HarfBuzz
   shaping provider retains an out-of-line inline-package sampling frame without
   adding a high-frequency trace event.
@@ -995,13 +1000,25 @@ attribute the work to the lifecycle package.
 
 `layout_algo_inline` is a real crate above base, like the other algorithm
 packages: it depends on `layout_assembly` and registers through
-`registration::Register`. Base reaches it through `InlineLayoutSupport` and
-`LayoutObjectFactorySet` slots, and through the `extern "Rust"` declarations
-of LayoutText/LayoutInline/InlineNode/InlineItem members whose Chromium
-bodies live in the inline package's `.cc` files; base never names the crate.
-The facade links it unconditionally and registers it under `inline_layout`.
-Base still compiles the editing query files under `layout_algo_inline/src/`
-through `#[path]` (`PACKAGE_MAP.md` §7, R5 status).
+`registration::Register`. Base reaches it only through registry slots and
+never names the crate; there is no `extern "Rust"`/`#[no_mangle]` coupling
+(R5 part 2). The facade depends on it, and registers it, under
+`inline_layout`. Inline slots, all filled by
+`layout_algo_inline::registration::Register`:
+
+| slot | signature | read through |
+|---|---|---|
+| `LayoutAlgorithmSet::inline_support.is_block_level` | `fn(&InlineNode) -> bool` | `LayoutPassScope::Algorithms()` |
+| `inline_support.layout` | `fn(&InlineNode, &ConstraintSpace, *const BreakToken, *const ColumnSpannerPath, *mut InlineChildLayoutContext) -> *const LayoutResult` | active pass |
+| `inline_support.measure` | `fn(&InlineNode, WritingMode, &ConstraintSpace, &MinMaxSizesFloatInput) -> MinMaxSizesResult` | active pass |
+| `inline_support.parallel_flow_break_tokens` | `fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>` | active pass |
+| `inline_support.get_offset_mapping` | `fn(*mut LayoutBlockFlow) -> *const OffsetMapping` | `LayoutPassScope::ResidentInlineSupport()` (active pass, else the last set a pass installed on this thread: editing/selection query after layout) |
+| `inline_support.layout_block_child` / `.reuse_fragments` | block-owned (`block_inline_layout::RegisterInlineSupport`) | active pass |
+| `LayoutObjectFactorySet::{inline_box, inline_text, inline_line_break, inline_word_break, block_ruby, insert_inline_text_child, update_inline_style, update_anonymous_text_combine_style, adjust_combined_text_style, is_text_fragment_selected, text_fragment_selection_facts, adjust_text_combine_bounding_box, recalc_text_combine_contents_ink_overflow}` | existing factory signatures | `LayoutObjectFactoryScope` (tree building) / pass |
+
+The `inline_support` readers raise `UnsupportedLayout` when inline is not
+installed, and `validate_performance_ownership` requires the slots and
+`performance_owner` to be installed together.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
