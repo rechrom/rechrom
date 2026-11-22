@@ -6,27 +6,18 @@
 
 use std::rc::Rc;
 
-use foundation::{gfx, CompositorElementId, PhysicalOffset};
+use foundation::{gfx, CompositorElementId};
 use layout_base::editing_state::LayoutEditingState;
 use layout_base::layout_registry::LayoutRegistry;
 use layout_base::fragment_tree::LayoutResultHandle;
 use layout_base::internal::layout_input::{ConstraintSpace, ElementData};
-use layout_base::internal::layout_object_builder::LayoutObjectTree;
-use layout_base::internal::scrollbar::Scrollbar;
 use layout_base::layout_engine::{
     ContainerQuerySizeSnapshot, LayoutEngine as CoreLayoutEngine,
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
     NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate,
 };
 use layout_base::engine::scroll::autoscroll_source::NativeLogicalScrollArea;
-use layout_base::engine::pointer::mouse_coordinates::{
-    NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
-};
 use layout_base::engine::scroll::page_scale_geometry::NativePageScaleGeometry;
-use layout_base::engine::pointer::pointer_scroll_controls::{
-    NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
-    NativeResizePlan, NativeScrollbarInteraction,
-};
 use layout_base::engine::scroll::scroll_source::NativeCompositorScrollArea;
 use layout_base::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
 use layout_base::style_projection::StyleResourceBindings;

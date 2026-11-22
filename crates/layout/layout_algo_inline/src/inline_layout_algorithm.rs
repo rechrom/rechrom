@@ -91,6 +91,7 @@ fn score_context_pointer(
 
 impl LineBreakStrategy {
     // cpp: layoutng_inline/inline_layout_algorithm.cc:62-99
+    #[cfg_attr(not(feature = "expensive_dchecks"), allow(unused_variables))]
     fn new(
         context: &mut InlineChildLayoutContext,
         node: &InlineNode,

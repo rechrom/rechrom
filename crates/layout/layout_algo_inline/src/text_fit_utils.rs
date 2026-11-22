@@ -637,7 +637,7 @@ pub fn LineFitterFitLineFromInline(
         let item = unsafe { &*result.item.Get() };
         if item.Type() != InlineItemType::kText {
             if item.IsForcedLineBreak() {
-                let font = unsafe { &*unsafe { &*item.Style() }.GetFont() };
+                let font = unsafe { &*(&*item.Style()).GetFont() };
                 let scaled_font = MakeGarbageCollected(Font::new_with_selector(
                     scaled_font_description(font, scale_factor, limit, &mut restricted),
                     font.GetFontSelector(),
@@ -653,7 +653,7 @@ pub fn LineFitterFitLineFromInline(
             static_total_size += result.inline_size;
             continue;
         }
-        let font = unsafe { &*unsafe { &*item.Style() }.GetFont() };
+        let font = unsafe { &*(&*item.Style()).GetFont() };
         let scaled_description =
             scaled_font_description(font, scale_factor, limit, &mut restricted);
         let scaled_font = MakeGarbageCollected(Font::new_with_selector(

@@ -1,4 +1,5 @@
-#![allow(non_snake_case)]
+// Translated Chromium identifiers keep their C++ spelling.
+#![allow(non_snake_case, non_upper_case_globals)]
 
 pub mod absolute_utils;
 pub mod anchor_evaluator;

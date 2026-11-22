@@ -415,7 +415,7 @@ impl InlineLayoutStateStack {
         line_info: &LineInfo,
         baseline: FontBaseline,
         line_height_quirk: bool,
-        should_scale_line_height: bool,
+        _should_scale_line_height: bool,
         line_box: *mut LogicalLineItems,
     ) -> *mut InlineBoxState {
         // cpp: layoutng_inline/inline_box_state.cc:298-377
@@ -502,7 +502,7 @@ impl InlineLayoutStateStack {
         space: &ConstraintSpace,
         item: &InlineItem,
         result: &InlineItemResult,
-        baseline: FontBaseline,
+        _baseline: FontBaseline,
         line_box: &LogicalLineItems,
     ) -> *mut InlineBoxState {
         // cpp: layoutng_inline/inline_box_state.cc:395-423

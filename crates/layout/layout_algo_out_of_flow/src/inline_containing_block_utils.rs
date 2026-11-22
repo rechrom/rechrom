@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use foundation::{HeapHashMap, LayoutUnit, Member, PhysicalOffset, PhysicalRect, PhysicalSize, To};
+use foundation::{HeapHashMap, LayoutUnit, Member, PhysicalOffset, PhysicalSize, To};
 use layout_base::box_fragment_builder::BoxFragmentBuilder;
 use layout_base::fragment_item::FragmentItem;
 use layout_base::fragment_items_builder::FragmentItemWithOffset;

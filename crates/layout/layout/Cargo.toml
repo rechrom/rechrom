@@ -18,7 +18,7 @@ layout_commit = { path = "../layout_commit" }
 paint_input_types = { path = "../paint_input_types" }
 layout_geometry = { path = "../layout_geometry" }
 layout_style = { path = "../layout_style" }
-layout_algo_block = { path = "../layout_algo_block", features = ["block_only_host", "replaced_extension"] }
+layout_algo_block = { path = "../layout_algo_block", features = ["block_only_host"] }
 layout_algo_multicol = { path = "../layout_algo_multicol" }
 layout_algo_flex = { path = "../layout_algo_flex" }
 layout_algo_grid = { path = "../layout_algo_grid" }

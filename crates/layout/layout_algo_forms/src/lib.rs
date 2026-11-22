@@ -1,3 +1,6 @@
+// Translated Chromium identifiers keep their C++ spelling.
+#![allow(non_camel_case_types)]
+
 pub mod registration;
 pub mod control_intrinsic_size;
 pub mod control_theme_size;

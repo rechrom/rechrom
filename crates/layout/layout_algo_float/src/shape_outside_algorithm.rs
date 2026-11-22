@@ -765,8 +765,8 @@ pub fn UpdateShapeOutsideInfo(
     let _trace = browser_tracing::span("layout", "layout_algo_float.UpdateShapeOutside");
     let box_ = node.GetLayoutBox();
     let box_size = layout_result.GetPhysicalFragment().Size();
-    let shape_outside = unsafe { &mut *unsafe { &*box_ }.GetShapeOutsideInfo() };
-    let writing_mode = unsafe { &*unsafe { &*box_ }.ContainingBlock() }
+    let shape_outside = unsafe { &mut *(&*box_).GetShapeOutsideInfo() };
+    let writing_mode = unsafe { &*(&*box_).ContainingBlock() }
         .StyleRef()
         .GetWritingMode();
     let margins = ComputePhysicalMarginsForSpace(constraint_space, node.Style())

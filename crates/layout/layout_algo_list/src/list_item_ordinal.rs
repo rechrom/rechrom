@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use layout_base::internal::layout_node_metadata::{ContainerNode, Node};
-use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_object::LayoutObjectClass;
 
 use crate::layout_inline_list_item::LayoutInlineListItem;
 use crate::layout_list_item::LayoutListItem;

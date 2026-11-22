@@ -5,7 +5,8 @@
 // fills; there is no link-time (`extern "Rust"` / `#[no_mangle]`) coupling.
 // Members of base-declared types whose bodies live here are extension traits
 // (`algorithms`). See crates/layout/PACKAGE_MAP.md, R5 status.
-#![allow(non_snake_case)]
+// Translated Chromium identifiers keep their C++ spelling.
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // The translated sources name base items through Chromium's `layoutng`
 // package path, like the block package does.
@@ -14,7 +15,7 @@
 // keep their `crate::<module>` paths for them.
 use layout_base::{
     block_break_token, box_fragment_builder, break_token, fragment_builder, fragment_item,
-    fragment_items, fragment_items_builder, inline_break_token, inline_cursor, inline_items_data,
+    fragment_items_builder, inline_break_token, inline_cursor, inline_items_data,
     layout_result, logical_box_fragment, logical_fragment, logical_line_container,
     logical_line_item, physical_box_fragment, physical_fragment, physical_line_box_fragment,
 };

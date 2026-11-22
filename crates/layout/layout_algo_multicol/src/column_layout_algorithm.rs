@@ -513,7 +513,7 @@ impl ColumnLayoutAlgorithm {
         let geometry =
             CalculateInitialFragmentGeometry(&space, self.Node(), std::ptr::null(), true);
         let params = LayoutAlgorithmParams::new(self.Node().clone(), &geometry, &space);
-        let mut algorithm = BlockLayoutAlgorithm::new(&params);
+        let algorithm = BlockLayoutAlgorithm::new(&params);
         let mut result = algorithm.ComputeMinMaxSizes(&MinMaxSizesFloatInput::default());
         if !self.Style().HasAutoColumnWidth() {
             let width = LayoutUnit::from_f32(self.Style().ColumnWidth());

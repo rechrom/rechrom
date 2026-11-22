@@ -22,10 +22,7 @@ use layout_base::internal::{
     layout_pass_scope::LayoutPassScope,
 };
 use layout_geometry::geometry::{box_strut::BoxStrut, logical_size::LogicalSize};
-use layout_style::style::{
-    grid_area::GridArea,
-    grid_enums::GridTrackSizingDirection::{self, *},
-};
+use layout_style::style::grid_enums::GridTrackSizingDirection::{self, *};
 
 // cpp: layoutng_grid/grid_sizing_tree_builder_impl.h:18-43
 // Source template operations required by both Grid and Grid Lanes.

@@ -361,7 +361,7 @@ pub fn PositionFloat(
     // cpp: layoutng_float/float_layout_algorithm.cc:375-387
     let physical_fragment = unsafe {
         &*foundation::To::<PhysicalBoxFragment>(
-            unsafe { &*layout_result }.GetPhysicalFragment() as *const _
+            (&*layout_result).GetPhysicalFragment() as *const _
         )
     };
     let float_fragment =

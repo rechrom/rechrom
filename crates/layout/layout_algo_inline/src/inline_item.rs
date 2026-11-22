@@ -124,9 +124,9 @@ fn InlineItemSetBidiLevelForItems(
     if unsafe { &*item }.end_offset_ > end_offset {
         let object = unsafe { &*item }.GetLayoutObject();
         if unsafe { &*object }.EverHadLayout() && !unsafe { &*object }.NeedsLayout() {
-            unsafe { &mut *object }.SetNeedsLayout(unsafe {
-                std::ptr::addr_of!(layout_invalidation_reason::kStyleChange)
-            });
+            unsafe { &mut *object }.SetNeedsLayout(std::ptr::addr_of!(
+                layout_invalidation_reason::kStyleChange
+            ));
         }
         InlineItem::Split(items, index, end_offset);
         return index + 1;

@@ -410,7 +410,7 @@ impl TableLayoutAlgorithm {
                 };
                 child_inline_offset = section_inline_offset;
                 after_spacing = spacing.block_size;
-                if unsafe { &*To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment()) }
+                if unsafe { &*To::<PhysicalBoxFragment>((&*result).GetPhysicalFragment()) }
                     .HasDescendantsForTablePart()
                 {
                     if !child_token.is_null() && unsafe { &*child_token }.IsAtBlockEnd() {
@@ -442,7 +442,7 @@ impl TableLayoutAlgorithm {
                 debug_assert_eq!(status, BreakStatus::kContinue);
             }
             let physical =
-                unsafe { &*To::<PhysicalBoxFragment>(unsafe { &*result }.GetPhysicalFragment()) };
+                unsafe { &*To::<PhysicalBoxFragment>((&*result).GetPhysicalFragment()) };
             let fragment = LogicalBoxFragment::new(direction, physical);
             if child.IsTableSection() {
                 if !repeated {

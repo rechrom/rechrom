@@ -10,10 +10,10 @@
 use crate::algorithms::*;
 use font_engine::fonts::orientation_iterator::OrientationIterator;
 use font_engine::{
-    Font, FontFallbackPriority, FontOrientation, HarfBuzzShaper, RenderOrientation, RunSegmenter,
-    RunSegmenterRange, ShapeOptions, ShapeResult,
+    Font, FontOrientation, HarfBuzzShaper, RenderOrientation, RunSegmenter, RunSegmenterRange,
+    ShapeOptions, ShapeResult,
 };
-use foundation::{HeapVector, MakeGarbageCollected, Member, String, TextDirection, TextOffsetMap};
+use foundation::{HeapVector, Member, String, TextDirection, TextOffsetMap};
 use layout_base::internal::inline_item::InlineItem;
 use layout_base::internal::inline_item_segment::{
     InlineItemSegment, InlineItemSegments, InlineItemSegmentsIterator, RunSegmenterRanges,
