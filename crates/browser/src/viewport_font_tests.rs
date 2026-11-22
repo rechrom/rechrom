@@ -1,5 +1,5 @@
 use crate::page::Page;
-use layout::object::{LayoutBlockFlow, LayoutObject};
+use layout::testing::{LayoutBlockFlow, LayoutObject};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Loader(String);

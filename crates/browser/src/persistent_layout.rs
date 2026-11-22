@@ -379,7 +379,7 @@ pub(crate) fn LayoutPersistentScrollDocumentWithMode(
 mod tests {
     use super::*;
     use dom::persistent_document::DOMNodeType;
-    use layout::{input::{Element, Text}, object::LayoutObject};
+    use layout::{input::{Element, Text}, testing::LayoutObject};
     use layout::mutation::LayoutMutation;
     use std::collections::BTreeMap;
 
@@ -415,7 +415,7 @@ mod tests {
         std::ptr::null_mut()
     }
     fn cached(root: *mut LayoutObject) -> *const layout::fragment::LayoutResult {
-        let b = foundation::DynamicTo::<layout::object::LayoutBox>(root);
+        let b = foundation::DynamicTo::<layout::testing::LayoutBox>(root);
         unsafe { &*b }.GetLayoutResult(0)
     }
     fn fragment(root: &FragmentPaintData, id: u64) -> &FragmentPaintData {
@@ -775,7 +775,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layout::object::LayoutObjectFactoryScope::new(
+                layout::testing::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -939,7 +939,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layout::object::LayoutObjectFactoryScope::new(
+                layout::testing::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -995,7 +995,7 @@ mod tests {
             resolve(&mut owner);
             let assembly = crate::CreateLayoutAssembly();
             let _factories =
-                layout::object::LayoutObjectFactoryScope::new(
+                layout::testing::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -1424,7 +1424,7 @@ mod tests {
             let root =
                 crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             let _factory_scope =
-                layout::object::LayoutObjectFactoryScope::new(
+                layout::testing::LayoutObjectFactoryScope::new(
                     &assembly.objects,
                 );
             let mut actual = BTreeMap::new();

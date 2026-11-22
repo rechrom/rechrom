@@ -11,7 +11,9 @@ use paint_input_types::layout_input::{
     Offset, PaintShadow, Size, TextDecorationPaint, TextDecorationStyle, WritingMode,
 };
 use paint_input_types::layout_input_types::Color;
-use layout::object::LayoutTheme;
+// Chromium reads LayoutTheme's platform marker colours directly while painting
+// spelling/grammar decorations (core/paint/text_decoration_info.cc:637-656).
+use layout::paint::LayoutTheme;
 use paint_input_types::paint_input::SvgPaintComponent;
 use layout::paint::{CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness};
 use prepaint::pre_paint_tree_walk::PaintTreeNode;

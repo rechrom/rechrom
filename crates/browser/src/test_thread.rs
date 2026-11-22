@@ -39,7 +39,7 @@ pub(crate) fn BuildDOMProjection(
     owner: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
     engine: &mut layout::LayoutEngine,
-) -> *mut layout::object::LayoutObject {
+) -> *mut layout::testing::LayoutObject {
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     engine.Pointer().ResidentLayoutTree().expect("projected tree").Root() as *const _ as *mut _
 }

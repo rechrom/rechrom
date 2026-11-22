@@ -267,16 +267,10 @@ impl LocalChildFrameHitTest for CurrentLocalFrameQuery<'_> {
         let layout = runtime.layout.borrow();
         let result = layout.GetLayoutResult().ok_or_else(|| self.Required())?;
         let cursor = PaintFragmentCursor::FromHandle(result);
-        let view = unsafe {
-            foundation::DynamicTo::<layout::object::LayoutView>(
-                layout
-                    .Pointer()
-                    .LayoutViewRoot()
-                    .ok_or_else(|| self.Required())?,
-            )
-            .as_ref()
-        }
-        .ok_or_else(|| self.Required())?;
+        let view = layout
+            .Pointer()
+            .ResidentLayoutView()
+            .ok_or_else(|| self.Required())?;
         let output = layout.Output().ok_or_else(|| self.Required())?;
         let nodes = interaction::adapter::page_cursor::ResidentDOMCursorNodes::new(
             runtime.document.Handle(),
@@ -566,16 +560,10 @@ impl PreparedLayoutViewLifecycle for CurrentLocalFrameView<'_> {
     }
     fn DocumentToFrameOffset(&self) -> foundation::PhysicalOffset {
         let layout = self.runtime.layout.borrow();
-        let root = layout
+        -layout
             .Pointer()
-            .LayoutViewRoot()
-            .expect("prepared child LayoutView");
-        let box_ = unsafe {
-            foundation::DynamicTo::<layout::object::LayoutBox>(root)
-                .as_ref()
-        }
-        .expect("LayoutView base");
-        -box_.ScrolledContentOffset()
+            .LayoutViewScrolledContentOffset()
+            .expect("prepared child LayoutView")
     }
     fn HasActiveUnboundedElements(&self) -> bool {
         // There is no unbounded activation producer in this embedding. Its

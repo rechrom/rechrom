@@ -122,21 +122,21 @@ fn body() {
         let fragments = engine
             .GetLayoutResult()
             .expect("successful layout has fragments");
-        let _scope = layout::object::LayoutObjectFactoryScope::new(
+        let _scope = layout::testing::LayoutObjectFactoryScope::new(
             &assembly.objects,
         );
         let mut columns = std::collections::BTreeMap::new();
         fn collect(
-            o: &layout::object::LayoutObject,
+            o: &layout::testing::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
-                *const layout::object::LayoutBox,
+                *const layout::testing::LayoutBox,
             >,
         ) {
             if o.IsLayoutTableCol() && !o.GetNode().is_null() {
                 out.insert(
                     unsafe { &*o.GetNode() }.InputId(),
-                    foundation::To::<layout::object::LayoutBox>(o),
+                    foundation::To::<layout::testing::LayoutBox>(o),
                 );
             }
             let mut c = o.SlowFirstChild();

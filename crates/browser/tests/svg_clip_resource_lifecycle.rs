@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::{LayoutResultHandle, ResidentBoxGeometry as _}, input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::{LayoutResultHandle, ResidentBoxGeometry as _}, input::FontFace, testing::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
 use std::{cell::RefCell, io, rc::Rc};

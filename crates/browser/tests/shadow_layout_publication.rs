@@ -150,7 +150,7 @@ fn count(root: &FragmentPaintData, id: u64) -> usize {
 // Inline owners can legitimately have no separate FragmentPaintData. Inspect the
 // retained native tree when checking uniqueness of the file status span.
 fn layout_object_count(page: &Page, id: u64) -> usize {
-    use layout::object::{LayoutObject, LayoutObjectFactoryScope};
+    use layout::testing::{LayoutObject, LayoutObjectFactoryScope};
     let assembly = browser::CreateLayoutAssembly();
     let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();

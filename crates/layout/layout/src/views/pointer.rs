@@ -8,9 +8,11 @@
 //! commands (overlay fade timer, resize mode) are `LayoutMutation::Pointer`.
 
 use foundation::{gfx, PhysicalOffset};
+use layout_assembly::internal::layout_box::LayoutBox;
 use layout_assembly::internal::layout_object::LayoutObject;
 use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
 use layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope;
+use layout_assembly::internal::layout_view::LayoutView;
 use layout_assembly::internal::scrollbar::Scrollbar;
 use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
 use layout_assembly::native_mouse_coordinates::{
@@ -22,6 +24,14 @@ use layout_assembly::native_pointer_scroll_controls::{
 };
 
 use crate::LayoutEngine;
+
+/// Opaque lifetime guard for Layout's `SVGResourceQueryScope`: while it is
+/// alive, Paint/PrePaint resolve native SVG resource owners from the resident
+/// tree. Consumers only hold and drop it; the scope type stays private.
+#[must_use = "the SVG resource scope ends when the guard is dropped"]
+pub struct SVGResourceQueryGuard<'a> {
+    _scope: SVGResourceQueryScope<'a>,
+}
 
 /// Borrowed pointer and mouse-coordinate queries over the resident layout.
 #[derive(Clone, Copy)]
@@ -63,12 +73,35 @@ impl<'a> PointerQueries<'a> {
         engine.GetLayoutTree().map(LayoutObjectTree::Root)
     }
 
-    /// Scope that resolves native SVG resource owners while Paint/PrePaint
-    /// walk this resident tree. `None` when no tree exists.
+    /// The resident root downcast to its LayoutView, for hit-test queries
+    /// that enter the LayoutView directly (`LayoutView::HitTest*`). `None`
+    /// when no tree exists or the root is not a LayoutView.
     #[inline]
-    pub fn SVGResourceQueryScope(&self) -> Option<SVGResourceQueryScope<'a>> {
+    pub fn ResidentLayoutView(&self) -> Option<&'a LayoutView> {
+        let root = self.LayoutViewRoot()?;
+        // SAFETY: the downcast target is the root object, borrowed for `'a`.
+        unsafe { foundation::DynamicTo::<LayoutView>(root).as_ref() }
+    }
+
+    /// `LayoutBox::ScrolledContentOffset()` of the resident LayoutView.
+    /// `None` when no tree exists or the root is not a LayoutBox.
+    #[inline]
+    pub fn LayoutViewScrolledContentOffset(&self) -> Option<PhysicalOffset> {
+        let root = self.LayoutViewRoot()?;
+        // SAFETY: the downcast target is the root object, borrowed for `'a`.
+        let box_ = unsafe { foundation::DynamicTo::<LayoutBox>(root).as_ref() }?;
+        Some(box_.ScrolledContentOffset())
+    }
+
+    /// Scope that resolves native SVG resource owners while Paint/PrePaint
+    /// walk this resident tree. `None` when no tree exists. Hold the guard
+    /// for the whole Paint/PrePaint call; dropping it leaves the scope.
+    #[inline]
+    pub fn SVGResourceQueryScope(&self) -> Option<SVGResourceQueryGuard<'a>> {
         let engine: &'a CoreLayoutEngine = self.engine;
-        engine.GetLayoutTree().map(SVGResourceQueryScope::new)
+        engine.GetLayoutTree().map(|tree| SVGResourceQueryGuard {
+            _scope: SVGResourceQueryScope::new(tree),
+        })
     }
 
     /// The whole resident LayoutObject tree. Test fixtures and diagnostics

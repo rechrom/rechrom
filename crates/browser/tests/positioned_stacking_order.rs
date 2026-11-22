@@ -5,7 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::DynamicTo;
-use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, object::{LayoutBoxModelObject, LayoutObject}, input::FontFace};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, testing::{LayoutBoxModelObject, LayoutObject}, input::FontFace};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

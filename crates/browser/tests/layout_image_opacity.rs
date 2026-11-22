@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::{DynamicTo, RespectImageOrientationEnum};
-use layout::{object::{HitTestPhase, LayoutBox, LayoutObject, StyleChangeContext, LayoutObjectFactoryScope, LayoutInputReplaced, LayoutReplaced, SelectionState}, input::{FontFace, VisibilityStatus}};
+use layout::{testing::{HitTestPhase, LayoutBox, LayoutObject, StyleChangeContext, LayoutObjectFactoryScope, LayoutInputReplaced, LayoutReplaced}, paint::SelectionState, input::{FontFace, VisibilityStatus}};
 use layout_style::style::{
     computed_style::ComputedStyleBuilder, style_difference::StyleDifference,
 };

@@ -28,6 +28,7 @@
 //! | [`editing`] | editing positions, selection/caret state, password echo |
 //! | [`scroll`] | native scroll, scrollbar, autoscroll, pointer-resize and mouse-coordinate sources |
 //! | [`object`] | resident LayoutObject/PaintLayer types still named by consumers (wave E: replace with query views) |
+//! | `testing` | hidden: Layout internals for `#[cfg(test)]` code and integration tests only |
 //!
 //! Each topic module is assembled from one submodule per consumer group in
 //! `src/exports/<group>.rs` (browser, document, paint, interaction, webapi), so
@@ -125,6 +126,30 @@ topic!(
     /// Resident LayoutObject types still named across the boundary.
     object
 );
+
+/// Layout internals for test fixtures and diagnostics only.
+///
+/// `#[cfg(test)]` code and integration tests (`crates/*/tests`) that build or
+/// inspect the resident LayoutObject tree directly name these items here.
+/// Production code must not use this module: it reaches Layout through
+/// [`LayoutEngine`], the topic modules and the [`views`] query views.
+#[doc(hidden)]
+pub mod testing {
+    pub use layout_algo_grid::layout_grid::LayoutGrid;
+    pub use layout_assembly::internal::block_node::BlockNode;
+    pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
+    pub use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
+    pub use layout_assembly::internal::layout_box::LayoutBox;
+    pub use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
+    pub use layout_assembly::internal::layout_object::{LayoutObject, StyleChangeContext};
+    pub use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
+    pub use layout_assembly::internal::layout_pass_scope::{
+        LayoutObjectFactoryScope, LayoutPassScope,
+    };
+    pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
+    pub use layout_assembly::internal::layout_view::LayoutView;
+    pub use layout_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+}
 
 /// Platform services the embedding injects into the Layout assembly. They are
 /// implemented by Paint's Skia geometry package, which depends on Layout, so

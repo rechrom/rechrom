@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout::object::{LayoutObject, LayoutObjectFactoryScope};
+use layout::testing::{LayoutObject, LayoutObjectFactoryScope};
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
