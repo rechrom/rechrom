@@ -1,7 +1,7 @@
 #[path = "../src/test_thread.rs"]
 mod test_thread;
 
-use layout::{LayoutEngine, paint::FragmentPaintData, input::{ComputedStyle, ConstraintSpace}, object::{LayoutObject, LayoutObjectTree}, mutation::{LayoutMutation, LayoutTreeUpdate}};
+use layout::{LayoutEngine, paint::FragmentPaintData, input::{ComputedStyle, ConstraintSpace}, testing::{LayoutObject, LayoutObjectTree}, mutation::{LayoutMutation, LayoutTreeUpdate}};
 
 fn project(engine: &mut LayoutEngine, ids: &[u64]) {
     engine.ApplyMutation(LayoutMutation::TreeUpdate(

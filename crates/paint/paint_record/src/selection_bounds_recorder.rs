@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use paint_input_types::layout_input::{TextDirection, WritingMode};
-use layout::object::SelectionState;
+use layout::paint::SelectionState;
 use paint_chunk::{PaintSelectionBound, PaintSelectionBoundType};
 
 use crate::paint_context::PaintContext;

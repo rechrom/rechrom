@@ -1,7 +1,7 @@
 #[path = "../src/test_thread.rs"]
 mod test_thread;
 
-use layout::{LayoutEngine, input::{ComputedStyle, Display, ElementData, NodeKind}, object::{LayoutObject, LayoutObjectTree, LayoutInputReplaced, LayoutView}, mutation::{LayoutMutation, LayoutTreeUpdate}};
+use layout::{LayoutEngine, input::{ComputedStyle, Display, ElementData, NodeKind}, testing::{LayoutObject, LayoutObjectTree, LayoutInputReplaced, LayoutView}, mutation::{LayoutMutation, LayoutTreeUpdate}};
 
 fn project_image(
     engine: &mut LayoutEngine,

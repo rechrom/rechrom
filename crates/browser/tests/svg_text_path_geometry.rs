@@ -5,7 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use layout::fragment::ResidentBoxGeometry as _;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout::{input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
+use layout::{input::FontFace, testing::{LayoutObject, LayoutObjectFactoryScope}};
 use layout::paint::PaintFragmentCursor;
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};

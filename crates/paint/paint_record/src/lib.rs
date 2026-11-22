@@ -14,13 +14,13 @@
 #[cfg(test)]
 #[used]
 static TEST_LAYOUT_TEXT_COMBINE_PROVIDER: extern "Rust" fn(
-    &layout::object::LayoutObject,
+    &layout::testing::LayoutObject,
 ) -> bool = layout::fragment::DispatchIsLayoutTextCombine;
 #[cfg(test)]
 #[used]
 static TEST_TEXT_OVERFLOW_PROVIDER: extern "Rust" fn(
-    *const layout::object::LayoutBlockFlow,
-) -> bool = layout::object::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    *const layout::testing::LayoutBlockFlow,
+) -> bool = layout::testing::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
 
 use prepaint::{
     background_geometry, nine_piece_image_grid, paint_shader_resolver, pre_paint_tree_walk,

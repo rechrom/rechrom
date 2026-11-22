@@ -5,7 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use dom::UserInteractionState;
-use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, object::{LayoutBox, LayoutObject, LayoutObjectFactoryScope}, input::FontFace};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, testing::{LayoutBox, LayoutObject, LayoutObjectFactoryScope}, input::FontFace};
 use page_mutation::{InteractionStateMutation, PageMutation};
 use paint::paint_engine::{DisplayItemType, PaintRect};
 use std::{cell::RefCell, io, rc::Rc};

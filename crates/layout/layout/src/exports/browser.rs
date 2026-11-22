@@ -113,20 +113,6 @@ pub mod scroll {
     };
 }
 
-pub mod object {
-    // Grid LayoutObject downcast target for the browser grid geometry tests.
-    pub use layout_algo_grid::layout_grid::LayoutGrid;
-    pub use layout_assembly::internal::block_node::BlockNode;
-    pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
-    pub use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-    pub use layout_assembly::internal::layout_box::LayoutBox;
-    pub use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-    pub use layout_assembly::internal::layout_object::{LayoutObject, StyleChangeContext};
-    pub use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
-    pub use layout_assembly::internal::layout_pass_scope::{
-        LayoutObjectFactoryScope, LayoutPassScope, SVGResourceQueryScope,
-    };
-    pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
-    pub use layout_assembly::internal::layout_view::LayoutView;
-    pub use layout_assembly::internal::selection_state::SelectionState;
-}
+// Browser production code names no LayoutObject internals; its tests use
+// `layout::testing`.
+pub mod object {}

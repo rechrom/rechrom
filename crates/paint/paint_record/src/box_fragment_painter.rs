@@ -67,7 +67,7 @@ use paint_input_types::paint_input::{
     BackgroundAttachment, BackgroundBox, BackgroundImageLayer, PaintBlendMode, PaintCornerRadii,
     SvgPaintComponent,
 };
-use layout::object::SelectionState;
+use layout::paint::SelectionState;
 use paint_model::geometry_mapper::SourceToDestinationRect;
 
 // Chromium entity: core/paint/box_fragment_painter.h:35-344.
@@ -8096,7 +8096,7 @@ mod background_attachment_tests {
     };
     use paint_input_types::layout_input_types::{Color, IntSize};
     use paint_input_types::paint_input::{BackgroundAttachment, BackgroundBox, BackgroundImageLayer};
-    use layout::object::SelectionState;
+    use layout::paint::SelectionState;
 
     use crate::geometry_mapper::TranslationTransform;
     use crate::paint_info::PaintInfo;

@@ -126,21 +126,21 @@ fn run_matrix(smoke: bool) {
             &dom::UserInteractionState::default(),
             &mut engine,
         );
-        let _scope = layout::object::LayoutObjectFactoryScope::new(
+        let _scope = layout::testing::LayoutObjectFactoryScope::new(
             &assembly.objects,
         );
         let mut grids = std::collections::BTreeMap::new();
         fn collect(
-            o: &layout::object::LayoutObject,
+            o: &layout::testing::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
-                *const layout::object::LayoutGrid,
+                *const layout::testing::LayoutGrid,
             >,
         ) {
             if o.IsLayoutGrid() && !o.GetNode().is_null() {
                 out.insert(
                     unsafe { &*o.GetNode() }.InputId(),
-                    foundation::To::<layout::object::LayoutGrid>(o),
+                    foundation::To::<layout::testing::LayoutGrid>(o),
                 );
             }
             let mut c = o.SlowFirstChild();
@@ -159,7 +159,7 @@ fn run_matrix(smoke: bool) {
                     .expect("successful layout has fragments");
                 fragments
             } else {
-                use layout::{object::{BlockNode, LayoutPassScope}, input::{FragmentationType, ConstraintSpaceBuilder}};
+                use layout::{testing::{BlockNode, LayoutPassScope}, input::{FragmentationType, ConstraintSpaceBuilder}};
                 let _heap = foundation::LayoutHeapScope::new();
                 let mut environment =
                     assembly.boundary.create_environment.unwrap()(unsafe { &mut *root }, &space);

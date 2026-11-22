@@ -61,6 +61,14 @@ pub mod paint {
     pub use layout_assembly::text_decoration_info::{
         CurrentSpellingGrammarLineStyle, CurrentSpellingGrammarThickness,
     };
+    // Plain value enum: a LayoutObject's selection state as painters and
+    // selection bounds recording read it (core/layout/selection_state.h:13-33).
+    pub use layout_assembly::internal::selection_state::SelectionState;
+    // Chromium's text decoration painting reads LayoutTheme's platform
+    // spelling/grammar marker colours directly
+    // (core/paint/text_decoration_info.cc:637-656). This stateless colour
+    // theme is the only LayoutTheme surface Paint names.
+    pub use layout_assembly::internal::layout_theme::LayoutTheme;
     pub use layout_assembly::{
         decorating_box, inline_paint_context, line_relative_rect, svg_filter_geometry,
         text_decoration_info,
@@ -107,11 +115,4 @@ pub mod editing {
 
 pub mod scroll {}
 
-pub mod object {
-    pub use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-    pub use layout_assembly::internal::layout_inline::LayoutInline;
-    pub use layout_assembly::internal::layout_object::LayoutObject;
-    pub use layout_assembly::internal::layout_theme::LayoutTheme;
-    pub use layout_assembly::internal::selection_state::SelectionState;
-    pub use layout_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
-}
+pub mod object {}
