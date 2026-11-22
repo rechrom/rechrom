@@ -127,8 +127,9 @@ never as whole packages or `internal` modules. Internally: `LayoutMutation`
 applied by `layout_assembly` (attach, style binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
 (`layout_algo_block`, `_inline`, `_flex`, `_grid`, `_table`, `_multicol`,
 `_float`, `_out_of_flow`, `_replaced`, `_svg`, `_forms`, `_list`) →
-`layout_fragment` (resident fragment tree) → `layout_commit` (typed
-publication). Shared roots: `layout_geometry`, `layout_style` (the single
+the resident fragment tree (base modules in `layout_core/src/fragment/`;
+published to Paint and Interaction through `layout::result`) →
+`layout_commit` (typed publication). Shared roots: `layout_geometry`, `layout_style` (the single
 `ComputedStyle` owner), `paint_input_types` (plain paint values Layout
 publishes: paint-input schema, `PaintResources`, glyph runs; Paint, Raster,
 Compositor and Style name them without depending on Layout), `layout_style_paint`

@@ -229,10 +229,10 @@ old `layoutng_*` source-package names at the repository boundary.
   scoped-name lookup live in `naming_scope.rs`; the complete lookup uses
   one invalidation frame without per-ancestor trace events.
   The fragment-retained trigger scoped-name alias and named-trigger map live in
-  `layout_fragment/src/trigger_scoped_name.rs`; `ToTriggerScopedName` and
-  the ancestor lookup (`NamingScopeExt::FindScopeElement`) are base code in
-  `layout_core/src/internal/{trigger_scoped_name,naming_scope}.rs`, and the
-  lookup keeps one non-inlined frame.
+  `layout_core/src/fragment/trigger_scoped_name.rs` with `ToTriggerScopedName`;
+  the ancestor lookup `NamingScope::FindScopeElement` lives in
+  `layout_core/src/fragment/invalidation/naming_scope.rs` and keeps one
+  non-inlined frame.
   Empty timeline-trigger metadata remains an inline no-op; nonempty name
   validation and scoped-name allocation live in
   `timeline_trigger_metadata.rs` under an invalidation sampling frame.
@@ -323,7 +323,7 @@ old `layoutng_*` source-package names at the repository boundary.
 - `layout_algo_*` owns concrete formatting and replaced-content algorithms.
   Shared page/column breaking policy is a base library in
   `layout_core/src/fragmentation/` (its control data, `BreakAppeal` and
-  `EarlyBreak`, in `layout_fragment/src/fragmentation/`); the former
+  `EarlyBreak`, in `layout_core/src/fragment/fragmentation/`); the former
   `layout_algo_fragmentation` package was folded in because nothing dispatches
   into it (PACKAGE_MAP.md §5.2). Fragment-builder setup, finalization,
   child-break selection, breakpoint advancement, soft-break attempts,
@@ -429,10 +429,10 @@ old `layoutng_*` source-package names at the repository boundary.
   fixed-cost provider dispatch remains inlineable beneath list work.
   Line-clamp state, ancestor-chain resolution, and final clamped block-size
   calculation are physically owned by
-  `layout_fragment/src/block/line_clamp_data.rs`; their small value queries
+  `layout_core/src/fragment/block/line_clamp_data.rs`; their small value queries
   remain inlineable through a re-export-only compatibility facade.
   Custom layout's serialized payload and constraint-space custom state are
-  physically owned by `layout_fragment/src/custom/custom_layout_payload.rs`
+  physically owned by `layout_core/src/fragment/custom/custom_layout_payload.rs`
   and `constraint_space_custom_data.rs`. Byte copying retains a custom
   algorithm sampling frame, while pointer-identity reuse admission and state
   access remain inlineable.
@@ -446,7 +446,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_input.rs` retains only the input schema and owner-module loader.
   Grid layout data, baseline state, subgrid projection, and retained subtree
   comparison are physically owned by
-  `layout_fragment/src/grid/grid_layout_data.rs`; subtree-sized equality work
+  `layout_core/src/fragment/grid/grid_layout_data.rs`; subtree-sized equality work
   retains a Grid sampling frame. Grid item/candidate state and track/range/set
   collections are physically owned by `grid_item_data.rs` and
   `grid_track_collection_types.rs`; their non-inline computation remains
@@ -454,7 +454,7 @@ old `layoutng_*` source-package names at the repository boundary.
   Grid-lanes grouping and the retained subtree cursor are colocated in
   `grid_lanes_item_group.rs` and `grid_subtree.rs`.
   Table constraint-space rows, sections, cells, and reuse admission are owned by
-  `layout_fragment/src/table/table_constraint_space_data.rs`; row-cell and
+  `layout_core/src/fragment/table/table_constraint_space_data.rs`; row-cell and
   section-row scans retain distinct table sampling frames. Collapsed-border
   state and column locations are colocated in `table_borders_types.rs`
   and `table_column_location.rs`, with heavy border computation still
@@ -470,7 +470,7 @@ old `layoutng_*` source-package names at the repository boundary.
   The complete exclusion-space implementation—including shelf maintenance,
   opportunity enumeration, derived-geometry cache rebuild, exclusion insertion,
   incremental update, and space merge—is physically owned by
-  `layout_fragment/src/float/exclusion_space.rs`. The legacy core path is a
+  `layout_core/src/fragment/float/exclusion_space.rs`. The legacy core path is a
   re-export-only facade, and all input-sized operations retain float-qualified
   sampling frames while the cache-hit path stays lightweight.
   `ExclusionArea`, its optional shape payload, allocation, initial-letter
@@ -490,7 +490,7 @@ old `layoutng_*` source-package names at the repository boundary.
   tiny accessors inlineable while exclusion search and placement stay visible in
   float-qualified frames.
   Flex diagnostic line/item geometry is physically owned by
-  `layout_fragment/src/flex/devtools_flex_info.rs`; exporting diagnostic data
+  `layout_core/src/fragment/flex/devtools_flex_info.rs`; exporting diagnostic data
   no longer makes flex-specific state appear as generic core ownership.
   SVG path commands, shape transforms, and textPath point validation are owned
   by `layout_core/src/svg/svg_metadata_validation.rs`; ordinary element
@@ -521,7 +521,7 @@ old `layoutng_*` source-package names at the repository boundary.
   `layout_core/src/multicol/multicol_break_token_data.rs`, keeping retained
   algorithm state adjacent to the code that creates and consumes it.
   Form-control classification, fixed-size policy, and HTML form-node metadata
-  are physically owned by `layout_fragment/src/forms/form_control_types.rs`,
+  are physically owned by `layout_core/src/fragment/forms/form_control_types.rs`,
   `form_control_sizing_service.rs`, and `form_node_metadata_interface.rs`.
   Construction still enters through the traced `layout_algo_forms.CreateMetadata`
   callback, so metadata cost and later intrinsic sizing remain attributable to
@@ -562,7 +562,7 @@ old `layoutng_*` source-package names at the repository boundary.
   Physical/logical OOF candidates, inline and containing-block descriptors,
   fragmented descendants, pending multicol state, and coordinate conversion
   are physically owned by
-  `layout_fragment/src/out_of_flow/oof_positioned_node.rs`; the tiny value
+  `layout_core/src/fragment/out_of_flow/oof_positioned_node.rs`; the tiny value
   accessors remain inlineable instead of adding artificial profiling frames.
   Position-try fallback state is physically owned by
   `successful_position_fallback.rs`, while remembered/speculative
@@ -572,22 +572,19 @@ old `layoutng_*` source-package names at the repository boundary.
   Inline containing-block geometry, its traced map, and provider entry points
   are colocated in `inline_containing_block_utils_interface.rs`, so future provider
   sampling and allocation cost resolve directly to the out-of-flow package.
-- `layout_fragment` is a real crate (`src/lib.rs`) holding fragment data
-  only. It depends on the shared roots (`foundation`, `layout_geometry`,
-  `layout_style`, `paint_input_types`) and never on base; base
-  (`layout_core`, compiled in `layout_assembly`) depends on it and
-  re-exports its modules at their old `internal::` paths. Fragment data names
-  a LayoutObject, Node or PaintLayer only through the opaque handles in
-  `src/opaque.rs` (`OpaqueLayoutObject`, `OpaqueNode`, `OpaquePaintLayer`);
-  behaviour that dereferences them is a base extension trait implemented on
-  the fragment type (`LayoutOpportunityExt`, `NamingScopeExt`, `SnapAreaExt`)
-  so calls stay direct. The fragment-tree types whose methods still call
-  LayoutObject behaviour (PhysicalFragment, PhysicalBoxFragment,
-  FragmentItem(s), InlineCursor, LayoutResult, break tokens, ...) are still
-  compiled by the assembly through
-  `layout_assembly/src/layout_fragment_package.rs`; `PACKAGE_MAP.md` §7
-  (R4 status) lists every file's side and what blocks the rest.
-  The package owns the source-result lifetime handle and fragment-local
+- Fragments are base. Fragment data (ConstraintSpace and its exclusion
+  space, grid track data, used fonts, scoped names, snap areas, ...) and the
+  fragment tree (PhysicalFragment, PhysicalBoxFragment, FragmentItem(s),
+  InlineCursor, LayoutResult, break tokens, builders) live in
+  `layout_core/src/fragment/` and compile with the rest of base in
+  `layout_assembly`. Data modules mount at `crate::internal::<module>`
+  (declared in `layout_core/src/lib.rs`), the fragment tree at the assembly
+  root through `layout_assembly/src/layout_fragment_package.rs`. Fragment
+  data holds the real base types (`Member<LayoutBox>`, `Member<Element>`,
+  ...) and keeps its behaviour as inherent methods with Chromium's names.
+  Paint and Interaction name the result through the facade's `layout::result`
+  module. The former `layout_fragment` crate is gone (`PACKAGE_MAP.md` §7).
+  The fragment area owns the source-result lifetime handle and fragment-local
   revision policy, plus engine-neutral retained-paint boundary values such as
   fragment identity/geometry, sticky and scroll geometry, inline client
   geometry, collapsed-table section geometry, scrollbar-axis client state,
@@ -611,7 +608,7 @@ old `layoutng_*` source-package names at the repository boundary.
   vectors retains a fragment sampling frame rather than appearing as core
   value-copy self time.
   The retained `MathMLPaintInfo` payload is physically owned by
-  `layout_fragment/src/mathml_paint_info.rs`; the old core path only
+  `layout_core/src/fragment/mathml_paint_info.rs`; the old core path only
   re-exports it, separating retained paint memory from MathML algorithm time.
   Inline client-geometry enumeration, including culled-inline discovery,
   ruby-text exclusion, border-box projection, and per-container bounds, is
@@ -981,9 +978,10 @@ that distinction instead of describing composition modules as independently
 compiled packages. Cargo package names, library names, dependency keys, source
 paths, and trace prefixes deliberately use the same names where a real package
 boundary exists; compatibility aliases are not allowed because they make
-profiles and dependency reports ambiguous. The two `_assembly` crates depend on
-`layout_fragment` under its own name; the former `layout_fragment_boundary`
-key and the `extern crate self as layout_fragment` alias are gone.
+profiles and dependency reports ambiguous. Fragments compile as base modules,
+so there is no fragment crate, dependency key or alias; the
+`layout_fragment.` trace prefix and the `layout_fragment_*` sampling module
+names are kept for profile continuity.
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
@@ -1123,12 +1121,12 @@ TLS scope, and current-resolver contract are colocated in
   transaction. Consequently `CollectSubtree`, `PrepareSubtree`, and
   `RetireObjects` spans contain package-qualified sampling frames instead of
   core `layout_object_builder` loops.
-- The opaque source result owner and scroll-property revision policy resolve
-  to `layout_fragment::LayoutResultHandle` and
-  `layout_fragment::revision::*`. The package also owns the
-  `layout_fragment.RevisionUpdate` and `layout_fragment.PublishFragmentTree` trace
-  constructors; commit and assembly adapters only add source traversal work
-  and statistics. Revision counters are package-owned and split into a main
+- The opaque source result owner resolves to
+  `layout_assembly::layout_result_handle::LayoutResultHandle`
+  (`layout_core/src/fragment/layout_result_handle.rs`). The `layout_fragment.*`
+  trace constructors (`PublishFragmentTree`, `UpdatePrePaintInputs`, ...) are
+  declared in `layout_commit/src/fragment_trace.rs`, keeping their historical
+  names; base adapters only add source traversal work and statistics. Revision counters are package-owned and split into a main
   interval plus `RevisionReasonSummary`, so all counters survive the trace
   collector's field limit. Chromium graph casts remain confined to the assembly
   cursor adapter.
@@ -1138,10 +1136,9 @@ TLS scope, and current-resolver contract are colocated in
   `IndexObjects` inclusive time and sampling stacks agree on the fragment
   owner.
 
-`layout_fragment` is now a standalone workspace package for the opaque source
-result lifetime handle. Its translated graph implementation and the inline
-implementation still have reciprocal concrete-type dependencies with LayoutNG
-and are composed by `layout_assembly`. Those sources remain nested under
+The fragment tree and the inline implementation have reciprocal
+concrete-type dependencies with LayoutNG and are composed by
+`layout_assembly`. Those sources remain nested under
 `layout_fragment_package` and `layout_algo_inline_package`, so demangled
 sampling symbols retain their owner while the remaining concrete declarations
 are split behind assembly adapters.
