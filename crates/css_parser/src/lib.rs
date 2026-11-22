@@ -5,7 +5,7 @@ pub enum Selector {
     Id(String),
 }
 
-#[cfg(feature = "layoutng_values")]
+#[cfg(feature = "color_parser")]
 pub mod color_parser;
 #[cfg(feature = "tokenizer")]
 pub mod css_parser_idioms;

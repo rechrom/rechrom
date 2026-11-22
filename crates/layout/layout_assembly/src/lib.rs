@@ -24,22 +24,27 @@ pub mod layout_algo_inline_package {
 }
 pub use layout_algo_inline_package::*;
 
-// Inline ink-overflow traversal is mutually recursive with Paint's decorating
-// box context in Chromium. Keep the Paint-owned sources at their physical path
-// and compile them once at this existing reciprocal assembly boundary.
-#[path = "../../../paint/paint_record/src/decorating_box.rs"]
+// Chromium's core/paint/ decorating-box, inline-paint-context, line-relative
+// geometry and text-decoration metrics are consumed by Layout's own
+// fragment-tree code (FragmentItem, InlineCursor, PhysicalBoxFragment and
+// ink_overflow) and name FragmentItem/UsedFont directly. Their only compile
+// unit is this assembly; the sources physically live beside those
+// fragment-tree users in `layout_fragment/src/` so samples attribute to the
+// fragment package. Paint reaches them through `layout::paint::<module>`
+// re-exports and does not compile them.
+#[path = "../../layout_fragment/src/decorating_box.rs"]
 pub mod decorating_box;
-#[path = "../../../paint/paint_record/src/inline_paint_context.rs"]
+#[path = "../../layout_fragment/src/inline_paint_context.rs"]
 pub mod inline_paint_context;
-#[path = "../../../paint/paint_record/src/line_relative_rect.rs"]
+#[path = "../../layout_fragment/src/line_relative_rect.rs"]
 pub mod line_relative_rect;
-#[path = "../../../paint/paint_record/src/text_decoration_info.rs"]
+#[path = "../../layout_fragment/src/text_decoration_info.rs"]
 pub mod text_decoration_info;
 
-// CSS value parsers refer to LayoutNG-owned value types. Compile the owning
-// css_parser source once at this reciprocal assembly boundary.
-#[path = "../../../css_parser/src/color_parser.rs"]
-pub mod css_color_parser;
+// The CSS colour parser is owned and compiled by `css_parser` (feature
+// `color_parser`). It names only `paint_input_types` values, so Layout
+// re-exports that compile unit instead of compiling the file a second time.
+pub use css_parser::color_parser as css_color_parser;
 
 mod block_virtual_dispatch;
 pub use block_virtual_dispatch::{
@@ -54,6 +59,14 @@ mod layout_invalidation_reason_symbols;
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 
+// Grid-owned sources whose only compile unit is this assembly. They stay in
+// `layout_algo_grid/src/` for profiler attribution; `layout_algo_grid/src/lib.rs`
+// re-exports these modules and does not compile the files. Core needs them:
+// gap_segment_state_aggregator.rs holds trait and inherent impls on the
+// core-declared `GapSegmentStateAggregator` (coherence requires the declaring
+// crate), and grid_track_collection.rs defines the `#[no_mangle]` bodies that
+// core's `internal::grid_track_collection` declares as `extern "Rust"`, so
+// they must link with every layout_assembly user, including its own tests.
 #[path = "../../layout_algo_grid/src/gap_segment_state_aggregator.rs"]
 pub mod grid_gap_segment_state_aggregator;
 

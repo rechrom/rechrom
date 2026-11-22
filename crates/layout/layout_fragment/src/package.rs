@@ -1,3 +1,18 @@
+// Compile units in `layout_fragment/src/` (each file has exactly one):
+//
+// * This standalone `layout_fragment` crate (lib path `src/package.rs`,
+//   aliased `layout_fragment_boundary` inside the assemblies) compiles only
+//   `package.rs`, `boundary_types.rs` and `trace.rs`.
+// * Every other `.rs` file in this directory is compiled by `layout_assembly`:
+//   `lib.rs` is `include!`d as `layout_assembly::layout_fragment_package`
+//   and declares the fragment-tree modules; the remaining files are reached
+//   through `#[path]` from `layout_core` facades, from `layout_assembly`'s
+//   root (`decorating_box`, `inline_paint_context`, `line_relative_rect`,
+//   `text_decoration_info`), or from nested `#[path]` in those files.
+//   The compile-only `layout_algo_inline_assembly` profile includes the same
+//   `lib.rs` for verification.
+// None of the assembly-compiled files is declared here, and the assemblies do
+// not compile this file, `boundary_types.rs` or `trace.rs`.
 #![allow(non_snake_case)]
 
 //! Ownership boundary for the canonical source fragment result.

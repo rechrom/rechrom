@@ -19,6 +19,8 @@ layout_commit = { path = "../layout_commit" }
 layout_algo_mathml = { path = "../layout_algo_mathml" }
 icu_bidi = { path = "../../icu_bidi" }
 cssom = { path = "../../cssom" }
+# Sole compile unit of color_parser.rs, re-exported as `css_color_parser`.
+css_parser = { path = "../../css_parser", features = ["color_parser"] }
 layout_algo_custom = { path = "../layout_algo_custom" }
 image_resource = { path = "../../image_resource" }
 skia = { path = "../../skia" }
