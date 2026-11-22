@@ -154,7 +154,7 @@ fn layout_object_count(page: &Page, id: u64) -> usize {
     let assembly = browser::CreateLayoutAssembly();
     let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     let mut count = 0;
     while !object.is_null() {

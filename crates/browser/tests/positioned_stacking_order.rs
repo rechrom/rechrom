@@ -95,7 +95,7 @@ fn node_id(page: &Page, name: &str) -> u64 {
 fn layout_object(page: &Page, name: &str) -> *mut LayoutObject {
     let wanted = node_id(page, name);
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject as *mut LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };

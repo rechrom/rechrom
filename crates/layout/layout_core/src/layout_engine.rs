@@ -211,6 +211,10 @@ pub enum LayoutMutation<'a> {
     Scroll(ScrollMutation),
     // Wave E: selection
     Selection(crate::layout_selection::SelectionMutation<'a>),
+    // Wave E: pointer
+    /// Pointer scrollbar/resizer commands on a resident
+    /// PaintLayerScrollableArea (scrollbar.cc, pointer_event_manager.cc).
+    Pointer(crate::native_pointer_scroll_controls::PointerMutation<'a>),
 }
 
 /// Scroll-family commands carried by [`LayoutMutation::Scroll`].

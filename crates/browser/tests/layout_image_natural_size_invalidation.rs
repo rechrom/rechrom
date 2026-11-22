@@ -75,13 +75,13 @@ fn fixed_layout_image_natural_size_change_is_paint_only() {
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
         engine.Layout();
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let image = unsafe { &mut *parent.SlowFirstChild() };
         image.ClearPaintInvalidationFlags();
         project_image(&mut engine, 120.0, false, true, 1.0, false, false);
 
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let image = unsafe { &*parent.SlowFirstChild() };
         assert!(image.IsLayoutImage());
@@ -118,7 +118,7 @@ fn flex_or_auto_sized_layout_image_natural_size_change_requires_layout() {
                 false,
             );
             engine.Layout();
-            let root = engine.GetLayoutTree().unwrap().Root();
+            let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
             let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
             unsafe { &mut *parent.SlowFirstChild() }.ClearPaintInvalidationFlags();
             project_image(
@@ -131,7 +131,7 @@ fn flex_or_auto_sized_layout_image_natural_size_change_requires_layout() {
                 false,
             );
 
-            let root = engine.GetLayoutTree().unwrap().Root();
+            let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
             let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
             let image = unsafe { &*parent.SlowFirstChild() };
             assert!(image.IsLayoutImage());
@@ -159,7 +159,7 @@ fn retained_layout_image_updates_device_pixel_ratio_member() {
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
         engine.Layout();
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let original = parent.SlowFirstChild();
         let image = unsafe { &*original.cast::<LayoutInputReplaced>() };
@@ -167,7 +167,7 @@ fn retained_layout_image_updates_device_pixel_ratio_member() {
         assert_eq!(image.GetNaturalDimensions().size.width.ToDouble(), 40.0);
 
         project_image(&mut engine, 40.0, false, true, 2.0, false, false);
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let retained = parent.SlowFirstChild();
         assert_eq!(retained, original);
@@ -191,12 +191,12 @@ fn animated_layout_image_change_delays_full_paint_invalidation() {
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
         engine.Layout();
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         unsafe { &mut *parent.SlowFirstChild() }.ClearPaintInvalidationFlags();
 
         project_image(&mut engine, 40.0, false, true, 1.0, true, false);
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let image = unsafe { &*parent.SlowFirstChild() };
         assert_eq!(
@@ -221,12 +221,12 @@ fn failed_layout_image_retains_last_successful_natural_dimensions() {
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
         engine.Layout();
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         unsafe { &mut *parent.SlowFirstChild() }.ClearPaintInvalidationFlags();
 
         project_image(&mut engine, 0.0, false, true, 1.0, false, true);
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let parent = unsafe { &*unsafe { &*root }.SlowFirstChild() };
         let image = unsafe { &*parent.SlowFirstChild().cast::<LayoutInputReplaced>() };
         assert_eq!(image.GetNaturalDimensions().size.width.ToDouble(), 40.0);
@@ -251,13 +251,13 @@ fn layout_image_contributes_visually_non_empty_pixels_only_once() {
         ));
 
         project_image(&mut engine, 10.0, false, true, 1.0, false, false);
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let view = unsafe { &*(root as *const LayoutObject).cast::<LayoutView>() };
         assert_eq!(view.VisuallyNonEmptyPixelCount(), 300);
         assert!(!view.IsVisuallyNonEmpty());
 
         project_image(&mut engine, 100.0, false, true, 1.0, false, false);
-        let root = engine.GetLayoutTree().unwrap().Root();
+        let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let view = unsafe { &*(root as *const LayoutObject).cast::<LayoutView>() };
         assert_eq!(view.VisuallyNonEmptyPixelCount(), 300);
         assert!(!view.IsVisuallyNonEmpty());

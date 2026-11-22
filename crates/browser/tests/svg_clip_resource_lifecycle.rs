@@ -119,7 +119,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     let assembly = browser::CreateLayoutAssembly();
     let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };
@@ -801,7 +801,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             .paint
             .glyph_runs
             .clone();
-        let label = engine.GetLayoutTree().unwrap().Root();
+        let label = engine.Pointer().ResidentLayoutTree().unwrap().Root();
         let mut object = label as *const LayoutObject;
         while unsafe { &*object }.OwnerNodeIdDefault() as u64 != label_id {
             object = unsafe { &*object }.NextInPreOrder(label);

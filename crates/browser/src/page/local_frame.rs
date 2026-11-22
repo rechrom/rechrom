@@ -254,7 +254,7 @@ impl LocalChildFrameHitTest for CurrentLocalFrameQuery<'_> {
             has_document: true,
             is_prepaint_clean: state >= dom::document_lifecycle::LifecycleState::PrePaintClean
                 && state < dom::document_lifecycle::LifecycleState::Stopping,
-            has_layout_view: runtime.layout.borrow().GetLayoutTree().is_some(),
+            has_layout_view: runtime.layout.borrow().Pointer().HasLayoutView(),
         };
         Ok(facts)
     }
@@ -270,9 +270,9 @@ impl LocalChildFrameHitTest for CurrentLocalFrameQuery<'_> {
         let view = unsafe {
             foundation::DynamicTo::<layout::object::LayoutView>(
                 layout
-                    .GetLayoutTree()
-                    .ok_or_else(|| self.Required())?
-                    .Root(),
+                    .Pointer()
+                    .LayoutViewRoot()
+                    .ok_or_else(|| self.Required())?,
             )
             .as_ref()
         }
@@ -567,9 +567,9 @@ impl PreparedLayoutViewLifecycle for CurrentLocalFrameView<'_> {
     fn DocumentToFrameOffset(&self) -> foundation::PhysicalOffset {
         let layout = self.runtime.layout.borrow();
         let root = layout
-            .GetLayoutTree()
-            .expect("prepared child LayoutView")
-            .Root();
+            .Pointer()
+            .LayoutViewRoot()
+            .expect("prepared child LayoutView");
         let box_ = unsafe {
             foundation::DynamicTo::<layout::object::LayoutBox>(root)
                 .as_ref()

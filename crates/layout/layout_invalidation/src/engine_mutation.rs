@@ -107,6 +107,7 @@ impl EngineMutation for LayoutEngine {
             LayoutMutation::Selection(mutation) => {
                 return apply_selection_mutation(self, mutation);
             }
+            LayoutMutation::Pointer(pointer) => return self.ApplyPointerMutation(pointer),
             mutation => mutation,
         };
         // A cancelled/restarted timer has no source mutation. Reject it before
@@ -593,7 +594,8 @@ impl EngineMutation for LayoutEngine {
             LayoutMutation::FormControl(_)
             | LayoutMutation::EventRegistry(_)
             | LayoutMutation::Scroll(_)
-            | LayoutMutation::Selection(_) => {
+            | LayoutMutation::Selection(_)
+            | LayoutMutation::Pointer(_) => {
                 unreachable!("Wave E command mutations return before bookkeeping")
             }
         }

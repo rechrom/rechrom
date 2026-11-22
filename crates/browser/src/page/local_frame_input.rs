@@ -263,15 +263,15 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
     ) -> Option<layout::scroll::NativeMouseCoordinateLayout> {
         let (frame, runtime, _) = self.Owners().ok()?;
         frame.EnsureFocusLayout(&runtime);
-        let result = runtime.layout.borrow().MouseCoordinateLayout(node);
+        let result = runtime.layout.borrow().Pointer().MouseCoordinateLayout(node);
         result
     }
     fn DragBoundingBox(&self, node: u64) -> Option<gfx::Rect> {
         let (_, runtime, _) = self.Owners().ok()?;
         let rect = {
             let layout = runtime.layout.borrow();
-            let object = layout.MouseCoordinateLayout(node)?;
-            layout.AbsoluteBoundingBoxIncludingDescendants(&object)
+            let object = layout.Pointer().MouseCoordinateLayout(node)?;
+            layout.Pointer().AbsoluteBoundingBoxIncludingDescendants(&object)
         };
         self.NonLocatedRectToRootFrame(rect)
     }
@@ -282,8 +282,8 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
         let (frame, runtime, _) = self.Owners().ok()?;
         let (point, zoom) = {
             let layout = runtime.layout.borrow();
-            let object = layout.MouseCoordinateLayout(node)?;
-            layout.SimulatedClickRootFrameCenter(&object)?
+            let object = layout.Pointer().MouseCoordinateLayout(node)?;
+            layout.Pointer().SimulatedClickRootFrameCenter(&object)?
         };
         let point = frame.domain.upgrade()?.MapChildPoint(
             &frame,
@@ -330,7 +330,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
             .1
             .layout
             .borrow()
-            .MouseLayoutViewportScrollOffsetInt()
+            .Pointer().MouseLayoutViewportScrollOffsetInt()
     }
     fn HasLayoutObject(&self, node: u64) -> bool {
         self.Owners().is_ok_and(|(_, runtime, _)| {

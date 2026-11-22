@@ -138,7 +138,7 @@ fn layout_box_by_id<'a>(page: &'a Page, id: &str) -> &'a LayoutBox {
         })
         .expect("wanted node");
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };
@@ -165,7 +165,7 @@ fn image_box_ptr(page: &Page) -> *mut LayoutReplaced {
         })
         .expect("target node");
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };

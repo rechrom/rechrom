@@ -177,7 +177,7 @@ fn edit_value(page: &Page, id: u64) -> String {
 }
 fn edit_selection(page: &Page, id: u64) -> layout::editing::Selection {
     page.GetLayoutEngine()
-        .GetLayoutTree()
+        .Pointer().ResidentLayoutTree()
         .unwrap()
         .EditingState()
         .selections

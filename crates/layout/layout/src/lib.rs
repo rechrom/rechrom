@@ -35,9 +35,15 @@
 //! several groups; all of them resolve to one re-export.
 
 mod engine;
-/// Borrowed query views over [`LayoutEngine`], one per consumer family.
+/// Borrowed per-family query views on [`LayoutEngine`] and the command values
+/// their families send through `LayoutMutation` (wave E).
 pub mod views {
+    pub mod event_registry;
+    pub mod form_control;
+    pub mod pointer;
     pub mod resource;
+    pub mod scroll;
+    pub mod selection;
 }
 mod engine_groups {
     mod browser;
@@ -56,14 +62,6 @@ mod exports {
     pub mod webapi;
 }
 
-/// Borrowed per-family query views on [`LayoutEngine`] and the command values
-/// their families send through `LayoutMutation`.
-pub mod views {
-    pub mod event_registry;
-    pub mod form_control;
-    pub mod scroll;
-    pub mod selection;
-}
 
 pub use engine::LayoutEngine;
 pub use layout_assembly::engine_assembly::LayoutAssembly;

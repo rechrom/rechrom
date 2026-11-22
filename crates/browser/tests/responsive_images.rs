@@ -104,7 +104,7 @@ fn image(page: &Page, id: u64) -> &LayoutInputReplaced {
     let assembly = browser::CreateLayoutAssembly();
     let _scope = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };

@@ -578,11 +578,10 @@ impl SVGDocumentAnimation {
             .ok_or_else(|| io::Error::other("animated SVG layout produced no fragments"))?;
         {
             let _svg_resources =
-                layout::object::SVGResourceQueryScope::new(
-                    self.engine
-                        .GetLayoutTree()
-                        .expect("SVG image Paint retains native resources"),
-                );
+                self.engine
+                    .Pointer()
+                    .SVGResourceQueryScope()
+                    .expect("SVG image Paint retains native resources");
             self.paint_engine.Paint(&layout_output, Default::default());
         }
         let paint_output = self.paint_engine.CommitPaintResult();

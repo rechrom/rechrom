@@ -75,17 +75,17 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
             let mut fresh = new_engine(&space);
             project(&mut fresh, ids);
             assert_eq!(actual, layout_geometry(&mut fresh));
-            let root = engine.GetLayoutTree().unwrap().Root() as *const LayoutObject;
+            let root = engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject;
             project(&mut engine, ids);
             assert_eq!(
                 root,
-                engine.GetLayoutTree().unwrap().Root() as *const LayoutObject
+                engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject
             );
             assert_eq!(
-                engine.GetLayoutTree().unwrap().UpdateStats().reused,
+                engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().reused,
                 ids.len() + 1
             );
-            assert_eq!(engine.GetLayoutTree().unwrap().UpdateStats().created, 0);
+            assert_eq!(engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().created, 0);
             assert_eq!(actual, layout_geometry(&mut engine));
         }
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -99,7 +99,7 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
         assert!(failure.is_err());
         project(&mut engine, &[8, 9]);
         assert_eq!(
-            engine.GetLayoutTree().unwrap().UpdateStats().created,
+            engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().created,
             3,
             "failed-build cleanup removes both maps' records"
         );
@@ -108,7 +108,7 @@ fn complete_tree_updates_survive_reorder_removal_and_failed_build() {
         project(&mut fresh, &[8, 9]);
         assert_eq!(actual, layout_geometry(&mut fresh));
         project(&mut engine, &[8, 9]);
-        assert_eq!(engine.GetLayoutTree().unwrap().UpdateStats().reused, 3);
+        assert_eq!(engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().reused, 3);
         assert_eq!(actual, layout_geometry(&mut engine));
     });
 }
@@ -147,7 +147,7 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
                 .Get();
             old = foundation::WeakPersistent::from_ptr(canonical);
             assert_ne!(
-                engine.GetLayoutTree().unwrap().Root().StyleRef() as *const _,
+                engine.Pointer().ResidentLayoutTree().unwrap().Root().StyleRef() as *const _,
                 canonical.cast_const(),
                 "font binding must exercise a distinct native style"
             );

@@ -19,6 +19,8 @@ pub mod mutation {
     };
     // Wave E: scroll
     pub use layout_assembly::layout_engine::ScrollMutation;
+    // Wave E: pointer
+    pub use layout_assembly::native_pointer_scroll_controls::PointerMutation;
 }
 
 pub mod input {

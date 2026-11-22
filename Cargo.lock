@@ -275,19 +275,7 @@ dependencies = [
  "interaction",
  "intersection_observer",
  "javascript",
- "layout_algo_block",
- "layout_algo_flex",
- "layout_algo_float",
- "layout_algo_forms",
- "layout_algo_grid",
- "layout_algo_list",
- "layout_algo_multicol",
- "layout_algo_out_of_flow",
- "layout_algo_replaced",
- "layout_algo_svg",
- "layout_algo_table",
- "layout_assembly",
- "layout_fragment",
+ "layout",
  "layout_style",
  "navigation_history",
  "open",
@@ -886,7 +874,7 @@ dependencies = [
  "cssom",
  "dom",
  "html",
- "layout_assembly",
+ "layout",
 ]
 
 [[package]]
@@ -898,7 +886,7 @@ dependencies = [
  "foundation",
  "html",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_style",
  "paint",
  "style",
@@ -921,7 +909,7 @@ dependencies = [
  "image_decoder",
  "image_resource",
  "javascript",
- "layout_assembly",
+ "layout",
  "navigation_history",
  "page_mutation",
  "resource",
@@ -947,9 +935,7 @@ dependencies = [
  "html",
  "image_resource",
  "intersection_observer",
- "layout_algo_block",
- "layout_algo_replaced",
- "layout_assembly",
+ "layout",
  "layout_style",
  "navigation_history",
  "resize_observer",
@@ -1519,8 +1505,7 @@ version = "0.0.1"
 dependencies = [
  "dom",
  "foundation",
- "layout_algo_replaced",
- "layout_assembly",
+ "layout",
  "xml",
 ]
 
@@ -2104,7 +2089,7 @@ dependencies = [
  "interaction_hit_test",
  "interaction_input",
  "interaction_scroll",
- "layout_assembly",
+ "layout",
  "layout_style",
  "navigation_history",
  "paint",
@@ -2148,7 +2133,7 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "interaction_input",
- "layout_assembly",
+ "layout",
  "layout_geometry",
  "layout_style",
  "paint",
@@ -3211,7 +3196,7 @@ dependencies = [
  "cssom",
  "dom",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_style",
 ]
 
@@ -3224,9 +3209,10 @@ dependencies = [
  "canvas",
  "foundation",
  "image_resource",
- "layout_assembly",
+ "layout",
  "paint_chunk",
  "paint_commit",
+ "paint_input_types",
  "paint_model",
  "paint_record",
  "paint_reuse",
@@ -3239,7 +3225,8 @@ name = "paint_chunk"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layout_assembly",
+ "layout",
+ "paint_input_types",
  "paint_model",
 ]
 
@@ -3249,7 +3236,8 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "foundation",
- "layout_assembly",
+ "layout",
+ "paint_input_types",
  "paint_model",
  "paint_record",
  "prepaint",
@@ -3272,9 +3260,10 @@ version = "0.0.1"
 dependencies = [
  "foundation",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_geometry",
  "layout_style",
+ "paint_input_types",
  "scroll_snap",
  "serde_json",
 ]
@@ -3288,9 +3277,10 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_style",
  "paint_chunk",
+ "paint_input_types",
  "paint_model",
  "paint_reuse",
  "prepaint",
@@ -3301,7 +3291,7 @@ dependencies = [
 name = "paint_reuse"
 version = "0.0.1"
 dependencies = [
- "layout_assembly",
+ "paint_input_types",
  "paint_model",
 ]
 
@@ -3310,9 +3300,9 @@ name = "paint_skia"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layout_assembly",
  "layout_geometry",
  "layout_style",
+ "paint_input_types",
  "paint_model",
  "skia",
 ]
@@ -3322,7 +3312,8 @@ name = "paint_walk"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
- "layout_assembly",
+ "layout",
+ "paint_input_types",
  "paint_model",
  "paint_record",
  "prepaint",
@@ -3520,9 +3511,10 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_geometry",
  "layout_style",
+ "paint_input_types",
  "paint_model",
  "paint_reuse",
 ]
@@ -3774,7 +3766,7 @@ dependencies = [
  "image_resource",
  "interaction",
  "javascript",
- "layout_assembly",
+ "layout",
  "libc",
  "navigation_history",
  "net_filename",
@@ -5103,8 +5095,7 @@ dependencies = [
  "http_transport",
  "interaction",
  "javascript",
- "layout_algo_replaced",
- "layout_assembly",
+ "layout",
  "navigation_history",
  "paint",
  "percent-encoding",
