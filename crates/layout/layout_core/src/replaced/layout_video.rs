@@ -2,9 +2,9 @@
 //! Source: core/layout/layout_video.cc:42-220 (6c1d401fcca5).
 #![allow(non_snake_case)]
 use foundation::{LayoutUnit, PhysicalSize};
-use layout_assembly::internal::layout_invalidation_reason::kSizeChanged;
-use layout_assembly::internal::layout_object::{MarkingBehavior, StyleChangeContext};
-use layout_assembly::internal::layout_replaced::{LayoutVideo, VideoDisplayMode};
+use crate::internal::layout_invalidation_reason::kSizeChanged;
+use crate::internal::layout_object::{MarkingBehavior, StyleChangeContext};
+use crate::internal::layout_replaced::{LayoutVideo, VideoDisplayMode};
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 use layout_style::style::style_difference::StyleDifference;
@@ -20,7 +20,7 @@ pub fn NaturalDimensions(this: &LayoutVideo) -> PhysicalNaturalSizingInfo {
     match mode {
         VideoDisplayMode::Poster => {
             let element = unsafe {
-                &*foundation::To::<layout_assembly::internal::layout_node_metadata::Element>(
+                &*foundation::To::<crate::internal::layout_node_metadata::Element>(
                     this.GetNode(),
                 )
             };
@@ -59,8 +59,7 @@ pub fn UpdateNaturalSize(this: &mut LayoutVideo) {
 }
 // Source: layout_video.cc:175-185 + Element::SetNeedsCompositingUpdate,
 // core/dom/element.cc:7368-7388. All flags target the original native layers.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutVideoInvalidateCompositing(this: &mut LayoutVideo) {
+pub fn LayoutVideoInvalidateCompositing(this: &mut LayoutVideo) {
     let state = this.ElementState();
     if state.player_natural_size.is_none() || !state.in_active_document {
         return;
@@ -76,8 +75,7 @@ pub extern "Rust" fn LayoutVideoInvalidateCompositing(this: &mut LayoutVideo) {
 }
 // Source: layout_video.cc:165-173. The inherited UpdateFromElement is the
 // source base implementation; derived invalidation must always follow it.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutVideoUpdateFromElement(this: &mut LayoutVideo) {
+pub fn LayoutVideoUpdateFromElement(this: &mut LayoutVideo) {
     this.UpdateFromElementBase();
     this.RefreshPosterNaturalDimensions();
     LayoutVideoInvalidateCompositing(this);
@@ -94,7 +92,7 @@ pub fn StyleDidChange(
     // Source: layout_video.cc:155-163. Image resource/style lifecycle runs first.
     // The original ComputedStyle continues through to VideoPainter's resident
     // foreign-layer filter/dynamic-range producer (html_video_element.cc:1308).
-    crate::layout_replaced::LayoutInputReplacedStyleDidChange(
+    super::layout_replaced_core::LayoutInputReplacedStyleDidChange(
         this, difference, old_style, new_style, context,
     );
     UpdateNaturalSize(this);

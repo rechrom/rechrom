@@ -1,26 +1,30 @@
+//! LayoutReplaced and LayoutImage member bodies (Chromium 6c1d401fcca5,
+//! core/layout/layout_replaced.cc, core/layout/layout_image.cc). These are
+//! object-model classes: base since R7a. The replaced layout algorithm
+//! (core/layout/replaced_layout_algorithm.cc) stays in `layout_algo_replaced`.
 #![allow(non_snake_case)]
 
 use foundation::{
     gfx, AspectRatioFit, DynamicTo, EObjectFit, FloatValueForLength, IsLtr, LayoutUnit,
     MinimumValueForLength, PhysicalOffset, PhysicalRect, PhysicalSize, UnsupportedLayout,
 };
-use layout_assembly::inline_cursor::InlineCursor;
-use layout_assembly::internal::editing::forward::PositionWithAffinity;
-use layout_assembly::internal::hit_test_phase::HitTestPhase;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_assembly::internal::layout_invalidation_reason;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{
+use crate::inline_cursor::InlineCursor;
+use crate::internal::editing::forward::PositionWithAffinity;
+use crate::internal::hit_test_phase::HitTestPhase;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_invalidation_reason;
+use crate::internal::layout_node_metadata::Element;
+use crate::internal::layout_object::{
     HitTestLocation, HitTestResult, LayoutObject, LayoutObjectClass, StyleChangeContext,
 };
-use layout_assembly::internal::layout_replaced::{
+use crate::internal::layout_replaced::{
     LayoutInputReplaced, LayoutReplaced, LayoutVideo, VideoDisplayMode,
 };
-use layout_assembly::internal::outline_geometry::OutlineOutsetExtent;
-use layout_assembly::internal::outline_info::LayoutOutlineInfo;
-use layout_assembly::internal::outline_rect_collector::VectorOutlineRectCollector;
-use layout_assembly::internal::selection_state::SelectionState;
+use crate::internal::outline_geometry::OutlineOutsetExtent;
+use crate::internal::outline_info::LayoutOutlineInfo;
+use crate::internal::outline_rect_collector::VectorOutlineRectCollector;
+use crate::internal::selection_state::SelectionState;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
@@ -35,52 +39,15 @@ use layout_style::style::style_difference::StyleDifference;
 use layout_style::style::style_overflow_clip_margin::ReferenceBox;
 
 // cpp: core/layout/layout_replaced.cc:67-68
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedDefaultWidth() -> i32 {
+pub fn LayoutReplacedDefaultWidth() -> i32 {
     300
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedDefaultHeight() -> i32 {
+pub fn LayoutReplacedDefaultHeight() -> i32 {
     150
 }
 
 // cpp: core/layout/layout_replaced.cc:70-70
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedNew(element: *mut Element) -> LayoutReplaced {
-    layout_assembly::RegisterReplacedStyleDidChange(
-        |object, difference, old_style, new_style, context| {
-            LayoutReplacedStyleDidChange(
-                unsafe { &mut *object.cast::<LayoutReplaced>() },
-                difference,
-                old_style,
-                new_style,
-                context,
-            )
-        },
-    );
-    layout_assembly::RegisterImageStyleDidChange(
-        |object, difference, old_style, new_style, context| {
-            LayoutInputReplacedStyleDidChange(
-                unsafe { &mut *object.cast::<LayoutInputReplaced>() },
-                difference,
-                old_style,
-                new_style,
-                context,
-            )
-        },
-    );
-    layout_assembly::RegisterVideoStyleDidChange(|object, diff, old, new, context| {
-        crate::layout_video::StyleDidChange(
-            unsafe { &mut *object.cast::<LayoutVideo>() },
-            diff,
-            old,
-            new,
-            context,
-        );
-    });
-    layout_assembly::RegisterReplacedRecalcVisualOverflow(|object| {
-        LayoutReplacedRecalcVisualOverflow(unsafe { &mut *object.cast::<LayoutReplaced>() })
-    });
+pub fn LayoutReplacedNew(element: *mut Element) -> LayoutReplaced {
     let box_ = LayoutBox::new(unsafe { &mut (*element).container });
     box_.SetRuntimeClass(LayoutObjectClass::Replaced);
     LayoutReplaced::FromLayoutBox(box_)
@@ -141,8 +108,7 @@ fn LayoutReplacedAddVisualEffectOverflow(this: &mut LayoutReplaced) {
 }
 
 // cpp: core/layout/layout_replaced.cc:301-319
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedRecalcVisualOverflow(this: &mut LayoutReplaced) {
+pub fn LayoutReplacedRecalcVisualOverflow(this: &mut LayoutReplaced) {
     this.CheckIsNotDestroyed();
     this.ClearVisualOverflow();
     let object: &mut LayoutObject = this;
@@ -155,8 +121,7 @@ pub extern "Rust" fn LayoutReplacedRecalcVisualOverflow(this: &mut LayoutReplace
 }
 
 // cpp: core/layout/layout_replaced.cc:74-93
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedStyleDidChange(
+pub fn LayoutReplacedStyleDidChange(
     this: &mut LayoutReplaced,
     diff: StyleDifference,
     old_style: *const ComputedStyle,
@@ -180,8 +145,7 @@ pub extern "Rust" fn LayoutReplacedStyleDidChange(
 }
 
 // cpp: core/layout/layout_image.cc:102-117
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputReplacedStyleDidChange(
+pub fn LayoutInputReplacedStyleDidChange(
     this: &mut LayoutInputReplaced,
     diff: StyleDifference,
     old_style: *const ComputedStyle,
@@ -225,8 +189,7 @@ pub extern "Rust" fn LayoutInputReplacedStyleDidChange(
 }
 
 // cpp: core/layout/layout_replaced.cc:95-99
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced) {
+pub fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced) {
     this.CheckIsNotDestroyed();
     if this.IsVideo() {
         let video = unsafe { &mut *(this as *mut LayoutReplaced).cast::<LayoutVideo>() };
@@ -235,7 +198,7 @@ pub extern "Rust" fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced)
                 &raw const layout_invalidation_reason::kSizeChanged,
             );
         }
-        crate::layout_video::UpdateNaturalSize(video);
+        super::layout_video::UpdateNaturalSize(video);
         return;
     }
     let object: &mut LayoutObject = this;
@@ -245,8 +208,7 @@ pub extern "Rust" fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced)
 }
 
 // cpp: core/layout/layout_replaced.cc:594-597
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedComputeSpeculativeDecodeSize(
+pub fn LayoutReplacedComputeSpeculativeDecodeSize(
     this: &LayoutReplaced,
 ) -> gfx::Size {
     this.CheckIsNotDestroyed();
@@ -254,8 +216,7 @@ pub extern "Rust" fn LayoutReplacedComputeSpeculativeDecodeSize(
 }
 
 // cpp: core/layout/layout_replaced.cc:599-617
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedLocalSelectionVisualRect(this: &LayoutReplaced) -> PhysicalRect {
+pub fn LayoutReplacedLocalSelectionVisualRect(this: &LayoutReplaced) -> PhysicalRect {
     this.CheckIsNotDestroyed();
     if matches!(
         this.GetSelectionState(),
@@ -310,8 +271,7 @@ fn SelectionTopAndBottom(
 }
 
 // cpp: core/layout/layout_replaced.cc:561-592
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedPositionForPoint(
+pub fn LayoutReplacedPositionForPoint(
     this: &LayoutReplaced,
     point: &PhysicalOffset,
 ) -> PositionWithAffinity {
@@ -345,8 +305,7 @@ pub extern "Rust" fn LayoutReplacedPositionForPoint(
 }
 
 // cpp: core/layout/layout_replaced.cc:211-236
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedHitTestChildren(
+pub fn LayoutReplacedHitTestChildren(
     this: &LayoutReplaced,
     result: &mut HitTestResult,
     location: &HitTestLocation,
@@ -384,8 +343,7 @@ pub extern "Rust" fn LayoutReplacedHitTestChildren(
 // the embedded LayoutBox through its ordinary field lifetime.
 
 // cpp: core/layout/layout_replaced.cc:321-358
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedComputeObjectViewBoxRect(
+pub fn LayoutReplacedComputeObjectViewBoxRect(
     this: &LayoutReplaced,
     sizing_info: &PhysicalNaturalSizingInfo,
 ) -> Option<PhysicalRect> {
@@ -435,8 +393,7 @@ pub extern "Rust" fn LayoutReplacedComputeObjectViewBoxRect(
 }
 
 // cpp: core/layout/layout_replaced.cc:360-424
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedComputeReplacedContentRect(
+pub fn LayoutReplacedComputeReplacedContentRect(
     this: &LayoutReplaced,
     base_content_rect: &PhysicalRect,
     sizing_info: &PhysicalNaturalSizingInfo,
@@ -478,8 +435,7 @@ pub extern "Rust" fn LayoutReplacedComputeReplacedContentRect(
 }
 
 // cpp: core/layout/layout_replaced.cc:426-488
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedComputeObjectFitAndPositionRect(
+pub fn LayoutReplacedComputeObjectFitAndPositionRect(
     this: &LayoutReplaced,
     base_content_rect: &PhysicalRect,
     sizing_info: &PhysicalNaturalSizingInfo,
@@ -550,15 +506,13 @@ pub extern "Rust" fn LayoutReplacedComputeObjectFitAndPositionRect(
 }
 
 // cpp: core/layout/layout_replaced.cc:490-495
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedContentRect(this: &LayoutReplaced) -> PhysicalRect {
+pub fn LayoutReplacedContentRect(this: &LayoutReplaced) -> PhysicalRect {
     this.CheckIsNotDestroyed();
     LayoutReplacedContentRectFrom(this, &this.PhysicalContentBoxRect())
 }
 
 // cpp: core/layout/layout_replaced.cc:497-502
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedContentRectFrom(
+pub fn LayoutReplacedContentRectFrom(
     this: &LayoutReplaced,
     base_content_rect: &PhysicalRect,
 ) -> PhysicalRect {
@@ -582,8 +536,7 @@ pub extern "Rust" fn LayoutReplacedContentRectFrom(
 }
 
 // cpp: core/layout/layout_replaced.cc:509-522
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedComputeNaturalSizingInfo(
+pub fn LayoutReplacedComputeNaturalSizingInfo(
     this: &LayoutReplaced,
 ) -> PhysicalNaturalSizingInfo {
     this.CheckIsNotDestroyed();
@@ -599,7 +552,7 @@ pub extern "Rust" fn LayoutReplacedComputeNaturalSizingInfo(
 }
 
 // cpp: core/layout/layout_replaced.cc:619-623
-pub(crate) fn LayoutReplacedRespectsCSSOverflow(this: &LayoutReplaced) -> bool {
+pub fn LayoutReplacedRespectsCSSOverflow(this: &LayoutReplaced) -> bool {
     this.CheckIsNotDestroyed();
     let element = DynamicTo::<Element>(this.GetNode());
     if element.is_null() {
@@ -612,8 +565,7 @@ pub(crate) fn LayoutReplacedRespectsCSSOverflow(this: &LayoutReplaced) -> bool {
 }
 
 // cpp: core/layout/layout_replaced.cc:625-644
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutReplacedClipsToContentBox(this: &LayoutReplaced) -> bool {
+pub fn LayoutReplacedClipsToContentBox(this: &LayoutReplaced) -> bool {
     this.CheckIsNotDestroyed();
     if !LayoutReplacedRespectsCSSOverflow(this) {
         if this.IsSVGRoot() {
@@ -631,8 +583,7 @@ pub extern "Rust" fn LayoutReplacedClipsToContentBox(this: &LayoutReplaced) -> b
 
 // LayoutImage's natural-dimension virtual returns its retained member.
 // cpp: core/layout/layout_image.cc:393-396
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputReplacedGetNaturalDimensions(
+pub fn LayoutInputReplacedGetNaturalDimensions(
     this: &LayoutInputReplaced,
 ) -> PhysicalNaturalSizingInfo {
     this.CheckIsNotDestroyed();
@@ -641,25 +592,24 @@ pub extern "Rust" fn LayoutInputReplacedGetNaturalDimensions(
 
 // cpp: core/layout/layout_replaced.h:98-103
 // cpp: core/layout/layout_image.cc:393-396
-#[unsafe(no_mangle)]
-pub extern "Rust" fn DispatchLayoutReplacedGetNaturalDimensions(
+pub fn DispatchLayoutReplacedGetNaturalDimensions(
     this: &LayoutReplaced,
 ) -> PhysicalNaturalSizingInfo {
     if this.RuntimeClass() == LayoutObjectClass::SvgRoot {
         // The SVG queries of the active pass, or the last one installed on
         // this thread when PrePaint asks for the previous replaced content.
         let dimensions =
-            layout_assembly::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
+            crate::internal::layout_pass_scope::LayoutPassScope::ResidentSvgSupport()
                 .root_natural_dimensions
                 .expect("SVG root natural dimensions are not installed");
         return dimensions(unsafe {
             &*(this as *const LayoutReplaced)
-                .cast::<layout_assembly::internal::layout_object::LayoutObject>()
+                .cast::<crate::internal::layout_object::LayoutObject>()
         });
     }
     assert_eq!(this.RuntimeClass(), LayoutObjectClass::Replaced);
     if this.IsVideo() {
-        return crate::layout_video::NaturalDimensions(unsafe {
+        return super::layout_video::NaturalDimensions(unsafe {
             &*(this as *const LayoutReplaced).cast::<LayoutVideo>()
         });
     }

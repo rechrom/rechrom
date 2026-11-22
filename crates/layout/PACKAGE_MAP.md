@@ -1395,6 +1395,79 @@ definition (unreferenced).
 - `Cargo.lock` is unchanged (the facade's inline dependency only became
   optional).
 
+### Status: R7a replaced (link-time ABI removed; done, not built)
+
+**Rule** (as R5 part 2): ownership follows each body's `// cpp:` citation.
+Every LayoutReplaced, LayoutImage, LayoutMedia and LayoutVideo member body
+cites Chromium `core/layout/layout_replaced.cc`, `layout_image.cc`,
+`layout_media.cc` or `layout_video.cc`: object-model classes at the
+`core/layout/` top level, so they belong to base. Only
+`core/layout/replaced_layout_algorithm.cc` (`ReplacedLayoutAlgorithm`) is the
+replaced algorithm; it stays in `layout_algo_replaced` with
+`registration::Register`.
+
+**Link-time symbols** (all 23 pairs were base → replaced; none in the reverse
+direction):
+
+| class | count | where |
+|---|---:|---|
+| A | 23 | LayoutReplaced 18 (`New`, `DefaultWidth`/`DefaultHeight`, `StyleDidChange`, `NaturalSizeChanged`, `RecalcVisualOverflow`, `ContentRect`, `ContentRectFrom`, `ComputeReplacedContentRect`, `ComputeObjectViewBoxRect`, `ComputeObjectFitAndPositionRect`, `ComputeNaturalSizingInfo`, `ComputeSpeculativeDecodeSize`, `LocalSelectionVisualRect`, `PositionForPoint`, `HitTestChildren`, `ClipsToContentBox`, `DispatchLayoutReplacedGetNaturalDimensions`), LayoutImage 2 (`LayoutInputReplacedGetNaturalDimensions`, `LayoutInputReplacedStyleDidChange`), LayoutVideo 2 (`UpdateFromElement`, `InvalidateCompositing`), LayoutMedia 1 (`ComputePanelWidth`); moved to base and called directly from `layout_replaced_interface.rs` |
+| B, slot | 0 | none |
+| C, extension trait | 0 | none |
+| D, dead stub | 1 | the block-only stub `LayoutReplacedContentRect` in `layout_algo_block::excluded_block_boundaries` (under `cfg(not(feature = "replaced_extension"))`): deleted, since base now defines the body in every configuration. The `replaced_extension` feature gates nothing any more and can be dropped from `layout_algo_block` and the facade |
+
+**Files moved** (`git mv`; bodies unchanged except `#[no_mangle] pub extern
+"Rust" fn` → `pub fn` and `layout_assembly::` → `crate::`):
+
+- `layout_algo_replaced/src/layout_replaced.rs` →
+  `layout_core/src/replaced/layout_replaced_core.rs`
+- `layout_algo_replaced/src/layout_video.rs` →
+  `layout_core/src/replaced/layout_video.rs`
+- `layout_algo_replaced/src/layout_media.rs` →
+  `layout_core/src/replaced/layout_media.rs`
+
+They are `pub mod layout_replaced_core`, `layout_video` and `layout_media` of
+`internal::layout_replaced`, beside the interface file. The replaced crate
+keeps `replaced_layout_algorithm.rs` and `registration.rs`; its object-factory
+callbacks now name the base paths
+(`layout_replaced_core::LayoutReplacedRespectsCSSOverflow`,
+`layout_video::UpdateNaturalSize`).
+
+**Self-registration removed.** `LayoutReplacedNew` used to fill four
+process-global `OnceLock`s in `layout_assembly/src/block_virtual_dispatch.rs`
+(`RegisterReplacedStyleDidChange`, `RegisterImageStyleDidChange`,
+`RegisterVideoStyleDidChange`, `RegisterReplacedRecalcVisualOverflow`). With
+the bodies in base that was base registering base, so the statics, their
+`Register*` functions and the `layout_assembly` re-exports are deleted.
+`DispatchLayoutObjectStyleDidChange` and
+`DispatchLayoutObjectRecalcVisualOverflow` call
+`LayoutReplaced::StyleDidChange`, `LayoutInputReplaced::StyleDidChange`,
+`layout_video::StyleDidChange` and `LayoutReplaced::RecalcVisualOverflow`
+directly (hot path: one `OnceLock` load and indirect call fewer).
+
+**Slots.** None added. The existing replaced slots are unchanged and still
+filled by `layout_algo_replaced::registration::Register` (listed in
+`README.md`). Some factory slots now point at base bodies (for example
+`replaced_respects_css_overflow`); folding them into direct base calls is a
+possible follow-up, not a link-time coupling.
+
+**Remaining link-time pairs between base and replaced:** 0
+(`layout_algo_replaced` has no `#[no_mangle]` and base declares no replaced
+`extern` item).
+
+**Build risks:**
+
+- The 23 signatures were never type-checked across the crate boundary. The
+  declarations matched the definitions textually, so an E0308 is unlikely and
+  would be fixed at the call.
+- The moved files resolve `crate::inline_cursor`,
+  `crate::internal::editing::forward` and `crate::internal::layout_pass_scope`
+  inside `layout_assembly`; all of them are declared ungated.
+- `block_virtual_dispatch.rs` and `layout_assembly/src/lib.rs` are also edited
+  by the concurrent table/grid/block work; the `pub use block_virtual_dispatch`
+  line in `lib.rs` may need a trivial merge.
+- `Cargo.lock` is unchanged.
+
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 
 The duplicate `layout_algo_inline_assembly` unit declares the same set (339

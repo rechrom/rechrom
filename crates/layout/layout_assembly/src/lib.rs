@@ -42,8 +42,7 @@ pub use css_parser::color_parser as css_color_parser;
 mod block_virtual_dispatch;
 pub use block_virtual_dispatch::{
     GridObjectVirtuals, RegisterGridObjectVirtuals, RegisterGridStyleDidChange,
-    RegisterImageStyleDidChange, RegisterReplacedRecalcVisualOverflow,
-    RegisterReplacedStyleDidChange, RegisterSvgRootChildren, RegisterVideoStyleDidChange,
+    RegisterSvgRootChildren,
 };
 pub use block_virtual_dispatch::{
     RegisterFlexStitchedRowGapIndex, RegisterFlexTotalRowGapCount, RegisterGridTotalRowGapCount,

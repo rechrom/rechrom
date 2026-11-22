@@ -10,8 +10,6 @@ use foundation::transform_operations::{
 };
 use foundation::{gfx, Length, PhysicalRect, TextDirection, TransformOperations};
 use layout_core::internal::layout_object::LayoutObject;
-#[cfg(not(feature = "replaced_extension"))]
-use layout_core::internal::layout_replaced::LayoutReplaced;
 use layout_style::style::content_data::ContentData;
 use std::ffi::c_void;
 
@@ -36,9 +34,4 @@ excluded! {
     fn ShapeResultViewForEachGlyph(view: &ShapeResultView, advance: f32, callback: GlyphCallback, context: *mut c_void) -> f32;
     fn ShapeResultViewStartIndex(view: &ShapeResultView) -> u32;
     fn ShapeResultViewWidth(view: &ShapeResultView) -> f32;
-}
-
-#[cfg(not(feature = "replaced_extension"))]
-excluded! {
-    fn LayoutReplacedContentRect(replaced: &LayoutReplaced) -> PhysicalRect;
 }
