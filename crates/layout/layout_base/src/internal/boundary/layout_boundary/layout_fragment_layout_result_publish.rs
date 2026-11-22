@@ -24,6 +24,19 @@ pub(super) fn install_layout_result_paint_state(
         layout_commit::fragment_trace::TracePhase::InstallLayoutResultPaintState,
     );
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
+    // FragmentData list synchronizations the sidecar lookups of the previous
+    // publication requested and ran (LayoutPaintState::
+    // SynchronizeBoxObjectFragmentData): PrePaint reads happen after the
+    // publication span closes, so they are reported with the next one.
+    if let Some(previous) = &cache.fragment_paint_state {
+        let (box_requests, box_synchronized, box_resized, inline_requests, inline_synchronized) =
+            previous.TakeFragmentDataSyncCounts();
+        trace.set("prior_box_fragment_data_sync_requests", box_requests as f64);
+        trace.set("prior_box_fragment_data_syncs", box_synchronized as f64);
+        trace.set("prior_box_fragment_data_resizes", box_resized as f64);
+        trace.set("prior_inline_fragment_data_sync_requests", inline_requests as f64);
+        trace.set("prior_inline_fragment_data_syncs", inline_synchronized as f64);
+    }
     let result_identity = result as *const LayoutResult as usize;
     let result_changed = cache.fragment_identity_result != result_identity;
     // A retained update of the same LayoutResult republishes the same state.
@@ -41,15 +54,27 @@ pub(super) fn install_layout_result_paint_state(
         );
         EnsureLayoutBoundaryObjectIndex(root, cache);
     }
+    let new_paint_state = |result: &LayoutResult| {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::NewPaintState,
+        );
+        crate::layout_engine::LayoutPaintState::New(result)
+    };
     let paint_state = if result_changed {
-        let state = crate::layout_engine::LayoutPaintState::New(result);
+        let state = new_paint_state(result);
         if let Some(previous) = &cache.fragment_paint_state {
             trace.set("previous_paint_state_refs", Arc::strong_count(previous) as f64);
             if purpose == LayoutUpdateKind::Paint {
+                let _phase = layout_commit::fragment_trace::span(
+                    layout_commit::fragment_trace::TracePhase::InheritPaintState,
+                );
                 state.InheritFrom(previous);
             }
             // Handles of the previous result stay readable; the shared
             // sidecars now bind to this result's owners.
+            let _phase = layout_commit::fragment_trace::span(
+                layout_commit::fragment_trace::TracePhase::SupersedePaintState,
+            );
             previous.Supersede();
         }
         state
@@ -57,13 +82,23 @@ pub(super) fn install_layout_result_paint_state(
         cache
             .fragment_paint_state
             .clone()
-            .unwrap_or_else(|| crate::layout_engine::LayoutPaintState::New(result))
+            .unwrap_or_else(|| new_paint_state(result))
     };
-    paint_state.BeginPublication();
+    {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::BeginPublication,
+        );
+        paint_state.BeginPublication();
+    }
     if result_changed {
         cache.fragment_identity_result = result_identity;
     }
-    EnsureBoundaryStyleIndices(cache);
+    {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::EnsureStyleIndices,
+        );
+        EnsureBoundaryStyleIndices(cache);
+    }
     let objects = &cache.objects;
     trace.set("objects", objects.len() as f64);
     // Sticky constraints and offsets are not refreshed here. Like Chromium's
@@ -75,6 +110,9 @@ pub(super) fn install_layout_result_paint_state(
     // white base backdrop; the outer page supplies whatever is behind the
     // image when the record is replayed.
     let is_document_image = space.document_image_container.is_some();
+    let resources_phase = layout_commit::fragment_trace::span(
+        layout_commit::fragment_trace::TracePhase::BuildPaintResources,
+    );
     let resources = Arc::new(PaintResources {
         fonts: if purpose == LayoutUpdateKind::Paint {
             space.fonts.clone()
@@ -105,6 +143,7 @@ pub(super) fn install_layout_result_paint_state(
         should_clear_document_background: !is_document_image,
         viewport: space.viewport,
     });
+    drop(resources_phase);
     let handle =
         unsafe { LayoutResultHandle::FromLayoutResultWithPaintState(result, paint_state.clone()) };
     if purpose == LayoutUpdateKind::Paint {
@@ -113,6 +152,9 @@ pub(super) fn install_layout_result_paint_state(
         // aggregates once from the root PaintLayer before PrePaint consumes
         // them. Doing this from every fragment repeats the same tree walk and
         // makes publication own a second layer lifecycle.
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::UpdateDescendantDependentFlags,
+        );
         let enclosing_layer = root.EnclosingLayer();
         if !enclosing_layer.is_null() {
             let root_layer = unsafe { &*enclosing_layer }.Root();
@@ -126,14 +168,33 @@ pub(super) fn install_layout_result_paint_state(
     // update). Sidecars bound after an incompatible change re-export;
     // the values are the Document / LocalFrameView facts Chromium reads,
     // held once per result rather than on every fragment sidecar.
-    let resources_compatible =
-        PaintResourcesAreCompatible(paint_state.DocumentResources(), &resources);
-    paint_state.InstallPublication(resources, resources_compatible, Some(cache.styles.Key()));
+    {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::InstallPublication,
+        );
+        let resources_compatible =
+            PaintResourcesAreCompatible(paint_state.DocumentResources(), &resources);
+        paint_state.InstallPublication(resources, resources_compatible, Some(cache.styles.Key()));
+    }
     // The same LayoutResult republishes the same immutable fragments, so no
     // live identity can appear or disappear.
     let topology_retained = retained_paint_state;
-    paint_state.FinishPublication(topology_retained);
+    {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::FinishPublication,
+        );
+        paint_state.FinishPublication(topology_retained);
+    }
     trace.set("topology_retained", topology_retained as u8 as f64);
-    cache.fragment_paint_state = Some(paint_state);
+    // Replacing the cached state may release the superseded one (its
+    // fallback sidecars, pinned sidecars and LayoutResult lease) when no
+    // handle retains it any more.
+    let previous_state = cache.fragment_paint_state.replace(paint_state);
+    {
+        let _phase = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::ReleasePaintState,
+        );
+        drop(previous_state);
+    }
     handle
 }

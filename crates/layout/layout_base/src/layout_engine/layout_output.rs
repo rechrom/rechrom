@@ -210,8 +210,9 @@ impl PaintFragmentOwner {
     /// itself on every query (no publication census or identity map). Never
     /// 0: an owner without a Chromium identity pair (a line box fragment, an
     /// unnumbered or container-owned inline item, the last fragmentainer)
-    /// falls back to a key derived from the owner itself.
-    fn InstanceId(self) -> u64 {
+    /// falls back to a key derived from the owner itself. `state`: the
+    /// publication the reaching cursor belongs to, if any.
+    fn InstanceId(self, state: Option<&LayoutPaintState>) -> u64 {
         match self {
             Self::Physical(fragment) => {
                 let fragment = unsafe { &*fragment };
@@ -220,9 +221,14 @@ impl PaintFragmentOwner {
                 // (GetOrCreateFragmentData, pre_paint_tree_walk.cc).
                 if fragment.IsBox() {
                     if let Some(object) = unsafe { fragment.GetLayoutObject().as_ref() } {
-                        crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(
-                            object,
-                        );
+                        match state {
+                            Some(state) => state.SynchronizeBoxObjectFragmentData(object),
+                            None => {
+                                crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(
+                                    object,
+                                );
+                            }
+                        }
                     }
                 }
                 crate::fragment_tree::PhysicalFragmentInstanceId(fragment)
@@ -271,6 +277,24 @@ fn DestroyedBoxFragmentIndex(fragment: &PhysicalFragment, list_size: u32) -> u32
     index.min(list_size.saturating_sub(1))
 }
 
+/// How often sidecar lookups asked for an object's FragmentData list to be
+/// synchronized with its fragments, and how often that work actually ran.
+#[derive(Clone, Copy, Default)]
+struct FragmentDataSyncCounts {
+    /// Box-object synchronization requests (every sidecar lookup or identity
+    /// query of a box fragment, and every FragmentsForLayoutObject).
+    box_requests: u64,
+    /// Requests that ran SynchronizeBoxFragmentData (first of the object in
+    /// the publication).
+    box_synchronized: u64,
+    /// Of those, the ones that grew or shrank the list.
+    box_resized: u64,
+    /// LayoutInline requests and the ones that ran
+    /// SynchronizeInlineFragmentData.
+    inline_requests: u64,
+    inline_synchronized: u64,
+}
+
 /// Per-result Paint publication state. It holds no per-fragment directory:
 /// each fragment occurrence's FragmentPaintData sidecar lives on the
 /// FragmentData Chromium keeps that occurrence's paint state on
@@ -315,6 +339,9 @@ pub(crate) struct LayoutPaintState {
     /// LayoutInline objects whose FragmentData list this publication already
     /// synchronized with their inline containers.
     synchronized_inlines: UnsafeCell<std::collections::HashSet<usize>>,
+    /// FragmentData list synchronization counts since the last report
+    /// (TakeFragmentDataSyncCounts); the next publication traces them.
+    fragment_data_sync: Cell<FragmentDataSyncCounts>,
     /// Serial of the current publication (NextPaintSerial).
     publication: Cell<u64>,
     generation: Cell<u64>,
@@ -342,6 +369,7 @@ impl LayoutPaintState {
             pinned: UnsafeCell::new(Default::default()),
             superseded: Cell::new(false),
             synchronized_inlines: UnsafeCell::new(Default::default()),
+            fragment_data_sync: Cell::new(FragmentDataSyncCounts::default()),
             publication: Cell::new(0),
             generation: Cell::new(1),
             resource_epoch: Cell::new(NextPaintSerial()),
@@ -491,10 +519,9 @@ impl LayoutPaintState {
                         list.at(DestroyedBoxFragmentIndex(fragment, list.size()))
                     } else {
                         // GetOrCreateFragmentData (pre_paint_tree_walk.cc):
-                        // one FragmentData entry per physical fragment.
-                        crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(
-                            object,
-                        );
+                        // one FragmentData entry per physical fragment,
+                        // established once per object and publication.
+                        self.SynchronizeBoxObjectFragmentData(object);
                         match unsafe { fragment.GetFragmentData().as_ref() } {
                             Some(fragment_data) => fragment_data,
                             None => list.front(),
@@ -552,7 +579,7 @@ impl LayoutPaintState {
             // Reached through this superseded handle only now: refresh a
             // private sidecar from the old owner so the shared one keeps
             // the replacement's binding.
-            let private = unsafe { &*self.FallbackSidecar(owner.InstanceId()) };
+            let private = unsafe { &*self.FallbackSidecar(owner.InstanceId(Some(self))) };
             let binding = private.Binding();
             if binding.publication == publication && binding.owner == key {
                 return Self::Current(private, owner, binding, display_item_fragment);
@@ -667,12 +694,70 @@ impl LayoutPaintState {
 
     /// SynchronizeInlineFragmentData once per LayoutInline and publication.
     fn SynchronizeInlineObjectFragmentData(&self, object: &LayoutObject) {
-        if object.IsLayoutInline()
-            && unsafe { &mut *self.synchronized_inlines.get() }
-                .insert(object as *const LayoutObject as usize)
+        if !object.IsLayoutInline() {
+            return;
+        }
+        let mut counts = self.fragment_data_sync.get();
+        counts.inline_requests += 1;
+        if unsafe { &mut *self.synchronized_inlines.get() }
+            .insert(object as *const LayoutObject as usize)
         {
+            counts.inline_synchronized += 1;
             crate::internal::boundary::layout_boundary::SynchronizeInlineFragmentData(object);
         }
+        self.fragment_data_sync.set(counts);
+    }
+
+    /// SynchronizeBoxFragmentData once per LayoutObject and publication.
+    ///
+    /// Chromium sizes a LayoutObject's FragmentData list to its physical
+    /// fragments once per object per PrePaintTreeWalk, in
+    /// PrePaintTreeWalk::GetOrCreateFragmentData
+    /// (core/paint/pre_paint_tree_walk.cc), and every later reader of that
+    /// lifecycle (FragmentDataIterator, PhysicalBoxFragment::GetFragmentData)
+    /// reads the list without re-checking it. The paint sidecar lookups of a
+    /// publication are Rechrom's equivalent of that walk, but they reach the
+    /// same object many times (every PaintData/Deref of each of its
+    /// fragments), so the object's first FragmentData records the publication
+    /// that synchronized it and later requests of that publication return at
+    /// once. The physical fragment count and the list only change through
+    /// layout, which starts a new publication (a new serial) before PrePaint
+    /// reads them, and through these synchronizations, so the skipped checks
+    /// would have found the list already matching.
+    fn SynchronizeBoxObjectFragmentData(&self, object: &LayoutObject) {
+        let publication = self.publication.get();
+        let mut counts = self.fragment_data_sync.get();
+        counts.box_requests += 1;
+        if publication != 0
+            && object.PaintSidecarFragments().front().FragmentListSyncPublication() == publication
+        {
+            self.fragment_data_sync.set(counts);
+            return;
+        }
+        counts.box_synchronized += 1;
+        if crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(object) {
+            counts.box_resized += 1;
+        }
+        // The first entry is never removed by FragmentDataList::Shrink.
+        object
+            .PaintSidecarFragments()
+            .front()
+            .SetFragmentListSyncPublication(publication);
+        self.fragment_data_sync.set(counts);
+    }
+
+    /// The FragmentData synchronization counts since the previous call:
+    /// (box requests, box synchronizations, box resizes, inline requests,
+    /// inline synchronizations).
+    pub(crate) fn TakeFragmentDataSyncCounts(&self) -> (u64, u64, u64, u64, u64) {
+        let counts = self.fragment_data_sync.replace(FragmentDataSyncCounts::default());
+        (
+            counts.box_requests,
+            counts.box_synchronized,
+            counts.box_resized,
+            counts.inline_requests,
+            counts.inline_synchronized,
+        )
     }
 
     fn Generation(&self) -> u64 {
@@ -1190,7 +1275,7 @@ impl<'a> PaintFragmentCursor<'a> {
         // The FragmentData list is iterated directly; establish its entries
         // first (GetOrCreateFragmentData, pre_paint_tree_walk.cc).
         if let Some(state) = self.state {
-            crate::internal::boundary::layout_boundary::SynchronizeBoxFragmentData(object);
+            state.SynchronizeBoxObjectFragmentData(object);
             state.SynchronizeInlineObjectFragmentData(object);
         }
         let layout_box = foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object);
@@ -1346,7 +1431,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// `fragment_tree::PhysicalFragmentInstanceId` / `InlineItemInstanceId`).
     /// FragmentData-less occurrences key their fallback sidecar by it.
     pub fn FragmentInstanceId(self) -> u64 {
-        self.source.PaintOwner().InstanceId()
+        self.source.PaintOwner().InstanceId(self.state)
     }
 
     /// The identity of the fragmentainer this cursor itself is (a column or
