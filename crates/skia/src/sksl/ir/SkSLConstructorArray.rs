@@ -100,10 +100,7 @@ unsafe impl AnyConstructor for ConstructorArray {
         unsafe { self.get_unchecked_mut().base.argumentSpan_mut() }
     }
 }
-use super::SkSLType::{
-    checkForOutOfRangeLiteralExpr, checkForOutOfRangeLiteralValue, isAllowedInES2Context,
-};
-use crate::src::sksl::SkSLConstantFolder::ConstantFolder;
+use super::SkSLType::isAllowedInES2Context;
 use crate::src::sksl::SkSLErrorReporter::ErrorReporterExt;
 impl ConstructorArray {
     // Source: src/sksl/ir/SkSLConstructorArray.cpp:23-77

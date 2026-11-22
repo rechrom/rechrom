@@ -173,7 +173,7 @@ impl<'a> SkReadBuffer<'a> {
     pub fn readPathEffect(
         &mut self,
     ) -> Result<sk_sp<dyn super::SkPathEffect::SkPathEffect>, crate::RasterError> {
-        let Some(mut obj) = self.readFlattenable(Type::kSkPathEffect_Type)? else {
+        let Some(obj) = self.readFlattenable(Type::kSkPathEffect_Type)? else {
             return Ok(sk_sp::default());
         };
         let FlattenableOwner::Intrusive(mut obj) = obj else {

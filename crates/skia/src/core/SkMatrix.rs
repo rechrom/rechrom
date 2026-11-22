@@ -1687,9 +1687,9 @@ impl SkMatrix {
 impl SkMatrix {
     unsafe fn Identity_pts(
         m: &Self,
-        mut dst: *mut crate::src::core::SkPoint::SkPoint,
+        dst: *mut crate::src::core::SkPoint::SkPoint,
         mut src: *const crate::src::core::SkPoint::SkPoint,
-        mut count: usize,
+        count: usize,
     ) {
         unsafe {
             crate::SkASSERT!(@source b"src/core/SkMatrix.cpp\0".as_ptr(),896; @condition b"m.getType() == 0\0".as_ptr(); (m.getType())==(0));

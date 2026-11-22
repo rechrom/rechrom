@@ -331,7 +331,7 @@ impl SkImage_Lazy {
             SkYUVAPixmaps::{SkYUVAPixmapInfo, SkYUVAPixmaps},
             SkYUVPlanesCache::SkYUVPlanesCache,
         };
-        let mut generator = self.fSharedGenerator.scoped();
+        let generator = self.fSharedGenerator.scoped();
         let data = SkYUVPlanesCache::FindAndRef(generator.uniqueID(), pixmaps.as_deref_mut(), None);
         if let Some(data) = data {
             let out = pixmaps

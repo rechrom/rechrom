@@ -6,8 +6,7 @@ use super::{
     SkSLType::Type,
 };
 use crate::src::sksl::{
-    SkSLContext::Context, SkSLDefines::ExpressionArray, SkSLOperator::OperatorPrecedence,
-    SkSLPosition::Position,
+    SkSLContext::Context, SkSLOperator::OperatorPrecedence, SkSLPosition::Position,
 };
 use core::{pin::Pin, ptr::NonNull};
 // Source: src/sksl/ir/SkSLConstructorCompoundCast.h:30-30
@@ -104,9 +103,7 @@ unsafe impl AnyConstructor for ConstructorCompoundCast {
         unsafe { self.get_unchecked_mut().base.argumentSpan_mut() }
     }
 }
-use super::SkSLType::{
-    checkForOutOfRangeLiteralExpr, checkForOutOfRangeLiteralValue, isAllowedInES2Context,
-};
+use super::SkSLType::{checkForOutOfRangeLiteralValue, isAllowedInES2Context};
 use super::{
     SkSLConstructorCompound::ConstructorCompound,
     SkSLConstructorDiagonalMatrix::ConstructorDiagonalMatrix,

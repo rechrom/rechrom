@@ -13,6 +13,38 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(sk_debug)");
     println!("cargo:rustc-check-cfg=cfg(dcheck_always_on)");
     println!("cargo:rustc-check-cfg=cfg(SK_WIN_PANOSE)");
+    // Upstream Skia/skcms preprocessor switches that the translated #if
+    // branches test but this embedding never defines (Chromium's
+    // SkUserConfig leaves them unset). Declared only so check-cfg knows them;
+    // none is ever set, so every branch keeps its current selection.
+    for name in [
+        "skcms_portable",
+        "skcms_disable_skx",
+        "skcms_disable_hsw",
+        "SKRP_CPU_SCALAR",
+        "SK_DISABLE_LOWP_RASTER_PIPELINE",
+        "SK_BUILD_FOR_ANDROID_FRAMEWORK",
+        "SK_BUILD_FOR_GOOGLE3",
+        "sk_build_for_fuzzer",
+        "sk_disable_skpicture",
+        "sk_dump_stats",
+        "gpu_test_utils",
+        "sk_legacy_ignore_draw_vertices_blend_with_no_shader",
+        "SK_PRINT_CODEC_MESSAGES",
+        "SK_USE_DISCARDABLE_SCALEDIMAGECACHE",
+        "SK_TYPEFACE_FACTORY_CORETEXT",
+        "SK_TYPEFACE_FACTORY_FREETYPE",
+        "SK_TYPEFACE_FACTORY_FONTATIONS",
+        "SK_TYPEFACE_FACTORY_DIRECTWRITE",
+        "SK_SUPPORT_LEGACY_CONIC_CHOP",
+        "SPEW_PURGE_STATUS",
+        "DCHECK_ALWAYS_ON",
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({name})");
+    }
+    println!(
+        "cargo:rustc-check-cfg=cfg(skia_lowest_active_log_priority, values(\"debug\", \"info\", \"warning\", \"error\"))"
+    );
     let browser_cpu = std::env::var_os("CARGO_FEATURE_BROWSER_CPU").is_some();
     let chromium_embedding = std::env::var_os("CARGO_FEATURE_CHROMIUM_EMBEDDING").is_some();
     assert!(

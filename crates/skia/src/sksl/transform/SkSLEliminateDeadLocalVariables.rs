@@ -15,7 +15,6 @@ use crate::src::sksl::{
     SkSLContext::Context,
     SkSLModule::Module,
 };
-use core::{pin::Pin, ptr::NonNull};
 type ES = Option<IRNodeBox<dyn Expression>>;
 type SS = Option<IRNodeBox<dyn Statement>>;
 type PS = Option<IRNodeBox<dyn ProgramElement>>;
@@ -149,7 +148,6 @@ unsafe impl ProgramWriter for Eliminator<'_> {
 unsafe fn eliminate(context: &Context, elements: &mut [PS], usage: &mut ProgramUsage) -> bool {
     let mut hasDead = false;
     usage.fVariableCounts.foreach(|var, c| {
-        use crate::src::sksl::ir::SkSLVariable::Variable;
         if c.fVarExists != 0 && c.fRead == 0 && var.as_ref().storage() == VariableStorage::kLocal {
             hasDead = true;
         }

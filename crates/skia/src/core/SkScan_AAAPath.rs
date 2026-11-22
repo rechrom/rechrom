@@ -87,7 +87,7 @@ impl<'a> MaskAdditiveBlitter<'a> {
     // SAFETY: caller retains the exclusive target and its backing leases until this
     // additive owner is dropped; the native final flush runs during Drop.
     unsafe fn new(
-        mut realBlitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        realBlitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
         ir: &crate::src::core::SkRect::SkIRect,
         clipBounds: &crate::src::core::SkRect::SkIRect,
         isInverse: bool,
@@ -176,7 +176,7 @@ impl AdditiveBlitter for MaskAdditiveBlitter<'_> {
         self.fClipRect.width()
     }
     unsafe fn flush_if_y_changed(self: core::pin::Pin<&mut Self>, _: i32, _: i32) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
 }
 unsafe impl crate::src::core::SkBlitter::SkBlitter for MaskAdditiveBlitter<'_> {
@@ -185,7 +185,7 @@ unsafe impl crate::src::core::SkBlitter::SkBlitter for MaskAdditiveBlitter<'_> {
         this.storage.allocBlitMemory(sz)
     }
     unsafe fn blitH(self: core::pin::Pin<&mut Self>, _: i32, _: i32, _: i32) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_AAAPath.cpp\0".as_ptr(), 119; b"Please call real blitter's blitH instead.\0".as_ptr());
     }
     unsafe fn blitAntiH(
@@ -195,7 +195,7 @@ unsafe impl crate::src::core::SkBlitter::SkBlitter for MaskAdditiveBlitter<'_> {
         _: &mut [u8],
         _: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_AAAPath.cpp\0".as_ptr(), 111; b"Please call real blitter's blitAntiH instead.\0".as_ptr());
     }
     // Source: src/core/SkScan_AAAPath.cpp:246-280
@@ -330,7 +330,7 @@ impl<'a> RunBasedAdditiveBlitter<'a> {
     // SAFETY: caller retains the exclusive target and its backing leases until this
     // additive owner is dropped; the native final flush runs during Drop.
     unsafe fn new(
-        mut realBlitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        realBlitter: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
         ir: &crate::src::core::SkRect::SkIRect,
         clipBounds: &crate::src::core::SkRect::SkIRect,
         isInverse: bool,
@@ -545,7 +545,7 @@ impl<'a> SafeRLEAdditiveBlitter<'a> {
     // SAFETY: caller retains the exclusive target and its backing leases until this
     // additive owner is dropped; the native final flush runs during Drop.
     unsafe fn new(
-        mut real: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
+        real: core::pin::Pin<&'a mut dyn crate::src::core::SkBlitter::SkBlitter>,
         ir: &crate::src::core::SkRect::SkIRect,
         clip: &crate::src::core::SkRect::SkIRect,
         inverse: bool,

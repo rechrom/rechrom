@@ -318,8 +318,8 @@ impl<'arena> SkRasterPipelineBlitter<'arena> {
         dstPaintColor: &SkColor4f,
         alloc: &'arena mut crate::src::core::SkArenaAlloc::SkArenaAlloc,
         shaderPipeline: &crate::src::core::SkRasterPipeline::SkRasterPipeline,
-        mut is_opaque: bool,
-        mut is_constant: bool,
+        is_opaque: bool,
+        is_constant: bool,
         clipShader: Option<&dyn crate::src::shaders::SkShader::SkShader>,
     ) -> Result<
         Option<core::ptr::NonNull<dyn crate::src::core::SkBlitter::SkBlitter + 'arena>>,
@@ -358,7 +358,6 @@ impl<'arena> SkRasterPipelineBlitter<'arena> {
         use crate::include::core::SkColorType::SkColorType::*;
         use crate::include::core::SkSurfaceProps::SkSurfaceProps;
         use crate::src::core::SkBlenderBase::as_BB;
-        use crate::src::core::SkColorFilter::SkColorFilter;
         use crate::src::core::SkEffectPriv::SkStageRec;
         use crate::src::core::SkRasterPipelineOpContexts::{kMaxStride, MemoryCtx};
         use crate::src::core::SkRasterPipelineOpList::SkRasterPipelineOp as Op;
@@ -373,7 +372,7 @@ impl<'arena> SkRasterPipelineBlitter<'arena> {
         let b = blitter.as_ptr();
         if let Some(clipShader) = clipShader {
             let props = SkSurfaceProps::default();
-            let dst_cs_owner = dst.refColorSpace();
+            let _dst_cs_owner = dst.refColorSpace();
             let rec = SkStageRec {
                 fPipeline: &mut (*b).fColorPipeline,
                 fAlloc: arena_ptr,

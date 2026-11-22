@@ -403,13 +403,13 @@ impl SkPaint {
 }
 // Source: src/core/SkPaint.cpp:92-99
 impl SkPaint {
-    pub fn setColorFilter(&mut self, mut value: Option<Arc<dyn SkColorFilter>>) {
+    pub fn setColorFilter(&mut self, value: Option<Arc<dyn SkColorFilter>>) {
         drop(core::mem::replace(&mut self.fColorFilter, value));
     }
-    pub fn setImageFilter(&mut self, mut value: Option<Arc<dyn SkImageFilter>>) {
+    pub fn setImageFilter(&mut self, value: Option<Arc<dyn SkImageFilter>>) {
         drop(core::mem::replace(&mut self.fImageFilter, value));
     }
-    pub fn setMaskFilter(&mut self, mut value: Option<Arc<dyn SkMaskFilter>>) {
+    pub fn setMaskFilter(&mut self, value: Option<Arc<dyn SkMaskFilter>>) {
         drop(core::mem::replace(&mut self.fMaskFilter, value));
     }
     pub fn setPathEffect(&mut self, mut value: sk_sp<dyn SkPathEffect>) {
@@ -417,7 +417,7 @@ impl SkPaint {
             self.fPathEffect.reset(value.release());
         }
     }
-    pub fn setShader(&mut self, mut value: Option<Arc<dyn SkShader>>) {
+    pub fn setShader(&mut self, value: Option<Arc<dyn SkShader>>) {
         drop(core::mem::replace(&mut self.fShader, value));
     }
 }

@@ -267,11 +267,11 @@ impl SkOTTableOS2_VA_Type_Raw {
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:78-78
     pub const Installable: SK_OT_USHORT = 0;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:79-79
-    pub const RestrictedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 1 }>::value;
+    pub const RestrictedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:80-80
-    pub const PreviewPrintMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 2 }>::value;
+    pub const PreviewPrintMask: SK_OT_USHORT = SkOTSetUSHORTBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:81-81
-    pub const EditableMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 3 }>::value;
+    pub const EditableMask: SK_OT_USHORT = SkOTSetUSHORTBit::<3>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_VA.h:99-99
 #[repr(C, packed)]
@@ -414,17 +414,17 @@ pub struct SkOTTableOS2_VA_Selection_Raw {
 }
 impl SkOTTableOS2_VA_Selection_Raw {
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:123-123
-    pub const ItalicMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 0 }>::value;
+    pub const ItalicMask: SK_OT_USHORT = SkOTSetUSHORTBit::<0>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:124-124
-    pub const UnderscoreMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 1 }>::value;
+    pub const UnderscoreMask: SK_OT_USHORT = SkOTSetUSHORTBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:125-125
-    pub const NegativeMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 2 }>::value;
+    pub const NegativeMask: SK_OT_USHORT = SkOTSetUSHORTBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:126-126
-    pub const OutlinedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 3 }>::value;
+    pub const OutlinedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<3>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:127-127
-    pub const StrikeoutMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 4 }>::value;
+    pub const StrikeoutMask: SK_OT_USHORT = SkOTSetUSHORTBit::<4>::value;
     // Source: src/sfnt/SkOTTable_OS_2_VA.h:128-128
-    pub const BoldMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 5 }>::value;
+    pub const BoldMask: SK_OT_USHORT = SkOTSetUSHORTBit::<5>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_VA.h:139-139
 const _: () = assert!(core::mem::size_of::<SkOTTableOS2_VA>() == 68);

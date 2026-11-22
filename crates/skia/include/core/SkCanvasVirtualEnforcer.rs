@@ -1,6 +1,4 @@
-use crate::src::core::SkCanvas::{
-    ImageSetEntry, Lattice, PointMode, QuadAAFlags, SkCanvas, SrcRectConstraint,
-};
+use crate::src::core::SkCanvas::{PointMode, QuadAAFlags, SkCanvas};
 
 pub use crate::src::core::SkCanvas::{SkCanvasOwner, SkCanvasOwnerHandle, SkCanvasVirtual};
 
@@ -17,8 +15,8 @@ pub trait SkCanvasVirtualEnforcer<'device>: SkCanvasVirtual<'device> {
     // Source: include/core/SkCanvasVirtualEnforcer.h:23-23
     unsafe fn onDrawBehind(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }

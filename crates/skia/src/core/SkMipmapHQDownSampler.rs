@@ -254,9 +254,9 @@ pub(crate) unsafe fn downsample_1_2<F: ColorTypeFilter>(
     let mut p1 = p0.cast::<u8>().add(srcRB).cast::<F::Type>();
     let d = dst;
     for i in 0..count as usize {
-        let mut c00 = F::Expand(*p0.add(0));
-        let mut c10 = F::Expand(*p1.add(0));
-        let mut c = c00.add(c10);
+        let c00 = F::Expand(*p0.add(0));
+        let c10 = F::Expand(*p1.add(0));
+        let c = c00.add(c10);
         *d.add(i) = F::Compact(shift_right(c, 1));
         p0 = p0.add(2);
         p1 = p1.add(2);
@@ -277,10 +277,10 @@ pub(crate) unsafe fn downsample_1_3<F: ColorTypeFilter>(
     let mut p2 = p1.cast::<u8>().add(srcRB).cast::<F::Type>();
     let d = dst;
     for i in 0..count as usize {
-        let mut c00 = F::Expand(*p0.add(0));
-        let mut c10 = F::Expand(*p1.add(0));
-        let mut c20 = F::Expand(*p2.add(0));
-        let mut c = add_121(c00, c10, c20);
+        let c00 = F::Expand(*p0.add(0));
+        let c10 = F::Expand(*p1.add(0));
+        let c20 = F::Expand(*p2.add(0));
+        let c = add_121(c00, c10, c20);
         *d.add(i) = F::Compact(shift_right(c, 2));
         p0 = p0.add(2);
         p1 = p1.add(2);
@@ -293,16 +293,16 @@ pub(crate) unsafe fn downsample_1_3<F: ColorTypeFilter>(
 pub(crate) unsafe fn downsample_2_1<F: ColorTypeFilter>(
     dst: *mut F::Type,
     src: *const F::Type,
-    srcRB: usize,
+    _srcRB: usize,
     count: i32,
 ) {
     crate::SkASSERT!(@source b"src/core/SkMipmapHQDownSampler.cpp\0".as_ptr(),228; @condition b"count > 0\0".as_ptr(); count>0);
     let mut p0 = src;
     let d = dst;
     for i in 0..count as usize {
-        let mut c00 = F::Expand(*p0.add(0));
-        let mut c01 = F::Expand(*p0.add(1));
-        let mut c = c00.add(c01);
+        let c00 = F::Expand(*p0.add(0));
+        let c01 = F::Expand(*p0.add(1));
+        let c = c00.add(c01);
         *d.add(i) = F::Compact(shift_right(c, 1));
         p0 = p0.add(2);
     }
@@ -321,11 +321,11 @@ pub(crate) unsafe fn downsample_2_2<F: ColorTypeFilter>(
     let mut p1 = p0.cast::<u8>().add(srcRB).cast::<F::Type>();
     let d = dst;
     for i in 0..count as usize {
-        let mut c00 = F::Expand(*p0.add(0));
-        let mut c01 = F::Expand(*p0.add(1));
-        let mut c10 = F::Expand(*p1.add(0));
-        let mut c11 = F::Expand(*p1.add(1));
-        let mut c = c00.add(c10).add(c01).add(c11);
+        let c00 = F::Expand(*p0.add(0));
+        let c01 = F::Expand(*p0.add(1));
+        let c10 = F::Expand(*p1.add(0));
+        let c11 = F::Expand(*p1.add(1));
+        let c = c00.add(c10).add(c01).add(c11);
         *d.add(i) = F::Compact(shift_right(c, 2));
         p0 = p0.add(2);
         p1 = p1.add(2);
@@ -346,13 +346,13 @@ pub(crate) unsafe fn downsample_2_3<F: ColorTypeFilter>(
     let mut p2 = p1.cast::<u8>().add(srcRB).cast::<F::Type>();
     let d = dst;
     for i in 0..count as usize {
-        let mut c00 = F::Expand(*p0.add(0));
-        let mut c01 = F::Expand(*p0.add(1));
-        let mut c10 = F::Expand(*p1.add(0));
-        let mut c11 = F::Expand(*p1.add(1));
-        let mut c20 = F::Expand(*p2.add(0));
-        let mut c21 = F::Expand(*p2.add(1));
-        let mut c = add_121(c00, c10, c20).add(add_121(c01, c11, c21));
+        let c00 = F::Expand(*p0.add(0));
+        let c01 = F::Expand(*p0.add(1));
+        let c10 = F::Expand(*p1.add(0));
+        let c11 = F::Expand(*p1.add(1));
+        let c20 = F::Expand(*p2.add(0));
+        let c21 = F::Expand(*p2.add(1));
+        let c = add_121(c00, c10, c20).add(add_121(c01, c11, c21));
         *d.add(i) = F::Compact(shift_right(c, 3));
         p0 = p0.add(2);
         p1 = p1.add(2);
@@ -365,7 +365,7 @@ pub(crate) unsafe fn downsample_2_3<F: ColorTypeFilter>(
 pub(crate) unsafe fn downsample_3_1<F: ColorTypeFilter>(
     dst: *mut F::Type,
     src: *const F::Type,
-    srcRB: usize,
+    _srcRB: usize,
     count: i32,
 ) {
     crate::SkASSERT!(@source b"src/core/SkMipmapHQDownSampler.cpp\0".as_ptr(),285; @condition b"count > 0\0".as_ptr(); count>0);
@@ -373,10 +373,10 @@ pub(crate) unsafe fn downsample_3_1<F: ColorTypeFilter>(
     let d = dst;
     let mut c02 = F::Expand(*p0.add(0));
     for i in 0..count as usize {
-        let mut c00 = c02;
-        let mut c01 = F::Expand(*p0.add(1));
+        let c00 = c02;
+        let c01 = F::Expand(*p0.add(1));
         c02 = F::Expand(*p0.add(2));
-        let mut c = add_121(c00, c01, c02);
+        let c = add_121(c00, c01, c02);
         *d.add(i) = F::Compact(shift_right(c, 2));
         p0 = p0.add(2);
     }
@@ -400,14 +400,14 @@ pub(crate) unsafe fn downsample_3_2<F: ColorTypeFilter>(
     let mut c1 = F::Expand(*p1.add(0));
     let mut c = c0.add(c1);
     for i in 0..count as usize {
-        let mut a = c;
-        let mut b0 = F::Expand(*p0.add(1));
-        let mut b1 = F::Expand(*p1.add(1));
-        let mut b = b0.add(b0).add(b1).add(b1);
+        let a = c;
+        let b0 = F::Expand(*p0.add(1));
+        let b1 = F::Expand(*p1.add(1));
+        let b = b0.add(b0).add(b1).add(b1);
         c0 = F::Expand(*p0.add(2));
         c1 = F::Expand(*p1.add(2));
         c = c0.add(c1);
-        let mut sum = a.add(b).add(c);
+        let sum = a.add(b).add(c);
         *d.add(i) = F::Compact(shift_right(sum, 3));
         p0 = p0.add(2);
         p1 = p1.add(2);
@@ -434,16 +434,16 @@ pub(crate) unsafe fn downsample_3_3<F: ColorTypeFilter>(
     let mut c2 = F::Expand(*p2.add(0));
     let mut c = add_121(c0, c1, c2);
     for i in 0..count as usize {
-        let mut a = c;
-        let mut b0 = F::Expand(*p0.add(1));
-        let mut b1 = F::Expand(*p1.add(1));
-        let mut b2 = F::Expand(*p2.add(1));
-        let mut b = shift_left(add_121(b0, b1, b2), 1);
+        let a = c;
+        let b0 = F::Expand(*p0.add(1));
+        let b1 = F::Expand(*p1.add(1));
+        let b2 = F::Expand(*p2.add(1));
+        let b = shift_left(add_121(b0, b1, b2), 1);
         c0 = F::Expand(*p0.add(2));
         c1 = F::Expand(*p1.add(2));
         c2 = F::Expand(*p2.add(2));
         c = add_121(c0, c1, c2);
-        let mut sum = a.add(b).add(c);
+        let sum = a.add(b).add(c);
         *d.add(i) = F::Compact(shift_right(sum, 4));
         p0 = p0.add(2);
         p1 = p1.add(2);

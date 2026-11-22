@@ -1109,7 +1109,7 @@ pub unsafe fn GenerateImageFromPath(
         Format::kBW_Format | Format::kA8_Format | Format::kLCD16_Format
     ));
     let mut paint = SkPaint::default();
-    let mut stroke_path: SkPath;
+    let stroke_path: SkPath;
     let mut path_to_use = path;
     let src_w = dst_mask.fBounds.width();
     let src_h = dst_mask.fBounds.height();

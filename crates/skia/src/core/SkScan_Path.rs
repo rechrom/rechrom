@@ -298,7 +298,7 @@ struct InverseBlitter<'a> {
 }
 impl<'a> InverseBlitter<'a> {
     fn new(
-        mut blitter: core::pin::Pin<&'a mut dyn SkBlitter>,
+        blitter: core::pin::Pin<&'a mut dyn SkBlitter>,
         clip: &crate::src::core::SkRect::SkIRect,
     ) -> Self {
         Self {
@@ -340,15 +340,15 @@ unsafe impl SkBlitter for InverseBlitter<'_> {
         _: &mut [u8],
         _: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_Path.cpp\0".as_ptr(), 344; b"blitAntiH unexpected\0".as_ptr());
     }
     unsafe fn blitV(self: core::pin::Pin<&mut Self>, _: i32, _: i32, _: i32, _: u8) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_Path.cpp\0".as_ptr(), 347; b"blitV unexpected\0".as_ptr());
     }
     unsafe fn blitRect(self: core::pin::Pin<&mut Self>, _: i32, _: i32, _: i32, _: i32) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_Path.cpp\0".as_ptr(), 350; b"blitRect unexpected\0".as_ptr());
     }
     unsafe fn blitMask(
@@ -356,7 +356,7 @@ unsafe impl SkBlitter for InverseBlitter<'_> {
         _: &crate::src::core::SkMask::SkMask,
         _: &crate::src::core::SkRect::SkIRect,
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         crate::SkDEBUGFAIL!(@source b"src/core/SkScan_Path.cpp\0".as_ptr(), 353; b"blitMask unexpected\0".as_ptr());
     }
 }
@@ -364,7 +364,7 @@ unsafe impl SkBlitter for InverseBlitter<'_> {
 // Private callback: sk_fill_path only installs this with the matching concrete
 // InverseBlitter, retaining the native downcast invariant at that single callsite.
 unsafe fn PrePostInverseBlitterProc(
-    mut blitter: core::pin::Pin<&mut dyn SkBlitter>,
+    blitter: core::pin::Pin<&mut dyn SkBlitter>,
     y: i32,
     isStart: bool,
 ) {

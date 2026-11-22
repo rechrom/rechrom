@@ -499,7 +499,7 @@ mod Intrinsics {
         fn remainder(x: f64, y: f64) -> f64;
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:363-363
-    pub(super) fn scalar_coalesce_length(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_coalesce_length(a: f64, b: f64, _c: f64) -> f64 {
         a + (b * b)
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:364-364
@@ -522,11 +522,11 @@ mod Intrinsics {
         a + (b * c)
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:370-370
-    pub(super) fn scalar_coalesce_any(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_coalesce_any(a: f64, b: f64, _c: f64) -> f64 {
         ((a != 0.0) || (b != 0.0)) as u8 as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:371-371
-    pub(super) fn scalar_coalesce_all(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_coalesce_all(a: f64, b: f64, _c: f64) -> f64 {
         ((a != 0.0) && (b != 0.0)) as u8 as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:373-373
@@ -554,123 +554,123 @@ mod Intrinsics {
         a != b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:380-380
-    pub(super) fn scalar_evaluate_radians(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_radians(a: f64, _b: f64, _c: f64) -> f64 {
         a * 0.0174532925
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:381-381
-    pub(super) fn scalar_evaluate_degrees(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_degrees(a: f64, _b: f64, _c: f64) -> f64 {
         a * 57.2957795
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:382-382
-    pub(super) fn scalar_evaluate_sin(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_sin(a: f64, _b: f64, _c: f64) -> f64 {
         a.sin()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:383-383
-    pub(super) fn scalar_evaluate_cos(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_cos(a: f64, _b: f64, _c: f64) -> f64 {
         a.cos()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:384-384
-    pub(super) fn scalar_evaluate_tan(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_tan(a: f64, _b: f64, _c: f64) -> f64 {
         a.tan()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:385-385
-    pub(super) fn scalar_evaluate_asin(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_asin(a: f64, _b: f64, _c: f64) -> f64 {
         a.asin()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:386-386
-    pub(super) fn scalar_evaluate_acos(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_acos(a: f64, _b: f64, _c: f64) -> f64 {
         a.acos()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:387-387
-    pub(super) fn scalar_evaluate_atan(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_atan(a: f64, _b: f64, _c: f64) -> f64 {
         a.atan()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:388-388
-    pub(super) fn scalar_evaluate_atan2(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_atan2(a: f64, b: f64, _c: f64) -> f64 {
         a.atan2(b)
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:389-389
-    pub(super) fn scalar_evaluate_asinh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_asinh(a: f64, _b: f64, _c: f64) -> f64 {
         a.asinh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:390-390
-    pub(super) fn scalar_evaluate_acosh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_acosh(a: f64, _b: f64, _c: f64) -> f64 {
         a.acosh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:391-391
-    pub(super) fn scalar_evaluate_atanh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_atanh(a: f64, _b: f64, _c: f64) -> f64 {
         a.atanh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:393-393
-    pub(super) fn scalar_evaluate_pow(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_pow(a: f64, b: f64, _c: f64) -> f64 {
         a.powf(b)
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:394-394
-    pub(super) fn scalar_evaluate_exp(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_exp(a: f64, _b: f64, _c: f64) -> f64 {
         a.exp()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:395-395
-    pub(super) fn scalar_evaluate_log(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_log(a: f64, _b: f64, _c: f64) -> f64 {
         a.ln()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:396-396
-    pub(super) fn scalar_evaluate_exp2(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_exp2(a: f64, _b: f64, _c: f64) -> f64 {
         a.exp2()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:397-397
-    pub(super) fn scalar_evaluate_log2(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_log2(a: f64, _b: f64, _c: f64) -> f64 {
         a.log2()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:398-398
-    pub(super) fn scalar_evaluate_sqrt(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_sqrt(a: f64, _b: f64, _c: f64) -> f64 {
         a.sqrt()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:399-401
-    pub(super) fn scalar_evaluate_inversesqrt(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_inversesqrt(a: f64, _b: f64, _c: f64) -> f64 {
         1.0 / a.sqrt()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:403-403
-    pub(super) fn scalar_evaluate_add(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_add(a: f64, b: f64, _c: f64) -> f64 {
         a + b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:404-404
-    pub(super) fn scalar_evaluate_sub(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_sub(a: f64, b: f64, _c: f64) -> f64 {
         a - b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:405-405
-    pub(super) fn scalar_evaluate_mul(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_mul(a: f64, b: f64, _c: f64) -> f64 {
         a * b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:406-406
-    pub(super) fn scalar_evaluate_div(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_div(a: f64, b: f64, _c: f64) -> f64 {
         a / b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:407-407
-    pub(super) fn scalar_evaluate_abs(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_abs(a: f64, _b: f64, _c: f64) -> f64 {
         a.abs()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:408-408
-    pub(super) fn scalar_evaluate_sign(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_sign(a: f64, _b: f64, _c: f64) -> f64 {
         ((a > 0.0) as i32 - (a < 0.0) as i32) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:409-409
-    pub(super) fn scalar_evaluate_opposite_sign(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_opposite_sign(a: f64, _b: f64, _c: f64) -> f64 {
         ((a < 0.0) as i32 - (a > 0.0) as i32) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:410-410
-    pub(super) fn scalar_evaluate_floor(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_floor(a: f64, _b: f64, _c: f64) -> f64 {
         a.floor()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:411-411
-    pub(super) fn scalar_evaluate_ceil(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_ceil(a: f64, _b: f64, _c: f64) -> f64 {
         a.ceil()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:412-412
-    pub(super) fn scalar_evaluate_fract(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_fract(a: f64, _b: f64, _c: f64) -> f64 {
         a - a.floor()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:413-413
-    pub(super) fn scalar_evaluate_min(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_min(a: f64, b: f64, _c: f64) -> f64 {
         if a < b {
             a
         } else {
@@ -678,7 +678,7 @@ mod Intrinsics {
         }
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:414-414
-    pub(super) fn scalar_evaluate_max(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_max(a: f64, b: f64, _c: f64) -> f64 {
         if a > b {
             a
         } else {
@@ -700,7 +700,7 @@ mod Intrinsics {
         a * b + c
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:417-417
-    pub(super) fn scalar_evaluate_saturate(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_saturate(a: f64, _b: f64, _c: f64) -> f64 {
         if a < 0.0 {
             0.0
         } else if a > 1.0 {
@@ -714,7 +714,7 @@ mod Intrinsics {
         a * (1.0 - c) + b * c
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:419-419
-    pub(super) fn scalar_evaluate_step(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_step(a: f64, b: f64, _c: f64) -> f64 {
         if b < a {
             0.0
         } else {
@@ -722,7 +722,7 @@ mod Intrinsics {
         }
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:420-422
-    pub(super) fn scalar_evaluate_mod(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_mod(a: f64, b: f64, _c: f64) -> f64 {
         a - b * (a / b).floor()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:423-427
@@ -740,47 +740,47 @@ mod Intrinsics {
         }
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:429-429
-    pub(super) fn scalar_evaluate_matrixCompMult(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_matrixCompMult(a: f64, b: f64, _c: f64) -> f64 {
         a * b
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:431-431
-    pub(super) fn scalar_evaluate_not(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_not(a: f64, _b: f64, _c: f64) -> f64 {
         (a == 0.0) as u8 as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:432-432
-    pub(super) fn scalar_evaluate_sinh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_sinh(a: f64, _b: f64, _c: f64) -> f64 {
         a.sinh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:433-433
-    pub(super) fn scalar_evaluate_cosh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_cosh(a: f64, _b: f64, _c: f64) -> f64 {
         a.cosh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:434-434
-    pub(super) fn scalar_evaluate_tanh(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_tanh(a: f64, _b: f64, _c: f64) -> f64 {
         a.tanh()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:435-435
-    pub(super) fn scalar_evaluate_trunc(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_trunc(a: f64, _b: f64, _c: f64) -> f64 {
         a.trunc()
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:436-440
-    pub(super) fn scalar_evaluate_round(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_round(a: f64, _b: f64, _c: f64) -> f64 {
         a - unsafe { remainder(a, 1.0) }
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:441-441
-    pub(super) fn scalar_evaluate_floatBitsToInt(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_floatBitsToInt(a: f64, _b: f64, _c: f64) -> f64 {
         (a as f32).to_bits() as i32 as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:442-442
-    pub(super) fn scalar_evaluate_floatBitsToUint(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_floatBitsToUint(a: f64, _b: f64, _c: f64) -> f64 {
         (a as f32).to_bits() as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:443-443
-    pub(super) fn scalar_evaluate_intBitsToFloat(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_intBitsToFloat(a: f64, _b: f64, _c: f64) -> f64 {
         f32::from_bits(unsafe { i32(a) } as u32) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:444-444
-    pub(super) fn scalar_evaluate_uintBitsToFloat(a: f64, b: f64, c: f64) -> f64 {
+    pub(super) fn scalar_evaluate_uintBitsToFloat(a: f64, _b: f64, _c: f64) -> f64 {
         f32::from_bits(unsafe { u32(a) }) as f64
     }
     // Source: src/sksl/ir/SkSLFunctionCall.cpp:446-451

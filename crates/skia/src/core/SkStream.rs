@@ -19,7 +19,7 @@ pub unsafe trait SkStream {
         unsafe { unsafe { Pin::new_unchecked(&mut *this) }.read(ptr::null_mut(), size) }
     }
     unsafe fn peek(self: Pin<&mut Self>, _buffer: *mut u8, _size: usize) -> usize {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         0
     }
     fn isAtEnd(&self) -> bool;
@@ -78,7 +78,7 @@ pub unsafe trait SkStream {
         read_packed_uint(unsafe { Pin::new_unchecked(&mut *this) }, x)
     }
     fn rewind(self: Pin<&mut Self>) -> bool {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         false
     }
     fn duplicate(&self) -> Option<Pin<Box<dyn SkStream>>> {
@@ -94,11 +94,11 @@ pub unsafe trait SkStream {
         0
     }
     fn seek(self: Pin<&mut Self>, _position: usize) -> bool {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         false
     }
     fn r#move(self: Pin<&mut Self>, _offset: isize) -> bool {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         false
     }
     fn hasLength(&self) -> bool {
@@ -108,7 +108,7 @@ pub unsafe trait SkStream {
         0
     }
     fn getMemoryBase(self: Pin<&mut Self>) -> *const u8 {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         ptr::null()
     }
     fn getData(&self) -> Option<Arc<SkData>> {
@@ -819,7 +819,7 @@ pub unsafe trait SkWStream {
     unsafe fn write(self: Pin<&mut Self>, buffer: *const u8, size: usize) -> bool;
     // Source: src/core/SkStream.cpp:81-83
     fn flush(self: Pin<&mut Self>) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     fn bytesWritten(&self) -> usize;
     fn write8(self: Pin<&mut Self>, value: u32) -> bool {
@@ -981,7 +981,7 @@ unsafe impl SkWStream for SkNullWStream {
         true
     }
     fn flush(self: Pin<&mut Self>) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
     }
     fn bytesWritten(&self) -> usize {
         self.fBytesWritten

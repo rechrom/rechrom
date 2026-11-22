@@ -743,7 +743,7 @@ impl<'a> SkTSect<'a> {
             let p = (*bounded).fBounded;
             let next = (*bounded).fNext;
             if p.cast_const() != keep && !(*p).fDeleted {
-                let empty = (*span).removeBounded(p);
+                let _empty = (*span).removeBounded(p);
 
                 if (*p).removeBounded(span) {
                     (*opp).removeSpan(p);

@@ -6,7 +6,7 @@ use super::{
 use crate::include::core::SkAlphaType::SkAlphaType;
 use crate::include::private::SkTArray::STArray;
 use crate::src::sksl::{ir::SkSLProgram::Program, SkSLContext::Context};
-use core::{ffi::c_void, ptr::NonNull};
+use core::ptr::NonNull;
 use core::{mem::ManuallyDrop, pin::Pin};
 use std::sync::Arc;
 // Source: include/core/SkMesh.h:27-31

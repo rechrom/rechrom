@@ -69,7 +69,7 @@ unsafe fn hline_cap(
     mut blitter: core::pin::Pin<&mut dyn SkBlitter>,
     x: i32,
     mut f: i32,
-    slope: i32,
+    _slope: i32,
     coverage: i32,
 ) -> i32 {
     f = f.wrapping_add(32768);
@@ -91,7 +91,7 @@ unsafe fn hline_line(
     mut x: i32,
     stop: i32,
     mut f: i32,
-    slope: i32,
+    _slope: i32,
 ) -> i32 {
     crate::SkASSERT!(@source b"src/core/SkScan_Antihair.cpp\0".as_ptr(), 123; @condition b"x < stopx\0".as_ptr(); x < stop);
     let count = stop - x;

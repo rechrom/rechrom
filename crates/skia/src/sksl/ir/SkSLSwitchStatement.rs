@@ -287,7 +287,7 @@ impl SwitchStatement {
             }
             return None;
         }
-        let mut block=crate::src::sksl::transform::SkSLHoistSwitchVarDeclarationsAtTopLevel::HoistSwitchVarDeclarationsAtTopLevel(context,&mut cases,&mut symbolTable,pos);
+        let block=crate::src::sksl::transform::SkSLHoistSwitchVarDeclarationsAtTopLevel::HoistSwitchVarDeclarationsAtTopLevel(context,&mut cases,&mut symbolTable,pos);
         let switchStmt = Self::Make(
             context,
             pos,
@@ -310,7 +310,7 @@ impl SwitchStatement {
         context: &Context,
         pos: Position,
         value: IRNodeBox<dyn Expression>,
-        mut caseBlock: IRNodeBox<dyn Statement>,
+        caseBlock: IRNodeBox<dyn Statement>,
     ) -> IRNodeBox<dyn Statement> {
         let cases = caseBlock.node().as_node::<Block>().children();
         debug_assert!(cases.as_slice().iter().all(|stmt| stmt

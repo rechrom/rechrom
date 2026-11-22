@@ -285,15 +285,15 @@ impl SkOTTableOS2_V3_Type_Raw {
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:74-74
     pub const Installable: SK_OT_USHORT = 0;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:75-75
-    pub const RestrictedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 1 }>::value;
+    pub const RestrictedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:76-76
-    pub const PreviewPrintMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 2 }>::value;
+    pub const PreviewPrintMask: SK_OT_USHORT = SkOTSetUSHORTBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:77-77
-    pub const EditableMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 3 }>::value;
+    pub const EditableMask: SK_OT_USHORT = SkOTSetUSHORTBit::<3>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:78-78
-    pub const NoSubsettingMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 8 }>::value;
+    pub const NoSubsettingMask: SK_OT_USHORT = SkOTSetUSHORTBit::<8>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:79-79
-    pub const BitmapMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 9 }>::value;
+    pub const BitmapMask: SK_OT_USHORT = SkOTSetUSHORTBit::<9>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_V3.h:95-95
 #[repr(C, packed)]
@@ -1252,61 +1252,61 @@ pub struct SkOTTableOS2_V3_UnicodeRange_Raw {
 pub struct SkOTTableOS2_V3_UnicodeRange_Raw_l0 {}
 impl SkOTTableOS2_V3_UnicodeRange_Raw_l0 {
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:263-263
-    pub const BasicLatinMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 0 }>::value;
+    pub const BasicLatinMask: SK_OT_ULONG = SkOTSetULONGBit::<0>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:264-264
-    pub const Latin1SupplementMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 1 }>::value;
+    pub const Latin1SupplementMask: SK_OT_ULONG = SkOTSetULONGBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:265-265
-    pub const LatinExtendedAMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 2 }>::value;
+    pub const LatinExtendedAMask: SK_OT_ULONG = SkOTSetULONGBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:266-266
-    pub const LatinExtendedBMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 3 }>::value;
+    pub const LatinExtendedBMask: SK_OT_ULONG = SkOTSetULONGBit::<3>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:267-267
-    pub const IPAExtensionsMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 4 }>::value;
+    pub const IPAExtensionsMask: SK_OT_ULONG = SkOTSetULONGBit::<4>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:268-268
-    pub const SpacingModifierLettersMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 5 }>::value;
+    pub const SpacingModifierLettersMask: SK_OT_ULONG = SkOTSetULONGBit::<5>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:269-269
-    pub const CombiningDiacriticalMarksMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 6 }>::value;
+    pub const CombiningDiacriticalMarksMask: SK_OT_ULONG = SkOTSetULONGBit::<6>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:270-270
-    pub const GreekAndCopticMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 7 }>::value;
+    pub const GreekAndCopticMask: SK_OT_ULONG = SkOTSetULONGBit::<7>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:272-272
-    pub const CyrillicMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 9 }>::value;
+    pub const CyrillicMask: SK_OT_ULONG = SkOTSetULONGBit::<9>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:273-273
-    pub const ArmenianMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 10 }>::value;
+    pub const ArmenianMask: SK_OT_ULONG = SkOTSetULONGBit::<10>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:274-274
-    pub const HebrewMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 11 }>::value;
+    pub const HebrewMask: SK_OT_ULONG = SkOTSetULONGBit::<11>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:276-276
-    pub const ArabicMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 13 }>::value;
+    pub const ArabicMask: SK_OT_ULONG = SkOTSetULONGBit::<13>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:278-278
-    pub const DevanagariMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 15 }>::value;
+    pub const DevanagariMask: SK_OT_ULONG = SkOTSetULONGBit::<15>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:279-279
-    pub const BengaliMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 16 }>::value;
+    pub const BengaliMask: SK_OT_ULONG = SkOTSetULONGBit::<16>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:280-280
-    pub const GurmukhiMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 17 }>::value;
+    pub const GurmukhiMask: SK_OT_ULONG = SkOTSetULONGBit::<17>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:281-281
-    pub const GujaratiMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 18 }>::value;
+    pub const GujaratiMask: SK_OT_ULONG = SkOTSetULONGBit::<18>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:282-282
-    pub const OriyaMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 19 }>::value;
+    pub const OriyaMask: SK_OT_ULONG = SkOTSetULONGBit::<19>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:283-283
-    pub const TamilMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 20 }>::value;
+    pub const TamilMask: SK_OT_ULONG = SkOTSetULONGBit::<20>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:284-284
-    pub const TeluguMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 21 }>::value;
+    pub const TeluguMask: SK_OT_ULONG = SkOTSetULONGBit::<21>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:285-285
-    pub const KannadaMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 22 }>::value;
+    pub const KannadaMask: SK_OT_ULONG = SkOTSetULONGBit::<22>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:286-286
-    pub const MalayalamMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 23 }>::value;
+    pub const MalayalamMask: SK_OT_ULONG = SkOTSetULONGBit::<23>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:287-287
-    pub const ThaiMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 24 }>::value;
+    pub const ThaiMask: SK_OT_ULONG = SkOTSetULONGBit::<24>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:288-288
-    pub const LaoMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 25 }>::value;
+    pub const LaoMask: SK_OT_ULONG = SkOTSetULONGBit::<25>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:289-289
-    pub const GeorgianMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 26 }>::value;
+    pub const GeorgianMask: SK_OT_ULONG = SkOTSetULONGBit::<26>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:291-291
-    pub const HangulJamoMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 28 }>::value;
+    pub const HangulJamoMask: SK_OT_ULONG = SkOTSetULONGBit::<28>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:292-292
-    pub const LatinExtendedAdditionalMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 29 }>::value;
+    pub const LatinExtendedAdditionalMask: SK_OT_ULONG = SkOTSetULONGBit::<29>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:293-293
-    pub const GreekExtendedMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 30 }>::value;
+    pub const GreekExtendedMask: SK_OT_ULONG = SkOTSetULONGBit::<30>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:294-294
-    pub const GeneralPunctuationMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 31 }>::value;
+    pub const GeneralPunctuationMask: SK_OT_ULONG = SkOTSetULONGBit::<31>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_V3.h:296-296
 #[repr(C, packed)]
@@ -1582,19 +1582,19 @@ pub struct SkOTTableOS2_V3_Selection_Raw {
 }
 impl SkOTTableOS2_V3_Selection_Raw {
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:389-389
-    pub const ItalicMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 0 }>::value;
+    pub const ItalicMask: SK_OT_USHORT = SkOTSetUSHORTBit::<0>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:390-390
-    pub const UnderscoreMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 1 }>::value;
+    pub const UnderscoreMask: SK_OT_USHORT = SkOTSetUSHORTBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:391-391
-    pub const NegativeMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 2 }>::value;
+    pub const NegativeMask: SK_OT_USHORT = SkOTSetUSHORTBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:392-392
-    pub const OutlinedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 3 }>::value;
+    pub const OutlinedMask: SK_OT_USHORT = SkOTSetUSHORTBit::<3>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:393-393
-    pub const StrikeoutMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 4 }>::value;
+    pub const StrikeoutMask: SK_OT_USHORT = SkOTSetUSHORTBit::<4>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:394-394
-    pub const BoldMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 5 }>::value;
+    pub const BoldMask: SK_OT_USHORT = SkOTSetUSHORTBit::<5>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:395-395
-    pub const RegularMask: SK_OT_USHORT = SkOTSetUSHORTBit::<{ 6 }>::value;
+    pub const RegularMask: SK_OT_USHORT = SkOTSetUSHORTBit::<6>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_V3.h:408-408
 #[repr(C, packed)]
@@ -2089,41 +2089,41 @@ pub struct SkOTTableOS2_V3_CodePageRange_Raw {
 pub struct SkOTTableOS2_V3_CodePageRange_Raw_l0 {}
 impl SkOTTableOS2_V3_CodePageRange_Raw_l0 {
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:494-494
-    pub const Latin1_1252Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 0 }>::value;
+    pub const Latin1_1252Mask: SK_OT_ULONG = SkOTSetULONGBit::<0>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:495-495
-    pub const Latin2EasternEurope_1250Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 1 }>::value;
+    pub const Latin2EasternEurope_1250Mask: SK_OT_ULONG = SkOTSetULONGBit::<1>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:496-496
-    pub const Cyrillic_1251Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 2 }>::value;
+    pub const Cyrillic_1251Mask: SK_OT_ULONG = SkOTSetULONGBit::<2>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:497-497
-    pub const Greek_1253Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 3 }>::value;
+    pub const Greek_1253Mask: SK_OT_ULONG = SkOTSetULONGBit::<3>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:498-498
-    pub const Turkish_1254Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 4 }>::value;
+    pub const Turkish_1254Mask: SK_OT_ULONG = SkOTSetULONGBit::<4>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:499-499
-    pub const Hebrew_1255Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 5 }>::value;
+    pub const Hebrew_1255Mask: SK_OT_ULONG = SkOTSetULONGBit::<5>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:500-500
-    pub const Arabic_1256Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 6 }>::value;
+    pub const Arabic_1256Mask: SK_OT_ULONG = SkOTSetULONGBit::<6>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:501-501
-    pub const WindowsBaltic_1257Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 7 }>::value;
+    pub const WindowsBaltic_1257Mask: SK_OT_ULONG = SkOTSetULONGBit::<7>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:502-502
-    pub const Vietnamese_1258Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 8 }>::value;
+    pub const Vietnamese_1258Mask: SK_OT_ULONG = SkOTSetULONGBit::<8>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:503-503
-    pub const Thai_874Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 16 }>::value;
+    pub const Thai_874Mask: SK_OT_ULONG = SkOTSetULONGBit::<16>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:504-504
-    pub const JISJapan_932Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 17 }>::value;
+    pub const JISJapan_932Mask: SK_OT_ULONG = SkOTSetULONGBit::<17>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:505-505
-    pub const ChineseSimplified_936Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 18 }>::value;
+    pub const ChineseSimplified_936Mask: SK_OT_ULONG = SkOTSetULONGBit::<18>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:506-506
-    pub const KoreanWansung_949Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 19 }>::value;
+    pub const KoreanWansung_949Mask: SK_OT_ULONG = SkOTSetULONGBit::<19>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:507-507
-    pub const ChineseTraditional_950Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 20 }>::value;
+    pub const ChineseTraditional_950Mask: SK_OT_ULONG = SkOTSetULONGBit::<20>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:508-508
-    pub const KoreanJohab_1361Mask: SK_OT_ULONG = SkOTSetULONGBit::<{ 21 }>::value;
+    pub const KoreanJohab_1361Mask: SK_OT_ULONG = SkOTSetULONGBit::<21>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:509-509
-    pub const MacintoshCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 29 }>::value;
+    pub const MacintoshCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<29>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:510-510
-    pub const OEMCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 30 }>::value;
+    pub const OEMCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<30>::value;
     // Source: src/sfnt/SkOTTable_OS_2_V3.h:511-511
-    pub const SymbolCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<{ 31 }>::value;
+    pub const SymbolCharacterSetMask: SK_OT_ULONG = SkOTSetULONGBit::<31>::value;
 }
 // Source: src/sfnt/SkOTTable_OS_2_V3.h:513-513
 #[repr(C, packed)]

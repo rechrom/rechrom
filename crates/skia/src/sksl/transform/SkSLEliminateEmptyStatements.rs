@@ -6,7 +6,6 @@ use crate::src::sksl::{
     transform::SkSLProgramWriter::{self, ProgramWriter, UniquePtrExpression, UniquePtrStatement},
     SkSLModule::Module,
 };
-use core::pin::Pin;
 // Source: src/sksl/transform/SkSLEliminateEmptyStatements.cpp:27-28
 unsafe fn eliminate_empty_statements(elements: &mut [Option<IRNodeBox<dyn ProgramElement>>]) {
     struct EmptyStatementEliminator;

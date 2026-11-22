@@ -189,139 +189,139 @@ impl<'device> SkNoDrawCanvas<'device> {
     // Source: include/utils/SkNoDrawCanvas.h:38-38
     pub(crate) unsafe fn onDrawAnnotation_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        rect: &crate::src::core::SkRect::SkRect,
-        key: &std::ffi::CStr,
-        value: Option<&std::sync::Arc<crate::src::core::SkData::SkData>>,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _rect: &crate::src::core::SkRect::SkRect,
+        _key: &std::ffi::CStr,
+        _value: Option<&std::sync::Arc<crate::src::core::SkData::SkData>>,
     ) {
     }
     // Source: include/utils/SkNoDrawCanvas.h:39-39
     pub(crate) unsafe fn onDrawDRRect_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        outer: &crate::src::core::SkRRect::SkRRect,
-        inner: &crate::src::core::SkRRect::SkRRect,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _outer: &crate::src::core::SkRRect::SkRRect,
+        _inner: &crate::src::core::SkRRect::SkRRect,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:40-40
     pub(crate) unsafe fn onDrawDrawable_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        drawable: &dyn crate::src::core::SkDrawable::SkDrawable,
-        matrix: Option<&crate::src::core::SkMatrix::SkMatrix>,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _drawable: &dyn crate::src::core::SkDrawable::SkDrawable,
+        _matrix: Option<&crate::src::core::SkMatrix::SkMatrix>,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:41-41
     pub(crate) unsafe fn onDrawTextBlob_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        blob: &crate::src::core::SkTextBlob::SkTextBlob,
-        x: f32,
-        y: f32,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _blob: &crate::src::core::SkTextBlob::SkTextBlob,
+        _x: f32,
+        _y: f32,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:42-43
     pub(crate) fn onDrawPatch_nodraw(
         &self,
-        cubics: &[SkPoint; 12],
-        colors: Option<&[SkColor; 4]>,
-        tex: Option<&[SkPoint; 4]>,
-        mode: SkBlendMode,
-        paint: &SkPaint,
+        _cubics: &[SkPoint; 12],
+        _colors: Option<&[SkColor; 4]>,
+        _tex: Option<&[SkPoint; 4]>,
+        _mode: SkBlendMode,
+        _paint: &SkPaint,
     ) {
     }
     // Source: include/utils/SkNoDrawCanvas.h:45-45
     pub(crate) unsafe fn onDrawPaint_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:46-46
     pub(crate) unsafe fn onDrawBehind_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:47-47
     pub(crate) unsafe fn onDrawPoints_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        mode: PointMode,
-        points: &[crate::src::core::SkPoint::SkPoint],
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _mode: PointMode,
+        _points: &[crate::src::core::SkPoint::SkPoint],
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:48-48
     pub(crate) unsafe fn onDrawRect_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        rect: &crate::src::core::SkRect::SkRect,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _rect: &crate::src::core::SkRect::SkRect,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:49-49
     pub(crate) unsafe fn onDrawRegion_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        region: &crate::src::core::SkRegion::SkRegion,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _region: &crate::src::core::SkRegion::SkRegion,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:50-50
     pub(crate) unsafe fn onDrawOval_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        oval: &crate::src::core::SkRect::SkRect,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _oval: &crate::src::core::SkRect::SkRect,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:51-51
     pub(crate) unsafe fn onDrawArc_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        oval: &crate::src::core::SkRect::SkRect,
-        start: f32,
-        sweep: f32,
-        use_center: bool,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _oval: &crate::src::core::SkRect::SkRect,
+        _start: f32,
+        _sweep: f32,
+        _use_center: bool,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:52-52
     pub(crate) unsafe fn onDrawRRect_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        rrect: &crate::src::core::SkRRect::SkRRect,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _rrect: &crate::src::core::SkRRect::SkRRect,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:53-53
     pub(crate) unsafe fn onDrawPath_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        path: &crate::src::core::SkPath::SkPath,
-        paint: &crate::src::core::SkPaint::SkPaint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _path: &crate::src::core::SkPath::SkPath,
+        _paint: &crate::src::core::SkPaint::SkPaint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:55-56
     pub(crate) unsafe fn onDrawImage2_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
         _image: Option<&std::sync::Arc<dyn crate::src::image::SkImage::SkImage>>,
         _x: f32,
         _y: f32,
@@ -332,25 +332,25 @@ impl<'device> SkNoDrawCanvas<'device> {
     // Source: include/utils/SkNoDrawCanvas.h:57-58
     pub(crate) unsafe fn onDrawImageRect2_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
         image: &std::sync::Arc<dyn crate::src::image::SkImage::SkImage>,
         src: &crate::src::core::SkRect::SkRect,
-        dst: &crate::src::core::SkRect::SkRect,
-        sampling: &crate::include::core::SkSamplingOptions::SkSamplingOptions,
-        paint: Option<&crate::src::core::SkPaint::SkPaint>,
-        constraint: SrcRectConstraint,
+        _dst: &crate::src::core::SkRect::SkRect,
+        _sampling: &crate::include::core::SkSamplingOptions::SkSamplingOptions,
+        _paint: Option<&crate::src::core::SkPaint::SkPaint>,
+        _constraint: SrcRectConstraint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:59-60
     pub(crate) unsafe fn onDrawImageLattice2_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
         image: &std::sync::Arc<dyn crate::src::image::SkImage::SkImage>,
-        lattice: &Lattice,
-        dst: &crate::src::core::SkRect::SkRect,
-        filter: crate::include::core::SkSamplingOptions::SkFilterMode,
-        paint: Option<&crate::src::core::SkPaint::SkPaint>,
+        _lattice: &Lattice,
+        _dst: &crate::src::core::SkRect::SkRect,
+        _filter: crate::include::core::SkSamplingOptions::SkFilterMode,
+        _paint: Option<&crate::src::core::SkPaint::SkPaint>,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
@@ -386,25 +386,25 @@ impl<'device> SkNoDrawCanvas<'device> {
     // Source: include/utils/SkNoDrawCanvas.h:68-69
     pub(crate) unsafe fn onDrawEdgeAAQuad_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        r: &crate::src::core::SkRect::SkRect,
-        clip: Option<&[crate::src::core::SkPoint::SkPoint; 4]>,
-        aa: QuadAAFlags,
-        color: &crate::src::core::SkColor::SkColor4f,
-        mode: crate::src::core::SkBlendMode::SkBlendMode,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _r: &crate::src::core::SkRect::SkRect,
+        _clip: Option<&[crate::src::core::SkPoint::SkPoint; 4]>,
+        _aa: QuadAAFlags,
+        _color: &crate::src::core::SkColor::SkColor4f,
+        _mode: crate::src::core::SkBlendMode::SkBlendMode,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }
     // Source: include/utils/SkNoDrawCanvas.h:70-72
     pub(crate) unsafe fn onDrawEdgeAAImageSet2_nodraw(
         &self,
-        canvas: core::ptr::NonNull<SkCanvas<'device>>,
-        images: &[ImageSetEntry],
-        clips: &[crate::src::core::SkPoint::SkPoint],
-        matrices: &[crate::src::core::SkMatrix::SkMatrix],
-        sampling: &crate::include::core::SkSamplingOptions::SkSamplingOptions,
-        paint: Option<&crate::src::core::SkPaint::SkPaint>,
-        constraint: SrcRectConstraint,
+        _canvas: core::ptr::NonNull<SkCanvas<'device>>,
+        _images: &[ImageSetEntry],
+        _clips: &[crate::src::core::SkPoint::SkPoint],
+        _matrices: &[crate::src::core::SkMatrix::SkMatrix],
+        _sampling: &crate::include::core::SkSamplingOptions::SkSamplingOptions,
+        _paint: Option<&crate::src::core::SkPaint::SkPaint>,
+        _constraint: SrcRectConstraint,
     ) -> Result<(), crate::RasterError> {
         Ok(())
     }

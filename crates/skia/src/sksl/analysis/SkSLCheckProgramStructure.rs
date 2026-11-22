@@ -1,4 +1,3 @@
-use crate::src::sksl::ir::SkSLIRNode::IRNode;
 // UNVERIFIED: user prohibited validation.
 use crate::src::sksl::{
     analysis::SkSLProgramVisitor::{self, ProgramVisitor},

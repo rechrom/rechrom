@@ -277,7 +277,7 @@ impl SkOpContour {
     pub unsafe fn toPartialBackward(&self, path: *mut SkPathWriter) {
         let mut segment = self.fTail;
         loop {
-            let ok = (*segment).addCurveTo((*segment).tail(), (*segment).head().cast(), path);
+            let _ok = (*segment).addCurveTo((*segment).tail(), (*segment).head().cast(), path);
 
             segment = (*segment).prev();
             if segment.is_null() {
@@ -288,7 +288,7 @@ impl SkOpContour {
     pub unsafe fn toPartialForward(&self, path: *mut SkPathWriter) {
         let mut segment = self.first();
         loop {
-            let ok = (*segment).addCurveTo((*segment).head().cast(), (*segment).tail(), path);
+            let _ok = (*segment).addCurveTo((*segment).head().cast(), (*segment).tail(), path);
 
             segment = (*segment).next();
             if segment.is_null() {

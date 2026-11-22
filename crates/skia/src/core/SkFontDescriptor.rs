@@ -17,7 +17,6 @@ use core::{
     pin::Pin,
     ptr,
 };
-use std::sync::Arc;
 
 // Rust allocation adapter for Auto[ST]Malloc; no initialization of native fields.
 fn uninit_array<T>(count: usize) -> Vec<MaybeUninit<T>> {

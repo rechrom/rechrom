@@ -725,7 +725,7 @@ impl<'device> SkCanvas<'device> {
     // Qualified INHERITED bypass: native default is empty.
     pub unsafe fn didConcat44_base_raw(
         _canvas: core::ptr::NonNull<Self>,
-        m: &crate::src::core::SkM44::SkM44,
+        _m: &crate::src::core::SkM44::SkM44,
     ) {
     }
 }
@@ -755,7 +755,7 @@ impl<'device> SkCanvas<'device> {
     // Qualified INHERITED bypass: native default is empty.
     pub unsafe fn didSetM44_base_raw(
         _canvas: core::ptr::NonNull<Self>,
-        m: &crate::src::core::SkM44::SkM44,
+        _m: &crate::src::core::SkM44::SkM44,
     ) {
     }
 }
@@ -780,7 +780,7 @@ impl<'device> SkCanvas<'device> {
         }
     }
     // Qualified INHERITED bypass: native default is empty.
-    pub unsafe fn didTranslate_base_raw(_canvas: core::ptr::NonNull<Self>, dx: f32, dy: f32) {}
+    pub unsafe fn didTranslate_base_raw(_canvas: core::ptr::NonNull<Self>, _dx: f32, _dy: f32) {}
 }
 // Source: include/core/SkCanvas.h:2336-2336
 impl<'device> SkCanvas<'device> {
@@ -803,7 +803,7 @@ impl<'device> SkCanvas<'device> {
         }
     }
     // Qualified INHERITED bypass: native default is empty.
-    pub unsafe fn didScale_base_raw(_canvas: core::ptr::NonNull<Self>, sx: f32, sy: f32) {}
+    pub unsafe fn didScale_base_raw(_canvas: core::ptr::NonNull<Self>, _sx: f32, _sy: f32) {}
 }
 
 // Source: include/core/SkCanvas.h:2389-2392
@@ -2785,7 +2785,7 @@ impl<'device> SkCanvas<'device> {
     }
     // Native abortLayer lambda: guard updates quick bounds after the empty clip.
     unsafe fn abort_layer(&mut self) {
-        let mut guard = unsafe { AutoUpdateQRBounds::new(self) };
+        let guard = unsafe { AutoUpdateQRBounds::new(self) };
         unsafe { guard.fCanvas.topDevice().as_mut() }.clipRect(
             &crate::src::core::SkRect::SkRect::MakeEmpty(),
             crate::include::core::SkClipOp::SkClipOp::kIntersect,
@@ -4895,7 +4895,7 @@ impl<'device> SkCanvas<'device> {
             && !image.isAlphaOnly()
             && real_paint.getMaskFilter().is_none()
         {
-            let mut device = unsafe { Self::top_device_raw(canvas) };
+            let device = unsafe { Self::top_device_raw(canvas) };
             let image_bounds = ParameterSpace::new(*dst);
             let output_bounds = DeviceSpace::new(unsafe { device.as_ref() }.devClipBounds());
             let filter_as_span = FilterToSpan::new(real_paint.refImageFilter().as_ref());

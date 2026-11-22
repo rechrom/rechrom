@@ -54,7 +54,7 @@ pub(crate) unsafe fn sprite_blit_anti_h() {
 
 // Source: src/core/SkBlitter_Sprite.cpp:63-68
 pub(crate) unsafe fn sprite_blit_v<B: crate::src::core::SkBlitter::SkBlitter + ?Sized>(
-    mut blitter: core::pin::Pin<&mut B>,
+    blitter: core::pin::Pin<&mut B>,
     x: i32,
     y: i32,
     height: i32,
@@ -65,7 +65,7 @@ pub(crate) unsafe fn sprite_blit_v<B: crate::src::core::SkBlitter::SkBlitter + ?
 }
 // Source: src/core/SkBlitter_Sprite.cpp:70-75
 pub(crate) unsafe fn sprite_blit_mask<B: crate::src::core::SkBlitter::SkBlitter + ?Sized>(
-    mut blitter: core::pin::Pin<&mut B>,
+    blitter: core::pin::Pin<&mut B>,
     mask: &crate::src::core::SkMask::SkMask,
     clip: &crate::src::core::SkRect::SkIRect,
 ) {
@@ -190,7 +190,7 @@ unsafe impl crate::src::core::SkBlitter::SkBlitter for SkSpriteBlitter_Memcpy {
         _: &mut [u8],
         _: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         sprite_blit_anti_h()
     }
     unsafe fn blitRect(self: core::pin::Pin<&mut Self>, x: i32, y: i32, width: i32, height: i32) {
@@ -402,7 +402,7 @@ unsafe impl crate::src::core::SkBlitter::SkBlitter for PreparedPipelineSprite<'_
         _: &mut [u8],
         _: &mut [i16],
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let _this = unsafe { self.get_unchecked_mut() };
         sprite_blit_anti_h()
     }
     unsafe fn blitRect(self: core::pin::Pin<&mut Self>, x: i32, y: i32, width: i32, height: i32) {

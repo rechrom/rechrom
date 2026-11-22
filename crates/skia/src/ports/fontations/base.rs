@@ -16,7 +16,6 @@ use skrifa::{
     setting::VariationSetting,
     MetadataProvider, OutlineGlyphCollection, Tag,
 };
-use std::pin::Pin;
 
 use super::ffi::{AxisWrapper, BridgeFontStyle, Metrics, OutlineFormat, SkiaDesignCoordinate};
 
