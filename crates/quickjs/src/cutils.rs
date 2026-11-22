@@ -617,5 +617,4 @@ pub unsafe fn rqsort(
 }
 
 #[cfg(test)]
-#[path = "../tests/cutils_differential.rs"]
 mod tests;

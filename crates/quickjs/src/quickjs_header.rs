@@ -9,7 +9,8 @@ pub type JSAtom = u32;
 pub type JSClassID = u32;
 pub const JS_LIMB_BITS: usize = usize::BITS as usize;
 pub const JS_SHORT_BIG_INT_BITS: usize = JS_LIMB_BITS;
-include!("quickjs_header_constants.rs");
+mod quickjs_header_constants;
+pub use quickjs_header_constants::*;
 #[repr(C)]
 pub struct JSRefCountHeader {
     pub ref_count: i32,
@@ -850,5 +851,4 @@ pub const fn JS_ALIAS_BASE_DEF(
     )
 }
 #[cfg(test)]
-#[path = "../tests/quickjs_value_differential.rs"]
 mod tests;

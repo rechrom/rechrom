@@ -4,7 +4,8 @@
 use super::cutils::*;
 pub use super::dtoa_header::*;
 use core::{ffi::c_char, ptr};
-include!("dtoa_tables.rs");
+mod dtoa_tables;
+pub use dtoa_tables::*;
 type slimb_t = i32;
 type limb_t = u32;
 type dlimb_t = u64;
@@ -1177,5 +1178,4 @@ pub unsafe fn js_atod(
     dval
 }
 #[cfg(test)]
-#[path = "../tests/dtoa_differential.rs"]
 mod tests;

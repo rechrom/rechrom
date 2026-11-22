@@ -11,7 +11,7 @@ description = "File-by-file Rust translation of official Bellard QuickJS 2026-06
 browser_tracing = { path = "../tracing" }
 
 [dev-dependencies]
-# Verifies the downloaded QuickJS oracle release (tests/quickjs_upstream_source.rs).
+# Verifies the downloaded QuickJS oracle release (src/test_support.rs).
 sha2 = "0.10"
 
 [features]
@@ -24,10 +24,6 @@ dump-read-object = []
 force-gc-at-malloc = []
 # Original address-sanitizer allocation policy; no sanitizer instrumentation.
 malloc-large-blocks = []
-
-[[test]]
-name = "source_oracles"
-path = "tests/source_oracles.rs"
 
 [[test]]
 name = "embedding_exceptions"
