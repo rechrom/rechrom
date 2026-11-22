@@ -23,13 +23,13 @@ use super::layout_object::{LayoutObject, RecalcScrollableOverflowResult};
 use super::layout_pass_scope::LayoutPassScope;
 use super::scrollable_overflow_calculator::ScrollableOverflowCalculator;
 
-#[path = "../../../layout_fragment/src/scrollable_overflow_recalc.rs"]
+#[path = "../fragment/scrollable_overflow_recalc.rs"]
 mod layout_fragment_scrollable_overflow_recalc;
 pub use layout_fragment_scrollable_overflow_recalc::{
     LayoutBoxRecalcChildScrollableOverflowNG, LayoutBoxRecalcScrollableOverflowNG,
 };
 
-#[path = "../../../layout_algo_out_of_flow/src/anchor_lookup.rs"]
+#[path = "../out_of_flow/anchor_lookup.rs"]
 mod layout_algo_out_of_flow_anchor_lookup;
 pub use layout_algo_out_of_flow_anchor_lookup::{
     LayoutBoxAcceptableImplicitAnchor, LayoutBoxFindTargetAnchor,

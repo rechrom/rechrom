@@ -1924,7 +1924,7 @@ pub struct ComputedStyle {
     pub paint: PaintStyle,
 }
 
-#[path = "../../../layout_invalidation/src/computed_style_equivalence.rs"]
+#[path = "../invalidation/computed_style_equivalence.rs"]
 mod layout_invalidation_computed_style_equivalence;
 pub(crate) use layout_invalidation_computed_style_equivalence::StyleReferencesSvgResource;
 

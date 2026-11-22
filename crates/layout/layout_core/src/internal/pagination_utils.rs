@@ -6,6 +6,6 @@ use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
 use layout_fragment::physical_fragment::BoxType;
 use layout_fragment::physical_fragment_link::PhysicalFragmentLink;
 
-#[path = "../../../layout_fragment/src/pagination_fragment_utils.rs"]
+#[path = "../fragment/pagination_fragment_utils.rs"]
 mod layout_fragment_pagination_fragment_utils;
 pub use layout_fragment_pagination_fragment_utils::*;

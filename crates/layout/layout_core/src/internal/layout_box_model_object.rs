@@ -18,20 +18,20 @@ pub use super::paint_layer::PaintLayer;
 use super::sticky_position_scrolling_constraints::StickyConstraintsData;
 use foundation::PhysicalOffset;
 
-#[path = "../../../layout_fragment/src/background_transfer.rs"]
+#[path = "../fragment/background_transfer.rs"]
 mod layout_fragment_background_transfer;
 use layout_fragment_background_transfer::LayoutBoxModelObjectBackgroundTransfersToView;
 
-#[path = "../../../layout_fragment/src/layout_box_model_scrollable_area.rs"]
+#[path = "../fragment/layout_box_model_scrollable_area.rs"]
 mod layout_fragment_layout_box_model_scrollable_area;
 
-#[path = "../../../layout_fragment/src/layout_box_model_outline.rs"]
+#[path = "../fragment/layout_box_model_outline.rs"]
 mod layout_fragment_layout_box_model_outline;
 
-#[path = "../../../layout_fragment/src/empty_element_caret.rs"]
+#[path = "../fragment/empty_element_caret.rs"]
 mod layout_fragment_empty_element_caret;
 
-#[path = "../../../layout_invalidation/src/layout_box_model_layer_invalidation.rs"]
+#[path = "../invalidation/layout_box_model_layer_invalidation.rs"]
 mod layout_invalidation_layout_box_model_layer_invalidation;
 
 // Declarations without supplied bodies remain typed external contracts.

@@ -1,6 +1,6 @@
 //! Compatibility facade for layout-reuse admission and inlineable helpers.
 
-#[path = "../../../layout_reuse/src/layout_utils.rs"]
+#[path = "../reuse/layout_utils.rs"]
 mod layout_reuse_layout_utils;
 pub use super::layout_alignment_utils::{
     BlockStaticPositionEdge, ComputeContentAlignmentForTableCell, InlineStaticPositionEdge,

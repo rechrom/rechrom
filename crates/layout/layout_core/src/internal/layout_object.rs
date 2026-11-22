@@ -65,7 +65,7 @@ use super::scrollbar_theme_metrics::{RequireScrollbarTheme, ScrollbarThemeMetric
 use super::selection_state::SelectionState;
 use super::style_variant::StyleVariant;
 
-#[path = "../../../layout_invalidation/src/layout_object_state_propagation.rs"]
+#[path = "../invalidation/layout_object_state_propagation.rs"]
 mod layout_invalidation_layout_object_state_propagation;
 use layout_invalidation_layout_object_state_propagation::{
     LayoutObjectDepthSlow, LayoutObjectSetDepthIncludingDescendants,
@@ -73,63 +73,63 @@ use layout_invalidation_layout_object_state_propagation::{
     LayoutObjectSetScrollAnchorDisablingStyleChangedOnAncestor,
 };
 
-#[path = "../../../layout_invalidation/src/layout_object_image_observers.rs"]
+#[path = "../invalidation/layout_object_image_observers.rs"]
 mod layout_invalidation_layout_object_image_observers;
 
-#[path = "../../../layout_fragment/src/layout_object_fragment_queries.rs"]
+#[path = "../fragment/layout_object_fragment_queries.rs"]
 mod layout_fragment_layout_object_fragment_queries;
-#[path = "../../../layout_fragment/src/visual_rect_mapping.rs"]
+#[path = "../fragment/visual_rect_mapping.rs"]
 mod layout_fragment_visual_rect_mapping;
 
-#[path = "../../../layout_fragment/src/layout_object_selection_queries.rs"]
+#[path = "../fragment/layout_object_selection_queries.rs"]
 mod layout_fragment_layout_object_selection_queries;
 
-#[path = "../../../layout_fragment/src/layout_object_paint_dispatch.rs"]
+#[path = "../fragment/layout_object_paint_dispatch.rs"]
 mod layout_fragment_layout_object_paint_dispatch;
 
-#[path = "../../../layout_fragment/src/layout_object_paint_state.rs"]
+#[path = "../fragment/layout_object_paint_state.rs"]
 mod layout_fragment_layout_object_paint_state;
 
-#[path = "../../../layout_fragment/src/layout_object_effective_style.rs"]
+#[path = "../fragment/layout_object_effective_style.rs"]
 mod layout_fragment_layout_object_effective_style;
 
-#[path = "../../../layout_fragment/src/layout_object_gap_queries.rs"]
+#[path = "../fragment/layout_object_gap_queries.rs"]
 mod layout_fragment_layout_object_gap_queries;
 
-#[path = "../../../layout_fragment/src/layout_object_inline_fragment_state.rs"]
+#[path = "../fragment/layout_object_inline_fragment_state.rs"]
 mod layout_fragment_layout_object_inline_fragment_state;
 
-#[path = "../../../layout_invalidation/src/layout_object_paint_invalidation.rs"]
+#[path = "../invalidation/layout_object_paint_invalidation.rs"]
 mod layout_invalidation_layout_object_paint_invalidation;
 
-#[path = "../../../layout_fragment/src/layout_object_layer_queries.rs"]
+#[path = "../fragment/layout_object_layer_queries.rs"]
 mod layout_fragment_layout_object_layer_queries;
 
-#[path = "../../../layout_fragment/src/layout_object_coordinate_conversion.rs"]
+#[path = "../fragment/layout_object_coordinate_conversion.rs"]
 mod layout_fragment_layout_object_coordinate_conversion;
 
-#[path = "../../../layout_fragment/src/layout_object_bounding_geometry.rs"]
+#[path = "../fragment/layout_object_bounding_geometry.rs"]
 mod layout_fragment_layout_object_bounding_geometry;
 
-#[path = "../../../layout_fragment/src/layout_object_scroll_container_queries.rs"]
+#[path = "../fragment/layout_object_scroll_container_queries.rs"]
 mod layout_fragment_layout_object_scroll_container_queries;
 
-#[path = "../../../layout_algo_inline/src/layout_object_editing_queries.rs"]
+#[path = "../inline/layout_object_editing_queries.rs"]
 mod layout_algo_inline_layout_object_editing_queries;
 pub use layout_algo_inline_layout_object_editing_queries::{
     AssociatedLayoutObjectOf, AssociatedLayoutObjectOfDefault,
 };
 
-#[path = "../../../layout_invalidation/src/layout_object_layer_mutation.rs"]
+#[path = "../invalidation/layout_object_layer_mutation.rs"]
 mod layout_invalidation_layout_object_layer_mutation;
 
-#[path = "../../../layout_invalidation/src/layout_object_style_services.rs"]
+#[path = "../invalidation/layout_object_style_services.rs"]
 mod layout_invalidation_layout_object_style_services;
 
-#[path = "../../../layout_invalidation/src/layout_object_prepaint_invalidation.rs"]
+#[path = "../invalidation/layout_object_prepaint_invalidation.rs"]
 mod layout_invalidation_layout_object_prepaint_invalidation;
 
-#[path = "../../../layout_invalidation/src/layout_object_display_lock.rs"]
+#[path = "../invalidation/layout_object_display_lock.rs"]
 mod layout_invalidation_layout_object_display_lock;
 
 // These are forward declarations in the owning C++ header. Their concrete

@@ -28,24 +28,24 @@ use super::super::layout_pass_scope::LayoutObjectFactoryScope;
 use super::super::outline_info::LayoutOutlineInfo;
 use super::super::outline_rect_collector::OutlineRectCollector;
 
-#[path = "../../layout_invalidation/src/layout_block_flow_style_change.rs"]
+#[path = "../invalidation/layout_block_flow_style_change.rs"]
 mod layout_invalidation_layout_block_flow_style_change;
 use layout_invalidation_layout_block_flow_style_change::LayoutBlockFlowStyleDidChange;
 
-#[path = "../../layout_invalidation/src/layout_block_flow_child_normalization.rs"]
+#[path = "../invalidation/layout_block_flow_child_normalization.rs"]
 mod layout_invalidation_layout_block_flow_child_normalization;
 use layout_invalidation_layout_block_flow_child_normalization::{
     LayoutBlockFlowCollapseAnonymousBlockChild, LayoutBlockFlowDirtyLinesFromChangedChild,
     LayoutBlockFlowMakeChildrenInlineIfPossible, LayoutBlockFlowMakeChildrenNonInline,
 };
 
-#[path = "../../layout_invalidation/src/layout_block_flow_child_mutation.rs"]
+#[path = "../invalidation/layout_block_flow_child_mutation.rs"]
 mod layout_invalidation_layout_block_flow_child_mutation;
 use layout_invalidation_layout_block_flow_child_mutation::{
     LayoutBlockFlowAddChildBase, LayoutBlockFlowCanMergeWithBase, LayoutBlockFlowRemoveChildBase,
 };
 
-#[path = "../../layout_invalidation/src/layout_block_flow_multicol_update.rs"]
+#[path = "../invalidation/layout_block_flow_multicol_update.rs"]
 mod layout_invalidation_layout_block_flow_multicol_update;
 use layout_invalidation_layout_block_flow_multicol_update::LayoutBlockFlowUpdateForMulticol;
 

@@ -1,16 +1,16 @@
 #![allow(non_snake_case)]
 
-#[path = "../../layout_core/src/internal/boundary/clip_path_projection.rs"]
+#[path = "../internal/boundary/clip_path_projection.rs"]
 mod clip_path_projection;
-#[path = "../../layout_algo_grid/src/grid_style_projection.rs"]
+#[path = "../grid/grid_style_projection.rs"]
 mod layout_algo_grid_style_projection;
-#[path = "../../layout_core/src/internal/boundary/mask_image_projection.rs"]
+#[path = "../internal/boundary/mask_image_projection.rs"]
 mod mask_image_projection;
 use layout_algo_grid_style_projection::{AutoTracks, GridPosition, GridTemplateAreas, Tracks};
-#[path = "../../layout_algo_float/src/shape_style_projection.rs"]
+#[path = "../float/shape_style_projection.rs"]
 mod layout_algo_float_shape_style_projection;
 use layout_algo_float_shape_style_projection::ApplyStyleShape;
-#[path = "../../layout_fragment/src/style_effect_projection.rs"]
+#[path = "../fragment/style_effect_projection.rs"]
 mod layout_fragment_style_effect_projection;
 use layout_fragment_style_effect_projection::{ApplyStylePaintGrouping, ApplyStyleTransforms};
 #[path = "style_font_resolution.rs"]

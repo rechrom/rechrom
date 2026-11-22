@@ -868,6 +868,65 @@ The stage boundaries are a proposal (**guess**); the counts are measured.
 | R6 base crate | `layout_core` → `layout_base`, absorbing the assembly's real code (`block_virtual_dispatch.rs` 2.8k, `out_of_flow_element_data`, `layout_invalidation_reason_symbols`); distribute `untranslated_symbols.rs` stubs to the declaring crates (or delete them per `DEAD_CODE.md`); delete the `include!`s and `layout_algo_inline_assembly` | 5 + 2 crates removed | ≈3.5k | 0 | 783 `layout_assembly::` paths in 145 files and about 2,300 `crate::`/`super::` paths in core/fragment/inline need a scripted rewrite; MSVC needs every extern symbol defined in the linked crate set |
 | R7 front crate | `layout` builds the engine and calls every `Register`; remove the `extern crate layout_assembly as …` aliases in block; one-way Cargo graph check; README | ≈20 edited | — | 0 | the ordering of `Register` calls (the order `CreateLayoutRegistry` in `layout/src/lib.rs` documents) |
 
+### Status: R2+R3 file relocation (done)
+
+All Appendix B files that `layout_assembly` compiles through `#[path]` or a
+`mod` in an `include!`d root now sit in their owner package. The clear §4.3
+base moves came along too. This was a physical move only: every
+`#[path]` / `include!` string was rewritten, the compile unit declares the
+same modules under the same names, and no logic changed. Paths elsewhere in
+this map (§1–§6, Appendices A and B) still describe the snapshot before the
+move. Base files go to `layout_core/src/<area>/`, which becomes `layout_base`
+in R6. Fragment data files go to `layout_fragment/src/<area>/`.
+
+| from | to | files |
+|---|---|---:|
+| `layout_fragment` | `layout_core/src/fragment/` | 110 |
+| `layout_invalidation` | `layout_core/src/invalidation/` (45 Appendix B + 9 §4.3 helpers) | 54 |
+| `layout_invalidation` | `layout_fragment/src/invalidation/` | 1 |
+| `layout_reuse` | `layout_core/src/reuse/` | 7 |
+| `layout_commit` | `layout_core/src/commit/` (3 + `output_node_lookup`, `engine_paint_commit`) | 5 |
+| `layout_core/src/internal/` | `layout_fragment/src/core/` | 12 |
+| `layout_algo_block` | `layout_core/src/block/` (10 + autoscroll, `fragmentation_context`, `layout_block_caret`) / `layout_fragment/src/block/` | 13 / 2 |
+| `layout_algo_inline` | `layout_core/src/inline/` (16 + `layout_text_fragment`, `offset_mapping`) / `layout_fragment/src/inline/` | 18 / 6 |
+| `layout_algo_float` | `layout_core/src/float/` / `layout_fragment/src/float/` | 7 / 5 |
+| `layout_algo_out_of_flow` | `layout_core/src/out_of_flow/` / `layout_fragment/src/out_of_flow/` | 8 / 3 |
+| `layout_algo_grid` | `layout_core/src/grid/` / `layout_fragment/src/grid/` | 3 / 3 |
+| `layout_algo_table` | `layout_core/src/table/` / `layout_fragment/src/table/` | 2 / 3 |
+| `layout_algo_svg` | `layout_core/src/svg/` (8 + `svg_metadata_validation`) | 9 |
+| `layout_algo_sizing` | `layout_core/src/sizing/` | 5 |
+| `layout_algo_fragmentation` | `layout_core/src/fragmentation/` / `layout_fragment/src/fragmentation/` | 2 / 2 |
+| `layout_algo_forms` | `layout_core/src/forms/` / `layout_fragment/src/forms/` | 1 / 2 |
+| `layout_algo_list` | `layout_core/src/list/` | 2 |
+| `layout_algo_custom` | `layout_fragment/src/custom/` | 2 |
+| `layout_algo_flex` | `layout_fragment/src/flex/` | 1 |
+| `layout_algo_multicol` | `layout_core/src/multicol/` | 1 |
+| `layout_algo_replaced` | `layout_core/src/replaced/` (`layout_replaced_interface`) | 1 |
+
+The `layout_algo_sizing` and `layout_algo_fragmentation` packages were left
+holding only an empty `lib.rs` and nothing named them, so both were removed
+from the workspace.
+
+Not moved:
+
+- **The standalone crate compiles the file itself, so moving it needs a
+  crate-level change.**
+  - `layout_invalidation`: `content_change_type.rs`,
+    `layout_invalidation_reason.rs`, `layout_invalidation_state.rs`.
+  - `layout_reuse`: `layout_cache_status.rs`, `min_max_sizes_cache.rs`.
+  - `layout_algo_block`: `block_child_iterator.rs`.
+  - `layout_algo_custom`: `custom_layout_api.rs`.
+  - `layout_algo_mathml`: `mathml_node_metadata.rs` (`MathScriptType`).
+- **`layout_reuse/src/layout_environment_cache.rs`.** It declares the trace
+  literal `"layout_reuse.FontEnvironment"`. The
+  `lifecycle_trace_names_are_declared_only_by_their_owner_package` test only
+  allows that literal under `layout_reuse/`, so the file has to switch to a
+  `layout_reuse::trace` helper before it can move.
+- **`layout_fragment/src/lib.rs`.** It stays as the `include!`d fragment
+  module root, and R4 step 8 merges it with `package.rs`.
+- **`layout_algo_list/src/layout_object_list_marker_queries.rs`.** It no
+  longer exists.
+
 ### Suggested order inside R4 (fragment)
 
 1. Add the opaque `LayoutObject` handle (and `BlockNode`/`LayoutInputNode`

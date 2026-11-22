@@ -84,21 +84,21 @@ pub enum LayoutEngineError {
     RuntimeError(&'static str),
 }
 
-#[path = "../../layout_fragment/src/prepaint_input_update.rs"]
+#[path = "fragment/prepaint_input_update.rs"]
 mod layout_fragment_prepaint_input_update;
 use layout_fragment_prepaint_input_update::{
     UpdateFragmentPaintStyle, UpdatePrePaintInputs, VisitMutablePaintInputs,
 };
-#[path = "../../layout_fragment/src/engine_paint_update.rs"]
+#[path = "fragment/engine_paint_update.rs"]
 mod layout_fragment_engine_paint_update;
 use layout_fragment_engine_paint_update::EnginePaintUpdate;
-#[path = "../../layout_fragment/src/layout_paint_output.rs"]
+#[path = "fragment/layout_paint_output.rs"]
 mod layout_fragment_layout_paint_output;
-#[path = "../../layout_fragment/src/retained_scroll_refresh.rs"]
+#[path = "fragment/retained_scroll_refresh.rs"]
 mod layout_fragment_retained_scroll_refresh;
-#[path = "../../layout_fragment/src/sticky_layout_commit.rs"]
+#[path = "fragment/sticky_layout_commit.rs"]
 mod layout_fragment_sticky_layout_commit;
-#[path = "../../layout_invalidation/src/constraint_equivalence.rs"]
+#[path = "invalidation/constraint_equivalence.rs"]
 mod layout_invalidation_constraint_equivalence;
 use layout_invalidation_constraint_equivalence::{
     SameConstraintScalars, SameConstraints, SameImageCatalogGeometry, SameOptionalArc,
@@ -107,7 +107,7 @@ use layout_invalidation_constraint_equivalence::{
 #[path = "../../layout_invalidation/src/engine_mutation.rs"]
 mod layout_invalidation_engine_mutation;
 use layout_invalidation_engine_mutation::EngineMutation;
-#[path = "../../layout_commit/src/engine_paint_commit.rs"]
+#[path = "commit/engine_paint_commit.rs"]
 mod layout_commit_engine_paint_commit;
 use layout_commit_engine_paint_commit::PaintCommit;
 #[path = "../../layout_commit/src/container_query_sizes.rs"]
