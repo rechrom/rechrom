@@ -27,7 +27,7 @@ use crate::internal::layout_pass_scope::{LayoutObjectFactoryScope, LayoutPassSco
 use crate::internal::layout_text::LayoutText;
 use crate::internal::scroll_anchor::ScrollAnchoringAdjustmentScope;
 use crate::internal::text_overflow_post_layout_snapshot::UpdateTextOverflowPostLayoutSnapshots;
-use crate::engine_assembly::LayoutAssembly;
+use crate::layout_registry::LayoutRegistry;
 use crate::layout_boundary_support::{LayoutBoundarySupport, LayoutUpdateKind};
 pub use layout_commit::{PaintClientCommit, PaintCommitOutput};
 
@@ -400,8 +400,8 @@ impl LayoutEngine {
     }
 
     // cpp: layoutng/layout_engine.h:21-23
-    pub fn new(assembly: &LayoutAssembly) -> Self {
-        assembly.algorithms.validate_performance_ownership();
+    pub fn new(registry: &LayoutRegistry) -> Self {
+        registry.algorithms.validate_performance_ownership();
         Self {
             fragments: None,
             invalidated_fragments_: None,
@@ -419,10 +419,10 @@ impl LayoutEngine {
             pending_paint_ids_: HashSet::new(),
             pending_inline_ink_ids_: HashSet::new(),
             pending_subtree_layout_id_: None,
-            shape_coverage_: assembly.shape_coverage,
-            algorithms_: assembly.algorithms,
-            objects_: assembly.objects,
-            boundary_: assembly.boundary,
+            shape_coverage_: registry.shape_coverage,
+            algorithms_: registry.algorithms,
+            objects_: registry.objects,
+            boundary_: registry.boundary,
             boundary_cache_: Default::default(),
             tree_facts_: None,
             tree_relations_dirty_: true,
@@ -1235,7 +1235,7 @@ impl LayoutEngine {
         }
         let before = unsafe { &*box_ptr }.GetLayoutResult(0);
         trace.set("needs_layout", unsafe { &*root }.NeedsLayout() as u8 as f64);
-        let assembly = LayoutAssembly {
+        let registry = LayoutRegistry {
             algorithms: self.algorithms_,
             objects: self.objects_,
             boundary: self.boundary_,
@@ -1270,13 +1270,13 @@ impl LayoutEngine {
         let after = unsafe { &*box_ptr }.GetLayoutResult(0);
         trace.set("layout_result_changed", (before != after) as u8 as f64);
         if before != after {
-            *fragments = assembly.PublishLayoutResult(
+            *fragments = registry.PublishLayoutResult(
                 unsafe { &mut *root },
                 &self.constraints_,
                 &mut self.boundary_cache_,
             );
         } else {
-            assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, false);
+            registry.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, false);
         }
         Some(ScrollLayoutUpdate::RefreshedLayout)
     }
@@ -1466,7 +1466,7 @@ impl LayoutEngine {
         // scroll positions the sticky offsets read.
         layout_fragment_sticky_layout_commit::execute_pending_sticky_updates_after_layout(root);
         // BlockNode stores the result on the LayoutBox; the tree owns its lifetime.
-        // Publication uses the same assembly callbacks, font bindings and
+        // Publication uses the same registry callbacks, font bindings and
         // layout pass as the source result, before committing the environment.
         let fragments = if let Some(publish_layout_result) = publish_layout_result {
             Some(transaction.Publish(

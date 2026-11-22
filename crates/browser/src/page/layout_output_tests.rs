@@ -265,13 +265,13 @@ impl url_loader::URLLoader for NoNetwork {
 #[test]
 fn completed_frame_retains_layout_output_without_a_second_measurement_layout() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             constraints(),
             None,
             None,
@@ -303,13 +303,13 @@ fn completed_frame_retains_layout_output_without_a_second_measurement_layout() {
 #[test]
 fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             constraints(),
             None,
             None,
@@ -352,7 +352,7 @@ fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
             "<html><body style='margin:0'><div id=b style='width:80px;height:20px;background:blue'></div></body></html>",
         );
         crate::style_services::ResolveLayoutStyles(&mut owner, &page.state.constraints.borrow());
-        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let fresh = crate::LayoutPersistentDocument(
             &mut layout_engine,
             &mut owner,
@@ -374,13 +374,13 @@ fn style_write_geometry_and_frame_share_source_layout_and_match_fresh_pixels() {
 #[test]
 fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             constraints(),
             None,
             None,
@@ -427,7 +427,7 @@ fn opacity_queries_retain_geometry_but_frame_exports_current_paint() {
             "<html><body style='margin:0'><div id=b style='width:40px;height:20px;background:blue;opacity:.6'></div></body></html>",
         );
         crate::style_services::ResolveLayoutStyles(&mut owner, &page.state.constraints.borrow());
-        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let fresh = crate::LayoutPersistentDocument(
             &mut layout_engine,
             &mut owner,

@@ -69,11 +69,11 @@ impl ImageDecoder for AnimatedImageDecoder {
 fn painted_animated_image_used_more_than_once_counts_document_feature() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(RepeatedAnimatedImageLoader)),
             Rc::new(RefCell::new(AnimatedImageDecoder)),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             browser::CreateBrowserConstraints(200, 100),
             None,
             None,

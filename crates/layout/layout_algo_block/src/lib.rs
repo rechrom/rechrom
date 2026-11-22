@@ -7,7 +7,7 @@ extern crate layout_assembly as layout_algo_inline;
 extern crate layout_assembly as layout_fragment;
 extern crate layout_assembly as layout_core;
 
-pub mod assembly;
+pub mod registration;
 pub mod block_child_iterator;
 #[cfg(feature = "inline_extension")]
 pub mod block_inline_layout;
@@ -20,21 +20,21 @@ mod excluded_block_boundaries;
 
 #[cfg(all(test, feature = "constructed_fixture"))]
 mod block_fixture_test {
-    use super::assembly::InstallBlockAlgorithm;
-    use layout_core::internal::boundary::assembly::InstallLayoutBoundary;
+    use super::registration::Register as RegisterBlock;
+    use layout_core::internal::boundary::registration::Register as RegisterLayoutBoundary;
     use layout_core::internal::layout_input::{
         ComputedStyle, ConstraintSpace, Edges, FontFace, Offset, Size,
     };
     use layout_core::internal::layout_input_types::Color;
     use layout_core::internal::layout_object_builder::LayoutObjectTree;
-    use layout_core::engine_assembly::LayoutAssembly;
+    use layout_core::layout_registry::LayoutRegistry;
     use layout_core::layout_engine::{LayoutEngine, LayoutMutation};
 
     #[test]
     fn constructed_block_tree_matches_reference_fragments() {
-        let mut assembly = LayoutAssembly::default();
-        InstallBlockAlgorithm(&mut assembly);
-        InstallLayoutBoundary(&mut assembly);
+        let mut registry = LayoutRegistry::default();
+        RegisterBlock(&mut registry);
+        RegisterLayoutBoundary(&mut registry);
 
         let mut space = ConstraintSpace::default();
         space.available_size = Size {
@@ -48,7 +48,7 @@ mod block_fixture_test {
                 .into(),
             ..FontFace::default()
         });
-        let mut tree = LayoutObjectTree::new_with_factories(&space, &assembly.objects);
+        let mut tree = LayoutObjectTree::new_with_factories(&space, &registry.objects);
         let html = tree.CreateRootDefault(3, &ComputedStyle::default()) as *mut _;
         let mut body_style = ComputedStyle::default();
         body_style.paint.background_color = Color {
@@ -127,7 +127,7 @@ mod block_fixture_test {
         };
         tree.AddBoxDefault(unsafe { &mut *frame }, 10, &bottom_style);
 
-        let mut engine = LayoutEngine::new(&assembly);
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(tree));
         engine.Layout();

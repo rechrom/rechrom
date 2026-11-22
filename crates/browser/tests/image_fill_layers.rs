@@ -61,7 +61,7 @@ fn page_fixture_with_preference(
 
     let html =
         format!("<!doctype html><style>body{{margin:0}}svg,img{{display:block}}</style>{markup}");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 240);
     constraints.preferred_color_scheme = preferred_color_scheme;
     constraints.fonts = vec![FontFace {
@@ -72,7 +72,7 @@ fn page_fixture_with_preference(
         ..Default::default()
     }]
     .into();
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.into_bytes(),

@@ -31,13 +31,13 @@ fn profile_full_page_creation_and_bootstrap_isolation() {
         let mut samples = Vec::new();
         for iteration in 0..5 {
             let start = std::time::Instant::now();
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let mut page = crate::page::Page::Create(
                 Rc::new(RefCell::new(NoNetwork)),
                 Rc::new(RefCell::new(
                     image_decoder::skia_image_decoder::SkiaImageDecoder,
                 )),
-                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
                 crate::CreateBrowserConstraints(1280, 720),
                 Some(crate::page::ScriptEnvironment {
                     runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
@@ -140,13 +140,13 @@ fn native_history_retains_window_state_and_restores_host_entry_owners() {
             }
         }
         let create = |commits: Rc<RefCell<Vec<Arc<HistoryItemSnapshot>>>>| {
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             crate::page::Page::Create(
                 Rc::new(RefCell::new(Loader)),
                 Rc::new(RefCell::new(
                     image_decoder::skia_image_decoder::SkiaImageDecoder,
                 )),
-                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+                Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
                 crate::CreateBrowserConstraints(160, 96),
                 Some(crate::page::ScriptEnvironment {
                     runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(

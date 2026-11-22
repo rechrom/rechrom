@@ -62,7 +62,7 @@ use layout_reuse_managed_input_index::BuildManagedInputIndex;
 use layout_reuse_paint_only_font_binding::PreservePaintOnlyFontBinding;
 
 // The one-argument constructor is defined by //src/main/default_layout_engine.cc
-// and supplies FullLayoutAssembly().objects from outside this Bazel package.
+// and supplies FullLayoutRegistry().objects from outside this Bazel package.
 unsafe extern "Rust" {
     fn LayoutObjectTreeNew(space: &ConstraintSpace) -> LayoutObjectTree;
 }

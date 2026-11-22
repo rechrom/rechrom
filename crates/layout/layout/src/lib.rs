@@ -16,8 +16,8 @@
 //!
 //! | Module | Contents |
 //! |---|---|
-//! | crate root | [`LayoutEngine`], [`LayoutAssembly`], [`CreateLayoutAssembly`], [`LayoutPlatformServices`] |
-//! | [`assembly`] | the translated algorithm/factory assembly value |
+//! | crate root | [`LayoutEngine`], [`LayoutRegistry`], [`CreateLayoutRegistry`], [`LayoutPlatformServices`] |
+//! | [`registry`] | the [`LayoutRegistry`] that Layout packages register their algorithms and factories into |
 //! | [`lifecycle`] | lifecycle results and errors (`LayoutEngineError`, `ScrollLayoutUpdate`, `LayoutUpdateKind`) |
 //! | [`mutation`] | boundary 3: `LayoutMutation`, `LayoutTreeUpdate`, the tree builder's parent `LayoutObject`, and mutation results |
 //! | [`input`] | Style/DOM-projected inputs: `ConstraintSpace`, `ElementData`, `NodeKind`, style projection, theme metrics |
@@ -66,7 +66,7 @@ mod exports {
 
 
 pub use engine::LayoutEngine;
-pub use layout_assembly::engine_assembly::LayoutAssembly;
+pub use layout_assembly::layout_registry::LayoutRegistry;
 
 macro_rules! topic {
     ($(#[$doc:meta])* $topic:ident) => {
@@ -83,8 +83,9 @@ macro_rules! topic {
 }
 
 topic!(
-    /// The translated algorithm and LayoutObject factory assembly.
-    assembly
+    /// The registry Layout packages register algorithms and LayoutObject
+    /// factories into.
+    registry
 );
 topic!(
     /// Lifecycle results and errors.
@@ -169,29 +170,51 @@ pub struct LayoutPlatformServices {
         Option<&'static dyn layout_geometry::shape_coverage::ShapeCoverageRasterizer>,
 }
 
-/// Assemble the full translated algorithm set from the linked algorithm
-/// packages. Source package slots that are not linked keep their source
-/// capability errors and are not replaced with generic boxes.
-pub fn CreateLayoutAssembly(services: LayoutPlatformServices) -> LayoutAssembly {
-    let mut assembly = LayoutAssembly::default();
-    layout_algo_block::assembly::InstallBlockAlgorithm(&mut assembly);
-    layout_algo_multicol::assembly::InstallMulticolAlgorithm(&mut assembly);
-    layout_algo_flex::assembly::InstallFlexAlgorithm(&mut assembly);
-    layout_algo_grid::assembly::InstallGridAlgorithm(&mut assembly);
-    layout_algo_table::assembly::InstallTableAlgorithm(&mut assembly);
-    layout_algo_float::assembly::InstallFloatAlgorithm(&mut assembly);
-    layout_algo_forms::assembly::InstallFormsAlgorithm(&mut assembly);
-    layout_algo_replaced::assembly::InstallReplacedAlgorithm(&mut assembly);
-    layout_algo_list::assembly::InstallListModule(&mut assembly);
-    layout_algo_svg::assembly::InstallSvgModule(&mut assembly);
-    assembly.objects.svg_shape_path = services.svg_shape_path;
-    assembly.shape_coverage = services.shape_coverage;
+/// Build the registry the core [`LayoutEngine`] is constructed from: every
+/// linked Layout package registers its algorithms and LayoutObject factories
+/// into one [`LayoutRegistry`]. Source package slots that are not linked keep
+/// their source capability errors and are not replaced with generic boxes.
+///
+/// Registration order (a later registration may overwrite a slot an earlier
+/// one filled, so the order is part of the contract):
+///
+/// 1. `layout_algo_block::registration::Register`
+/// 2. `layout_algo_multicol::registration::Register`
+/// 3. `layout_algo_flex::registration::Register`
+/// 4. `layout_algo_grid::registration::Register`
+/// 5. `layout_algo_table::registration::Register`
+/// 6. `layout_algo_float::registration::Register`
+/// 7. `layout_algo_forms::registration::Register`
+/// 8. `layout_algo_replaced::registration::Register`
+/// 9. `layout_algo_list::registration::Register`
+/// 10. `layout_algo_svg::registration::Register`
+/// 11. the embedding's platform services (`svg_shape_path`, `shape_coverage`)
+/// 12. only with feature `inline_layout`: `layout_algo_inline`'s
+///     `registration::Register` (compiled in `layout_assembly`), then
+///     `layout_algo_block::block_inline_layout::RegisterInlineSupport`, then
+///     `layout_algo_out_of_flow::registration::Register`
+/// 13. the base boundary, `layout_core`'s
+///     `internal::boundary::registration::Register`
+pub fn CreateLayoutRegistry(services: LayoutPlatformServices) -> LayoutRegistry {
+    let mut registry = LayoutRegistry::default();
+    layout_algo_block::registration::Register(&mut registry);
+    layout_algo_multicol::registration::Register(&mut registry);
+    layout_algo_flex::registration::Register(&mut registry);
+    layout_algo_grid::registration::Register(&mut registry);
+    layout_algo_table::registration::Register(&mut registry);
+    layout_algo_float::registration::Register(&mut registry);
+    layout_algo_forms::registration::Register(&mut registry);
+    layout_algo_replaced::registration::Register(&mut registry);
+    layout_algo_list::registration::Register(&mut registry);
+    layout_algo_svg::registration::Register(&mut registry);
+    registry.objects.svg_shape_path = services.svg_shape_path;
+    registry.shape_coverage = services.shape_coverage;
     #[cfg(feature = "inline_layout")]
     {
-        layout_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
-        layout_algo_block::block_inline_layout::InstallBlockInlineSupport(&mut assembly);
-        layout_algo_out_of_flow::assembly::InstallOutOfFlowAlgorithm(&mut assembly);
+        layout_assembly::layout_algo_inline_package::registration::Register(&mut registry);
+        layout_algo_block::block_inline_layout::RegisterInlineSupport(&mut registry);
+        layout_algo_out_of_flow::registration::Register(&mut registry);
     }
-    layout_assembly::internal::boundary::assembly::InstallLayoutBoundary(&mut assembly);
-    assembly
+    layout_assembly::internal::boundary::registration::Register(&mut registry);
+    registry
 }

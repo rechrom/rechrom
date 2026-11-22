@@ -25,11 +25,11 @@ fn project(engine: &mut LayoutEngine, ids: &[u64]) {
 }
 
 fn new_engine(space: &ConstraintSpace) -> LayoutEngine {
-    let assembly = browser::CreateLayoutAssembly();
-    let mut engine = LayoutEngine::new(&assembly);
+    let registry = browser::CreateLayoutRegistry();
+    let mut engine = LayoutEngine::new(&registry);
     engine.ApplyMutation(LayoutMutation::Constraints(space));
     engine.ApplyMutation(LayoutMutation::ReplaceTree(
-        LayoutObjectTree::new_with_factories(space, &assembly.objects),
+        LayoutObjectTree::new_with_factories(space, &registry.objects),
     ));
     engine
 }
@@ -128,8 +128,8 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
             ..Default::default()
         };
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         let mut styles = style::StyleEngine::new(&owner);
         let old;
         {
@@ -178,7 +178,7 @@ fn retained_style_inputs_survive_dom_replacement_and_collection() {
         );
         let actual =
             browser::LayoutPersistentDocument(&mut engine, &mut owner, &interaction, &space);
-        let mut fresh = LayoutEngine::new(&assembly);
+        let mut fresh = LayoutEngine::new(&registry);
         let expected =
             browser::LayoutPersistentDocument(&mut fresh, &mut owner, &interaction, &space);
         let mut actual_geometry = Vec::new();
@@ -253,8 +253,8 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                     ..Default::default()
                 });
         }
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         let mut extra = None;
         for step in 0..10 {
             match step {
@@ -337,7 +337,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
                     );
                 }
             }
-            let mut fresh_engine = LayoutEngine::new(&assembly);
+            let mut fresh_engine = LayoutEngine::new(&registry);
             let fresh = browser::LayoutPersistentDocument(
                 &mut fresh_engine,
                 &mut owner,

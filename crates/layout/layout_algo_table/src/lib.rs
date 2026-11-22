@@ -1,4 +1,4 @@
-//! Source table package. Object factories and algorithms are installed together.
+//! Source table package. Object factories and algorithms are registered together.
 pub mod layout_table_column_visitor;
 pub mod table_borders;
 pub mod table_break_token_data;
@@ -23,7 +23,7 @@ mod table_distribution_tests;
 #[cfg(test)]
 mod test_thread;
 
-pub mod assembly;
+pub mod registration;
 mod table_object_virtuals;
 pub mod table_tree_insertion;
 

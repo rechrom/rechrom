@@ -15,7 +15,7 @@ use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideE
 use layout_core::internal::inline_node::InlineNode;
 use layout_core::internal::layout_algorithm::LayoutAlgorithmParams;
 use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::engine_assembly::LayoutAssembly;
+use layout_core::layout_registry::LayoutRegistry;
 use layout_style::css::white_space::ShouldWrapLineGreedy;
 use layout_style::style::text_fit::{TextFitTarget, TextFitType};
 
@@ -233,11 +233,11 @@ impl BlockLayoutAlgorithm {
 // cpp: layoutng_block/block_layout_algorithm.h:26
 // cpp: layoutng_block/block_layout_algorithm.h:178
 // cpp: layoutng_block/block_inline_layout.cc:225-238
-pub fn InstallBlockInlineSupport(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.inline_support.layout_block_child = Some(|block, child| {
+pub fn RegisterInlineSupport(registry: &mut LayoutRegistry) {
+    registry.algorithms.inline_support.layout_block_child = Some(|block, child| {
         unsafe { &mut *(block as *mut BlockLayoutAlgorithm) }.LayoutInlineChild(child)
     });
-    assembly.algorithms.inline_support.reuse_fragments = Some(|block, child, position, token| {
+    registry.algorithms.inline_support.reuse_fragments = Some(|block, child, position, token| {
         unsafe { &mut *(block as *mut BlockLayoutAlgorithm) }.TryReuseFragmentsFromCache(
             child,
             position as *mut PreviousInflowPosition,

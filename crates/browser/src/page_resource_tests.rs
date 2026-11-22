@@ -158,7 +158,7 @@ fn body() {
     let decode = Rc::new(decode::DecodeEngine::WithDecoders(
         Rc::new(RefCell::new(SkiaImageDecoder)),
         Rc::new(RefCell::new(crate::CreateSVGImageDecoder(
-            &crate::CreateLayoutAssembly(),
+            &crate::CreateLayoutRegistry(),
         ))),
     ));
     let resource_engine = Rc::new(resource::ResourceEngine::WithDecodeEngine(
@@ -233,7 +233,7 @@ fn body() {
     resources.LoadPendingImages(&mut client);
     resources.LoadPendingFonts(&mut client);
     crate::style_services::ResolveLayoutStyles(&mut document.borrow_mut(), &constraints.borrow());
-    let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+    let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
     let fragments = crate::LayoutPersistentDocument(
         &mut layout_engine,
         &mut document.borrow_mut(),

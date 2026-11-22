@@ -44,7 +44,7 @@ fn fixture() -> Page {
         <area id=area shape=rect coords="10,20,30,40" href="#">
         <area id=empty-area shape=circle coords="10,20,0" href="#">
       </map>"##;
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(180, 140);
     constraints.fonts = vec![FontFace {
         family: "ImageMapFocusRing".into(),
@@ -54,7 +54,7 @@ fn fixture() -> Page {
         ..Default::default()
     }]
     .into();
-    let svg = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let svg = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(html.to_vec()))),
         Rc::new(RefCell::new(
@@ -93,8 +93,8 @@ fn id(page: &Page, name: &str) -> u64 {
 
 fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     let wanted = id(page, name);
-    let assembly = browser::CreateLayoutAssembly();
-    let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _factories = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;

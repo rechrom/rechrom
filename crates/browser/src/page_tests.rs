@@ -248,7 +248,7 @@ fn create_page(
     trace: &Rc<RefCell<Vec<String>>>,
     frames: &Rc<RefCell<Vec<Vec<u8>>>>,
 ) -> Page {
-    let assembly = crate::CreateLayoutAssembly();
+    let registry = crate::CreateLayoutRegistry();
     let mut space = crate::CreateBrowserConstraints(160, 96);
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
@@ -261,7 +261,7 @@ fn create_page(
     Page::Create(
         Rc::new(RefCell::new(Loader(root.to_path_buf(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         space,
         Some(crate::page::ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
@@ -393,11 +393,11 @@ fn injected_page_color_scheme_controls_javascript_css_and_pixels() {
         }
         let trace = Rc::new(RefCell::new(Vec::new()));
         let frames = Rc::new(RefCell::new(Vec::new()));
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(160, 96),
             None,
             Some(Rc::new(RefCell::new(Client {
@@ -428,11 +428,11 @@ fn css_semibold_font_selection_matches_repository_chromium() {
             .join("../../artifacts/qq-chromium-parity/font-fixture");
         let trace = Rc::new(RefCell::new(Vec::new()));
         let frames = Rc::new(RefCell::new(Vec::new()));
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(160, 96),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
@@ -1137,7 +1137,7 @@ fn without_javascript(mode: &str) {
         .join(mode);
     let trace = Rc::new(RefCell::new(Vec::new()));
     let frames = Rc::new(RefCell::new(Vec::new()));
-    let assembly = crate::CreateLayoutAssembly();
+    let registry = crate::CreateLayoutRegistry();
     let mut space = crate::CreateBrowserConstraints(160, 96);
     space.fonts = vec![FontFace {
         family: "sans-serif".into(),
@@ -1150,7 +1150,7 @@ fn without_javascript(mode: &str) {
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(root.clone(), trace.clone()))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         space,
         None,
         Some(Rc::new(RefCell::new(Client {
@@ -1295,7 +1295,7 @@ fn without_javascript(mode: &str) {
     let mut silent = Page::Create(
         Rc::new(RefCell::new(Loader(root, trace))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         crate::CreateBrowserConstraints(160, 96),
         None,
         None,
@@ -1838,14 +1838,14 @@ fn css_animation_definition_samples_at_animation_origin_and_is_removed_with_name
 fn profile_qq_loading_stall() {
     crate::test_thread::run(|| {
         let options = url_loader::DefaultURLLoaderOptions::default();
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let loader = Rc::new(RefCell::new(
             url_loader::DefaultURLLoader::new(options.clone()).unwrap(),
         ));
         let mut page = Page::Create(
             loader,
             Rc::new(RefCell::new(SkiaImageDecoder)),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(1216, 704),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(

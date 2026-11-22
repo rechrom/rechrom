@@ -45,7 +45,7 @@ impl layout_commit::LayoutPublicationBackend for LayoutPublication<'_> {
 
 // cpp: layoutng/layout_assembly.h:9-15
 #[derive(Clone, Copy, Default)]
-pub struct LayoutAssembly {
+pub struct LayoutRegistry {
     pub algorithms: LayoutAlgorithmSet,
     pub objects: LayoutObjectFactorySet,
     pub boundary: LayoutBoundarySupport,
@@ -55,12 +55,12 @@ pub struct LayoutAssembly {
 
 // cpp: layoutng/layout_assembly.h:17-17
 // Implemented by //src/main/full_layout_algorithms.cc, outside the selected
-// package set. The external symbol remains a pending assembly dependency.
+// package set. The external symbol remains a pending registry dependency.
 unsafe extern "Rust" {
-    pub fn FullLayoutAssembly() -> &'static LayoutAssembly;
+    pub fn FullLayoutRegistry() -> &'static LayoutRegistry;
 }
 
-impl LayoutAssembly {
+impl LayoutRegistry {
     /// Restore the document-wide boundary indices after a targeted subtree
     /// replacement. Chromium keeps the same live LayoutObject graph here; the
     /// extracted immutable boundary mirrors that identity in this cache.

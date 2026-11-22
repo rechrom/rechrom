@@ -42,13 +42,13 @@ fn fixture(children: &str) -> Page {
     let html = format!(
         "<!doctype html><style>html,body{{margin:0}}#fill{{height:800px}}</style>{children}"
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(html.into_bytes()))),
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(300, 200),
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(

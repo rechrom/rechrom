@@ -4,7 +4,7 @@
 //! `lib.rs` (`layout::<topic>::Item`). Seeded from the 2026-11-22 consumer
 //! inventory; consumer migrations edit only this group's file.
 
-pub mod assembly {}
+pub mod registry {}
 
 pub mod lifecycle {}
 

@@ -44,7 +44,7 @@ impl URLLoader for Loader {
 fn page_fixture(markup: &str, image: Option<&str>) -> Page {
     let html =
         format!("<!doctype html><style>body{{margin:0}}svg,img{{display:block}}</style>{markup}");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 240);
     constraints.fonts = vec![FontFace {
         family: "SvgPaintOwnershipFixture".into(),
@@ -54,7 +54,7 @@ fn page_fixture(markup: &str, image: Option<&str>) -> Page {
         ..Default::default()
     }]
     .into();
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.into_bytes(),
@@ -116,8 +116,8 @@ fn id(page: &Page, name: &str) -> u64 {
 
 fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     let wanted = id(page, name);
-    let assembly = browser::CreateLayoutAssembly();
-    let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _factories = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
@@ -403,8 +403,8 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
         let mut owner = html::html_parser::ParseHTML(&format!(
             "<!doctype html><body style='margin:0'>{CLIPPED}"
         ));
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         let constraints = browser::CreateBrowserConstraints(320, 240);
         let mut style_engine = style::StyleEngine::new(&owner);
         let index = |owner: &dom::DOM, name: &str| {
@@ -602,8 +602,8 @@ fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
             .Update(&mut owner, &Default::default(), &host_styles())
             .unwrap();
         owner.UpdateSVGResources();
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(
             &browser::CreateBrowserConstraints(320, 240),
         ));
@@ -760,8 +760,8 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
         let mut owner = html::html_parser::ParseHTML(&format!(
             "<!doctype html><style>.wide #geometry{{width:50px}}</style><body style='margin:0'><div id='label' style='color:red'>label</div>{CLIPPED}"
         ));
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         let mut constraints = browser::CreateBrowserConstraints(320, 240);
         constraints.fonts = vec![FontFace {
             family: "SvgPaintOwnershipFixture".into(),
@@ -1015,8 +1015,8 @@ mod active_filter_inventory {
             )
             .unwrap();
         owner.UpdateSVGResources();
-        let assembly = browser::CreateLayoutAssembly();
-        let mut layout = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut layout = LayoutEngine::new(&registry);
         layout.ApplyMutation(LayoutMutation::Constraints(
             &browser::CreateBrowserConstraints(320, 240),
         ));

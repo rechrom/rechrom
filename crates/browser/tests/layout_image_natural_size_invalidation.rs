@@ -66,11 +66,11 @@ fn fixed_layout_image_natural_size_change_is_paint_only() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(
-            LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+            LayoutObjectTree::new_with_factories(&space, &registry.objects),
         ));
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
@@ -101,11 +101,11 @@ fn flex_or_auto_sized_layout_image_natural_size_change_requires_layout() {
         let _heap = foundation::LayoutHeapScope::new();
         for (flex_parent, fixed_size) in [(true, true), (false, false)] {
             let space = browser::CreateBrowserConstraints(320, 240);
-            let assembly = browser::CreateLayoutAssembly();
-            let mut engine = LayoutEngine::new(&assembly);
+            let registry = browser::CreateLayoutRegistry();
+            let mut engine = LayoutEngine::new(&registry);
             engine.ApplyMutation(LayoutMutation::Constraints(&space));
             engine.ApplyMutation(LayoutMutation::ReplaceTree(
-                LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+                LayoutObjectTree::new_with_factories(&space, &registry.objects),
             ));
 
             project_image(
@@ -150,11 +150,11 @@ fn retained_layout_image_updates_device_pixel_ratio_member() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(
-            LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+            LayoutObjectTree::new_with_factories(&space, &registry.objects),
         ));
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
@@ -182,11 +182,11 @@ fn animated_layout_image_change_delays_full_paint_invalidation() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(
-            LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+            LayoutObjectTree::new_with_factories(&space, &registry.objects),
         ));
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
@@ -212,11 +212,11 @@ fn failed_layout_image_retains_last_successful_natural_dimensions() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(
-            LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+            LayoutObjectTree::new_with_factories(&space, &registry.objects),
         ));
 
         project_image(&mut engine, 40.0, false, true, 1.0, false, false);
@@ -243,11 +243,11 @@ fn layout_image_contributes_visually_non_empty_pixels_only_once() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let space = browser::CreateBrowserConstraints(320, 240);
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(&space));
         engine.ApplyMutation(LayoutMutation::ReplaceTree(
-            LayoutObjectTree::new_with_factories(&space, &assembly.objects),
+            LayoutObjectTree::new_with_factories(&space, &registry.objects),
         ));
 
         project_image(&mut engine, 10.0, false, true, 1.0, false, false);

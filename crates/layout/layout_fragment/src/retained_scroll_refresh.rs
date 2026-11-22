@@ -35,13 +35,13 @@ pub(super) fn refresh_retained_scroll_geometry(
         .is_some_and(|index| index.refresh(unsafe { &mut *root }, &engine.pending_scroll_ids_));
     PrepareLayoutHeapForPointerQueries();
     if !refreshed {
-        let assembly = LayoutAssembly {
+        let registry = LayoutRegistry {
             algorithms: engine.algorithms_,
             objects: engine.objects_,
             boundary: engine.boundary_,
             shape_coverage: engine.shape_coverage_,
         };
-        assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
+        registry.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
         let reuse = engine
             .scroll_paint_index_
             .take()

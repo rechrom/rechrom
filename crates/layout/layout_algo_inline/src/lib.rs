@@ -1,5 +1,5 @@
 #[cfg(feature = "translation_in_progress")]
-pub mod assembly;
+pub mod registration;
 #[cfg(feature = "translation_in_progress")]
 pub mod empty_offset_mapping_builder;
 #[cfg(feature = "translation_in_progress")]

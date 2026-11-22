@@ -44,7 +44,7 @@ fn text_fit_scales_shadows_and_glyphs_but_not_decorations() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let html = br#"<!doctype html><body style="margin:0"><div style="width:160px;white-space:pre;font:20px/40px TextFitFixture;text-fit:grow consistent;text-shadow:1px 0 red;text-decoration-line:underline line-through;text-decoration-thickness:from-font;text-decoration-skip-ink:none">ppp</div></body>"#;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut constraints = browser::CreateBrowserConstraints(320, 100);
         constraints.fonts = vec![FontFace {
             family: "TextFitFixture".into(),
@@ -59,7 +59,7 @@ fn text_fit_scales_shadows_and_glyphs_but_not_decorations() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             None,

@@ -84,8 +84,8 @@ fn run_matrix(smoke: bool) {
                 .map(|a| (a.value.clone(), i))
         })
         .collect();
-    let assembly = crate::CreateLayoutAssembly();
-    let mut engine = crate::LayoutEngine::new(&assembly);
+    let registry = crate::CreateLayoutRegistry();
+    let mut engine = crate::LayoutEngine::new(&registry);
     for stage in 0..if smoke { 1 } else { 7 } {
         let d = owner.GetDocumentMut();
         let attr = |d: &mut dom::Document, id: &str, name: &str, value: &str| {
@@ -127,7 +127,7 @@ fn run_matrix(smoke: bool) {
             &mut engine,
         );
         let _scope = layout::testing::LayoutObjectFactoryScope::new(
-            &assembly.objects,
+            &registry.objects,
         );
         let mut grids = std::collections::BTreeMap::new();
         fn collect(
@@ -162,19 +162,19 @@ fn run_matrix(smoke: bool) {
                 use layout::{testing::{BlockNode, LayoutPassScope}, input::{FragmentationType, ConstraintSpaceBuilder}};
                 let _heap = foundation::LayoutHeapScope::new();
                 let mut environment =
-                    assembly.boundary.create_environment.unwrap()(unsafe { &mut *root }, &space);
-                let parent_space = assembly.boundary.prepare_constraints.unwrap()(
+                    registry.boundary.create_environment.unwrap()(unsafe { &mut *root }, &space);
+                let parent_space = registry.boundary.prepare_constraints.unwrap()(
                     unsafe { &*(*root).GetNode() }.InputStyle(),
                     &space,
                     false,
                 );
-                assembly.boundary.prepare_tree.unwrap()(
+                registry.boundary.prepare_tree.unwrap()(
                     unsafe { &mut *root },
                     &space,
                     &parent_space,
                     environment.ReusesPreparedFonts(),
                 );
-                let _pass = LayoutPassScope::new(&assembly.algorithms, &assembly.objects);
+                let _pass = LayoutPassScope::new(&registry.algorithms, &registry.objects);
                 let grid = grids[&owner.GetDocument().Node(ids["g0"]).Id()].cast_mut();
                 let mut builder = ConstraintSpaceBuilder::new(
                     &parent_space,
@@ -209,7 +209,7 @@ fn run_matrix(smoke: bool) {
                     assert!(!token.is_null(), "expected continuation token");
                     result = node.Layout(&grid_space, token, std::ptr::null(), std::ptr::null());
                 }
-                let fragments = assembly.boundary.publish_layout_result.unwrap()(
+                let fragments = registry.boundary.publish_layout_result.unwrap()(
                     unsafe { &mut *grid.cast() },
                     unsafe { &*result },
                     &space,

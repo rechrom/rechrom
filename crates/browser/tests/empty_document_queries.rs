@@ -65,7 +65,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
     let body = Rc::new(RefCell::new(VecDeque::new()));
     let resources = Rc::new(RefCell::new(HashMap::new()));
     let finished = Rc::new(Cell::new(0));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let scripts = scripting.then(|| ScriptEnvironment {
         runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::new()),
         xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&Default::default()).unwrap(),
@@ -79,7 +79,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(320, 200),
         scripts,
         Some(Rc::new(RefCell::new(Client(

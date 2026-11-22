@@ -46,7 +46,7 @@ fn page_fixture(markup: &str, image: Option<&str>) -> Page {
 fn page_fixture_at_scale(markup: &str, image: Option<&str>, scale: f64) -> Page {
     let html =
         format!("<!doctype html><style>body{{margin:0}}svg,img{{display:block}}</style>{markup}");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 200);
     constraints.device_pixel_ratio = scale;
     constraints.fonts = vec![FontFace {
@@ -57,7 +57,7 @@ fn page_fixture_at_scale(markup: &str, image: Option<&str>, scale: f64) -> Page 
         ..Default::default()
     }]
     .into();
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.into_bytes(),

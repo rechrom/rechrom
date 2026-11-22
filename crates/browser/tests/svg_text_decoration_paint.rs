@@ -50,7 +50,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
             <tspan style="fill:blue;stroke:purple">Decorated</tspan>
           </text>
         </svg>"#;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut constraints = browser::CreateBrowserConstraints(320, 100);
         constraints.fonts = vec![FontFace {
             family: "DecorationFixture".into(),
@@ -65,7 +65,7 @@ fn svg_decoration_uses_declaring_ancestor_and_paint_order() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             None,

@@ -449,7 +449,7 @@ mod tests {
             ));
             crate::style_services::ResolveLayoutStyles(&mut document, &constraints);
             let mut layout =
-                layout::LayoutEngine::new(&crate::CreateLayoutAssembly());
+                layout::LayoutEngine::new(&crate::CreateLayoutRegistry());
             LayoutWithSystemFonts(
                 &mut layout,
                 &mut document,

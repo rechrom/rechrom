@@ -151,7 +151,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
                     ..Default::default() }))))
             }
         }
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let constraints = browser::CreateBrowserConstraints(320, 120);
         let emergency = constraints.fonts[0].bytes.clone();
         assert_eq!(
@@ -206,7 +206,7 @@ fn page_settles_system_font_requests_before_publishing_glyphs() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             Some(Rc::new(RefCell::new(Client {

@@ -444,7 +444,7 @@ pub(crate) fn CreateLayoutBindingsHost(
     let geometry_document = document.clone();
     let geometry_constraints = constraints.clone();
     let engine = Rc::new(RefCell::new(crate::LayoutEngine::new(
-        &crate::CreateLayoutAssembly(),
+        &crate::CreateLayoutRegistry(),
     )));
     let measure = Rc::new(move || {
         let constraints = constraints.borrow();

@@ -4,7 +4,7 @@ use foundation::{AtomicString, EListStylePosition, LayoutUnit, MakeGarbageCollec
 use layout_assembly::internal::layout_input::NodeKind;
 use layout_assembly::internal::layout_node_metadata::{Element, Node};
 use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::layout_inline_list_item::LayoutInlineListItem;
@@ -101,15 +101,15 @@ fn SubtreeDidChange(object: &mut LayoutObject) {
 
 // cpp: layoutng_list/assembly.h:2-2
 // cpp: layoutng_list/assembly.cc:73-79
-pub fn InstallListModule(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.list_support.performance_owner = Some("layout_algo_list");
-    assembly.objects.list = Some(CreateListObject);
-    assembly.objects.list_subtree_did_change = Some(SubtreeDidChange);
-    assembly.algorithms.list_support.update_marker_text = Some(UpdateMarkerText);
-    assembly.algorithms.list_support.marker_occupies_whole_line = Some(MarkerOccupiesWholeLine);
-    assembly.algorithms.list_support.symbol_marker_text = Some(SymbolMarkerText);
-    assembly.algorithms.list_support.symbol_width = Some(SymbolWidth);
-    assembly
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.algorithms.list_support.performance_owner = Some("layout_algo_list");
+    registry.objects.list = Some(CreateListObject);
+    registry.objects.list_subtree_did_change = Some(SubtreeDidChange);
+    registry.algorithms.list_support.update_marker_text = Some(UpdateMarkerText);
+    registry.algorithms.list_support.marker_occupies_whole_line = Some(MarkerOccupiesWholeLine);
+    registry.algorithms.list_support.symbol_marker_text = Some(SymbolMarkerText);
+    registry.algorithms.list_support.symbol_width = Some(SymbolWidth);
+    registry
         .algorithms
         .list_support
         .outside_marker_inline_offset = Some(OutsideMarkerInlineOffset);

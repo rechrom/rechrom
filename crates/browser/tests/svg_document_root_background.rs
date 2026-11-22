@@ -17,8 +17,8 @@ const ROOT_BACKGROUND_SVG: &[u8] = br#"
 #[test]
 fn svg_document_root_background_is_not_transferred_to_the_html_canvas() {
     test_thread::run(|| {
-        let assembly = browser::CreateLayoutAssembly();
-        let mut decoder = browser::CreateSVGImageDecoder(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut decoder = browser::CreateSVGImageDecoder(&registry);
         let container = ContainerKey::new(64, 32, 1.0, 1.0);
         let created = decoder
             .create(

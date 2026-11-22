@@ -4,8 +4,8 @@
 //! `lib.rs` (`layout::<topic>::Item`). Seeded from the 2026-11-22 consumer
 //! inventory; consumer migrations edit only this group's file.
 
-pub mod assembly {
-    pub use layout_assembly::engine_assembly::LayoutAssembly;
+pub mod registry {
+    pub use layout_assembly::layout_registry::LayoutRegistry;
 }
 
 pub mod lifecycle {

@@ -22,7 +22,7 @@ pub mod grid_line_resolver;
 pub mod grid_placement;
 pub mod grid_sizing_tree;
 pub use layout_assembly::grid_track_collection_implementation as grid_track_collection;
-pub mod assembly;
+pub mod registration;
 pub mod grid_layout_algorithm;
 pub mod grid_node;
 pub mod grid_oof_placement;

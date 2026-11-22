@@ -46,7 +46,7 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 }
 fn fixture_html(html: String, svg: &str) -> (Page, Rc<RefCell<Vec<String>>>) {
     let requests = Rc::new(RefCell::new(Vec::new()));
-    let a = browser::CreateLayoutAssembly();
+    let a = browser::CreateLayoutRegistry();
     let c = browser::CreateBrowserConstraints(160, 60);
     let decoder = browser::CreateSVGImageDecoderWithConstraints(&a, &c);
     let mut p = Page::Create(

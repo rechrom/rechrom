@@ -36,7 +36,7 @@ impl MarkupSanitizationHost for BrowserMarkupSanitizationHost {
         style.SetFontMetricsResolver(font_metrics);
         Box::new(StagingLifecycle {
             style: RefCell::new(style),
-            layout: LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            layout: LayoutEngine::new(&crate::CreateLayoutRegistry()),
             constraints,
             user_agent: crate::user_agent_styles::UserAgentStyleSheets::new(),
         })

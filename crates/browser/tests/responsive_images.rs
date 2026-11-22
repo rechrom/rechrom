@@ -101,8 +101,8 @@ impl xhr_transport::XMLHttpRequestTransport for LazyXHR {
 }
 
 fn image(page: &Page, id: u64) -> &LayoutInputReplaced {
-    let assembly = browser::CreateLayoutAssembly();
-    let _scope = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _scope = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
@@ -136,7 +136,7 @@ fn hero(page: &Page) -> (usize, u64) {
 fn root_scroll_admits_a_deferred_image_in_document_coordinates() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut page = Page::Create(
             Rc::new(RefCell::new(ScrollLazyLoader {
@@ -145,7 +145,7 @@ fn root_scroll_admits_a_deferred_image_in_document_coordinates() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             browser::CreateBrowserConstraints(800, 600),
             Some(browser::page::ScriptEnvironment {
                 runtime: Box::new(
@@ -211,13 +211,13 @@ fn root_scroll_admits_a_deferred_image_in_document_coordinates() {
 fn lazy_auto_sizes_reselects_from_the_rendered_content_width() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             browser::CreateBrowserConstraints(800, 600),
             None,
             None,
@@ -262,13 +262,13 @@ fn lazy_auto_sizes_reselects_from_the_rendered_content_width() {
 fn content_dpr_header_overrides_html_image_density() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(ContentDPRLoader)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             browser::CreateBrowserConstraints(800, 600),
             None,
             None,

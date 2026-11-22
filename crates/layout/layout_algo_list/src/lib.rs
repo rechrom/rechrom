@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-pub mod assembly;
+pub mod registration;
 pub mod layout_inline_list_item;
 pub mod layout_inside_list_marker;
 pub mod layout_list_item;

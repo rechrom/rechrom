@@ -61,10 +61,10 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
         include_bytes!("../../image_decoder/tests/fixtures/avif-source/alpha-libyuv.png").as_slice()
     };
     let markup=format!("<!doctype html><style>body{{margin:0;background:{background}}}img{{display:block;position:absolute;left:17.5px;top:9.25px;width:93px;height:87px}}</style><img src='fixture.image'>");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(160, 120);
     constraints.device_pixel_ratio = scale;
-    let svg = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let svg = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: markup.into_bytes(),

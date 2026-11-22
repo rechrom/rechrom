@@ -53,7 +53,7 @@ fn thick_offset_underline_expands_source_text_ink_overflow() {
                 text-underline-offset: 12px;
             }
         </style><span>Decorated text</span>"#;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut constraints = browser::CreateBrowserConstraints(320, 120);
         constraints.fonts = vec![FontFace {
             family: "DecorationFixture".into(),
@@ -68,7 +68,7 @@ fn thick_offset_underline_expands_source_text_ink_overflow() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             None,
