@@ -62,7 +62,7 @@ impl PageAutoscrollLayout {
     }
     fn Query<T>(&self, query: impl FnOnce(&NativeAutoscrollSource<'_>) -> T) -> Option<T> {
         self.owner.WithLayout(|engine| {
-            let scroll = engine.MouseLayoutViewportScrollOffset().unwrap_or_default();
+            let scroll = engine.Pointer().MouseLayoutViewportScrollOffset().unwrap_or_default();
             let frame = layout::scroll::NativeScrollFrameGeometry {
                 document_to_root_frame: Offset {
                     x: -(scroll.0 as f64),
@@ -193,7 +193,7 @@ impl AutoscrollLayout for PageAutoscrollLayout {
             let scroll = runtime
                 .layout
                 .borrow()
-                .MouseLayoutViewportScrollOffset()
+                .Pointer().MouseLayoutViewportScrollOffset()
                 .unwrap_or_default();
             rect = foundation::gfx::RectF::new(
                 foundation::gfx::PointF::new(rect.x() - scroll.0, rect.y() - scroll.1),

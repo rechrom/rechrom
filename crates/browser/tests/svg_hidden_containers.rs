@@ -103,7 +103,7 @@ fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     let assembly = browser::CreateLayoutAssembly();
     let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();
-    let root = engine.GetLayoutTree().unwrap().Root();
+    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
     while !object.is_null() {
         let current = unsafe { &*object };
@@ -291,7 +291,7 @@ fn generated_pseudos_bind_only_referenced_clip_resources_in_the_originating_scop
             let assembly = browser::CreateLayoutAssembly();
             let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
             let engine = page.GetLayoutEngine();
-            let root = engine.GetLayoutTree().unwrap().Root();
+            let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
             let mut bindings = std::collections::HashMap::new();
             let mut object = root as *const LayoutObject;
             while let Some(current) = unsafe { object.as_ref() } {

@@ -198,6 +198,10 @@ pub enum LayoutMutation<'a> {
     },
     EditingState(Rc<LayoutEditingState>),
     PasswordEchoTimerFired(crate::password_echo::PasswordEchoTimerToken),
+    // Wave E: pointer
+    /// Pointer scrollbar/resizer commands on a resident
+    /// PaintLayerScrollableArea (scrollbar.cc, pointer_event_manager.cc).
+    Pointer(crate::native_pointer_scroll_controls::PointerMutation<'a>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

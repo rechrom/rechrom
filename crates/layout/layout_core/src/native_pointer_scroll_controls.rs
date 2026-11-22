@@ -26,6 +26,17 @@ pub struct NativeMacScrollbarAnimationUpdate {
     pub needs_repaint: bool,
     pub hidden_changed: bool,
 }
+/// Pointer commands carried by `LayoutMutation::Pointer`. Each runs exactly
+/// the source owner call below and bypasses the generic mutation bookkeeping.
+pub enum PointerMutation<'a> {
+    /// ScrollableArea::FadeOverlayScrollbarsTimerFired.
+    ScrollbarFadeTimerFired(&'a NativePointerResizeArea),
+    /// PaintLayerScrollableArea::SetInResizeMode.
+    SetResizeAreaInResizeMode {
+        area: &'a NativePointerResizeArea,
+        value: bool,
+    },
+}
 impl NativePointerResizeArea {
     pub fn Identity(&self) -> usize {
         self.area.Get() as usize
@@ -62,6 +73,20 @@ impl LayoutEngine {
             },
             update,
         ))
+    }
+    /// `LayoutMutation::Pointer` dispatch. `apply_mutation` calls this before
+    /// any generic mutation bookkeeping, exactly as the former direct calls.
+    #[inline]
+    pub(crate) fn ApplyPointerMutation(&self, mutation: PointerMutation<'_>) -> bool {
+        match mutation {
+            PointerMutation::ScrollbarFadeTimerFired(area) => {
+                self.PointerScrollbarFadeTimerFired(area)
+            }
+            PointerMutation::SetResizeAreaInResizeMode { area, value } => {
+                self.SetPointerResizeAreaInResizeMode(area, value)
+            }
+        }
+        true
     }
     pub fn PointerScrollbarFadeTimerFired(&self, area: &NativePointerResizeArea) {
         let _scope = self.NativeScrollPassScope();

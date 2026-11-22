@@ -437,7 +437,7 @@ impl PageEventHandlerHitTestLifecycle for NativeEventHandlerFrame {
         self.domain
             .upgrade()
             .and_then(|domain| {
-                domain.WithLayout(self.token, |layout| layout.GetLayoutTree().is_some())
+                domain.WithLayout(self.token, |layout| layout.Pointer().HasLayoutView())
             })
             .unwrap_or(false)
     }

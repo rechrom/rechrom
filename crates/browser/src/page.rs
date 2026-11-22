@@ -3445,15 +3445,15 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
     ) -> Option<layout::scroll::NativeMouseCoordinateLayout> {
         let state = self.0.upgrade()?;
         state.EnsureLayoutOutput();
-        let result = state.layout_engine.borrow().MouseCoordinateLayout(node_id);
+        let result = state.layout_engine.borrow().Pointer().MouseCoordinateLayout(node_id);
         result
     }
     fn DragBoundingBox(&self, node_id: u64) -> Option<foundation::gfx::Rect> {
         let state = self.0.upgrade()?;
         state.EnsureLayoutOutput();
         let layout = state.layout_engine.borrow();
-        let object = layout.MouseCoordinateLayout(node_id)?;
-        Some(layout.AbsoluteBoundingBoxIncludingDescendants(&object))
+        let object = layout.Pointer().MouseCoordinateLayout(node_id)?;
+        Some(layout.Pointer().AbsoluteBoundingBoxIncludingDescendants(&object))
     }
     fn SimulatedClickRootFrameCenter(
         &self,
@@ -3461,8 +3461,8 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
     ) -> Option<(foundation::PhysicalOffset, f32)> {
         let state = self.0.upgrade()?;
         let layout = state.layout_engine.borrow();
-        let object = layout.MouseCoordinateLayout(node)?;
-        layout.SimulatedClickRootFrameCenter(&object)
+        let object = layout.Pointer().MouseCoordinateLayout(node)?;
+        layout.Pointer().SimulatedClickRootFrameCenter(&object)
     }
     fn HasFrameView(&self) -> bool {
         self.0.upgrade().is_some_and(|state| {
@@ -3496,7 +3496,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
         let offset = state
             .layout_engine
             .borrow()
-            .MouseLayoutViewportScrollOffsetInt();
+            .Pointer().MouseLayoutViewportScrollOffsetInt();
         offset
     }
 
@@ -5709,11 +5709,10 @@ impl PageState {
                 }
                 let layout = self.layout_engine.borrow();
                 let _svg_resources =
-                    layout::object::SVGResourceQueryScope::new(
-                        layout
-                            .GetLayoutTree()
-                            .expect("scroll Paint retains native SVG resources"),
-                    );
+                    layout
+                        .Pointer()
+                        .SVGResourceQueryScope()
+                        .expect("scroll Paint retains native SVG resources");
                 paint.PaintWithLifecycle(
                     &layout_output,
                     self.layout_editing.PaintState(),
@@ -9979,11 +9978,10 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layout::object::SVGResourceQueryScope::new(
-                        layout
-                            .GetLayoutTree()
-                            .expect("PrePaint retains native SVG resource owners"),
-                    );
+                    layout
+                        .Pointer()
+                        .SVGResourceQueryScope()
+                        .expect("PrePaint retains native SVG resource owners");
                 let mut paint = self.state.paint_engine.borrow_mut();
                 if direct_compositor_ready {
                     paint.PrePaintCompositedAnimationUpdate(
@@ -10287,11 +10285,10 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layout::object::SVGResourceQueryScope::new(
-                        layout
-                            .GetLayoutTree()
-                            .expect("Paint retains native SVG resource owners"),
-                    );
+                    layout
+                        .Pointer()
+                        .SVGResourceQueryScope()
+                        .expect("Paint retains native SVG resource owners");
                 let lifecycle = PagePaintLifecycle(self.state.DocumentLifecycle());
                 let child_layouts = child_paint
                     .iter()
@@ -10351,11 +10348,10 @@ impl Page {
                 let layout = self.state.layout_engine.borrow();
                 let _layout_paint_scope = layout.PaintScope();
                 let _svg_resources =
-                    layout::object::SVGResourceQueryScope::new(
-                        layout
-                            .GetLayoutTree()
-                            .expect("Paint retains native SVG resource owners"),
-                    );
+                    layout
+                        .Pointer()
+                        .SVGResourceQueryScope()
+                        .expect("Paint retains native SVG resource owners");
                 let child_layouts = child_paint
                     .iter()
                     .map(|child| child.runtime.layout.borrow())

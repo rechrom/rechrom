@@ -7,14 +7,12 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use foundation::{gfx, CompositorElementId, Persistent, PhysicalOffset};
+use foundation::{gfx, CompositorElementId, Persistent};
 use layout_assembly::editing_state::LayoutEditingState;
 use layout_assembly::engine_assembly::LayoutAssembly;
 use layout_assembly::fragment_tree::{LayoutResultHandle, PaintResources};
 use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData, Offset, PaintImage};
-use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
 use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity;
-use layout_assembly::internal::scrollbar::Scrollbar;
 use layout_assembly::layout_engine::{
     ContainerQuerySizeSnapshot, HTMLImageResourceUpdate, LayoutEngine as CoreLayoutEngine,
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
@@ -25,14 +23,7 @@ use layout_assembly::native_autoscroll_source::{
     NativeAutoscrollLayout, NativeAutoscrollSource, NativeLogicalScrollArea,
 };
 use layout_assembly::native_event_registry_source::NativeEventRegistryLayout;
-use layout_assembly::native_mouse_coordinates::{
-    NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
-};
 use layout_assembly::native_page_scale_geometry::NativePageScaleGeometry;
-use layout_assembly::native_pointer_scroll_controls::{
-    NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
-    NativeResizePlan, NativeScrollbarInteraction,
-};
 use layout_assembly::native_scroll_source::{
     NativeCompositorScrollArea, NativeCompositorScrollUpdate, NativeScrollFrameGeometry,
     NativeScrollResult, NativeScrollSource,
@@ -325,12 +316,6 @@ impl LayoutEngine {
 /// Legacy side channels that consumer crates call today.
 // Wave E: fold into LayoutMutation / query views
 impl LayoutEngine {
-    /// Resident LayoutObject tree access (tests and Page diagnostics).
-    #[inline]
-    pub fn GetLayoutTree(&self) -> Option<&LayoutObjectTree> {
-        self.engine.GetLayoutTree()
-    }
-
     // Resource and environment invalidations.
 
     #[inline]
@@ -538,165 +523,5 @@ impl LayoutEngine {
     #[inline]
     pub fn TakeNativeScrollbarActivities(&mut self) -> Vec<NativeScrollbarActivity> {
         self.engine.TakeNativeScrollbarActivities()
-    }
-
-    // Mouse-coordinate sources. The three handle queries are forwarded here
-    // because their core form borrows the core engine.
-
-    #[inline]
-    pub fn MouseCoordinateLayout(&self, id: u64) -> Option<NativeMouseCoordinateLayout> {
-        self.engine.MouseCoordinateLayout(id)
-    }
-
-    #[inline]
-    pub fn MouseLayoutViewportScrollOffset(&self) -> Option<(f32, f32)> {
-        self.engine.MouseLayoutViewportScrollOffset()
-    }
-
-    #[inline]
-    pub fn MouseLayoutViewportScrollOffsetInt(&self) -> Option<(i32, i32)> {
-        self.engine.MouseLayoutViewportScrollOffsetInt()
-    }
-
-    #[inline]
-    pub fn RegisteredScrollableAreas(&self) -> Vec<NativeRegisteredScrollableArea> {
-        self.engine.RegisteredScrollableAreas()
-    }
-
-    /// `NativeMouseCoordinateLayout::SimulatedClickRootFrameCenter`.
-    #[inline]
-    pub fn SimulatedClickRootFrameCenter(
-        &self,
-        object: &NativeMouseCoordinateLayout,
-    ) -> Option<(PhysicalOffset, f32)> {
-        object.SimulatedClickRootFrameCenter(&self.engine)
-    }
-
-    /// `NativeMouseCoordinateLayout::AbsoluteBoundingBoxIncludingDescendants`.
-    #[inline]
-    pub fn AbsoluteBoundingBoxIncludingDescendants(
-        &self,
-        object: &NativeMouseCoordinateLayout,
-    ) -> gfx::Rect {
-        object.AbsoluteBoundingBoxIncludingDescendants(&self.engine)
-    }
-
-    /// `NativeMouseCoordinateLayout::DragNodeImageGeometry`.
-    #[inline]
-    pub fn DragNodeImageGeometry(
-        &self,
-        object: &NativeMouseCoordinateLayout,
-    ) -> Option<NativeDragNodeImageGeometry> {
-        object.DragNodeImageGeometry(&self.engine)
-    }
-
-    // Pointer scrollbar and resizer controls.
-
-    #[inline]
-    pub fn PointerScrollbarInteraction(
-        &self,
-        scrollbar: &Scrollbar,
-        interaction: NativeScrollbarInteraction,
-        is_popup: bool,
-    ) -> Option<(NativePointerResizeArea, NativeOverlayVisibilityUpdate)> {
-        self.engine
-            .PointerScrollbarInteraction(scrollbar, interaction, is_popup)
-    }
-
-    #[inline]
-    pub fn PointerScrollbarFadeTimerFired(&self, area: &NativePointerResizeArea) {
-        self.engine.PointerScrollbarFadeTimerFired(area)
-    }
-
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    pub fn PublishPointerMacScrollbarAnimation(
-        &self,
-        scrollbar: &Scrollbar,
-        thumb: f32,
-        track: f32,
-        width: i32,
-        thumb_dirty: bool,
-        track_dirty: bool,
-        hidden: Option<bool>,
-    ) -> Option<NativeMacScrollbarAnimationUpdate> {
-        self.engine.PublishPointerMacScrollbarAnimation(
-            scrollbar,
-            thumb,
-            track,
-            width,
-            thumb_dirty,
-            track_dirty,
-            hidden,
-        )
-    }
-
-    #[inline]
-    pub fn PointerScrollbarTargetThumbGeometry(
-        &self,
-        scrollbar: &Scrollbar,
-        target: gfx::Vector2dF,
-    ) -> (i32, i32) {
-        self.engine
-            .PointerScrollbarTargetThumbGeometry(scrollbar, target)
-    }
-
-    #[inline]
-    pub fn PointerScrollbarPointFromRootFrame(
-        &self,
-        scrollbar: &Scrollbar,
-        point_in_containing_frame: gfx::Point,
-    ) -> gfx::Point {
-        self.engine
-            .PointerScrollbarPointFromRootFrame(scrollbar, point_in_containing_frame)
-    }
-
-    #[inline]
-    pub fn PointerResizeAreaForNode(&self, node: u64) -> Option<NativePointerResizeArea> {
-        self.engine.PointerResizeAreaForNode(node)
-    }
-
-    #[inline]
-    pub fn PointerResizeAreaInResizeMode(&self, area: &NativePointerResizeArea) -> bool {
-        self.engine.PointerResizeAreaInResizeMode(area)
-    }
-
-    #[inline]
-    pub fn SetPointerResizeAreaInResizeMode(&self, area: &NativePointerResizeArea, value: bool) {
-        self.engine.SetPointerResizeAreaInResizeMode(area, value)
-    }
-
-    #[inline]
-    pub fn PointerResizeAreaHasLayerAndLayoutBox(&self, area: &NativePointerResizeArea) -> bool {
-        self.engine.PointerResizeAreaHasLayerAndLayoutBox(area)
-    }
-
-    #[inline]
-    pub fn PointerResizeAreaContainsTouchPoint(
-        &self,
-        area: &NativePointerResizeArea,
-        point: gfx::Point,
-    ) -> bool {
-        self.engine.PointerResizeAreaContainsTouchPoint(area, point)
-    }
-
-    #[inline]
-    pub fn InitializePointerResizeTransform(
-        &self,
-        area: &NativePointerResizeArea,
-        point: gfx::Point,
-    ) -> gfx::Transform {
-        self.engine.InitializePointerResizeTransform(area, point)
-    }
-
-    #[inline]
-    pub fn PlanPointerResize(
-        &self,
-        area: &NativePointerResizeArea,
-        point_in_containing_frame: gfx::Point,
-        transform: &gfx::Transform,
-    ) -> Option<NativeResizePlan> {
-        self.engine
-            .PlanPointerResize(area, point_in_containing_frame, transform)
     }
 }

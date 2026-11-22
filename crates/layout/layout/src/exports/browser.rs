@@ -17,6 +17,8 @@ pub mod mutation {
     pub use layout_assembly::layout_engine::{
         HTMLImageResourceUpdate, LayoutMutation, LayoutTreeUpdate,
     };
+    // Wave E: pointer
+    pub use layout_assembly::native_pointer_scroll_controls::PointerMutation;
 }
 
 pub mod input {

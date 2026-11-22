@@ -299,7 +299,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
         .unwrap();
         let document_selection = page
             .GetLayoutEngine()
-            .GetLayoutTree()
+            .Pointer().ResidentLayoutTree()
             .expect("layout tree")
             .EditingState()
             .selections
@@ -930,7 +930,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
         // SelectionBoundsRecorder is active only while touch-style selection
         // handles are visible. This retained-state transition invalidates paint.
         page.GetLayoutEngine()
-            .GetLayoutTree()
+            .Pointer().ResidentLayoutTree()
             .expect("layout tree")
             .EditingState()
             .selections
@@ -965,7 +965,7 @@ fn visible_selection_handles_publish_compositor_bounds() {
 
         let document_selection = page
             .GetLayoutEngine()
-            .GetLayoutTree()
+            .Pointer().ResidentLayoutTree()
             .expect("layout tree")
             .EditingState()
             .selections

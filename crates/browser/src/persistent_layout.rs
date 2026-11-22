@@ -489,7 +489,7 @@ mod tests {
             let same_root =
                 crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             assert_eq!(root, same_root);
-            let stats = engine.GetLayoutTree().unwrap().UpdateStats();
+            let stats = engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats();
             assert!(stats.reused >= 3, "{stats:?}");
             assert_eq!((stats.created, stats.updated, stats.removed), (0, 0, 0));
             // Document no longer roots native objects. Engine independently
@@ -497,13 +497,13 @@ mod tests {
             drop(owner);
             foundation::CollectLayoutHeapForTesting();
             assert_eq!(
-                engine.GetLayoutTree().unwrap().Root() as *const LayoutObject,
+                engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject,
                 root.cast_const()
             );
             engine.Layout();
             assert_eq!(engine.GetLayoutResult().unwrap().size.width, 320.0);
             assert!(!engine
-                .GetLayoutTree()
+                .Pointer().ResidentLayoutTree()
                 .unwrap()
                 .Root()
                 .SlowFirstChild()
@@ -568,7 +568,7 @@ mod tests {
             let id = owner.GetDocument().Node(index).Id();
 
             let root =
-                engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
+                engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
             let before = cached(root);
             let object = native(root, id);
             let object_result = cached(object);
@@ -691,7 +691,7 @@ mod tests {
                         &cs,
                     );
 
-                    let root = engine.GetLayoutTree().unwrap().Root() as *const LayoutObject
+                    let root = engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject
                         as *mut LayoutObject;
                     let index = if root_scroll {
                         (0..owner.GetDocument().NodeCount())
@@ -786,7 +786,7 @@ mod tests {
                 &cs,
             );
             let root =
-                engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
+                engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
             let a = dom_id(&owner, "a");
             let id = owner.GetDocument().Node(a).Id();
             let object = native(root, id);
@@ -966,7 +966,7 @@ mod tests {
             assert_eq!(root, root_again);
             assert_eq!(a, native(root_again, a_id));
             assert_eq!(style, unsafe { &*a }.StyleRef() as *const _);
-            let stats = engine.GetLayoutTree().unwrap().UpdateStats().clone();
+            let stats = engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().clone();
             assert!(stats.reused >= 5, "{stats:?}");
             assert_eq!((stats.created, stats.updated, stats.removed), (0, 0, 0));
             engine.Layout();

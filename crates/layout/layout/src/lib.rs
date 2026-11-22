@@ -35,6 +35,10 @@
 //! several groups; all of them resolve to one re-export.
 
 mod engine;
+/// Borrowed query views over the facade, one per Wave E family.
+pub mod views {
+    pub mod pointer;
+}
 mod engine_groups {
     mod browser;
     mod document;

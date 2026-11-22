@@ -2942,7 +2942,7 @@ pub fn BuildLayoutObjectTree(
         engine.ApplyMutation(mutation);
     });
     engine
-        .GetLayoutTree()
+        .Pointer().ResidentLayoutTree()
         .expect("DOM projection installed a layout tree")
         .Root() as *const LayoutObject as *mut LayoutObject
 }
@@ -3445,7 +3445,7 @@ mod tests {
         let interaction = UserInteractionState::default();
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
         let root =
-            engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
+            engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
         let changed = source(root, changed_id);
         let sibling = source(root, sibling_id);
         let sibling_style = unsafe { &*sibling }.StyleRef() as *const _;
@@ -3494,13 +3494,13 @@ mod tests {
         });
         assert_eq!(received, 1);
         let updated_root =
-            engine.GetLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
+            engine.Pointer().ResidentLayoutTree().unwrap().Root() as *const LayoutObject as *mut LayoutObject;
         assert_eq!(updated_root, root);
         assert_eq!(source(updated_root, changed_id), changed);
         assert_eq!(width(changed), Some(120.0));
         assert_eq!(source(updated_root, sibling_id), sibling);
         assert_eq!(unsafe { &*sibling }.StyleRef() as *const _, sibling_style);
-        assert_eq!(engine.GetLayoutTree().unwrap().UpdateStats().created, 0);
+        assert_eq!(engine.Pointer().ResidentLayoutTree().unwrap().UpdateStats().created, 0);
     }
     #[test]
     fn persistent_metadata_and_namespace_kinds_match_cpp_including_live_values() {

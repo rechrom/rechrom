@@ -105,9 +105,8 @@ impl PageState {
             let attached = self
                 .layout_engine
                 .borrow()
-                .GetLayoutTree()
-                .and_then(|tree| tree.GetLayoutObjectForNode(u64::from(id)))
-                .is_some();
+                .Pointer()
+                .HasLayoutObjectForNode(u64::from(id));
             let replacement = self
                 .document
                 .borrow()

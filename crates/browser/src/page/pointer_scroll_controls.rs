@@ -5,6 +5,7 @@ use interaction::adapter::page_pointer_scroll_controls::{
     PagePointerScrollControls, ScrollbarTimerKind, ScrollbarTimerTask,
 };
 use interaction::scroll::core::scroll::scrollbar::{ScrollbarGesture, ScrollbarThumbUse};
+use layout::mutation::{LayoutMutation, PointerMutation};
 use layout::scroll::{Scrollbar, NativePointerResizeArea};
 struct OverlayTimer {
     generation: u64,
@@ -115,7 +116,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         let state = self.state();
         // A Browser Page is an ordinary LocalFrame, including browser chrome.
         // It is not Blink's separate PagePopup widget.
-        let update = state.Layout().borrow().PointerScrollbarInteraction(
+        let update = state.Layout().borrow().Pointer().PointerScrollbarInteraction(
             unsafe { &*owner.Get() },
             event,
             false,
@@ -172,10 +173,9 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
                 .expect("live overlay task")
         };
         let state = self.state();
-        state
-            .Layout()
-            .borrow()
-            .PointerScrollbarFadeTimerFired(&timer.area);
+        state.Layout().borrow_mut().ApplyMutation(LayoutMutation::Pointer(
+            PointerMutation::ScrollbarFadeTimerFired(&timer.area),
+        ));
         state.dirty.set(true);
     }
     fn PublishMacScrollbarAnimation(
@@ -191,7 +191,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         let state = self.state();
         let update = {
             let layout = state.Layout().borrow();
-            layout.PublishPointerMacScrollbarAnimation(
+            layout.Pointer().PublishPointerMacScrollbarAnimation(
                 unsafe { &*owner.Get() },
                 thumb,
                 track,
@@ -249,7 +249,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         let geometry = state
             .Layout()
             .borrow()
-            .PointerScrollbarTargetThumbGeometry(scrollbar, target);
+            .Pointer().PointerScrollbarTargetThumbGeometry(scrollbar, target);
         geometry
     }
     fn StartScrollbarTimer(
@@ -279,7 +279,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         let state = self.state();
         // Each Page is its own local root. FrameView conversion is identity;
         // the resident scrollbar owner then performs its box-local conversion.
-        let point = state.Layout().borrow().PointerScrollbarPointFromRootFrame(
+        let point = state.Layout().borrow().Pointer().PointerScrollbarPointFromRootFrame(
             unsafe { &*owner.Get() },
             self.PointFromRoot(point),
         );
@@ -328,7 +328,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
     fn ResizeAreaForNode(&self, node: u64) -> Option<NativePointerResizeArea> {
         let state = self.state();
         state.EnsureLayoutOutput();
-        let area = state.Layout().borrow().PointerResizeAreaForNode(node);
+        let area = state.Layout().borrow().Pointer().PointerResizeAreaForNode(node);
         area
     }
     fn IsAbsolutePointInResizeControl(
@@ -339,25 +339,24 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         self.state()
             .Layout()
             .borrow()
-            .PointerResizeAreaContainsTouchPoint(area, self.PointFromRoot(point))
+            .Pointer().PointerResizeAreaContainsTouchPoint(area, self.PointFromRoot(point))
     }
     fn SetInResizeMode(&self, area: &NativePointerResizeArea, value: bool) {
-        self.state()
-            .Layout()
-            .borrow()
-            .SetPointerResizeAreaInResizeMode(area, value);
+        self.state().Layout().borrow_mut().ApplyMutation(LayoutMutation::Pointer(
+            PointerMutation::SetResizeAreaInResizeMode { area, value },
+        ));
     }
     fn InResizeMode(&self, area: &NativePointerResizeArea) -> bool {
         self.state()
             .Layout()
             .borrow()
-            .PointerResizeAreaInResizeMode(area)
+            .Pointer().PointerResizeAreaInResizeMode(area)
     }
     fn HasLayerAndLayoutBox(&self, area: &NativePointerResizeArea) -> bool {
         self.state()
             .Layout()
             .borrow()
-            .PointerResizeAreaHasLayerAndLayoutBox(area)
+            .Pointer().PointerResizeAreaHasLayerAndLayoutBox(area)
     }
     fn InitializeResizeTransform(
         &self,
@@ -367,7 +366,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
         self.state()
             .Layout()
             .borrow()
-            .InitializePointerResizeTransform(area, self.PointFromRoot(point))
+            .Pointer().InitializePointerResizeTransform(area, self.PointFromRoot(point))
     }
     fn Resize(
         &self,
@@ -380,7 +379,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
             state
                 .Layout()
                 .borrow()
-                .PlanPointerResize(area, self.PointFromRoot(point), transform);
+                .Pointer().PlanPointerResize(area, self.PointFromRoot(point), transform);
         let Some(plan) = plan else {
             return Ok(());
         };

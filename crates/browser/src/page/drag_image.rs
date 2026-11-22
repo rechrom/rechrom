@@ -89,7 +89,7 @@ impl DraggedNode {
             tree.SetNodeDragged(
                 node,
                 dragged,
-                layout.MouseCoordinateLayout(tree.Node(node).Id()).is_some(),
+                layout.Pointer().MouseCoordinateLayout(tree.Node(node).Id()).is_some(),
             );
             current = if let Some(child) = tree.Node(node).Children().first() {
                 Some(*child)
@@ -143,7 +143,7 @@ impl DragVisualViewportClip for Viewport<'_> {
             .0
             .layout_engine
             .borrow()
-            .MouseLayoutViewportScrollOffsetInt()
+            .Pointer().MouseLayoutViewportScrollOffsetInt()
             .unwrap_or_default();
         foundation::gfx::Rect::new(
             foundation::gfx::Point::new(rect.x() + scroll.0, rect.y() + scroll.1),
@@ -202,8 +202,8 @@ impl PageMouseFrameGeometry {
         let geometry = {
             let layout = state.layout_engine.borrow();
             layout
-                .MouseCoordinateLayout(node)
-                .and_then(|source| layout.DragNodeImageGeometry(&source))
+                .Pointer().MouseCoordinateLayout(node)
+                .and_then(|source| layout.Pointer().DragNodeImageGeometry(&source))
         };
         let Some(geometry) = geometry else {
             return Ok(None);
@@ -281,7 +281,7 @@ impl PageMouseFrameGeometry {
         let Some(facts) = state
             .layout_engine
             .borrow()
-            .MouseCoordinateLayout(node)
+            .Pointer().MouseCoordinateLayout(node)
             .and_then(|source| source.DragResourceImageFacts())
         else {
             return Ok(None);

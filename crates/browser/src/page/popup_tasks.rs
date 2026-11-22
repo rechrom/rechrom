@@ -358,7 +358,7 @@ impl GestureTimerServices for PageGestureTimerServices {
             return Vec::new();
         };
         let runtime = state.scrollbar_scroll_runtime.borrow().clone();
-        let areas = state.layout_engine.borrow().RegisteredScrollableAreas();
+        let areas = state.layout_engine.borrow().Pointer().RegisteredScrollableAreas();
         areas
             .into_iter()
             .map(|area| {

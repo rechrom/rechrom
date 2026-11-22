@@ -88,6 +88,12 @@ impl EngineMutation for LayoutEngine {
 
     #[inline(never)]
     fn apply_mutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
+        // Wave E: pointer. Scrollbar/resizer commands act on their resident
+        // scrollable-area owner only and never touch mutation bookkeeping.
+        let mutation = match mutation {
+            LayoutMutation::Pointer(pointer) => return self.ApplyPointerMutation(pointer),
+            mutation => mutation,
+        };
         // A cancelled/restarted timer has no source mutation. Reject it before
         // clearing any retained paint/scroll/local-layout bookkeeping.
         if let LayoutMutation::PasswordEchoTimerFired(token) = &mutation {
@@ -568,6 +574,8 @@ impl EngineMutation for LayoutEngine {
                     false
                 }
             }
+            // Wave E: pointer. Dispatched at the top of this function.
+            LayoutMutation::Pointer(_) => unreachable!("pointer mutation dispatched first"),
         }
     }
 }

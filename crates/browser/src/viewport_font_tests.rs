@@ -53,7 +53,7 @@ fn shape(page: &Page) -> *const font_engine::fonts::shaping::shape_result::Shape
         })
         .unwrap();
     let engine = page.GetLayoutEngine();
-    let tree = engine.GetLayoutTree().unwrap();
+    let tree = engine.Pointer().ResidentLayoutTree().unwrap();
     let root = tree.Root() as *const LayoutObject as *mut LayoutObject;
     let mut object = root;
     while !object.is_null() {
