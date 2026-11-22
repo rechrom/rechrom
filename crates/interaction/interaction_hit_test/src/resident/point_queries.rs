@@ -17,8 +17,7 @@
 use ::layout::fragment::ResidentBoxGeometry as _;
 use super::{ResidentCursorGeometry, ResidentCursorGeometryError};
 use crate::core::layout::hit_test_location::HitTestLocation;
-use foundation::{gfx, DynamicTo, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize};
-use ::layout::object::LayoutBoxModelObject;
+use foundation::{gfx, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize};
 use ::layout::scroll::{OverflowControlHit, Scrollbar};
 use ::layout::editing::DocumentSelectionPosition;
 use ::layout::paint::{FragmentPaintData, PaintFragmentCursor};
@@ -203,16 +202,8 @@ impl<'a> PointQuery<'a> {
             if inner {
                 // Source: only the descendant border-shape clip receives the
                 // LayoutBox owner's overflow-clip-margin outsets.
-                let object = cursor.Cursor().GetLayoutObject();
-                if let Some(box_) = unsafe {
-                    foundation::DynamicTo::<::layout::object::LayoutBox>(
-                        object,
-                    )
-                    .as_ref()
-                } {
-                    if box_.ShouldApplyOverflowClipMargin() {
-                        rect.Expand(&box_.BorderOutsetsForClipping());
-                    }
+                if let Some(outsets) = cursor.OverflowClipMarginBorderOutsets() {
+                    rect.Expand(&outsets);
                 }
             }
             return match self.geometry.BorderShapeOuterPath(cursor, rect) {
@@ -375,11 +366,7 @@ fn OverflowControlAt(
     point: Offset,
     absolute: Offset,
 ) -> OverflowControlHit {
-    let object = fragment.Cursor().Cursor().GetLayoutObject();
-    let Some(box_) = (unsafe { DynamicTo::<LayoutBoxModelObject>(object).as_ref() }) else {
-        return OverflowControlHit::None;
-    };
-    let Some(area) = (unsafe { box_.GetScrollableArea().as_ref() }) else {
+    let Some(area) = fragment.Cursor().ScrollableArea() else {
         return OverflowControlHit::None;
     };
     // The source owning area decides which control was hit and returns that

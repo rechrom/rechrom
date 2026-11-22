@@ -312,7 +312,7 @@ pub fn HitTestCulledInline(
     cursor: InlineCursor<'_, ()>,
 ) -> NativeHitTestResult {
     let object = (target as &dyn std::any::Any)
-        .downcast_ref::<::layout::object::LayoutObject>()
+        .downcast_ref::<::layout::views::hit_test::LayoutObject>()
         .ok_or(NativeHitTestRequiredPort::MissingLayoutObject)?;
     let parent_item = match cursor.Current() {
         Some(FragmentItemRef::Resident(item)) => item,

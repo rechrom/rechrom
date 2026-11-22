@@ -1092,6 +1092,67 @@ impl<'a> PaintFragmentCursor<'a> {
             .expect("layout result handle has no committed root paint input")
     }
 
+    /// Hit-test fact: the cursor LayoutObject's own scrollable area, when it
+    /// is a LayoutBoxModelObject with one (box_fragment_painter.cc
+    /// HitTestOverflowControl reads GetScrollableArea() of the fragment's
+    /// box).
+    #[inline]
+    pub fn ScrollableArea(
+        self,
+    ) -> Option<&'a crate::internal::layout_scrollable_area::PaintLayerScrollableArea> {
+        let object = self.source.GetLayoutObject();
+        let box_ = unsafe { foundation::DynamicTo::<LayoutBoxModelObject>(object).as_ref() }?;
+        unsafe { box_.GetScrollableArea().as_ref() }
+    }
+
+    /// Hit-test fact: the LayoutBox border outsets for clipping when the
+    /// cursor LayoutObject is a LayoutBox that applies overflow-clip-margin
+    /// (BoxFragmentPainter::NodeAtPoint's descendant border-shape clip).
+    #[inline]
+    pub fn OverflowClipMarginBorderOutsets(
+        self,
+    ) -> Option<layout_geometry::geometry::box_strut::PhysicalBoxStrut> {
+        let object = self.source.GetLayoutObject();
+        let box_ = unsafe {
+            foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).as_ref()
+        }?;
+        box_.ShouldApplyOverflowClipMargin()
+            .then(|| box_.BorderOutsetsForClipping())
+    }
+
+    /// The physical fragment's GetSelfOrContainerLayoutObject(), or the inline
+    /// item's LayoutObject: the owner hit-test services query per fragment.
+    #[inline]
+    fn SelfOrContainerLayoutObject(self) -> *const LayoutObject {
+        match self.source {
+            FragmentCursor::Physical { fragment, .. } => {
+                fragment.GetSelfOrContainerLayoutObject() as *const LayoutObject
+            }
+            FragmentCursor::Inline { item, .. } => item.GetLayoutObject() as *const LayoutObject,
+        }
+    }
+
+    /// [`Self::ScrollableArea`] of the self-or-container LayoutObject
+    /// (paint_layer_scrollable_area.cc HitTestOverflowControls caller).
+    #[inline]
+    pub fn SelfOrContainerScrollableArea(
+        self,
+    ) -> Option<&'a crate::internal::layout_scrollable_area::PaintLayerScrollableArea> {
+        let object = unsafe { self.SelfOrContainerLayoutObject().as_ref() }?;
+        let box_ = unsafe { foundation::DynamicTo::<LayoutBoxModelObject>(object).as_ref() }?;
+        unsafe { box_.GetScrollableArea().as_ref() }
+    }
+
+    /// LayoutBoxModelObject::ApplyFiltersToRect of the self-or-container
+    /// LayoutObject (PaintLayer hit testing of filtered layers). None when
+    /// that owner is not a box model object.
+    #[inline]
+    pub fn SelfOrContainerApplyFiltersToRect(self, rect: &PhysicalRect) -> Option<PhysicalRect> {
+        let object = unsafe { self.SelfOrContainerLayoutObject().as_ref() }?;
+        let box_ = unsafe { foundation::DynamicTo::<LayoutBoxModelObject>(object).as_ref() }?;
+        Some(box_.ApplyFiltersToRect(rect))
+    }
+
     pub fn SvgContextReferenceBox(self) -> Option<foundation::gfx::RectF> {
         let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
         let query = unsafe { object.FactorySet().as_ref() }?.svg_context_reference_box?;

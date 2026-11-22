@@ -3,8 +3,7 @@
 //! invalidates the entire query before its tentative result can be published.
 use super::*;
 use crate::core::layout::native_hit_test::{NativeHitTestRequiredPort, NativeHitTestResult};
-use foundation::{layout_hit_test::LayoutHitTestKind as Kind, DynamicTo};
-use ::layout::object::LayoutBoxModelObject;
+use foundation::layout_hit_test::LayoutHitTestKind as Kind;
 use ::layout::input::Node;
 use ::layout::scroll::OverflowControlHit;
 use ::layout::output::NativeHitTestCursor;
@@ -304,9 +303,9 @@ impl ResidentHitTestServices<()> for ResidentQueryServices<'_> {
         cursor: PaintFragmentCursor<'_>,
         rect: PhysicalRect,
     ) -> PhysicalRect {
-        unsafe { DynamicTo::<LayoutBoxModelObject>(self.Object(cursor)).as_ref() }
+        cursor
+            .SelfOrContainerApplyFiltersToRect(&rect)
             .expect("filtered fragment has a box model owner")
-            .ApplyFiltersToRect(&rect)
     }
     fn TextCombineBounds(
         &self,
@@ -368,12 +367,7 @@ impl ResidentHitTestServices<()> for ResidentQueryServices<'_> {
         {
             return false;
         }
-        let Some(box_) =
-            (unsafe { DynamicTo::<LayoutBoxModelObject>(self.Object(cursor)).as_ref() })
-        else {
-            return false;
-        };
-        let Some(area) = (unsafe { box_.GetScrollableArea().as_ref() }) else {
+        let Some(area) = cursor.SelfOrContainerScrollableArea() else {
             return false;
         };
         // Source paint_layer_scrollable_area.cc:2243-2280. Preserve the

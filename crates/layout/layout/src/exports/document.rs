@@ -14,6 +14,12 @@ pub mod lifecycle {
 
 pub mod mutation {
     pub use layout_assembly::layout_engine::{LayoutMutation, LayoutTreeUpdate};
+    // Chromium's LayoutTreeBuilder (dom_to_layout/layout_object_tree_builder.cc,
+    // layout_tree_builder.h) holds the parent LayoutObject* it attaches under
+    // and checks its class (LayoutSVGInline::IsChildAllowed). LayoutTreeUpdate
+    // lends and returns those parents, so DOM's builder names them here, as
+    // part of the boundary-3 attach transaction.
+    pub use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
 }
 
 pub mod input {
@@ -62,7 +68,5 @@ pub mod editing {
 
 pub mod scroll {}
 
-pub mod object {
-    pub use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-    pub use layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope;
-}
+// LayoutObject/LayoutObjectClass moved to `mutation` (tree-builder parents).
+pub mod object {}

@@ -12,7 +12,7 @@ use layout::input::{
     SvgViewBoxData, TextAreaSizing, TextFieldSizing,
 };
 use layout::mutation::{LayoutMutation, LayoutTreeUpdate};
-use layout::object::LayoutObject;
+use layout::mutation::LayoutObject;
 #[cfg(test)]
 use layout::LayoutEngine;
 use layout_style::style::appearance::AppearanceValue;
