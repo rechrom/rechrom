@@ -23,9 +23,6 @@ unsafe extern "Rust" {
         this: &LayoutTextFragment,
         position: &Position,
     ) -> Option<u32>;
-    fn LayoutTextFragmentBlockForAccompanyingFirstLetter(
-        this: &LayoutTextFragment,
-    ) -> *mut LayoutBlock;
     fn LayoutTextFragmentUpdateHitTestResult(
         this: &LayoutTextFragment,
         result: &mut HitTestResult,
@@ -215,10 +212,6 @@ impl LayoutTextFragment {
         self.CheckIsNotDestroyed();
         self.text_.InvalidateInlineItems();
         unsafe { LayoutTextInsertedIntoTree(&mut self.text_) }
-    }
-    // cpp: layoutng_inline/layout_text_fragment.h:119-124
-    pub fn BlockForAccompanyingFirstLetter(&self) -> *mut LayoutBlock {
-        unsafe { LayoutTextFragmentBlockForAccompanyingFirstLetter(self) }
     }
     // cpp: layoutng_inline/layout_text_fragment_layout.cc:101-109
     pub fn PreviousCharacter(&self) -> UChar {

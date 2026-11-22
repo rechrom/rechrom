@@ -17633,20 +17633,6 @@ impl ComputedStyleBuilderBase {
     }
 }
 
-// cpp: layoutng_style/style/computed_style_base.h:17643
-// The generated declaration has no definition in the supplied source tree.
-unsafe extern "Rust" {
-    fn ComputedStyleBuilderBaseResetTapHighlightColor(builder: *mut ComputedStyleBuilderBase);
-}
-
-#[allow(non_snake_case)]
-impl ComputedStyleBuilderBase {
-    // cpp: layoutng_style/style/computed_style_base.h:17643
-    pub fn ResetTapHighlightColor(&mut self) {
-        unsafe { ComputedStyleBuilderBaseResetTapHighlightColor(self) }
-    }
-}
-
 // cpp: foundation/style_values/style/computed_style_base_constants.h:684-696
 fn decode_gettextalign_bits(bits: u32) -> ETextAlign {
     match bits {
@@ -18328,18 +18314,6 @@ impl ComputedStyleBuilderBase {
         unsafe { &mut *data }.set_text_emphasis_mark_bits(TextEmphasisMark::kNone as u32);
     }
 }
-// cpp: layoutng_style/style/computed_style_base.h:17947
-unsafe extern "Rust" {
-    fn ComputedStyleBuilderBaseResetTextEmphasisPosition(builder: *mut ComputedStyleBuilderBase);
-}
-#[allow(non_snake_case)]
-impl ComputedStyleBuilderBase {
-    // cpp: layoutng_style/style/computed_style_base.h:17947
-    pub fn ResetTextEmphasisPosition(&mut self) {
-        unsafe { ComputedStyleBuilderBaseResetTextEmphasisPosition(self) }
-    }
-}
-
 #[allow(non_snake_case)]
 impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:17952-17955
@@ -25781,21 +25755,6 @@ pub struct ComputedStyleBaseDebugDiff {
 
 #[allow(non_snake_case)]
 impl ComputedStyleBase {
-    // cpp: layoutng_style/style/computed_style_base.h:4883-4897
-    pub fn TransitionAllDiff(a: &ComputedStyle, b: &ComputedStyle) -> CSSBitset {
-        unsafe { ComputedStyleBaseTransitionAllDiff(a, b) }
-    }
-
-    // cpp: layoutng_style/style/computed_style_base.h:4897
-    pub fn TransitionAllWithDiscreteDiff(a: &ComputedStyle, b: &ComputedStyle) -> CSSBitset {
-        unsafe { ComputedStyleBaseTransitionAllWithDiscreteDiff(a, b) }
-    }
-
-    // cpp: layoutng_style/style/computed_style_base.h:5457-5469
-    pub fn FindChangedGroups(&self, other: &ComputedStyleBase) -> Vector<(String, usize)> {
-        unsafe { ComputedStyleBaseFindChangedGroups(self, other) }
-    }
-
     // cpp: out/Min/gen/third_party/blink/renderer/core/style/computed_style_base.cc:323-1732
     // The generated bit assignment is preserved for every compared field.
     pub fn FieldInvalidationDiff(a: &ComputedStyle, b: &ComputedStyle) -> u64 {
@@ -28265,18 +28224,6 @@ impl ComputedStyleBase {
 }
 
 unsafe extern "Rust" {
-    // cpp: layoutng_style/style/computed_style_base.h:4896
-    fn ComputedStyleBaseTransitionAllDiff(a: &ComputedStyle, b: &ComputedStyle) -> CSSBitset;
-    // cpp: layoutng_style/style/computed_style_base.h:4897
-    fn ComputedStyleBaseTransitionAllWithDiscreteDiff(
-        a: &ComputedStyle,
-        b: &ComputedStyle,
-    ) -> CSSBitset;
-    // cpp: layoutng_style/style/computed_style_base.h:5468-5469
-    fn ComputedStyleBaseFindChangedGroups(
-        style: &ComputedStyleBase,
-        other: &ComputedStyleBase,
-    ) -> Vector<(String, usize)>;
     // cpp: layoutng_style/style/computed_style_base.h:5451
     #[cfg(debug_assertions)]
     fn ComputedStyleBaseDebugFieldToString(field: ComputedStyleBaseDebugField) -> String;

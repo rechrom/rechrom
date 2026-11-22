@@ -261,29 +261,14 @@ impl ComputedStyle {
         }
     }
 
-    // cpp: layoutng_style/style/computed_style.h:778
-    pub fn ListStyleStringValue(&self) -> &AtomicString {
-        unsafe { &*ComputedStyleListStyleStringValue(self) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:787-789
     pub fn MarkerShouldBeInside(&self, parent: &Element, marker_style: &DisplayStyle<'_>) -> bool {
         unsafe { ComputedStyleMarkerShouldBeInside(self, parent, marker_style) }
     }
 
-    // cpp: layoutng_style/style/computed_style.h:1459
-    pub fn CanRenderBorderImage(&self) -> bool {
-        unsafe { ComputedStyleCanRenderBorderImage(self) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:2548
     pub fn IsRenderedInTopLayer(&self, element: &Element) -> bool {
         unsafe { ComputedStyleIsRenderedInTopLayer(self, element) }
-    }
-
-    // cpp: layoutng_style/style/computed_style.h:821
-    pub fn HighlightPseudoElementStylesDependOnRelativeUnits(&self) -> bool {
-        unsafe { ComputedStyleHighlightPseudoElementStylesDependOnRelativeUnits(self) }
     }
 
     // cpp: third_party/blink/renderer/core/style/computed_style.cc:583-611
@@ -306,20 +291,9 @@ impl ComputedStyle {
             .any(|(_, style)| unsafe { &*style.Get() }.HasContainerRelativeValue())
     }
 
-    // cpp: layoutng_style/style/computed_style.h:823
-    pub fn HighlightPseudoElementStylesHaveVariableReferences(&self) -> bool {
-        unsafe { ComputedStyleHighlightPseudoElementStylesHaveVariableReferences(self) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:2735
     pub fn HasPropertyDependingOnCurrentColor(&self) -> bool {
         self.HasPropertyDependingOnCurrentColorSource()
-    }
-
-    // C++ FunctionRef also borrows its callable and permits captures.
-    // cpp: layoutng_style/style/computed_style.h:819
-    pub fn DependsOnFunc(&self, func: &dyn Fn(&ComputedStyle) -> bool) -> bool {
-        unsafe { ComputedStyleDependsOnFunc(self, func) }
     }
 
     // cpp: layoutng_style/style/computed_style.h:2762
@@ -659,14 +633,6 @@ impl ComputedStyle {
         ))
     }
 
-    // cpp: layoutng_style/style/computed_style.h:414-417
-    pub fn DiffAffectsContainerQueries(
-        old_style: *const ComputedStyle,
-        new_style: *const ComputedStyle,
-    ) -> bool {
-        unsafe { ComputedStyleDiffAffectsContainerQueries(old_style, new_style) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:419-422
     pub fn NeedsReattachLayoutTree(
         element: &impl LayoutTreeElement,
@@ -905,28 +871,12 @@ impl ComputedStyle {
             .InheritedEqualIncludingInheritedVariables(&other.base_)
     }
 
-    // cpp: layoutng_style/style/computed_style.h:953
-    pub fn CopyChildDependentFlagsFrom(&self, other: &ComputedStyle) {
-        unsafe { ComputedStyleCopyChildDependentFlagsFrom(self, other) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:971-972
     pub fn HasVariables(&self) -> bool {
         // Source: core/style/computed_style.cc:2260-2270.
         !self.InheritedVariables().IsEmpty()
             || !self.NonInheritedVariables().IsEmpty()
             || unsafe { self.InitialData().as_ref() }.is_some_and(|data| data.HasInitialVariables())
-    }
-
-    // C++ wtf_size_t is a 32-bit count.
-    // cpp: layoutng_style/style/computed_style.h:973
-    pub fn GetVariableNamesCount(&self) -> u32 {
-        unsafe { ComputedStyleGetVariableNamesCount(self) }
-    }
-
-    // cpp: layoutng_style/style/computed_style.h:974
-    pub fn GetVariableNames(&self) -> &foundation::Vector<AtomicString> {
-        unsafe { &*ComputedStyleGetVariableNames(self) }
     }
 
     // cpp: layoutng_style/style/computed_style.h:975
@@ -3052,24 +3002,6 @@ impl ComputedStyle {
         unsafe { ComputedStyleVisitedDependentColor(self, color_property, is_current_color) }
     }
 
-    // C++ overload with an explicitly supplied unvisited color.
-    // cpp: layoutng_style/style/computed_style.h:2405-2408
-    pub fn VisitedDependentColorWithUnvisited(
-        &self,
-        unvisited_color: &Color,
-        color_property: &Longhand,
-        is_current_color: Option<&mut bool>,
-    ) -> Color {
-        unsafe {
-            ComputedStyleVisitedDependentColorWithUnvisited(
-                self,
-                unvisited_color,
-                color_property,
-                is_current_color,
-            )
-        }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:2410-2412
     pub fn VisitedDependentGapColor(&self, gap_color: &StyleColor, is_column_rule: bool) -> Color {
         let unvisited = if self.ShouldForceColor(gap_color) {
@@ -3853,11 +3785,6 @@ impl ComputedStyle {
     // The body is owned by layoutng/internal/form_control_sizing_service.cc.
     // Its Rust extension trait is implemented in that package so this crate
     // does not invent a distinct Node identity or unresolved forwarding body.
-
-    // cpp: layoutng_style/style/computed_style.h:2605-2607
-    pub fn HasAnimationTrigger(&self) -> bool {
-        unsafe { ComputedStyleHasAnimationTrigger(self) }
-    }
 
     // cpp: layoutng_style/style/computed_style.h:2609
     pub fn HasBaseEffectiveAppearance(&self) -> bool {
@@ -5054,16 +4981,6 @@ impl ComputedStyleBuilder {
         unsafe { &mut *ComputedStyleBuilderMutableNonInheritedVariables(self) }
     }
 
-    // cpp: layoutng_style/style/computed_style.h:3589
-    pub fn SetInheritedVariablesFrom(&mut self, style: *const ComputedStyle) {
-        unsafe { ComputedStyleBuilderSetInheritedVariablesFrom(self, style) }
-    }
-
-    // cpp: layoutng_style/style/computed_style.h:3590
-    pub fn SetNonInheritedVariablesFrom(&mut self, style: *const ComputedStyle) {
-        unsafe { ComputedStyleBuilderSetNonInheritedVariablesFrom(self, style) }
-    }
-
     // cpp: layoutng_style/style/computed_style.h:3591-3599
     pub fn SetVariableData(
         &mut self,
@@ -5137,46 +5054,23 @@ unsafe extern "Rust" {
         style: &ComputedStyle,
         is_current_color: Option<&mut bool>,
     ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:819
-    fn ComputedStyleDependsOnFunc(
-        style: &ComputedStyle,
-        func: &dyn Fn(&ComputedStyle) -> bool,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2762
     fn ComputedStyleDecorationColorIncludingFallback(
         style: &ComputedStyle,
         visited_link: bool,
     ) -> StyleColor;
-    // cpp: layoutng_style/style/computed_style.h:2786-2787
-    fn ComputedStyleDiffNeedsRecomputeVisualOverflow(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-        field_diff: u64,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2793-2794
     fn ComputedStylePropertiesEqual(
         style: &ComputedStyle,
         properties: &foundation::Vector<CSSPropertyID>,
         other: &ComputedStyle,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:821
-    fn ComputedStyleHighlightPseudoElementStylesDependOnRelativeUnits(
-        style: &ComputedStyle,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:823
-    fn ComputedStyleHighlightPseudoElementStylesHaveVariableReferences(
-        style: &ComputedStyle,
-    ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:778
-    fn ComputedStyleListStyleStringValue(style: &ComputedStyle) -> *const AtomicString;
     // cpp: layoutng_style/style/computed_style.h:787-789
     fn ComputedStyleMarkerShouldBeInside(
         style: &ComputedStyle,
         parent: &Element,
         marker_style: &DisplayStyle<'_>,
     ) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:1459
-    fn ComputedStyleCanRenderBorderImage(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2548
     fn ComputedStyleIsRenderedInTopLayer(style: &ComputedStyle, element: &Element) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2401-2403
@@ -5184,19 +5078,6 @@ unsafe extern "Rust" {
         style: &ComputedStyle,
         color_property: &Longhand,
         is_current_color: Option<&mut bool>,
-    ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:2405-2408
-    fn ComputedStyleVisitedDependentColorWithUnvisited(
-        style: &ComputedStyle,
-        unvisited_color: &Color,
-        color_property: &Longhand,
-        is_current_color: Option<&mut bool>,
-    ) -> Color;
-    // cpp: layoutng_style/style/computed_style.h:2410-2412
-    fn ComputedStyleVisitedDependentGapColor(
-        style: &ComputedStyle,
-        gap_color: &StyleColor,
-        is_column_rule: bool,
     ) -> Color;
     // cpp: layoutng_style/style/computed_style.h:326
     fn ComputedStyleGetVariableNamesCache(
@@ -5206,48 +5087,18 @@ unsafe extern "Rust" {
     fn ComputedStyleEnsureVariableNamesCache(
         style: &ComputedStyle,
     ) -> *mut foundation::Vector<AtomicString>;
-    // cpp: layoutng_style/style/computed_style.h:1360
-    // cpp: layoutng_style/style/computed_style.h:2605-2607
-    fn ComputedStyleHasAnimationTrigger(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2609
     // cpp: layoutng_style/style/computed_style.h:3544-3545
     fn ComputedStyleBuilderAddPaintImage(
         builder: &mut ComputedStyleBuilder,
         image: *mut StyleImage,
     );
-    // cpp: layoutng_style/style/computed_style.h:920-922
-    // cpp: layoutng_style/style/computed_style.h:928-931
-    // cpp: layoutng_style/style/computed_style.h:933-936
-    // cpp: layoutng_style/style/computed_style.h:938
-    // cpp: layoutng_style/style/computed_style.h:939
-    // cpp: layoutng_style/style/computed_style.h:940
-    // cpp: layoutng_style/style/computed_style.h:941
-    // cpp: layoutng_style/style/computed_style.h:942
-    // cpp: layoutng_style/style/computed_style.h:953
-    fn ComputedStyleCopyChildDependentFlagsFrom(style: &ComputedStyle, other: &ComputedStyle);
-    // cpp: layoutng_style/style/computed_style.h:973
-    fn ComputedStyleGetVariableNamesCount(style: &ComputedStyle) -> u32;
-    // cpp: layoutng_style/style/computed_style.h:974
-    fn ComputedStyleGetVariableNames(
-        style: &ComputedStyle,
-    ) -> *const foundation::Vector<AtomicString>;
-    // cpp: layoutng_style/style/computed_style.h:410-412
-    // cpp: layoutng_style/style/computed_style.h:414-417
-    fn ComputedStyleDiffAffectsContainerQueries(
-        old_style: *const ComputedStyle,
-        new_style: *const ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:2363-2365
     fn ComputedStyleGetBorderEdgeInfo(
         style: &ComputedStyle,
         edges: &mut BorderEdgeArray,
         sides: PhysicalBoxSides,
     );
-    // cpp: layoutng_style/style/computed_style.h:1870
-    fn ComputedStyleTextDecorationVisualOverflowChanged(
-        style: &ComputedStyle,
-        other: &ComputedStyle,
-    ) -> bool;
     // cpp: layoutng_style/style/computed_style.h:1872
     // cpp: layoutng_style/style/computed_style.h:1687-1690
     fn ComputedStyleShouldApplyAnyContainment(
@@ -5259,8 +5110,6 @@ unsafe extern "Rust" {
     fn ComputedStyleCanMatchSizeContainerQueries(style: &ComputedStyle, element: &Element) -> bool;
     // cpp: layoutng_style/style/computed_style.h:1731-1733
     fn ComputedStyleIsInterleavingRoot(style: *const ComputedStyle) -> bool;
-    // cpp: layoutng_style/style/computed_style.h:2068-2072
-    fn ComputedStyleHas3DTransformOperation(style: &ComputedStyle) -> bool;
     // cpp: layoutng_style/style/computed_style.h:456
     fn ComputedStyleGetBaseImportantSet(style: &ComputedStyle) -> *const CSSBitset;
     // cpp: layoutng_style/style/computed_style.h:3585-3586
@@ -5276,15 +5125,6 @@ unsafe extern "Rust" {
     fn ComputedStyleBuilderMutableNonInheritedVariables(
         builder: &mut ComputedStyleBuilder,
     ) -> *mut StyleNonInheritedVariables;
-    // cpp: layoutng_style/style/computed_style.h:3589-3590
-    fn ComputedStyleBuilderSetInheritedVariablesFrom(
-        builder: &mut ComputedStyleBuilder,
-        style: *const ComputedStyle,
-    );
-    fn ComputedStyleBuilderSetNonInheritedVariablesFrom(
-        builder: &mut ComputedStyleBuilder,
-        style: *const ComputedStyle,
-    );
 }
 
 #[allow(non_snake_case)]

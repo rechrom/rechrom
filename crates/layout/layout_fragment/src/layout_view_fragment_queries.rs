@@ -79,18 +79,4 @@ impl LayoutView {
     ) {
         unsafe { LayoutViewMapAncestorToLocalProvider(self, ancestor, state, flags) }
     }
-
-    #[inline(never)]
-    pub fn MapLocalToAncestor(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: MapCoordinatesFlags,
-    ) {
-        unsafe { LayoutViewMapLocalToAncestorProvider(self, ancestor, state, flags) }
-    }
-
-    pub fn GetViewTransitionRoot(&self) -> *mut LayoutViewTransitionRoot {
-        unsafe { LayoutViewGetViewTransitionRootProvider(self) }
-    }
 }

@@ -232,12 +232,6 @@ impl BasicShapeEllipse {
         &self.radius_y_
     }
 
-    // cpp: layoutng_style/style/basic_shapes.h:181-182
-    // No definition is supplied in this package.
-    pub fn ResolveRadii(&self, center: &gfx::PointF, box_size: &gfx::SizeF) -> gfx::SizeF {
-        unsafe { BasicShapeEllipseResolveRadii(self, center, box_size) }
-    }
-
     // cpp: layoutng_style/style/basic_shapes.h:184-185
     pub fn SetRadiusX(&mut self, radius_x: BasicShapeRadius) {
         self.radius_x_ = radius_x;
@@ -495,25 +489,10 @@ unsafe extern "Rust" {
         center: &gfx::PointF,
         size: &gfx::SizeF,
     ) -> f32;
-    fn BasicShapeEllipseResolveRadii(
-        value: &BasicShapeEllipse,
-        center: &gfx::PointF,
-        size: &gfx::SizeF,
-    ) -> gfx::SizeF;
     fn BasicShapeEllipseFloatValueForRadiusInBox(
         value: &BasicShapeEllipse,
         radius: &BasicShapeRadius,
         center: f32,
         width_or_height: f32,
     ) -> f32;
-    fn BasicShapePolygonGetPath(
-        value: &BasicShapePolygon,
-        rect: &gfx::RectF,
-        zoom: f32,
-        scale: f32,
-    ) -> Path;
-    fn BasicShapePolygonIsEqualAssumingSameType(
-        value: &BasicShapePolygon,
-        other: &dyn BasicShape,
-    ) -> bool;
 }

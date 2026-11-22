@@ -120,9 +120,6 @@ pub use layout_algo_inline_layout_object_editing_queries::{
     AssociatedLayoutObjectOf, AssociatedLayoutObjectOfDefault,
 };
 
-#[path = "../../../layout_algo_list/src/layout_object_list_marker_queries.rs"]
-mod layout_algo_list_layout_object_list_marker_queries;
-
 #[path = "../../../layout_invalidation/src/layout_object_layer_mutation.rs"]
 mod layout_invalidation_layout_object_layer_mutation;
 
@@ -624,13 +621,6 @@ unsafe extern "Rust" {
     fn DispatchLayoutObjectRespectsCSSOverflow(object: &LayoutObject) -> bool;
     fn DispatchLayoutObjectIsVideo(object: &LayoutObject) -> bool;
     fn DispatchLayoutObjectIsLayoutEmbeddedContent(object: &LayoutObject) -> bool;
-    // LocalToAncestorQuad is declared but not defined in the supplied packages.
-    fn DispatchLayoutObjectLocalToAncestorQuad(
-        object: &LayoutObject,
-        quad: &gfx::QuadF,
-        ancestor: *const LayoutBoxModelObject,
-        mode: MapCoordinatesFlags,
-    ) -> gfx::QuadF;
     fn DispatchLayoutObjectQuadsInAncestorInternal(
         object: &LayoutObject,
         quads: &mut Vector<gfx::QuadF>,
@@ -638,16 +628,9 @@ unsafe extern "Rust" {
         mode: MapCoordinatesFlags,
         box_type: BoxQuadType,
     );
-    fn LayoutObjectAbsoluteBoundingBoxRectForUnboundedElementProvider(
-        object: &LayoutObject,
-    ) -> gfx::Rect;
     fn LayoutObjectGetCachedPseudoElementStyleProvider(
         object: &LayoutObject,
         pseudo_id: PseudoId,
-    ) -> *const ComputedStyle;
-    fn LayoutObjectGetUncachedPseudoElementStyleProvider(
-        object: &LayoutObject,
-        request: &StyleRequest,
     ) -> *const ComputedStyle;
     fn LayoutObjectDumpLayoutObjectProvider(
         object: &LayoutObject,
@@ -673,16 +656,6 @@ unsafe extern "Rust" {
     fn LayoutObjectSetLayoutNeededForbiddenScopeDestructProvider(
         scope: &mut SetLayoutNeededForbiddenScope,
     );
-    fn LayoutObjectHitTestForOcclusionProvider(
-        object: &LayoutObject,
-        rect: &PhysicalRect,
-    ) -> HitTestResult;
-    fn LayoutObjectCollectOutlineRectsAndAdvanceProvider(
-        object: &LayoutObject,
-        outline_type: OutlineType,
-        iterator: &mut AccompaniedFragmentIterator,
-    ) -> Vector<PhysicalRect>;
-    fn LayoutObjectGetDisplayLockContextProvider(object: &LayoutObject) -> *mut DisplayLockContext;
     fn ShowTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeProvider(object: *const LayoutObject);
     fn ShowLayoutTreeWithSecondProvider(object1: *const LayoutObject, object2: *const LayoutObject);
@@ -697,11 +670,6 @@ unsafe extern "Rust" {
     fn DispatchLayoutObjectFirstInlineFragmentItemIndex(object: *const LayoutObject) -> usize;
     fn DispatchLayoutObjectClearFirstInlineFragmentItemIndex(object: *mut LayoutObject);
     fn DispatchLayoutObjectSetFirstInlineFragmentItemIndex(object: *mut LayoutObject, index: usize);
-    fn DispatchLayoutObjectAnonymousHasStylePropagationOverride(object: *mut LayoutObject) -> bool;
-    fn DispatchLayoutObjectInLayoutNGInlineFormattingContextWillChange(
-        object: *mut LayoutObject,
-        value: bool,
-    );
     fn LayoutObjectPaintProvider(object: &LayoutObject, info: &PaintInfo);
     fn LayoutObjectAddDraggableRegionsProvider(
         object: &mut LayoutObject,
@@ -729,18 +697,6 @@ unsafe extern "Rust" {
         accumulated_offset: &PhysicalOffset,
         phase: HitTestPhase,
     ) -> bool;
-    fn LayoutObjectGetPropertyContainerProvider(
-        object: &LayoutObject,
-        skip_info: *mut AncestorSkipInfo,
-        state: *mut PropertyTreeStateOrAlias,
-        flags: VisualRectFlags,
-    ) -> *const LayoutObject;
-    fn LayoutObjectMapLocalToAncestorProvider(
-        object: &LayoutObject,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    );
     fn DispatchLayoutObjectAddOutlineRects(
         object: &LayoutObject,
         collector: &mut dyn OutlineRectCollector,
@@ -751,10 +707,6 @@ unsafe extern "Rust" {
     fn LayoutObjectInvalidatePaintProvider(
         object: &LayoutObject,
         context: &PaintInvalidatorContext,
-    );
-    fn LayoutObjectInvalidateDisplayItemClientsProvider(
-        object: &LayoutObject,
-        reason: PaintInvalidationReason,
     );
     fn LayoutObjectDebugRectProvider(object: &LayoutObject) -> PhysicalRect;
     fn DispatchLayoutObjectWillBeDestroyed(object: *mut LayoutObject);
@@ -803,14 +755,8 @@ unsafe extern "Rust" {
     fn DispatchLayoutObjectIsSVGShape(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGImage(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsValidColumnSpannerInTree(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectSetNeedsTransformUpdate(object: *mut LayoutObject);
-    fn DispatchLayoutObjectSetNeedsBoundariesUpdate(object: *mut LayoutObject);
     fn DispatchLayoutObjectSetNeedsTextMetricsUpdate(object: *mut LayoutObject);
     fn DispatchLayoutObjectHasNonIsolatedBlendingDescendants(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectDescendantIsolationRequirementsChanged(
-        object: *mut LayoutObject,
-        state: DescendantIsolationState,
-    );
     fn DispatchLayoutObjectLocalToSVGParentTransform(
         object: *const LayoutObject,
     ) -> AffineTransform;
@@ -819,25 +765,18 @@ unsafe extern "Rust" {
     fn DispatchLayoutObjectIsCanvas(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsCounter(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsEmbeddedObject(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsFrame(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsListMarkerImage(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsMathMLRoot(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsProgress(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsQuote(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsLayoutCustom(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsLayoutImage(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutImageReplacement(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsLayoutCustomScrollbarPart(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsRuby(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsTextControlInnerEditor(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsViewTransitionContent(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsViewTransitionRoot(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGTransformableContainer(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGViewportContainer(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGTextPath(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGTSpan(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectIsSVGResourceContainer(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGFilterPrimitive(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectVisualRectRespectsVisibility(object: *const LayoutObject) -> bool;
     fn DispatchLayoutObjectUpdateFromElement(object: *mut LayoutObject);
     fn DispatchLayoutObjectCanHaveChildren(object: *const LayoutObject) -> bool;
@@ -853,62 +792,20 @@ unsafe extern "Rust" {
         line_index: Option<usize>,
     ) -> usize;
     fn LayoutObjectAssertClearedPaintInvalidationFlagsProvider(object: *const LayoutObject);
-    fn DispatchLayoutObjectUpdateAnonymousChildStyle(
-        object: *const LayoutObject,
-        child: *const LayoutObject,
-        builder: &mut ComputedStyleBuilder,
-    );
     fn LayoutObjectSetShouldInheritContainerTimingRootProvider(
         object: *mut LayoutObject,
         inherit: bool,
     );
-    fn LayoutObjectClearPaintFlagsProvider(object: *mut LayoutObject);
     fn LayoutObjectEnsureIsReadyForPaintInvalidationProvider(object: *mut LayoutObject);
-    fn LayoutObjectDecoratedNameProvider(object: *const LayoutObject) -> BlinkString;
     fn LayoutObjectAddLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
-    fn LayoutObjectRemoveLayersProvider(object: *mut LayoutObject, parent_layer: *mut PaintLayer);
-    fn LayoutObjectMoveLayersProvider(
-        object: *mut LayoutObject,
-        old_parent: *mut PaintLayer,
-        new_parent: *mut PaintLayer,
-    );
     fn LayoutObjectFindNextLayerProvider(
         object: *mut LayoutObject,
         parent_layer: *mut PaintLayer,
         start_point: *mut LayoutObject,
         check_parent: bool,
     ) -> *mut PaintLayer;
-    fn LayoutObjectIsBackdropForOverscrollAreaParentProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsInputButtonProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectIsMenuListProvider(object: *const LayoutObject) -> bool;
     fn LayoutObjectHasClipRelatedPropertyProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsScrollMarkerProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsScrollMarkerGroupBeforeProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsListMarkerForSummaryProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectIsInListMarkerProvider(object: *const LayoutObject) -> bool;
-    fn LayoutObjectNotifyPriorityScrollAnchorStatusChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectCreateObjectProvider(
-        element: *mut Element,
-        style: &ComputedStyle,
-    ) -> *mut LayoutObject;
-    fn LayoutObjectCreateBlockFlowOrListItemProvider(
-        element: *mut Element,
-        style: &ComputedStyle,
-    ) -> *mut LayoutBlockFlow;
-    fn LayoutObjectGeneratingNodeProvider(object: *const LayoutObject) -> *mut Node;
-    fn LayoutObjectEnclosingNodeProvider(object: *const LayoutObject) -> *mut Node;
-    fn LayoutObjectScrollParentProvider(
-        object: *const LayoutObject,
-        base: *const Element,
-    ) -> *mut Element;
-    fn LayoutObjectOffsetParentProvider(
-        object: *const LayoutObject,
-        base: *const Element,
-    ) -> *mut Element;
-    fn LayoutObjectInvalidateSubtreePositionTryProvider(
-        object: *mut LayoutObject,
-        mark_style_dirty: bool,
-    );
     fn LayoutObjectVisibleToHitTestRequestProvider(
         object: *const LayoutObject,
         request: &HitTestRequest,
@@ -919,7 +816,6 @@ unsafe extern "Rust" {
     );
     fn LayoutObjectClearShouldDelayFullPaintInvalidationProvider(object: *mut LayoutObject);
     fn LayoutObjectSetShouldInvalidateSelectionProvider(object: *mut LayoutObject);
-    fn LayoutObjectInvalidateSelectionOnStyleChangeProvider(object: *mut LayoutObject);
     fn LayoutObjectSetNeedsPrePaintSubtreeWalkProvider(
         object: *mut LayoutObject,
         reasons: PrePaintSubtreeWalkReasons,
@@ -930,8 +826,6 @@ unsafe extern "Rust" {
     );
     fn LayoutObjectMarkEffectiveAllowedTouchActionChangedProvider(object: *mut LayoutObject);
     fn LayoutObjectMarkBlockingWheelEventHandlerChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectMarkSoftNavigationContextChangedProvider(object: *mut LayoutObject);
-    fn LayoutObjectMarkContainerTimingChangedProvider(object: *mut LayoutObject);
     fn MutableForPaintingSetShouldDoFullPaintInvalidationProvider(
         object: *mut LayoutObject,
         reason: PaintInvalidationReason,
@@ -941,13 +835,6 @@ unsafe extern "Rust" {
         reason: PaintInvalidationReason,
     );
     fn LayoutObjectMaybeClearIsScrollAnchorObjectProvider(object: *mut LayoutObject);
-    fn LayoutObjectSetSVGDescendantMayHaveTransformRelatedOperationsProvider(
-        object: *mut LayoutObject,
-    );
-    fn LayoutObjectUpdateAfterReinsertProvider(
-        object: *mut LayoutObject,
-        old_style: &ComputedStyle,
-    );
     fn LayoutObjectSetIsBackgroundAttachmentFixedObjectProvider(
         object: *mut LayoutObject,
         value: bool,
@@ -961,9 +848,6 @@ unsafe extern "Rust" {
     fn LayoutObjectFirstLineStyleWithoutFallbackProvider(
         object: *const LayoutObject,
     ) -> *const ComputedStyle;
-    fn LayoutObjectGetImageOrientationProvider(
-        object: *const LayoutObject,
-    ) -> RespectImageOrientationEnum;
     fn LayoutObjectAddAsImageObserverProvider(object: *mut LayoutObject, image: *mut StyleImage);
     fn LayoutObjectRemoveAsImageObserverProvider(object: *mut LayoutObject, image: *mut StyleImage);
     fn LayoutObjectUpdateImageProvider(
@@ -1411,22 +1295,8 @@ impl LayoutObject {
         self.CheckIsNotDestroyed();
     }
 
-    pub fn SetNeedsTransformUpdate(&mut self) {
-        self.CheckIsNotDestroyed();
-        // LayoutSVGHiddenContainer does not establish a painted transform.
-        if self.IsSVGHiddenContainer() {
-            return;
-        }
-        unsafe { DispatchLayoutObjectSetNeedsTransformUpdate(self) }
-    }
-
     pub fn SetNeedsBoundariesUpdateBase(&mut self) {
         self.CheckIsNotDestroyed();
-    }
-
-    pub fn SetNeedsBoundariesUpdate(&mut self) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectSetNeedsBoundariesUpdate(self) }
     }
 
     pub fn SetNeedsTextMetricsUpdateBase(&mut self) {
@@ -1452,11 +1322,6 @@ impl LayoutObject {
 
     pub fn DescendantIsolationRequirementsChangedBase(&mut self, _state: DescendantIsolationState) {
         self.CheckIsNotDestroyed();
-    }
-
-    pub fn DescendantIsolationRequirementsChanged(&mut self, state: DescendantIsolationState) {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectDescendantIsolationRequirementsChanged(self, state) }
     }
 
     // cpp: layoutng/internal/layout_object.h:1312-1315
@@ -3643,20 +3508,10 @@ impl LayoutObject {
         false
     }
 
-    pub fn IsFrame(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsFrame(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:903-906
     pub fn IsListMarkerImageBase(&self) -> bool {
         self.CheckIsNotDestroyed();
         false
-    }
-
-    pub fn IsListMarkerImage(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsListMarkerImage(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:911-914
@@ -3674,11 +3529,6 @@ impl LayoutObject {
     pub fn IsProgressBase(&self) -> bool {
         self.CheckIsNotDestroyed();
         false
-    }
-
-    pub fn IsProgress(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsProgress(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:923-926
@@ -3720,20 +3570,10 @@ impl LayoutObject {
         false
     }
 
-    pub fn IsLayoutImageReplacement(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsLayoutImageReplacement(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:963-966
     pub fn IsLayoutCustomScrollbarPartBase(&self) -> bool {
         self.CheckIsNotDestroyed();
         false
-    }
-
-    pub fn IsLayoutCustomScrollbarPart(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsLayoutCustomScrollbarPart(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:971-974
@@ -3762,11 +3602,6 @@ impl LayoutObject {
     pub fn IsViewTransitionContentBase(&self) -> bool {
         self.CheckIsNotDestroyed();
         false
-    }
-
-    pub fn IsViewTransitionContent(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsViewTransitionContent(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:1021-1024
@@ -3840,11 +3675,6 @@ impl LayoutObject {
         self.CheckIsNotDestroyed();
         false
     }
-
-    pub fn IsSVGFilterPrimitive(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { DispatchLayoutObjectIsSVGFilterPrimitive(self) }
-    }
 }
 
 impl LayoutObject {
@@ -3903,23 +3733,11 @@ impl LayoutObject {
         self.IsOutOfFlowPositioned() && self.StyleRef().GetPosition() == EPosition::kAbsolute
     }
 
-    // cpp: layoutng/internal/layout_object.h:326-326
-    pub fn DecoratedName(&self) -> BlinkString {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectDecoratedNameProvider(self) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:1051-1051
     pub fn IsHR(&self) -> bool {
         self.CheckIsNotDestroyed();
         let node = self.GetNode();
         !node.is_null() && unsafe { &*node }.InputIsHTMLHRElement()
-    }
-
-    // cpp: layoutng/internal/layout_object.h:1053-1053
-    pub fn IsInputButton(&self) -> bool {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutObjectIsInputButtonProvider(self) }
     }
 
     // cpp: layoutng/internal/layout_object.h:1054-1054

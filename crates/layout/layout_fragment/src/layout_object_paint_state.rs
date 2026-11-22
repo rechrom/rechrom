@@ -65,8 +65,4 @@ impl LayoutObject {
     pub(crate) fn SetBackgroundIsKnownToBeObscured(&mut self, value: bool) {
         unsafe { LayoutObjectSetBackgroundIsKnownToBeObscuredProvider(self, value) }
     }
-
-    pub fn GetImageOrientation(object: *const LayoutObject) -> RespectImageOrientationEnum {
-        unsafe { LayoutObjectGetImageOrientationProvider(object) }
-    }
 }

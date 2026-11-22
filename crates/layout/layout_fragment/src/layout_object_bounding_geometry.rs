@@ -107,11 +107,6 @@ impl LayoutObject {
     }
 
     #[inline(never)]
-    pub fn AbsoluteBoundingBoxRectForUnboundedElement(&self) -> gfx::Rect {
-        unsafe { LayoutObjectAbsoluteBoundingBoxRectForUnboundedElementProvider(self) }
-    }
-
-    #[inline(never)]
     pub fn AbsoluteBoundingBoxRectHandlingEmptyInline(
         &self,
         flags: MapCoordinatesFlags,

@@ -36,11 +36,6 @@ mod layout_invalidation_layout_box_model_layer_invalidation;
 
 // Declarations without supplied bodies remain typed external contracts.
 unsafe extern "Rust" {
-    fn LayoutBoxModelObjectComputeStickyPositionConstraints(
-        this: &LayoutBoxModelObject,
-        layer: &PaintLayer,
-        axes: PhysicalAxes,
-    ) -> StickyConstraintsData;
     fn LayoutBoxModelObjectVisualOverflowRectIncludingFilters(
         this: &LayoutBoxModelObject,
     ) -> PhysicalRect;
@@ -49,10 +44,6 @@ unsafe extern "Rust" {
         this: &LayoutBoxModelObject,
         rect: &PhysicalRect,
     ) -> PhysicalRect;
-    fn LayoutBoxModelObjectUpdateCanCompositeBackgroundAttachmentFixed(
-        this: &mut LayoutBoxModelObject,
-        enable: bool,
-    );
     fn LayoutBoxModelObjectAdjustedPositionRelativeTo(
         this: &LayoutBoxModelObject,
         offset: &PhysicalOffset,
@@ -214,20 +205,6 @@ impl LayoutBoxModelObject {
 }
 
 impl LayoutBoxModelObject {
-    pub fn ComputeStickyPositionConstraints(
-        &self,
-        scroll_container_layer: &PaintLayer,
-        scroll_axes: PhysicalAxes,
-    ) -> StickyConstraintsData {
-        unsafe {
-            LayoutBoxModelObjectComputeStickyPositionConstraints(
-                self,
-                scroll_container_layer,
-                scroll_axes,
-            )
-        }
-    }
-
     // cpp: layoutng/internal/layout_box_model_object.h:159-163
     // cpp: core/layout/layout_box_model_object.cc:370-373
     pub fn HasSelfPaintingLayer(&self) -> bool {
@@ -311,10 +288,6 @@ impl LayoutBoxModelObject {
 
     pub fn BackgroundTransfersToViewDefault(&self) -> bool {
         self.BackgroundTransfersToView(std::ptr::null())
-    }
-
-    pub fn UpdateCanCompositeBackgroundAttachmentFixed(&mut self, enable: bool) {
-        unsafe { LayoutBoxModelObjectUpdateCanCompositeBackgroundAttachmentFixed(self, enable) }
     }
 
     // cpp: layoutng/internal/layout_box_model_object.h:257-268

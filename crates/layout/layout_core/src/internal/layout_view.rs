@@ -107,7 +107,6 @@ unsafe extern "Rust" {
         result: &mut HitTestResult,
     ) -> bool;
     fn LayoutViewClearHitTestCacheProvider(view: &mut LayoutView);
-    fn LayoutViewCommitPendingSelectionProvider(view: &mut LayoutView);
     fn LayoutViewUpdateHitTestResultProvider(
         view: &LayoutView,
         result: &mut HitTestResult,
@@ -122,14 +121,6 @@ unsafe extern "Rust" {
         state: &mut TransformState,
         flags: MapCoordinatesFlags,
     );
-    fn LayoutViewMapLocalToAncestorProvider(
-        view: &LayoutView,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        flags: MapCoordinatesFlags,
-    );
-    fn LayoutViewGetViewTransitionRootProvider(view: &LayoutView) -> *mut LayoutViewTransitionRoot;
-    fn LayoutViewCacheScrollDimensionsProvider(view: &mut LayoutView);
 }
 
 // cpp: layoutng/internal/layout_view.h:45-47

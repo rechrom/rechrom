@@ -801,7 +801,6 @@ unsafe extern "Rust" {
         value: &CounterContentData,
         engine: &StyleEngine,
     ) -> *const CounterStyle;
-    fn CounterContentDataEquals(value: &CounterContentData, other: &dyn ContentData) -> bool;
     fn AltCounterContentDataUpdateText(
         value: &mut AltCounterContentData,
         context: &mut CountersAttachmentContext,

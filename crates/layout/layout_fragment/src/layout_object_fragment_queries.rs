@@ -8,11 +8,6 @@ use super::*;
 
 impl LayoutObject {
     #[inline(never)]
-    pub fn HitTestForOcclusion(&self, rect: &PhysicalRect) -> HitTestResult {
-        unsafe { LayoutObjectHitTestForOcclusionProvider(self, rect) }
-    }
-
-    #[inline(never)]
     pub fn HitTestAllPhases(
         &mut self,
         result: &mut HitTestResult,
@@ -132,16 +127,6 @@ impl LayoutObject {
         self.MapVisualRectInternalDispatch(ancestor, state, flags)
     }
 
-    #[inline(never)]
-    pub fn GetPropertyContainer(
-        &self,
-        skip_info: *mut AncestorSkipInfo,
-        state: *mut PropertyTreeStateOrAlias,
-        flags: VisualRectFlags,
-    ) -> *const LayoutObject {
-        unsafe { LayoutObjectGetPropertyContainerProvider(self, skip_info, state, flags) }
-    }
-
     pub fn LocalCaretRect(&self, offset: i32, shape: CaretShape) -> PhysicalRect {
         // Source virtual dispatch: layout_block.cc:507-525,
         // layout_inline.cc:253-286, layout_box.cc:3138-3183. Text and the
@@ -165,16 +150,6 @@ impl LayoutObject {
     // object-by-object hit testing does not manufacture a frame per candidate.
     pub fn VisibleToHitTestRequest(&self, request: &HitTestRequest) -> bool {
         unsafe { LayoutObjectVisibleToHitTestRequestProvider(self, request) }
-    }
-
-    #[inline(never)]
-    pub fn MapLocalToAncestor(
-        &self,
-        ancestor: *const LayoutBoxModelObject,
-        state: &mut TransformState,
-        mode: MapCoordinatesFlags,
-    ) {
-        unsafe { LayoutObjectMapLocalToAncestorProvider(self, ancestor, state, mode) }
     }
 
     // This is a specifically optimized caller-side path, so the dispatch

@@ -71,10 +71,6 @@ unsafe extern "Rust" {
         image: WrappedImagePtr,
         defer: CanDeferInvalidation,
     );
-    fn LayoutBlockPositionForPointIfOutsideAtomicInlineLevel(
-        block: *const LayoutBlock,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity;
 }
 
 // cpp: layoutng/internal/layout_block.cc:52-56
@@ -498,15 +494,6 @@ impl LayoutBlock {
             && !self.StitchedSize().IsEmpty()
             && unsafe { self.GetNode().as_ref() }
                 .is_some_and(|node| node.InputEditingFacts().ignores_content)
-    }
-
-    // cpp: layoutng/internal/layout_block.h:241-242
-    pub fn PositionForPointIfOutsideAtomicInlineLevel(
-        &self,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity {
-        self.CheckIsNotDestroyed();
-        unsafe { LayoutBlockPositionForPointIfOutsideAtomicInlineLevel(self, point) }
     }
 
     // This virtual override always returns the block's child-list member.

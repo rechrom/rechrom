@@ -24,12 +24,6 @@ impl LayoutObject {
         unsafe { LayoutObjectGetCachedPseudoElementStyleProvider(self, pseudo_id) }
     }
 
-    // cpp: layoutng/internal/layout_object.h:1672-1672
-    #[inline(never)]
-    pub fn GetUncachedPseudoElementStyle(&self, request: &StyleRequest) -> *const ComputedStyle {
-        unsafe { LayoutObjectGetUncachedPseudoElementStyleProvider(self, request) }
-    }
-
     // cpp: layoutng/internal/layout_object.h:2218-2219
     #[inline(never)]
     pub fn SetModifiedStyleOutsideStyleRecalc(
