@@ -686,6 +686,9 @@ traits. Tests excluded.
 
 ### 5.1 Lifecycle packages are below base today, and much of their code is LayoutObject members
 
+**Decided (R6):** option A, with no engine half above base. See "Status: R6
+lifecycle packages" in §7.
+
 - `layout_core/Cargo.toml` depends on the standalone crates
   `layout_invalidation`, `layout_reuse` and `layout_commit`. Base therefore
   uses their vocabulary from *below*:
@@ -865,7 +868,7 @@ The stage boundaries are a proposal (**guess**); the counts are measured.
 | R3 lifecycle | invalidation/reuse/commit: 61 LayoutObject-bound files → base, 1 → fragment (≈10.8k lines); engine phases stay above with slots; decide §5.1 (root crate + engine half) | 62 | ≈10.8k | ≈29 | trace-ownership contract; per-object hot paths must stay direct calls; `tree_update` generic closures become `dyn` |
 | R4 fragment | **done differently** (§7, R4 decision): every fragment file moved into base `layout_core/src/fragment/`, the crate deleted, `layout::result` added. Original estimate: fragment data crate (39 own + 3 standalone + 12 core + 29 algo data files (moved in R2) ≈ 82 files); 111 fragment files → base; builders → base; LayoutObject opaque handle; ≈113 base behaviours called from data → base extension traits; split `fragment_tree.rs` | ≈123 (111 up, 12 down) | ≈33.1k | 5–15 (**guess**) | the largest edge (160 items + 286 methods); `LayoutResult` embeds `ConstraintSpace` (closure into exclusions, line clamp, table/grid/custom rare data); `PaintStyle` (141 fns impl'd in fragment on a core type); fragment API churn for Paint/Interaction through the front crate |
 | R5 inline | 16 base-cited inline files → base (LayoutText/LayoutInline/… ≈3.6k lines), 6 data files → fragment (≈1.1k); 19 editing-query files → extension traits in inline (118 fns); `block_inline_layout.rs` → inline; link-time symbols → slots; drop the `translation_in_progress` gating | 23 + 19 converted | ≈4.7k moved | ≈9 | inline is 37.5k lines and has never compiled standalone; the duplicate `InlineChildLayoutContextParallelFlowBreakTokens` definition; editing API surface used by DOM/Interaction via the front crate |
-| R6 base crate | `layout_core` → `layout_base`, absorbing the assembly's real code (`block_virtual_dispatch.rs` 2.8k, `out_of_flow_element_data`, `layout_invalidation_reason_symbols`); distribute `untranslated_symbols.rs` stubs to the declaring crates (or delete them per `DEAD_CODE.md`); delete the `include!`s and `layout_algo_inline_assembly` | 5 + 2 crates removed | ≈3.5k | 0 | 783 `layout_assembly::` paths in 145 files and about 2,300 `crate::`/`super::` paths in core/fragment/inline need a scripted rewrite; MSVC needs every extern symbol defined in the linked crate set |
+| R6 base crate | `layout_core` → `layout_base`, absorbing the assembly's real code (`block_virtual_dispatch.rs` 2.8k, `out_of_flow_element_data`; `layout_invalidation_reason_symbols` went to `layout_invalidation` instead, see the R6 lifecycle status); distribute `untranslated_symbols.rs` stubs to the declaring crates (or delete them per `DEAD_CODE.md`); delete the `include!`s and `layout_algo_inline_assembly` | 5 + 2 crates removed | ≈3.5k | 0 | 783 `layout_assembly::` paths in 145 files and about 2,300 `crate::`/`super::` paths in core/fragment/inline need a scripted rewrite; MSVC needs every extern symbol defined in the linked crate set |
 | R7 front crate | `layout` builds the engine and calls every `Register`; remove the `extern crate layout_assembly as …` aliases in block; one-way Cargo graph check; README | ≈20 edited | — | 0 | the ordering of `Register` calls (the order `CreateLayoutRegistry` in `layout/src/lib.rs` documents) |
 
 ### Status: R2+R3 file relocation (done)
@@ -1181,6 +1184,100 @@ macros, and no other base → inline paths. `pub(crate)` uses were audited with
 - `cargo test -p layout_assembly` cannot link on MSVC: base's `extern "Rust"`
   declarations are defined in `layout_algo_inline` above it (already true for
   the table and forms symbols).
+
+### Status: R6 lifecycle packages (vocabulary roots + base modules) (done)
+
+**Decided layering:** shared roots → `layout_invalidation`, `layout_reuse`,
+`layout_commit` (vocabulary crates: values, traits, tree-agnostic policy,
+trace phases; no base type, no dependency on base) → base (`layout_core`,
+compiled by `layout_assembly`) → algorithm crates → facade. This is §5.1
+option A. Code that is a member of LayoutObject/LayoutBox/LayoutObjectTree/
+LayoutEngine, an impl on a base type, or a per-object hot path is base code
+in `layout_core/src/{invalidation,reuse,commit}/`. It keeps its
+`layout_<owner>_*` module name and calls the vocabulary crate's trace API,
+so sampling and trace ownership are unchanged. No behaviour change; nothing
+built yet.
+
+**Vocabulary crates now compile only their own files**, and no other crate
+compiles any of them:
+
+| crate | files (excluding `lib.rs`) |
+|---|---|
+| `layout_invalidation` (6) | `content_change_type` (`content_change_type.h`), `layout_invalidation_reason` (`layout_invalidation_reason.h`/`.cc`), `layout_invalidation_reason_symbols` (`.cc` string definitions, moved here from `layout_assembly`), `layout_invalidation_state` (`MarkingBehavior`, `layout_object.h:117-120`), `propagation` (8 `*InvalidationTree` traits + `propagate_*`), `trace` |
+| `layout_reuse` (8) | `block_formatting_context`, `cache_decision`, `layout_cache_status` (`layout_utils.h:19-30`), `layout_tree_update_stats`, `min_max_sizes` (re-export), `min_max_sizes_cache` (`min_max_sizes_cache.h`), `recent_entries`, `trace` |
+| `layout_commit` (2) | `trace`, `fragment_trace`; `lib.rs` holds `LayoutUpdateKind`, `PaintClientCommit`, `PaintCommitOutput`, the `PaintCommitBackend`/`LayoutPublicationBackend` traits and `CommitPaintResult`/`PublishLayoutResult` ordering |
+
+**Moved into base (14 files).** All named base types (`super::*` of their
+base parent, `crate::internal::*`, engine private fields) and were compiled
+only by base through a cross-package `#[path]`. None has a `// cpp:` line
+except `layout_environment_cache.rs` (`layoutng/internal/boundary/layout_boundary.cc`,
+a base file).
+
+| file | now | why base |
+|---|---|---|
+| `element_data_equivalence.rs` | `invalidation/` (child of `internal/layout_input.rs`) | `impl PartialEq for ElementData` (coherence) |
+| `input_invalidation.rs` | `invalidation/` (child of `internal/layout_object_builder.rs`) | per-object LayoutObject invalidation over the tree storage |
+| `node_input_update.rs` | `invalidation/` (same parent) | `LayoutObjectTree` private storage |
+| `tree_update.rs` | `invalidation/` (same parent, module `layout_invalidation_package`) | `LayoutObjectTree` private storage; generic `complete_update<T>` |
+| `tree_facts.rs` | `invalidation/` (child of `layout_engine.rs`) | reads `LayoutObjectFactorySet` and LayoutObject state; result cached in an engine field |
+| `engine_mutation.rs` | `invalidation/` (same parent) | `impl EngineMutation for LayoutEngine`; 87 private-field accesses |
+| `layout_environment_cache.rs` | `reuse/` (child of `internal/boundary/layout_boundary.rs`) | `layout_boundary.cc`; root `Node` environment and TLS resolver scope |
+| `paint_only_font_binding.rs` | `reuse/` (child of `layout_object_builder.rs`) | per-object style rebind |
+| `engine_output_reuse.rs` | `reuse/` (child of `layout_engine.rs`) | engine private state |
+| `cache_lookup.rs` | `reuse/` (module `layout_reuse_package`) | one direct call per box (`LayoutBox::CachedLayoutResult`) |
+| `scroll_offset_snapshot.rs` | `commit/` (child of `layout_object_builder.rs`) | tree storage |
+| `container_query_sizes.rs` | `commit/` (child of `layout_engine.rs`) | engine private state |
+| `engine_layout_publish.rs` | `commit/` (same parent) | engine private state (18 accesses) |
+| `client_commit.rs` | `commit/` (module `layout_commit_package`) | source-client and fragment traversals |
+
+**No engine phase was lifted above base, so no registry slot was added.**
+The candidate phases of §6.2 (`tree_update.*`, `node_input.*`,
+`input_invalidation`, `tree_facts`, `apply_mutation`, `has_current_output`,
+`publish.*`, `container_query_sizes`, `scroll_offsets.*`,
+`commit_paint_client_state`) are bodies of base methods
+(`LayoutEngine::ApplyMutation`/`Layout`, `LayoutObjectTree` update entry
+points) that read private engine and tree state. Lifting them would need a
+new crate above base (a `Cargo.lock` change), base fields and
+`pub(super)` items widened to `pub` (reaching into another engine's private
+state, AGENTS.md §1.6), and `dyn` closures in place of generic ones. There
+is no responsibility boundary to gain: they are the engine's own lifecycle
+steps, already attributed to their owner by module name and trace phase.
+`cached_layout_result` is per box and must stay a direct call.
+
+**Trace names unchanged.** The three literals the moved files spelled now
+come from the owning crate: `layout_invalidation::TracePhase::
+{GeometryInputMatches, FontFallbackChanged}` and
+`layout_reuse::trace::font_environment_span()` (`layout_reuse.FontEnvironment`).
+`lifecycle_trace_names_are_declared_only_by_their_owner_package` needs no
+change: no lifecycle trace literal remains outside its owner directory.
+
+**Link-time pairs.** `layout_invalidation_reason.rs` declares the
+`layout_invalidation_reason.h` arrays as `extern "C"` statics. 18 of their
+`#[no_mangle]` definitions were in `layout_assembly`; they are now the private
+`layout_invalidation::layout_invalidation_reason_symbols` module, beside the
+crate's existing `export_name = "kSvgChanged"` definition. No
+`#[no_mangle]`/`extern` pair remains between the three vocabulary crates and
+base. (Base's own `extern "Rust"` declarations in `invalidation/` pair with
+algorithm crates above base; they are outside this stage.)
+
+**Cross-package `#[path]` for these packages: 0.** The perl walk from
+`layout_assembly`, the three vocabulary crates and the facade (through
+`mod`, `#[path]` and `include!`) finds every target present, no file compiled
+twice in one crate, no orphan in the three `src/` directories or in
+`layout_core/src/{invalidation,reuse,commit}`, and each of those files
+compiled by exactly one crate.
+
+**Build risks:**
+
+- The moved files keep their parent modules and `super::*` scope, so name
+  resolution is unchanged; the only edits are `#[path]` strings, header
+  comments and three trace calls.
+- `layout_invalidation_reason_symbols` now links wherever
+  `layout_invalidation` does (also in that crate's own tests). Nothing else
+  defines those symbols, so there is no duplicate.
+- `cargo test -p layout_invalidation` can now resolve the 18 reason symbols
+  itself. Arrays that are declared but defined nowhere were already
+  unresolved before this change.
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

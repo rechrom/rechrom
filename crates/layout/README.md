@@ -983,6 +983,16 @@ so there is no fragment crate, dependency key or alias; the
 `layout_fragment.` trace prefix and the `layout_fragment_*` sampling module
 names are kept for profile continuity.
 
+`layout_invalidation`, `layout_reuse` and `layout_commit` are vocabulary
+crates below base: values, traits, tree-agnostic policy and their trace
+phases, with no base type and no dependency on base, and each compiles only
+its own `src/` files. Their LayoutObject, LayoutObjectTree and LayoutEngine
+members (tree update, node input, mutation admission, cached-result lookup,
+publication, client commit) are base modules in
+`layout_core/src/{invalidation,reuse,commit}/`. Those modules keep their
+`layout_<owner>_*` names and call the owner's trace API, so profiles still
+attribute the work to the lifecycle package.
+
 `layout_algo_inline` is a real crate above base, like the other algorithm
 packages: it depends on `layout_assembly` and registers through
 `registration::Register`. Base reaches it through `InlineLayoutSupport` and
