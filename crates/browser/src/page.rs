@@ -5239,6 +5239,7 @@ impl PageState {
             let Some(result) = state
                 .layout_engine
                 .borrow_mut()
+                .Resources()
                 .UpdateHTMLImageResource(node, update)
             else {
                 return;
@@ -7096,6 +7097,7 @@ impl Page {
                     .state
                     .layout_engine
                     .borrow_mut()
+                    .Resources()
                     .NotifyPaintResourcesChanged(&[previous], &resources);
                 trace.set("invalidated_clients", clients as f64);
             }
@@ -7177,6 +7179,7 @@ impl Page {
             self.state
                 .layout_engine
                 .borrow_mut()
+                .Resources()
                 .NotifyPaintResourcesChanged(&[previous], &resources);
         }
         Ok(changed || rebound)
@@ -7572,6 +7575,7 @@ impl Page {
                     .state
                     .layout_engine
                     .borrow_mut()
+                    .Resources()
                     .NotifyDocumentImageEnvironmentChanged(&constraints.images);
                 self.document_image_environment_dirty |= invalidated != 0;
             }

@@ -35,6 +35,10 @@
 //! several groups; all of them resolve to one re-export.
 
 mod engine;
+/// Borrowed query views over [`LayoutEngine`], one per consumer family.
+pub mod views {
+    pub mod resource;
+}
 mod engine_groups {
     mod browser;
     mod document;

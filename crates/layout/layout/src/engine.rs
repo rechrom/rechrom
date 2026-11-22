@@ -5,18 +5,17 @@
 //! only these entry points instead of the core engine's full method set.
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use foundation::{gfx, CompositorElementId, Persistent, PhysicalOffset};
 use layout_assembly::editing_state::LayoutEditingState;
 use layout_assembly::engine_assembly::LayoutAssembly;
-use layout_assembly::fragment_tree::{LayoutResultHandle, PaintResources};
-use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData, Offset, PaintImage};
+use layout_assembly::fragment_tree::LayoutResultHandle;
+use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData, Offset};
 use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
 use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity;
 use layout_assembly::internal::scrollbar::Scrollbar;
 use layout_assembly::layout_engine::{
-    ContainerQuerySizeSnapshot, HTMLImageResourceUpdate, LayoutEngine as CoreLayoutEngine,
+    ContainerQuerySizeSnapshot, LayoutEngine as CoreLayoutEngine,
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
     NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate, SuppressScrollAnchorScope,
 };
@@ -329,31 +328,6 @@ impl LayoutEngine {
     #[inline]
     pub fn GetLayoutTree(&self) -> Option<&LayoutObjectTree> {
         self.engine.GetLayoutTree()
-    }
-
-    // Resource and environment invalidations.
-
-    #[inline]
-    pub fn UpdateHTMLImageResource(
-        &mut self,
-        node_id: u64,
-        update: image_resource::ImageResourceContentUpdate,
-    ) -> Option<HTMLImageResourceUpdate> {
-        self.engine.UpdateHTMLImageResource(node_id, update)
-    }
-
-    #[inline]
-    pub fn NotifyDocumentImageEnvironmentChanged(&mut self, images: &[PaintImage]) -> usize {
-        self.engine.NotifyDocumentImageEnvironmentChanged(images)
-    }
-
-    #[inline]
-    pub fn NotifyPaintResourcesChanged(
-        &mut self,
-        previous: &[Arc<PaintResources>],
-        current: &PaintResources,
-    ) -> usize {
-        self.engine.NotifyPaintResourcesChanged(previous, current)
     }
 
     // Selection, caret and editing invalidations.
