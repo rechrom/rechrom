@@ -10,7 +10,7 @@ use dom::{
     persistent_document::{DOMNamespace, DOMNodeType},
     Document,
 };
-use layoutng::internal::{
+use paint_input_types::{
     layout_input::{
         Offset, PaintPathVerb, Size, SvgShapeData, SvgViewBoxData, TextDirection, TransformMatrix,
     },
@@ -343,7 +343,7 @@ fn Stops(
             None,
         );
         let (red, green, blue) = resolved.ToSRGB();
-        let color = layoutng::internal::layout_input_types::Color {
+        let color = paint_input_types::layout_input_types::Color {
             red,
             green,
             blue,
@@ -353,7 +353,7 @@ fn Stops(
             offset,
             color,
             source_color_space:
-                layoutng::internal::paint_input::PaintColorInterpolationSpace::kSRGB,
+                paint_input_types::paint_input::PaintColorInterpolationSpace::kSRGB,
             source_components: [red, green, blue, color.alpha],
             missing_components: 0,
             offset_length: 0.0,
@@ -743,7 +743,7 @@ fn PatternComputedStyle(style: &ResolvedNodeStyle) -> Result<&ComputedStyle, Pat
 
 fn PatternPaint(
     style: &ResolvedNodeStyle,
-) -> Result<layoutng::internal::paint_input::PaintStyleData, PatternContentError> {
+) -> Result<paint_input_types::paint_input::PaintStyleData, PatternContentError> {
     Ok(layoutng::internal::boundary::paint_style_export::Export(
         PatternComputedStyle(style)?,
         None,
@@ -751,8 +751,8 @@ fn PatternPaint(
 }
 
 fn PatternFilters(
-    filters: &[layoutng::internal::paint_input::PaintFilterOperation],
-) -> Result<Vec<layoutng::internal::paint_input::PaintFilterOperation>, PatternContentError> {
+    filters: &[paint_input_types::paint_input::PaintFilterOperation],
+) -> Result<Vec<paint_input_types::paint_input::PaintFilterOperation>, PatternContentError> {
     for filter in filters {
         if filter.r#type == PaintFilterType::kReference {
             if filter.reference_error.is_some()
@@ -773,7 +773,7 @@ fn PatternFilters(
 
 fn PushPatternFilters(
     output: &mut Vec<SvgPatternCommand>,
-    filters: &[layoutng::internal::paint_input::PaintFilterOperation],
+    filters: &[paint_input_types::paint_input::PaintFilterOperation],
 ) -> usize {
     // Nested saveLayers restore from the inside out. Push the CSS list in
     // reverse so filters still execute in authored left-to-right order.
@@ -798,14 +798,14 @@ fn PushPatternFilters(
 }
 
 fn ValidatePatternEffects(
-    paint: &layoutng::internal::paint_input::PaintStyleData,
+    paint: &paint_input_types::paint_input::PaintStyleData,
 ) -> Result<(), PatternContentError> {
     PatternFilters(&paint.filters).map(|_| ())
 }
 
 fn PatternClip(
-    paint: &layoutng::internal::paint_input::PaintStyleData,
-) -> Result<Option<Arc<layoutng::internal::paint_input::SvgClipPathGraph>>, PatternContentError> {
+    paint: &paint_input_types::paint_input::PaintStyleData,
+) -> Result<Option<Arc<paint_input_types::paint_input::SvgClipPathGraph>>, PatternContentError> {
     let Some(clip) = paint.clip_path.as_ref() else {
         return Ok(None);
     };
@@ -840,7 +840,7 @@ fn PatternMask(
     document: &Document,
     pending: &PendingStyles<'_>,
     node: usize,
-    paint: &layoutng::internal::paint_input::PaintStyleData,
+    paint: &paint_input_types::paint_input::PaintStyleData,
     resolving: &mut HashSet<usize>,
 ) -> Result<Option<Arc<SvgMaskGraph>>, PatternContentError> {
     // Consume the same computed style projection as ordinary Layout/Paint. The older
@@ -982,7 +982,7 @@ fn PatternPrimitivesWithShapes(
                 .and_then(|style| PatternPaint(style).ok())
                 .and_then(|paint| paint.transform);
             if let Some(transform) = projected_transform.as_ref() {
-                use layoutng::internal::paint_input::PaintTransformOperationKind;
+                use paint_input_types::paint_input::PaintTransformOperationKind;
                 for operation in &transform.operations {
                     let operation = match operation.kind {
                         PaintTransformOperationKind::kMatrix => operation.matrix,
@@ -1110,7 +1110,7 @@ fn PatternPrimitivesWithShapes(
             let mask = PatternMask(document, pending, node, paint, resolving)?;
             let has_mask = mask.is_some();
             let has_blend = paint.blend_mode
-                != layoutng::internal::paint_input::PaintBlendMode::kNormal
+                != paint_input_types::paint_input::PaintBlendMode::kNormal
                 || paint.isolate_blending;
             let fill_opacity = computed_style.FillOpacity();
             let stroke_opacity = computed_style.StrokeOpacity();
@@ -1347,7 +1347,7 @@ fn PatternPrimitivesWithShapes(
                 let mask = PatternMask(document, pending, node, paint, resolving)?;
                 let has_mask = mask.is_some();
                 let has_blend = paint.blend_mode
-                    != layoutng::internal::paint_input::PaintBlendMode::kNormal
+                    != paint_input_types::paint_input::PaintBlendMode::kNormal
                     || paint.isolate_blending;
                 if has_blend {
                     output.push(SvgPatternCommand::SaveLayerBlend(paint.blend_mode));
@@ -1413,11 +1413,11 @@ fn PatternPrimitivesWithShapes(
         let pattern_paint = pattern_paint.as_ref();
         let opacity = pattern_paint.map_or(1.0, |paint| paint.opacity);
         let blend_mode = pattern_paint.map_or(
-            layoutng::internal::paint_input::PaintBlendMode::kNormal,
+            paint_input_types::paint_input::PaintBlendMode::kNormal,
             |paint| paint.blend_mode,
         );
         let has_blend = pattern_paint.is_some_and(|paint| {
-            paint.blend_mode != layoutng::internal::paint_input::PaintBlendMode::kNormal
+            paint.blend_mode != paint_input_types::paint_input::PaintBlendMode::kNormal
                 || paint.isolate_blending
         });
         if has_blend {
@@ -1656,7 +1656,7 @@ fn BisectAngles(incoming: Offset, outgoing: Offset) -> f64 {
 /// and their incoming/outgoing tangents. Keep that geometry above Layout so
 /// the immutable marker instances crossing into Paint need no DOM access.
 fn MarkerPlacements(shape: &SvgShapeData) -> Vec<MarkerPlacement> {
-    if shape.geometry != layoutng::internal::layout_input::SvgShapeGeometry::kPath {
+    if shape.geometry != paint_input_types::layout_input::SvgShapeGeometry::kPath {
         return Vec::new();
     }
     fn flush(segments: &mut Vec<MarkerSegment>, output: &mut Vec<MarkerPlacement>) {

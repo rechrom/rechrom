@@ -14,6 +14,7 @@ font_engine = { path = "../../font_engine" }
 image_resource = { path = "../../image_resource" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 layoutng_style = { path = "../layoutng_style" }
+paint_input_types = { path = "../paint_input_types" }
 layout_invalidation = { path = "../layout_invalidation" }
 layout_reuse = { path = "../layout_reuse" }
 layout_commit = { path = "../layout_commit" }

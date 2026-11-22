@@ -10,6 +10,7 @@ canvas = { path = "../../canvas" }
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 image_resource = { path = "../../image_resource" }
+paint_input_types = { path = "../paint_input_types" }
 
 [lib]
 path = "src/package.rs"

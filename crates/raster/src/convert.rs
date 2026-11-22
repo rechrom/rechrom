@@ -29,7 +29,7 @@ impl ToSkia for [f64; 16] {
         *self
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input_types::Color {
+impl ToSkia for paint_input_types::layout_input_types::Color {
     type Output = target::Color;
     fn to_skia(&self) -> Self::Output {
         target::Color {
@@ -40,7 +40,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input_types::Color {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::Offset {
+impl ToSkia for paint_input_types::layout_input::Offset {
     type Output = target::Offset;
     fn to_skia(&self) -> Self::Output {
         target::Offset {
@@ -49,7 +49,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::Offset {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::Size {
+impl ToSkia for paint_input_types::layout_input::Size {
     type Output = target::Size;
     fn to_skia(&self) -> Self::Output {
         target::Size {
@@ -58,7 +58,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::Size {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::TransformMatrix {
+impl ToSkia for paint_input_types::layout_input::TransformMatrix {
     type Output = target::TransformMatrix;
     fn to_skia(&self) -> Self::Output {
         target::TransformMatrix {
@@ -66,7 +66,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::TransformMatrix {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::PaintPathVerb {
+impl ToSkia for paint_input_types::layout_input::PaintPathVerb {
     type Output = target::PaintPathVerb;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -79,7 +79,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::PaintPathVerb {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::PaintPathCommand {
+impl ToSkia for paint_input_types::layout_input::PaintPathCommand {
     type Output = target::PaintPathCommand;
     fn to_skia(&self) -> Self::Output {
         target::PaintPathCommand {
@@ -91,7 +91,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::PaintPathCommand {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::BorderLineStyle {
+impl ToSkia for paint_input_types::layout_input::BorderLineStyle {
     type Output = target::BorderLineStyle;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -108,7 +108,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::BorderLineStyle {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::TextDecorationStyle {
+impl ToSkia for paint_input_types::layout_input::TextDecorationStyle {
     type Output = target::TextDecorationStyle;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -130,7 +130,7 @@ impl ToSkia for foundation::ETextDecorationSkipInk {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::FontSmoothing {
+impl ToSkia for paint_input_types::layout_input::FontSmoothing {
     type Output = target::FontSmoothing;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -141,7 +141,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::FontSmoothing {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::layout_input::FontVariation {
+impl ToSkia for paint_input_types::layout_input::FontVariation {
     type Output = target::FontVariation;
     fn to_skia(&self) -> Self::Output {
         target::FontVariation {
@@ -150,7 +150,7 @@ impl ToSkia for layoutng_assembly::internal::layout_input::FontVariation {
         }
     }
 }
-impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyph {
+impl ToSkia for paint_input_types::PaintGlyph {
     type Output = target::PaintGlyph;
     fn to_skia(&self) -> Self::Output {
         target::PaintGlyph {
@@ -162,7 +162,7 @@ impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyph {
         }
     }
 }
-impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyphRun {
+impl ToSkia for paint_input_types::PaintGlyphRun {
     type Output = target::TextInkSkipRun;
     fn to_skia(&self) -> Self::Output {
         target::TextInkSkipRun {
@@ -176,7 +176,7 @@ impl ToSkia for layoutng_assembly::fragment_tree::PaintGlyphRun {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintCornerRadius {
+impl ToSkia for paint_input_types::paint_input::PaintCornerRadius {
     type Output = target::PaintCornerRadius;
     fn to_skia(&self) -> Self::Output {
         target::PaintCornerRadius {
@@ -185,7 +185,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintCornerRadius {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintCornerRadii {
+impl ToSkia for paint_input_types::paint_input::PaintCornerRadii {
     type Output = target::PaintCornerRadii;
     fn to_skia(&self) -> Self::Output {
         target::PaintCornerRadii {
@@ -196,7 +196,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintCornerRadii {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintBlendMode {
+impl ToSkia for paint_input_types::paint_input::PaintBlendMode {
     type Output = target::PaintBlendMode;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -220,7 +220,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintBlendMode {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterType {
+impl ToSkia for paint_input_types::paint_input::PaintFilterType {
     type Output = target::PaintFilterType;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -244,7 +244,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterType {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
+impl ToSkia for paint_input_types::paint_input::PaintFilterOperation {
     type Output = target::PaintFilterOperation;
     fn to_skia(&self) -> Self::Output {
         debug_assert!(self.reflection_offset_calculation.is_none());
@@ -260,16 +260,16 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
             blur_radius: self.blur_radius.to_skia(),
             color: self.color.to_skia(),
             reflection_direction: match self.reflection_direction {
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kAbove => {
+                paint_input_types::paint_input::PaintReflectionDirection::kAbove => {
                     target::PaintReflectionDirection::kAbove
                 }
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow => {
+                paint_input_types::paint_input::PaintReflectionDirection::kBelow => {
                     target::PaintReflectionDirection::kBelow
                 }
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kLeft => {
+                paint_input_types::paint_input::PaintReflectionDirection::kLeft => {
                     target::PaintReflectionDirection::kLeft
                 }
-                layoutng_assembly::internal::paint_input::PaintReflectionDirection::kRight => {
+                paint_input_types::paint_input::PaintReflectionDirection::kRight => {
                     target::PaintReflectionDirection::kRight
                 }
             },
@@ -292,7 +292,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintFilterOperation {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgStrokeLineCap {
+impl ToSkia for paint_input_types::paint_input::SvgStrokeLineCap {
     type Output = target::SvgStrokeLineCap;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -302,7 +302,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgStrokeLineCap {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgStrokeLineJoin {
+impl ToSkia for paint_input_types::paint_input::SvgStrokeLineJoin {
     type Output = target::SvgStrokeLineJoin;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -312,7 +312,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgStrokeLineJoin {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintShaderKind {
+impl ToSkia for paint_input_types::paint_input::PaintShaderKind {
     type Output = target::PaintShaderKind;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -323,7 +323,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShaderKind {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintSpreadMethod {
+impl ToSkia for paint_input_types::paint_input::PaintSpreadMethod {
     type Output = target::PaintSpreadMethod;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -333,7 +333,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintSpreadMethod {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintRadialShape {
+impl ToSkia for paint_input_types::paint_input::PaintRadialShape {
     type Output = target::PaintRadialShape;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -342,7 +342,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintRadialShape {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintRadialExtent {
+impl ToSkia for paint_input_types::paint_input::PaintRadialExtent {
     type Output = target::PaintRadialExtent;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -354,7 +354,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintRadialExtent {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorInterpolationSpace {
+impl ToSkia for paint_input_types::paint_input::PaintColorInterpolationSpace {
     type Output = target::PaintColorInterpolationSpace;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -379,7 +379,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorInterpolatio
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintHueInterpolationMethod {
+impl ToSkia for paint_input_types::paint_input::PaintHueInterpolationMethod {
     type Output = target::PaintHueInterpolationMethod;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -390,7 +390,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintHueInterpolationM
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorStop {
+impl ToSkia for paint_input_types::paint_input::PaintColorStop {
     type Output = target::PaintColorStop;
     fn to_skia(&self) -> Self::Output {
         target::PaintColorStop {
@@ -404,10 +404,10 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintColorStop {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
+impl ToSkia for paint_input_types::paint_input::SvgMarkerPrimitive {
     type Output = target::SvgPatternPrimitive;
     fn to_skia(&self) -> Self::Output {
-        use layoutng_assembly::internal::layout_input::SvgShapeGeometry;
+        use paint_input_types::layout_input::SvgShapeGeometry;
         target::SvgPatternPrimitive {
             geometry: match self.shape.geometry {
                 SvgShapeGeometry::kPath => target::SvgPatternGeometry::kPath,
@@ -438,7 +438,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgMarkerPrimitive {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternImage {
+impl ToSkia for paint_input_types::paint_input::SvgPatternImage {
     type Output = target::SvgPatternImage;
     fn to_skia(&self) -> Self::Output {
         target::SvgPatternImage {
@@ -464,7 +464,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternImage {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternCommand {
+impl ToSkia for paint_input_types::paint_input::SvgPatternCommand {
     type Output = target::SvgPatternCommand;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -523,7 +523,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternCommand {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternData {
+impl ToSkia for paint_input_types::paint_input::SvgPatternData {
     type Output = target::SvgPatternData;
     fn to_skia(&self) -> Self::Output {
         target::SvgPatternData {
@@ -533,7 +533,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::SvgPatternData {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
+impl ToSkia for paint_input_types::paint_input::PaintShader {
     type Output = target::PaintShader;
     fn to_skia(&self) -> Self::Output {
         target::PaintShader {
@@ -580,7 +580,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintShader {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::BackgroundRepeatRule {
+impl ToSkia for paint_input_types::paint_input::BackgroundRepeatRule {
     type Output = target::BackgroundRepeatRule;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -591,7 +591,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::BackgroundRepeatRule {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::InterpolationQuality {
+impl ToSkia for paint_input_types::paint_input::InterpolationQuality {
     type Output = target::ImageInterpolationQuality;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -612,7 +612,7 @@ impl ToSkia for foundation::DynamicRangeLimit {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintMaskMode {
+impl ToSkia for paint_input_types::paint_input::PaintMaskMode {
     type Output = target::PaintMaskMode;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -621,7 +621,7 @@ impl ToSkia for layoutng_assembly::internal::paint_input::PaintMaskMode {
         }
     }
 }
-impl ToSkia for layoutng_assembly::internal::paint_input::PaintMaskComposite {
+impl ToSkia for paint_input_types::paint_input::PaintMaskComposite {
     type Output = target::PaintMaskComposite;
     fn to_skia(&self) -> Self::Output {
         match self {
@@ -865,8 +865,8 @@ pub fn resources(list: &paint::paint_engine::PaintArtifact) -> target::ResourceC
 mod font_identity_tests {
     use super::*;
     use foundation::ETextDecorationSkipInk;
-    use layoutng_assembly::fragment_tree::{PaintGlyph, PaintGlyphRun, PaintResources};
-    use layoutng_assembly::internal::layout_input::{FontFace, FontVariation, Offset};
+    use paint_input_types::{PaintGlyph, PaintGlyphRun, PaintResources};
+    use paint_input_types::layout_input::{FontFace, FontVariation, Offset};
     use paint::paint_engine::{DisplayItem, DisplayItemType, PaintArtifact};
     use std::sync::Arc;
 
@@ -1110,7 +1110,7 @@ mod font_identity_tests {
             items: Arc::new(vec![DisplayItem {
                 r#type: DisplayItemType::kDrawGlyphRun,
                 font_size: 24.0,
-                color: layoutng_assembly::internal::layout_input_types::Color {
+                color: paint_input_types::layout_input_types::Color {
                     red: 0.0,
                     green: 0.0,
                     blue: 0.0,
@@ -1178,7 +1178,7 @@ mod font_identity_tests {
 mod canvas_resource_tests {
     use super::*;
     use canvas::CanvasPaintResource;
-    use layoutng_assembly::fragment_tree::PaintResources;
+    use paint_input_types::PaintResources;
     use paint::paint_engine::PaintArtifact;
     use std::sync::Arc;
 
@@ -1196,7 +1196,7 @@ mod canvas_resource_tests {
                     origin_clean: true,
                     is_clear: false,
                     pixels: pixels.clone(),
-                }],
+                }].into(),
                 ..Default::default()
             })),
             ..Default::default()

@@ -8738,7 +8738,7 @@ mod background_attachment_tests {
                 is_cors_same_origin: false,
                 content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
                 ..Default::default()
-            }],
+            }].into(),
             ..Default::default()
         }));
         let mut node = PaintTreeNode::default();
@@ -10039,7 +10039,7 @@ mod background_attachment_tests {
                 height: 100,
                 content: PaintImageContent::Bitmap(Arc::new(vec![0; 100 * 100 * 4])),
                 ..Default::default()
-            }],
+            }].into(),
             // 128 layout pixels become the 64 CSS-pixel icon threshold.
             layout_zoom_factor: 2.0,
             ..Default::default()
@@ -10118,8 +10118,8 @@ mod background_attachment_tests {
                 height: 1,
                 content: PaintImageContent::Bitmap(Arc::new(vec![0; 3])),
                 ..Default::default()
-            }],
-            canvases: Vec::new(),
+            }].into(),
+            canvases: Default::default(),
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,
             layout_zoom_factor: 1.0,
@@ -10212,8 +10212,8 @@ mod background_attachment_tests {
                     height: 1,
                     content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
                     ..Default::default()
-                }],
-                canvases: Vec::new(),
+                }].into(),
+                canvases: Default::default(),
                 device_pixel_ratio: 1.0,
                 preferred_color_scheme: 0,
                 layout_zoom_factor: 1.0,
@@ -10323,8 +10323,8 @@ mod background_attachment_tests {
                     is_cors_same_origin,
                     content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
                     ..Default::default()
-                }],
-                canvases: Vec::new(),
+                }].into(),
+                canvases: Default::default(),
                 device_pixel_ratio: 1.0,
                 preferred_color_scheme: 0,
                 layout_zoom_factor: 1.0,
@@ -10414,8 +10414,8 @@ mod background_attachment_tests {
                     }),
                     content: PaintImageContent::Bitmap(Arc::new(vec![0, 0, 0, 255])),
                     ..Default::default()
-                }],
-                canvases: Vec::new(),
+                }].into(),
+                canvases: Default::default(),
                 device_pixel_ratio: 1.0,
                 preferred_color_scheme: 0,
                 layout_zoom_factor: 1.0,

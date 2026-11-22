@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layoutng::internal::layout_input_types::Color;
+use paint_input_types::layout_input_types::Color;
 
 // cpp: css_parser/color_parser.cc:17-20
 #[derive(Clone, Copy)]

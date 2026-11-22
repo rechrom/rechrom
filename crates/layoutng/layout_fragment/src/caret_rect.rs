@@ -6,13 +6,8 @@ use layout_fragment::inline_cursor::InlineCursor;
 use layoutng_geometry::geometry::logical_rect::LogicalRect;
 use layoutng_style::style::computed_style::ComputedStyle;
 
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CaretShape {
-    kBar,
-    kBlock,
-    kUnderscore,
-}
+// The caret shape is a plain paint-style value owned by `paint_input_types`.
+pub use paint_input_types::CaretShape;
 
 // The supplied header only forward-declares InlineCaretPosition and
 // LocalCaretRect, and the supplied source tree defines none of these four

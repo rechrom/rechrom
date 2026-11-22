@@ -125,7 +125,10 @@ binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithm
 `_float`, `_out_of_flow`, `_replaced`, `_svg`, `_forms`, `_list`) →
 `layout_fragment` (resident fragment tree) → `layout_commit` (typed
 publication). Shared roots: `layoutng_geometry`, `layoutng_style` (the single
-`ComputedStyle` owner), `foundation` (shared base types, in `crates/foundation`).
+`ComputedStyle` owner), `paint_input_types` (plain paint values Layout
+publishes: paint-input schema, `PaintResources`, glyph runs; Paint, Raster,
+Compositor and Style name them without depending on Layout), `foundation`
+(shared base types, in `crates/foundation`).
 
 - Output is a retained `LayoutResultHandle` and borrowed `LayoutOutput` access
   to resident geometry. Paint and Interaction traverse native

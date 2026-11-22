@@ -2448,7 +2448,7 @@ fn pseudo_background_and_content_urls_retain_resource_dependencies() {
 #[test]
 fn generated_gradient_content_reaches_the_replaced_image_shader_boundary() {
     use dom::persistent_document::PseudoContent;
-    use layoutng::internal::paint_input::PaintShaderKind;
+    use paint_input_types::paint_input::PaintShaderKind;
 
     let _heap = foundation::LayoutHeapScope::new();
     let mut owner = html::html_parser::ParseHTML("<div id=target></div>");
@@ -2942,7 +2942,7 @@ fn local_svg_paint_servers_resolve_attached_resource_nodes() {
         .unwrap();
     let pattern = server.pattern.as_ref().unwrap();
     let stroke_width = pattern.commands.iter().find_map(|command| match command {
-        layoutng::internal::paint_input::SvgPatternCommand::DrawShape(shape) => {
+        paint_input_types::paint_input::SvgPatternCommand::DrawShape(shape) => {
             Some(shape.stroke_width)
         }
         _ => None,
@@ -3067,7 +3067,7 @@ fn svg_mask_linear_rgb_color_interpolation_reaches_recorded_primitives() {
         .expect("local mask graph");
     assert_eq!(graph.unsupported, None);
     let primitive = graph.commands.iter().find_map(|command| match command {
-        layoutng::internal::paint_input::SvgPatternCommand::DrawShape(primitive) => Some(primitive),
+        paint_input_types::paint_input::SvgPatternCommand::DrawShape(primitive) => Some(primitive),
         _ => None,
     });
     let primitive = primitive.expect("mask shape primitive");

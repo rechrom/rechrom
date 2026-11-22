@@ -1092,7 +1092,7 @@ impl document_loader::ResourceFetcherClient for FrameResourceClient {
     fn ApplyResourceMutation(&mut self, mutation: ResourceMutation) {
         match mutation {
             ResourceMutation::PlatformImageResourceReady(image) => {
-                self.0.constraints.borrow_mut().images.push(image)
+                self.0.constraints.borrow_mut().PushImage(image)
             }
             ResourceMutation::ImageResourceReady(image) => {
                 dom::image_resource::AddImageResourceWithContent(
@@ -1155,7 +1155,7 @@ impl document_loader::ResourceFetcherClient for FrameResourceClient {
             ResourceMutation::DocumentImageFrameChanged(update) => {
                 let mut constraints = self.0.constraints.borrow_mut();
                 let image = constraints
-                    .images
+                    .ImagesMut()
                     .iter_mut()
                     .find(|image| image.id == update.frame.resource_id)
                     .expect("child document image owner");
@@ -1185,7 +1185,7 @@ impl document_loader::ResourceFetcherClient for FrameResourceClient {
             ResourceMutation::DocumentImageIntrinsicSizeChanged(update) => {
                 let mut constraints = self.0.constraints.borrow_mut();
                 let image = constraints
-                    .images
+                    .ImagesMut()
                     .iter_mut()
                     .find(|image| image.id == update.resource_id)
                     .expect("child document image owner");

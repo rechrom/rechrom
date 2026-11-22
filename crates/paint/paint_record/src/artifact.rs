@@ -603,8 +603,7 @@ impl PaintRecording {
         }
         let damaged_records = self.image_dependencies.dependencies(image_id).to_vec();
         let mut resources = old_resources.clone();
-        let image = resources
-            .images
+        let image = Arc::make_mut(&mut resources.images)
             .iter_mut()
             .find(|image| image.id == image_id)?;
         image.revision = revision;
@@ -627,14 +626,14 @@ impl PaintRecording {
     pub fn RefreshImageContentRevisions(&mut self) -> Vec<usize> {
         let mut revisions = vec![Vec::new(); self.display_items.len()];
         if let Some(resources) = self.resources.as_deref() {
-            for image in &resources.images {
+            for image in resources.images.iter() {
                 for dependency in self.image_dependencies.dependencies(image.id) {
                     if let Some(record) = revisions.get_mut(dependency.record_index) {
                         record.push((image.id, image.revision));
                     }
                 }
             }
-            for canvas in &resources.canvases {
+            for canvas in resources.canvases.iter() {
                 for dependency in self.image_dependencies.dependencies(canvas.resource_id) {
                     if let Some(record) = revisions.get_mut(dependency.record_index) {
                         record.push((canvas.resource_id, canvas.revision));

@@ -1735,7 +1735,7 @@ fn pattern_document_container_uses_embedding_environment_not_last_resource_use()
                 Arc::new(0_u8),
             ))),
             ..Default::default()
-        }],
+        }].into(),
         ..Default::default()
     };
     for (normal, used_dark, expected) in [(true, false, 1), (false, false, 0), (false, true, 1)] {

@@ -1409,8 +1409,8 @@ fn color(value: command::Color) -> SkColor4f {
 fn forced_dark_background_color(value: command::Color) -> command::Color {
     let filtered = paint::paint_auto_dark_mode::InvertColorIfEnabled(
         true,
-        layoutng_assembly::internal::layout_input_types::Color::default(),
-        layoutng_assembly::internal::layout_input_types::Color {
+        paint_input_types::layout_input_types::Color::default(),
+        paint_input_types::layout_input_types::Color {
             red: value.red,
             green: value.green,
             blue: value.blue,
@@ -2474,16 +2474,16 @@ fn translated_filter_graph(
             )?;
             translated_reflection_filter(
                 match operation.reflection_direction {
-                    layoutng_assembly::internal::paint_input::PaintReflectionDirection::kAbove => {
+                    paint_input_types::paint_input::PaintReflectionDirection::kAbove => {
                         command::PaintReflectionDirection::kAbove
                     }
-                    layoutng_assembly::internal::paint_input::PaintReflectionDirection::kBelow => {
+                    paint_input_types::paint_input::PaintReflectionDirection::kBelow => {
                         command::PaintReflectionDirection::kBelow
                     }
-                    layoutng_assembly::internal::paint_input::PaintReflectionDirection::kLeft => {
+                    paint_input_types::paint_input::PaintReflectionDirection::kLeft => {
                         command::PaintReflectionDirection::kLeft
                     }
-                    layoutng_assembly::internal::paint_input::PaintReflectionDirection::kRight => {
+                    paint_input_types::paint_input::PaintReflectionDirection::kRight => {
                         command::PaintReflectionDirection::kRight
                     }
                 },
@@ -3134,10 +3134,10 @@ fn decoded_pattern_local_matrix(
 }
 
 fn translated_reference_filter(
-    operation: &layoutng_assembly::internal::paint_input::PaintFilterOperation,
+    operation: &paint_input_types::paint_input::PaintFilterOperation,
     reference_box: paint::PaintRect,
     reference_viewport: Option<paint::PaintRect>,
-    reference_origin: layoutng_assembly::internal::layout_input::Offset,
+    reference_origin: paint_input_types::layout_input::Offset,
     reference_scale: f64,
     matrix: &SkM44,
     source: Option<Arc<dyn SkImageFilter>>,
@@ -7716,7 +7716,7 @@ mod tests {
 
     #[test]
     fn flat_paint_record_replays_reference_filter_with_paint_geometry() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             layout_input_types::Color,
             paint_input::{
@@ -7802,7 +7802,7 @@ mod tests {
 
     #[test]
     fn reference_filter_retains_linear_output_until_the_filter_chain_tail() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             paint_input::{
                 PaintFilterOperation, PaintFilterType, SvgFilterGraph, SvgFilterInput,
@@ -7870,7 +7870,7 @@ mod tests {
 
     #[test]
     fn fe_image_output_stays_srgb_when_authored_interpolation_is_linear() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             paint_input::{
                 PaintFilterOperation, PaintFilterType, SvgFilterGraph, SvgFilterInput,
@@ -7934,7 +7934,7 @@ mod tests {
 
     #[test]
     fn text_shadow_layer_filters_the_merged_source_alpha_once() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::{Offset, PaintShadow},
             layout_input_types::Color,
         };
@@ -8005,7 +8005,7 @@ mod tests {
 
     #[test]
     fn arithmetic_filter_builder_keeps_distinct_premul_validation_variants() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             layout_input_types::Color,
             paint_input::{
@@ -8127,7 +8127,7 @@ mod tests {
 
     #[test]
     fn tainted_displacement_input_is_a_pass_through_filter() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             layout_input_types::Color,
             paint_input::{
@@ -8226,7 +8226,7 @@ mod tests {
 
     #[test]
     fn extended_svg_effects_build_filter_graphs() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             layout_input_types::Color,
             paint_input::{
@@ -8407,7 +8407,7 @@ mod tests {
 
     #[test]
     fn flat_paint_record_replays_box_reflection_and_keeps_pending_mask_transparent() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::{Offset, Size},
             layout_input_types::Color,
             paint_input::{
@@ -8523,7 +8523,7 @@ mod tests {
 
     #[test]
     fn flat_paint_record_replays_canonical_scalar_filter_without_authored_input() {
-        use layoutng_assembly::internal::{
+        use paint_input_types::{
             layout_input::Offset,
             layout_input_types::Color,
             paint_input::{PaintFilterOperation, PaintFilterType},

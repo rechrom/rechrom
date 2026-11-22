@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 foundation = { path = "../foundation" }
-layoutng = { path = "../layoutng/layoutng", optional = true }
+paint_input_types = { path = "../layoutng/paint_input_types", optional = true }
 
 [features]
 tokenizer = []
-layoutng_values = ["dep:layoutng", "tokenizer"]
+layoutng_values = ["dep:paint_input_types", "tokenizer"]
 translation_in_progress = ["tokenizer", "layoutng_values"]

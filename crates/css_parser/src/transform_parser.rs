@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use crate::length_percentage_parser::ParseLengthPercentage;
-use layoutng::internal::layout_input::{Offset, TransformMatrix};
-use layoutng::internal::paint_input::{
+use paint_input_types::layout_input::{Offset, TransformMatrix};
+use paint_input_types::paint_input::{
     PaintTransform, PaintTransformOperation, PaintTransformOperationKind,
 };
 

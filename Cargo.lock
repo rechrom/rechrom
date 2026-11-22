@@ -500,8 +500,8 @@ dependencies = [
  "compositor_tree",
  "foundation",
  "getrandom 0.4.3",
- "layoutng_assembly",
  "paint",
+ "paint_input_types",
  "paint_model",
  "paint_skia",
  "scroll_animation",
@@ -736,7 +736,7 @@ name = "css_parser"
 version = "0.0.1"
 dependencies = [
  "foundation",
- "layoutng",
+ "paint_input_types",
 ]
 
 [[package]]
@@ -2391,6 +2391,7 @@ dependencies = [
  "layout_reuse",
  "layoutng_geometry",
  "layoutng_style",
+ "paint_input_types",
  "skia",
 ]
 
@@ -2493,6 +2494,7 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
+ "paint_input_types",
  "scroll_snap",
 ]
 
@@ -2510,26 +2512,6 @@ dependencies = [
  "browser_tracing",
  "foundation",
  "layoutng_geometry",
-]
-
-[[package]]
-name = "layoutng"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "canvas",
- "font_engine",
- "foundation",
- "image_resource",
- "intersection_observer",
- "layout_commit",
- "layout_invalidation",
- "layout_reuse",
- "layoutng_geometry",
- "layoutng_style",
- "resize_observer",
- "scroll_snap",
- "skia",
 ]
 
 [[package]]
@@ -2552,6 +2534,7 @@ dependencies = [
  "layout_reuse",
  "layoutng_geometry",
  "layoutng_style",
+ "paint_input_types",
  "resize_observer",
  "scroll_snap",
  "skia",
@@ -3246,6 +3229,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paint_input_types"
+version = "0.0.1"
+dependencies = [
+ "canvas",
+ "font_engine",
+ "foundation",
+ "image_resource",
+ "layoutng_style",
+]
+
+[[package]]
 name = "paint_model"
 version = "0.0.1"
 dependencies = [
@@ -3662,8 +3656,8 @@ dependencies = [
  "font_engine",
  "foundation",
  "image_resource",
- "layoutng_assembly",
  "paint",
+ "paint_input_types",
  "skia",
 ]
 
@@ -3871,7 +3865,6 @@ dependencies = [
  "bytemuck",
  "compositor",
  "foundation",
- "layoutng_assembly",
  "paint",
  "raster",
  "renderer",
@@ -4391,6 +4384,7 @@ dependencies = [
  "image_resource",
  "layoutng_assembly",
  "layoutng_style",
+ "paint_input_types",
  "style_commit",
  "style_diff",
  "style_invalidation",

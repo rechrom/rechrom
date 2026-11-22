@@ -281,7 +281,7 @@ mod tests {
                 origin_clean,
                 is_clear: false,
                 pixels: Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]),
-            }],
+            }].into(),
             ..Default::default()
         }));
         fragment
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn clear_canvas_does_not_mark_first_contentful_paint() {
         let mut fragment = fragment(true);
-        Arc::make_mut(fragment.resources.as_mut().unwrap()).canvases[0].is_clear = true;
+        Arc::make_mut(&mut Arc::make_mut(fragment.resources.as_mut().unwrap()).canvases)[0].is_clear = true;
         let mut node = PaintTreeNode::default();
         node.SetOwnedFragmentForTesting(&fragment);
         let mut recording = PaintRecording::default();

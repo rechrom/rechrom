@@ -267,7 +267,7 @@ fn body() {
             font.bytes.len()
         ));
     }
-    for image in &catalog.images {
+    for image in catalog.images.iter() {
         let bytes = image.BitmapPixels().map_or_else(
             || format!("document-revision-{}", image.revision),
             |pixels| {

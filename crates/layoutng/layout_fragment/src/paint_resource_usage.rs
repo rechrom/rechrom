@@ -88,7 +88,7 @@ fn resources_equal_for_usage(a: &PaintResources, b: &PaintResources, usage: u8) 
                     }))))
         && (usage & RESOURCE_IMAGES == 0
             || (images.len() == b.images.len()
-                && images.iter().zip(&b.images).all(|(a, b)| a == b)
+                && images.iter().zip(b.images.iter()).all(|(a, b)| a == b)
                 && canvases.len() == b.canvases.len()
-                && canvases.iter().zip(&b.canvases).all(|(a, b)| a == b)))
+                && canvases.iter().zip(b.canvases.iter()).all(|(a, b)| a == b)))
 }
