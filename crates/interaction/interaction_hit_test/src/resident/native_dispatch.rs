@@ -34,10 +34,10 @@ use crate::{
 use foundation::{
     layout_hit_test::LayoutHitTestKind as Kind, PhysicalOffset, PhysicalRect, PhysicalSize,
 };
-use layout_assembly::layout_engine::{
+use ::layout::output::{
     FragmentCursor, NativeHitTestCursor, NativeHitTestInlineItem, NativeHitTestTarget,
-    PaintFragmentCursor,
 };
+use ::layout::paint::PaintFragmentCursor;
 
 /// Source layout_box_hot.cc:35-68. Layout owns selection of the native
 /// overflow rectangle; Interaction owns the HitTestLocation intersection.
@@ -94,7 +94,7 @@ impl<'a> ResidentNativeHitTestSource<'a> {
                 ..
             } => fragment
                 .map(|fragment| {
-                    let expected: &layout_assembly::physical_fragment::PhysicalFragment =
+                    let expected: &::layout::fragment::PhysicalFragment =
                         fragment;
                     let cursor = root
                         .ForPaintObject(source.PaintIdentity())
@@ -173,7 +173,7 @@ impl<'a> ResidentNativeHitTestSource<'a> {
 
 /// A parent cursor is scoped to the source inline adapter. The identity only
 /// verifies that the translated method is using that same borrowed scope.
-struct ResidentInlineParent(layout_assembly::inline_cursor::InlineCursor);
+struct ResidentInlineParent(::layout::fragment::InlineCursor);
 impl InlineHitTestParentCursor for ResidentInlineParent {
     fn Identity(&self) -> usize {
         self as *const _ as usize
@@ -312,7 +312,7 @@ pub fn HitTestCulledInline(
     cursor: InlineCursor<'_, ()>,
 ) -> NativeHitTestResult {
     let object = (target as &dyn std::any::Any)
-        .downcast_ref::<layout_assembly::internal::layout_object::LayoutObject>()
+        .downcast_ref::<::layout::object::LayoutObject>()
         .ok_or(NativeHitTestRequiredPort::MissingLayoutObject)?;
     let parent_item = match cursor.Current() {
         Some(FragmentItemRef::Resident(item)) => item,
@@ -322,7 +322,7 @@ pub fn HitTestCulledInline(
         FragmentCursor::Inline { container, .. } => container,
         FragmentCursor::Physical { .. } => return Err(NativeHitTestRequiredPort::Inline),
     };
-    let mut parent = layout_assembly::inline_cursor::InlineCursor::from_fragment(container);
+    let mut parent = ::layout::fragment::InlineCursor::from_fragment(container);
     if let Some(index) = cursor.parent {
         let items = unsafe { container.Items().as_ref() }
             .expect("culled-inline parent retains FragmentItems");

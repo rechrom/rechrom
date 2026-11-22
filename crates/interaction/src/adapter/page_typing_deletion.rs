@@ -86,7 +86,7 @@ impl EditorKillRingContext<ImeTypingSelection> for Host<'_, '_, '_, '_> {
 }
 impl TypingDeletionContext<ImeTypingSelection> for Host<'_, '_, '_, '_> {
     type Node = u64;
-    type ScrollAnchorSuppression = layout_assembly::layout_engine::SuppressScrollAnchorScope;
+    type ScrollAnchorSuppression = layout::scroll::SuppressScrollAnchorScope;
     fn HasFrame(&self) -> bool {
         self.Frame().IsAvailable()
     }
@@ -105,8 +105,8 @@ impl TypingDeletionContext<ImeTypingSelection> for Host<'_, '_, '_, '_> {
         ReadNode(&self.commands.document, node, |document, _, index| {
             if matches!(
                 position.anchor,
-                layout_assembly::EditingPositionAnchorType::BeforeAnchor
-                    | layout_assembly::EditingPositionAnchorType::AfterAnchor
+                layout::editing::EditingPositionAnchorType::BeforeAnchor
+                    | layout::editing::EditingPositionAnchorType::AfterAnchor
             ) {
                 document
                     .Node(index)

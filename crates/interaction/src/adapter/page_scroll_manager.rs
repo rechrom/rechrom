@@ -32,18 +32,12 @@ use interaction_scroll::core::input::{
         ScrollableAreaRef, SnapScrollKind, UserScrollRequest,
     },
 };
-use layout_assembly::{
-    native_autoscroll_source::{
-        NativeAutoscrollLayout, NativeLogicalScrollArea, NativeLogicalScrollBoxFacts,
-        NativeLogicalScrollNodeFacts, NativeLogicalScrollingArea,
-    },
-    native_scroll_source::{NativeLayoutSnapPlan, NativeSnapAnimationState},
-    native_user_scroll_source::{
-        NativeScrollCompletionMode, NativeScrollFinishedPlan, NativeUserScrollAnimationRequest,
-        NativeUserScrollAnimationState, NativeUserScrollAreaFacts, NativeUserScrollGranularity,
-        NativeUserScrollPlan,
-    },
-    native_wheel_scrollable_traversal::NativeWheelScrollableArea,
+use layout::scroll::{
+    NativeAutoscrollLayout, NativeLayoutSnapPlan, NativeLogicalScrollArea,
+    NativeLogicalScrollBoxFacts, NativeLogicalScrollNodeFacts, NativeLogicalScrollingArea,
+    NativeScrollCompletionMode, NativeScrollFinishedPlan, NativeSnapAnimationState,
+    NativeUserScrollAnimationRequest, NativeUserScrollAnimationState, NativeUserScrollAreaFacts,
+    NativeUserScrollGranularity, NativeUserScrollPlan, NativeWheelScrollableArea,
 };
 
 /// Live LayoutNG owner required by the translated `ScrollManager`.
@@ -76,7 +70,7 @@ pub trait PageLogicalScrollLayout {
     fn PlanSnapForUserScroll(
         &self,
         area: &NativeLogicalScrollArea,
-        kind: layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind,
+        kind: layout::scroll::NativeUserSnapScrollKind,
         direction: foundation::PhysicalDirection,
         line_step: f32,
         animation: NativeSnapAnimationState,
@@ -391,7 +385,7 @@ impl ScrollableArea for PageScrollableArea {
         direction: ScrollDirectionPhysical,
         _emit: &ScrollEffectEmitter,
     ) -> bool {
-        use layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind;
+        use layout::scroll::NativeUserSnapScrollKind;
         let kind = match kind {
             SnapScrollKind::Direction => NativeUserSnapScrollKind::Direction,
             SnapScrollKind::Page => NativeUserSnapScrollKind::Page,
@@ -568,7 +562,7 @@ fn CompletionMode(value: NativeScrollCompletionMode) -> ScrollCompletionMode {
 }
 
 fn Consumption(
-    value: layout_assembly::native_user_scroll_source::NativeScrollConsumption,
+    value: layout::scroll::NativeScrollConsumption,
 ) -> interaction_scroll::core::scroll::scroll_types::ScrollConsumption {
     interaction_scroll::core::scroll::scroll_types::ScrollConsumption::new(
         value.did_scroll_x,

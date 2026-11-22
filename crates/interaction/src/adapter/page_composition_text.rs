@@ -23,7 +23,7 @@ use interaction_default::core::editing::{
         text_iterator_behavior::TextIteratorBehavior,
     },
 };
-use layout_assembly::editing_state::DocumentCompositionMarker;
+use layout::editing::DocumentCompositionMarker;
 use std::rc::Rc;
 
 impl ParagraphContext for EditingPositionContext<'_> {
@@ -465,7 +465,7 @@ pub enum CompositionTextResult {
 
 impl<'a> TextIteratorContext for EditingPositionContext<'a> {
     type VisibleContext = Self;
-    type TextCursor = layout_assembly::layout_engine::EditingTextRunCursor<'a>;
+    type TextCursor = layout::editing::EditingTextRunCursor<'a>;
     fn VisibleContext(&self) -> &Self {
         self
     }
@@ -603,7 +603,7 @@ impl<'a> TextIteratorContext for EditingPositionContext<'a> {
         self.Layout(node)?.EditingTextRuns(
             start.try_into().ok()?,
             end.min(u32::MAX as usize) as u32,
-            layout_assembly::layout_engine::EditingTextIteratorBehavior {
+            layout::editing::EditingTextIteratorBehavior {
                 ignores_style_visibility: behavior.IgnoresStyleVisibility(),
                 ignores_css_text_transforms: behavior.IgnoresCssTextTransforms(),
                 emits_original_text: behavior.EmitsOriginalText(),

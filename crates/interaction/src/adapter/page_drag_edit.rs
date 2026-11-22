@@ -16,7 +16,7 @@ use interaction_dispatch::core::{
         text_event::{TextEvent, TextEventInputType},
     },
 };
-use layout_assembly::{editing_state::DOMSelection, EditingPosition, EditingTextAffinity};
+use layout::editing::{DOMSelection, EditingPosition, EditingTextAffinity};
 struct DropCaret {
     document: InteractionDocument,
     range: dom::DOMRangeHandle,

@@ -23,7 +23,7 @@ use interaction_default::{
     },
     public::mojom::input::focus_type::FocusType,
 };
-use layout_assembly::editing_state::DOMSelection;
+use layout::editing::DOMSelection;
 use std::{cell::RefCell, rc::Rc};
 
 pub use super::page_editing_visible_position::{

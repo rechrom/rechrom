@@ -14,13 +14,7 @@ use interaction_scroll::core::scroll::scrollbar::{
     ScrollbarThumbUse, ThumbGeometry,
 };
 use interaction_scroll::core::scroll::{scrollbar_animation as animation, scrollbar_theme};
-use layout_assembly::{
-    internal::{
-        scrollbar::Scrollbar, scrollbar_orientation::ScrollbarOrientation,
-        scrollbar_part::ScrollbarPart,
-    },
-    native_pointer_scroll_controls::NativePointerResizeArea,
-};
+use layout::scroll::{NativePointerResizeArea, Scrollbar, ScrollbarOrientation, ScrollbarPart};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -48,7 +42,7 @@ pub trait PagePointerScrollControls {
     fn ScrollbarInteraction(
         &self,
         scrollbar: &Persistent<Scrollbar>,
-        event: layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
+        event: layout::scroll::NativeScrollbarInteraction,
     ) -> io::Result<()>;
     fn RunOverlayFadeTimer(&self, task: ScrollbarTimerTask);
     fn PublishMacScrollbarAnimation(
@@ -174,10 +168,10 @@ impl PagePointerScrollControlOwners {
     pub fn HandleNativeActivities(
         &self,
         activities: Vec<
-            layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
+            layout::scroll::NativeScrollbarActivity,
         >,
     ) -> io::Result<()> {
-        use layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivityKind as Kind;
+        use layout::scroll::NativeScrollbarActivityKind as Kind;
         for activity in activities {
             let owner = self.NativeScrollbar(activity.scrollbar);
             if matches!(activity.kind, Kind::Removed) {
@@ -356,7 +350,7 @@ impl NativePointerScrollbar {
     }
     fn Interaction(
         &self,
-        event: layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
+        event: layout::scroll::NativeScrollbarInteraction,
     ) {
         if let Err(error) = self.controls.ScrollbarInteraction(&self.owner, event) {
             self.error.borrow_mut().get_or_insert(error);
@@ -503,22 +497,22 @@ impl scrollbar::ScrollbarMouseSource for NativePointerScrollbar {
     }
     fn MouseEnteredScrollbar(&self) {
         self.Interaction(
-            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Entered,
+            layout::scroll::NativeScrollbarInteraction::Entered,
         );
     }
     fn MouseExitedScrollbar(&self) {
         self.Interaction(
-            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Exited,
+            layout::scroll::NativeScrollbarInteraction::Exited,
         );
     }
     fn MouseCapturedScrollbar(&self) {
         self.Interaction(
-            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Captured,
+            layout::scroll::NativeScrollbarInteraction::Captured,
         );
     }
     fn MouseReleasedScrollbar(&self) {
         self.Interaction(
-            layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction::Released,
+            layout::scroll::NativeScrollbarInteraction::Released,
         );
     }
     fn UsesFluentOverlayScrollbars(&self) -> bool {

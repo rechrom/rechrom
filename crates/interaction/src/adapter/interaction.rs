@@ -14,10 +14,9 @@ use crate::{
 };
 use dom::InteractionStateMutation;
 use interaction_scroll::core::input::event_handler::EventHandlerScrollRouting;
-use layout_assembly::{
-    editing_state::SelectionState, internal::layout_input::Offset,
-    layout_engine::PaintFragmentCursor,
-};
+use layout::editing::SelectionState;
+use layout::input::Offset;
+use layout::paint::PaintFragmentCursor;
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 pub use interaction_hit_test::resident::point_queries::ResidentFragmentSource as InteractionFragmentSource;
@@ -184,7 +183,7 @@ impl<'a> Interaction<'a> {
     pub fn WithSelectionState(
         emit: InteractionOutputEmitter,
         listeners: Option<EventListenerDispatcher<'a>>,
-        selections: Rc<layout_assembly::editing_state::SelectionState>,
+        selections: Rc<layout::editing::SelectionState>,
         clock: Rc<dyn interaction_dispatch::core::dom::events::event::EventClock>,
     ) -> Self {
         let editor = Rc::new(PageEditingOwners::WithSelectionState(selections.clone()));
@@ -399,7 +398,7 @@ impl<'a> Interaction<'a> {
     pub fn HandleNativeScrollbarActivities(
         &self,
         activities: Vec<
-            layout_assembly::internal::layout_scrollable_area::NativeScrollbarActivity,
+            layout::scroll::NativeScrollbarActivity,
         >,
     ) -> std::io::Result<()> {
         let controls = self
@@ -823,11 +822,11 @@ impl<'a> Interaction<'a> {
         &self,
         document: &InteractionDocument,
     ) -> Option<DOMSelectionSnapshot> {
-        use layout_assembly::EditingPositionAnchorType as A;
+        use layout::editing::EditingPositionAnchorType as A;
         let selection = self.FrameSelectionOwner()?.Current()?;
         let owner = document.borrow();
         let document = owner.GetDocument();
-        let boundary = |position: layout_assembly::EditingPosition| {
+        let boundary = |position: layout::editing::EditingPosition| {
             let node = document.FindNodeById(position.node_id?)?;
             let point = match position.anchor {
                 A::OffsetInAnchor => dom::DOMBoundaryPoint {
@@ -869,11 +868,11 @@ impl<'a> Interaction<'a> {
         use interaction_default::core::editing::set_selection_options::{
             SetSelectionBy, SetSelectionOptions,
         };
-        use layout_assembly::{EditingPosition, EditingTextAffinity};
+        use layout::editing::{EditingPosition, EditingTextAffinity};
         let Some(frame) = self.FrameSelectionOwner() else {
             return false;
         };
-        let selection = range.map(|range| layout_assembly::editing_state::DOMSelection {
+        let selection = range.map(|range| layout::editing::DOMSelection {
             anchor: EditingPosition::new(range.start.node_id, range.start.offset),
             focus: EditingPosition::new(range.end.node_id, range.end.offset),
             affinity: EditingTextAffinity::Downstream,
@@ -959,10 +958,10 @@ impl<'a> Interaction<'a> {
             return false;
         };
         frame.SetSelection(
-            Some(layout_assembly::editing_state::DOMSelection {
-                anchor: layout_assembly::EditingPosition::new(anchor.node_id, anchor.offset),
-                focus: layout_assembly::EditingPosition::new(focus.node_id, focus.offset),
-                affinity: layout_assembly::EditingTextAffinity::Downstream,
+            Some(layout::editing::DOMSelection {
+                anchor: layout::editing::EditingPosition::new(anchor.node_id, anchor.offset),
+                focus: layout::editing::EditingPosition::new(focus.node_id, focus.offset),
+                affinity: layout::editing::EditingTextAffinity::Downstream,
             }),
             interaction_default::core::editing::set_selection_options::SetSelectionOptions {
                 should_close_typing: true,
@@ -1393,7 +1392,7 @@ impl<'a> Interaction<'a> {
             files,
         );
     }
-    pub fn DragCaretSelection(&self) -> Option<layout_assembly::editing_state::DOMSelection> {
+    pub fn DragCaretSelection(&self) -> Option<layout::editing::DOMSelection> {
         super::page_event_dispatcher::mouse_drag::CurrentDragCaret(&self.source_input)
     }
     pub fn HandleTargetDrag(

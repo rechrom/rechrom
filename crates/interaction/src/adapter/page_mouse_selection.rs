@@ -20,7 +20,7 @@ use interaction_default::core::editing::{
     set_selection_options::SetSelectionOptions,
     text_granularity::TextGranularity,
 };
-use layout_assembly::{editing_state::DOMSelection, EditingPositionWithAffinity};
+use layout::editing::{DOMSelection, EditingPositionWithAffinity};
 
 #[derive(Clone, Copy)]
 pub(crate) struct MouseSelectionSettings {
@@ -462,7 +462,7 @@ impl SelectionGeometry<S, H> for PageMouseSelection<'_, '_, '_> {
             target: h.InnerNode()?.DOMNodeId()?,
             hit: hit.value,
             local_point: *h.LocalPoint(),
-            options: layout_assembly::EditingPositionOptions {
+            options: layout::editing::EditingPositionOptions {
                 move_caret_to_horizontal_boundary_when_past_top_or_bottom: behavior
                     .ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(),
                 ..Default::default()

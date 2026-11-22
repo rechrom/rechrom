@@ -397,9 +397,9 @@ pub use super::page_editing_visible_position::{
 /// FrameSelection::SelectedHtmlForClipboard's exact CreateMarkup options.
 pub fn SelectedHtmlForClipboard(
     document: &dom::Document,
-    layout: layout_assembly::layout_engine::LayoutOutput<'_>,
+    layout: layout::output::LayoutOutput<'_>,
     styles: &dyn MarkupStyleQueries,
-    selection: layout_assembly::editing_state::DOMSelection,
+    selection: layout::editing::DOMSelection,
 ) -> Result<
     Vec<u16>,
     interaction_default::core::editing::serializers::styled_markup_serializer::SerializationError,

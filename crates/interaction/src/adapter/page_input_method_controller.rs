@@ -36,7 +36,7 @@ use interaction_dispatch::core::{
     },
     events::input_event::InputType,
 };
-use layout_assembly::{editing_state::DOMSelection, EditingPosition, EditingTextAffinity};
+use layout::editing::{DOMSelection, EditingPosition, EditingTextAffinity};
 use std::{cell::RefCell, rc::Rc};
 
 #[path = "page_event_handler_text_input.rs"]
