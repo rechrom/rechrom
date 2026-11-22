@@ -4,7 +4,6 @@
 #![allow(non_snake_case)]
 use crate::{
     css_property_name::CSSPropertyName,
-    css_property_value::CSSPropertyValueBackend,
     css_property_value_set::CSSPropertyValueSetRuleHandle,
     css_selector::{CSSSelector, GetPseudoId, MatchType, PseudoType, RelationType},
     css_selector_list::CSSSelectorList,
@@ -20,26 +19,20 @@ use crate::{
     parser::{
         css_parser_mode::CSSParserMode,
         css_selector_parser::{CSSSelectorParser, SelectorParserContext},
-        production_property_parser::{ParseDeclarationList, ParseProperty, PropertyParseErrorKind},
+        production_property_parser::ParseProperty,
     },
     persistent_selector::{
         PersistentSelectorError, PersistentSelectorMatchSession, PersistentSelectorService,
     },
-    production_css_value::{ProductionCSSValueDispatch, PropertyValue, Value},
+    production_css_value::{ProductionCSSValueDispatch, Value},
     production_rule_matching::{
         ProductionSelectorBucket as SelectorBucket,
         ProductionSelectorBucketForComplexSubject as SelectorBucketForComplexSubject,
     },
-    properties::{
-        css_property::CSSProperty,
-        longhand_dispatch::{LonghandApplicationError, ResolvePhysical},
-    },
+    properties::longhand_dispatch::LonghandApplicationError,
     resolver::{
-        cascade_expansion::{self, CascadeExpansionBackend},
-        cascade_map::CascadeMap,
         cascade_origin::CascadeOrigin,
-        cascade_priority::CascadePriority,
-        match_result::{MatchResult, MatchedPropertiesData, MatchedPropertySet},
+        match_result::MatchResult,
         production_style_builder::{
             self,
             custom_properties::{
@@ -47,11 +40,10 @@ use crate::{
                     AttributeResolutionState, AttributeResolver, PersistentAttributeSource,
                 },
                 ComputedVariableValue, CustomProperties, EnvironmentVariableResolver,
-                ResolvePropertyValueWithContext, SubstitutionContext, VariableResolutionError,
+                SubstitutionContext,
             },
         },
     },
-    valid_property_filter::ValidPropertyFilter,
 };
 use cssom::css_style_sheet::{CSSStyleSheet, CSSUserAgentStyleSheetRole};
 use dom::{
@@ -69,7 +61,6 @@ use foundation::{
 use layout_style::css::white_space::EWhiteSpace;
 use layout_style::style::{
     computed_style::{ComputedStyle, ComputedStyleBuilder, ComputedStyleDifference},
-    computed_style_base::{FieldDifference, IsAtShadowBoundary},
     computed_style_constants::{PseudoId, PseudoIdFlags},
     content_data::{ImageContentData, TextContentData},
     display_adjustment::AdjustComputedDisplayForLayout,
@@ -1957,7 +1948,7 @@ impl DocumentStyleEngine {
         ensure_target: Option<usize>,
     ) -> Result<StyleUpdateImpact, DocumentStyleError> {
         let mut update_trace = browser_tracing::span("style", "StyleEngine.Update");
-        let mut sheets_trace =
+        let sheets_trace =
             browser_tracing::span("style_rules", "StyleEngine.UpdateActiveStyleSheets");
         self.diagnostics.clear();
         self.translated_rule_shadow_stats = Default::default();
@@ -7346,7 +7337,7 @@ impl DocumentStyleEngine {
         originating: &ResolvedNodeStyle,
         originating_custom: &Rc<CustomProperties>,
         variable_dependencies: &mut Option<RetainedVariableDependencies>,
-        initial: &ComputedStyle,
+        _initial: &ComputedStyle,
         root: f32,
         media: &MediaValuesCachedData,
         environment_variables: Option<&dyn EnvironmentVariableResolver>,

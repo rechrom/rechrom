@@ -26,7 +26,7 @@ use crate::resolver::{
     match_result::{MatchResult, MatchedProperties},
     production_container_runtime::ProductionContainerRuntime,
 };
-use crate::rule_set::{RuleData, RuleSet};
+use crate::rule_set::RuleSet;
 use dom::persistent_document::{CompatibilityMode, DOMNamespace, DOMNodeType};
 use dom::Document;
 use foundation::{AtomicString, EInsideLink};

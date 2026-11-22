@@ -2460,7 +2460,6 @@ impl crate::media_query_exp::MediaQueryExpSerialization for CSSUnparsedDeclarati
 
 impl crate::media_query_exp::MediaQueryExpUnitFlags for Value {
     fn GetUnitFlags(&self) -> u32 {
-        use crate::media_query_exp::MediaQueryExpUnitFlags;
         match self.Payload() {
             CSSValuePayload::kNumericLiteralClass(value) => value.GetUnitFlags(),
             CSSValuePayload::kMathFunctionClass(value) => value.GetUnitFlags(),

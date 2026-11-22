@@ -1905,7 +1905,7 @@ impl<'c> Parser<'c> {
                 let old_ignore = self.ignore_default_namespace;
                 self.ignore_default_namespace |= pseudo == PseudoType::kPseudoCue;
                 let parsed = if pseudo == PseudoType::kPseudoSlotted {
-                    self.compound(&mut s, result_flags).map(|mut compound| {
+                    self.compound(&mut s, result_flags).map(|compound| {
                         MarkAsEntireComplexSelector(
                             &mut self.output.borrow_mut()[compound.clone()],
                         );

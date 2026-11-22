@@ -7,9 +7,9 @@ use crate::svg_path_parser::ParseSVGPathDefault;
 use crate::{Document, UserInteractionState, DOM};
 use foundation::TransformMatrix;
 use layout::input::{
-    ComputedStyle, Display, DocumentRole, ElementData, EmbeddedContentKind, FocusedImageMapArea,
-    FormControlType, ImageMapAreaShape, ListStyleType, NodeKind, SvgTextPathData, SvgUseData,
-    SvgViewBoxData, TextAreaSizing, TextFieldSizing,
+    ComputedStyle, DocumentRole, ElementData, EmbeddedContentKind, FocusedImageMapArea,
+    FormControlType, ImageMapAreaShape, NodeKind, SvgTextPathData, SvgUseData, SvgViewBoxData,
+    TextAreaSizing, TextFieldSizing,
 };
 use layout::mutation::{LayoutMutation, LayoutTreeUpdate};
 use layout::mutation::LayoutObject;

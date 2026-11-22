@@ -11,15 +11,13 @@ use dom::{
     Document,
 };
 use paint_input_types::{
-    layout_input::{
-        Offset, PaintPathVerb, Size, SvgShapeData, SvgViewBoxData, TextDirection, TransformMatrix,
-    },
+    layout_input::{Offset, PaintPathVerb, Size, SvgShapeData, SvgViewBoxData, TransformMatrix},
     paint_input::{
         PaintColorStop, PaintFilterType, PaintMaskMode, PaintRadialShape, PaintShader,
-        PaintShaderKind, PaintSpreadMethod, PaintStyleData, SvgClipLength, SvgClipText,
-        SvgClipTextAnchor, SvgClipTextPath, SvgMarkerInstance, SvgMarkerPrimitive, SvgMaskGraph,
-        SvgMaskUnits, SvgPaintServerReferenceBox, SvgPatternCommand, SvgPatternData,
-        SvgPatternImage, SvgPatternReferenceFilter, SvgPatternText,
+        PaintShaderKind, PaintSpreadMethod, SvgClipLength, SvgClipText, SvgClipTextAnchor,
+        SvgClipTextPath, SvgMarkerInstance, SvgMarkerPrimitive, SvgMaskGraph, SvgMaskUnits,
+        SvgPaintServerReferenceBox, SvgPatternCommand, SvgPatternData, SvgPatternImage,
+        SvgPatternReferenceFilter, SvgPatternText,
     },
 };
 use layout_style::style::{computed_style::ComputedStyle, svg_paint::SVGPaintType};
@@ -442,7 +440,7 @@ fn Collect(
     pending: &PendingStyles<'_>,
     start: usize,
     kind: PaintShaderKind,
-    paint_opacity: f32,
+    _paint_opacity: f32,
 ) -> CollectedGradient {
     let mut output = CollectedGradient::default();
     let mut visited = HashSet::new();

@@ -9,7 +9,7 @@ use super::{
     conditional_parser::{AtIdent, ConditionalParser, ConsumeAnyValue, ConsumeIfIdent, ParseMode},
     css_parser_context::CSSParserContext,
     css_parser_impl::{CSSParserImpl, SupportsResult},
-    css_parser_token::{BlockType, CSSParserTokenType::*},
+    css_parser_token::CSSParserTokenType::*,
     css_parser_token_stream::{
         BlockGuard, CSSParserTokenStream, RestoringBlockGuard, TokenStreamTokenizer,
     },

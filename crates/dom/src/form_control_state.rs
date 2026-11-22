@@ -3,7 +3,7 @@
 //! Source: core/html/forms/html_form_element.cc:1302-1379,1400-1428;
 //! html_select_element.cc:709-776,2339-2364;
 //! html_option_element.cc:386-412.
-use super::{DOMNamespace, PersistentDocument};
+use super::PersistentDocument;
 use std::{collections::HashMap, rc::Rc};
 
 /// Native listed/control class selected by the DOM allocation owner.

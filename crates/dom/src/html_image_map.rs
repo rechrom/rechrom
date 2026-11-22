@@ -7,7 +7,7 @@ pub use foundation::native_path::{
 };
 use foundation::{
     blink_geometry::transforms::affine_transform::AffineTransform,
-    gfx::{PointF, RectF},
+    gfx::PointF,
     native_path::{NativePath, NativePathFactory},
     LayoutUnit, PhysicalOffset, WindRule,
 };

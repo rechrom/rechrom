@@ -9,7 +9,6 @@ use crate::{
     production_css_value::Value,
     properties::{css_property::CSSProperty, longhand_dispatch::*},
 };
-use font_engine::FontSelectionValue;
 use foundation::{CSSPropertyID, CSSValueID, Color, IsHorizontalWritingMode, Length, LengthType};
 use layout_style::{
     css::style_color::StyleColor,

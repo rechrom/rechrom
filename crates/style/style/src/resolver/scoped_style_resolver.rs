@@ -41,7 +41,7 @@ use crate::font_feature_values_registry::FontFeatureValuesRegistry;
 use crate::resolver::cascade_origin::CascadeOrigin;
 use crate::resolver::media_query_result::MediaQueryResultFlags;
 use crate::rule_set::{
-    FontFaceRuleKind, FunctionRuleKind, RuleSet, RuleSetBackend, RuleSetStyleScope, TypedRuleRef,
+    FontFaceRuleKind, FunctionRuleKind, RuleSet, RuleSetStyleScope, TypedRuleRef,
 };
 use crate::style_rule_font_feature_values::{FontFeatureValuesStorage, StyleRuleFontFeatureValues};
 use crate::style_sheet_contents::{StyleSheetContents, StyleSheetContentsBackend};

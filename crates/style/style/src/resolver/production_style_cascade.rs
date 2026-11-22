@@ -34,7 +34,7 @@ use crate::{
         },
     },
     production_css_value::{self, CSSVariableData, ProductionCSSValueDispatch},
-    production_style_sheet::{self, Backend as ProductionSheetBackend, QuerySet},
+    production_style_sheet::{self, QuerySet},
     properties::{
         css_property::{CSSProperty, Flags},
         longhand_dispatch::ResolvePhysical,
@@ -4307,6 +4307,7 @@ mod tests {
             production_property_parser::{ParseCustomProperty, ParseDeclarationList},
         },
         production_css_value::PropertyValue,
+        production_style_sheet::Backend as ProductionSheetBackend,
         resolver::{
             match_result::MatchedPropertiesData,
             production_style_builder::custom_properties::{

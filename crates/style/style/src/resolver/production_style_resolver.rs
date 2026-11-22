@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-use font_engine::{FontDescription, FontSelectionValue, FontVariantEmoji, LayoutLocale};
+use font_engine::{FontDescription, FontVariantEmoji, LayoutLocale};
 use foundation::{
     AtomicString, CSSBitset as StyleCSSBitset, CSSPropertyID, CSSValueID, DisplayAdjustmentContext,
     EDisplay, EForcedColorAdjust, EInlineBlockBaselineEdge, EInsideLink, EInteractivity, EOrder,
@@ -3658,10 +3658,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             .FindAttribute("contenteditable")
             .is_some()
     }
-    fn ImplicitAnchorElement(&self, element: &Self::Element) -> Option<Rc<Self::Element>> {
+    fn ImplicitAnchorElement(&self, _element: &Self::Element) -> Option<Rc<Self::Element>> {
         None
     }
-    fn GetCascadeFilter(&self, element: &Self::Element) -> CascadeFilter {
+    fn GetCascadeFilter(&self, _element: &Self::Element) -> CascadeFilter {
         let filter = CascadeFilter::new();
         if layout_style::style::computed_style_constants::IsHighlightPseudoElement(
             self.cascade.pseudo_id,
@@ -3683,31 +3683,31 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             .backward_positional_parents
             .insert(node.index);
     }
-    fn SetUsesTreeCountingFunctions(&self, engine: &Self::StyleEngine) {
+    fn SetUsesTreeCountingFunctions(&self, _engine: &Self::StyleEngine) {
         self.base_style_metrics
             .borrow_mut()
             .uses_tree_counting_functions = true;
     }
-    fn SetUsesRootRelativeUnits(&self, engine: &Self::StyleEngine, value: bool) {
+    fn SetUsesRootRelativeUnits(&self, _engine: &Self::StyleEngine, value: bool) {
         self.base_style_metrics
             .borrow_mut()
             .uses_root_relative_units |= value;
     }
-    fn SetUsesGlyphRelativeUnits(&self, engine: &Self::StyleEngine, value: bool) {
+    fn SetUsesGlyphRelativeUnits(&self, _engine: &Self::StyleEngine, value: bool) {
         self.base_style_metrics
             .borrow_mut()
             .uses_glyph_relative_units |= value;
     }
-    fn SetUsesLineHeightUnits(&self, engine: &Self::StyleEngine, value: bool) {
+    fn SetUsesLineHeightUnits(&self, _engine: &Self::StyleEngine, value: bool) {
         self.base_style_metrics.borrow_mut().uses_line_height_units |= value;
     }
-    fn AddViewportUnitFlags(&self, document: &Self::Document, flags: u32) {
+    fn AddViewportUnitFlags(&self, _document: &Self::Document, flags: u32) {
         self.base_style_metrics.borrow_mut().viewport_unit_flags |= flags;
     }
-    fn SetTextLinkTextColor(&self, document: &Self::Document, color: Self::CurrentColor) {
+    fn SetTextLinkTextColor(&self, _document: &Self::Document, color: Self::CurrentColor) {
         self.base_style_metrics.borrow_mut().text_link_text_color = Some(color);
     }
-    fn ActiveModalDialog(&self, document: &Self::Document) -> Option<Rc<Self::Element>> {
+    fn ActiveModalDialog(&self, _document: &Self::Document) -> Option<Rc<Self::Element>> {
         None
     }
     fn FullscreenElementFrom(&self, _document: &Self::Document) -> Option<Rc<Self::Element>> {
@@ -3720,7 +3720,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             ))
         })
     }
-    fn RuntimeFeatureEnabled(&self, feature: ResolverRuntimeFeature) -> bool {
+    fn RuntimeFeatureEnabled(&self, _feature: ResolverRuntimeFeature) -> bool {
         false
     }
     fn NewStyleRequest(&self) -> Self::StyleRequest {
@@ -3762,10 +3762,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn RequestPseudoId(&self, request: &Self::StyleRequest) -> PseudoId {
         request.pseudo.id
     }
-    fn RequestUAOnly(&self, request: &Self::StyleRequest) -> bool {
+    fn RequestUAOnly(&self, _request: &Self::StyleRequest) -> bool {
         false
     }
-    fn RequestExcludesSMIL(&self, request: &Self::StyleRequest) -> bool {
+    fn RequestExcludesSMIL(&self, _request: &Self::StyleRequest) -> bool {
         true
     }
     fn NewStyleRecalcContext(&self) -> Self::StyleRecalcContext {
@@ -3795,9 +3795,9 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn NewStyleResolverState(
         &self,
-        document: &Self::Document,
+        _document: &Self::Document,
         element: &Self::Element,
-        context: Option<&Self::StyleRecalcContext>,
+        _context: Option<&Self::StyleRecalcContext>,
         request: &Self::StyleRequest,
     ) -> Self::StyleResolverState {
         ProductionResolverState {
@@ -3915,13 +3915,13 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn StateSetHadNoMatchedProperties(&self, state: &mut Self::StyleResolverState) {
         state.had_no_matched_properties = true
     }
-    fn StateCanTriggerAnimations(&self, state: &Self::StyleResolverState) -> bool {
+    fn StateCanTriggerAnimations(&self, _state: &Self::StyleResolverState) -> bool {
         false
     }
     fn StateCanAffectAnimations(&self, state: &Self::StyleResolverState) -> bool {
         state.conditionally_affects_animations || state.builder.CanAffectAnimations()
     }
-    fn StateAffectsCompositorSnapshots(&self, state: &Self::StyleResolverState) -> bool {
+    fn StateAffectsCompositorSnapshots(&self, _state: &Self::StyleResolverState) -> bool {
         false
     }
     fn StateInsideLink(&self, state: &Self::StyleResolverState) -> EInsideLink {
@@ -3985,10 +3985,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         }
         state.output.as_ref().unwrap().clone()
     }
-    fn StateLoadPendingResources(&self, state: &mut Self::StyleResolverState) {
+    fn StateLoadPendingResources(&self, _state: &mut Self::StyleResolverState) {
         // Ordinary typed declarations in this slice have no pending resources.
     }
-    fn StateUpdateFont(&self, state: &mut Self::StyleResolverState) {
+    fn StateUpdateFont(&self, _state: &mut Self::StyleResolverState) {
         // StyleCascade::Apply performs the production font update.
     }
     fn StateSetTreeScopedReference(&self, state: &mut Self::StyleResolverState) {
@@ -4478,7 +4478,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn StyleEffectiveZoom(&self, style: &Self::ComputedStyle) -> f32 {
         Self::style(style).EffectiveZoom()
     }
-    fn StyleInheritedVariablesHash(&self, style: &Self::ComputedStyle) -> u32 {
+    fn StyleInheritedVariablesHash(&self, _style: &Self::ComputedStyle) -> u32 {
         // The computed style style retains other inherited fields. Variables belong
         // to the typed style-side owner and join the same source MPC key.
         self.cascade
@@ -4534,7 +4534,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn ValueIsMathFunction(&self, value: &Self::CSSValue) -> bool {
         value.IsMathFunctionValue()
     }
-    fn MathValueHasAnchorFunctions(&self, value: &Self::CSSValue) -> bool {
+    fn MathValueHasAnchorFunctions(&self, _value: &Self::CSSValue) -> bool {
         // The fixed-commit production parser has no CSSMathExpressionNode
         // variant for anchor()/anchor-size(). Such syntax is rejected before
         // a math CSSValue reaches StyleResolver, matching the cascade backend.
@@ -4582,14 +4582,14 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn StateAnchorEvaluator(
         &self,
-        state: &Self::StyleResolverState,
+        _state: &Self::StyleResolverState,
     ) -> Option<Rc<Self::AnchorEvaluator>> {
         None
     }
     fn ComputeAnchorCenterOffsets(
         &self,
-        evaluator: &Self::AnchorEvaluator,
-        builder: &Self::ComputedStyleBuilder,
+        _evaluator: &Self::AnchorEvaluator,
+        _builder: &Self::ComputedStyleBuilder,
     ) -> Option<PhysicalOffset> {
         self.unsupported("base:ComputeAnchorCenterOffsets");
         Default::default()
@@ -4601,10 +4601,10 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     ) {
         builder.SetAnchorCenterOffsetOwned(offset)
     }
-    fn EnsureUAStyleForElement(&self, engine: &Self::StyleEngine, element: &Self::Element) {
+    fn EnsureUAStyleForElement(&self, _engine: &Self::StyleEngine, _element: &Self::Element) {
         // The caller supplied the typed UA RuleSet owner.
     }
-    fn EnsureUAStyleForPseudoElement(&self, engine: &Self::StyleEngine, pseudo_id: PseudoId) {
+    fn EnsureUAStyleForPseudoElement(&self, _engine: &Self::StyleEngine, pseudo_id: PseudoId) {
         if !matches!(
             pseudo_id,
             PseudoId::kPseudoIdBefore
@@ -4634,7 +4634,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         &self,
         state: &Self::StyleResolverState,
         context: &Self::StyleRecalcContext,
-        selector_filter: &mut Self::SelectorFilter,
+        _selector_filter: &mut Self::SelectorFilter,
         cascade: &mut Self::StyleCascade,
     ) -> Self::ElementRuleCollector {
         if self.cascade.incremental_style.is_some() && !state.pseudo {
@@ -4674,7 +4674,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         &self,
         state: &Self::StyleResolverState,
         context: &Self::StyleRecalcContext,
-        selector_filter: &mut Self::SelectorFilter,
+        _selector_filter: &mut Self::SelectorFilter,
         result: &mut Self::MatchResult,
     ) -> Self::ElementRuleCollector {
         self.unsupported("base:new-collector-for-external-result");
@@ -4976,7 +4976,7 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         state: &mut Self::StyleResolverState,
         element: &Self::Element,
         pseudo_or_element: Option<&Self::Element>,
-        styled_element: Option<&Self::Element>,
+        _styled_element: Option<&Self::Element>,
     ) {
         // cpp: style_adjuster.cc:1423-1458. Pseudos without a concrete
         // element have no theme owner and source sets effective appearance to
@@ -5003,8 +5003,8 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn GetElementTypeCacheKey(
         &self,
-        layout_parent: &Self::ComputedStyle,
-        element: &Self::Element,
+        _layout_parent: &Self::ComputedStyle,
+        _element: &Self::Element,
     ) -> Self::ElementTypeForCache {
         // This adapter currently performs only the shared display adjustment
         // after insertion. Store the pre-adjusted style, exactly matching the
@@ -5168,12 +5168,12 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
             .borrow_mut()
             .matched_property_cache_adds += 1;
     }
-    fn WatchedSelectorsRuleSet(&self, engine: &Self::StyleEngine) -> Option<Rc<Self::RuleSet>> {
+    fn WatchedSelectorsRuleSet(&self, _engine: &Self::StyleEngine) -> Option<Rc<Self::RuleSet>> {
         None
     }
     fn DocumentRulesSelectorsRuleSet(
         &self,
-        engine: &Self::StyleEngine,
+        _engine: &Self::StyleEngine,
     ) -> Option<Rc<Self::RuleSet>> {
         // StyleEngine::DocumentRulesSelectorsRuleSet is nullable in Blink.
         // This owner has no document-rules selector registrations, so the
@@ -5183,60 +5183,60 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn SetMatchingRulesFromNoStyleSheet(
         &self,
-        collector: &mut Self::ElementRuleCollector,
-        value: bool,
+        _collector: &mut Self::ElementRuleCollector,
+        _value: bool,
     ) {
         self.unsupported("base:SetMatchingRulesFromNoStyleSheet");
         Default::default()
     }
-    fn SetCollectingStyleRulesMode(&self, collector: &mut Self::ElementRuleCollector) {
+    fn SetCollectingStyleRulesMode(&self, _collector: &mut Self::ElementRuleCollector) {
         self.unsupported("base:SetCollectingStyleRulesMode");
         Default::default()
     }
-    fn CompactRulesIfNeeded(&self, rules: &Self::RuleSet) {
+    fn CompactRulesIfNeeded(&self, _rules: &Self::RuleSet) {
         self.unsupported("base:CompactRulesIfNeeded");
         Default::default()
     }
     fn RuleSetGroupAddRuleSetBorrowed(
         &self,
-        group: &mut Self::RuleSetGroup,
-        rules: &Self::RuleSet,
+        _group: &mut Self::RuleSetGroup,
+        _rules: &Self::RuleSet,
     ) {
         self.unsupported("base:RuleSetGroupAddRuleSetBorrowed");
         Default::default()
     }
     fn CollectMatchingRulesInContainer(
         &self,
-        collector: &mut Self::ElementRuleCollector,
-        group: &Self::RuleSetGroup,
-        scope: Option<&Self::ContainerNode>,
+        _collector: &mut Self::ElementRuleCollector,
+        _group: &Self::RuleSetGroup,
+        _scope: Option<&Self::ContainerNode>,
     ) {
         self.unsupported("base:CollectMatchingRulesInContainer");
         Default::default()
     }
     fn MatchedStyleRuleList(
         &self,
-        collector: &Self::ElementRuleCollector,
+        _collector: &Self::ElementRuleCollector,
     ) -> Option<Vec<Rc<Self::StyleRule>>> {
         self.unsupported("base:MatchedStyleRuleList");
         Default::default()
     }
-    fn SelectorsText(&self, rule: &Self::StyleRule) -> foundation::String {
+    fn SelectorsText(&self, _rule: &Self::StyleRule) -> foundation::String {
         self.unsupported("base:SelectorsText");
         Default::default()
     }
     fn AddCallbackSelector(
         &self,
-        builder: &mut Self::ComputedStyleBuilder,
-        selector: foundation::String,
+        _builder: &mut Self::ComputedStyleBuilder,
+        _selector: foundation::String,
     ) {
         self.unsupported("base:AddCallbackSelector");
         Default::default()
     }
     fn AddDocumentRulesSelector(
         &self,
-        builder: &mut Self::ComputedStyleBuilder,
-        rule: &Rc<Self::StyleRule>,
+        _builder: &mut Self::ComputedStyleBuilder,
+        _rule: &Rc<Self::StyleRule>,
     ) {
         self.unsupported("base:AddDocumentRulesSelector");
         Default::default()
@@ -5264,21 +5264,21 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn ElementAnimationsIsAnimationStyleChange(
         &self,
-        animations: &Self::ElementAnimations,
+        _animations: &Self::ElementAnimations,
     ) -> bool {
         false
     }
     fn AnimatingProperty(
         &self,
-        animations: &Self::ElementAnimations,
-        property: ResolverAnimationProperty,
+        _animations: &Self::ElementAnimations,
+        _property: ResolverAnimationProperty,
     ) -> bool {
         false
     }
     fn IsAnimatingStandardPropertiesAtDefaultPriority(
         &self,
-        animations: &Self::ElementAnimations,
-        important: Option<&Self::CSSBitset>,
+        _animations: &Self::ElementAnimations,
+        _important: Option<&Self::CSSBitset>,
     ) -> bool {
         false
     }
@@ -5297,30 +5297,30 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     fn TimelineScopeIsNone(&self, builder: &Self::ComputedStyleBuilder) -> bool {
         builder.TimelineScope().IsNone()
     }
-    fn CSSAnimationsHasTimelines(&self, animations: &Self::ElementAnimations) -> bool {
+    fn CSSAnimationsHasTimelines(&self, _animations: &Self::ElementAnimations) -> bool {
         false
     }
-    fn AnimationUpdateEmpty(&self, state: &Self::StyleResolverState) -> bool {
+    fn AnimationUpdateEmpty(&self, _state: &Self::StyleResolverState) -> bool {
         true
     }
     fn HasPreviousActiveInterpolationsForAnimations(
         &self,
-        animations: &Self::ElementAnimations,
+        _animations: &Self::ElementAnimations,
     ) -> bool {
         false
     }
     fn CurrentAnimationData(&self) -> Option<Rc<Self::AnimationData>> {
         None
     }
-    fn StoreOldStyleIfNeeded(&self, data: &Self::AnimationData, element: &Self::Element) {
+    fn StoreOldStyleIfNeeded(&self, _data: &Self::AnimationData, _element: &Self::Element) {
         self.unsupported("base:StoreOldStyleIfNeeded");
         Default::default()
     }
     fn SetPendingAnimationUpdate(
         &self,
-        data: &Self::AnimationData,
-        element: &Self::Element,
-        state: &Self::StyleResolverState,
+        _data: &Self::AnimationData,
+        _element: &Self::Element,
+        _state: &Self::StyleResolverState,
     ) {
         self.unsupported("base:SetPendingAnimationUpdate");
         Default::default()
@@ -5329,9 +5329,9 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
         &self,
         state: &mut Self::StyleResolverState,
         animating: &Self::Element,
-        originating: &Self::Element,
-        resolver: &StyleResolver<'_, Self>,
-        can_trigger: bool,
+        _originating: &Self::Element,
+        _resolver: &StyleResolver<'_, Self>,
+        _can_trigger: bool,
     ) {
         // `Document::AnimationStyles` is already the sampled animation update
         // produced by the document owner. Preserve CSSAnimations::
@@ -5389,28 +5389,28 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn CalculateTransitionUpdate(
         &self,
-        state: &mut Self::StyleResolverState,
-        animating: &Self::Element,
-        context: &Self::StyleRecalcContext,
-        can_trigger: bool,
+        _state: &mut Self::StyleResolverState,
+        _animating: &Self::Element,
+        _context: &Self::StyleRecalcContext,
+        _can_trigger: bool,
     ) {
         // `Document::TransitionStyles` is the separate retained transition
         // bucket, matching CSSAnimationUpdate's two ActiveInterpolationsMaps.
         // The producer has already sampled it; this host only publishes it.
     }
-    fn AnimationUpdateHasActiveInterpolations(&self, state: &Self::StyleResolverState) -> bool {
+    fn AnimationUpdateHasActiveInterpolations(&self, _state: &Self::StyleResolverState) -> bool {
         self.cascade.animations.is_some_and(|map| !map.IsEmpty())
             || self.cascade.transitions.is_some_and(|map| !map.IsEmpty())
     }
     fn ActiveInterpolationsForAnimations(
         &self,
-        state: &Self::StyleResolverState,
+        _state: &Self::StyleResolverState,
     ) -> Rc<Self::ActiveInterpolationsMap> {
         Rc::new(self.cascade.animations.cloned().unwrap_or_default())
     }
     fn ActiveInterpolationsForTransitions(
         &self,
-        state: &Self::StyleResolverState,
+        _state: &Self::StyleResolverState,
     ) -> Rc<Self::ActiveInterpolationsMap> {
         Rc::new(self.cascade.transitions.cloned().unwrap_or_default())
     }
@@ -5419,36 +5419,36 @@ impl StyleResolverBaseStyleBackend for ProductionRuleMatchingHost<'_> {
     }
     fn CancelCompositedAnimationsAffectingProperties(
         &self,
-        animations: &Self::ElementAnimations,
-        important: &Self::CSSBitset,
+        _animations: &Self::ElementAnimations,
+        _important: &Self::CSSBitset,
     ) {
         // Sampled DOM declarations have no compositor animation owner.
     }
     fn CalculateCompositorAnimationUpdate(
         &self,
-        state: &mut Self::StyleResolverState,
-        animating: &Self::Element,
-        originating: &Self::Element,
-        base_style: &Self::ComputedStyle,
-        parent: Option<&Self::ComputedStyle>,
-        viewport_resized: bool,
-        affects_snapshots: bool,
+        _state: &mut Self::StyleResolverState,
+        _animating: &Self::Element,
+        _originating: &Self::Element,
+        _base_style: &Self::ComputedStyle,
+        _parent: Option<&Self::ComputedStyle>,
+        _viewport_resized: bool,
+        _affects_snapshots: bool,
     ) {
         // The retained sample owner has no compositor update payload.
     }
     fn SnapshotCompositorKeyframes(
         &self,
-        animating: &Self::Element,
-        state: &Self::StyleResolverState,
-        base_style: &Self::ComputedStyle,
-        parent: Option<&Self::ComputedStyle>,
+        _animating: &Self::Element,
+        _state: &Self::StyleResolverState,
+        _base_style: &Self::ComputedStyle,
+        _parent: Option<&Self::ComputedStyle>,
     ) {
         // The retained sample owner has no compositor keyframe payload.
     }
     fn UpdateAnimationFlags(
         &self,
-        animating: &Self::Element,
-        state: &mut Self::StyleResolverState,
+        _animating: &Self::Element,
+        _state: &mut Self::StyleResolverState,
     ) {
         // Current-animation compositor flags require the missing compositor
         // effect owner; sampled declarations do not imply those flags.
@@ -5963,6 +5963,7 @@ mod tests {
             },
         },
     };
+    use font_engine::FontSelectionValue;
 
     fn element_with_id(document: &Document, id: &str) -> usize {
         (0..document.NodeCount())

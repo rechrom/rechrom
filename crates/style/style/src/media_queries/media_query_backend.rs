@@ -15,7 +15,6 @@ use super::device_posture_provider::DevicePostureType;
 use super::display_mode::DisplayMode as DisplayModeValue;
 use super::media_query_evaluator::*;
 use super::media_query_exp::*;
-use super::media_query_set::MediaQuerySet;
 use super::media_values::MediaValues;
 use super::scripting::Scripting as ScriptingValue;
 use super::web_preferences::OutputDeviceUpdateAbilityType;
@@ -23,13 +22,8 @@ use super::window_show_state::WindowShowState;
 use crate::css_numeric_literal_value::CSSNumericLiteralValue;
 use crate::css_primitive_value::UnitType;
 use crate::kleene_value::KleeneValue;
-use crate::parser::css_parser_token::{CSSParserTokenType::*, NumericValueType};
-use crate::parser::css_parser_token_stream::{CSSParserTokenStream, TokenStreamTokenizer};
-use crate::parser::media_query_parser::{
-    MediaQueryParser, MediaQueryParserBackend, MediaQueryRuntimeFeatures,
-};
 use crate::resolver::media_query_result::MediaQueryResultFlags;
-use foundation::{AtomicString, CSSValueID, StringView};
+use foundation::{AtomicString, CSSValueID};
 use std::rc::Rc;
 
 use style_parser::production_media_query::{Feature, FeatureForName};
@@ -437,6 +431,8 @@ mod tests {
     use super::*;
     use crate::media_queries::web_preferences::{HoverType, PointerType};
     use crate::media_queries::{MediaValuesCached, MediaValuesCachedData, PreferredColorScheme};
+    use crate::parser::media_query_parser::MediaQueryParser;
+    use foundation::StringView;
     fn values() -> MediaValuesCached {
         MediaValuesCached::new(&MediaValuesCachedData {
             viewport_width: 800.0,

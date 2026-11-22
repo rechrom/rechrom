@@ -12,7 +12,7 @@ use crate::{
     kleene_value::KleeneValue,
     media_queries::{
         conditional_exp_node::{ConditionalExpNode, ConditionalExpNodeVisitor},
-        media_query_backend::{MediaQueryFeatureFlags, MediaQueryValueBackend},
+        media_query_backend::MediaQueryFeatureFlags,
         media_query_container::ContainerQueryEvaluationBackend,
         media_query_evaluator::{MediaQueryEvaluationBackend, MediaQueryEvaluator},
         media_query_exp::{
