@@ -16,7 +16,10 @@ use core::{
 };
 use quickjs::cutils::{dbuf_free, dbuf_init, dbuf_put_u32, dbuf_putc, DynBuf};
 use quickjs::cutils_header::{max_int, min_int, FALSE, TRUE};
-include!("unicode_gen_support.rs");
+use std::{ffi::{CStr,CString,OsString},fs::{File,OpenOptions},io::{BufRead,BufReader,BufWriter,Read,Write},sync::Mutex};
+use quickjs::libunicode_header::{UnicodeNormalizationEnum,UNICODE_NFC,UNICODE_NFD,UNICODE_NFKC,UNICODE_NFKD};
+mod unicode_gen_support;
+pub use unicode_gen_support::*;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct REString {
@@ -119,7 +122,11 @@ static mut total_table_bytes: u32 = 0;
 static mut total_index: u32 = 0;
 static mut total_index_bytes: u32 = 0;
 
-include!("unicode_gen_constants.rs");
-include!("unicode_gen_bodies.rs");
-include!("unicode_gen_entry.rs");
-include!("unicode_gen_dormant.rs");
+mod unicode_gen_constants;
+pub use unicode_gen_constants::*;
+mod unicode_gen_bodies;
+pub use unicode_gen_bodies::*;
+mod unicode_gen_entry;
+pub use unicode_gen_entry::*;
+mod unicode_gen_dormant;
+pub use unicode_gen_dormant::*;

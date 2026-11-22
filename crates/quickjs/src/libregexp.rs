@@ -786,11 +786,10 @@ pub unsafe fn lre_exec_with_backtrack_limit(
     ret
 }
 #[cfg(test)]
-#[path = "../tests/regexp_exec_differential.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../tests/regexp_compile_differential.rs"]
 mod compile_tests;
 
-include!("libregexp_parser.rs");
+mod libregexp_parser;
+pub use libregexp_parser::*;

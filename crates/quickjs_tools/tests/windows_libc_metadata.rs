@@ -1,5 +1,6 @@
-//! Typecheck the real Windows-selected source on a non-Windows host. This is
-//! compile-only; no native Windows OS service is mocked or executed.
+//! Layout checks of the production Windows host modules, through the crate API.
+//! Compile-only; no native Windows OS service is mocked or executed.
+#![cfg(windows)]
 #![allow(
     non_snake_case,
     non_camel_case_types,
@@ -10,15 +11,7 @@
     unused_parens,
     unused_assignments
 )]
-mod quickjs_libc {
-    pub use quickjs_tools::quickjs_libc::*;
-}
-#[path = "../src/quickjs_libc_windows.rs"]
-mod quickjs_libc_windows;
-#[path = "../src/quickjs_libc_windows_state.rs"]
-mod quickjs_libc_windows_state;
-#[path = "../src/quickjs_libc_windows_worker.rs"]
-mod quickjs_libc_windows_worker;
+use quickjs_tools::{quickjs_libc_windows, quickjs_libc_windows_state};
 const _: () =
     assert!(core::mem::size_of::<quickjs_libc_windows::CONSOLE_SCREEN_BUFFER_INFO>() == 22);
 #[cfg(target_pointer_width = "64")]

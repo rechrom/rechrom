@@ -1088,15 +1088,27 @@ pub unsafe fn js_module_loader_test(
 }
 
 #[cfg(any(unix, windows))]
-include!("run_test262_agents.rs");
+use quickjs::list::{init_list_head, list_add_tail, list_del, list_empty, list_head, ListIter};
 #[cfg(any(unix, windows))]
-include!("run_test262_eval.rs");
+mod run_test262_agents;
+#[cfg(any(unix, windows))]
+pub use run_test262_agents::*;
+#[cfg(any(unix, windows))]
+mod run_test262_eval;
+#[cfg(any(unix, windows))]
+pub use run_test262_eval::*;
 
 #[cfg(any(unix, windows))]
-include!("run_test262_runner.rs");
+mod run_test262_runner;
+#[cfg(any(unix, windows))]
+pub use run_test262_runner::*;
 
 #[cfg(any(unix, windows))]
-include!("run_test262_cli.rs");
+mod run_test262_cli;
+#[cfg(any(unix, windows))]
+pub use run_test262_cli::*;
 
 #[cfg(any(unix, windows))]
-include!("run_test262_main.rs");
+mod run_test262_main;
+#[cfg(any(unix, windows))]
+pub use run_test262_main::*;

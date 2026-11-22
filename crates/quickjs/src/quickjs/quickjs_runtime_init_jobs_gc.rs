@@ -1,0 +1,194 @@
+// quickjs.c:2263..2342,6510..6538,6815..6838,61027..61059. MIT.
+use super::*;
+pub(crate) unsafe fn JS_EnqueueJob2(
+    ctx: *mut JSContext,
+    job_func: Option<JSJobFunc>,
+    argc: i32,
+    argv: *mut JSValueConst,
+    no_exception: i32,
+) -> i32 {
+    let rt = (*ctx).rt;
+    let size =
+        size_of::<JSJobEntry>().wrapping_add((argc as usize).wrapping_mul(size_of::<JSValue>()));
+    let e = if no_exception != 0 {
+        js_malloc_rt(rt, size)
+    } else {
+        js_malloc(ctx, size)
+    }
+    .cast::<JSJobEntry>();
+    if e.is_null() {
+        return -1;
+    }
+    (*e).continuation_data = js_capture_continuation_data(ctx);
+    (*e).realm = JS_DupContext(ctx);
+    (*e).job_func = job_func;
+    (*e).argc = argc;
+    for i in 0..argc {
+        *ptr::addr_of_mut!((*e).argv)
+            .cast::<JSValue>()
+            .add(i as usize) = JS_DupValue(ctx, *argv.add(i as usize));
+    }
+    list_add_tail(&mut (*e).link, &mut (*rt).job_list);
+    0
+}
+pub unsafe fn JS_EnqueueJob(
+    ctx: *mut JSContext,
+    job_func: Option<JSJobFunc>,
+    argc: i32,
+    argv: *mut JSValueConst,
+) -> i32 {
+    JS_EnqueueJob2(ctx, job_func, argc, argv, 0)
+}
+
+pub unsafe fn JS_ExecutePendingJob(rt: *mut JSRuntime, pctx: *mut *mut JSContext) -> i32 {
+    if list_empty(&mut (*rt).job_list) != 0 {
+        if !pctx.is_null() {
+            *pctx = ptr::null_mut();
+        }
+        return 0;
+    }
+    let e = (*rt)
+        .job_list
+        .next
+        .cast::<u8>()
+        .sub(offset_of!(JSJobEntry, link))
+        .cast::<JSJobEntry>();
+    list_del(&mut (*e).link);
+    let ctx = (*e).realm;
+    let argv = ptr::addr_of_mut!((*e).argv).cast::<JSValue>();
+    let mut trace = browser_tracing::span("javascript", "PendingJob");
+    trace.set("argc", (*e).argc as f64);
+    let stack_profile = js_job_stack_profile_begin(rt, (*e).job_func.unwrap() as usize);
+    let continuation_scope =
+        JSContinuationScope::Enter(ctx, js_continuation_value((*e).continuation_data));
+    let res = (*e).job_func.unwrap()(ctx, (*e).argc, argv);
+    drop(continuation_scope);
+    js_free_continuation_data((*e).continuation_data);
+    drop(stack_profile);
+    for i in 0..(*e).argc {
+        JS_FreeValue(ctx, *argv.add(i as usize));
+    }
+    let ret = if JS_IsException(res) != 0 { -1 } else { 1 };
+    trace.set("failed", u8::from(ret < 0) as f64);
+    JS_FreeValue(ctx, res);
+    js_free(ctx, e.cast());
+    if !pctx.is_null() {
+        *pctx = if (*js_rc(ctx.cast())).ref_count > 1 {
+            ctx
+        } else {
+            ptr::null_mut()
+        };
+    }
+    JS_FreeContext(ctx);
+    ret
+}
+pub(crate) unsafe fn js_finrec_job(ctx: *mut JSContext, _argc: i32, argv: *mut JSValueConst) -> JSValue {
+    JS_Call(ctx, *argv, JS_UNDEFINED, 1, argv.add(1))
+}
+pub(crate) unsafe fn finrec_delete_weakref(rt: *mut JSRuntime, wh: *mut JSWeakRefHeader) {
+    let frd = wh
+        .cast::<u8>()
+        .sub(offset_of!(JSFinalizationRegistryData, weakref_header))
+        .cast::<JSFinalizationRegistryData>();
+    for el in ListIter::new(&mut (*frd).entries, false, true) {
+        let fre = el
+            .cast::<u8>()
+            .sub(offset_of!(JSFinRecEntry, link))
+            .cast::<JSFinRecEntry>();
+        if js_weakref_is_live((*fre).token) == 0 {
+            js_weakref_free(rt, (*fre).token);
+            (*fre).token = JS_UNDEFINED;
+        }
+        if js_weakref_is_live((*fre).target) == 0 {
+            let mut args = [(*frd).cb, (*fre).held_val];
+            JS_EnqueueJob2((*frd).realm, Some(js_finrec_job), 2, args.as_mut_ptr(), 1);
+            js_weakref_free(rt, (*fre).target);
+            js_weakref_free(rt, (*fre).token);
+            JS_FreeValueRT(rt, (*fre).held_val);
+            list_del(&mut (*fre).link);
+            js_free_rt(rt, fre.cast());
+        }
+    }
+}
+pub(crate) unsafe fn gc_remove_weak_objects(rt: *mut JSRuntime) {
+    (*rt).gc_phase = JS_GC_PHASE_DECREF as u8;
+    for el in ListIter::new(&mut (*rt).weakref_list, false, false) {
+        let wh = el
+            .cast::<u8>()
+            .sub(offset_of!(JSWeakRefHeader, link))
+            .cast::<JSWeakRefHeader>();
+        match (*wh).weakref_type {
+            JS_WEAKREF_TYPE_MAP => map_delete_weakrefs(rt, wh),
+            JS_WEAKREF_TYPE_WEAKREF => weakref_delete_weakref(rt, wh),
+            JS_WEAKREF_TYPE_FINREC => finrec_delete_weakref(rt, wh),
+            _ => std::process::abort(),
+        }
+    }
+    (*rt).gc_phase = JS_GC_PHASE_NONE as u8;
+    free_zero_refcount(rt);
+}
+pub(crate) unsafe fn JS_RunGCInternal(rt: *mut JSRuntime, remove_weak_objects: i32) {
+    let mut trace = browser_tracing::span("gc", "QuickJSGC");
+    trace.set("remove_weak_objects", remove_weak_objects as f64);
+    let count = browser_tracing::enabled();
+    trace.set(
+        "malloc_bytes_before",
+        (*rt).malloc_ctx.malloc_state.malloc_size as f64,
+    );
+    trace.set("gc_threshold", (*rt).malloc_gc_threshold as f64);
+    if remove_weak_objects != 0 {
+        let _phase = browser_tracing::span("gc", "QuickJSWeakObjects");
+        gc_remove_weak_objects(rt);
+    }
+    {
+        let mut phase = browser_tracing::span("gc", "QuickJSDecref");
+        if count {
+            let counts = gc_decref_counted::<true>(rt);
+            trace.set("gc_nodes", counts.kinds.iter().sum::<usize>() as f64);
+            trace.set("gc_objects", counts.kinds[0] as f64);
+            phase.set("property_slots", counts.property_slots as f64);
+            phase.set("closure_slots", counts.closure_slots as f64);
+            phase.set("array_slots", counts.array_slots as f64);
+            phase.set("constant_slots", counts.constant_slots as f64);
+            phase.set("function_slots", counts.function_slots as f64);
+            // Each trace event has eight field slots. Keep the type breakdown
+            // separate from parent totals and phase work counters.
+            browser_tracing::instant(
+                "gc",
+                "QuickJSTopology",
+                &[
+                    ("objects", counts.kinds[0] as f64),
+                    ("bytecodes", counts.kinds[1] as f64),
+                    ("shapes", counts.kinds[2] as f64),
+                    ("var_refs", counts.kinds[3] as f64),
+                    ("async_functions", counts.kinds[4] as f64),
+                    ("contexts", counts.kinds[5] as f64),
+                    ("modules", counts.kinds[6] as f64),
+                ],
+            );
+        } else {
+            gc_decref(rt);
+        }
+    }
+    {
+        let _phase = browser_tracing::span("gc", "QuickJSScan");
+        if count {
+            let counts = gc_scan_counted::<true>(rt);
+            trace.set("live_gc_nodes", counts.iter().sum::<usize>() as f64);
+            trace.set("live_gc_objects", counts[0] as f64);
+        } else {
+            gc_scan(rt);
+        }
+    }
+    {
+        let _phase = browser_tracing::span("gc", "QuickJSFreeCycles");
+        gc_free_cycles(rt);
+    }
+    trace.set(
+        "malloc_bytes_after",
+        (*rt).malloc_ctx.malloc_state.malloc_size as f64,
+    );
+}
+pub unsafe fn JS_RunGC(rt: *mut JSRuntime) {
+    JS_RunGCInternal(rt, 1);
+}

@@ -6,7 +6,8 @@ use std::{
     mem::{align_of, offset_of, size_of},
     ptr,
 };
-include!("../../quickjs/tests/quickjs_diagnostic_allocator.rs");
+mod quickjs_diagnostic_allocator;
+use quickjs_diagnostic_allocator::*;
 static mut LIVE: usize = 0;
 static mut FAIL_AFTER: usize = usize::MAX;
 unsafe fn gate_fail() -> bool {

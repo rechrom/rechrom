@@ -482,9 +482,14 @@ pub fn trace_mf(data: &TraceMallocData) -> JSMallocFunctions {
     }
 }
 
-include!("qjs_raw.rs");
+mod qjs_raw;
+pub use qjs_raw::*;
 #[cfg(any(unix, windows))]
-include!("qjs_eval.rs");
+mod qjs_eval;
+#[cfg(any(unix, windows))]
+pub use qjs_eval::*;
 
 #[cfg(any(unix, windows))]
-include!("qjs_runtime.rs");
+mod qjs_runtime;
+#[cfg(any(unix, windows))]
+pub use qjs_runtime::*;

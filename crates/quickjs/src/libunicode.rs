@@ -6,7 +6,8 @@ use core::{
     ffi::{c_char, c_void},
     ptr,
 };
-include!("libunicode_constants.rs");
+mod libunicode_constants;
+pub use libunicode_constants::*;
 
 fn lre_case_conv1(c: u32, conv_type: i32) -> u32 {
     let mut res = [0; LRE_CC_RES_LEN_MAX];
@@ -1427,7 +1428,8 @@ pub unsafe fn unicode_general_category(cr: *mut CharRange, gc_name: *const c_cha
     };
     unicode_general_category1(cr, gc_mask)
 }
-include!("libunicode_property_dispatch.rs");
+mod libunicode_property_dispatch;
+pub use libunicode_property_dispatch::*;
 
 unsafe fn unicode_sequence_prop1(
     seq_prop_idx: i32,
@@ -1623,5 +1625,4 @@ pub unsafe fn unicode_sequence_prop(
     unicode_sequence_prop1(seq_prop_idx, cb, opaque, cr)
 }
 #[cfg(test)]
-#[path = "../tests/unicode_differential.rs"]
 mod tests;

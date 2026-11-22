@@ -17,3 +17,7 @@ pub mod quickjs;
 pub mod quickjs_atom;
 pub mod quickjs_header;
 pub mod quickjs_opcode;
+#[cfg(test)]
+mod source_oracles;
+#[cfg(test)]
+mod test_support;
