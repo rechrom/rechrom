@@ -1012,11 +1012,15 @@ impl PaintEngine {
         selection: crate::resident_hit_test::ResidentLayerSelection,
         reverse: bool,
     ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+        // The query names a PaintLayer, which belongs to its LayoutObject:
+        // resolve it by object identity, as the layer itself was resolved
+        // (ResidentLayerHitTest), so an inline-level layer reached through
+        // its FragmentItem cursor finds its box fragment's resident node.
         self.pre_paint
-            .WithResidentPaintNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
+            .WithResidentLayerNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
         Some(
             self.pre_paint
-                .ResidentHitTest(source)?
+                .ResidentLayerHitTest(source)?
                 .LayerOrder(selection, None, reverse),
         )
     }
@@ -1026,11 +1030,13 @@ impl PaintEngine {
         source: layout::paint::PaintFragmentCursor<'_>,
         child: layout::paint::PaintFragmentCursor<'_>,
     ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
+        // Both cursors name PaintLayers; resolve them by object identity
+        // like ResidentLayerOrder.
         self.pre_paint
-            .WithResidentPaintNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
+            .WithResidentLayerNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
         let child = self
             .pre_paint
-            .ResidentHitTest(child)?
+            .ResidentLayerHitTest(child)?
             .Fragment()
             .paint
             .PaintLayerClientId();
@@ -1041,7 +1047,7 @@ impl PaintEngine {
         };
         Some(
             self.pre_paint
-                .ResidentHitTest(source)?
+                .ResidentLayerHitTest(source)?
                 .LayerOrder(all, Some(child), false),
         )
     }

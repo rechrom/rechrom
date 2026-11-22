@@ -204,6 +204,20 @@ impl PrePaintTreeWalk {
             .map(|source| query(source.node))
     }
 
+    /// WithResidentPaintNode for a PaintLayer query. A PaintLayer belongs to
+    /// its LayoutObject (paint_layer.h), so the layer's resident node is
+    /// resolved by object identity like ResidentLayerHitTest: an inline-level
+    /// layer reached through its FragmentItem cursor names the node PrePaint
+    /// recorded for its box fragment.
+    pub fn WithResidentLayerNode<'a, T>(
+        &'a self,
+        source: PaintFragmentCursor<'_>,
+        query: impl FnOnce(&'a PaintTreeNode<'static>) -> T,
+    ) -> Option<T> {
+        self.ResidentLayerHitTest(source)
+            .map(|layer| query(layer.node))
+    }
+
     pub fn ResidentHitTest(
         &self,
         source: PaintFragmentCursor<'_>,
