@@ -198,6 +198,8 @@ pub enum LayoutMutation<'a> {
     },
     EditingState(Rc<LayoutEditingState>),
     PasswordEchoTimerFired(crate::password_echo::PasswordEchoTimerToken),
+    // Wave E: selection
+    Selection(crate::layout_selection::SelectionMutation<'a>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

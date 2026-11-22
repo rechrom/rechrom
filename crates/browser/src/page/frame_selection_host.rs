@@ -102,7 +102,11 @@ impl ResidentFrameSelectionHost {
                 state
                     .layout_engine
                     .borrow_mut()
-                    .MarkSelectionEndpointPaintingLayerNeedsRepaint(node);
+                    .ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                        layout::views::selection::SelectionMutation::MarkSelectionEndpointPaintingLayerNeedsRepaint {
+                            node_id: node,
+                        },
+                    ));
                 state.dirty.set(true);
             }
             E::SetPointerCursor => state.client.borrow_mut().DidChangeCursor(Cursor::default()),
@@ -110,7 +114,11 @@ impl ResidentFrameSelectionHost {
                 state
                     .layout_engine
                     .borrow_mut()
-                    .InvalidateDocumentMarkerPaint(node);
+                    .ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                        layout::views::selection::SelectionMutation::InvalidateDocumentMarkerPaint {
+                            id: node,
+                        },
+                    ));
                 state.dirty.set(true);
             }
             E::NotifyDisplayLock { old, new } => {
@@ -129,6 +137,7 @@ impl ResidentFrameSelectionHost {
                 if let Some(node_id) = state
                     .layout_engine
                     .borrow_mut()
+                    .SelectionMut()
                     .SetContainsSelectionFocusByIdentity(owner.0, contains_focus)
                 {
                     let document_identity = state
@@ -317,17 +326,29 @@ impl FrameSelectionOwners {
             E::InvalidateInputCapsLockIndicatorPaint(node) => {
                 runtime.layout.borrow_mut().InvalidateInputCapsLockIndicatorPaint(node);
             }
-            E::MarkSelectionEndpointPaintingLayerNeedsRepaint(node) => runtime.layout.borrow_mut().MarkSelectionEndpointPaintingLayerNeedsRepaint(node),
+            E::MarkSelectionEndpointPaintingLayerNeedsRepaint(node) => {
+                runtime.layout.borrow_mut().ApplyMutation(
+                    layout::mutation::LayoutMutation::Selection(
+                        layout::views::selection::SelectionMutation::MarkSelectionEndpointPaintingLayerNeedsRepaint {
+                            node_id: node,
+                        },
+                    ),
+                );
+            }
             E::InvalidateCompositionMarkerPaint(node) => {
                 runtime
                     .layout
                     .borrow_mut()
-                    .InvalidateDocumentMarkerPaint(node);
+                    .ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                        layout::views::selection::SelectionMutation::InvalidateDocumentMarkerPaint {
+                            id: node,
+                        },
+                    ));
             }
             E::SetPointerCursor => self.page.client.borrow_mut().DidChangeCursor(Cursor::default()),
             E::NotifyDisplayLock { old, new } => interaction::adapter::page_focus_controller::NotifyDisplayLockForSelectionChangeForFocus(runtime.document.borrow_mut().GetDocumentMut(), old, new),
             E::SetContainsSelectionFocusFlag { owner, contains_focus } => {
-                if let Some(node) = runtime.layout.borrow_mut().SetContainsSelectionFocusByIdentity(owner.0, contains_focus) {
+                if let Some(node) = runtime.layout.borrow_mut().SelectionMut().SetContainsSelectionFocusByIdentity(owner.0, contains_focus) {
                     runtime.pending_text_overflow_layout_invalidations.borrow_mut().push(node);
                 }
             }
@@ -399,6 +420,7 @@ impl
         let effects = owners
             .Layout()
             .borrow_mut()
+            .SelectionMut()
             .InvalidateStyleAndPaintForSelection();
         let mut owner = owners.Document().borrow_mut();
         let document = owner.GetDocumentMut();
@@ -920,6 +942,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
         let owner = state
             .Layout()
             .borrow()
+            .Selection()
             .SelectionTextOverflowOwnerIdentity(node_id)
             .map(interaction::adapter::page_frame_selection::SelectionTextOverflowOwner);
         owner

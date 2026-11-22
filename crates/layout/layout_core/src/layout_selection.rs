@@ -35,6 +35,79 @@ pub struct LayoutSelectionRange<I> {
     pub start: EditingPosition,
     pub end: EditingPosition,
 }
+
+/// Type-erased form of the live flat-tree range iterator, so the boundary-3
+/// [`SelectionMutation::CommitLayoutSelection`] value needs no type parameter.
+/// It still borrows the original traversal owner for the synchronous commit
+/// and clones the traversal cursor exactly where `Commit` does.
+pub struct LayoutSelectionNodes<'a> {
+    nodes: Box<dyn SelectionNodeIterator<'a> + 'a>,
+}
+trait SelectionNodeIterator<'a>: Iterator<Item = u64> {
+    fn clone_nodes(&self) -> Box<dyn SelectionNodeIterator<'a> + 'a>;
+}
+impl<'a, I: Iterator<Item = u64> + Clone + 'a> SelectionNodeIterator<'a> for I {
+    fn clone_nodes(&self) -> Box<dyn SelectionNodeIterator<'a> + 'a> {
+        Box::new(self.clone())
+    }
+}
+impl<'a> LayoutSelectionNodes<'a> {
+    pub fn new<I: Iterator<Item = u64> + Clone + 'a>(nodes: I) -> Self {
+        Self {
+            nodes: Box::new(nodes),
+        }
+    }
+}
+impl Iterator for LayoutSelectionNodes<'_> {
+    type Item = u64;
+    #[inline]
+    fn next(&mut self) -> Option<u64> {
+        self.nodes.next()
+    }
+}
+impl Clone for LayoutSelectionNodes<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone_nodes(),
+        }
+    }
+}
+
+/// Wave E: selection. Selection, caret and editing commands carried by
+/// `LayoutMutation::Selection`. Each variant runs exactly the engine method of
+/// the same name; `ApplyMutation` returns that method's bool result, or
+/// `false` for a method without one.
+pub enum SelectionMutation<'a> {
+    /// Commit the canonical FrameSelection's borrowed flat-tree projection.
+    CommitLayoutSelection {
+        range: Option<LayoutSelectionRange<LayoutSelectionNodes<'a>>>,
+        hidden: bool,
+    },
+    MarkSelectionEndpointPaintingLayerNeedsRepaint {
+        node_id: u64,
+    },
+    /// CaretDisplayItemClient::UpdateStyleAndLayout previous/current anchors.
+    InvalidateBlockCaretText {
+        anchors: &'a [u64],
+    },
+    InvalidateTextOverflowLayoutForNode {
+        node_id: u64,
+    },
+    UpdateEditingNodeFactsForFocus {
+        node_id: u64,
+        facts: crate::EditingNodeFacts,
+    },
+    InvalidateDocumentMarkerPaint {
+        id: u64,
+    },
+    MomentarilyRevealLastTypedCharacterIfSecure {
+        node_id: u64,
+        offset: usize,
+        settings: Option<crate::password_echo::PasswordEchoLayoutSettings>,
+        scheduler: &'a dyn crate::password_echo::PasswordEchoTimerScheduler,
+    },
+}
+
 #[derive(Default)]
 pub struct LayoutSelection {
     has_pending_selection: bool,

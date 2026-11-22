@@ -52,6 +52,11 @@ mod exports {
     pub mod webapi;
 }
 
+/// Borrowed query views of the facade, one per legacy family (wave E).
+pub mod views {
+    pub mod selection;
+}
+
 pub use engine::LayoutEngine;
 pub use layout_assembly::engine_assembly::LayoutAssembly;
 

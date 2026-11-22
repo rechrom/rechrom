@@ -359,7 +359,12 @@ impl ChildFocusServices {
         };
         let mut layout = runtime.layout.borrow_mut();
         for (id, facts) in facts {
-            layout.UpdateEditingNodeFactsForFocus(id, facts);
+            layout.ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                layout::views::selection::SelectionMutation::UpdateEditingNodeFactsForFocus {
+                    node_id: id,
+                    facts,
+                },
+            ));
         }
         for id in update.snap_container_candidates {
             if let Some(mut source) = layout.NativeScrollSource(id) {
@@ -823,7 +828,11 @@ impl LocalFrameRuntime {
         let invalidated = {
             let mut layout = self.layout.borrow_mut();
             pending.into_iter().fold(false, |changed, node| {
-                layout.InvalidateTextOverflowLayoutForNode(node) || changed
+                layout.ApplyMutation(layout::mutation::LayoutMutation::Selection(
+                    layout::views::selection::SelectionMutation::InvalidateTextOverflowLayoutForNode {
+                        node_id: node,
+                    },
+                )) || changed
             })
         };
         let lifecycle = self.document.borrow().GetDocument().Lifecycle().clone();
