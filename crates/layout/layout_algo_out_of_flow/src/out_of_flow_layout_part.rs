@@ -933,7 +933,7 @@ impl OutOfFlowLayoutPart {
                 if !offsets.is_null() {
                     let offset = unsafe { &*offsets }
                         .GetOffset(
-                            non_overflowing_range.anchor_element.Get().cast::<Element>(),
+                            non_overflowing_range.anchor_element.Get(),
                             layout_assembly::internal::css::out_of_flow_data::RememberedScrollOffsetType::kRangeAdjustment,
                             anchor_evaluator.NeedsScrollAdjustmentInX(),
                             anchor_evaluator.NeedsScrollAdjustmentInY(),
@@ -1299,12 +1299,12 @@ impl OutOfFlowLayoutPart {
             );
             out_non_overflowing_range.containing_block_range =
                 scroll_range.ToPhysical(candidate_writing_direction);
-            out_non_overflowing_range.anchor_element = Member::from_ptr((GetPositionAnchorElement(
+            out_non_overflowing_range.anchor_element = Member::from_ptr(GetPositionAnchorElement(
                 &node_info.node,
                 candidate_style,
                 anchor_evaluator.GetAnchorMap(),
             )
-                as *mut Element).cast());
+                as *mut Element);
             if overflows_imcb {
                 return None;
             }

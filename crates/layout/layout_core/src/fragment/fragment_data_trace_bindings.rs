@@ -1,8 +1,6 @@
 // Bind the source Trace methods of fragment data to the layout heap without
-// moving their translated bodies out of their owning files. Rust coherence
-// requires `impl Traceable` (a foundation trait) to sit in the crate that
-// declares the type, so these left base's `layoutng_trace_bindings.rs` with
-// their types.
+// moving their translated bodies out of their owning files. This is the
+// fragment-data half of `layoutng_trace_bindings.rs`.
 // cpp: foundation/blink_base/heap/trace_traits.h:20-28
 use foundation::{Traceable, Visitor};
 

@@ -1,4 +1,4 @@
-//! Fragment-result and inline-fragment state owned by `layout_fragment`.
+//! Fragment-result and inline-fragment state of the fragment area.
 
 use super::*;
 

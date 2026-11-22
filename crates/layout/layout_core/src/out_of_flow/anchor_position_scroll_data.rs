@@ -444,7 +444,7 @@ impl AnchorPositionScrollData {
         }
         for range in unsafe { &*ranges } {
             let range_element = new_adjustment_data.anchor_element.Get();
-            let new_element = range.anchor_element.Get().cast::<Element>();
+            let new_element = range.anchor_element.Get();
             let range_object = if range_element.is_null() {
                 std::ptr::null_mut()
             } else {

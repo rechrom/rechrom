@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/out_of_flow/oof_positioned_node.rs"]
+#[path = "../fragment/out_of_flow/oof_positioned_node.rs"]
 mod layout_algo_out_of_flow_oof_positioned_node;
 
 pub use layout_algo_out_of_flow_oof_positioned_node::*;

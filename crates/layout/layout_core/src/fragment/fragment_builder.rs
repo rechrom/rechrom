@@ -24,7 +24,7 @@ use layout_core::internal::oof_positioned_node::{
     OofContainingBlock, OofInlineContainer, PhysicalOofPositionedNodeToLogical,
     RelativeInsetToLogical,
 };
-use layout_core::internal::snap_area::{SnapArea, SnapAreaExt};
+use layout_core::internal::snap_area::SnapArea;
 use layout_core::internal::split_axis_item::SplitAxisItem;
 use layout_core::internal::style_variant::StyleVariant;
 use layout_core::internal::transform_utils::UpdateTransformState;
@@ -1321,7 +1321,7 @@ impl FragmentBuilder {
         };
         let (consumed, pending) = PartitionAxes(scroll_snap_axes, pending_axes);
         SnapArea::new(
-            snap_area.GetElementHandle(),
+            snap_area.GetElement(),
             consumed,
             pending,
             writing_direction_mode,
@@ -1338,7 +1338,7 @@ impl FragmentBuilder {
                 let node = unsafe { &*child.GetLayoutObject() }.GetNode();
                 let element = To::<Element>(node);
                 resolved_child_snap_areas
-                    .push(self.ResolveSnapArea(&SnapArea::from_element(element.cast())));
+                    .push(self.ResolveSnapArea(&SnapArea::from_element(element)));
             }
         }
         for item in child.SnapAreas() {
@@ -1936,25 +1936,25 @@ impl FragmentBuilder {
         let named_triggers = self.EnsureNamedTriggers();
         let key = Member::from_ptr(name as *const TriggerScopedName as *mut TriggerScopedName);
         let Some(existing) = named_triggers.get(&key) else {
-            named_triggers.Set(key, Member::from_ptr(owner.cast_mut().cast()));
+            named_triggers.Set(key, Member::from_ptr(owner as *mut Element));
             return;
         };
-        if existing.Get().cast::<Element>() == owner as *mut Element {
+        if existing.Get() == owner as *mut Element {
             return;
         }
         debug_assert!(!owner.is_null());
         let owner_object = unsafe { &*owner }.GetLayoutObject();
         debug_assert!(!owner_object.is_null());
-        let existing_owner = existing.Get().cast::<Element>();
+        let existing_owner = existing.Get();
         debug_assert!(!existing_owner.is_null());
         let existing_object = unsafe { &*existing_owner }.GetLayoutObject();
         debug_assert!(!existing_object.is_null());
         if unsafe { &*existing_object }.IsBeforeInPreOrderDefault(unsafe { &*owner_object }) {
-            named_triggers.Set(key, Member::from_ptr(owner.cast_mut().cast()));
+            named_triggers.Set(key, Member::from_ptr(owner as *mut Element));
             let updated = named_triggers
                 .get(&key)
                 .expect("named trigger remains present");
-            debug_assert_eq!(unsafe { &*updated.Get().cast::<Element>() }.GetLayoutObject(), owner_object);
+            debug_assert_eq!(unsafe { &*updated.Get() }.GetLayoutObject(), owner_object);
         }
     }
 
@@ -1977,7 +1977,7 @@ impl FragmentBuilder {
         }
         if !descendant_names.is_null() {
             for (key, value) in unsafe { &*descendant_names }.iter() {
-                self.SetNamedTrigger(unsafe { &*key.Get() }, value.Get().cast_const().cast());
+                self.SetNamedTrigger(unsafe { &*key.Get() }, value.Get());
             }
         }
     }

@@ -2,8 +2,8 @@
 // are mutually recursive C++ packages. Cargo cannot express that cycle
 // between two crates, so compile their translated modules once in one
 // assembly crate. The include paths point to the owning crates' source files
-// and do not copy or relocate implementations. Fragment data that needs no
-// base type is the real `layout_fragment` crate, a dependency of this one.
+// and do not copy or relocate implementations. Fragment data and the
+// fragment tree are base modules (`layout_core/src/fragment/`).
 extern crate self as layout_algo_inline;
 extern crate self as layout_core;
 extern crate self as layout_assembly;
@@ -28,16 +28,15 @@ pub use layout_algo_inline_package::*;
 // fragment-tree code (FragmentItem, InlineCursor, PhysicalBoxFragment and
 // ink_overflow) and name FragmentItem/UsedFont directly. Their only compile
 // unit is this assembly; the sources physically live beside those
-// fragment-tree users in `layout_fragment/src/` so samples attribute to the
-// fragment package. Paint reaches them through `layout::paint::<module>`
-// re-exports and does not compile them.
-#[path = "../../layout_fragment/src/decorating_box.rs"]
+// fragment-tree users in `layout_core/src/fragment/`. Paint reaches them
+// through `layout::paint::<module>` re-exports and does not compile them.
+#[path = "../../layout_core/src/fragment/decorating_box.rs"]
 pub mod decorating_box;
-#[path = "../../layout_fragment/src/inline_paint_context.rs"]
+#[path = "../../layout_core/src/fragment/inline_paint_context.rs"]
 pub mod inline_paint_context;
-#[path = "../../layout_fragment/src/line_relative_rect.rs"]
+#[path = "../../layout_core/src/fragment/line_relative_rect.rs"]
 pub mod line_relative_rect;
-#[path = "../../layout_fragment/src/text_decoration_info.rs"]
+#[path = "../../layout_core/src/fragment/text_decoration_info.rs"]
 pub mod text_decoration_info;
 
 // The CSS colour parser is owned and compiled by `css_parser` (feature
@@ -58,24 +57,11 @@ mod layout_invalidation_reason_symbols;
 mod untranslated_symbols;
 mod out_of_flow_element_data;
 
-// Grid-track-collection and gap-segment-aggregation bodies of fragment data
-// types compile in `layout_fragment` with the types they implement (coherence
-// requires the declaring crate, and the `#[no_mangle]` bodies link with every
-// user of the crate). `layout_algo_grid/src/lib.rs` reaches them through these
-// re-exports.
-pub use layout_fragment::grid_gap_segment_state_aggregator;
-pub use layout_fragment::grid_track_collection_implementation;
-
 #[cfg(test)]
 mod package_contract_tests {
     use std::path::{Path, PathBuf};
 
-    const LIFECYCLE_OWNERS: [&str; 4] = [
-        "layout_invalidation",
-        "layout_reuse",
-        "layout_fragment",
-        "layout_commit",
-    ];
+    const LIFECYCLE_OWNERS: [&str; 3] = ["layout_invalidation", "layout_reuse", "layout_commit"];
 
     fn manifest_section_value<'a>(contents: &'a str, section: &str, key: &str) -> Option<&'a str> {
         let mut current = "";
@@ -125,19 +111,28 @@ mod package_contract_tests {
             .expect("layout package root");
         let mut sources = Vec::new();
         rust_sources(root, &mut sources);
+        // (trace-name prefix, the only source path allowed to declare it).
         let owners = [
-            "layout_invalidation",
-            "layout_reuse",
-            "layout_fragment",
-            "layout_commit",
+            ("layout_invalidation", Path::new("layout_invalidation")),
+            ("layout_reuse", Path::new("layout_reuse")),
+            // `layout_fragment.` is the historical category of fragment
+            // publication and Paint-sidecar work. Fragments are base now and
+            // that package is gone, but recorded traces, DevTools owner
+            // attribution and the diagnostics phase map keep the name, so its
+            // phases are declared only by `layout_commit`'s fragment_trace.rs.
+            (
+                "layout_fragment",
+                Path::new("layout_commit/src/fragment_trace.rs"),
+            ),
+            ("layout_commit", Path::new("layout_commit")),
         ];
         let mut violations = Vec::new();
         for source in sources {
             let relative = source.strip_prefix(root).expect("relative Layout source");
             let contents = std::fs::read_to_string(&source).expect("read Layout source");
-            for owner in owners {
+            for (owner, allowed) in owners {
                 if contents.contains(&format!("\"{owner}."))
-                    && !relative.starts_with(Path::new(owner))
+                    && !relative.starts_with(allowed)
                 {
                     violations.push(format!(
                         "{} declares {owner} trace names",

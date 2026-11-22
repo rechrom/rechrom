@@ -12,7 +12,7 @@ Target layering used for "upward" below (bottom to top):
 | level | packages |
 |---|---|
 | L0 roots | `layout_geometry`, `layout_style`, `paint_input_types`, `layout_style_paint` (already clean, not analysed further) |
-| L1 | `layout_fragment` (fragment data; LayoutObject as an opaque handle) |
+| L1 | `layout_fragment` (fragment data; LayoutObject as an opaque handle). **Superseded**: fragments live in base (§7, R4 decision) |
 | L2 base | `layout_core` + `layout_assembly` real code → `layout_base` |
 | L3 | `layout_invalidation`, `layout_reuse`, `layout_commit`, every `layout_algo_*` (peers; any L3→L3 reference is reported as *lateral*) |
 | L4 | `layout` (front crate) |
@@ -863,7 +863,7 @@ The stage boundaries are a proposal (**guess**); the counts are measured.
 | R1 registry | `LayoutEngine` owns a registry built from `LayoutAlgorithmSet`, `LayoutObjectFactorySet`, `LayoutBoundarySupport`, the 12 `OnceLock` statics (15 fn pointers) and `FullLayoutRegistry`; `Install*` → `Register` (rename done, see §6.1); front crate calls them | 0 (≈20 edited) | — | 0 (≈234 re-homed) | process-global `OnceLock` → per-engine (tests that build several engines); `LayoutPassScope` access stays thread-local |
 | R2 leaf algorithms | move base-owned files out of float, out_of_flow, grid, svg, table, forms, list, custom, flex, multicol, replaced into `layout_core/`; their fragment-data files into `layout_fragment/`; move the `Traceable` impls to their types; fold sizing and fragmentation into base | 64 (+11 sizing/fragmentation) | ≈13.9k (+5.0k) | ≈8 (table 4 + 2 editing, forms 1, list 1) | `grid_track_collection.rs` `#[no_mangle]` bodies and `gap_segment_state_aggregator.rs` coherence (impl on a fragment-declared type); a clean `#[path]` removal still compiles in the assembly until R6 |
 | R3 lifecycle | invalidation/reuse/commit: 61 LayoutObject-bound files → base, 1 → fragment (≈10.8k lines); engine phases stay above with slots; decide §5.1 (root crate + engine half) | 62 | ≈10.8k | ≈29 | trace-ownership contract; per-object hot paths must stay direct calls; `tree_update` generic closures become `dyn` |
-| R4 fragment | fragment data crate (39 own + 3 standalone + 12 core + 29 algo data files (moved in R2) ≈ 82 files); 111 fragment files → base; builders → base; LayoutObject opaque handle; ≈113 base behaviours called from data → base extension traits; split `fragment_tree.rs` | ≈123 (111 up, 12 down) | ≈33.1k | 5–15 (**guess**) | the largest edge (160 items + 286 methods); `LayoutResult` embeds `ConstraintSpace` (closure into exclusions, line clamp, table/grid/custom rare data); `PaintStyle` (141 fns impl'd in fragment on a core type); fragment API churn for Paint/Interaction through the front crate |
+| R4 fragment | **done differently** (§7, R4 decision): every fragment file moved into base `layout_core/src/fragment/`, the crate deleted, `layout::result` added. Original estimate: fragment data crate (39 own + 3 standalone + 12 core + 29 algo data files (moved in R2) ≈ 82 files); 111 fragment files → base; builders → base; LayoutObject opaque handle; ≈113 base behaviours called from data → base extension traits; split `fragment_tree.rs` | ≈123 (111 up, 12 down) | ≈33.1k | 5–15 (**guess**) | the largest edge (160 items + 286 methods); `LayoutResult` embeds `ConstraintSpace` (closure into exclusions, line clamp, table/grid/custom rare data); `PaintStyle` (141 fns impl'd in fragment on a core type); fragment API churn for Paint/Interaction through the front crate |
 | R5 inline | 16 base-cited inline files → base (LayoutText/LayoutInline/… ≈3.6k lines), 6 data files → fragment (≈1.1k); 19 editing-query files → extension traits in inline (118 fns); `block_inline_layout.rs` → inline; link-time symbols → slots; drop the `translation_in_progress` gating | 23 + 19 converted | ≈4.7k moved | ≈9 | inline is 37.5k lines and has never compiled standalone; the duplicate `InlineChildLayoutContextParallelFlowBreakTokens` definition; editing API surface used by DOM/Interaction via the front crate |
 | R6 base crate | `layout_core` → `layout_base`, absorbing the assembly's real code (`block_virtual_dispatch.rs` 2.8k, `out_of_flow_element_data`, `layout_invalidation_reason_symbols`); distribute `untranslated_symbols.rs` stubs to the declaring crates (or delete them per `DEAD_CODE.md`); delete the `include!`s and `layout_algo_inline_assembly` | 5 + 2 crates removed | ≈3.5k | 0 | 783 `layout_assembly::` paths in 145 files and about 2,300 `crate::`/`super::` paths in core/fragment/inline need a scripted rewrite; MSVC needs every extern symbol defined in the linked crate set |
 | R7 front crate | `layout` builds the engine and calls every `Register`; remove the `extern crate layout_assembly as …` aliases in block; one-way Cargo graph check; README | ≈20 edited | — | 0 | the ordering of `Register` calls (the order `CreateLayoutRegistry` in `layout/src/lib.rs` documents) |
@@ -877,7 +877,8 @@ base moves came along too. This was a physical move only: every
 same modules under the same names, and no logic changed. Paths elsewhere in
 this map (§1–§6, Appendices A and B) still describe the snapshot before the
 move. Base files go to `layout_core/src/<area>/`, which becomes `layout_base`
-in R6. Fragment data files go to `layout_fragment/src/<area>/`.
+in R6. Fragment data files go to `layout_fragment/src/<area>/` (since the R4
+decision: `layout_core/src/fragment/<area>/`).
 
 | from | to | files |
 |---|---|---:|
@@ -927,200 +928,135 @@ Not moved:
 - **`layout_algo_list/src/layout_object_list_marker_queries.rs`.** It no
   longer exists.
 
-### Status: R4 fragment crate (partial)
+### Status: R4 decision: fragments live in base (done)
 
-Done; no behaviour change, nothing built yet. `layout_fragment` is a real
-crate: `src/lib.rs` (the former `package.rs`) is its only root and nothing
-`include!`s it. It depends on `foundation`, `layout_geometry`, `layout_style`,
-`paint_input_types` and the leaf services it already used (`scroll_snap`,
-`browser_tracing`, `canvas`, `font_engine`, `image_resource`), never on base.
-Both assemblies depend on it under its own name. The `layout_fragment_boundary`
-key and the `extern crate self as layout_fragment` alias are gone, and
-assembly-compiled paths that named fragment-tree modules through the alias now
-use `crate::`. The fragment-tree files still compiled with base are declared in
-`layout_assembly/src/layout_fragment_package.rs`, which both assemblies
-declare.
+**Decision (user, 2026-11-22):** fragments are base. The L1 fragment crate of
+the target layering above is dropped; there is no `layout_fragment` package.
+No behaviour change; nothing built yet.
 
-**Module layout.** The crate mounts its data under `internal::<module>`, the
-path base already used. Where base reached a file through a compatibility
-facade, the crate keeps the facade's shape: a private source module plus a
-glob re-export. Translated `super::` paths therefore resolve unchanged. Base
-re-exports each module (`pub use layout_fragment::internal::<module>;` in
-`layout_core/src/lib.rs`). The only exceptions are the modules where base adds
-an extension trait; those keep a small base facade that glob re-exports the
-fragment module.
+History. R4 first made `layout_fragment` a real crate holding the 53
+base-free data files, with opaque handles (`OpaqueLayoutObject`,
+`OpaqueNode`, `OpaquePaintLayer`) in six fields and three base extension
+traits (`LayoutOpportunityExt`, `NamingScopeExt`, `SnapAreaExt`), while the
+32 fragment-tree files stayed compiled by the assembly. The remaining fragment
+tree reaches base behaviour from about 641 of 2,256 functions
+(`PhysicalFragment::Style()` alone pulls most of the API), so the split was
+reversed.
 
-**Opaque handles** (`layout_fragment/src/opaque.rs`):
+**Where the files are.** Every file of the former `layout_fragment/src/` is in
+`layout_core/src/fragment/`, keeping its sub-area (`core/`, `float/`,
+`grid/`, `inline/`, `out_of_flow/`, `table/`, ...). Exceptions:
 
-- `OpaqueLayoutObject` covers LayoutObject and all its subclasses. Each
-  subclass is `#[repr(C)]` with its base class first, so the same address
-  covers them all.
-- `OpaqueNode` covers Node, Element and the form element classes.
-- `OpaquePaintLayer`.
+| former file | now |
+|---|---|
+| `lib.rs` | data modules declared in `layout_core/src/lib.rs`; `LayoutResultHandle` in `fragment/layout_result_handle.rs` |
+| `trace_bindings.rs` | `fragment/fragment_data_trace_bindings.rs` (the name `fragment/trace_bindings.rs` was taken) |
+| `trace.rs` | `layout_commit/src/fragment_trace.rs` |
+| `opaque.rs` | deleted |
 
-Fragment data stores `Member<Opaque*>` or `*const Opaque*`. The heap traces
-`Member<T>` without needing `T`. Base converts with `.cast::<LayoutBox>()` and
-similar. Current users:
+**Module paths are unchanged.**
 
-- `ExclusionShapeData::layout_box`
-- `LineClampData::clamp_after_layout_object`
-- `NamingScope::scope_element_`
-- `TriggerScopedNameMap` values
-- `SnapArea::element_`
-- `NonOverflowingScrollRange::anchor_element`
+- Fragment data mounts at `crate::internal::<module>` exactly as the crate
+  did. `layout_core/src/lib.rs` declares the module (`#[path]` into
+  `fragment/`), and where the crate kept a facade's shape (a private source
+  module plus a glob re-export) the inline block does the same, so the
+  translated `super::` paths resolve unchanged. `anchor_scope` is a direct
+  `#[path]` module again. `naming_scope`, `snap_area`, `trigger_scoped_name`
+  and `exclusions::layout_opportunity` use their pre-R4 base facade files.
+- Base roots beside `internal`: `boundary_types` (the generic sidecar values
+  that `fragment_tree` specializes), `layout_result_handle`,
+  `grid_track_collection_implementation` and
+  `grid_gap_segment_state_aggregator` (re-exported by `layout_algo_grid`),
+  plus the private `used_font_implementation` and
+  `fragment_data_trace_bindings`. Both assemblies include them through
+  `layout_core/src/lib.rs`.
+- The fragment tree is declared in
+  `layout_assembly/src/layout_fragment_package.rs` (both assemblies), at the
+  assembly root paths (`crate::physical_box_fragment`, ...). The module keeps
+  its `layout_fragment_package` name, and the many `layout_fragment_*`
+  wrapper modules keep theirs, so sampling symbols stay comparable.
 
-**Base extension traits** (direct static calls, Chromium names kept):
+**R4 indirection reverted** (the pre-R4 content of each file, from
+`2af6984b^` and `798dcce3^`):
 
-| trait | where | methods |
-|---|---|---|
-| `LayoutOpportunityExt` | `layout_core/src/internal/exclusions/layout_opportunity.rs` | `ComputeLineLayoutOpportunity` (with its shape-aware helpers; reads the float's `ShapeOutsideInfo`) |
-| `NamingScopeExt` | `layout_core/src/internal/naming_scope.rs` | `FindScopeElement` (associated fn; `AnchorScopedName::FindScopeElement(..)` still works) |
-| `SnapAreaExt` | `layout_core/src/internal/snap_area.rs` | typed `GetElement`, `GetElementIfConsumed` (fragment keeps `GetElementHandle*`) |
+- The six fields hold base types again:
+  - `ExclusionShapeData::layout_box: Member<LayoutBox>`
+  - `LineClampData::clamp_after_layout_object: *const LayoutObject`
+  - `NamingScope::scope_element_: Member<Element>`
+  - `TriggerScopedNameMap` values: `Member<Element>`
+  - `SnapArea::element_: Member<Element>`
+  - `NonOverflowingScrollRange::anchor_element: Member<Element>`
 
-Base-only functions kept at their module paths: `ToAnchorScopedName`
-(`internal/anchor_scope.rs`), `ToTriggerScopedName`
-(`internal/trigger_scoped_name.rs`), and
-`ConstraintSpaceBuilder::SetCustomLayoutData` (`internal/constraint_space_builder.rs`).
+  The `.cast()` sites in block, float, out-of-flow, the fragment builder and
+  the anchor scroll data are direct again.
+- The extension traits are inherent methods with their Chromium names again,
+  in the data files:
+  - `LayoutOpportunity::ComputeLineLayoutOpportunity`, with its shape helpers.
+  - `NamingScope::FindScopeElement`.
+  - `SnapArea::GetElement` / `GetElementIfConsumed`. The `GetElementHandle*`
+    workaround is gone.
 
-**In the crate** (53 files, 10.8k lines including tests). The `src/` paths are:
+  `ToAnchorScopedName` and `ToTriggerScopedName` are back in
+  `fragment/core/anchor_scope.rs` and `fragment/trigger_scoped_name.rs`. The
+  inline callers drop their `LayoutOpportunityExt` imports.
+- `ConstraintSpaceBuilder::SetCustomLayoutData` stays in base's
+  `constraint_space_builder.rs`, and the `pub` widenings of `ConstraintSpace`
+  fields stay; both are neutral.
 
-- Roots: `lib.rs`, `boundary_types.rs`, `trace.rs`, `opaque.rs`,
-  `trace_bindings.rs`. The last holds the `Traceable` impls that left
-  `layoutng_trace_bindings.rs` with their types.
-- `core/`: `constraint_space` (+ `constraint_space_fragmentation`,
-  `constraint_space_block_in_inline`, moved from `layout_core/src/`),
-  `anchor_scope` (alias only), `disable_layout_side_effects_scope`,
-  `hit_test_phase`, `layout_theme`, `map_coordinates_flags`,
-  `selection_state`, `split_axis_item`, `style_variant`,
-  `text_decoration_offset`, `text_offset_range`,
-  `exclusions/line_layout_opportunity`.
-- `float/`: `exclusion_area`, `exclusion_space`, `layout_opportunity`,
-  `shape`, `shape_exclusions`.
-- `block/line_clamp_data`.
-- `custom/`: `constraint_space_custom_data`, `custom_layout_payload`.
-- `fragmentation/break_appeal`, `flex/devtools_flex_info` and
-  `forms/form_control_types`.
-- `grid/`: `grid_layout_data`, `grid_subtree`,
-  `grid_track_collection_types`, plus `grid_track_collection` and
-  `gap_segment_state_aggregator`, moved from `layout_algo_grid/src/`.
-- `inline/`: `inline_item_text_index`, `text_fit_scale`, `text_item_type`,
-  `used_font_interface`, plus `used_font`, moved from
-  `layout_algo_inline/src/`.
-- `table/`: `table_column_location`, `table_constraint_space_data`.
-- At the top level: `cross_gap`, `gap_intersection`, `gap_utils`, `main_gap`,
-  `invalidation/naming_scope`, `snap_area`, `trigger_scoped_name`,
-  `out_of_flow/non_overflowing_scroll_range`, `mathml_paint_info`,
-  `outline_info` and `frame_set_layout_data`.
+**Trace names.** `fragment_trace.rs` keeps the `layout_fragment.*` names
+(`layout_fragment.PublishFragmentTree`, `layout_fragment.UpdatePrePaintInputs`,
+...). `devtools` owner attribution and `tracing::diagnostics` key on that
+prefix. Base and `layout_invalidation/src/engine_mutation.rs` call
+`layout_commit::fragment_trace::*`, and `layout_commit` itself calls
+`fragment_trace::*`. In
+`lifecycle_trace_names_are_declared_only_by_their_owner_package`, the
+`layout_fragment.` prefix is owned by that one file, and a comment explains
+the historical name. `layout_fragment` left the performance-owner list.
+`layout_commit`'s two trace tests share a `TRACE_TEST_LOCK`.
 
-**Moved to base** because they are LayoutObject, LayoutBox or PaintLayer code,
-not fragment data:
+**Crate deletion.** The workspace member, the package and its
+`layout_fragment = ...` keys (in the `layout` facade, `layout_assembly`,
+`layout_algo_inline_assembly`, `layout_commit` and `layout_core`) are gone.
+`layout_algo_block` dropped its `extern crate layout_assembly as
+layout_fragment` alias; its paths use `layout_core::`. The facade's
+`tests/dependency_boundary.rs` no longer lists the crate.
 
-- `forms/form_node_metadata_interface.rs` (the DOM projection element
-  classes) went to `layout_core/src/forms/`.
-- `scrollable_overflow_calculator.rs`, `outline_rect_collector.rs` and
-  `sticky_position_scrolling_constraints.rs` went to
-  `layout_core/src/fragment/`.
+**Facade.** `layout::result` is what Layout produces for Paint and
+Interaction: `LayoutResultHandle`, `LayoutPaintOutput`,
+`PaintFragmentCursor`, `PaintFragmentLease`, `PaintLayoutObjectIdentity`,
+`FragmentCursor`, `FragmentKind`, `ResidentBoxGeometry`,
+`PreviousBoxGeometry`, `PrePaintSourceObject`, `FragmentPaintData`,
+`FragmentPaintRect`, `PaintProperties`, `PaintResources`, `SvgTextPaintData`,
+`PaintClientCommit` and `PaintCommitOutput`. The `fragment`, `paint` and
+`output` topic paths still re-export the same items.
 
-**Still compiled by the assembly from `layout_fragment/src/`** (32 files,
-24.4k lines). "Ext" means the methods that dereference base objects become a
-base extension trait. Constructors that take builders become associated
-functions of that trait:
-
-| file | lines | what blocks it | destination |
-|---|---:|---|---|
-| `block/column_spanner_path.rs` | 41 | `new`/`with_child(BlockNode)`, `GetBlockNode` | fragment + `ColumnSpannerPathExt` (callers: box builder, block algorithm) |
-| `fragmentation/early_break.rs` | 101 | `from_block*(BlockNode)`, `GetBlockNode` | fragment + `EarlyBreakExt` (callers: `fragmentation_utils.rs`) |
-| `table/table_borders_types.rs` | 488 | `ComputeTableBorders`/`CellBorder` declare `extern "Rust"` bodies taking `&BlockNode` | fragment + `TableBordersExt` (callers: 3 `layout_algo_table` files) |
-| `table_fragment_data.rs` | 60 | `TableColumnGeometry::node: LayoutInputNode` by value | fragment; field readers need an audit |
-| `break_token.rs`, `block_break_token.rs`, `inline_break_token.rs`, `break_token_algorithm_data.rs` | 1045 | `LayoutInputNode`/`InlineNode` accessors, `BoxFragmentBuilder` constructors, `Style()` through the LayoutObject, the `DispatchBreakTokenAlgorithmData*` link-time symbol | fragment + ext |
-| `layout_result.rs` | 1394 | `new(builder)` constructors, `LayoutObject`/`Element` weak members | fragment + ext |
-| `physical_fragment.rs`, `physical_line_box_fragment.rs`, `physical_fragment_link.rs`, `physical_fragment_rare_data.rs` | 2296 | `from_builder`, OOF data from the builder, `GetLayoutObject` typed, `IsTextControl*`, `GetFragmentData`, debug dump through `InlineCursor` | fragment + `PhysicalFragmentExt` |
-| `physical_fragment_data.rs` | 356 | every method dereferences the LayoutObject (`Style`, `GetNode`, `IsTable`, ...) | base, as the bulk of `PhysicalFragmentExt` |
-| `physical_box_fragment.rs` | 2469 | `Create(builder)`; about 66 of 140 fns reach LayoutObject/LayoutBox (over-approximation); inline editing queries (R5) | split |
-| `fragment_item.rs`, `fragment_items.rs` | 2907 | `Member<LayoutObject>` plus about 87 dependent methods; `FragmentItemsBuilder` constructor; LayoutObject item-index upkeep | split |
-| `inline_cursor.rs` | 1957 | about 107 of 175 fns reach LayoutObject/LayoutBlockFlow/InlineNodeData | **decision:** base wholesale (Chromium `core/layout/inline/inline_cursor.h` is layout traversal, not fragment data) |
-| `fragment_data.rs`, `fragment_data_iterator.rs` | 805 | `FragmentData` is the LayoutObject's Paint sidecar (`Member<PaintLayer>`, sticky constraints) | **decision:** base (Chromium `core/paint/fragment_data.h`); this map listed it as data |
-| `fragment_tree.rs` | 3520 | paint-export glue: `PaintProperties`, about 60 `Live*`/`Export*` calls | split: the `LayoutResultHandle` re-exports stay, the rest goes to base |
-| `ink_overflow.rs` | 915 | storage is data; `Compute*` uses `InlineCursor`, `TextDecorationInfo`, `InlinePaintContext` | split (storage in fragment, compute as a base ext) |
-| `decorating_box.rs`, `inline_paint_context.rs`, `text_decoration_info.rs`, `line_relative_rect.rs` | 2171 | Chromium `core/paint` helpers over `FragmentItem` and LayoutObject | base (`line_relative_rect` is pure geometry and could stay) |
-| `gap_geometry.rs`, `gap_decoration_utils.rs` | 1838 | one fn takes `&PhysicalBoxFragment` (`gap_geometry.rs:463`) | fragment once `PhysicalBoxFragment` is |
-| `inline/inline_item_interface.rs`, `inline/inline_item_segment_interface.rs` | 883 | `InlineItem` holds a LayoutObject and calls `EffectiveStyle` and similar | R5 split, then fragment |
-| `out_of_flow/oof_positioned_node.rs`, `out_of_flow/anchor_map.rs` | 998 | `BlockNode`/`LayoutInline` values; `anchor_map_operations` (base) bodies | fragment + ext |
-
-**Unresolved (needs a decision before the hub types move):**
-
-1. **Volume.** A name-based method closure (`fnclosure.pl`, an
-   over-approximation) marks 641 of 2,256 fns in the remaining files as
-   reaching base. Their callers are spread across base, every algorithm crate,
-   and Paint/Interaction through `layout::fragment`. Each such file must import
-   the traits.
-   - Proposal: one prelude (`layout_core::fragment_ext::*`, re-exported as
-     `layout::fragment::ext`) added to every file that calls them.
-   - Fragment-side accessors that return opaque handles must not reuse the
-     Chromium name, because an inherent method shadows the trait method. The
-     SnapArea precedent is `GetElementHandle`.
-2. **`PhysicalFragment::Style()`** (`EffectiveStyle` on the LayoutObject) is
-   the most transitive dependency. Most box/item methods reach it. Moving it
-   to an extension trait pulls most of the fragment API up into base.
-   - The alternative is to store a style handle in the fragment. That changes
-     memory and lifecycle, so it is not done.
-3. **Whole files.** Decide whether `InlineCursor`, `FragmentData` with its
-   iterator, and the paint helper files go to base wholesale, as proposed
-   above.
-4. **Builder constructors.** `PhysicalBoxFragment::Create`,
-   `LayoutResult::new`, `FragmentItems::new` and the break-token constructors
-   become associated functions in base. The fields they set must become
-   `pub`.
-
-**Checks run** (no cargo):
-
-- `fragcheck.pl` walks the crate's module tree from `lib.rs` and resolves
-  every `crate::`/`super::`/`self::` path and every `use` tree. It also flags
-  any `layout_core::`/`layout_assembly::`/`layout_algo_*::` path and any
-  base-only type name. Result: 53 files, OK.
-- `scan.pl` dependency refs, the `clean.pl` closure, and `rg` audits of
-  `pub(crate)` items (now `pub`), `impl` blocks on moved types (coherence)
-  and every call site of a changed signature.
-
-The R4 scripts are in `C:\Users\Administrator\rechrom-handoff\tools\r4\`. Run
-`perl fragcheck.pl crates/layout/layout_fragment` from the repository root.
-`clean.pl` reads `scan.pl`'s `refs.tsv`, from the R0 tools folder.
+**Checks run** (no cargo): `modcheck.pl` walks both assemblies,
+`layout_commit`, the facade, block and grid from their roots through `mod`,
+`#[path]` and `include!`. It found every target present, no file compiled
+twice in one crate, and no orphan file under `layout_core/src/fragment`,
+`layout_core/src/internal` or `layout_commit/src`. The same script on the
+previous tree also reports OK. 629 assembly files now equals 579 + 53 data −
+`lib.rs`, `trace.rs`, `opaque.rs` and base `anchor_scope.rs`, +
+`layout_result_handle.rs`. `rg layout_fragment` leaves only trace names,
+`layout_fragment_*` sampling module names, profiler comments and docs.
 
 **Build risks:**
 
-- `Cargo.lock` gains the new `layout_geometry` and `layout_style`
-  dependencies of `layout_fragment` on the first build.
-- `cargo test -p layout_fragment` may not link on MSVC. The crate declares
-  `GridRangeBuilderNew` and `GridSizingTrackCollectionBuildSets` as
-  `extern "Rust"`, and those are defined in `layout_algo_grid` above it. The
-  assembly had the same pattern.
-- Type inference at the new `.cast()` sites.
+- `Cargo.lock` still lists the `layout_fragment` package. The first build
+  drops it.
+- The inline callers (`inline_layout_algorithm.rs`, `line_breaker.rs`) lost
+  one import line each. This can conflict with the concurrent inline crate
+  work.
+- `layout_algo_inline_assembly` now also compiles the grid `#[no_mangle]`
+  bodies through base. It always got them through the crate before, and
+  nothing links both assemblies.
 
-### Suggested order inside R4 (fragment)
+### Suggested order inside R4 (fragment) (superseded)
 
-1. Add the opaque `LayoutObject` handle (and `BlockNode`/`LayoutInputNode`
-   handles) to fragment, plus the typed accessor extension trait in base. Make
-   no behaviour change.
-2. Move the data closure down. In order: `StyleVariant`, `TextOffsetRange`,
-   `SplitAxisItem`, `HitTestPhase`, `SelectionState`, `MapCoordinatesFlags`,
-   `TextDecorationOffset`; then `ConstraintSpace` with its rare data
-   (`ExclusionSpace` and the exclusion files, `LineClampData`,
-   `TableConstraintSpaceData`, `CustomData`, `GridLayoutSubtree`,
-   `BreakAppeal`); then the `LayoutResult` payload (`EarlyBreak`,
-   `ColumnSpannerPath`, `GridLayoutData`, `DevtoolsFlexInfo`,
-   `NonOverflowingScrollRange`, `SerializedScriptValue`); then fragment
-   payload types (`OofPositionedNode`, `AnchorMap`, `TableBorders`,
-   `UsedFont`, `InlineItem*`).
-3. Move the 32 LayoutObject/LayoutBox/LayoutView method files (inherent impls)
-   up. This step is mechanical.
-4. Move the PaintLayer/scroll cluster (24 files) up.
-5. Move builders (8 files) up, along with the `Create(builder)` constructors.
-6. Move the paint-export/publish cluster (21) and the remaining glue (26) up.
-   Split `fragment_tree.rs`.
-7. Turn the ≈113 data→base behaviour calls into base extension-trait methods,
-   adding a slot only where the call must stay inside a fragment algorithm.
-8. Fragment compiles alone (`package.rs` + `lib.rs` merged); delete its
-   `include!`.
+The original eight-step order (opaque handles, data closure down, method
+files up, extension traits, standalone fragment crate) is superseded by the
+decision above: fragments are base, so steps 1, 7 and 8 do not apply and the
+file moves are done.
 
 ### Suggested order inside R5 (inline)
 
@@ -1141,9 +1077,10 @@ The R4 scripts are in `C:\Users\Administrator\rechrom-handoff\tools\r4\`. Run
 5. Remove the `translation_in_progress` gating so inline compiles standalone
    on base + fragment.
 
-R4 before R5 is assumed. LayoutText and LayoutInline are referenced by
-fragment data (`LayoutInline` ×17 files), so the opaque handle from R4 step 1
-must exist first.
+R4 before R5 was assumed for the opaque handle. With fragments in base
+(R4 decision above) no handle is needed: fragment data names LayoutText and
+LayoutInline directly, and "fragment" in the R5 steps means base's
+`layout_core/src/fragment/`.
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

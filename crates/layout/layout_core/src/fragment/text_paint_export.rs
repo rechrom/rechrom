@@ -1,4 +1,4 @@
-//! Chromium text shaping and glyph-paint export owned by `layout_fragment`.
+//! Chromium text shaping and glyph-paint export of the fragment area.
 //!
 //! Included at the reciprocal source boundary so paint-time glyph creation,
 //! text-combine projection, and list-marker payloads retain their source

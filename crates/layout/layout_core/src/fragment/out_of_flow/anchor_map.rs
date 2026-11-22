@@ -13,7 +13,7 @@ use super::super::layout_node_metadata::Element;
 use super::super::layout_object::LayoutObject;
 use super::super::transform_utils::UpdateTransformState;
 
-#[path = "../../../layout_core/src/out_of_flow/anchor_map_operations.rs"]
+#[path = "../../out_of_flow/anchor_map_operations.rs"]
 mod layout_algo_out_of_flow_anchor_map_operations;
 use layout_algo_out_of_flow_anchor_map_operations::{
     AnchorMapAnchorReference, AnchorMapEntries, AnchorMapSetFromChild, AnchorMapSetReference,

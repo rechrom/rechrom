@@ -145,7 +145,7 @@ fn CreateExclusionShapeData(
         }
     }
     MakeGarbageCollected(ExclusionShapeData::new(
-        layout_box.cast_const().cast(),
+        layout_box,
         &new_margins,
         &shape_insets,
     ))

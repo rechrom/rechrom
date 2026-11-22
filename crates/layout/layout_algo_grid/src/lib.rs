@@ -7,7 +7,7 @@ pub mod grid_named_line_collection;
 pub mod subgrid_min_max_sizes_cache;
 // Grid code compiled elsewhere and reached here by re-export: the
 // gap-segment aggregator and the track-collection bodies are fragment data
-// (`layout_fragment/src/grid/`, re-exported through
+// (`layout_core/src/fragment/grid/`, re-exported through
 // layout_assembly::grid_gap_segment_state_aggregator and
 // layout_assembly::grid_track_collection_implementation); the base-owned grid
 // files sit in `layout_core/src/grid/`.

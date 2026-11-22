@@ -10,18 +10,18 @@ use foundation::{
     LogicalToLogical, MakeGarbageCollected, MarginStrut, RuntimeEnabledFeatures, TextDirection, To,
     UnsupportedLayout,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::fragment_builder::FragmentBuilder;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::layout_result::{EStatus, LayoutResult};
-use layout_fragment::logical_box_fragment::LogicalBoxFragment;
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::BoxType;
-use layout_fragment::physical_fragment::PhysicalFragment;
-use layout_fragment::physical_line_box_fragment::PhysicalLineBoxFragment;
+use layout_core::block_break_token::BlockBreakToken;
+use layout_core::box_fragment_builder::BoxFragmentBuilder;
+use layout_core::break_token::BreakToken;
+use layout_core::fragment_builder::FragmentBuilder;
+use layout_core::inline_break_token::InlineBreakToken;
+use layout_core::layout_result::{EStatus, LayoutResult};
+use layout_core::logical_box_fragment::LogicalBoxFragment;
+use layout_core::logical_fragment::LogicalFragment;
+use layout_core::physical_box_fragment::PhysicalBoxFragment;
+use layout_core::physical_fragment::BoxType;
+use layout_core::physical_fragment::PhysicalFragment;
+use layout_core::physical_line_box_fragment::PhysicalLineBoxFragment;
 use layout_core::internal::algorithm_entry::LayoutAlgorithmImplementation;
 use layout_core::internal::algorithm_forward::{
     BlockLayoutAlgorithm as ForwardBlockLayoutAlgorithm, InlineChildLayoutContext,
@@ -608,8 +608,7 @@ impl BlockLineClampData {
         }
         if self.data.state == LineClampState::kClampAfterLayoutObject
             && (layout_result.LinesUntilClamp() < 0
-                || self.data.clamp_after_layout_object.cast::<()>()
-                    == fragment.GetLayoutObject().cast::<()>())
+                || self.data.clamp_after_layout_object == fragment.GetLayoutObject())
         {
             debug_assert!(self.previous_inflow_position_when_clamped.is_none());
             self.data.state = LineClampState::kClampByLines;
@@ -669,7 +668,7 @@ impl DerefMut for BlockLayoutAlgorithm {
 // cpp: layoutng_block/block_layout_algorithm.h:482-486
 pub struct PlaceholderLayoutResult {
     pub logical_block_offset: LayoutUnit,
-    pub status: layout_fragment::layout_result::EStatus,
+    pub status: layout_core::layout_result::EStatus,
 }
 
 impl BlockLayoutAlgorithm {
@@ -753,7 +752,7 @@ impl BlockLayoutAlgorithm {
         } else if relayout_type == RelayoutType::kRelayoutClampingAfterLayoutObject {
             self.line_clamp_data_.data.state = LineClampState::kClampAfterLayoutObject;
             self.line_clamp_data_.data.clamp_after_layout_object =
-                previous.line_clamp_data_.last_layout_object.cast();
+                previous.line_clamp_data_.last_layout_object;
             self.line_clamp_data_.data.block_ellipsis =
                 previous.line_clamp_data_.data.block_ellipsis;
         } else if previous.line_clamp_data_.data.IsClampByLines() {

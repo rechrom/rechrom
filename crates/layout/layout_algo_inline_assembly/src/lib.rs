@@ -8,8 +8,7 @@ pub use foundation::UnsupportedLayout;
 
 include!("../../layout_core/src/lib.rs");
 
-// Fragment-tree modules still compiled with base; fragment data is the real
-// `layout_fragment` crate.
+// The fragment-tree modules (fragment data is part of the included base root).
 #[path = "../../layout_assembly/src/layout_fragment_package.rs"]
 pub mod layout_fragment_package;
 pub use layout_fragment_package::*;

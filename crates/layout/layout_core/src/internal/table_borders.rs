@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/table/table_borders_types.rs"]
+#[path = "../fragment/table/table_borders_types.rs"]
 mod layout_algo_table_table_borders_types;
 
 pub use layout_algo_table_table_borders_types::*;

@@ -1,18 +1,19 @@
 use std::sync::{Arc, OnceLock};
 
-pub use layout_fragment::{
+pub use crate::boundary_types::{
     BackgroundPaintLocation, CollapsedTableEdge, CollapsedTablePaintData, CollapsedTableSection,
     ColumnRule, ColumnRulePaintData, FieldsetPaintData, FormControlPaintData, FragmentBoxSides,
     FragmentKind, FragmentPaintRect, FrameSetPaintData, GapRule, GapRulePaintData, GapRuleSide,
-    LayoutResultHandle, MathMLPaintData, MathMLPaintKind,
+    MathMLPaintData, MathMLPaintKind,
     PaintGlyph, PaintGlyphRun, PaintResources, PrePaintInvalidation, PreviousBoxGeometry,
     ReplacedContentPaintData, ScrollContainerPaintData, ScrollSnapAxisPaintData,
     ScrollSnapStrictnessPaintData, ScrollSnapTypePaintData, ScrollbarPaintAxis, ScrollbarPaintData,
     SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
     SvgTextPaintData, SvgViewportGeometry, TextCombineEmphasisPaintData, TextCombinePaintData,
 };
+pub use crate::layout_result_handle::LayoutResultHandle;
 
-#[path = "../../layout_core/src/fragment/paint_resource_usage.rs"]
+#[path = "paint_resource_usage.rs"]
 pub mod paint_resource_usage;
 
 pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
@@ -67,8 +68,8 @@ impl PrePaintSourceObject {
 
 /// Assembly specialization of fragment-owned table geometry with LayoutNG's
 /// immutable paint-style snapshot. Existing consumers keep the original API.
-pub type TablePaintColumn = layout_fragment::TablePaintColumn<PaintStyle>;
-pub type TablePaintData = layout_fragment::TablePaintData<PaintStyle>;
+pub type TablePaintColumn = crate::boundary_types::TablePaintColumn<PaintStyle>;
+pub type TablePaintData = crate::boundary_types::TablePaintData<PaintStyle>;
 
 // The source fragment is the complete paint input. Shared payloads use Arc
 // because C++ shared_ptr<const T> is shared immutable ownership.
@@ -84,12 +85,12 @@ pub type TablePaintData = layout_fragment::TablePaintData<PaintStyle>;
 /// background.  Keeping the selected immutable style here avoids asking Paint
 /// to rediscover DOM roles or containment rules.
 pub type CanvasBackgroundPaintData =
-    layout_fragment::CanvasBackgroundPaintData<PaintStyle>;
+    crate::boundary_types::CanvasBackgroundPaintData<PaintStyle>;
 /// The same selection read live from the resident root/body fragments
 /// (PaintFragmentCursor::ViewBackground / CanvasBackground); the style is the
 /// selected fragment's own PaintStyle projection, borrowed, not copied.
 pub type CanvasBackgroundPaintView<'a> =
-    layout_fragment::CanvasBackgroundPaintData<&'a PaintStyle>;
+    crate::boundary_types::CanvasBackgroundPaintData<&'a PaintStyle>;
 
 /// BoxBackgroundPaintContext state for a page border box painting the
 /// document canvas. The positioning size belongs to the LayoutView root while
@@ -118,9 +119,9 @@ pub struct PageContainerBackgroundPaintData {
 }
 
 /// Assembly specializations preserve the historical non-generic API while
-/// fragment-local storage and sharing remain owned by `layout_fragment`.
-pub type PaintPropertiesHandle = layout_fragment::PaintPropertiesHandle<PaintProperties>;
-pub type FragmentPaintData = layout_fragment::FragmentPaintData<PaintProperties>;
+/// fragment-local storage and sharing remain owned by `boundary_types`.
+pub type PaintPropertiesHandle = crate::boundary_types::PaintPropertiesHandle<PaintProperties>;
+pub type FragmentPaintData = crate::boundary_types::FragmentPaintData<PaintProperties>;
 
 #[derive(Clone, PartialEq)]
 pub struct PaintProperties {
@@ -781,7 +782,7 @@ pub trait ResidentBoxGeometry {
     }
     fn Borders(&self) -> Edges;
     fn Padding(&self) -> Edges;
-    fn BorderSides(&self) -> layout_fragment::FragmentBoxSides;
+    fn BorderSides(&self) -> crate::boundary_types::FragmentBoxSides;
     /// The border-image of a box fragment, resolved from its live style,
     /// size, borders and the document's image resources
     /// (NinePieceImagePainter reads the fragment being painted and its
@@ -1067,7 +1068,7 @@ pub fn InlineItemInstanceId(
 
 impl ResidentBoxGeometry for FragmentPaintData {
     fn ViewEstablishesPaintState(&self) -> bool {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
@@ -1096,7 +1097,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     fn ResidentTextItem(
         &self,
     ) -> Option<(&crate::fragment_item::FragmentItem, &crate::fragment_items::FragmentItems)> {
-        let layout_fragment::ResidentFragmentOwner::InlineItem { items, index } =
+        let crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } =
             self.resident_owner
         else {
             return None;
@@ -1113,7 +1114,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     fn ResidentOwnerIsInline(&self) -> bool {
         matches!(
             self.resident_owner,
-            layout_fragment::ResidentFragmentOwner::InlineItem { .. }
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { .. }
         )
     }
 
@@ -1192,7 +1193,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewPropertyFragmentUniqueId(&self) -> u64 {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         let object = self.paint.SourceObjectPointer();
         if object.is_null() || matches!(self.resident_owner, ResidentFragmentOwner::None) {
             return self.paint.property_fragment_unique_id;
@@ -1213,7 +1214,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewFragmentInstanceId(&self) -> u64 {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => self.fragment_instance_id,
             ResidentFragmentOwner::Physical(address) => PhysicalFragmentInstanceId(unsafe {
@@ -1227,7 +1228,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewOwnFragmentainerInstanceId(&self) -> Option<u64> {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             // Detached fixtures record the enclosing fragmentainer directly.
             ResidentFragmentOwner::None => {
@@ -1249,7 +1250,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewTextHitTestBounds(&self) -> Option<FragmentPaintRect> {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items
                     .Items()
@@ -1396,7 +1397,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewSvgText(&self) -> Option<Arc<SvgTextPaintData>> {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items.Items().get(index).and_then(|item| {
                     crate::internal::boundary::layout_boundary::ExportSvgTextPaintData(
@@ -1469,7 +1470,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewTextLineGeometry(&self) -> Option<(f64, f64)> {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 crate::internal::boundary::layout_boundary::LiveTextLineGeometry(items, index)
             }
@@ -1479,7 +1480,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewFirstLineDecorationRect(&self) -> Option<FragmentPaintRect> {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items.Items().get(index).and_then(
                     crate::internal::boundary::layout_boundary::LiveFirstLineDecorationRect,
@@ -1491,7 +1492,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewDisplayItemFragment(&self) -> u32 {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items
                     .Items()
@@ -1503,7 +1504,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewOwnDisplayItemFragment(&self) -> Option<u32> {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => Some(self.paint.display_item_fragment),
             ResidentFragmentOwner::InlineItem { .. } => Some(self.ViewDisplayItemFragment()),
@@ -1542,20 +1543,20 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewHidden(&self) -> bool {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items.Items().get(index).map_or(self.paint.hidden, |item| {
                     item.IsHiddenForPaint()
                         || self.paint.SvgViewport().is_some_and(|viewport| viewport.disabled)
                 })
             }
-            layout_fragment::ResidentFragmentOwner::Physical(address) => {
+            crate::boundary_types::ResidentFragmentOwner::Physical(address) => {
                 let fragment =
                     unsafe { &*(address as *const crate::physical_fragment::PhysicalFragment) };
                 IsHiddenForPaintIncludingInlineItem(fragment)
                     || self.paint.SvgViewport().is_some_and(|viewport| viewport.disabled)
             }
-            layout_fragment::ResidentFragmentOwner::None => self.paint.hidden,
+            crate::boundary_types::ResidentFragmentOwner::None => self.paint.hidden,
         }
     }
 
@@ -1568,7 +1569,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
             self.paint.text_combine_inline_offset,
         );
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items
                     .Items()
@@ -1582,7 +1583,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewIsLineBreak(&self) -> bool {
         match self.resident_owner {
-            layout_fragment::ResidentFragmentOwner::InlineItem { items, index } => {
+            crate::boundary_types::ResidentFragmentOwner::InlineItem { items, index } => {
                 let items = unsafe { &*(items as *const crate::fragment_items::FragmentItems) };
                 items
                     .Items()
@@ -1609,7 +1610,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewInkOverflows(&self) -> [Option<FragmentPaintRect>; 4] {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => [
                 self.paint.self_ink_overflow,
@@ -1639,7 +1640,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewKind(&self) -> FragmentKind {
         use crate::fragment_item::ItemType;
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => self.kind,
             ResidentFragmentOwner::Physical(address) => {
@@ -1665,7 +1666,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewNodeId(&self) -> u64 {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         let object = match self.resident_owner {
             ResidentFragmentOwner::None => return self.node_id,
             ResidentFragmentOwner::Physical(address) => {
@@ -1690,7 +1691,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewContentSize(&self) -> Size {
-        if matches!(self.resident_owner, layout_fragment::ResidentFragmentOwner::None) {
+        if matches!(self.resident_owner, crate::boundary_types::ResidentFragmentOwner::None) {
             return self.content_size;
         }
         match self.ResidentBoxFragment() {
@@ -1713,7 +1714,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewSize(&self) -> Size {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => self.size,
             ResidentFragmentOwner::Physical(address) => {
@@ -1741,7 +1742,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewStyle(&self) -> PaintStyle {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         let style = match self.resident_owner {
             ResidentFragmentOwner::None => None,
             ResidentFragmentOwner::Physical(address) => Some(
@@ -1759,7 +1760,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     }
 
     fn ViewCanPaintFragmentOccurrence(&self) -> bool {
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         match self.resident_owner {
             ResidentFragmentOwner::None => self.paint.CanPaintFragmentOccurrence(),
             // Only box fragments carry IsFirstForNode; line boxes and inline
@@ -1788,7 +1789,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ResidentBoxFragment(&self) -> Option<&crate::physical_box_fragment::PhysicalBoxFragment> {
         use crate::physical_box_fragment::PhysicalBoxFragment;
-        use layout_fragment::ResidentFragmentOwner;
+        use crate::boundary_types::ResidentFragmentOwner;
         // The owner was bound by the publication that this slot belongs to;
         // the LayoutResult lease held by Paint keeps it resident.
         match self.resident_owner {
@@ -1853,18 +1854,18 @@ impl ResidentBoxGeometry for FragmentPaintData {
             .unwrap_or_else(|| self.paint.style.mask_box_image.clone())
     }
 
-    fn BorderSides(&self) -> layout_fragment::FragmentBoxSides {
+    fn BorderSides(&self) -> crate::boundary_types::FragmentBoxSides {
         match self.ResidentBoxFragment() {
             Some(fragment) => {
                 let sides = fragment.SidesToInclude();
-                layout_fragment::FragmentBoxSides {
+                crate::boundary_types::FragmentBoxSides {
                     top: sides.top,
                     right: sides.right,
                     bottom: sides.bottom,
                     left: sides.left,
                 }
             }
-            None => layout_fragment::FragmentBoxSides::default(),
+            None => crate::boundary_types::FragmentBoxSides::default(),
         }
     }
 
