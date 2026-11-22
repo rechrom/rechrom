@@ -5,14 +5,14 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../replaced/layout_replaced_interface.rs"]
+#[path = "replaced/layout_replaced_interface.rs"]
 mod layout_algo_replaced_layout_replaced_interface;
 
 pub use layout_algo_replaced_layout_replaced_interface::*;
 
-#[path = "../replaced/layout_replaced_core.rs"]
+#[path = "replaced/layout_replaced_core.rs"]
 pub mod layout_replaced_core;
-#[path = "../replaced/layout_video.rs"]
+#[path = "replaced/layout_video.rs"]
 pub mod layout_video;
-#[path = "../replaced/layout_media.rs"]
+#[path = "replaced/layout_media.rs"]
 pub mod layout_media;

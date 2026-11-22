@@ -1516,10 +1516,10 @@ impl LayoutEngine {
 #[path = "editing/engine_password_echo.rs"]
 mod layout_algo_inline_engine_password_echo;
 
-#[path = "../../layout_algo_forms/src/slider_track_geometry.rs"]
+#[path = "forms/slider_track_geometry.rs"]
 mod layout_algo_forms_slider_track_geometry;
 
-#[path = "../../layout_algo_forms/src/spin_button_geometry.rs"]
+#[path = "forms/spin_button_geometry.rs"]
 mod layout_algo_forms_spin_button_geometry;
 
 #[cfg(feature = "translation_in_progress")]

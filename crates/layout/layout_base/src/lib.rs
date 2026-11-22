@@ -21,7 +21,7 @@ pub mod internal {
     pub mod anchor_map;
     pub mod anchor_map_services;
     pub mod anchor_position_scroll_data;
-    #[path = "../fragment/core/anchor_scope.rs"]
+    #[path = "core/anchor_scope.rs"]
     pub mod anchor_scope;
     pub mod anchor_scroll_services;
     pub mod boundary {
@@ -38,7 +38,7 @@ pub mod internal {
     pub mod block_node;
     pub mod block_node_data;
     pub mod break_appeal {
-        #[path = "../../fragment/fragmentation/break_appeal.rs"]
+        #[path = "fragmentation/break_appeal.rs"]
         mod layout_algo_fragmentation_break_appeal;
         pub use layout_algo_fragmentation_break_appeal::*;
     }
@@ -51,28 +51,28 @@ pub mod internal {
         pub mod out_of_flow_data;
         pub mod successful_position_fallback;
     }
-    #[path = "../fragment/core/constraint_space.rs"]
+    #[path = "core/constraint_space.rs"]
     pub mod constraint_space;
     pub mod constraint_space_builder;
     pub mod constraint_space_builder_style;
     pub mod constraint_space_custom_data {
-        #[path = "../../fragment/custom/constraint_space_custom_data.rs"]
+        #[path = "custom/constraint_space_custom_data.rs"]
         mod layout_algo_custom_constraint_space_custom_data;
         pub use layout_algo_custom_constraint_space_custom_data::*;
     }
     pub mod content_change_type;
     pub mod custom_layout_payload {
-        #[path = "../../fragment/custom/custom_layout_payload.rs"]
+        #[path = "custom/custom_layout_payload.rs"]
         mod layout_algo_custom_custom_layout_payload;
         pub use layout_algo_custom_custom_layout_payload::*;
     }
     pub mod custom_scrollbar;
     pub mod devtools_flex_info {
-        #[path = "../../fragment/flex/devtools_flex_info.rs"]
+        #[path = "flex/devtools_flex_info.rs"]
         mod layout_algo_flex_devtools_flex_info;
         pub use layout_algo_flex_devtools_flex_info::*;
     }
-    #[path = "../fragment/core/disable_layout_side_effects_scope.rs"]
+    #[path = "core/disable_layout_side_effects_scope.rs"]
     pub mod disable_layout_side_effects_scope;
     pub mod document_marker;
     pub mod early_break;
@@ -81,27 +81,27 @@ pub mod internal {
     }
     pub mod exclusions {
         pub mod exclusion_area {
-            #[path = "../../../fragment/float/exclusion_area.rs"]
+            #[path = "float/exclusion_area.rs"]
             mod layout_algo_float_exclusion_area;
             pub use layout_algo_float_exclusion_area::*;
         }
         pub mod exclusion_space {
-            #[path = "../../../fragment/float/exclusion_space.rs"]
+            #[path = "float/exclusion_space.rs"]
             mod layout_algo_float_exclusion_space;
             pub use layout_algo_float_exclusion_space::*;
         }
         pub mod layout_opportunity;
-        #[path = "../../fragment/core/exclusions/line_layout_opportunity.rs"]
+        #[path = "exclusions/line_layout_opportunity.rs"]
         pub mod line_layout_opportunity;
         pub mod shape_exclusions {
-            #[path = "../../../fragment/float/shape_exclusions.rs"]
+            #[path = "float/shape_exclusions.rs"]
             mod layout_algo_float_shape_exclusions;
             pub use layout_algo_float_shape_exclusions::*;
         }
     }
     pub mod form_control_sizing_service;
     pub mod form_control_types {
-        #[path = "../../fragment/forms/form_control_types.rs"]
+        #[path = "forms/form_control_types.rs"]
         mod layout_algo_forms_form_control_types;
         pub use layout_algo_forms_form_control_types::*;
     }
@@ -110,31 +110,31 @@ pub mod internal {
     pub mod fragment_repeater;
     pub mod fragmentation_utils;
     pub mod frame_set_layout_data {
-        #[path = "../../fragment/frame_set_layout_data.rs"]
+        #[path = "fragment/frame_set_layout_data.rs"]
         mod layout_fragment_frame_set_layout_data;
         pub use layout_fragment_frame_set_layout_data::*;
     }
     pub mod gap {
         pub mod cross_gap {
-            #[path = "../../../fragment/cross_gap.rs"]
+            #[path = "fragment/cross_gap.rs"]
             mod layout_fragment_cross_gap;
             pub use layout_fragment_cross_gap::*;
         }
         pub mod gap_decoration_utils;
         pub mod gap_geometry;
         pub mod gap_intersection {
-            #[path = "../../../fragment/gap_intersection.rs"]
+            #[path = "fragment/gap_intersection.rs"]
             mod layout_fragment_gap_intersection;
             pub use layout_fragment_gap_intersection::*;
         }
         #[allow(non_upper_case_globals)]
         pub mod gap_utils {
-            #[path = "../../../fragment/gap_utils.rs"]
+            #[path = "fragment/gap_utils.rs"]
             mod layout_fragment_gap_utils;
             pub use layout_fragment_gap_utils::*;
         }
         pub mod main_gap {
-            #[path = "../../../fragment/main_gap.rs"]
+            #[path = "fragment/main_gap.rs"]
             mod layout_fragment_main_gap;
             pub use layout_fragment_main_gap::*;
         }
@@ -143,21 +143,21 @@ pub mod internal {
     pub mod grid_item;
     pub mod grid_lanes_item_group;
     pub mod grid_layout_data {
-        #[path = "../../fragment/grid/grid_layout_data.rs"]
+        #[path = "grid/grid_layout_data.rs"]
         mod layout_algo_grid_grid_layout_data;
         pub use layout_algo_grid_grid_layout_data::*;
     }
     pub mod grid_subtree {
-        #[path = "../../fragment/grid/grid_subtree.rs"]
+        #[path = "grid/grid_subtree.rs"]
         mod layout_algo_grid_grid_subtree;
         pub use layout_algo_grid_grid_subtree::*;
     }
     pub mod grid_track_collection {
-        #[path = "../../fragment/grid/grid_track_collection_types.rs"]
+        #[path = "grid/grid_track_collection_types.rs"]
         mod layout_algo_grid_grid_track_collection_types;
         pub use layout_algo_grid_grid_track_collection_types::*;
     }
-    #[path = "../fragment/core/hit_test_phase.rs"]
+    #[path = "core/hit_test_phase.rs"]
     pub mod hit_test_phase;
     pub mod hyphen_result;
     pub mod ink_overflow;
@@ -167,7 +167,7 @@ pub mod internal {
     pub mod inline_item_segment;
     pub mod inline_item_span;
     pub mod inline_item_text_index {
-        #[path = "../../fragment/inline/inline_item_text_index.rs"]
+        #[path = "inline/inline_item_text_index.rs"]
         mod layout_algo_inline_inline_item_text_index;
         pub use layout_algo_inline_inline_item_text_index::*;
     }
@@ -215,7 +215,7 @@ pub mod internal {
     pub mod layout_text;
     pub mod layout_text_combine;
     pub mod layout_text_core;
-    #[path = "../fragment/core/layout_theme.rs"]
+    #[path = "core/layout_theme.rs"]
     pub mod layout_theme;
     pub mod layout_transform;
     pub mod layout_tree_invalidation;
@@ -223,7 +223,7 @@ pub mod internal {
     pub mod layout_view;
     pub mod length_utils;
     pub mod line_clamp_data {
-        #[path = "../../fragment/block/line_clamp_data.rs"]
+        #[path = "block/line_clamp_data.rs"]
         mod layout_algo_block_line_clamp_data;
         pub use layout_algo_block_line_clamp_data::*;
     }
@@ -239,10 +239,10 @@ pub mod internal {
             pub mod image_resource_observer;
         }
     }
-    #[path = "../fragment/core/map_coordinates_flags.rs"]
+    #[path = "core/map_coordinates_flags.rs"]
     pub mod map_coordinates_flags;
     pub mod mathml_paint_info {
-        #[path = "../../fragment/mathml_paint_info.rs"]
+        #[path = "fragment/mathml_paint_info.rs"]
         mod layout_fragment_mathml_paint_info;
         pub use layout_fragment_mathml_paint_info::*;
     }
@@ -253,14 +253,14 @@ pub mod internal {
     pub mod naming_scope;
     pub mod node_rare_data_field;
     pub mod non_overflowing_scroll_range {
-        #[path = "../../fragment/out_of_flow/non_overflowing_scroll_range.rs"]
+        #[path = "out_of_flow/non_overflowing_scroll_range.rs"]
         mod layout_algo_out_of_flow_non_overflowing_scroll_range;
         pub use layout_algo_out_of_flow_non_overflowing_scroll_range::*;
     }
     pub mod oof_positioned_node;
     pub mod outline_geometry;
     pub mod outline_info {
-        #[path = "../../fragment/outline_info.rs"]
+        #[path = "fragment/outline_info.rs"]
         mod layout_fragment_outline_info;
         pub use layout_fragment_outline_info::*;
     }
@@ -281,11 +281,11 @@ pub mod internal {
     pub mod scrollbar_orientation;
     pub mod scrollbar_part;
     pub mod scrollbar_theme_metrics;
-    #[path = "../fragment/core/selection_state.rs"]
+    #[path = "core/selection_state.rs"]
     pub mod selection_state;
     pub mod shapes {
         pub mod shape {
-            #[path = "../../../fragment/float/shape.rs"]
+            #[path = "float/shape.rs"]
             mod layout_algo_float_shape;
             pub use layout_algo_float_shape::*;
         }
@@ -295,10 +295,10 @@ pub mod internal {
     }
     pub mod snap_area;
     pub mod space_utils;
-    #[path = "../fragment/core/split_axis_item.rs"]
+    #[path = "core/split_axis_item.rs"]
     pub mod split_axis_item;
     pub mod sticky_position_scrolling_constraints;
-    #[path = "../fragment/core/style_variant.rs"]
+    #[path = "core/style_variant.rs"]
     pub mod style_variant;
     pub mod svg_character_data;
     pub mod svg_inline_node_data;
@@ -307,12 +307,12 @@ pub mod internal {
     pub mod svg_text_attributes_request;
     pub mod table_borders;
     pub mod table_column_location {
-        #[path = "../../fragment/table/table_column_location.rs"]
+        #[path = "table/table_column_location.rs"]
         mod layout_algo_table_table_column_location;
         pub use layout_algo_table_table_column_location::*;
     }
     pub mod table_constraint_space_data {
-        #[path = "../../fragment/table/table_constraint_space_data.rs"]
+        #[path = "table/table_constraint_space_data.rs"]
         mod layout_algo_table_table_constraint_space_data;
         pub use layout_algo_table_table_constraint_space_data::*;
     }
@@ -320,19 +320,19 @@ pub mod internal {
     pub mod table_layout_algorithm_types;
     pub mod table_node;
     pub mod text_combine_style_service;
-    #[path = "../fragment/core/text_decoration_offset.rs"]
+    #[path = "core/text_decoration_offset.rs"]
     pub mod text_decoration_offset;
     pub mod text_fit_scale {
-        #[path = "../../fragment/inline/text_fit_scale.rs"]
+        #[path = "inline/text_fit_scale.rs"]
         mod layout_algo_inline_text_fit_scale;
         pub use layout_algo_inline_text_fit_scale::*;
     }
     pub mod text_item_type {
-        #[path = "../../fragment/inline/text_item_type.rs"]
+        #[path = "inline/text_item_type.rs"]
         mod layout_algo_inline_text_item_type;
         pub use layout_algo_inline_text_item_type::*;
     }
-    #[path = "../fragment/core/text_offset_range.rs"]
+    #[path = "core/text_offset_range.rs"]
     pub mod text_offset_range;
     pub mod text_overflow_post_layout_snapshot;
     pub mod transform_utils;
@@ -341,7 +341,7 @@ pub mod internal {
     pub mod unpositioned_float;
     pub mod unpositioned_list_marker;
     pub mod used_font {
-        #[path = "../../fragment/inline/used_font_interface.rs"]
+        #[path = "inline/used_font_interface.rs"]
         mod layout_algo_inline_used_font_interface;
         pub use layout_algo_inline_used_font_interface::*;
     }

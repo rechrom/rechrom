@@ -5,7 +5,7 @@ use layout_style::style::computed_style::ComputedStyleBuilder;
 // Bodies: base `inline/text_combine_style_service.rs` (snapshot layoutng_inline).
 // Chromium core/layout/layout_text_combine.cc (AssertStyleIsValid) and style_adjuster.cc text-combine adjustments.
 #[cfg(feature = "translation_in_progress")]
-#[path = "../inline/text_combine_style_service.rs"]
+#[path = "inline/text_combine_style_service.rs"]
 pub mod text_combine_style_members;
 
 #[cfg(feature = "translation_in_progress")]

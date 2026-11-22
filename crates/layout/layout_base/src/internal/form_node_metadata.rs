@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../forms/form_node_metadata_interface.rs"]
+#[path = "forms/form_node_metadata_interface.rs"]
 mod layout_core_form_node_metadata_interface;
 
 pub use layout_core_form_node_metadata_interface::*;

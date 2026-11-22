@@ -14,6 +14,6 @@ use super::tree_traversal_utils::{
     PhysicalFragmentTraversalOptions,
 };
 
-#[path = "../fragment/layout_box_location_update.rs"]
+#[path = "fragment/layout_box_location_update.rs"]
 mod layout_fragment_layout_box_location_update;
 pub use layout_fragment_layout_box_location_update::*;

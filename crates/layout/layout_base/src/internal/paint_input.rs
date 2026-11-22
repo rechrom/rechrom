@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 
-#[path = "../fragment/paint_input.rs"]
+#[path = "fragment/paint_input.rs"]
 mod layout_fragment_paint_input;
 
 pub use layout_fragment_paint_input::*;

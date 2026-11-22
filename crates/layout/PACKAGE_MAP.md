@@ -1425,11 +1425,11 @@ direction):
 "Rust" fn` → `pub fn` and `layout_assembly::` → `crate::`):
 
 - `layout_algo_replaced/src/layout_replaced.rs` →
-  `layout_core/src/replaced/layout_replaced_core.rs`
+  `layout_base/src/internal/replaced/layout_replaced_core.rs`
 - `layout_algo_replaced/src/layout_video.rs` →
-  `layout_core/src/replaced/layout_video.rs`
+  `layout_base/src/internal/replaced/layout_video.rs`
 - `layout_algo_replaced/src/layout_media.rs` →
-  `layout_core/src/replaced/layout_media.rs`
+  `layout_base/src/internal/replaced/layout_media.rs`
 
 They are `pub mod layout_replaced_core`, `layout_video` and `layout_media` of
 `internal::layout_replaced`, beside the interface file. The replaced crate

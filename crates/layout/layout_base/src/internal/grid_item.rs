@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../grid/grid_item_data.rs"]
+#[path = "grid/grid_item_data.rs"]
 mod layout_algo_grid_grid_item_data;
 
 pub use layout_algo_grid_grid_item_data::*;

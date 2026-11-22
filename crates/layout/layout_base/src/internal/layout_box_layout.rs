@@ -6,7 +6,7 @@ use super::layout_box::LayoutBox;
 use super::layout_node_metadata::Element;
 use super::layout_object::OverflowRecalcType;
 
-#[path = "../commit/layout_box_post_layout_commit.rs"]
+#[path = "commit/layout_box_post_layout_commit.rs"]
 mod layout_commit_layout_box_post_layout_commit;
 
 // cpp: layoutng/internal/layout_box.h:75-80

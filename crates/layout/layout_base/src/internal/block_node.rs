@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../block/block_node.rs"]
+#[path = "block/block_node.rs"]
 mod layout_algo_block_block_node;
 
 pub use layout_algo_block_block_node::*;

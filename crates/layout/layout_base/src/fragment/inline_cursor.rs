@@ -1947,5 +1947,5 @@ impl<'a> InlineBackwardCursor<'a> {
 }
 
 #[cfg(feature = "translation_in_progress")]
-#[path = "../editing/inline_cursor_editing_queries.rs"]
+#[path = "editing/inline_cursor_editing_queries.rs"]
 mod layout_algo_inline_editing_queries;
