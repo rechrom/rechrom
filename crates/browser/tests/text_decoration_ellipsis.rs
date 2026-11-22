@@ -1,8 +1,8 @@
 //! Ellipsis glyphs are generated text, but Chromium deliberately excludes
 //! them from TextDecorationPainter::UpdateDecorationInfo.
 
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::fragment::ResidentBoxGeometry as _;

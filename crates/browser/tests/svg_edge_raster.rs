@@ -1,6 +1,6 @@
 //! Production SVG inline and document-image clip/raster equivalence.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::input::FontFace;

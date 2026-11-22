@@ -1,8 +1,8 @@
 //! Effective border-width changes must invalidate retained LayoutNG geometry.
 //! Source: third_party/blink/renderer/core/style/computed_style.cc
 //! ComputedStyle::DiffNeedsFullLayout.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, input::{FontFace, Size}};

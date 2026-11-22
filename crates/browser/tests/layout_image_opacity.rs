@@ -1,6 +1,6 @@
 //! LayoutImage foreground-opacity dispatch through DOM, Layout and Paint state.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use foundation::{DynamicTo, RespectImageOrientationEnum};

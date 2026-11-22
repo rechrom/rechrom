@@ -1,6 +1,6 @@
 //! Local SVG masks use scoped immutable resources, not image requests.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};

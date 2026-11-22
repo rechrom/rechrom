@@ -1,8 +1,8 @@
 //! Author shadow/slot attachment through the production Page and QuickJS lifecycle.
 //! Use native HTML createElement nodes: ShadowRoot.innerHTML's fragment namespace
 //! behavior is a separate parser concern and must not hide attachment regressions.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;

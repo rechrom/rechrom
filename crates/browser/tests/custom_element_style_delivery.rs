@@ -1,8 +1,8 @@
 //! Generic registration-time metadata finalization delivered to production Page style/layout.
 //! Native HTML style/button nodes keep fragment-parser namespace behavior out of this test.
 //! https://html.spec.whatwg.org/multipage/custom-elements.html#dom-customelementregistry-define
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};

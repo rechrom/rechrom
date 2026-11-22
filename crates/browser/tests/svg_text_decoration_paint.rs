@@ -1,8 +1,8 @@
 //! SVG text decorations use the declaring ancestor's paint, not the leaf
 //! LayoutSVGInlineText paint.  Paint-order remains stroke/fill ordered.
 
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::fragment::ResidentBoxGeometry as _;

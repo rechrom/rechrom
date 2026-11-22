@@ -1,6 +1,6 @@
 //! Spanning named grid rows through the production Style and Layout owners.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::{paint::FragmentPaintData, input::{FontFace, Offset}};

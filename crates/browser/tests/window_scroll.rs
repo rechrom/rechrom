@@ -1,8 +1,8 @@
 //! Window CSSOM View calls use the existing viewport scroll owner and lifecycle.
 //! Chromium 6c1d401fcca5e1b0030563a90c2f2bba168e0c15:
 //! third_party/blink/renderer/core/frame/local_dom_window.cc:1832-1876,1942-2083.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::input::FontFace;

@@ -1,8 +1,8 @@
 //! TextFragmentPainter rounds the accumulated CSS line top before device
 //! projection. Fractional ancestors must therefore affect text paint geometry
 //! identically at DPR 1 and DPR 2.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::input::FontFace;

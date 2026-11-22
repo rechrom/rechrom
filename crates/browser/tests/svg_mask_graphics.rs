@@ -1,6 +1,6 @@
 //! External SVG graphics through the production resource, image, mask and raster path.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
 use std::{cell::RefCell, io, rc::Rc};

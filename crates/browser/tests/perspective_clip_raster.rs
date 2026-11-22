@@ -1,6 +1,4 @@
 //! Non-composited, plane-preserving perspective property-tree lowering.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
 
 use browser::page::Page;
 use std::{cell::RefCell, io, rc::Rc};

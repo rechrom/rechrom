@@ -1,6 +1,6 @@
 //! Root scroll publishes one coherent native sticky/property/paint snapshot.
-#[path = "../src/test_thread.rs"]
-mod test_thread;
+mod support;
+use support::test_thread;
 
 use browser::page::Page;
 use layout::input::FontFace;
