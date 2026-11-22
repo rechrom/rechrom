@@ -6,7 +6,7 @@ mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layout_assembly::fragment_tree::FragmentPaintData;
+use layout::paint::FragmentPaintData;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -54,7 +54,7 @@ fn evaluate(page: &mut Page, script: &str) {
 fn fixture() -> Page {
     let assembly = browser::CreateLayoutAssembly();
     let mut constraints = browser::CreateBrowserConstraints(640, 800);
-    constraints.fonts = vec![layout_assembly::internal::layout_input::FontFace {
+    constraints.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
             .as_slice()
@@ -150,9 +150,7 @@ fn count(root: &FragmentPaintData, id: u64) -> usize {
 // Inline owners can legitimately have no separate FragmentPaintData. Inspect the
 // retained native tree when checking uniqueness of the file status span.
 fn layout_object_count(page: &Page, id: u64) -> usize {
-    use layout_assembly::internal::{
-        layout_object::LayoutObject, layout_pass_scope::LayoutObjectFactoryScope,
-    };
+    use layout::object::{LayoutObject, LayoutObjectFactoryScope};
     let assembly = browser::CreateLayoutAssembly();
     let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
     let engine = page.GetLayoutEngine();

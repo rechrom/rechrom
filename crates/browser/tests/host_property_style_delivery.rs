@@ -8,7 +8,7 @@ use browser::page::{Page, PageClient, ScriptEnvironment};
 use javascript::{
     javascript_runtime::JavaScriptException, quickjs_javascript_runtime::QuickJsJavaScriptRuntime,
 };
-use layout_assembly::fragment_tree::FragmentPaintData;
+use layout::paint::FragmentPaintData;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -67,7 +67,7 @@ fn evaluate(page: &mut Page, script: &str) {
 fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
     let assembly = browser::CreateLayoutAssembly();
     let mut constraints = browser::CreateBrowserConstraints(640, 800);
-    constraints.fonts = vec![layout_assembly::internal::layout_input::FontFace {
+    constraints.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
             .as_slice()

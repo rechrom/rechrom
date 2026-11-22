@@ -4,18 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::{
-        layout_input::{
-            FontFace, TrackedElementFrameToken, TrackedElementRelativeRect, TrackedElementSubRect,
-            TrackedElementSubRectType,
-        },
-        layout_object::LayoutObject,
-        layout_pass_scope::LayoutObjectFactoryScope,
-    },
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, input::{FontFace, TrackedElementFrameToken, TrackedElementRelativeRect, TrackedElementSubRect, TrackedElementSubRectType}, object::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
 use std::{cell::RefCell, io, rc::Rc};
@@ -292,7 +281,7 @@ fn svg_shape_publishes_region_capture_bounds_before_cached_drawing() {
         }
 
         let source = foundation::DynamicTo::<
-            layout_assembly::internal::layout_node_metadata::Element,
+            layout::input::Element,
         >(native(&page, "capture").GetNode());
         assert_eq!(
             unsafe { &*source }.InputRegionCaptureCropId(),

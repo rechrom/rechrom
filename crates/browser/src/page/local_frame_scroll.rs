@@ -119,7 +119,7 @@ impl InteractionScrollOwner {
     }
     pub(super) fn WithLayout<T>(
         &self,
-        query: impl FnOnce(&mut layout_assembly::layout_engine::LayoutEngine) -> T,
+        query: impl FnOnce(&mut layout::LayoutEngine) -> T,
     ) -> Option<T> {
         match self {
             Self::Root(page) => Some(query(&mut page.upgrade()?.layout_engine.borrow_mut())),

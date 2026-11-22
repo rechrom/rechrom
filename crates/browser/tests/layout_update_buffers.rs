@@ -1,15 +1,7 @@
 #[path = "../src/test_thread.rs"]
 mod test_thread;
 
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::{
-        layout_input::{ComputedStyle, ConstraintSpace},
-        layout_object::LayoutObject,
-        layout_object_builder::LayoutObjectTree,
-    },
-    layout_engine::{LayoutEngine, LayoutMutation, LayoutTreeUpdate},
-};
+use layout::{LayoutEngine, paint::FragmentPaintData, input::{ComputedStyle, ConstraintSpace}, object::{LayoutObject, LayoutObjectTree}, mutation::{LayoutMutation, LayoutTreeUpdate}};
 
 fn project(engine: &mut LayoutEngine, ids: &[u64]) {
     engine.ApplyMutation(LayoutMutation::TreeUpdate(
@@ -251,7 +243,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             (100, 12, 7, [255, 0, 0, 255]),
             (200, 52, 29, [0, 0, 255, 255]),
         ] {
-            space.PushImage(layout_assembly::internal::layout_input::PaintImage {
+            space.PushImage(layout::input::PaintImage {
                     id,
                     width,
                     height,

@@ -1,8 +1,5 @@
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::{
-    fragment_tree::{FragmentKind, FragmentPaintData},
-    internal::layout_input::{ConstraintSpace, FontFace, Size},
-};
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::{fragment::FragmentKind, paint::FragmentPaintData, input::{ConstraintSpace, FontFace, Size}};
 #[test]
 fn table_layout_matches_unchanged_cpp() {
     crate::test_thread::run(body);
@@ -41,17 +38,17 @@ fn body() {
         ..Default::default()
     });
     space.viewport = Some(
-        layout_assembly::internal::layout_input::ViewportGeometry {
-            size: layout_assembly::internal::layout_input_types::IntSize {
+        layout::input::ViewportGeometry {
+            size: layout::input::IntSize {
                 width: 1024,
                 height: 768,
             },
-            overscroll_type: layout_assembly::internal::layout_input::OverscrollType::kTransform,
+            overscroll_type: layout::input::OverscrollType::kTransform,
             ..Default::default()
         },
     );
     space.scrollbar_theme = Some(
-        layout_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+        layout::input::ScrollbarThemeMetrics {
             auto_thickness: 15,
             thin_thickness: 7,
             minimum_thumb_length: 24,
@@ -115,7 +112,7 @@ fn body() {
             d.AppendChild(ids["r1"], ids["f0"]);
         }
         crate::style_services::ResolveLayoutStyles(&mut owner, &space);
-        engine.ApplyMutation(layout_assembly::layout_engine::LayoutMutation::Constraints(&space));
+        engine.ApplyMutation(layout::mutation::LayoutMutation::Constraints(&space));
         let root = crate::test_thread::BuildDOMProjection(
             &mut owner,
             &dom::UserInteractionState::default(),
@@ -125,21 +122,21 @@ fn body() {
         let fragments = engine
             .GetLayoutResult()
             .expect("successful layout has fragments");
-        let _scope = layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+        let _scope = layout::object::LayoutObjectFactoryScope::new(
             &assembly.objects,
         );
         let mut columns = std::collections::BTreeMap::new();
         fn collect(
-            o: &layout_assembly::internal::layout_object::LayoutObject,
+            o: &layout::object::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
-                *const layout_assembly::internal::layout_box::LayoutBox,
+                *const layout::object::LayoutBox,
             >,
         ) {
             if o.IsLayoutTableCol() && !o.GetNode().is_null() {
                 out.insert(
                     unsafe { &*o.GetNode() }.InputId(),
-                    foundation::To::<layout_assembly::internal::layout_box::LayoutBox>(o),
+                    foundation::To::<layout::object::LayoutBox>(o),
                 );
             }
             let mut c = o.SlowFirstChild();

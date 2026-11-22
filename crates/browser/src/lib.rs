@@ -1,24 +1,12 @@
 #![allow(non_snake_case)]
 
-use layout_algo_block::assembly::InstallBlockAlgorithm;
-use layout_algo_flex::assembly::InstallFlexAlgorithm;
-use layout_algo_float::assembly::InstallFloatAlgorithm;
-use layout_algo_forms::assembly::InstallFormsAlgorithm;
-use layout_algo_list::assembly::InstallListModule;
-use layout_algo_replaced::assembly::InstallReplacedAlgorithm;
-use layout_algo_svg::assembly::InstallSvgModule;
-use layout_fragment::LayoutResultHandle;
+use layout::fragment::LayoutResultHandle;
 #[cfg(test)]
-use layout_assembly::fragment_tree::FragmentPaintData;
-use layout_assembly::internal::boundary::assembly::InstallLayoutBoundary;
-use layout_assembly::internal::layout_input::{
-    ConstraintSpace, OverscrollType, Size, ViewportGeometry,
-};
-use layout_assembly::internal::layout_input_types::{
-    ControlThemeMetrics, IntSize, ScrollbarThemeMetrics,
-};
-use layout_assembly::engine_assembly::LayoutAssembly;
-pub use layout_assembly::layout_engine::LayoutEngine;
+use layout::paint::FragmentPaintData;
+use layout::input::{ConstraintSpace, OverscrollType, Size, ViewportGeometry};
+use layout::input::{ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
+use layout::LayoutAssembly;
+pub use layout::LayoutEngine;
 use std::cell::RefCell;
 use std::io;
 use std::path::Path;
@@ -56,28 +44,10 @@ mod user_agent_styles;
 // Shared translated assembly; missing source package slots retain source
 // capability errors, and are not replaced with generic boxes.
 pub fn CreateLayoutAssembly() -> LayoutAssembly {
-    let mut assembly = LayoutAssembly::default();
-    InstallBlockAlgorithm(&mut assembly);
-    layout_algo_multicol::assembly::InstallMulticolAlgorithm(&mut assembly);
-    InstallFlexAlgorithm(&mut assembly);
-    layout_algo_grid::assembly::InstallGridAlgorithm(&mut assembly);
-    layout_algo_table::assembly::InstallTableAlgorithm(&mut assembly);
-    InstallFloatAlgorithm(&mut assembly);
-    InstallFormsAlgorithm(&mut assembly);
-    InstallReplacedAlgorithm(&mut assembly);
-    InstallListModule(&mut assembly);
-    InstallSvgModule(&mut assembly);
-    assembly.objects.svg_shape_path = Some(paint_skia::svg_shape_path::CreateSvgShapePath);
-    assembly.shape_coverage = Some(&paint_skia::shape_coverage::SkiaShapeCoverageRasterizer);
-    #[cfg(feature = "inline_layout")]
-    {
-        layout_assembly::assembly::InstallInlineAlgorithm(&mut assembly);
-        layout_algo_block::block_inline_layout::InstallBlockInlineSupport(&mut assembly);
-        layout_algo_out_of_flow::assembly::InstallOutOfFlowAlgorithm(&mut assembly);
-    }
-    InstallLayoutBoundary(&mut assembly);
-
-    assembly
+    layout::CreateLayoutAssembly(layout::LayoutPlatformServices {
+        svg_shape_path: Some(paint_skia::svg_shape_path::CreateSvgShapePath),
+        shape_coverage: Some(&paint_skia::shape_coverage::SkiaShapeCoverageRasterizer),
+    })
 }
 
 #[cfg(test)]

@@ -5,14 +5,7 @@ mod test_thread;
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
 use dom::UserInteractionState;
-use layout_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle},
-    internal::{
-        layout_box::LayoutBox, layout_input::FontFace, layout_object::LayoutObject,
-        layout_pass_scope::LayoutObjectFactoryScope,
-    },
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, object::{LayoutBox, LayoutObject, LayoutObjectFactoryScope}, input::FontFace};
 use page_mutation::{InteractionStateMutation, PageMutation};
 use paint::paint_engine::{DisplayItemType, PaintRect};
 use std::{cell::RefCell, io, rc::Rc};
@@ -192,7 +185,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
         let image_input = unsafe {
             &*native(&page, "image")
                 .GetNode()
-                .cast::<layout_assembly::internal::layout_node_metadata::Element>()
+                .cast::<layout::input::Element>()
         }
         .InputElementData()
         .as_ref()
@@ -370,7 +363,7 @@ fn focused_area_records_clipped_image_area_focus_path() {
         let image_input = unsafe {
             &*native(&page, "image")
                 .GetNode()
-                .cast::<layout_assembly::internal::layout_node_metadata::Element>()
+                .cast::<layout::input::Element>()
         }
         .InputElementData()
         .as_ref()

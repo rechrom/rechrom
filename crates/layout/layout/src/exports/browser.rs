@@ -110,6 +110,8 @@ pub mod scroll {
 }
 
 pub mod object {
+    // Grid LayoutObject downcast target for the browser grid geometry tests.
+    pub use layout_algo_grid::layout_grid::LayoutGrid;
     pub use layout_assembly::internal::block_node::BlockNode;
     pub use layout_assembly::internal::hit_test_phase::HitTestPhase;
     pub use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;

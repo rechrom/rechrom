@@ -687,7 +687,7 @@ impl NativeEventHandlerChrome {
                 interaction::core::input::event_handler_cursor::ColorScheme::kLight
             }
         };
-        let (selections, queries): (Rc<layout_assembly::editing_state::SelectionState>, Rc<dyn interaction::adapter::resident_editing_positions::ResidentEditingPositionQueries>) = if token == domain.root {
+        let (selections, queries): (Rc<layout::editing::SelectionState>, Rc<dyn interaction::adapter::resident_editing_positions::ResidentEditingPositionQueries>) = if token == domain.root {
             (page.layout_editing.selections.clone(), Rc::new(super::resident_editing_positions::PageResidentEditingPositions(Rc::downgrade(&page))))
         } else {
             let frame = domain.Frame(token).expect("cursor child Frame");

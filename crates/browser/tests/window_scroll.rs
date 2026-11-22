@@ -5,7 +5,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::internal::layout_input::FontFace;
+use layout::input::FontFace;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -128,7 +128,7 @@ fn numeric_window_scroll_updates_source_viewport_geometry_and_events() {
         }
         assert_eq!(
             old.paint.ScrollOffset(),
-            layout_assembly::internal::layout_input::Offset::default()
+            layout::input::Offset::default()
         );
         check(&mut page, "if(order.join(',')!=='call,microtask,completion')throw Error('task completion order');if(JSON.stringify(events)!=='[\"document\",\"window\"]')throw Error('coalesced scroll events '+JSON.stringify(events)); window.scrollTo(100,250);");
         for _ in 0..4 {

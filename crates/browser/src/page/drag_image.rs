@@ -203,7 +203,7 @@ impl PageMouseFrameGeometry {
             let layout = state.layout_engine.borrow();
             layout
                 .MouseCoordinateLayout(node)
-                .and_then(|source| source.DragNodeImageGeometry(&layout))
+                .and_then(|source| layout.DragNodeImageGeometry(&source))
         };
         let Some(geometry) = geometry else {
             return Ok(None);

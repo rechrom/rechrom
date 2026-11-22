@@ -44,7 +44,7 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 fn editing_fixture() -> Page {
     let assembly = browser::CreateLayoutAssembly();
     let mut space = browser::CreateBrowserConstraints(640, 480);
-    space.fonts = vec![layout_assembly::internal::layout_input::FontFace {
+    space.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
             .as_slice()
@@ -175,7 +175,7 @@ fn edit_value(page: &Page, id: u64) -> String {
     let doc = owner.GetDocument();
     doc.ControlValue(doc.FindNodeById(id).unwrap())
 }
-fn edit_selection(page: &Page, id: u64) -> layout_assembly::editing_state::Selection {
+fn edit_selection(page: &Page, id: u64) -> layout::editing::Selection {
     page.GetLayoutEngine()
         .GetLayoutTree()
         .unwrap()
@@ -213,7 +213,7 @@ fn mouse_refocus_reactivates_the_text_control_selection_owner() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         use interaction::input_event::MouseEventType as M;
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
 
         let mut page = editing_fixture();
         assert!(
@@ -331,7 +331,7 @@ fn document_editor_insert_link_and_format_commands_use_native_undo() {
 fn edit_mouse(
     page: &mut Page,
     kind: interaction::input_event::MouseEventType,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     shift: bool,
 ) {
     use interaction::input_event::*;
@@ -735,7 +735,7 @@ fn text_control_hit_test_round_trips_shaped_unicode_positions_and_transforms() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         use interaction::input_event::MouseEventType as M;
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         let mut page = editing_fixture();
         let id = edit_id(&page, "edit");
         edit_focus(&mut page, id);
@@ -855,7 +855,7 @@ fn text_control_selection_paints_blue_and_tracks_drag_shift_and_collapse() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         use interaction::input_event::MouseEventType as M;
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         let mut page = editing_fixture();
         page.SetActive(true).unwrap();
         let id = edit_id(&page, "edit");
@@ -971,7 +971,7 @@ fn text_control_multiline_hit_test_and_trailing_newline_caret() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         use interaction::input_event::MouseEventType as M;
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         let mut page = editing_fixture();
         let id = edit_id(&page, "area");
         assert!(page

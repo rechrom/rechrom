@@ -1,6 +1,6 @@
 use browser::page::{Page, PageClient, ScriptEnvironment};
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::paint::PaintFragmentCursor;
 use std::{
     cell::RefCell,
     rc::Rc,

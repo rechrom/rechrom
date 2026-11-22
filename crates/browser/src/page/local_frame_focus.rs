@@ -408,7 +408,7 @@ impl FocusNavigationLayout for ChildFocusServices {
     fn Facts(
         &self,
         node: u64,
-    ) -> Option<layout_assembly::layout_engine::LayoutFocusNavigationFacts> {
+    ) -> Option<layout::output::LayoutFocusNavigationFacts> {
         let (_, runtime) = self.Owners()?;
         let layout = runtime.layout.borrow();
         layout
@@ -572,7 +572,7 @@ impl LocalFrame {
     pub(super) fn ApplyNativeScrollResult(
         &self,
         runtime: &Rc<LocalFrameRuntime>,
-        result: layout_assembly::native_scroll_source::NativeScrollResult,
+        result: layout::scroll::NativeScrollResult,
     ) {
         if !self.IsCurrentRuntime(runtime) {
             return;
@@ -840,12 +840,12 @@ impl LocalFrameRuntime {
             || self.layout.borrow().Output().is_none();
         if needs_update {
             let mut constraints = self.constraints.borrow_mut();
-            constraints.available_size = layout_assembly::internal::layout_input::Size {
+            constraints.available_size = layout::input::Size {
                 width: size.width() as f64,
                 height: size.height() as f64,
             };
             constraints.viewport = Some(
-                layout_assembly::internal::layout_input::ViewportGeometry {
+                layout::input::ViewportGeometry {
                     size: IntSize {
                         width: size.width(),
                         height: size.height(),

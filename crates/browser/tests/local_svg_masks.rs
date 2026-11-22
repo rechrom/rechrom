@@ -155,7 +155,7 @@ fn inner(page: &mut Page, name: &str, value: &str) {
     ))
     .unwrap();
 }
-fn graph(page: &Page) -> std::sync::Arc<layout_assembly::internal::paint_input::SvgMaskGraph> {
+fn graph(page: &Page) -> std::sync::Arc<layout::paint_input::SvgMaskGraph> {
     page.Document()
         .GetDocument()
         .SVGResources()
@@ -364,9 +364,9 @@ fn host_styles() -> Vec<cssom::CSSStyleSheet> {
     ]
 }
 fn find_fragment(
-    node: &layout_assembly::fragment_tree::FragmentPaintData,
+    node: &layout::paint::FragmentPaintData,
     wanted: u64,
-) -> Option<&layout_assembly::fragment_tree::FragmentPaintData> {
+) -> Option<&layout::paint::FragmentPaintData> {
     if node.node_id == wanted {
         Some(node)
     } else {
@@ -378,7 +378,7 @@ fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
     test_thread::run(|| {
         use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
 
-        use layout_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        use layout::{LayoutEngine, mutation::LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(
             r##"<!doctype html><body><svg width="1" height="1"><defs><mask id="clip"><rect width="40" height="40"/></mask></defs></svg><div id="host" style="width:80px;height:80px;mask-image:url(#clip)"></div>"##,
@@ -479,13 +479,13 @@ fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
             .unwrap();
         assert_eq!(own_clip.scope, shadow_scope);
         assert_eq!(inherited_clip.scope, document_scope);
-        let width = |clip: &layout_assembly::internal::paint_input::SvgMaskReference| match &clip
+        let width = |clip: &layout::paint_input::SvgMaskReference| match &clip
             .graph
             .as_ref()
             .unwrap()
             .commands[0]
         {
-            layout_assembly::internal::paint_input::SvgPatternCommand::DrawShape(shape) => {
+            layout::paint_input::SvgPatternCommand::DrawShape(shape) => {
                 shape.shape.bounds_width
             }
             _ => panic!("expected canonical shape record"),
@@ -505,7 +505,7 @@ fn mask_record_uses_canonical_stroke_fillrule_and_suppression() {
         ));
         let g = graph(&p);
         assert!(g.unsupported.is_none());
-        let layout_assembly::internal::paint_input::SvgPatternCommand::DrawShape(shape) =
+        let layout::paint_input::SvgPatternCommand::DrawShape(shape) =
             &g.commands[0]
         else {
             panic!("shape record")
@@ -514,7 +514,7 @@ fn mask_record_uses_canonical_stroke_fillrule_and_suppression() {
         assert!(shape.fill_even_odd);
         assert_eq!(
             shape.stroke_line_cap,
-            layout_assembly::internal::paint_input::SvgStrokeLineCap::kRound
+            layout::paint_input::SvgStrokeLineCap::kRound
         );
         assert_eq!(px(&pixels(&p), 25, 25), [255, 255, 255, 255]);
         set(&mut p, "ink", "style", "fill-rule:nonzero;stroke-width:8");
@@ -634,7 +634,7 @@ fn existing_pattern_mask_reads_canonical_override() {
                 .any(|command| {
                     matches!(
                         command,
-                        layout_assembly::internal::paint_input::SvgPatternCommand::SaveLayerMask(
+                        layout::paint_input::SvgPatternCommand::SaveLayerMask(
                             _
                         )
                     )

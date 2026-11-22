@@ -333,7 +333,7 @@ impl PageGestureTimerServices {
     }
 }
 struct PageGestureScrollableArea {
-    area: layout_assembly::native_mouse_coordinates::NativeRegisteredScrollableArea,
+    area: layout::scroll::NativeRegisteredScrollableArea,
     runtime: Weak<PageInteractionScrollRuntime>,
 }
 impl interaction::core::input::gesture_manager::GestureScrollableArea

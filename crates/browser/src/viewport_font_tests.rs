@@ -1,7 +1,5 @@
 use crate::page::Page;
-use layout_assembly::internal::{
-    layout_block_flow::LayoutBlockFlow, layout_object::LayoutObject,
-};
+use layout::object::{LayoutBlockFlow, LayoutObject};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Loader(String);

@@ -47,7 +47,7 @@ image_resource = { path = "../../crates/image_resource" }
 url_loader = { path = "../../crates/url_loader" }
 xhr_transport = { path = "../../crates/xhr_transport" }
 javascript = { path = "../../crates/javascript" }
-layout_assembly = { path = "../../crates/layout/layout_assembly" }
+layout = { path = "../../crates/layout/layout" }
 url = "2.5"
 serde_json = "1"
 png = "0.18"

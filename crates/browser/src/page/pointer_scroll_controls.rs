@@ -5,9 +5,7 @@ use interaction::adapter::page_pointer_scroll_controls::{
     PagePointerScrollControls, ScrollbarTimerKind, ScrollbarTimerTask,
 };
 use interaction::scroll::core::scroll::scrollbar::{ScrollbarGesture, ScrollbarThumbUse};
-use layout_assembly::{
-    internal::scrollbar::Scrollbar, native_pointer_scroll_controls::NativePointerResizeArea,
-};
+use layout::scroll::{Scrollbar, NativePointerResizeArea};
 struct OverlayTimer {
     generation: u64,
     token: foundation::popup_types::PopupTaskId,
@@ -112,7 +110,7 @@ impl PagePointerScrollControls for PagePointerScrollControlsProvider {
     fn ScrollbarInteraction(
         &self,
         owner: &Persistent<Scrollbar>,
-        event: layout_assembly::native_pointer_scroll_controls::NativeScrollbarInteraction,
+        event: layout::scroll::NativeScrollbarInteraction,
     ) -> io::Result<()> {
         let state = self.state();
         // A Browser Page is an ordinary LocalFrame, including browser chrome.
@@ -451,7 +449,7 @@ impl std::ops::Deref for PointerFrameState {
     }
 }
 impl PointerFrameState {
-    fn Layout(&self) -> &RefCell<layout_assembly::layout_engine::LayoutEngine> {
+    fn Layout(&self) -> &RefCell<layout::LayoutEngine> {
         self.child
             .as_ref()
             .map_or(&self.page.layout_engine, |(_, runtime)| &runtime.layout)

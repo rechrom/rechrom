@@ -6,7 +6,7 @@ use interaction::adapter::resident_editing_positions::{self, ResidentEditingPosi
 use interaction::hit_test::core::layout::hit_test_result::{
     CaretPositionQuery, HitTestPositionData,
 };
-use layout_assembly::internal::layout_node_metadata::Node;
+use layout::input::Node;
 pub(super) struct PageResidentEditingPositions(pub(super) Weak<PageState>);
 impl ResidentEditingPositionQueries for PageResidentEditingPositions {
     fn VisibleContentRectExcludingScrollbars(&self) -> foundation::gfx::RectF {
@@ -148,7 +148,7 @@ impl ResidentEditingPositionQueries for PageResidentEditingPositions {
                     query.layout,
                     unsafe { &*node.Get() },
                     point,
-                    layout_assembly::EditingPositionOptions {
+                    layout::editing::EditingPositionOptions {
                         move_caret_to_horizontal_boundary_when_past_top_or_bottom: behavior
                             .ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom(),
                         ..Default::default()

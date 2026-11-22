@@ -45,7 +45,7 @@ impl AutoscrollStopServices for PageAutoscrollStop {
 use super::local_frame_scroll::InteractionScrollOwner;
 use interaction::default::core::page::autoscroll_controller::AutoscrollLayout;
 use interaction::input::public::common::input::web_pointer_properties::PointF;
-use layout_assembly::native_autoscroll_source::{NativeAutoscrollLayout, NativeAutoscrollSource};
+use layout::scroll::{NativeAutoscrollLayout, NativeAutoscrollSource};
 
 /// Roots the original LayoutObject. All geometry and scrolling enters the
 /// owning LayoutEngine for one call, exactly like the logical-scroll adapter.
@@ -63,7 +63,7 @@ impl PageAutoscrollLayout {
     fn Query<T>(&self, query: impl FnOnce(&NativeAutoscrollSource<'_>) -> T) -> Option<T> {
         self.owner.WithLayout(|engine| {
             let scroll = engine.MouseLayoutViewportScrollOffset().unwrap_or_default();
-            let frame = layout_assembly::native_scroll_source::NativeScrollFrameGeometry {
+            let frame = layout::scroll::NativeScrollFrameGeometry {
                 document_to_root_frame: Offset {
                     x: -(scroll.0 as f64),
                     y: -(scroll.1 as f64),
@@ -155,7 +155,7 @@ impl AutoscrollLayout for PageAutoscrollLayout {
         matches!(self.owner, InteractionScrollOwner::Root(_)) && self.HasPage()
     }
     fn FindAutoscrollable(&self, middle: bool) -> Option<Rc<dyn AutoscrollLayout>> {
-        use layout_assembly::native_autoscroll_source::NativeAutoscrollSearch;
+        use layout::scroll::NativeAutoscrollSearch;
         match self.Query(|source| source.FindAutoscrollableInFrame(middle))? {
             NativeAutoscrollSearch::Found(layout) => Some(self.Wrap(layout)),
             NativeAutoscrollSearch::ParentFrame => {

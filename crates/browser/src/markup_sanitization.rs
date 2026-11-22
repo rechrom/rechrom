@@ -7,7 +7,7 @@ use interaction::adapter::{
     page_markup_sanitization::{MarkupSanitizationHost, MarkupSanitizationLifecycle},
     page_selection_markup::{FragmentError, MarkupStyleQueries, SerializeMarkupBody},
 };
-use layout_assembly::{internal::layout_input::ConstraintSpace, layout_engine::LayoutEngine};
+use layout::{LayoutEngine, input::ConstraintSpace};
 use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct BrowserMarkupSanitizationHost;
@@ -93,7 +93,7 @@ impl MarkupSanitizationLifecycle for StagingLifecycle {
             document,
             &dom::UserInteractionState::default(),
             &self.constraints,
-            layout_assembly::layout_boundary_support::LayoutUpdateKind::Layout,
+            layout::lifecycle::LayoutUpdateKind::Layout,
         );
         let output = self.layout.Output().ok_or(FragmentError::ParseFailed)?;
         let styles = StagingStyleQueries {

@@ -5,10 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::ETextAlign;
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::layout_input::{FontFace, NodeKind, Offset},
-};
+use layout::{paint::FragmentPaintData, input::{FontFace, NodeKind, Offset}};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

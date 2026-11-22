@@ -1,6 +1,4 @@
-use layout_assembly::internal::layout_input::{
-    TextOffsetMapping, TextTransform, TextTransformProvider, TextTransformResult,
-};
+use layout::input::{TextOffsetMapping, TextTransform, TextTransformProvider, TextTransformResult};
 
 pub(crate) struct BrowserTextTransformProvider;
 

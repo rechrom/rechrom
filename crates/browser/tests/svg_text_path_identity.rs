@@ -4,10 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::internal::{
-    layout_input::FontFace, layout_object::LayoutObject,
-    layout_pass_scope::LayoutObjectFactoryScope,
-};
+use layout::{input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -184,7 +181,7 @@ fn text_path_identity_is_independent_of_supported_geometry() {
             let element = unsafe {
                 &*object
                     .GetNode()
-                    .cast::<layout_assembly::internal::layout_node_metadata::Element>()
+                    .cast::<layout::input::Element>()
             }
             .InputElementData()
             .as_ref()
@@ -328,7 +325,7 @@ fn consecutive_moveto_text_paths_match_their_single_moveto_geometry_and_pixels()
                 unsafe {
                     &*object
                         .GetNode()
-                        .cast::<layout_assembly::internal::layout_node_metadata::Element>()
+                        .cast::<layout::input::Element>()
                 }
                 .InputElementData()
                 .as_ref()

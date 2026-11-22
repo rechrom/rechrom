@@ -1,8 +1,5 @@
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::{
-    fragment_tree::{FragmentKind, FragmentPaintData},
-    internal::layout_input::{ConstraintSpace, FontFace, Size},
-};
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::{fragment::FragmentKind, paint::FragmentPaintData, input::{ConstraintSpace, FontFace, Size}};
 #[test]
 #[cfg_attr(
     debug_assertions,
@@ -50,17 +47,17 @@ fn run_matrix(smoke: bool) {
         ..Default::default()
     });
     space.viewport = Some(
-        layout_assembly::internal::layout_input::ViewportGeometry {
-            size: layout_assembly::internal::layout_input_types::IntSize {
+        layout::input::ViewportGeometry {
+            size: layout::input::IntSize {
                 width: 1024,
                 height: 768,
             },
-            overscroll_type: layout_assembly::internal::layout_input::OverscrollType::kTransform,
+            overscroll_type: layout::input::OverscrollType::kTransform,
             ..Default::default()
         },
     );
     space.scrollbar_theme = Some(
-        layout_assembly::internal::layout_input_types::ScrollbarThemeMetrics {
+        layout::input::ScrollbarThemeMetrics {
             auto_thickness: 15,
             thin_thickness: 7,
             minimum_thumb_length: 24,
@@ -123,27 +120,27 @@ fn run_matrix(smoke: bool) {
             attr(d, "g15", "style", "width:270px;gap:4px");
         }
         crate::style_services::ResolveLayoutStyles(&mut owner, &space);
-        engine.ApplyMutation(layout_assembly::layout_engine::LayoutMutation::Constraints(&space));
+        engine.ApplyMutation(layout::mutation::LayoutMutation::Constraints(&space));
         let root = crate::test_thread::BuildDOMProjection(
             &mut owner,
             &dom::UserInteractionState::default(),
             &mut engine,
         );
-        let _scope = layout_assembly::internal::layout_pass_scope::LayoutObjectFactoryScope::new(
+        let _scope = layout::object::LayoutObjectFactoryScope::new(
             &assembly.objects,
         );
         let mut grids = std::collections::BTreeMap::new();
         fn collect(
-            o: &layout_assembly::internal::layout_object::LayoutObject,
+            o: &layout::object::LayoutObject,
             out: &mut std::collections::BTreeMap<
                 u64,
-                *const layout_algo_grid::layout_grid::LayoutGrid,
+                *const layout::object::LayoutGrid,
             >,
         ) {
             if o.IsLayoutGrid() && !o.GetNode().is_null() {
                 out.insert(
                     unsafe { &*o.GetNode() }.InputId(),
-                    foundation::To::<layout_algo_grid::layout_grid::LayoutGrid>(o),
+                    foundation::To::<layout::object::LayoutGrid>(o),
                 );
             }
             let mut c = o.SlowFirstChild();
@@ -162,11 +159,7 @@ fn run_matrix(smoke: bool) {
                     .expect("successful layout has fragments");
                 fragments
             } else {
-                use layout_assembly::internal::{
-                    block_node::BlockNode, constraint_space::FragmentationType,
-                    constraint_space_builder::ConstraintSpaceBuilder,
-                    layout_pass_scope::LayoutPassScope,
-                };
+                use layout::{object::{BlockNode, LayoutPassScope}, input::{FragmentationType, ConstraintSpaceBuilder}};
                 let _heap = foundation::LayoutHeapScope::new();
                 let mut environment =
                     assembly.boundary.create_environment.unwrap()(unsafe { &mut *root }, &space);
@@ -210,7 +203,7 @@ fn run_matrix(smoke: bool) {
                 );
                 for _ in 0..if stage >= 5 { stage - 4 } else { 0 } {
                     let physical = foundation::To::<
-                        layout_assembly::physical_box_fragment::PhysicalBoxFragment,
+                        layout::fragment::PhysicalBoxFragment,
                     >(unsafe { &*result }.GetPhysicalFragment());
                     let token = unsafe { &*physical }.GetBreakToken();
                     assert!(!token.is_null(), "expected continuation token");
