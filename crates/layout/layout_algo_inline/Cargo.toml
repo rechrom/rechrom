@@ -11,9 +11,12 @@ browser_tracing = { path = "../../tracing" }
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 icu_bidi = { path = "../../icu_bidi" }
+# Base. Its `translation_in_progress` feature compiles the inline-facing base
+# surface (OffsetMapping, LayoutTextFragment, LayoutText dispatch arms) that
+# the inline sources name; the facade already enables it for every build.
+layout_assembly = { path = "../layout_assembly", features = ["translation_in_progress"] }
+layout_geometry = { path = "../layout_geometry" }
+layout_style = { path = "../layout_style" }
 
 [features]
-expensive_dchecks = []
-# Source modules that still require the shared LayoutNG/inline assembly are
-# kept out of the existing block-only host until that type identity is wired.
-translation_in_progress = []
+expensive_dchecks = ["layout_assembly/expensive_dchecks"]

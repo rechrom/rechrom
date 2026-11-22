@@ -3,8 +3,8 @@
 // between two crates, so compile their translated modules once in one
 // assembly crate. The include paths point to the owning crates' source files
 // and do not copy or relocate implementations. Fragment data that needs no
-// base type is the real `layout_fragment` crate, a dependency of this one.
-extern crate self as layout_algo_inline;
+// base type is the real `layout_fragment` crate, a dependency of this one;
+// the inline algorithm package is the real `layout_algo_inline` crate above it.
 extern crate self as layout_core;
 extern crate self as layout_assembly;
 
@@ -17,11 +17,6 @@ include!("../../layout_core/src/lib.rs");
 /// identify the source package instead of flattening everything into assembly.
 pub mod layout_fragment_package;
 pub use layout_fragment_package::*;
-
-pub mod layout_algo_inline_package {
-    include!("../../layout_algo_inline/src/lib.rs");
-}
-pub use layout_algo_inline_package::*;
 
 // Chromium's core/paint/ decorating-box, inline-paint-context, line-relative
 // geometry and text-decoration metrics are consumed by Layout's own

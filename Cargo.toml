@@ -19,7 +19,6 @@ members = [
     "crates/layout/layout_commit",
     "crates/layout/layout_assembly",
     "crates/layout/layout",
-    "crates/layout/layout_algo_inline_assembly",
     "crates/layout/layout_algo_block",
     "crates/layout/layout_algo_multicol",
     "crates/layout/layout_algo_flex",
