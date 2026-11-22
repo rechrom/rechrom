@@ -37,17 +37,15 @@ impl ListItemOrdinal {
     }
 
     // cpp: layoutng_list/list_item_ordinal.h:62-63
+    // The body (layoutng_list/list_item_ordinal.cc) is not translated yet. It
+    // belongs to this package, so the untranslated abort lives here instead of
+    // a link-time stub in base (it was `untranslated_symbols.rs`).
     pub fn ItemInsertedOrRemoved(
-        item: *const layout_assembly::internal::layout_object::LayoutObject,
+        _item: *const layout_assembly::internal::layout_object::LayoutObject,
     ) {
-        unsafe { ListItemOrdinalItemInsertedOrRemoved(item) }
+        eprintln!("untranslated LayoutNG symbol called: ListItemOrdinalItemInsertedOrRemoved");
+        std::process::abort()
     }
-}
-
-unsafe extern "Rust" {
-    fn ListItemOrdinalItemInsertedOrRemoved(
-        item: *const layout_assembly::internal::layout_object::LayoutObject,
-    );
 }
 
 fn IsListOwner(node: &Node) -> bool {

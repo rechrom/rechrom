@@ -349,9 +349,8 @@ pub mod layout_result_handle;
 // Traceable bindings of the fragment data types in `internal`.
 #[path = "fragment/fragment_data_trace_bindings.rs"]
 mod fragment_data_trace_bindings;
-// Method bodies of fragment data types that the snapshot declared as
-// link-time symbols (`extern "Rust"` in the type's file, `#[no_mangle]`
-// definition here).
+// Method bodies of fragment data types whose declarations live in the type's
+// file; that file imports them directly (they were link-time symbols before R7a).
 // cpp: layoutng_grid/grid_track_collection.cc
 #[path = "fragment/grid/grid_track_collection.rs"]
 pub mod grid_track_collection_implementation;

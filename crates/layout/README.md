@@ -1020,6 +1020,26 @@ The `inline_support` readers raise `UnsupportedLayout` when inline is not
 installed, and `validate_performance_ownership` requires the slots and
 `performance_owner` to be installed together.
 
+The grid, flex, block, out-of-flow, float, forms and list packages have no
+link-time coupling with base either (R7a, `PACKAGE_MAP.md` §7). Members of
+base-declared types whose bodies are those packages' algorithms are extension
+traits in the package (`UnpositionedListMarkerAlgorithms`,
+`BlockNodeFormsAlgorithms`, `InlineContainingBlockUtilsAlgorithms`,
+`layout_algo_grid::algorithms`); `CurrentShapeImage` is a plain float
+function. Slots base dispatches to:
+
+| slot | signature | filled by | read through |
+|---|---|---|---|
+| `LayoutObjectFactorySet::grid_virtuals` | `Option<GridObjectVirtuals>`: `add_child: fn(*mut LayoutObject, *mut LayoutObject, *mut LayoutObject)`, `remove_child: fn(*mut LayoutObject, *mut LayoutObject)`, `style_did_change: fn(*mut LayoutObject, StyleDifference, *const ComputedStyle, &ComputedStyle, &StyleChangeContext)`, `stitched_row_gap_index: StitchedRowGapIndex`, `adjust_anchor_containing_block: fn(&LayoutBox, *const GridLayoutData, &ComputedStyle, &LogicalRect, &LayoutBox) -> LogicalRect` | `layout_algo_grid::registration::Register` | the object's own factory set (`LayoutObject::FactorySet()`, its "vptr"; valid outside a pass) |
+| `LayoutObjectFactorySet::flex_stitched_row_gap_index` | `StitchedRowGapIndex = fn(*const LayoutObject, &PhysicalBoxFragment, usize, Option<usize>) -> usize` | `layout_algo_flex::registration::Register` | the object's factory set |
+| `LayoutObjectFactorySet::svg_root_children`, `svg_inline_text_scaled_font`, `svg_inline_text_scaling_factor` | existing factory signatures | `layout_algo_svg::registration::Register` | active `LayoutObjectFactoryScope`, else the object's factory set |
+| `ListLayoutSupport::list_item_value` | `fn(*const LayoutObject) -> Option<i32>` | `layout_algo_list::registration::Register` | `LayoutPassScope::ResidentListSupport()` (editing, after layout) |
+| `BreakTokenAlgorithmData::total_row_gap_count_` | `TotalRowGapCountOverride = fn(*const BreakTokenAlgorithmData) -> u32` | the flex/grid data constructors (`NewWithTotalRowGapCount`) | the data value itself (a per-object vptr) |
+
+`LayoutEngine::new` runs `LayoutObjectFactorySet::validate_virtual_overrides`:
+a grid or flex factory requires its virtual overrides and the SVG factory its
+root-children and inline-text font overrides.
+
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
 from Chromium's five-value source `WritingMode`: `sideways-rl` collapses to its

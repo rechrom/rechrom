@@ -9,7 +9,7 @@ use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::flex_layout_algorithm::FlexLayoutAlgorithm;
-use crate::layout_flexible_box::LayoutFlexibleBox;
+use crate::layout_flexible_box::{DispatchFlexStitchedRowGapIndex, LayoutFlexibleBox};
 
 // cpp: layoutng_flex/assembly.cc:10-13
 fn CreateFlexObject(node: &mut Node, _style: &ComputedStyle) -> *mut LayoutObject {
@@ -27,5 +27,6 @@ fn CreateAnonymousFlexObject() -> *mut LayoutBlock {
 pub fn Register(registry: &mut LayoutRegistry) {
     registry.objects.flex = Some(CreateFlexObject);
     registry.objects.anonymous_flex = Some(CreateAnonymousFlexObject);
+    registry.objects.flex_stitched_row_gap_index = Some(DispatchFlexStitchedRowGapIndex);
     registry.algorithms.flex = LayoutAlgorithmEntryFor::<FlexLayoutAlgorithm>("layout_algo_flex");
 }

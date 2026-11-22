@@ -24,14 +24,8 @@ use std::cell::Cell;
 
 // The foundation length owner supplies the EvaluationInput-aware overload.
 // Its evaluator resolves nested calc-size keywords in this layoutng module.
-unsafe extern "Rust" {
-    fn FoundationMinimumValueForLengthWithIntrinsicEvaluator(
-        length: &Length,
-        percentage_resolution_size: LayoutUnit,
-        evaluator: &mut dyn FnMut(&Length) -> LayoutUnit,
-        calc_size_keyword_behavior: CalcSizeKeywordBehavior,
-    ) -> LayoutUnit;
-}
+// Foundation is a dependency: a direct call (it was a link-time symbol).
+use foundation::length_functions::FoundationMinimumValueForLengthWithIntrinsicEvaluator;
 
 // cpp: layoutng/internal/length_utils.h:28-45
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

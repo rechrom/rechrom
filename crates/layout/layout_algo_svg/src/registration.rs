@@ -7,7 +7,6 @@ use layout_assembly::internal::inline_node::InlineNode;
 use layout_assembly::internal::layout_input::NodeKind;
 use layout_assembly::internal::layout_node_metadata::{Element, Node, Text};
 use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::layout_text::RegisterSvgInlineTextFontVirtuals;
 use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layout_assembly::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
@@ -313,8 +312,6 @@ pub fn Register(registry: &mut LayoutRegistry) {
         )
     });
     svg.hit_test_has_paint_server = Some(crate::svg_resources::HasPaintServer);
-    layout_assembly::RegisterSvgRootChildren(SvgRootChildren);
-    RegisterSvgInlineTextFontVirtuals(SvgInlineTextScaledFont, SvgInlineTextScalingFactor);
     registry.objects.svg = Some(CreateSvgObject);
     registry.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
     registry.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);

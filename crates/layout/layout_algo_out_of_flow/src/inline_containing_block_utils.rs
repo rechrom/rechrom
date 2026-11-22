@@ -5,7 +5,7 @@ use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
 use layout_assembly::fragment_item::FragmentItem;
 use layout_assembly::fragment_items_builder::FragmentItemWithOffset;
 use layout_assembly::internal::inline_containing_block_utils::{
-    InlineContainingBlockGeometry, InlineContainingBlockMap,
+    InlineContainingBlockGeometry, InlineContainingBlockMap, InlineContainingBlockUtils,
 };
 use layout_assembly::internal::layout_box::LayoutBox;
 use layout_assembly::internal::layout_object::LayoutObject;
@@ -124,8 +124,7 @@ fn GatherInlineContainerFragmentsFromItems<Items: InlineFragmentItemView>(
 }
 
 // cpp: layoutng_out_of_flow/inline_containing_block_utils.cc:119-172
-#[unsafe(no_mangle)]
-pub extern "Rust" fn ComputeInlineContainerGeometryProvider(
+pub fn ComputeInlineContainerGeometryProvider(
     inline_containing_block_map: *mut InlineContainingBlockMap,
     container_builder: *mut BoxFragmentBuilder,
 ) {
@@ -182,8 +181,7 @@ pub extern "Rust" fn ComputeInlineContainerGeometryProvider(
 }
 
 // cpp: layoutng_out_of_flow/inline_containing_block_utils.cc:174-232
-#[unsafe(no_mangle)]
-pub extern "Rust" fn ComputeInlineContainerGeometryForFragmentainerProvider(
+pub fn ComputeInlineContainerGeometryForFragmentainerProvider(
     box_: *const LayoutBox,
     accumulated_containing_block_size: PhysicalSize,
     inline_containing_block_map: *mut InlineContainingBlockMap,
@@ -240,5 +238,43 @@ pub extern "Rust" fn ComputeInlineContainerGeometryForFragmentainerProvider(
         if !break_token.is_null() {
             current_block_offset = unsafe { &*break_token }.ConsumedBlockSize();
         }
+    }
+}
+
+// InlineContainingBlockUtils' static members are declared in base
+// (layoutng/internal/inline_containing_block_utils.h:44-61) and defined here.
+// Rust cannot add inherent associated functions to a base type from this
+// crate, so they are this extension trait; only this crate calls them.
+pub trait InlineContainingBlockUtilsAlgorithms {
+    // cpp: layoutng/internal/inline_containing_block_utils.h:44-50
+    fn ComputeInlineContainerGeometry(
+        inline_containing_block_map: *mut InlineContainingBlockMap,
+        container_builder: *mut BoxFragmentBuilder,
+    );
+    // cpp: layoutng/internal/inline_containing_block_utils.h:52-61
+    fn ComputeInlineContainerGeometryForFragmentainer(
+        box_: *const LayoutBox,
+        accumulated_containing_block_size: PhysicalSize,
+        inline_containing_block_map: *mut InlineContainingBlockMap,
+    );
+}
+
+impl InlineContainingBlockUtilsAlgorithms for InlineContainingBlockUtils {
+    fn ComputeInlineContainerGeometry(
+        inline_containing_block_map: *mut InlineContainingBlockMap,
+        container_builder: *mut BoxFragmentBuilder,
+    ) {
+        ComputeInlineContainerGeometryProvider(inline_containing_block_map, container_builder)
+    }
+    fn ComputeInlineContainerGeometryForFragmentainer(
+        box_: *const LayoutBox,
+        accumulated_containing_block_size: PhysicalSize,
+        inline_containing_block_map: *mut InlineContainingBlockMap,
+    ) {
+        ComputeInlineContainerGeometryForFragmentainerProvider(
+            box_,
+            accumulated_containing_block_size,
+            inline_containing_block_map,
+        )
     }
 }

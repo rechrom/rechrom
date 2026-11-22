@@ -204,28 +204,37 @@ pub enum BackgroundRectType {
     kBackgroundKnownOpaqueRect,
 }
 
+use crate::block_virtual_dispatch::{
+    InvalidateLayoutResultCacheAfterMeasureProvider,
+    LayoutBoxBackgroundShouldAlwaysBeClippedProvider,
+    LayoutBoxContentLayoutBoxProvider,
+    LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider,
+    LayoutBoxCreatesNewFormattingContextProvider,
+    LayoutBoxEffectiveRootScrollerViewportSizeProvider,
+    LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider,
+    LayoutBoxIsFragmentationContextRootProvider,
+    LayoutBoxOverflowClipRectProvider,
+    LayoutBoxPhysicalLocationProvider,
+    LayoutBoxScrollHeightProvider,
+    LayoutBoxScrollWidthProvider,
+    LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider,
+    LayoutBoxShouldPlaceBlockDirectionScrollbarOnLogicalLeftProvider,
+    LayoutBoxStitchedSizeProvider,
+};
+use crate::layout_algo_inline_editing_caret::LayoutBoxPositionForPointInFragmentsProvider;
+use crate::out_of_flow_element_data::LayoutBoxDisplayLocksAffectedByAnchorsProvider;
+use self::layout_fragment_layout_box_background::{
+    LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider,
+    LayoutBoxBackgroundIsKnownToBeOpaqueInRectProvider,
+    LayoutBoxBackgroundPaintedExtentProvider,
+    LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider,
+    LayoutBoxEnsureIsReadyForPaintInvalidationProvider,
+    LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider,
+    LayoutBoxIntersectsVisibleViewportProvider,
+    LayoutBoxPhysicalBackgroundRectProvider,
+};
+use self::layout_fragment_layout_result_overflow::LayoutBoxMutableSavePreviousOverflowDataProvider;
 unsafe extern "Rust" {
-    fn LayoutBoxStitchedSizeProvider(box_: &LayoutBox) -> PhysicalSize;
-    fn LayoutBoxPhysicalLocationProvider(box_: &LayoutBox) -> PhysicalOffset;
-    fn LayoutBoxOverflowClipRectProvider(
-        box_: &LayoutBox,
-        behavior: OverlayScrollbarClipBehavior,
-    ) -> PhysicalRect;
-
-    // The source LayoutBox default is empty; derived table cells may override it.
-    fn InvalidateLayoutResultCacheAfterMeasureProvider(box_: &LayoutBox);
-    // LayoutView and its viewport geometry belong to a pending owner in this package.
-    fn LayoutBoxEffectiveRootScrollerViewportSizeProvider(box_: &LayoutBox) -> PhysicalSize;
-    fn LayoutBoxCreatesNewFormattingContextProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxIsFragmentationContextRootProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxShouldPlaceBlockDirectionScrollbarOnLogicalLeftProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxMutableSavePreviousOverflowDataProvider(box_: &mut LayoutBox);
-    // These declarations have no definitions in the supplied source packages.
-    // Their typed providers preserve the source interface for the owner layer.
-    fn LayoutBoxPhysicalBackgroundRectProvider(
-        box_: &LayoutBox,
-        kind: BackgroundRectType,
-    ) -> PhysicalRect;
     fn LayoutBoxHitTestAllPhasesProvider(
         box_: &mut LayoutBox,
         result: &mut HitTestResult,
@@ -238,58 +247,24 @@ unsafe extern "Rust" {
         location: &HitTestLocation,
         offset: &PhysicalOffset,
     ) -> bool;
-    fn LayoutBoxPositionForPointInFragmentsProvider(
-        box_: &LayoutBox,
-        offset: &PhysicalOffset,
-    ) -> PositionWithAffinity;
     fn LayoutBoxHitTestOverflowControlProvider(
         box_: &LayoutBox,
         result: &mut HitTestResult,
         location: &HitTestLocation,
         offset: &PhysicalOffset,
     ) -> bool;
-    fn LayoutBoxIntersectsVisibleViewportProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxEnsureIsReadyForPaintInvalidationProvider(box_: &mut LayoutBox);
     fn LayoutBoxClearPaintFlagsProvider(box_: &mut LayoutBox);
     fn LayoutBoxNonOverflowingScrollRangesProvider(
         box_: &LayoutBox,
     ) -> *const GCedHeapVector<NonOverflowingScrollRange>;
-    fn LayoutBoxDisplayLocksAffectedByAnchorsProvider(
-        box_: &LayoutBox,
-    ) -> *const GCedHeapHashSet<Member<Element>>;
-    fn LayoutBoxBackgroundPaintedExtentProvider(box_: &LayoutBox) -> PhysicalRect;
-    fn LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider(
-        box_: &LayoutBox,
-        rect: &PhysicalRect,
-        max_depth: u32,
-    ) -> bool;
-    fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider(box_: &LayoutBox) -> bool;
-    fn LayoutBoxIntrinsicLogicalWidthsBorderSizesProvider(box_: &LayoutBox) -> *const BoxStrut;
-    fn LayoutBoxSetIntrinsicLogicalWidthsBorderSizesProvider(
-        box_: &mut LayoutBox,
-        borders: &BoxStrut,
-    );
-    fn LayoutBoxContentLayoutBoxProvider(box_: &mut LayoutBox) -> *mut LayoutBox;
-    fn LayoutBoxScrollWidthProvider(box_: &LayoutBox) -> LayoutUnit;
-    fn LayoutBoxScrollHeightProvider(box_: &LayoutBox) -> LayoutUnit;
     fn LayoutBoxPaintProvider(box_: &LayoutBox, info: &PaintInfo);
     fn LayoutBoxInvalidatePaintProvider(box_: &LayoutBox, context: &PaintInvalidatorContext);
     fn LayoutBoxGetCustomLayoutChildProvider(box_: &LayoutBox) -> *mut CustomLayoutChild;
-    fn LayoutBoxBackgroundIsKnownToBeOpaqueInRectProvider(
-        box_: &LayoutBox,
-        rect: &PhysicalRect,
-    ) -> bool;
-    fn LayoutBoxBackgroundShouldAlwaysBeClippedProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxImageChangedProvider(
         box_: &mut LayoutBox,
         image: WrappedImagePtr,
         defer: CanDeferInvalidation,
     );
-    fn LayoutBoxCreateAnonymousBoxWithSameTypeAsProvider(
-        box_: &LayoutBox,
-        object: *const LayoutObject,
-    ) -> *mut LayoutBox;
     fn LayoutBoxIsEligibleForPaintOrLayoutContainmentProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxIsEligibleForSizeContainmentProvider(box_: &LayoutBox) -> bool;
     fn LayoutBoxComputeCanCompositeBackgroundAttachmentFixedProvider(box_: &LayoutBox) -> bool;
@@ -2221,12 +2196,4 @@ impl DerefMut for LayoutBox {
     }
 }
 
-unsafe extern "Rust" {
-    fn LayoutBoxAdjustOutOfFlowContainingBlockForAnchorProvider(
-        box_: &LayoutBox,
-        data: *const GridLayoutData,
-        style: &ComputedStyle,
-        padding: &LogicalRect,
-        query: &LayoutBox,
-    ) -> LogicalRect;
-}
+use crate::block_virtual_dispatch::LayoutBoxAdjustOutOfFlowContainingBlockForAnchorProvider;

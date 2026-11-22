@@ -12,15 +12,26 @@ impl LayoutNode<'_> {
     }
 }
 
-unsafe extern "Rust" {
-    fn LayoutEditingListItemValue(object: *const LayoutObject) -> Option<i32>;
-}
 impl LayoutNode<'_> {
     pub fn EditingIsListItem(&self) -> bool {
         self.object.IsLayoutListItem()
     }
+    /// break_blockquote_command.cc:51-62. LayoutListItem and its lazily
+    /// resolved ordinal belong to the list package (registry slot
+    /// `list_support.list_item_value`); a LayoutListItem exists only when
+    /// that package is installed.
     pub fn EditingListItemValue(&self) -> Option<i32> {
-        unsafe { LayoutEditingListItemValue(self.object) }
+        if !self.object.IsLayoutListItem() {
+            return None;
+        }
+        let value = crate::internal::layout_pass_scope::LayoutPassScope::ResidentListSupport()
+            .list_item_value
+            .unwrap_or_else(|| {
+                std::panic::panic_any(foundation::UnsupportedLayout::new(
+                    "list layout module is not installed",
+                ))
+            });
+        value(self.object)
     }
     pub fn EditingInlineAlwaysCreateLineBoxes(&self) -> Option<bool> {
         unsafe {

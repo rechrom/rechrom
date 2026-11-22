@@ -4,7 +4,6 @@ use foundation::graphics_types;
 use std::cell::Cell;
 use std::ffi::c_char;
 use std::ops::{Deref, DerefMut};
-use std::sync::OnceLock;
 
 use super::super::algorithm_forward::{OffsetMapping, TextDiffRange};
 use font_engine::Font;
@@ -26,9 +25,6 @@ use super::super::layout_node_metadata::{Node, Text};
 use super::super::layout_object::{
     BoxQuadType, HitTestLocation, HitTestResult, IncludeDescendants, LayoutObject, PaintInfo,
     PaintInvalidatorContext, StyleChangeContext,
-};
-use super::super::layout_object_factory_set::{
-    SvgInlineTextScaledFont, SvgInlineTextScalingFactor,
 };
 use super::super::map_coordinates_flags::MapCoordinatesFlags;
 use super::super::variable_length_transform_result::VariableLengthTransformResult;
@@ -223,6 +219,11 @@ unsafe extern "Rust" {
         option: ClippingOption,
     );
 }
+use crate::layout_algo_inline_editing_caret::LayoutTextPositionForPoint;
+use crate::layout_fragment_package::inline_cursor::{
+    LayoutTextInvalidateVisualOverflow,
+    LayoutTextPhysicalLinesBoundingBox,
+};
 unsafe extern "Rust" {
     fn LayoutTextLocalBoundingBoxRectForAccessibility(
         this: &LayoutText,
@@ -233,33 +234,11 @@ unsafe extern "Rust" {
         quads: &mut Vector<gfx::QuadF>,
         option: ClippingOption,
     );
-    fn LayoutTextPositionForPoint(
-        this: &LayoutText,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity;
-    fn LayoutTextPhysicalLinesBoundingBox(this: &LayoutText) -> PhysicalRect;
     fn LayoutTextVisualOverflowRect(this: &LayoutText) -> PhysicalRect;
-    fn LayoutTextInvalidateVisualOverflow(this: &mut LayoutText);
     fn LayoutTextSetTextWithOffset(this: &mut LayoutText, text: String, diff: &TextDiffRange);
     fn LayoutTextFirstAbstractInlineTextBox(this: &mut LayoutText) -> *mut AbstractInlineTextBox;
     fn LayoutTextDebugRect(this: &LayoutText) -> PhysicalRect;
     fn LayoutTextInvalidatePaint(this: &LayoutText, context: &PaintInvalidatorContext);
-}
-
-static SVG_INLINE_TEXT_SCALED_FONT: OnceLock<SvgInlineTextScaledFont> = OnceLock::new();
-static SVG_INLINE_TEXT_SCALING_FACTOR: OnceLock<SvgInlineTextScalingFactor> = OnceLock::new();
-
-// The SVG derived type lives in //src/layoutng_svg. These persistent slots are
-// the Rust equivalent of its C++ virtual calls and remain valid outside a
-// LayoutPassScope (for example during retained ink-overflow recomputation).
-pub fn RegisterSvgInlineTextFontVirtuals(
-    scaled_font: SvgInlineTextScaledFont,
-    scaling_factor: SvgInlineTextScalingFactor,
-) {
-    let installed_font = SVG_INLINE_TEXT_SCALED_FONT.get_or_init(|| scaled_font);
-    let installed_factor = SVG_INLINE_TEXT_SCALING_FACTOR.get_or_init(|| scaling_factor);
-    assert_eq!(*installed_font as usize, scaled_font as usize);
-    assert_eq!(*installed_factor as usize, scaling_factor as usize);
 }
 
 // Forward-declared in the source; concrete ownership is outside this package.
@@ -370,7 +349,7 @@ impl LayoutText {
             let objects = super::super::layout_pass_scope::LayoutObjectFactoryScope::Objects();
             let scaled = unsafe { objects.as_ref() }
                 .and_then(|objects| objects.svg_inline_text_scaled_font)
-                .or_else(|| SVG_INLINE_TEXT_SCALED_FONT.get().copied())
+                .or_else(|| unsafe { self.FactorySet().as_ref() }?.svg_inline_text_scaled_font)
                 .expect("SVG inline text scaled font is not installed");
             let object = self as *const LayoutText as *const LayoutObject;
             return unsafe { &*scaled(&*object) };
@@ -382,7 +361,7 @@ impl LayoutText {
             let objects = super::super::layout_pass_scope::LayoutObjectFactoryScope::Objects();
             let factor = unsafe { objects.as_ref() }
                 .and_then(|objects| objects.svg_inline_text_scaling_factor)
-                .or_else(|| SVG_INLINE_TEXT_SCALING_FACTOR.get().copied())
+                .or_else(|| unsafe { self.FactorySet().as_ref() }?.svg_inline_text_scaling_factor)
                 .expect("SVG inline text scaling factor is not installed");
             let object = self as *const LayoutText as *const LayoutObject;
             return factor(unsafe { &*object });

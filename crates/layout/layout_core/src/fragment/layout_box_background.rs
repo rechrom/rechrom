@@ -149,7 +149,6 @@ fn MapVisualOverflowToLayoutView(
 }
 
 // Source: core/layout/layout_box.cc:1396-1482.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxPhysicalBackgroundRectProvider(
     box_: &LayoutBox,
     rect_type: BackgroundRectType,
@@ -235,13 +234,11 @@ pub extern "Rust" fn LayoutBoxPhysicalBackgroundRectProvider(
 }
 
 // Source: core/layout/layout_box.cc:2030-2033.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxBackgroundPaintedExtentProvider(box_: &LayoutBox) -> PhysicalRect {
     box_.PhysicalBackgroundRect(BackgroundRectType::kBackgroundPaintedExtent)
 }
 
 // Source: core/layout/layout_box.cc:2035-2063.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxBackgroundIsKnownToBeOpaqueInRectProvider(
     box_: &LayoutBox,
     local_rect: &PhysicalRect,
@@ -331,7 +328,6 @@ fn LayoutImageForegroundIsKnownToBeOpaqueInRect(
 }
 
 // Source: core/layout/layout_box.cc:2088-2137.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider(
     box_: &LayoutBox,
     local_rect: &PhysicalRect,
@@ -383,7 +379,6 @@ pub extern "Rust" fn LayoutBoxForegroundIsKnownToBeOpaqueInRectProvider(
 }
 
 // Source: core/layout/layout_box.cc:2139-2172.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider(
     box_: &LayoutBox,
 ) -> bool {
@@ -406,7 +401,6 @@ pub extern "Rust" fn LayoutBoxComputeBackgroundIsKnownToBeObscuredProvider(
 }
 
 // Source: core/layout/layout_box.cc:2299-2315.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxIntersectsVisibleViewportProvider(box_: &LayoutBox) -> bool {
     box_.CheckIsNotDestroyed();
 
@@ -451,7 +445,6 @@ pub extern "Rust" fn LayoutBoxIntersectsVisibleViewportProvider(box_: &LayoutBox
 }
 
 // Source: core/layout/layout_box.cc:2317-2340.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxEnsureIsReadyForPaintInvalidationProvider(box_: &mut LayoutBox) {
     box_.CheckIsNotDestroyed();
     box_.EnsureIsReadyForPaintInvalidationBase();
@@ -476,7 +469,6 @@ pub extern "Rust" fn LayoutBoxEnsureIsReadyForPaintInvalidationProvider(box_: &m
 }
 
 // Source: core/layout/layout_box.cc:4156-4204.
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxBackgroundClipBorderBoxIsEquivalentToPaddingBoxProvider(
     box_: &LayoutBox,
 ) -> bool {

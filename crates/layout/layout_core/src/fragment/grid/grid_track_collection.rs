@@ -45,38 +45,31 @@ pub fn RangeIndexFromGridLine(collection: &dyn GridTrackCollectionBase, line: u3
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:50-52
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeIsCollapsed(this: &GridRange) -> bool {
     this.properties.HasProperty(PropertyId::kIsCollapsed)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:54-56
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeIsImplicit(this: &GridRange) -> bool {
     this.properties.HasProperty(PropertyId::kIsImplicit)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:58-60
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeIsAutoRepeat(this: &GridRange) -> bool {
     this.properties.HasProperty(PropertyId::kIsAutoRepeat)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:62-64
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeSetIsCollapsed(this: &mut GridRange) {
     this.properties.SetProperty(PropertyId::kIsCollapsed);
 }
 // cpp: layoutng_grid/grid_track_collection.cc:66-68
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeSetIsImplicit(this: &mut GridRange) {
     this.properties.SetProperty(PropertyId::kIsImplicit);
 }
 // cpp: layoutng_grid/grid_track_collection.cc:70-72
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeSetIsAutoRepeat(this: &mut GridRange) {
     this.properties.SetProperty(PropertyId::kIsAutoRepeat);
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:76-88
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeBuilderEnsureTrackCoverage(
     this: &mut GridRangeBuilder,
     start: u32,
@@ -97,7 +90,6 @@ pub extern "Rust" fn GridRangeBuilderEnsureTrackCoverage(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:90-319
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeBuilderFinalizeRanges(
     this: &mut GridRangeBuilder,
     needs_intrinsic_track_size: bool,
@@ -250,7 +242,6 @@ pub extern "Rust" fn GridRangeBuilderFinalizeRanges(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:321-368
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridRangeBuilderNewFromTracks(
     explicit: &GridTrackList,
     implicit: &GridTrackList,
@@ -296,7 +287,6 @@ pub extern "Rust" fn GridRangeBuilderNewFromTracks(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:370-404
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetNewWithDefinition(
     count: u32,
     definition: &GridTrackSize,
@@ -328,32 +318,27 @@ pub extern "Rust" fn GridSetNewWithDefinition(
     this
 }
 // cpp: layoutng_grid/grid_track_collection.cc:406-409
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetFlexFactor(this: &GridSet) -> f32 {
     debug_assert!(this.track_size.HasFlexMaxTrackBreadth());
     this.track_size.MaxTrackBreadth().FlexValue() * this.track_count as f32
 }
 // cpp: layoutng_grid/grid_track_collection.cc:411-414
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetBaseSize(this: &GridSet) -> LayoutUnit {
     debug_assert!(!this.IsGrowthLimitLessThanBaseSize());
     this.base_size
 }
 // cpp: layoutng_grid/grid_track_collection.cc:416-419
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetGrowthLimit(this: &GridSet) -> LayoutUnit {
     debug_assert!(!this.IsGrowthLimitLessThanBaseSize());
     this.growth_limit
 }
 // cpp: layoutng_grid/grid_track_collection.cc:421-425
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetInitBaseSize(this: &mut GridSet, size: LayoutUnit) {
     debug_assert_ne!(size, kIndefiniteSize);
     this.base_size = size;
     this.EnsureGrowthLimitIsNotLessThanBaseSize();
 }
 // cpp: layoutng_grid/grid_track_collection.cc:427-433
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetIncreaseBaseSize(this: &mut GridSet, size: LayoutUnit) {
     debug_assert_ne!(size, kIndefiniteSize);
     debug_assert!(this.base_size <= size);
@@ -361,7 +346,6 @@ pub extern "Rust" fn GridSetIncreaseBaseSize(this: &mut GridSet, size: LayoutUni
     this.EnsureGrowthLimitIsNotLessThanBaseSize();
 }
 // cpp: layoutng_grid/grid_track_collection.cc:435-442
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetIncreaseGrowthLimit(this: &mut GridSet, size: LayoutUnit) {
     debug_assert_ne!(size, kIndefiniteSize);
     debug_assert!(
@@ -371,20 +355,17 @@ pub extern "Rust" fn GridSetIncreaseGrowthLimit(this: &mut GridSet, size: Layout
     this.growth_limit = size;
 }
 // cpp: layoutng_grid/grid_track_collection.cc:444-447
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetEnsureGrowthLimitIsNotLessThanBaseSize(this: &mut GridSet) {
     if this.IsGrowthLimitLessThanBaseSize() {
         this.growth_limit = this.base_size;
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:449-451
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSetIsGrowthLimitLessThanBaseSize(this: &GridSet) -> bool {
     this.growth_limit != kIndefiniteSize && this.growth_limit < this.base_size
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:453-457
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeStartLine(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -392,7 +373,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeStartLine(
     this.ranges_[i as usize].start_line
 }
 // cpp: layoutng_grid/grid_track_collection.cc:459-463
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeTrackCount(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -400,7 +380,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeTrackCount(
     this.ranges_[i as usize].track_count
 }
 // cpp: layoutng_grid/grid_track_collection.cc:465-469
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeSetCount(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -408,7 +387,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeSetCount(
     this.ranges_[i as usize].set_count
 }
 // cpp: layoutng_grid/grid_track_collection.cc:471-475
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeBeginSetIndex(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -416,7 +394,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeBeginSetIndex(
     this.ranges_[i as usize].begin_set_index
 }
 // cpp: layoutng_grid/grid_track_collection.cc:477-481
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeProperties(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -424,7 +401,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeProperties(
     this.ranges_[i as usize].properties
 }
 // cpp: layoutng_grid/grid_track_collection.cc:21-23
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeEndLine(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -432,7 +408,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeEndLine(
     RangeEndLine(this, i)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:25-48
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionRangeIndexFromGridLine(
     this: &GridLayoutTrackCollection,
     line: u32,
@@ -440,7 +415,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionRangeIndexFromGridLine(
     RangeIndexFromGridLine(this, line)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:483-488
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionEndLineOfImplicitGrid(
     this: &GridLayoutTrackCollection,
 ) -> u32 {
@@ -449,7 +423,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionEndLineOfImplicitGrid(
         .map_or(0, |r| r.start_line.wrapping_add(r.track_count))
 }
 // cpp: layoutng_grid/grid_track_collection.cc:490-494
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionIsGridLineWithinImplicitGrid(
     this: &GridLayoutTrackCollection,
     line: u32,
@@ -458,14 +431,12 @@ pub extern "Rust" fn GridLayoutTrackCollectionIsGridLineWithinImplicitGrid(
     line <= this.EndLineOfImplicitGrid()
 }
 // cpp: layoutng_grid/grid_track_collection.cc:496-501
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionGetSetCount(this: &GridLayoutTrackCollection) -> u32 {
     this.ranges_
         .last()
         .map_or(0, |r| r.begin_set_index.wrapping_add(r.set_count))
 }
 // cpp: layoutng_grid/grid_track_collection.cc:503-506
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionGetSetOffset(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -473,7 +444,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionGetSetOffset(
     this.sets_geometry_[i as usize].offset
 }
 // cpp: layoutng_grid/grid_track_collection.cc:508-512
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionGetSetTrackCount(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -481,7 +451,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionGetSetTrackCount(
     this.sets_geometry_[i as usize + 1].track_count
 }
 // cpp: layoutng_grid/grid_track_collection.cc:514-518
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionStartExtraMargin(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -493,7 +462,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionStartExtraMargin(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:520-525
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionEndExtraMargin(
     this: &GridLayoutTrackCollection,
     i: u32,
@@ -505,7 +473,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionEndExtraMargin(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:527-531
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionAdjustSingleSetOffset(
     this: &mut GridLayoutTrackCollection,
     i: u32,
@@ -514,7 +481,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionAdjustSingleSetOffset(
     this.sets_geometry_[i as usize].offset += delta;
 }
 // cpp: layoutng_grid/grid_track_collection.cc:533-539
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionAdjustSetOffsets(
     this: &mut GridLayoutTrackCollection,
     i: u32,
@@ -526,14 +492,12 @@ pub extern "Rust" fn GridLayoutTrackCollectionAdjustSetOffsets(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:541-543
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionCalculateSetSpanSize(
     this: &GridLayoutTrackCollection,
 ) -> LayoutUnit {
     this.CalculateSetSpanSizeRange(0, this.GetSetCount())
 }
 // cpp: layoutng_grid/grid_track_collection.cc:545-563
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionCalculateSetSpanSizeRange(
     this: &GridLayoutTrackCollection,
     begin: u32,
@@ -550,7 +514,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionCalculateSetSpanSizeRange(
     (this.GetSetOffset(end) - this.gutter_size_ - this.GetSetOffset(begin)).ClampNegativeToZero()
 }
 // cpp: layoutng_grid/grid_track_collection.cc:565-579
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionIsSpanningIndefiniteSet(
     this: &GridLayoutTrackCollection,
     begin: u32,
@@ -565,7 +528,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionIsSpanningIndefiniteSet(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:581-817
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionCreateSubgridTrackCollection(
     this: &GridLayoutTrackCollection,
     begin_range: u32,
@@ -709,7 +671,6 @@ fn ExtraMarginsFromParent(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:819-882
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionCreateSubgridBaselines(
     this: &GridLayoutTrackCollection,
     begin_range: u32,
@@ -761,21 +722,18 @@ pub extern "Rust" fn GridLayoutTrackCollectionCreateSubgridBaselines(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:884-886
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionHasFlexibleTrack(
     this: &GridLayoutTrackCollection,
 ) -> bool {
     this.properties_.HasProperty(PropertyId::kHasFlexibleTrack)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:888-890
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionHasIntrinsicTrack(
     this: &GridLayoutTrackCollection,
 ) -> bool {
     this.properties_.HasProperty(PropertyId::kHasIntrinsicTrack)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:892-894
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionHasNonDefiniteTrack(
     this: &GridLayoutTrackCollection,
 ) -> bool {
@@ -783,7 +741,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionHasNonDefiniteTrack(
         .HasProperty(PropertyId::kHasNonDefiniteTrack)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:896-899
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionIsDependentOnAvailableSize(
     this: &GridLayoutTrackCollection,
 ) -> bool {
@@ -791,7 +748,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionIsDependentOnAvailableSize(
         .HasProperty(PropertyId::kIsDependentOnAvailableSize)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:901-911
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionFirstNonCollapsedLineIndex(
     this: &GridLayoutTrackCollection,
 ) -> u32 {
@@ -804,7 +760,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionFirstNonCollapsedLineIndex(
     })
 }
 // cpp: layoutng_grid/grid_track_collection.cc:913-916
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridLayoutTrackCollectionHasIndefiniteSet(
     this: &GridLayoutTrackCollection,
 ) -> bool {
@@ -814,7 +769,6 @@ pub extern "Rust" fn GridLayoutTrackCollectionHasIndefiniteSet(
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:918-945
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionNew(
     ranges: GridRangeVector,
     direction: GridTrackSizingDirection,
@@ -846,7 +800,6 @@ pub extern "Rust" fn GridSizingTrackCollectionNew(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:947-950
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionGetSetAt(
     this: &mut GridSizingTrackCollection,
     i: u32,
@@ -854,7 +807,6 @@ pub extern "Rust" fn GridSizingTrackCollectionGetSetAt(
     &mut this.sets_[i as usize]
 }
 // cpp: layoutng_grid/grid_track_collection.cc:952-955
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionGetSetAtConst(
     this: &GridSizingTrackCollection,
     i: u32,
@@ -862,14 +814,12 @@ pub extern "Rust" fn GridSizingTrackCollectionGetSetAtConst(
     &this.sets_[i as usize]
 }
 // cpp: layoutng_grid/grid_track_collection.cc:958-960
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionGetSetIterator(
     this: &mut GridSizingTrackCollection,
 ) -> SetIterator {
     SetIterator::new(this, 0, this.sets_.len() as u32)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:963-965
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionGetConstSetIterator(
     this: &GridSizingTrackCollection,
 ) -> ConstSetIterator {
@@ -880,7 +830,6 @@ pub extern "Rust" fn GridSizingTrackCollectionGetConstSetIterator(
     )
 }
 // cpp: layoutng_grid/grid_track_collection.cc:968-971
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionGetSetIteratorRange(
     this: &mut GridSizingTrackCollection,
     begin: u32,
@@ -889,7 +838,6 @@ pub extern "Rust" fn GridSizingTrackCollectionGetSetIteratorRange(
     SetIterator::new(this, begin, end)
 }
 // cpp: layoutng_grid/grid_track_collection.cc:973-981
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionTotalTrackSize(
     this: &GridSizingTrackCollection,
 ) -> LayoutUnit {
@@ -903,7 +851,6 @@ pub extern "Rust" fn GridSizingTrackCollectionTotalTrackSize(
     total - this.base.gutter_size_
 }
 // cpp: layoutng_grid/grid_track_collection.cc:983-1001
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionCacheDefiniteSetsGeometry(
     this: &mut GridSizingTrackCollection,
 ) {
@@ -931,7 +878,6 @@ pub extern "Rust" fn GridSizingTrackCollectionCacheDefiniteSetsGeometry(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:1003-1022
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionCacheInitializedSetsGeometry(
     this: &mut GridSizingTrackCollection,
     mut offset: LayoutUnit,
@@ -958,7 +904,6 @@ pub extern "Rust" fn GridSizingTrackCollectionCacheInitializedSetsGeometry(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:1024-1039
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionFinalizeSetsGeometry(
     this: &mut GridSizingTrackCollection,
     mut offset: LayoutUnit,
@@ -977,7 +922,6 @@ pub extern "Rust" fn GridSizingTrackCollectionFinalizeSetsGeometry(
     }
 }
 // cpp: layoutng_grid/grid_track_collection.cc:1041-1046
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionSetIndefiniteGrowthLimitsToBaseSize(
     this: &mut GridSizingTrackCollection,
 ) {
@@ -989,7 +933,6 @@ pub extern "Rust" fn GridSizingTrackCollectionSetIndefiniteGrowthLimitsToBaseSiz
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:1050-1157
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionBuildSetsFromLists(
     this: &mut GridSizingTrackCollection,
     explicit: &GridTrackList,
@@ -1072,7 +1015,6 @@ fn CacheSetProperties(range: &mut GridRange, set: &GridSet) {
 }
 
 // cpp: layoutng_grid/grid_track_collection.cc:1160-1205
-#[unsafe(no_mangle)]
 pub extern "Rust" fn GridSizingTrackCollectionInitializeSets(
     this: &mut GridSizingTrackCollection,
     available: LayoutUnit,

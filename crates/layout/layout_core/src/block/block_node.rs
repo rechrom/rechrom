@@ -101,7 +101,6 @@ const _: () = assert!(std::mem::offset_of!(BlockNode, base) == 0);
 // original out-of-package member definitions connect through these typed
 // providers when the corresponding packages are assembled.
 unsafe extern "Rust" {
-    fn BlockNodeGetFieldsetContentFromForms(node: &BlockNode) -> BlockNode;
     fn BlockNodeIsCustomLayoutLoadedFromCustom(node: &BlockNode) -> bool;
     fn BlockNodeGetCustomLayoutDefinitionFromCustom(node: &BlockNode) -> *mut CSSLayoutDefinition;
     fn BlockNodeScriptTypeFromMathML(node: &BlockNode) -> MathScriptType;
@@ -201,10 +200,9 @@ impl BlockNode {
     }
 
     // cpp: layoutng/internal/block_node.h:125
-    // Body: //src/layoutng_forms/layout_fieldset.cc.
-    pub fn GetFieldsetContent(&self) -> BlockNode {
-        unsafe { BlockNodeGetFieldsetContentFromForms(self) }
-    }
+    // GetFieldsetContent() is forms code (layoutng_forms/layout_fieldset.cc)
+    // that only the fieldset algorithm calls: the extension trait
+    // `layout_algo_forms::layout_fieldset::BlockNodeFormsAlgorithms`.
 
     // cpp: layoutng/internal/block_node.h:177-178
     // Bodies: //src/layoutng_custom/layout_custom.cc.

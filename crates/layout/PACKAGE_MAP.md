@@ -804,7 +804,8 @@ same fields as the former `LayoutAssembly`). Each algorithm crate exposes
 `internal::boundary::registration::Register`. `layout::CreateLayoutRegistry`
 calls them in the former install order and `LayoutEngine::new(&LayoutRegistry)`
 still copies the table, so construction is unchanged. The `OnceLock` slots are
-not moved yet.
+not moved yet (R7a moved the grid, flex and SVG ones into registry fields; the
+`REPLACED_*` ones remain, see §7 "R7a other algorithms").
 
 ### 6.2 New slots required by the upward edges
 
@@ -1371,7 +1372,9 @@ the moved object-model modules are gated on the feature like
 `cfg(not(feature = "translation_in_progress"))`. Nothing defines them in that
 configuration (as before, it does not link a LayoutText).
 
-**Remaining link-time pairs in `crates/layout`** (not changed):
+**Remaining link-time pairs in `crates/layout`** (not changed here; the grid,
+block, out_of_flow, float, forms, list and intra-base ones are resolved by R7a
+below):
 base → table 40, base → replaced 23, base → grid 10, base → block 9,
 base → out_of_flow 2, base → float/forms/list 1 each; intra-base:
 `editing_caret.rs` defines `LayoutTextPositionForPoint`,
@@ -1394,6 +1397,86 @@ definition (unreferenced).
   now call safe functions; other files may show unused-import warnings.
 - `Cargo.lock` is unchanged (the facade's inline dependency only became
   optional).
+
+### Status: R7a other algorithms (grid, block, out_of_flow, float, forms, list; base-internal) (done, not built)
+
+Same rule as R5 part 2 (ownership from each body's `// cpp:` citation; `A`
+move to base / direct call, `B` registry slot, `C` extension trait or plain
+function in the algorithm crate because only it calls the member, `D` dead).
+Table and replaced are handled separately (R7b/R7c).
+
+**Base ↔ algorithm pairs:**
+
+| crate | pairs | A | B | C | D | notes |
+|---|---:|---:|---:|---:|---:|---|
+| block | 9 + 1 | 2 | 0 | 8 | 0 | `UnpositionedListMarker` (layoutng_block/unpositioned_list_marker.cc): constructor, ContentAlignmentBaseline, AddToBox, AddToBoxWithoutLineBoxes, InlineOffset, Layout, CheckMargin, ComputeIntrudedFloatOffset → `UnpositionedListMarkerAlgorithms` (block only); `Trace` is a record member defined in base (base trace bindings call it). Base gained `UnpositionedListMarker::FromMarkerLayoutObject` for the constructor. The "+1": base declared `DispatchLayoutInlinePhysicalLinesBoundingBox` (sticky inline bounds) and the only definition was the block-only host's *excluded package* panic stub; base now calls `LayoutInline::PhysicalLinesBoundingBox` directly (Chromium `To<LayoutInline>(this)->PhysicalLinesBoundingBox()`), the stub is deleted |
+| grid | 10 | 0 | 0 | 10 | 0 | `GridItemData` new / new_with_parent_style / SetAlignmentFallback / UpdateSpan / ComputeSetIndices / ComputeOutOfFlowItemPlacement / CalculateAvailableSize → `GridItemDataAlgorithms`; `GridItems::{Append, SortByOrderProperty}` → `GridItemsAlgorithms`; `GridRangeBuilder::new(&ComputedStyle, ..)` → `GridRangeBuilderStyleAlgorithms`; `GridSizingTrackCollection::BuildSets` → `GridSizingTrackCollectionStyleAlgorithms` (`layout_algo_grid::algorithms` re-exports them; six grid modules glob-import it) |
+| out_of_flow | 2 | 0 | 0 | 2 | 0 | `InlineContainingBlockUtils::ComputeInlineContainerGeometry(ForFragmentainer)` → `InlineContainingBlockUtilsAlgorithms` (associated functions) |
+| float | 1 | 0 | 0 | 1 | 0 | `CurrentShapeImage` → plain `layout_algo_float::shape_image_services::CurrentShapeImage` (only float calls it) |
+| forms | 1 | 0 | 0 | 1 | 0 | `BlockNode::GetFieldsetContent` → `BlockNodeFormsAlgorithms` |
+| list | 1 + 1 | 0 | 1 | 0 | 1 | `LayoutEditingListItemValue` (editing reads LayoutListItem::Value after layout) → slot `list_support.list_item_value`; reverse pair `ListItemOrdinalItemInsertedOrRemoved` (list declared, base `untranslated_symbols.rs` aborting stub) → the untranslated abort is the list crate's own `ListItemOrdinal::ItemInsertedOrRemoved` body |
+
+**Base-internal pairs** (both sides compiled in `layout_assembly`): 226
+declarations of 223 symbols became `use` imports of the definition (`crate::
+block_virtual_dispatch` 128, `crate::grid_track_collection_implementation` 58,
+`crate::layout_algo_inline_editing_caret` 3, `crate::used_font_implementation`
+4, `crate::layout_fragment_package::inline_cursor` 6, child modules of
+`internal/layout_box.rs` / `internal/layout_object.rs` 23,
+`crate::out_of_flow_element_data` 1), and the `#[no_mangle]`s were removed
+(including the `block_false_predicates!` macro). A signature scan found only
+`&LayoutObject` declarations for `*const LayoutObject` definitions (coerces)
+and the opaque `GridPlacementData` alias. Also: the unreferenced
+`#[no_mangle]` exports `DispatchLayoutObjectCanBeSelectionLeafInternal`
+(`LayoutObject::CanBeSelectionLeafInternal` uses the private dispatch in
+`layout_object_editing_queries.rs`) and `LayoutBoxModelObjectBackgroundTransfersToView`
+(already imported directly) lost the attribute; the undefined, unreferenced
+`FullLayoutRegistry` and inline's `NGContainingLineBoxOf` / `InSameNGLineBox`
+declarations are deleted; base's 7 declarations of foundation symbols
+(`FoundationTextTransformFromBits`, `RoundForImpreciseConversionI16`, the 4
+`InitialLetter*` constructors, `FoundationMinimumValueForLengthWithIntrinsicEvaluator`)
+are direct `use foundation::..` calls. `layout_assembly` allows `unused_unsafe`
+for the former extern call sites.
+
+**OnceLocks** (process-global, set from object constructors) → registry fields
+filled by `registration::Register`:
+
+| former static | now |
+|---|---|
+| `GRID_OBJECT_VIRTUALS`, `GRID_STYLE_DID_CHANGE` | `LayoutObjectFactorySet::grid_virtuals: Option<GridObjectVirtuals>` (type moved to `layout_object_factory_set.rs`, `style_did_change` added) |
+| `FLEX_STITCHED_ROW_GAP_INDEX` | `LayoutObjectFactorySet::flex_stitched_row_gap_index: Option<StitchedRowGapIndex>` |
+| `SVG_ROOT_CHILDREN`, `SVG_INLINE_TEXT_SCALED_FONT`, `SVG_INLINE_TEXT_SCALING_FACTOR` | the existing factory fields `svg_root_children`, `svg_inline_text_scaled_font`, `svg_inline_text_scaling_factor` |
+| `FLEX_TOTAL_ROW_GAP_COUNT`, `GRID_TOTAL_ROW_GAP_COUNT` (+ `DispatchBreakTokenAlgorithmDataGetTotalRowGapCount`) | `BreakTokenAlgorithmData::total_row_gap_count_`, set by `NewWithTotalRowGapCount` in the flex/grid data constructors (the C++ vptr; paint export reads it after layout) |
+
+Base reads the object overrides from the factory set each LayoutObject
+captured at construction (`LayoutObject::FactorySet()`, like
+`table_virtuals`), so they work outside a layout pass without a thread-local.
+`LayoutObjectFactorySet::validate_virtual_overrides` (called by
+`LayoutEngine::new`) rejects a grid/flex factory without its overrides and an
+SVG factory without root children / inline-text font overrides. The
+`Register*` functions and their `layout_assembly` re-exports are gone, except
+the `REPLACED_*`/`IMAGE_*`/`VIDEO_*` ones (R7c).
+
+**Remaining link-time pairs touching base** (outside this task): base → table
+40 and base → replaced 23 (R7b/R7c); `FontNewWithSelector` (font_engine
+declares, base defines); layout_style → foundation `FoundationTextTransformFromBits`
+(foundation keeps its `#[no_mangle]`s for that); base's aborting stubs in
+`untranslated_symbols.rs` (`DEAD_CODE.md`); about 160 base declarations
+without any definition (97 of them the block-only `cfg(not(translation_in_progress))`
+blocks); the block-only host's remaining excluded stubs (`ContentDataClone`,
+`*TransformOperation*`, `ShapeResultView*`, which no crate declares, and
+`LayoutReplacedContentRect` under `cfg(not(replaced_extension))`).
+
+**Build risks:**
+
+- Trait imports: a missed caller of a moved member is E0599 (no method) or
+  E0599 on `GridItemData::new`/`GridRangeBuilder::new`/`UnpositionedListMarker::new`;
+  add the crate's trait import.
+- Glob imports of `algorithms::*` into grid modules may warn as unused.
+- The `use` lines were placed where the extern blocks were; a name that the
+  module also imports explicitly would be E0252.
+- `LayoutText::ScaledFont`/`SvgScalingFactor` call `self.FactorySet()` through
+  `Deref`; `object_factories` panics for an object created without a factory
+  scope (previously the OnceLocks were global).
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 

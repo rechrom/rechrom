@@ -5,20 +5,16 @@
 use crate::algorithms::*;
 use font_engine::fonts::font_height::FontHeight;
 use foundation::{EPosition, LayoutUnit};
-use crate::inline_cursor::InlineCursor;
 use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::editing::forward::PositionWithAffinity;
 use layout_core::internal::relative_utils::ComputeRelativeOffset;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_inline/line_utils.h:24-35
-// These two declarations have no definition anywhere in the source checkout.
-// Retain their external ABI without manufacturing caret-position behavior.
-unsafe extern "Rust" {
-    pub fn NGContainingLineBoxOf(position: &PositionWithAffinity) -> InlineCursor;
-    pub fn InSameNGLineBox(first: &PositionWithAffinity, second: &PositionWithAffinity) -> bool;
-}
+// NGContainingLineBoxOf / InSameNGLineBox: declared in the source with no
+// definition in the checkout and never referenced here; the declarations are
+// omitted (no link-time symbol). Editing uses
+// `layout_output_editing_queries` (line_utils.cc:12-24) instead.
 
 // cpp: layoutng_inline/line_utils.h:17-19
 // cpp: layoutng_inline/line_utils.cc:12-36

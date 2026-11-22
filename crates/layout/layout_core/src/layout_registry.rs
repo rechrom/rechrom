@@ -54,11 +54,8 @@ pub struct LayoutRegistry {
 }
 
 // cpp: layoutng/layout_assembly.h:17-17
-// Implemented by //src/main/full_layout_algorithms.cc, outside the selected
-// package set. The external symbol remains a pending registry dependency.
-unsafe extern "Rust" {
-    pub fn FullLayoutRegistry() -> &'static LayoutRegistry;
-}
+// FullLayoutRegistry() is `layout::CreateLayoutRegistry` in the front crate;
+// the undefined link-time declaration is gone.
 
 impl LayoutRegistry {
     /// Restore the document-wide boundary indices after a targeted subtree

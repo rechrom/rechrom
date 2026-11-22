@@ -7,7 +7,6 @@
 use super::*;
 
 // cpp: third_party/blink/renderer/core/layout/layout_object.cc:888-914
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutObjectHasClipRelatedPropertyProvider(
     object: *const LayoutObject,
 ) -> bool {

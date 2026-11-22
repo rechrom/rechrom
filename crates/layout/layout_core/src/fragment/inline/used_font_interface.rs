@@ -100,9 +100,9 @@ impl UsedFont {
     }
 }
 
-unsafe extern "Rust" {
-    fn UsedFontFixedAscentForBaseline(font: &UsedFont, baseline: FontBaseline) -> LayoutUnit;
-    fn UsedFontFixedDescent(font: &UsedFont) -> LayoutUnit;
-    fn UsedFontFixedDescentForBaseline(font: &UsedFont, baseline: FontBaseline) -> LayoutUnit;
-    fn UsedFontUnderlineThickness(font: &UsedFont) -> Option<f32>;
-}
+use crate::used_font_implementation::{
+    UsedFontFixedAscentForBaseline,
+    UsedFontFixedDescent,
+    UsedFontFixedDescentForBaseline,
+    UsedFontUnderlineThickness,
+};

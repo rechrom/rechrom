@@ -711,21 +711,18 @@ fn PositionForPointInFragments(
 
     box_object.CreatePositionWithAffinityDefault(0)
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutBoxPositionForPointInFragmentsProvider(
     box_object: &crate::internal::layout_box::LayoutBox,
     point: &foundation::PhysicalOffset,
 ) -> PositionWithAffinity {
     PositionForPointInFragments(box_object, point, crate::EditingPositionOptions::default())
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutTextPositionForPoint(
     text: &crate::internal::layout_text::LayoutText,
     point: &foundation::PhysicalOffset,
 ) -> PositionWithAffinity {
     PositionForPoint(text, point, crate::EditingPositionOptions::default())
 }
-#[unsafe(no_mangle)]
 pub extern "Rust" fn LayoutInlinePositionForPoint(
     inline: &crate::internal::layout_inline::LayoutInline,
     point: &foundation::PhysicalOffset,

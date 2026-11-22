@@ -6,18 +6,17 @@ use crate::internal::layout_object::{LayoutObject, MarkingBehavior};
 
 // Concrete grid and inline-fragment owners supply these virtual results when
 // the class hierarchy is assembled.
+use crate::block_virtual_dispatch::{
+    DispatchLayoutObjectHasInlineFragments,
+    DispatchLayoutObjectInlineFormattingContextWillChange,
+    DispatchLayoutObjectIsLayoutGridOrGridLanes,
+    DispatchLayoutObjectIsSVG,
+    DispatchLayoutObjectIsSVGForeignObject,
+    DispatchLayoutObjectIsSVGInline,
+    DispatchLayoutObjectIsSVGRoot,
+    DispatchLayoutObjectIsSVGText,
+};
 unsafe extern "Rust" {
-    fn DispatchLayoutObjectIsLayoutGridOrGridLanes(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVG(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGRoot(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGText(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGInline(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectIsSVGForeignObject(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectHasInlineFragments(object: *const LayoutObject) -> bool;
-    fn DispatchLayoutObjectInlineFormattingContextWillChange(
-        object: *mut LayoutObject,
-        new_value: bool,
-    );
     fn DispatchLayoutObjectInLayoutNGInlineFormattingContextWillChange(
         object: *mut LayoutObject,
         value: bool,

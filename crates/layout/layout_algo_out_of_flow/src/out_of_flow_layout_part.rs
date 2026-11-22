@@ -30,6 +30,7 @@ use layout_assembly::internal::inline_containing_block_utils::{
     InlineContainingBlockGeometry, InlineContainingBlockMap, InlineContainingBlockUtils,
 };
 use layout_assembly::internal::layout_algorithm::LayoutAlgorithmParams;
+use crate::inline_containing_block_utils::InlineContainingBlockUtilsAlgorithms;
 use layout_assembly::internal::layout_box::LayoutBox;
 use layout_assembly::internal::layout_node_metadata::Element;
 use layout_assembly::internal::layout_object::LayoutObject;

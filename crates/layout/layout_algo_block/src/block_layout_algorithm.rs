@@ -79,6 +79,7 @@ use layout_core::internal::space_utils::{
 use layout_core::internal::style_variant::StyleVariant;
 use layout_core::internal::unpositioned_float::UnpositionedFloat;
 use layout_core::internal::unpositioned_list_marker::UnpositionedListMarker;
+use crate::unpositioned_list_marker::UnpositionedListMarkerAlgorithms;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::box_sides::LogicalBoxSides;
 use layout_geometry::geometry::box_strut::BoxStrut;

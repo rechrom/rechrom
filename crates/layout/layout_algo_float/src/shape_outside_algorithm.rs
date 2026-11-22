@@ -14,7 +14,7 @@ use layout_assembly::internal::layout_input::{
 use layout_assembly::internal::layout_replaced::LayoutReplaced;
 use layout_assembly::internal::length_utils::ComputePhysicalMarginsForSpace;
 use layout_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
-use layout_assembly::internal::shapes::shape_image_services::CurrentShapeImage;
+use crate::shape_image_services::CurrentShapeImage;
 use layout_assembly::layout_result::LayoutResult;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToLogicalSize, ToPhysicalSize};

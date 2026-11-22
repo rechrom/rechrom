@@ -18,15 +18,10 @@ pub fn LayoutBoxModelObjectBaseForNode(node: *mut ContainerNode) -> LayoutObject
 }
 
 // cpp: layoutng/internal/layout_box_model_object.h:327-355
-unsafe extern "Rust" {
-    fn DispatchLayoutBoxModelObjectCanMergeWith(
-        owner: *const LayoutBoxModelObject,
-        other: &LayoutBoxModelObject,
-    ) -> bool;
-    fn DispatchLayoutBoxModelObjectContainingBlockLogicalWidthForContent(
-        owner: *const LayoutBoxModelObject,
-    ) -> LayoutUnit;
-}
+use crate::block_virtual_dispatch::{
+    DispatchLayoutBoxModelObjectCanMergeWith,
+    DispatchLayoutBoxModelObjectContainingBlockLogicalWidthForContent,
+};
 
 impl LayoutBoxModelObject {
     // cpp: layoutng/internal/layout_box_model_object.h:350-353

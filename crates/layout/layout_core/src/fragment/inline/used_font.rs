@@ -9,7 +9,6 @@ use foundation::LayoutUnit;
 use crate::internal::used_font::UsedFont;
 
 // cpp: layoutng_inline/used_font.cc:9-15
-#[no_mangle]
 pub extern "Rust" fn UsedFontFixedAscentForBaseline(
     font: &UsedFont,
     baseline: FontBaseline,
@@ -27,7 +26,6 @@ pub extern "Rust" fn UsedFontFixedAscentForBaseline(
 }
 
 // cpp: layoutng_inline/used_font.cc:17-24
-#[no_mangle]
 pub extern "Rust" fn UsedFontFixedDescent(font: &UsedFont) -> LayoutUnit {
     let font_data = font.PrimaryFont();
     if !font_data.is_null() {
@@ -42,7 +40,6 @@ pub extern "Rust" fn UsedFontFixedDescent(font: &UsedFont) -> LayoutUnit {
 }
 
 // cpp: layoutng_inline/used_font.cc:26-32
-#[no_mangle]
 pub extern "Rust" fn UsedFontFixedDescentForBaseline(
     font: &UsedFont,
     baseline: FontBaseline,
@@ -60,7 +57,6 @@ pub extern "Rust" fn UsedFontFixedDescentForBaseline(
 }
 
 // cpp: layoutng_inline/used_font.cc:34-42
-#[no_mangle]
 pub extern "Rust" fn UsedFontUnderlineThickness(font: &UsedFont) -> Option<f32> {
     let font_data = font.PrimaryFont();
     if !font_data.is_null() {

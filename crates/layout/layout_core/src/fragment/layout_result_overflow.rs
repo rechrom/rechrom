@@ -1,7 +1,6 @@
 use super::*;
 
 // cpp: core/layout/layout_box.cc:4038-4052.
-#[no_mangle]
 pub extern "Rust" fn LayoutBoxMutableSavePreviousOverflowDataProvider(box_: &mut LayoutBox) {
     if box_.overflow_.Get().is_null() {
         box_.overflow_ = Member::from_ptr(MakeGarbageCollected(BoxOverflowModel::default()));

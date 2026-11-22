@@ -143,8 +143,7 @@ fn AxisEdgeFromItemPosition(
     }
 }
 // cpp: layoutng_grid/grid_item.cc:159-271
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataNewProvider(
+pub fn GridItemDataNewProvider(
     node: BlockNode,
     parent: &ComputedStyle,
     root: &ComputedStyle,
@@ -247,8 +246,7 @@ pub extern "Rust" fn GridItemDataNewProvider(
     item
 }
 // cpp: layoutng_grid/grid_item.cc:273-328
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataSetAlignmentFallbackProvider(
+pub fn GridItemDataSetAlignmentFallbackProvider(
     item: &mut GridItemData,
     direction: GridTrackSizingDirection,
     synthesized: bool,
@@ -289,8 +287,7 @@ pub extern "Rust" fn GridItemDataSetAlignmentFallbackProvider(
     }
 }
 // cpp: layoutng_grid/grid_item.cc:330-339
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataUpdateSpanProvider(
+pub fn GridItemDataUpdateSpanProvider(
     item: &mut GridItemData,
     span: &GridSpan,
     direction: GridTrackSizingDirection,
@@ -303,8 +300,7 @@ pub extern "Rust" fn GridItemDataUpdateSpanProvider(
     GridItemDataComputeSetIndicesProvider(item, tracks);
 }
 // cpp: layoutng_grid/grid_item.cc:341-381
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataComputeSetIndicesProvider(
+pub fn GridItemDataComputeSetIndicesProvider(
     item: &mut GridItemData,
     tracks: &GridLayoutTrackCollection,
 ) {
@@ -403,8 +399,7 @@ pub fn ComputeOutOfFlowItemPlacement(
 }
 // The layoutng header intentionally forward-declares GridPlacementData. This
 // typed Rust provider connects that pointer to its actual Grid package owner.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataComputeOutOfFlowItemPlacementProvider(
+pub fn GridItemDataComputeOutOfFlowItemPlacementProvider(
     item: &mut GridItemData,
     tracks: &GridLayoutTrackCollection,
     placement: &OpaquePlacementData,
@@ -414,8 +409,7 @@ pub extern "Rust" fn GridItemDataComputeOutOfFlowItemPlacementProvider(
     ComputeOutOfFlowItemPlacement(item, tracks, data, style);
 }
 // cpp: layoutng_grid/grid_item.cc:454-469
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemDataCalculateAvailableSizeProvider(
+pub fn GridItemDataCalculateAvailableSizeProvider(
     item: &GridItemData,
     tracks: &GridLayoutTrackCollection,
     start_offset: *mut LayoutUnit,
@@ -436,8 +430,7 @@ pub extern "Rust" fn GridItemDataCalculateAvailableSizeProvider(
     }
 }
 // cpp: layoutng_grid/grid_item.cc:471-476
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemsAppendProvider(items: &mut GridItems, other: *mut GridItems) {
+pub fn GridItemsAppendProvider(items: &mut GridItems, other: *mut GridItems) {
     let other = unsafe { &mut *other }.GridPackageItemsMut();
     let data = items.GridPackageItemsMut();
     data.reserve(other.len());
@@ -446,9 +439,112 @@ pub extern "Rust" fn GridItemsAppendProvider(items: &mut GridItems, other: *mut 
     }
 }
 // cpp: layoutng_grid/grid_item.cc:478-480
-#[unsafe(no_mangle)]
-pub extern "Rust" fn GridItemsSortByOrderPropertyProvider(items: &mut GridItems) {
+pub fn GridItemsSortByOrderPropertyProvider(items: &mut GridItems) {
     items
         .GridPackageItemsMut()
         .sort_by_key(|item| unsafe { &*item.Get() }.node.Style().Order());
+}
+
+// GridItemData / GridItems members declared with the base types
+// (layoutng/internal/grid_item.h) whose bodies are grid algorithms
+// (layoutng_grid/grid_item.cc). Rust cannot add inherent methods to a base
+// type from this crate, so they are these extension traits; only this crate
+// calls them, as direct static calls.
+pub trait GridItemDataAlgorithms: Sized {
+    // cpp: layoutng/internal/grid_item.h:37-44
+    fn new(
+        item_node: BlockNode,
+        parent_grid_style: &ComputedStyle,
+        root_grid_style: &ComputedStyle,
+        parent_must_consider_columns: bool,
+        parent_must_consider_rows: bool,
+    ) -> Self;
+    fn new_with_parent_style(item_node: BlockNode, parent_style: &ComputedStyle) -> Self {
+        Self::new(item_node, parent_style, parent_style, false, false)
+    }
+    // cpp: layoutng/internal/grid_item.h:46-56
+    fn SetAlignmentFallback(&mut self, direction: GridTrackSizingDirection, synthesized: bool);
+    fn UpdateSpan(
+        &mut self,
+        span: &GridSpan,
+        direction: GridTrackSizingDirection,
+        start_offset: u32,
+        collection: &GridLayoutTrackCollection,
+    );
+    // cpp: layoutng/internal/grid_item.h:89-107
+    fn ComputeSetIndices(&mut self, collection: &GridLayoutTrackCollection);
+    fn ComputeOutOfFlowItemPlacement(
+        &mut self,
+        collection: &GridLayoutTrackCollection,
+        placement: &OpaquePlacementData,
+        style: &ComputedStyle,
+    );
+    fn CalculateAvailableSize(
+        &self,
+        collection: &GridLayoutTrackCollection,
+        start_offset: *mut LayoutUnit,
+    ) -> LayoutUnit;
+}
+
+impl GridItemDataAlgorithms for GridItemData {
+    fn new(
+        item_node: BlockNode,
+        parent_grid_style: &ComputedStyle,
+        root_grid_style: &ComputedStyle,
+        parent_must_consider_columns: bool,
+        parent_must_consider_rows: bool,
+    ) -> Self {
+        GridItemDataNewProvider(
+            item_node,
+            parent_grid_style,
+            root_grid_style,
+            parent_must_consider_columns,
+            parent_must_consider_rows,
+        )
+    }
+    fn SetAlignmentFallback(&mut self, direction: GridTrackSizingDirection, synthesized: bool) {
+        GridItemDataSetAlignmentFallbackProvider(self, direction, synthesized)
+    }
+    fn UpdateSpan(
+        &mut self,
+        span: &GridSpan,
+        direction: GridTrackSizingDirection,
+        start_offset: u32,
+        collection: &GridLayoutTrackCollection,
+    ) {
+        GridItemDataUpdateSpanProvider(self, span, direction, start_offset, collection)
+    }
+    fn ComputeSetIndices(&mut self, collection: &GridLayoutTrackCollection) {
+        GridItemDataComputeSetIndicesProvider(self, collection)
+    }
+    fn ComputeOutOfFlowItemPlacement(
+        &mut self,
+        collection: &GridLayoutTrackCollection,
+        placement: &OpaquePlacementData,
+        style: &ComputedStyle,
+    ) {
+        GridItemDataComputeOutOfFlowItemPlacementProvider(self, collection, placement, style)
+    }
+    fn CalculateAvailableSize(
+        &self,
+        collection: &GridLayoutTrackCollection,
+        start_offset: *mut LayoutUnit,
+    ) -> LayoutUnit {
+        GridItemDataCalculateAvailableSizeProvider(self, collection, start_offset)
+    }
+}
+
+// cpp: layoutng/internal/grid_item.h:520-524 (bodies: grid_item.cc:471-480)
+pub trait GridItemsAlgorithms {
+    fn Append(&mut self, other: *mut GridItems);
+    fn SortByOrderProperty(&mut self);
+}
+
+impl GridItemsAlgorithms for GridItems {
+    fn Append(&mut self, other: *mut GridItems) {
+        GridItemsAppendProvider(self, other)
+    }
+    fn SortByOrderProperty(&mut self) {
+        GridItemsSortByOrderPropertyProvider(self)
+    }
 }

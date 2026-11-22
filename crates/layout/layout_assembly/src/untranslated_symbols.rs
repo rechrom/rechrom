@@ -142,7 +142,6 @@ untranslated!(
     LayoutViewMapAncestorToLocalProvider,
     LayoutViewNamedPageAtIndexProvider,
     LayoutViewUpdateHitTestResultProvider,
-    ListItemOrdinalItemInsertedOrRemoved,
     ListStyleTypeDataCreateSymbolsFunction,
     MutableForPaintingSetShouldDoFullPaintInvalidationProvider,
     MutableForPaintingSetShouldDoFullPaintInvalidationWithoutLayoutChangeProvider,

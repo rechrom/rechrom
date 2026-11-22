@@ -17,9 +17,7 @@ use super::super::loader::resource::image_resource_observer::CanDeferInvalidatio
 
 // C++'s unqualified call in LayoutBoxModelObject::StyleDidChange is virtual.
 // cpp: layoutng/internal/layout_box_model_lifecycle.cc:63
-unsafe extern "Rust" {
-    fn DispatchLayoutBoxModelUpdateFromStyle(object: *mut LayoutBoxModelObject);
-}
+use crate::block_virtual_dispatch::DispatchLayoutBoxModelUpdateFromStyle;
 
 // cpp: layoutng/internal/layout_box_model_lifecycle.cc:18-37
 fn NeedsAnchorPositionScrollData(element: &Element, style: &ComputedStyle) -> bool {

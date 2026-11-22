@@ -33,6 +33,7 @@ use layout_geometry::geometry::logical_size::LogicalSize;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::fieldset_break_token_data::FieldsetBreakTokenData;
+use crate::layout_fieldset::BlockNodeFormsAlgorithms;
 use layout_assembly::internal::length_utils::{
     CalculateChildPercentageSize, CalculateMinMaxSizesIgnoringChildren, ClampIntrinsicBlockSize,
     ComputeBlockSizeForFragment, ComputeBorders, ComputeMarginsFor, ComputeMarginsForInlineSize,
