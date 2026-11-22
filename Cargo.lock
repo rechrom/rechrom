@@ -2293,6 +2293,7 @@ dependencies = [
  "layout_algo_float",
  "layout_algo_forms",
  "layout_algo_grid",
+ "layout_algo_inline",
  "layout_algo_list",
  "layout_algo_multicol",
  "layout_algo_out_of_flow",
@@ -2313,6 +2314,7 @@ version = "0.0.1"
 dependencies = [
  "font_engine",
  "foundation",
+ "layout_algo_inline",
  "layout_assembly",
  "layout_geometry",
  "layout_style",
@@ -2378,29 +2380,9 @@ dependencies = [
  "font_engine",
  "foundation",
  "icu_bidi",
-]
-
-[[package]]
-name = "layout_algo_inline_assembly"
-version = "0.0.1"
-dependencies = [
- "browser_tracing",
- "css_parser",
- "cssom",
- "font_engine",
- "foundation",
- "icu_bidi",
- "image_resource",
- "layout_algo_custom",
- "layout_algo_mathml",
- "layout_commit",
+ "layout_assembly",
  "layout_geometry",
- "layout_invalidation",
- "layout_reuse",
  "layout_style",
- "layout_style_paint",
- "paint_input_types",
- "skia",
 ]
 
 [[package]]

@@ -35,7 +35,7 @@ mod translated {
     // cpp: layoutng_inline/offset_mapping.h:42-101
     #[derive(Clone)]
     pub struct OffsetMappingUnit {
-        pub(crate) type_: OffsetMappingUnitType,
+        pub type_: OffsetMappingUnitType,
         pub layout_object_: Member<LayoutObject>,
         pub dom_start_: u32,
         pub dom_end_: u32,

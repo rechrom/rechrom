@@ -92,7 +92,7 @@ pub struct InlineItem {
     pub shape_result_: Member<ShapeResult>,
     pub layout_object_: Member<LayoutObject>,
     pub index_: u32,
-    pub(crate) type_: InlineItemType,
+    pub type_: InlineItemType,
     pub(crate) text_type_: u8,
     pub(crate) style_variant_: u8,
     pub(crate) end_collapse_type_: CollapseType,
