@@ -6,34 +6,34 @@ use foundation::{
     PhysicalToLogical, RuntimeEnabledFeatures, ScopedRefPtr, To, ToLineWritingMode,
     WritingDirectionMode, WritingMode,
 };
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::break_appeal::{kBreakAppealPerfect, BreakAppeal};
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::custom_layout_payload::SerializedScriptValue;
-use layout_core::internal::devtools_flex_info::DevtoolsFlexInfo;
-use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_core::internal::early_break::EarlyBreak;
-use layout_core::internal::fragmentation_utils::{
+use crate::internal::block_node::BlockNode;
+use crate::internal::break_appeal::{kBreakAppealPerfect, BreakAppeal};
+use crate::internal::column_spanner_path::ColumnSpannerPath;
+use crate::internal::constraint_space::ConstraintSpace;
+use crate::internal::custom_layout_payload::SerializedScriptValue;
+use crate::internal::devtools_flex_info::DevtoolsFlexInfo;
+use crate::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use crate::internal::early_break::EarlyBreak;
+use crate::internal::fragmentation_utils::{
     BlockSizeForFragmentation, CalculateBreakAppealInsideDefault, FragmentainerSpaceLeft,
     IsAvoidBreakValue, IsBreakInside, JoinFragmentainerBreakValues, PageNameForChildFragment,
 };
-use layout_core::internal::frame_set_layout_data::FrameSetLayoutData;
-use layout_core::internal::gap::gap_geometry::GapGeometry;
-use layout_core::internal::grid_layout_data::GridLayoutData;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_input_node::LayoutInputNode;
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::length_utils::CalculateChildAvailableSize;
-use layout_core::internal::length_utils::ComputeMarginsForInlineSize;
-use layout_core::internal::mathml_paint_info::MathMLPaintInfo;
-use layout_core::internal::oof_positioned_node::{LogicalOofNodeForFragmentation, OofInlineContainer};
-use layout_core::internal::relative_utils::ComputeRelativeOffsetForBoxFragment;
-use layout_core::internal::table_borders::TableBorders;
-use layout_core::internal::table_fragment_data::{
+use crate::internal::frame_set_layout_data::FrameSetLayoutData;
+use crate::internal::gap::gap_geometry::GapGeometry;
+use crate::internal::grid_layout_data::GridLayoutData;
+use crate::internal::inline_item_text_index::InlineItemTextIndex;
+use crate::internal::inline_node::InlineNode;
+use crate::internal::layout_input_node::LayoutInputNode;
+use crate::internal::layout_node_metadata::Node;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_pass_scope::LayoutPassScope;
+use crate::internal::length_utils::CalculateChildAvailableSize;
+use crate::internal::length_utils::ComputeMarginsForInlineSize;
+use crate::internal::mathml_paint_info::MathMLPaintInfo;
+use crate::internal::oof_positioned_node::{LogicalOofNodeForFragmentation, OofInlineContainer};
+use crate::internal::relative_utils::ComputeRelativeOffsetForBoxFragment;
+use crate::internal::table_borders::TableBorders;
+use crate::internal::table_fragment_data::{
     CollapsedTableBordersGeometry, TableColumnGeometries,
 };
 use layout_geometry::geometry::box_sides::{LineLogicalBoxSides, LogicalBoxSides};
@@ -1503,7 +1503,7 @@ impl BoxFragmentBuilder {
             || self.HasOutOfFlowFragmentainerDescendants()
             || self.HasMulticolsWithPendingOOFs()
         {
-            std::panic::panic_any(layout_core::UnsupportedLayout::new(
+            std::panic::panic_any(crate::UnsupportedLayout::new(
                 "out-of-flow descendants require the out-of-flow package",
             ));
         }

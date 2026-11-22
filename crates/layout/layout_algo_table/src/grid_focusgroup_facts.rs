@@ -9,7 +9,7 @@ use crate::{
     layout_table_row::LayoutTableRow, layout_table_section::LayoutTableSection,
 };
 use foundation::{table_focusgroup::TableFocusgroupFacts as Facts, To};
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObject;
 fn Object<T>(pointer: *mut T) -> Option<*const LayoutObject> {
     (!pointer.is_null()).then_some(pointer.cast::<LayoutObject>() as *const LayoutObject)
 }

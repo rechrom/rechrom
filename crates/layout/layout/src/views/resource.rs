@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use layout_assembly::fragment_tree::PaintResources;
-use layout_assembly::internal::layout_input::PaintImage;
-use layout_assembly::layout_engine::HTMLImageResourceUpdate;
+use layout_base::fragment_tree::PaintResources;
+use layout_base::internal::layout_input::PaintImage;
+use layout_base::layout_engine::HTMLImageResourceUpdate;
 
 use crate::LayoutEngine;
 

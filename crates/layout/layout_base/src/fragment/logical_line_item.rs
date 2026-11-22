@@ -7,16 +7,16 @@ use foundation::{
     TextDirection, Visitor, WritingDirectionMode, WritingMode,
 };
 use icu_bidi::UBiDiLevel;
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::inline_item_result::{InlineItemResult, OptionalPositionedFloat};
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::style_variant::StyleVariant;
-use layout_core::internal::text_fit_scale::TextFitScale;
-use layout_core::internal::text_offset_range::TextOffsetRange;
-use layout_core::internal::used_font::UsedFont;
+use crate::internal::inline_item::{InlineItem, InlineItemType};
+use crate::internal::layout_node_metadata::Node;
+use crate::internal::inline_item_result::{InlineItemResult, OptionalPositionedFloat};
+use crate::internal::inline_item_text_index::InlineItemTextIndex;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_text::LayoutText;
+use crate::internal::style_variant::StyleVariant;
+use crate::internal::text_fit_scale::TextFitScale;
+use crate::internal::text_offset_range::TextOffsetRange;
+use crate::internal::used_font::UsedFont;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::logical_rect::LogicalRect;

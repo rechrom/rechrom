@@ -4,13 +4,13 @@
 
 use foundation::{DynamicTo, EDisplay, IsA, RuntimeEnabledFeatures};
 use crate::fragment_items::FragmentItems;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_invalidation_reason;
-use layout_core::internal::layout_node_metadata::Element;
-use layout_core::internal::layout_object::{LayoutObject, StyleChangeContext};
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_inline::LayoutInline;
+use crate::internal::layout_invalidation_reason;
+use crate::internal::layout_node_metadata::Element;
+use crate::internal::layout_object::{LayoutObject, StyleChangeContext};
 use layout_style::style::anonymous_style::CreateAnonymousStyleBuilderWithDisplay;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;

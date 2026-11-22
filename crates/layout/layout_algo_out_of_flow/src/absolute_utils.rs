@@ -6,19 +6,19 @@ use foundation::{
     LogicalToLogical, MinimumValueForLength, PhysicalSize, PhysicalToLogical,
     RuntimeEnabledFeatures, WritingDirectionMode,
 };
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space::{AutoSizeBehavior, ConstraintSpace};
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_assembly::internal::fragmentation_utils::SetupSpaceBuilderForFragmentationFromSpace;
-use layout_assembly::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_assembly::internal::length_utils::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space::{AutoSizeBehavior, ConstraintSpace};
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use layout_base::internal::fragmentation_utils::SetupSpaceBuilderForFragmentationFromSpace;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::length_utils::{
     ComputeInitialMinMaxBlockSizes, ComputeMinMaxInlineSizes, FitContentMode,
     ResolveMainBlockLength, ResolveMainInlineLength, SizeType, TransferredSizesMode,
 };
-use layout_assembly::layout_result::LayoutResult;
-use layout_assembly::logical_fragment::LogicalFragment;
+use layout_base::layout_result::LayoutResult;
+use layout_base::logical_fragment::LogicalFragment;
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::logical_size::LogicalSize;
 use layout_geometry::geometry::static_position::{

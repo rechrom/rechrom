@@ -3,7 +3,7 @@
 use super::*;
 use crate::offset_mapping::OffsetMapping;
 use foundation::{gfx, PhysicalRect, Vector};
-use layout_core::internal::{
+use crate::internal::{
     layout_box_model_object::LayoutBoxModelObject, layout_object::BoxQuadType,
     layout_text::ClippingOption, map_coordinates_flags::MapCoordinatesFlags,
 };

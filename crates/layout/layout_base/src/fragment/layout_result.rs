@@ -10,18 +10,18 @@ use foundation::{
     LayoutUnit, MakeGarbageCollected, MarginStrut, Member, ScopedRefPtr, To, Traceable, Visitor,
     WeakMember,
 };
-use layout_core::internal::break_appeal::BreakAppeal;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::custom_layout_payload::SerializedScriptValue;
-use layout_core::internal::devtools_flex_info::DevtoolsFlexInfo;
-use layout_core::internal::early_break::EarlyBreak;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::grid_layout_data::GridLayoutData;
-use layout_core::internal::layout_node_metadata::Element;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
-use layout_core::internal::table_constraint_space_data::TableConstraintSpaceData;
+use crate::internal::break_appeal::BreakAppeal;
+use crate::internal::column_spanner_path::ColumnSpannerPath;
+use crate::internal::constraint_space::ConstraintSpace;
+use crate::internal::custom_layout_payload::SerializedScriptValue;
+use crate::internal::devtools_flex_info::DevtoolsFlexInfo;
+use crate::internal::early_break::EarlyBreak;
+use crate::internal::exclusions::exclusion_space::ExclusionSpace;
+use crate::internal::grid_layout_data::GridLayoutData;
+use crate::internal::layout_node_metadata::Element;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
+use crate::internal::table_constraint_space_data::TableConstraintSpaceData;
 use layout_geometry::geometry::bfc_offset::{BfcDelta, BfcOffset};
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
@@ -1149,7 +1149,7 @@ impl LayoutResult {
             .get_flag(LayoutResultBitfields::SHOULD_FORCE_SAME_FRAGMENTATION_FLOW)
     }
 
-    // The numeric values come from the later layout_core::break_appeal enum.
+    // The numeric values come from the later crate::break_appeal enum.
     // cpp: layoutng_fragment_tree/layout_result.h:370-388
     pub fn GetBreakAppeal(&self) -> BreakAppeal {
         BreakAppeal::try_from(

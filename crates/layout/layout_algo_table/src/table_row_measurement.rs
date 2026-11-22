@@ -8,7 +8,7 @@ use crate::table_layout_utils::{
 use foundation::{
     kIndefiniteSize, EBoxSizing, EVisibility, IsParallelWritingMode, LayoutUnit, To, Vector,
 };
-use layout_assembly::{
+use layout_base::{
     box_fragment_builder::BoxFragmentBuilder,
     internal::{
         block_node::BlockNode,

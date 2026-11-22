@@ -4,12 +4,12 @@ use foundation::{
     AtomicString, GCedHeapVector, HeapVector, LayoutUnit, MakeGarbageCollected, Member,
     PhysicalOffset, PhysicalRect, ScopedRefPtr, Vector, Visitor,
 };
-use layout_core::internal::frame_set_layout_data::FrameSetLayoutData;
-use layout_core::internal::mathml_paint_info::MathMLPaintInfo;
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::gap::gap_geometry::GapGeometry;
-use layout_core::internal::table_borders::TableBorders;
-use layout_core::internal::table_fragment_data::{
+use crate::internal::frame_set_layout_data::FrameSetLayoutData;
+use crate::internal::mathml_paint_info::MathMLPaintInfo;
+use crate::internal::layout_node_metadata::Node;
+use crate::internal::gap::gap_geometry::GapGeometry;
+use crate::internal::table_borders::TableBorders;
+use crate::internal::table_fragment_data::{
     CollapsedTableBordersGeometry, GCedTableColumnGeometries,
 };
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;

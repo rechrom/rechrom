@@ -9,7 +9,7 @@ use foundation::{
     kIndefiniteSize, DynamicTo, EBoxDecorationBreak, ECaptionSide, HeapVector, LayoutUnit,
     MakeGarbageCollected, To, UnsupportedLayout, Vector, WritingDirectionMode,
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{

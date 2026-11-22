@@ -28,36 +28,36 @@ use crate::break_token::BreakToken;
 use crate::inline_break_token::InlineBreakToken;
 use crate::inline_items_data::{InlineItemsData, InlineItemsDataWithOffsetMap};
 use crate::layout_result::LayoutResult;
-use layout_core::internal::algorithm_forward::InlineChildLayoutContext as ForwardInlineChildLayoutContext;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
-use layout_core::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_item_segment::{InlineItemSegment, InlineItemSegments};
-use layout_core::internal::inline_node::{FloatingObject, InlineNode};
-use layout_core::internal::inline_node_data::InlineNodeData;
-use layout_core::internal::layout_algorithm_set::ListLayoutSupport;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_input::TextDirection as InputTextDirection;
-use layout_core::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
-use layout_core::internal::length_utils::{ComputeMarginsFor, ComputeMinAndMaxContentContribution};
-use layout_core::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
-use layout_core::internal::style_variant::StyleVariant;
-use layout_core::internal::svg_character_data::SvgCharacterData;
-use layout_core::internal::svg_inline_node_data::{SvgTextChunkOffsets, SvgTextContentRange};
-use layout_core::internal::svg_text_attributes_request::{
+use layout_base::internal::algorithm_forward::InlineChildLayoutContext as ForwardInlineChildLayoutContext;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::column_spanner_path::ColumnSpannerPath;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_item_segment::{InlineItemSegment, InlineItemSegments};
+use layout_base::internal::inline_node::{FloatingObject, InlineNode};
+use layout_base::internal::inline_node_data::InlineNodeData;
+use layout_base::internal::layout_algorithm_set::ListLayoutSupport;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_inline::LayoutInline;
+use layout_base::internal::layout_input::TextDirection as InputTextDirection;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::layout_text::LayoutText;
+use layout_base::internal::layout_text_combine::LayoutTextCombine;
+use layout_base::internal::length_utils::{ComputeMarginsFor, ComputeMinAndMaxContentContribution};
+use layout_base::internal::min_max_sizes::{MinMaxSizes, MinMaxSizesResult};
+use layout_base::internal::style_variant::StyleVariant;
+use layout_base::internal::svg_character_data::SvgCharacterData;
+use layout_base::internal::svg_inline_node_data::{SvgTextChunkOffsets, SvgTextContentRange};
+use layout_base::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
 };
-use layout_core::internal::text_item_type::TextItemType;
+use layout_base::internal::text_item_type::TextItemType;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::computed_style_constants::EVerticalAlign;
 use std::cell::Cell;
@@ -557,7 +557,7 @@ pub fn InlineNodeFindSvgTextChunks(
     block: &mut LayoutBlockFlow,
     data: &mut InlineNodeData,
 ) -> *const SvgTextChunkOffsets {
-    let mut items = layout_core::internal::inline_item::InlineItems::default();
+    let mut items = layout_base::internal::inline_item::InlineItems::default();
     let _clear_scope = unsafe { ClearCollectionScope::new(&mut items) };
     items.reserve(estimate_inline_items_count(block) as usize);
     let mut items_builder = InlineItemsBuilderForOffsetMapping::new(
@@ -641,7 +641,7 @@ pub fn InlineNodeComputeOffsetMapping(block: *mut LayoutBlockFlow, data: *mut In
         std::ptr::null()
     };
 
-    let mut items = layout_core::internal::inline_item::InlineItems::default();
+    let mut items = layout_base::internal::inline_item::InlineItems::default();
     let _clear_scope = unsafe { ClearCollectionScope::new(&mut items) };
     items.reserve(estimate_inline_items_count(block_ref) as usize);
     let mut builder = InlineItemsBuilderForOffsetMapping::new(
@@ -1284,7 +1284,7 @@ pub fn InlineNodeSegmentScriptRuns(
                 render_orientation: RenderOrientation::kOrientationKeep,
                 font_fallback_priority: FontFallbackPriority::kText,
             };
-            layout_core::internal::inline_item::InlineItem::SetSegmentData(&range, &mut data.items);
+            layout_base::internal::inline_item::InlineItem::SetSegmentData(&range, &mut data.items);
         }
         data.segments.Clear();
         return;
@@ -1298,7 +1298,7 @@ pub fn InlineNodeSegmentScriptRuns(
     let consumed = segmenter.Consume(&mut range);
     debug_assert!(consumed);
     if range.end == text_content.length() {
-        layout_core::internal::inline_item::InlineItem::SetSegmentData(&range, &mut data.items);
+        layout_base::internal::inline_item::InlineItem::SetSegmentData(&range, &mut data.items);
         data.segments.Clear();
         return;
     }
@@ -1510,7 +1510,7 @@ pub fn InlineNodeIsNGShapeCacheAllowed(
     _this: &InlineNode,
     text_content: &String,
     override_font: *const Font,
-    items: &layout_core::internal::inline_item::InlineItems,
+    items: &layout_base::internal::inline_item::InlineItems,
     spacing: &mut ShapeResultSpacing,
 ) -> bool {
     if text_content.empty() {
@@ -1913,7 +1913,7 @@ pub fn InlineNodeShapeTextIncludingFirstLine(
     this: &InlineNode,
     data: *mut InlineNodeData,
     previous_text: *const String,
-    previous_items: *const layout_core::internal::inline_item::InlineItems,
+    previous_items: *const layout_base::internal::inline_item::InlineItems,
 ) {
     let data_ref = unsafe { &mut *data };
     InlineItem::UpdateIndex(&mut data_ref.items);
@@ -1993,7 +1993,7 @@ pub fn InlineNodeEnsureData(this: &InlineNode) -> *const InlineNodeData {
 // cpp: layoutng_inline/inline_node.cc:1970-1985
 fn create_text_content_for_sticky_images_quirk(
     text: &String,
-    items: &[foundation::Member<layout_core::internal::inline_item::InlineItem>],
+    items: &[foundation::Member<layout_base::internal::inline_item::InlineItem>],
 ) -> String {
     let mut units = text.Span16().unwrap_or_default().to_vec();
     for item in items {

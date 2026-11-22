@@ -6,11 +6,11 @@ use crate::layout_svg_root::LayoutSVGRoot;
 use crate::layout_svg_viewport_container::LayoutSVGViewportContainer;
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::{gfx, DynamicTo, EOverflow, ETransformBox, UnsupportedLayout};
-use layout_assembly::fragment_tree::{FragmentPaintRect, SvgViewportGeometry};
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_input::{Offset, Size, SvgViewBoxData, TransformMatrix};
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::fragment_tree::{FragmentPaintRect, SvgViewportGeometry};
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_input::{Offset, Size, SvgViewBoxData, TransformMatrix};
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
 use layout_style::style::style_transform::{
     ApplyIndependentTransformProperties, ApplyMotionPath, ApplyTransformOperations,
     ApplyTransformOrigin, TransformBoxContext,

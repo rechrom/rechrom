@@ -13,7 +13,7 @@ intersection_observer = { path = "../../webapi/intersection_observer" }
 scroll_snap = { path = "../../compositor/scroll_snap" }
 # Consumers already compile Layout with the in-progress editing/inline
 # surface (dom, interaction, html); the facade exposes that same surface.
-layout_assembly = { path = "../layout_assembly", features = ["translation_in_progress"] }
+layout_base = { path = "../layout_base", features = ["translation_in_progress"] }
 layout_commit = { path = "../layout_commit" }
 paint_input_types = { path = "../paint_input_types" }
 layout_geometry = { path = "../layout_geometry" }

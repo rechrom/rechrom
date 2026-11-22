@@ -7,7 +7,7 @@ use foundation::{
     DynamicTo, EDisplay, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize, To, Traceable,
     Vector, Visitor,
 };
-use layout_assembly::{
+use layout_base::{
     internal::{
         block_node::BlockNode,
         layout_box::LayoutBox,
@@ -33,7 +33,7 @@ use std::ops::{Deref, DerefMut};
 
 // cpp: layoutng_table/layout_table_column.cc:21-24
 pub fn LayoutInputNodeTableColumnSpanFromTable(
-    node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
+    node: &layout_base::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(node.IsTableCol() || node.IsTableColgroup());
     unsafe { &*To::<LayoutTableColumn>(node.GetLayoutBox()) }.Span()
@@ -134,7 +134,7 @@ impl LayoutTableColumn {
                     }
                 }
                 if diff.NeedsFullLayout() {
-                    table.SetIntrinsicLogicalWidthsDirty(layout_assembly::internal::layout_object::MarkingBehavior::kMarkContainerChain);
+                    table.SetIntrinsicLogicalWidthsDirty(layout_base::internal::layout_object::MarkingBehavior::kMarkContainerChain);
                     if let Some(old) = unsafe { old.as_ref() } {
                         if TableTypes::CreateColumn(
                             old,
@@ -155,8 +155,8 @@ impl LayoutTableColumn {
     }
     pub fn ImageChanged(
         &mut self,
-        _image: layout_assembly::internal::loader::resource::image_resource_observer::WrappedImagePtr,
-        _can_defer: layout_assembly::internal::loader::resource::image_resource_observer::CanDeferInvalidation,
+        _image: layout_base::internal::loader::resource::image_resource_observer::WrappedImagePtr,
+        _can_defer: layout_base::internal::loader::resource::image_resource_observer::CanDeferInvalidation,
     ) {
         self.CheckIsNotDestroyed();
         if let Some(table) = unsafe { self.Table().as_mut() } {
@@ -313,7 +313,7 @@ impl LayoutTableColumn {
         quads: &mut Vector<foundation::gfx::QuadF>,
         ancestor: *const LayoutBoxModelObject,
         mode: MapCoordinatesFlags,
-        _quad_type: layout_assembly::internal::layout_object::BoxQuadType,
+        _quad_type: layout_base::internal::layout_object::BoxQuadType,
     ) {
         self.CheckIsNotDestroyed();
         let mut first = None;

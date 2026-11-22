@@ -3,7 +3,7 @@
 use crate::algorithms::*;
 use crate::{layout_table::LayoutTable, layout_table_row::LayoutTableRow};
 use foundation::{EDisplay, MakeGarbageCollected, To, Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_block::LayoutBlock,
     layout_box::LayoutBox,
     layout_input_node::LayoutInputNode,

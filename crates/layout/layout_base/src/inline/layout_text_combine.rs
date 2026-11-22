@@ -10,12 +10,12 @@ use foundation::{
     TextDecorationLine, TextDirection, TextEmphasisMark, WritingDirectionMode, WritingMode,
 };
 use crate::inline_cursor::InlineCursor;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
-use layout_core::internal::text_combine_style_service::AdjustStyleForTextCombine;
-use layout_core::internal::used_font::UsedFont;
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use crate::internal::layout_text::LayoutText;
+use crate::internal::layout_text_combine::LayoutTextCombine;
+use crate::internal::text_combine_style_service::AdjustStyleForTextCombine;
+use crate::internal::used_font::UsedFont;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;

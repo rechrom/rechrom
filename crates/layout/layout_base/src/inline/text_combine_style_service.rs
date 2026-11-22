@@ -7,7 +7,7 @@ use foundation::{
     EDisplay, ETextAlign, EWordBreak, LayoutUnit, Length, LengthSize, Member, TextDecorationLine,
     TextEmphasisMark, WritingMode,
 };
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
+use crate::internal::layout_text_combine::LayoutTextCombine;
 use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use layout_style::style::computed_style_constants::EVerticalAlign;
 use layout_style::style::style_intrinsic_length::{

@@ -3,7 +3,7 @@ use crate::{
     grid_item::ComputeOutOfFlowItemPlacement,
     grid_layout_utils::{TrackEndOffset, TrackStartOffset},
 };
-use layout_assembly::internal::{grid_item::GridItemData, grid_layout_data::GridLayoutData};
+use layout_base::internal::{grid_item::GridItemData, grid_layout_data::GridLayoutData};
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_style::style::{
     computed_style::ComputedStyle, grid_enums::GridTrackSizingDirection::kForColumns,

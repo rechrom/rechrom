@@ -3,14 +3,14 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{DynamicTo, LogicalToPhysical, Traceable, Visitor, WtfSizeT};
-use layout_assembly::internal::devtools_flex_info::DevtoolsFlexInfo;
-use layout_assembly::internal::fragmentation_utils::FindPreviousBreakToken;
-use layout_assembly::internal::gap::gap_geometry::GapGeometry;
-use layout_assembly::internal::layout_block::LayoutBlock;
-use layout_assembly::internal::layout_invalidation_reason;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::internal::devtools_flex_info::DevtoolsFlexInfo;
+use layout_base::internal::fragmentation_utils::FindPreviousBreakToken;
+use layout_base::internal::gap::gap_geometry::GapGeometry;
+use layout_base::internal::layout_block::LayoutBlock;
+use layout_base::internal::layout_invalidation_reason;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::grid_enums::GridTrackSizingDirection;
 

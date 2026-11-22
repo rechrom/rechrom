@@ -10,15 +10,15 @@ use foundation::{
     kNotFound, EOrder, ETextTransform, HeapVector, IsA, MakeGarbageCollected, Member, String,
     StringBuilder, StringView, TextDirection, TextEmphasisMark, To, UChar, UnicodeBidi, Visitor,
 };
-use layout_core::internal::form_node_metadata::HTMLAreaElement;
-use layout_core::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_node_data::InlineNodeData;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::svg_inline_node_data::SvgTextChunkOffsets;
-use layout_core::internal::text_item_type::TextItemType;
+use layout_base::internal::form_node_metadata::HTMLAreaElement;
+use layout_base::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_node_data::InlineNodeData;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_inline::LayoutInline;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_text::LayoutText;
+use layout_base::internal::svg_inline_node_data::SvgTextChunkOffsets;
+use layout_base::internal::text_item_type::TextItemType;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::computed_style_constants::EVerticalAlign;
 

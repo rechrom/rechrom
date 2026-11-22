@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::layout_registry::LayoutRegistry;
 
 use crate::out_of_flow_layout_part::OutOfFlowLayoutPart;
 

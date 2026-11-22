@@ -1,15 +1,15 @@
 #![allow(non_snake_case)]
 
 use foundation::{BlinkString, MakeGarbageCollected, UnsupportedLayout, Visitor};
-use layout_assembly::internal::form_control_types::{AutofillState, FormControlType as Type};
-use layout_assembly::internal::form_node_metadata::{
+use layout_base::internal::form_control_types::{AutofillState, FormControlType as Type};
+use layout_base::internal::form_node_metadata::{
     FormNodeMetadataExternal, HTMLButtonElement, HTMLDivElement, HTMLElement, HTMLFieldSetElement,
     HTMLFormControlElement, HTMLFormControlElementWithState, HTMLInputElement, HTMLLegendElement,
     HTMLMarqueeElement, HTMLOutputElement, HTMLSelectElement, HTMLTextAreaElement,
     SliderThumbElement, SpinButtonElement, TextControlElement, TextControlInnerEditorElement,
 };
-use layout_assembly::internal::layout_input::{NodeConstructionData, NodeKind};
-use layout_assembly::internal::layout_node_metadata::{Element, ElementType, Node, NodeDowncast};
+use layout_base::internal::layout_input::{NodeConstructionData, NodeKind};
+use layout_base::internal::layout_node_metadata::{Element, ElementType, Node, NodeDowncast};
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_forms/form_node_metadata.cc:14-16

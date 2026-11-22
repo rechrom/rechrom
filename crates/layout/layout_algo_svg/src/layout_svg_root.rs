@@ -3,13 +3,13 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{DynamicTo, LayoutUnit, PhysicalRect, PhysicalSize, Traceable, Visitor};
-use layout_assembly::internal::layout_algorithm_set::SvgRootSizingInfo;
-use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::layout_object_child_list::LayoutObjectChildList;
-use layout_assembly::internal::layout_replaced::LayoutReplaced;
-use layout_assembly::internal::svg_layout_info::SVGLayoutInfo;
+use layout_base::internal::layout_algorithm_set::SvgRootSizingInfo;
+use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_object_child_list::LayoutObjectChildList;
+use layout_base::internal::layout_replaced::LayoutReplaced;
+use layout_base::internal::svg_layout_info::SVGLayoutInfo;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 
@@ -50,7 +50,7 @@ impl LayoutSVGRoot {
         if self.container_scale != scale {
             self.container_scale = scale;
             self.SetNeedsLayoutAndFullPaintInvalidation(
-                &raw const layout_assembly::internal::layout_invalidation_reason::kSvgChanged,
+                &raw const layout_base::internal::layout_invalidation_reason::kSvgChanged,
             );
         }
     }
@@ -81,7 +81,7 @@ impl LayoutSVGRoot {
         }
         self.container_size = size;
         self.SetNeedsLayoutAndFullPaintInvalidation(
-            &raw const layout_assembly::internal::layout_invalidation_reason::kSizeChanged,
+            &raw const layout_base::internal::layout_invalidation_reason::kSizeChanged,
         );
     }
     pub fn ViewportSize(&self) -> foundation::gfx::SizeF {
@@ -161,7 +161,7 @@ impl LayoutSVGRoot {
     ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
         self.content_transform
     }
-    pub fn PaintGeometry(&self) -> layout_assembly::fragment_tree::SvgViewportGeometry {
+    pub fn PaintGeometry(&self) -> layout_base::fragment_tree::SvgViewportGeometry {
         crate::svg_viewport::Geometry(self, self.viewport, self.content_transform, false)
     }
 

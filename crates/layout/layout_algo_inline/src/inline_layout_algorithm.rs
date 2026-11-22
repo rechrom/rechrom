@@ -20,30 +20,30 @@ use crate::logical_fragment::LogicalFragment;
 use crate::logical_line_container::LogicalLineContainer;
 use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
 use crate::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::{AdjoiningObjectTypeValue, ConstraintSpace};
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunity;
-use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
-use layout_core::internal::form_control_types::FormControlType;
-use layout_core::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_item_result::InlineItemResult;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_algorithm::LayoutAlgorithm;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_core::internal::layout_node_metadata::Element;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::length_utils::{
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::column_spanner_path::ColumnSpannerPath;
+use layout_base::internal::constraint_space::{AdjoiningObjectTypeValue, ConstraintSpace};
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::exclusions::layout_opportunity::LayoutOpportunity;
+use layout_base::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
+use layout_base::internal::form_control_types::FormControlType;
+use layout_base::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_item_result::InlineItemResult;
+use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_algorithm::LayoutAlgorithm;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::length_utils::{
     ComputeLineBorders, ComputeLineMarginsForSelf, ComputeLinePadding, LineOffsetForTextAlign,
 };
-use layout_core::internal::min_max_sizes::MinMaxSizesResult;
-use layout_core::internal::positioned_float::PositionedFloat;
-use layout_core::internal::space_utils::AdjustToClearance;
-use layout_core::internal::unpositioned_float::UnpositionedFloat;
+use layout_base::internal::min_max_sizes::MinMaxSizesResult;
+use layout_base::internal::positioned_float::PositionedFloat;
+use layout_base::internal::space_utils::AdjustToClearance;
+use layout_base::internal::unpositioned_float::UnpositionedFloat;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::box_strut::{BoxStrut, LineBoxStrut};
 use layout_geometry::geometry::logical_offset::LogicalOffset;
@@ -761,7 +761,7 @@ impl InlineLayoutAlgorithm {
         if line_info.UseFirstLineStyle() {
             self.base_
                 .container_builder_
-                .SetStyleVariant(layout_core::internal::style_variant::StyleVariant::kFirstLine);
+                .SetStyleVariant(layout_base::internal::style_variant::StyleVariant::kFirstLine);
         }
         if line_info.IsEmptyLine() {
             return;

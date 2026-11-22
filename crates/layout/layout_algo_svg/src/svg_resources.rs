@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 use crate::layout_svg_shape::LayoutSVGShape;
 use foundation::gfx;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObject;
 use layout_style::style::computed_style_constants::GeometryBox;
 
 pub fn ObjectBoundingBox(object: &LayoutObject) -> gfx::RectF {
@@ -198,13 +198,13 @@ enum ResourceClientKind {
 }
 #[derive(Default)]
 pub(crate) struct ResourceCycleCache {
-    version: Option<layout_assembly::internal::paint_input::SvgClipResourceVersion>,
+    version: Option<layout_base::internal::paint_input::SvgClipResourceVersion>,
     clients: std::collections::HashMap<(u64, ResourceClientKind), CycleCheck>,
 }
 impl ResourceCycleCache {
     fn InvalidateFor(
         &mut self,
-        version: layout_assembly::internal::paint_input::SvgClipResourceVersion,
+        version: layout_base::internal::paint_input::SvgClipResourceVersion,
     ) {
         if self.version != Some(version) {
             // SVGResource::InvalidateCycleCache cc:112-115. These entries
@@ -215,7 +215,7 @@ impl ResourceCycleCache {
     }
 }
 fn LookupResource<'a>(
-    tree: &'a layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &'a layout_base::internal::layout_object_builder::LayoutObjectTree,
     client: &LayoutObject,
     url: &str,
     scope: Option<layout_style::style::reference_clip_path_operation::SvgClipResourceScope>,
@@ -245,7 +245,7 @@ fn LookupResource<'a>(
         .and_then(AsResource)
 }
 fn LookupClipper<'a>(
-    tree: &'a layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &'a layout_base::internal::layout_object_builder::LayoutObjectTree,
     client: &LayoutObject,
     reference: &layout_style::style::reference_clip_path_operation::ReferenceClipPathOperation,
 ) -> Option<&'a crate::layout_svg_resource_clipper::LayoutSVGResourceClipper> {
@@ -256,7 +256,7 @@ fn LookupClipper<'a>(
         reference.ResourceScope(),
     )?;
     (resource.RuntimeClass()
-        == layout_assembly::internal::layout_object::LayoutObjectClass::SvgResourceClipper)
+        == layout_base::internal::layout_object::LayoutObjectClass::SvgResourceClipper)
         .then(|| unsafe { &*(resource as *const _ as *const LayoutObject).cast() })
 }
 
@@ -331,7 +331,7 @@ fn AsResource(
         .then(|| unsafe { &*(object as *const LayoutObject).cast() })
 }
 fn FindCycleInResources(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     object: &LayoutObject,
 ) -> bool {
     if !object.IsSVG() || object.IsText() {
@@ -435,13 +435,13 @@ fn FindCycleInResources(
     false
 }
 fn FindCycleInSubtree(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     root: &LayoutObject,
 ) -> bool {
     FindCycleInResources(tree, root) || FindCycleInDescendants(tree, root)
 }
 fn FindCycleInDescendants(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     root: &LayoutObject,
 ) -> bool {
     let mut next = root.SlowFirstChild();
@@ -458,10 +458,10 @@ fn FindCycleInDescendants(
     false
 }
 fn FindCycleFromSelf(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     resource: &crate::layout_svg_resource_clipper::LayoutSVGResourceContainer,
 ) -> bool {
-    use layout_assembly::internal::layout_object::LayoutObjectClass;
+    use layout_base::internal::layout_object::LayoutObjectClass;
     let root: &LayoutObject = resource;
     if root.RuntimeClass() == LayoutObjectClass::SvgResourceClipper
         && FindCycleInResources(tree, root)
@@ -477,7 +477,7 @@ fn FindCycleFromSelf(
             return FindCycleInSubtree(tree, root);
         }
         let element = foundation::DynamicTo::<
-            layout_assembly::internal::layout_node_metadata::Element,
+            layout_base::internal::layout_node_metadata::Element,
         >(root.GetNode());
         return unsafe { element.as_ref() }
             .and_then(|element| element.InputElementData().as_ref())
@@ -507,14 +507,14 @@ fn FindCycleFromSelf(
     FindCycleInDescendants(tree, root)
 }
 fn FindCycleForClient(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     resource: &crate::layout_svg_resource_clipper::LayoutSVGResourceContainer,
     client: &LayoutObject,
 ) -> bool {
     FindCycleForClientWithIdentity(tree, resource, client, ResourceClientKind::Element)
 }
 fn FindCycleForClientWithIdentity(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     resource: &crate::layout_svg_resource_clipper::LayoutSVGResourceContainer,
     client: &LayoutObject,
     identity: ResourceClientKind,
@@ -556,7 +556,7 @@ fn FindCycleForClientWithIdentity(
     }
 }
 fn ResourceHasNoCycle(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     resource: &crate::layout_svg_resource_clipper::LayoutSVGResourceContainer,
     client: &LayoutObject,
 ) -> bool {
@@ -576,14 +576,14 @@ fn ResourceHasNoCycle(
     ClientCycleState(resource, client) == CycleCheck::NoCycle
 }
 pub(crate) fn FilterResourceTarget(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     client: &LayoutObject,
     reference: &layout_style::style::filter_operation::ReferenceFilterOperation,
 ) -> Option<u64> {
     let resource = LookupResource(tree, client, &reference.Url().Utf8(), None)?;
     if !ResourceHasNoCycle(tree, resource, client)
         || resource.RuntimeClass()
-            != layout_assembly::internal::layout_object::LayoutObjectClass::SvgResourceAuxiliary
+            != layout_base::internal::layout_object::LayoutObjectClass::SvgResourceAuxiliary
     {
         return None;
     }
@@ -599,7 +599,7 @@ fn HasMarkerClient(object: &LayoutObject) -> bool {
     if !object.IsSVGShape() {
         return false;
     }
-    let element = foundation::DynamicTo::<layout_assembly::internal::layout_node_metadata::Element>(
+    let element = foundation::DynamicTo::<layout_base::internal::layout_node_metadata::Element>(
         object.GetNode(),
     );
     unsafe { element.as_ref() }
@@ -608,12 +608,12 @@ fn HasMarkerClient(object: &LayoutObject) -> bool {
             data.svg_path_element
                 || data.svg_shape.as_ref().is_some_and(|shape| {
                     shape.geometry
-                        == layout_assembly::internal::layout_input::SvgShapeGeometry::kPath
+                        == layout_base::internal::layout_input::SvgShapeGeometry::kPath
                 })
         })
 }
 pub(crate) fn ResolveMarker<'a>(
-    tree: &'a layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &'a layout_base::internal::layout_object_builder::LayoutObjectTree,
     client: &LayoutObject,
     reference: *mut layout_style::style::style_svg_resource::StyleSVGResource,
 ) -> Option<&'a crate::layout_svg_resource_auxiliary::LayoutSVGResourceAuxiliary> {
@@ -621,7 +621,7 @@ pub(crate) fn ResolveMarker<'a>(
     let resource = LookupResource(tree, client, &reference.Url().Utf8(), None)?;
     if !ResourceHasNoCycle(tree, resource, client)
         || resource.RuntimeClass()
-            != layout_assembly::internal::layout_object::LayoutObjectClass::SvgResourceAuxiliary
+            != layout_base::internal::layout_object::LayoutObjectClass::SvgResourceAuxiliary
     {
         return None;
     }
@@ -634,12 +634,12 @@ pub(crate) fn ResolveMarker<'a>(
 // SVGContentContainer::LayoutMarkerResourcesIfNeeded, cc:24-34,56-72.
 pub(crate) fn LayoutMarkerResourcesIfNeeded(
     object: &LayoutObject,
-    info: &layout_assembly::internal::svg_layout_info::SVGLayoutInfo,
+    info: &layout_base::internal::svg_layout_info::SVGLayoutInfo,
 ) -> bool {
     if !HasMarkerClient(object) || !object.StyleRef().HasMarkers() {
         return false;
     }
-    layout_assembly::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(|tree| {
+    layout_base::internal::layout_pass_scope::LayoutPassScope::WithSVGResourceTree(|tree| {
         let style = object.StyleRef();
         let mut dependent = false;
         for reference in [
@@ -657,9 +657,9 @@ pub(crate) fn LayoutMarkerResourcesIfNeeded(
             if info.viewport_changed && marker.HasViewportDependence() {
                 marker.SetNeedsLayoutWithMarking(
                     unsafe {
-                        &layout_assembly::internal::layout_invalidation_reason::kSvgChanged
+                        &layout_base::internal::layout_invalidation_reason::kSvgChanged
                     },
-                    layout_assembly::internal::layout_object::MarkingBehavior::kMarkOnlyThis,
+                    layout_base::internal::layout_object::MarkingBehavior::kMarkOnlyThis,
                 );
             }
             if marker.NeedsLayout() {
@@ -673,7 +673,7 @@ pub(crate) fn LayoutMarkerResourcesIfNeeded(
     .expect("SVG marker layout borrows the native resource tree scope")
 }
 pub fn ResolveClipPathTarget<'a>(
-    tree: &'a layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &'a layout_base::internal::layout_object_builder::LayoutObjectTree,
     client: &LayoutObject,
     reference: &layout_style::style::reference_clip_path_operation::ReferenceClipPathOperation,
 ) -> Option<&'a crate::layout_svg_resource_clipper::LayoutSVGResourceClipper> {
@@ -685,7 +685,7 @@ pub fn ResolveClipPathTarget<'a>(
 /// Native SVG client owns the cached FilterEffect bounds data, independently
 /// of the thread or Paint projection consuming its exact result.
 pub fn ApplyFiltersToRect(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     object: &LayoutObject,
     rect: gfx::RectF,
 ) -> gfx::RectF {
@@ -714,7 +714,7 @@ pub fn ApplyFiltersToRect(
     cache.ApplyFiltersToRect(tree, object, rect)
 }
 pub fn HasPaintServer(
-    tree: &layout_assembly::internal::layout_object_builder::LayoutObjectTree,
+    tree: &layout_base::internal::layout_object_builder::LayoutObjectTree,
     object: &LayoutObject,
     stroke: bool,
 ) -> bool {
@@ -740,7 +740,7 @@ pub fn HasPaintServer(
     };
     let target: &LayoutObject = resource;
     if target.RuntimeClass()
-        != layout_assembly::internal::layout_object::LayoutObjectClass::SvgResourcePaintServer
+        != layout_base::internal::layout_object::LayoutObjectClass::SvgResourcePaintServer
     {
         return false;
     }

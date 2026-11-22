@@ -12,8 +12,8 @@ use foundation::{
     ETextAutospace, EastAsianSpacingType, IsLtr, Member, RuntimeEnabledFeatures, String,
 };
 use crate::inline_items_data::InlineItemsData;
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_node::InlineNode;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType};
+use layout_base::internal::inline_node::InlineNode;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_inline/text_auto_space.cc:23-27

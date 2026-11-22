@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use font_engine::FontHeight;
 use foundation::{MakeGarbageCollected, TextDirection, Visitor};
-use layout_core::internal::layout_object::LayoutObject;
+use crate::internal::layout_object::LayoutObject;
 
 use crate::physical_fragment::{FragmentType, PhysicalFragment, PhysicalFragmentFlags};
 

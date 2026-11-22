@@ -5,8 +5,8 @@ use foundation::{
     PhysicalSize, String, TextDirection, ToLineWritingMode, Visitor, WritingDirectionMode,
     WritingMode,
 };
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
+use crate::internal::inline_node::InlineNode;
+use crate::internal::layout_pass_scope::LayoutPassScope;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 
@@ -479,7 +479,7 @@ impl FragmentItemsBuilder {
         if self.node_.IsSvgText() {
             let algorithms = LayoutPassScope::Algorithms();
             if algorithms.is_null() || unsafe { &*algorithms }.svg_support.layout_text.is_none() {
-                std::panic::panic_any(layout_core::UnsupportedLayout::new(
+                std::panic::panic_any(crate::UnsupportedLayout::new(
                     "SVG text layout module is not installed",
                 ));
             }

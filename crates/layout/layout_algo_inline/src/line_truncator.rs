@@ -18,8 +18,8 @@ use foundation::{
 use icu_bidi::UBiDiLevel;
 use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
 use crate::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::internal::style_variant::StyleVariant;
-use layout_core::internal::text_offset_range::TextOffsetRange;
+use layout_base::internal::style_variant::StyleVariant;
+use layout_base::internal::text_offset_range::TextOffsetRange;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_style::style::computed_style::ComputedStyle;
 

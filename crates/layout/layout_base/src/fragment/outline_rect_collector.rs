@@ -1,7 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use foundation::{PhysicalOffset, PhysicalRect, Vector};
-use layout_core::internal::map_coordinates_flags::MapCoordinatesFlags;
+use crate::internal::map_coordinates_flags::MapCoordinatesFlags;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 
 use super::super::layout_box_model_object::LayoutBoxModelObject;

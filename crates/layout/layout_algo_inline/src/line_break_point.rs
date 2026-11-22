@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::LayoutUnit;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
+use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
 
 // cpp: layoutng_inline/line_break_point.h:20-56
 #[repr(C)]

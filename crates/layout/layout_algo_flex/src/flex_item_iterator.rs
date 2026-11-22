@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{To, WtfSizeT};
-use layout_assembly::block_break_token::BlockBreakToken;
+use layout_base::block_break_token::BlockBreakToken;
 
 use crate::flex_line::{FlexItemData, FlexLineVector};
 
@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use crate::flex_line::FlexLine;
     use foundation::LayoutUnit;
-    use layout_assembly::internal::block_node::BlockNode;
+    use layout_base::internal::block_node::BlockNode;
     use layout_geometry::geometry::logical_offset::LogicalOffset;
     use layout_style::style::computed_style_constants::ItemPosition;
 

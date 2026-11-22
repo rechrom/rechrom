@@ -2,7 +2,7 @@ use std::cell::{Cell, UnsafeCell};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-use layout_core::internal::paint_layer::PaintLayer;
+use crate::internal::paint_layer::PaintLayer;
 
 use foundation::{
     HeapVector, MakeGarbageCollected, Member, NewUniqueObjectId, PhysicalOffset, UniqueObjectId,
@@ -12,7 +12,7 @@ use layout_geometry::geometry::axis::{
     kPhysicalAxesHorizontal, kPhysicalAxesVertical, PhysicalAxes,
 };
 
-use layout_core::internal::sticky_position_scrolling_constraints::{
+use crate::internal::sticky_position_scrolling_constraints::{
     PerAxisData, StickyConstraintsData, StickyPositionScrollingConstraints,
 };
 

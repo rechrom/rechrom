@@ -3,8 +3,8 @@
 //! result, LayoutObject projection, or retained geometry tree is required.
 
 use foundation::{DynamicTo, PhysicalRect};
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 
 use crate::physical_box_fragment::PhysicalBoxFragment;

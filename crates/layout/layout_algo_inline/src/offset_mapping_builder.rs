@@ -6,9 +6,9 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{DynamicTo, HeapVector, MakeGarbageCollected, Member, String};
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
+use layout_base::internal::layout_node_metadata::Node;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_text::LayoutText;
 
 use crate::layout_text_fragment::LayoutTextFragment;
 use crate::offset_mapping::{

@@ -5,7 +5,7 @@ use crate::algorithms::*;
 // section ordering in their existing owning package, behind scalar results.
 // Registered as TableObjectVirtuals::text_iterator_table_facts.
 pub(crate) fn LayoutTextIteratorTableFacts(
-    object: &layout_assembly::internal::layout_object::LayoutObject,
+    object: &layout_base::internal::layout_object::LayoutObject,
 ) -> (bool, bool, bool) {
     if object.IsTableCell() {
         let cell = unsafe {
@@ -35,7 +35,7 @@ use foundation::{
     EBorderCollapse, EDisplay, LayoutUnit, MakeGarbageCollected, Member,
     OverlayScrollbarClipBehavior, PhysicalOffset, PhysicalRect, To, Traceable, Visitor,
 };
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     layout_block::LayoutBlock,
     layout_box::LayoutBox,

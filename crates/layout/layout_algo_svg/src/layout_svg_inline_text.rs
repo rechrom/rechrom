@@ -8,14 +8,14 @@ use foundation::{
     DowncastFrom, MakeGarbageCollected, Member, String as BlinkString, Traceable,
     UnsupportedLayout, Visitor, WritingMode,
 };
-use layout_assembly::internal::layout_font_resolver::{CurrentFontResolver, FontRequest};
-use layout_assembly::internal::layout_input::{
+use layout_base::internal::layout_font_resolver::{CurrentFontResolver, FontRequest};
+use layout_base::internal::layout_input::{
     ComputedStyle as InputComputedStyle, ExtendedStyle, WritingMode as InputWritingMode,
 };
-use layout_assembly::internal::layout_node_metadata::Node;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::layout_pass_scope::LayoutPassScope;
-use layout_assembly::internal::layout_text::LayoutText;
+use layout_base::internal::layout_node_metadata::Node;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::layout_text::LayoutText;
 
 // cpp: layoutng_svg/svg_layout_objects.cc:22-26
 fn NormalizeSvgWhitespace(text: BlinkString) -> BlinkString {

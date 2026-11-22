@@ -5,7 +5,7 @@
 use std::marker::PhantomData;
 
 use foundation::DynamicTo;
-use layout_core::internal::{layout_box::LayoutBox, layout_object::LayoutObject};
+use crate::internal::{layout_box::LayoutBox, layout_object::LayoutObject};
 
 use crate::{
     fragment_data::{FragmentData, FragmentDataList},

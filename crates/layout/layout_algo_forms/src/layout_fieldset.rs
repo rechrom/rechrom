@@ -3,12 +3,12 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{EDisplay, LayoutUnit, To, Traceable, Visitor};
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::layout_block::LayoutBlock;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::layout_block::LayoutBlock;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
 use layout_style::style::computed_style::ComputedStyleBuilder;
 
 // BlockNode members whose bodies Chromium defines in the forms package. Rust

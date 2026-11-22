@@ -8,11 +8,11 @@ use foundation::graphics_types::graphics::dom_node_id::DOMNodeId;
 use foundation::{
     DynamicTo, MakeGarbageCollected, Member, PhysicalOffset, String, Traceable, UChar, Visitor,
 };
-use layout_core::internal::editing::forward::Position;
-use layout_core::internal::layout_block::LayoutBlock;
-use layout_core::internal::layout_node_metadata::{Element, Node, Text};
-use layout_core::internal::layout_object::{HitTestResult, LayoutObject};
-use layout_core::internal::layout_text::LayoutText;
+use crate::internal::editing::forward::Position;
+use crate::internal::layout_block::LayoutBlock;
+use crate::internal::layout_node_metadata::{Element, Node, Text};
+use crate::internal::layout_object::{HitTestResult, LayoutObject};
+use crate::internal::layout_text::LayoutText;
 
 #[cfg(feature = "translation_in_progress")]
 use crate::internal::layout_text::layout_text_members::editing_queries::{

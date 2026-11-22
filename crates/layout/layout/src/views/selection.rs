@@ -6,10 +6,10 @@
 
 use std::ops::{Deref, DerefMut};
 
-use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
-use layout_assembly::layout_selection::SelectionStyleAndPaintInvalidation;
+use layout_base::layout_engine::LayoutEngine as CoreLayoutEngine;
+use layout_base::layout_selection::SelectionStyleAndPaintInvalidation;
 
-pub use layout_assembly::layout_selection::{LayoutSelectionNodes, SelectionMutation};
+pub use layout_base::layout_selection::{LayoutSelectionNodes, SelectionMutation};
 
 use crate::LayoutEngine;
 

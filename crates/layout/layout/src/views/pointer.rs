@@ -8,17 +8,17 @@
 //! commands (overlay fade timer, resize mode) are `LayoutMutation::Pointer`.
 
 use foundation::{gfx, PhysicalOffset};
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
-use layout_assembly::internal::layout_pass_scope::SVGResourceQueryScope;
-use layout_assembly::internal::layout_view::LayoutView;
-use layout_assembly::internal::scrollbar::Scrollbar;
-use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
-use layout_assembly::engine::pointer::mouse_coordinates::{
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object_builder::LayoutObjectTree;
+use layout_base::internal::layout_pass_scope::SVGResourceQueryScope;
+use layout_base::internal::layout_view::LayoutView;
+use layout_base::internal::scrollbar::Scrollbar;
+use layout_base::layout_engine::LayoutEngine as CoreLayoutEngine;
+use layout_base::engine::pointer::mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
-use layout_assembly::engine::pointer::pointer_scroll_controls::{
+use layout_base::engine::pointer::pointer_scroll_controls::{
     NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
     NativeResizePlan, NativeScrollbarInteraction,
 };

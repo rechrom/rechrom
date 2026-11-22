@@ -12,13 +12,13 @@ use foundation::{
     DynamicTo, GCedHeapHashSet, LayoutUnit, MakeGarbageCollected, Member, PhysicalOffset,
     PhysicalRect, To, WritingDirectionMode,
 };
-use layout_assembly::internal::anchor_map::{AnchorMap, PhysicalAnchorReference};
-use layout_assembly::internal::anchor_scope::ToAnchorScopedName;
-use layout_assembly::internal::css::out_of_flow_data::RememberedScrollOffsets;
-use layout_assembly::internal::grid_layout_data::GridLayoutData;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::anchor_map::{AnchorMap, PhysicalAnchorReference};
+use layout_base::internal::anchor_scope::ToAnchorScopedName;
+use layout_base::internal::css::out_of_flow_data::RememberedScrollOffsets;
+use layout_base::internal::grid_layout_data::GridLayoutData;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
 use layout_geometry::geometry::axis::PhysicalAxis;
 use layout_geometry::geometry::box_sides::PhysicalBoxSides;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;

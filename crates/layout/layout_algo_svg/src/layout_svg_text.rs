@@ -3,14 +3,14 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{gfx, DowncastFrom, DynamicTo, Traceable, Visitor};
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::layout_block::LayoutBlock;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::layout_block::LayoutBlock;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
 use layout_geometry::geometry::logical_size::LogicalSize;
 use layout_style::style::computed_style::ComputedStyle;
 

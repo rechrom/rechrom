@@ -3,8 +3,8 @@ use std::ops::Deref;
 use foundation::{
     MakeGarbageCollectedWithAdditionalBytes, Member, String, StringBuilder, Traceable, Visitor,
 };
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node::InlineNode;
+use crate::internal::inline_item_text_index::InlineItemTextIndex;
+use crate::internal::inline_node::InlineNode;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::block_break_token::BlockBreakToken;

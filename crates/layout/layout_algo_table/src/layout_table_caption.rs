@@ -3,7 +3,7 @@
 use crate::algorithms::*;
 use crate::layout_table::LayoutTable;
 use foundation::{To, Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_block_flow::LayoutBlockFlow,
     layout_box::LayoutBox,
     layout_node_metadata::Element,

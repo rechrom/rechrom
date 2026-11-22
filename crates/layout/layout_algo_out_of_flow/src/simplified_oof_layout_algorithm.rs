@@ -1,17 +1,17 @@
 #![allow(non_snake_case)]
 
 use foundation::{RuntimeEnabledFeatures, To};
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::fragmentation_utils::{
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::fragmentation_utils::{
     FinishFragmentationForFragmentainer, PageNameForChildFragment,
 };
-use layout_assembly::internal::layout_algorithm::{LayoutAlgorithm, LayoutAlgorithmParams};
-use layout_assembly::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_assembly::internal::min_max_sizes::MinMaxSizesResult;
-use layout_assembly::layout_result::LayoutResult;
-use layout_assembly::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::internal::layout_algorithm::{LayoutAlgorithm, LayoutAlgorithmParams};
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::min_max_sizes::MinMaxSizesResult;
+use layout_base::layout_result::LayoutResult;
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
 
 // cpp: layoutng_out_of_flow/simplified_oof_layout_algorithm.h:23-51
 pub struct SimplifiedOofLayoutAlgorithm {

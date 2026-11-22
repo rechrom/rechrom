@@ -15,12 +15,12 @@ mod translated {
     use foundation::{
         DynamicTo, HeapHashMap, HeapVector, Member, String, Traceable, UChar, Visitor,
     };
-    use layout_core::internal::editing::forward::{EphemeralRange, Position, PositionAnchorType};
-    use layout_core::internal::inline_node::InlineNode;
-    use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-    use layout_core::internal::layout_node_metadata::Node;
-    use layout_core::internal::layout_object::LayoutObject;
-    use layout_core::internal::layout_text::LayoutText;
+    use crate::internal::editing::forward::{EphemeralRange, Position, PositionAnchorType};
+    use crate::internal::inline_node::InlineNode;
+    use crate::internal::layout_block_flow::LayoutBlockFlow;
+    use crate::internal::layout_node_metadata::Node;
+    use crate::internal::layout_object::LayoutObject;
+    use crate::internal::layout_text::LayoutText;
 
     use crate::layout_text_fragment::LayoutTextFragment;
 

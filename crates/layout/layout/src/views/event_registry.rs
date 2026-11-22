@@ -5,10 +5,10 @@
 //! invalidation of that identity crosses boundary 3 as
 //! `LayoutMutation::EventRegistry(EventRegistryMutation::Invalidate { .. })`.
 
-pub use layout_assembly::engine::event_registry::event_registry_source::{
+pub use layout_base::engine::event_registry::event_registry_source::{
     EventRegistryMutation, NativeEventRegistryLayout,
 };
-use layout_assembly::layout_engine::LayoutEngine as CoreLayoutEngine;
+use layout_base::layout_engine::LayoutEngine as CoreLayoutEngine;
 
 use crate::LayoutEngine;
 

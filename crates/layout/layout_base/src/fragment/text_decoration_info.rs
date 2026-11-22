@@ -12,7 +12,7 @@ use foundation::{
     gfx, Color, DecorationGeometry, EBoxDecorationBreak, ETextDecorationStyle, FloatValueForLength,
     LayoutUnit, Length, StrokeStyle, TextDecorationLine, TextDirection, WaveDefinition,
 };
-use layout_assembly::{
+use crate::{
     fragment_item::FragmentItem,
     inline_cursor::InlineCursor,
     internal::{

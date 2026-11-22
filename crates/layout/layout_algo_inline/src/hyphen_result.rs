@@ -6,7 +6,7 @@
 use crate::algorithms::*;
 use font_engine::HarfBuzzShaper;
 use foundation::{Member, String};
-use layout_core::internal::hyphen_result::HyphenResult;
+use layout_base::internal::hyphen_result::HyphenResult;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_inline/hyphen_result.cc:12-16

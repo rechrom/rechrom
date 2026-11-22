@@ -2,7 +2,7 @@ use foundation::{
     HeapHashMap, HeapVector, IsParallelWritingMode, MakeGarbageCollected, Member, Traceable,
     Visitor, WritingMode,
 };
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     grid_item::{GridItemData, GridItems},
     grid_lanes_item_group::{GridLanesItemGroups, VirtualItems},

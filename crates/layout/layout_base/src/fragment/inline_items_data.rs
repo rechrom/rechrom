@@ -1,11 +1,11 @@
 use std::ops::Deref;
 
 use foundation::{HeapVector, Member, String, TextOffsetMap, Visitor};
-use layout_core::internal::inline_item::{InlineItem, InlineItems};
-use layout_core::internal::inline_item_segment::InlineItemSegments;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node_data::InlineNodeData;
-use layout_core::internal::svg_inline_node_data::SvgInlineNodeData;
+use crate::internal::inline_item::{InlineItem, InlineItems};
+use crate::internal::inline_item_segment::InlineItemSegments;
+use crate::internal::inline_item_text_index::InlineItemTextIndex;
+use crate::internal::inline_node_data::InlineNodeData;
+use crate::internal::svg_inline_node_data::SvgInlineNodeData;
 use crate::offset_mapping::OffsetMapping;
 
 // C++ stores this discriminator in one byte and uses it for checked casts.
@@ -103,9 +103,9 @@ impl InlineItemsData {
         assert!(end <= self.items.size());
         for item_ptr in &self.items[start_index as usize..end as usize] {
             let item = unsafe { &*item_ptr.Get() };
-            if item.Type() == layout_core::internal::inline_item::InlineItemType::kOpenTag {
+            if item.Type() == crate::internal::inline_item::InlineItemType::kOpenTag {
                 open_items.push_back(*item_ptr);
-            } else if item.Type() == layout_core::internal::inline_item::InlineItemType::kCloseTag
+            } else if item.Type() == crate::internal::inline_item::InlineItemType::kCloseTag
             {
                 open_items.pop();
             }

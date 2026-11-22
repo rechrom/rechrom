@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{PhysicalOffset, TextDecorationLine};
-use layout_assembly::{
+use crate::{
     fragment_item::{FragmentItem, ItemType},
     inline_cursor::InlineCursor,
     internal::{
@@ -240,7 +240,7 @@ struct DecorationBoxSynchronizer<'a> {
     stop_at_: *const AppliedTextDecorationVector,
     line_cursor_: Option<InlineCursor>,
     saved_decorating_boxes: &'a mut DecoratingBoxList,
-    style_variant_: layout_assembly::internal::style_variant::StyleVariant,
+    style_variant_: crate::internal::style_variant::StyleVariant,
 }
 
 impl DecorationBoxSynchronizer<'_> {

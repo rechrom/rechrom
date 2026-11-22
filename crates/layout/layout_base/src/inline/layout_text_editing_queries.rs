@@ -2,7 +2,7 @@
 //! layout_text_fragment.cc:245-283; layout_br.cc:51-54,66-84;
 //! layout_word_break.cc:42-63. Offsets retain DOM/fragment ownership.
 use super::*;
-use layout_core::internal::editing::forward::{Position, PositionAnchorType};
+use crate::internal::editing::forward::{Position, PositionAnchorType};
 use crate::layout_text_fragment::LayoutTextFragment;
 use crate::offset_mapping::OffsetMapping;
 

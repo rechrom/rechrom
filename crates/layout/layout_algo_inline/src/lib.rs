@@ -1,6 +1,6 @@
 // The inline layout algorithm package (Chromium core/layout/inline/; snapshot
 // //src/layoutng_inline). It compiles as its own crate above base
-// (`layout_assembly`) and reaches base only through its public API. Base
+// (`layout_base`) and reaches base only through its public API. Base
 // reaches it back only through the registry slots `registration::Register`
 // fills; there is no link-time (`extern "Rust"` / `#[no_mangle]`) coupling.
 // Members of base-declared types whose bodies live here are extension traits
@@ -9,11 +9,10 @@
 
 // The translated sources name base items through Chromium's `layoutng`
 // package path, like the block package does.
-extern crate layout_assembly as layout_core;
 
 // Fragment-tree modules that are still compiled with base. The inline sources
 // keep their `crate::<module>` paths for them.
-use layout_assembly::{
+use layout_base::{
     block_break_token, box_fragment_builder, break_token, fragment_builder, fragment_item,
     fragment_items, fragment_items_builder, inline_break_token, inline_cursor, inline_items_data,
     layout_result, logical_box_fragment, logical_fragment, logical_line_container,
@@ -21,10 +20,10 @@ use layout_assembly::{
 };
 // Base LayoutObject / DOM-position classes that the inline sources name
 // beside their own modules.
-pub use layout_assembly::{layout_text_fragment, offset_mapping};
+pub use layout_base::{layout_text_fragment, offset_mapping};
 // LayoutBR, LayoutCounter, LayoutRubyAsBlock and LayoutWordBreak (Chromium
 // core/layout/layout_*.cc) are object-model classes, base since R5.
-pub use layout_assembly::{layout_br, layout_counter, layout_ruby_as_block, layout_word_break};
+pub use layout_base::{layout_br, layout_counter, layout_ruby_as_block, layout_word_break};
 
 pub mod registration;
 pub mod algorithms;

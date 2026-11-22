@@ -3,19 +3,19 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{DynamicTo, PhysicalSize};
-use layout_assembly::block_break_token::BlockBreakToken;
-use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::internal::algorithm_entry::LayoutAlgorithmImplementation;
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::layout_algorithm::{LayoutAlgorithm, LayoutAlgorithmParams};
-use layout_assembly::internal::layout_input::MediaChildKind;
-use layout_assembly::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_replaced::LayoutMedia;
-use layout_assembly::internal::length_utils::ShrinkLogicalSize;
-use layout_assembly::internal::min_max_sizes::MinMaxSizesResult;
-use layout_assembly::layout_result::LayoutResult;
+use layout_base::block_break_token::BlockBreakToken;
+use layout_base::box_fragment_builder::BoxFragmentBuilder;
+use layout_base::internal::algorithm_entry::LayoutAlgorithmImplementation;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::layout_algorithm::{LayoutAlgorithm, LayoutAlgorithmParams};
+use layout_base::internal::layout_input::MediaChildKind;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_replaced::LayoutMedia;
+use layout_base::internal::length_utils::ShrinkLogicalSize;
+use layout_base::internal::min_max_sizes::MinMaxSizesResult;
+use layout_base::layout_result::LayoutResult;
 use layout_geometry::geometry::{
     logical_rect::LogicalRect, writing_mode_converter::WritingModeConverter,
 };

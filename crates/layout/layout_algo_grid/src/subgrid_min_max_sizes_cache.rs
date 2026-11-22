@@ -1,7 +1,7 @@
 use foundation::{Member, Traceable, Visitor};
-use layout_assembly::internal::grid_layout_data::GridLayoutData;
-use layout_assembly::internal::grid_track_collection::GridLayoutTrackCollection;
-use layout_assembly::internal::min_max_sizes::MinMaxSizes;
+use layout_base::internal::grid_layout_data::GridLayoutData;
+use layout_base::internal::grid_track_collection::GridLayoutTrackCollection;
+use layout_base::internal::min_max_sizes::MinMaxSizes;
 
 // cpp: layoutng_grid/subgrid_min_max_sizes_cache.h:14-43
 // Deleted C++ default/copy constructors map to no Default/Clone implementation.

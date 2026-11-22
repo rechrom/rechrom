@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
-use layout_assembly::internal::layout_node_metadata::{ContainerNode, Node};
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::layout_node_metadata::{ContainerNode, Node};
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
 
 use crate::layout_inline_list_item::LayoutInlineListItem;
 use crate::layout_list_item::LayoutListItem;
@@ -41,7 +41,7 @@ impl ListItemOrdinal {
     // belongs to this package, so the untranslated abort lives here instead of
     // a link-time stub in base (it was `untranslated_symbols.rs`).
     pub fn ItemInsertedOrRemoved(
-        _item: *const layout_assembly::internal::layout_object::LayoutObject,
+        _item: *const layout_base::internal::layout_object::LayoutObject,
     ) {
         eprintln!("untranslated LayoutNG symbol called: ListItemOrdinalItemInsertedOrRemoved");
         std::process::abort()

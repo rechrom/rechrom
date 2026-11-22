@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{kIndefiniteSize, LayoutUnit, Vector};
-use layout_assembly::internal::table_layout_algorithm_types::{
+use layout_base::internal::table_layout_algorithm_types::{
     CellBlockConstraint, ColspanCell, ColspanCells, Column, Columns, Row, Rows, RowspanCell,
     Sections,
 };
@@ -25,7 +25,7 @@ pub fn EnsureDistributableColumnExists(start: u32, count: u32, columns: &mut Col
 }
 // cpp: layoutng_table/table_layout_utils.cc:87-168
 pub fn ApplyCellConstraintsToColumnConstraints(
-    cells: &layout_assembly::internal::table_layout_algorithm_types::CellInlineConstraints,
+    cells: &layout_base::internal::table_layout_algorithm_types::CellInlineConstraints,
     spacing: LayoutUnit,
     fixed: bool,
     colspan: &mut ColspanCells,
@@ -76,12 +76,12 @@ pub fn ApplyCellConstraintsToColumnConstraints(
 
 // cpp: layoutng_table/table_layout_utils.cc:1743-1824
 pub fn ComputeGridInlineMinMax(
-    node: &layout_assembly::internal::table_node::TableNode,
+    node: &layout_base::internal::table_node::TableNode,
     columns: &Columns,
     undistributable: LayoutUnit,
     fixed: bool,
     layout_pass: bool,
-) -> layout_assembly::internal::min_max_sizes::MinMaxSizes {
+) -> layout_base::internal::min_max_sizes::MinMaxSizes {
     ComputeGridInlineMinMaxWithAllowance(columns, undistributable, fixed, || {
         node.AllowColumnPercentages(layout_pass)
     })
@@ -92,8 +92,8 @@ pub(crate) fn ComputeGridInlineMinMaxWithAllowance(
     undistributable: LayoutUnit,
     fixed: bool,
     allow_percentages: impl FnOnce() -> bool,
-) -> layout_assembly::internal::min_max_sizes::MinMaxSizes {
-    use layout_assembly::internal::{
+) -> layout_base::internal::min_max_sizes::MinMaxSizes {
+    use layout_base::internal::{
         min_max_sizes::MinMaxSizes, table_layout_algorithm_types::TableTypes,
     };
     let zero = LayoutUnit::default();
@@ -765,7 +765,7 @@ pub fn DistributeTableBlockSizeToSections(
     }
     let zero = LayoutUnit::default();
     let distributable = (size - spacing * (sections.len() as i32 + 1)).ClampNegativeToZero();
-    let percentage = |s: &layout_assembly::internal::table_layout_algorithm_types::Section| {
+    let percentage = |s: &layout_base::internal::table_layout_algorithm_types::Section| {
         max(
             s.block_size,
             LayoutUnit::from_f32(s.percent.unwrap() * distributable / 100.0),

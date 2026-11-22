@@ -12,13 +12,13 @@ use foundation::{
 use crate::fragment_items::FragmentItems;
 use crate::inline_cursor::InlineCursor;
 use crate::inline_items_data::InlineItemsData;
-use layout_core::internal::inline_item_span::InlineItemSpan;
-use layout_core::internal::layout_invalidation_reason;
-use layout_core::internal::layout_node_metadata::{Node, Text};
-use layout_core::internal::layout_object::{LayoutObject, StyleChangeContext};
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
-use layout_core::internal::variable_length_transform_result::VariableLengthTransformResult;
+use crate::internal::inline_item_span::InlineItemSpan;
+use crate::internal::layout_invalidation_reason;
+use crate::internal::layout_node_metadata::{Node, Text};
+use crate::internal::layout_object::{LayoutObject, StyleChangeContext};
+use crate::internal::layout_text::LayoutText;
+use crate::internal::layout_text_combine::LayoutTextCombine;
+use crate::internal::variable_length_transform_result::VariableLengthTransformResult;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;
@@ -47,9 +47,9 @@ pub fn layout_text_is_selected(this: &LayoutText) -> bool {
         let object = unsafe { &*text }.GetLayoutObject();
         return !object.is_null()
             && unsafe { &*object }.GetSelectionState()
-                != layout_core::internal::selection_state::SelectionState::kNone;
+                != crate::internal::selection_state::SelectionState::kNone;
     }
-    this.GetSelectionState() != layout_core::internal::selection_state::SelectionState::kNone
+    this.GetSelectionState() != crate::internal::selection_state::SelectionState::kNone
 }
 
 // cpp: layoutng_inline/layout_text.cc:31-41
@@ -572,14 +572,14 @@ pub mod quad_geometry;
 pub fn LayoutTextMomentarilyRevealLastTypedCharacter(
     this: &mut LayoutText,
     offset: u32,
-    settings: Option<layout_core::password_echo::PasswordEchoLayoutSettings>,
-    token: layout_core::password_echo::PasswordEchoTimerToken,
-    scheduler: &dyn layout_core::password_echo::PasswordEchoTimerScheduler,
+    settings: Option<crate::password_echo::PasswordEchoLayoutSettings>,
+    token: crate::password_echo::PasswordEchoTimerToken,
+    scheduler: &dyn crate::password_echo::PasswordEchoTimerScheduler,
 ) {
     this.CheckIsNotDestroyed();
     let timer = this
         .secure_text_timer_
-        .get_or_insert_with(layout_core::password_echo::SecureTextTimer::new);
+        .get_or_insert_with(crate::password_echo::SecureTextTimer::new);
     timer.last_typed_character_offset = Some(offset);
     if let Some(settings) = settings {
         timer.Stop();
@@ -593,7 +593,7 @@ pub fn LayoutTextMomentarilyRevealLastTypedCharacter(
 // transform/invalidation path; no substring is retained by the timer.
 pub fn LayoutTextPasswordEchoTimerFired(
     this: &mut LayoutText,
-    token: layout_core::password_echo::PasswordEchoTimerToken,
+    token: crate::password_echo::PasswordEchoTimerToken,
 ) -> bool {
     this.CheckIsNotDestroyed();
     if !this.PasswordEchoTimerMatches(token) {
@@ -633,11 +633,11 @@ pub fn LayoutTextLocalSelectionVisualRect(
             let generated = cursor.Current().IsLayoutGeneratedText();
             let mut status = if generated {
                 if cursor.Current().IsEllipsis() {
-                    layout_core::layout_selection::InlineSelectionStatus::default()
+                    crate::layout_selection::InlineSelectionStatus::default()
                 } else {
                     let offset = item.StartOffsetInContainer(&cursor);
                     if offset == 0 {
-                        layout_core::layout_selection::InlineSelectionStatus::default()
+                        crate::layout_selection::InlineSelectionStatus::default()
                     } else {
                         selection.ComputeInlineSelectionStatus(
                             this,

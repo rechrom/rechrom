@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{keywords, AtomicString, LayoutUnit};
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::LayoutObject;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::layout_inside_list_marker::LayoutInsideListMarker;
@@ -48,7 +48,7 @@ impl ListMarker {
             self.marker_text_type_ = MarkerTextType::kUnresolved;
             marker.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
                 std::ptr::addr_of!(
-                    layout_assembly::internal::layout_invalidation_reason::kListValueChange
+                    layout_base::internal::layout_invalidation_reason::kListValueChange
                 ),
             );
         }
@@ -88,7 +88,7 @@ impl ListMarker {
         }
         self.marker_text_type_ = MarkerTextType::kUnresolved;
         marker.SetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(std::ptr::addr_of!(
-            layout_assembly::internal::layout_invalidation_reason::kListStyleTypeChange
+            layout_base::internal::layout_invalidation_reason::kListStyleTypeChange
         ));
     }
     // cpp: layoutng_list/list_marker.h:27-28

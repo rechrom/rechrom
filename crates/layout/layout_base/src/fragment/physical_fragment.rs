@@ -6,25 +6,25 @@ use foundation::{
     PhysicalOffset, PhysicalRect, PhysicalSize, String, StringBuilder, TextDirection,
     ThreadAffinity, ThreadingTrait, To, Visitor, WritingMode,
 };
-use layout_core::internal::anchor_map::AnchorMap;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::form_node_metadata::TextControlElement;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_core::internal::layout_box_model_object::PaintLayer;
-use layout_core::internal::layout_node_metadata::{Element, Node};
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::oof_positioned_node::FragmentedOofData;
-use layout_core::internal::oof_positioned_node::LogicalOofPositionedNodeToPhysical;
-use layout_core::internal::oof_positioned_node::PhysicalOofPositionedNode;
-use layout_core::internal::oof_positioned_node::{
+use crate::internal::anchor_map::AnchorMap;
+use crate::internal::block_node::BlockNode;
+use crate::internal::form_node_metadata::TextControlElement;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_box_model_object::PaintLayer;
+use crate::internal::layout_node_metadata::{Element, Node};
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::oof_positioned_node::FragmentedOofData;
+use crate::internal::oof_positioned_node::LogicalOofPositionedNodeToPhysical;
+use crate::internal::oof_positioned_node::PhysicalOofPositionedNode;
+use crate::internal::oof_positioned_node::{
     MulticolWithPendingOofs, OofContainingBlock, OofInlineContainer,
     PhysicalOofNodeForFragmentation, RelativeInsetToPhysical,
 };
-use layout_core::internal::snap_area::SnapArea;
-use layout_core::internal::split_axis_item::SplitAxisItem;
-use layout_core::internal::style_variant::{StyleVariant, UsesFirstLineStyle};
-use layout_core::internal::trigger_scoped_name::TriggerScopedNameMap;
+use crate::internal::snap_area::SnapArea;
+use crate::internal::split_axis_item::SplitAxisItem;
+use crate::internal::style_variant::{StyleVariant, UsesFirstLineStyle};
+use crate::internal::trigger_scoped_name::TriggerScopedNameMap;
 
 use crate::break_token::BreakToken;
 use crate::fragment_builder::FragmentBuilder;

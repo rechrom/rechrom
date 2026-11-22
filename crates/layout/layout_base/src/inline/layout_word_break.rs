@@ -3,8 +3,8 @@
 #![allow(non_snake_case)]
 
 use foundation::{String, Traceable, Visitor};
-use layout_core::internal::layout_node_metadata::{Element, Node};
-use layout_core::internal::layout_text::LayoutText;
+use crate::internal::layout_node_metadata::{Element, Node};
+use crate::internal::layout_text::LayoutText;
 use std::ops::{Deref, DerefMut};
 
 // cpp: layoutng_inline/layout_word_break.h:36-45

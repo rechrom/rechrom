@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{DowncastFrom, LayoutUnit, Traceable, Visitor};
-use layout_assembly::break_token_algorithm_data::{
+use layout_base::break_token_algorithm_data::{
     BreakTokenAlgorithmData, BreakTokenAlgorithmDataType, BreakTokenAlgorithmDataVirtual,
 };
 

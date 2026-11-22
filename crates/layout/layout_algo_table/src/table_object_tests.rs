@@ -7,12 +7,12 @@ use crate::{
 };
 use foundation::To;
 use layout_algo_replaced as _;
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_box::LayoutBox, layout_object::LayoutObject,
     layout_object_factory_set::LayoutObjectFactorySet, layout_pass_scope::LayoutObjectFactoryScope,
     table_layout_algorithm_types::TableGroupedChildren, table_node::TableNode,
 };
-use layout_assembly::{layout_registry::LayoutRegistry, layout_engine::LayoutEngine};
+use layout_base::{layout_registry::LayoutRegistry, layout_engine::LayoutEngine};
 use std::collections::BTreeMap;
 
 #[test]
@@ -256,8 +256,8 @@ fn objects_body() {
 pub(crate) fn BuildDOMProjection(
     owner: &mut dom::DOM,
     interaction: &dom::UserInteractionState,
-    engine: &mut layout_assembly::layout_engine::LayoutEngine,
-) -> *mut layout_assembly::internal::layout_object::LayoutObject {
+    engine: &mut layout_base::layout_engine::LayoutEngine,
+) -> *mut layout_base::internal::layout_object::LayoutObject {
     owner.EmitLayoutMutations(interaction, |mutation| engine.ApplyMutation(mutation));
     engine.GetLayoutTree().expect("projected tree").Root() as *const _ as *mut _
 }

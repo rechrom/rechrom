@@ -19,9 +19,9 @@ use foundation::{
     MakeGarbageCollected, RubyPosition, RuntimeEnabledFeatures, String, StringView,
     TextEmphasisMark, To, ToLineWritingMode, Traceable, Visitor, WritingDirectionMode, WtfSizeT,
 };
-use layout_core::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
-use layout_core::internal::used_font::UsedFont;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_item_result::{InlineItemResult, InlineItemResults};
+use layout_base::internal::used_font::UsedFont;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::inline_box_state::{InlineBoxState, LogicalRubyColumn};

@@ -2,8 +2,8 @@
 
 use foundation::blink_geometry::transforms::affine_transform::AffineTransform;
 use foundation::DynamicTo;
-use layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_assembly::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_box_model_object::LayoutBoxModelObject;
+use layout_base::internal::layout_object::LayoutObject;
 
 use crate::subtree_content_transform_scope::SubtreeContentTransformScope;
 

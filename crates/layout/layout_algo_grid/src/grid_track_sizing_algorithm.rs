@@ -1,6 +1,6 @@
 use crate::algorithms::*;
 use foundation::{kIndefiniteSize, LayoutUnit, MinimumValueForLength};
-use layout_assembly::internal::{
+use layout_base::internal::{
     grid_item::{GridItemData, GridItems},
     grid_track_collection::{
         GridLayoutTrackCollection, GridSet, GridSizingTrackCollection, PropertyId, SetIterator,

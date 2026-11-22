@@ -15,7 +15,7 @@ use crate::inline_cursor::InlineCursor;
 #[cfg(debug_assertions)]
 use crate::physical_box_fragment::AllowPostLayoutScope;
 use crate::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::internal::inline_node::InlineNode;
+use crate::internal::inline_node::InlineNode;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 

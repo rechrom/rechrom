@@ -5,8 +5,8 @@ use foundation::{
     EBoxAlignment, EBoxPack, LayoutUnit, LogicalToLogical, LogicalToPhysical, PhysicalToLogical,
     WritingDirectionMode,
 };
-use layout_assembly::internal::length_utils::{ResolveColumnGapLength, ResolveRowGapLength};
-use layout_assembly::logical_box_fragment::LogicalBoxFragment;
+use layout_base::internal::length_utils::{ResolveColumnGapLength, ResolveRowGapLength};
+use layout_base::logical_box_fragment::LogicalBoxFragment;
 use layout_geometry::geometry::layout_unit_diffuser::LayoutUnitDiffuser;
 use layout_geometry::geometry::logical_size::LogicalSize;
 use layout_style::style::computed_style::ComputedStyle;

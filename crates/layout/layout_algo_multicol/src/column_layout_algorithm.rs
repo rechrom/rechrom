@@ -13,7 +13,7 @@ use foundation::{
 use layout_algo_block::{
     block_layout_algorithm::BlockLayoutAlgorithm, block_layout_utils::AlignBlockContent,
 };
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     box_fragment_builder::BoxFragmentBuilder,
     internal::{

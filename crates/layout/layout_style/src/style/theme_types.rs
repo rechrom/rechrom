@@ -24,5 +24,5 @@
  */
 
 // cpp: layoutng_style/style/theme_types.h:29-40
-// The Blink alias names the same type as layout_core::AppearanceValue.
+// The Blink alias names the same type as layout_base::AppearanceValue.
 pub use super::appearance::AppearanceValue;

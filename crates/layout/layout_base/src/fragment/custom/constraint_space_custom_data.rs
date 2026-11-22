@@ -37,4 +37,4 @@ impl RareData {
 
 // `ConstraintSpaceBuilder::SetCustomLayoutData`
 // (constraint_space_custom_data.cc:23-33) is builder code and lives with the
-// builder in base (`layout_core/src/internal/constraint_space_builder.rs`).
+// builder in base (`layout_base/src/internal/constraint_space_builder.rs`).

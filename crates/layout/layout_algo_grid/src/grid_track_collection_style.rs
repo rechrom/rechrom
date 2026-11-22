@@ -1,6 +1,6 @@
 use crate::grid_track_sizing_algorithm::GridTrackSizingAlgorithm;
 use foundation::kIndefiniteSize;
-use layout_assembly::internal::grid_track_collection::{
+use layout_base::internal::grid_track_collection::{
     GridRangeBuilder, GridSizingTrackCollection, TrackBoundaryToRangePair,
 };
 use layout_geometry::geometry::logical_size::LogicalSize;
@@ -17,7 +17,7 @@ pub fn GridRangeBuilderNew(
     offset: u32,
 ) -> GridRangeBuilder {
     let mut builder =
-        layout_assembly::grid_track_collection_implementation::GridRangeBuilderNewFromTracks(
+        layout_base::grid_track_collection_implementation::GridRangeBuilderNewFromTracks(
             style.TemplateTracks(direction).GetTrackList(),
             style.AutoTracks(direction),
             repetitions,

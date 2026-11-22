@@ -2,12 +2,12 @@
 
 use font_engine::fonts::shaping::text_width::ComputeTextWidth;
 use foundation::{LayoutUnit, String as BlinkString, StringView};
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder;
-use layout_assembly::internal::form_node_metadata::{FormNodeMetadataExternal, HTMLInputElement};
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_assembly::internal::length_utils::SizeType;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder;
+use layout_base::internal::form_node_metadata::{FormNodeMetadataExternal, HTMLInputElement};
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::length_utils::SizeType;
 
 use crate::form_node_metadata::FormNodeMetadataProvider;
 

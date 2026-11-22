@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 
 use foundation::{MakeGarbageCollected, To};
-use layout_assembly::internal::algorithm_entry::LayoutAlgorithmEntryFor;
-use layout_assembly::internal::layout_block::LayoutBlock;
-use layout_assembly::internal::layout_node_metadata::{Element, Node};
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::internal::algorithm_entry::LayoutAlgorithmEntryFor;
+use layout_base::internal::layout_block::LayoutBlock;
+use layout_base::internal::layout_node_metadata::{Element, Node};
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::flex_layout_algorithm::FlexLayoutAlgorithm;

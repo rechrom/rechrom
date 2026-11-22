@@ -8,8 +8,8 @@ use foundation::{
     g_null_atom, keywords, AtomicString, DowncastFrom, DynamicTo, Member, String, Traceable,
     Vector, Visitor,
 };
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_text::LayoutText;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::content_data::CounterContentData;
 use layout_style::style::forward::CounterStyle;

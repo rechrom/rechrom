@@ -4,18 +4,18 @@ use foundation::{
     gfx, FloatValueForLength, IsHorizontalWritingMode, LayoutUnit, PhysicalOffset, PhysicalRect,
     PhysicalSize, SnapSizeToPixel, TextDirection, WritingDirectionMode, WritingMode,
 };
-use layout_assembly::internal::block_node::BlockNode;
-use layout_assembly::internal::constraint_space::ConstraintSpace;
-use layout_assembly::internal::layout_box::LayoutBox;
-use layout_assembly::internal::layout_input::{
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_input::{
     PaintImage, ShapeCoordinate, ShapeOutsideGeometry, ShapeOutsideKind, ShapeRadius,
     ShapeRadiusKind,
 };
-use layout_assembly::internal::layout_replaced::LayoutReplaced;
-use layout_assembly::internal::length_utils::ComputePhysicalMarginsForSpace;
-use layout_assembly::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
+use layout_base::internal::layout_replaced::LayoutReplaced;
+use layout_base::internal::length_utils::ComputePhysicalMarginsForSpace;
+use layout_base::internal::shapes::shape::{LineSegment, Shape, ShapeBase};
 use crate::shape_image_services::CurrentShapeImage;
-use layout_assembly::layout_result::LayoutResult;
+use layout_base::layout_result::LayoutResult;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::logical_size::{LogicalSize, ToLogicalSize, ToPhysicalSize};
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
@@ -146,7 +146,7 @@ fn ExtractImageIntervals(
         }
         if start_x < end_x {
             *intervals.IntervalAtMut(y) =
-                layout_assembly::internal::shapes::shape_interval::IntShapeInterval::new(
+                layout_base::internal::shapes::shape_interval::IntShapeInterval::new(
                     start_x, end_x,
                 );
         }
@@ -540,7 +540,7 @@ fn InputBorderRadii(box_: &LayoutBox, physical_size: PhysicalSize) -> [gfx::Size
 fn InputGeometry(box_: &LayoutBox) -> ShapeOutsideGeometry {
     let node = box_.GetNode();
     assert!(!node.is_null());
-    layout_assembly::style_projection::ReadShapeOutside(unsafe { &*node }.ComputedStyleRef())
+    layout_base::style_projection::ReadShapeOutside(unsafe { &*node }.ComputedStyleRef())
         .expect("shape outside geometry")
 }
 
@@ -610,7 +610,7 @@ fn CreatePathShape(
             }
             if left < right {
                 *intervals.IntervalAtMut(y) =
-                    layout_assembly::internal::shapes::shape_interval::IntShapeInterval::new(
+                    layout_base::internal::shapes::shape_interval::IntShapeInterval::new(
                         left, right,
                     );
             }

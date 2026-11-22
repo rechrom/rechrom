@@ -9,16 +9,16 @@ use layout_algo_inline::inline_child_layout_context::{
 };
 use layout_algo_inline::score_line_break_context::{kMaxLinesForBalance, kMaxLinesForOptimal};
 use layout_algo_inline::text_fit_utils::{MeasurePerBlockScale, ParagraphScale};
-use layout_core::fragment_items::FragmentItems;
-use layout_core::inline_break_token::InlineBreakToken;
-use layout_core::layout_result::{EStatus, LayoutResult};
-use layout_core::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::internal::algorithm_forward::InlineChildLayoutContext;
-use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_algorithm::LayoutAlgorithmParams;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::layout_registry::LayoutRegistry;
+use layout_base::fragment_items::FragmentItems;
+use layout_base::inline_break_token::InlineBreakToken;
+use layout_base::layout_result::{EStatus, LayoutResult};
+use layout_base::physical_box_fragment::PhysicalBoxFragment;
+use layout_base::internal::algorithm_forward::InlineChildLayoutContext;
+use layout_base::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_algorithm::LayoutAlgorithmParams;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::css::white_space::ShouldWrapLineGreedy;
 use layout_style::style::text_fit::{TextFitTarget, TextFitType};
 

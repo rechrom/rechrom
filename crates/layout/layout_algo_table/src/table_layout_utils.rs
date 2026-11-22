@@ -4,7 +4,7 @@ use crate::algorithms::*;
 use crate::layout_table_column_visitor::{ColumnVisitor, VisitLayoutTableColumn};
 pub use crate::table_size_distribution::*;
 use foundation::{HeapVector, Vector};
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     layout_object::LayoutObject,
     table_layout_algorithm_types::{Column, Columns, TableTypes},
@@ -31,13 +31,13 @@ impl RowBaselineTabulator {
     // cpp: layoutng_table/table_layout_utils.cc:1680-1714
     pub fn ProcessCell(
         &mut self,
-        fragment: &layout_assembly::logical_box_fragment::LogicalBoxFragment<'_>,
-        align: layout_assembly::internal::layout_alignment_utils::BlockContentAlignment,
+        fragment: &layout_base::logical_box_fragment::LogicalBoxFragment<'_>,
+        align: layout_base::internal::layout_alignment_utils::BlockContentAlignment,
         rowspanned: bool,
         percentage_descendant: bool,
     ) {
         use foundation::LayoutUnit;
-        use layout_assembly::internal::layout_alignment_utils::BlockContentAlignment;
+        use layout_base::internal::layout_alignment_utils::BlockContentAlignment;
         if align == BlockContentAlignment::kBaseline
             && fragment.HasDescendantsForTablePart()
             && fragment.FirstBaseline().is_some()
@@ -106,7 +106,7 @@ pub fn SetupTableCellConstraintSpaceBuilder(
     table_direction: foundation::WritingDirectionMode,
     cell: &BlockNode,
     borders: &layout_geometry::geometry::box_strut::BoxStrut,
-    locations: &Vector<layout_assembly::internal::table_column_location::TableColumnLocation>,
+    locations: &Vector<layout_base::internal::table_column_location::TableColumnLocation>,
     block_size: foundation::LayoutUnit,
     percentage_inline_size: foundation::LayoutUnit,
     baseline: Option<foundation::LayoutUnit>,
@@ -114,8 +114,8 @@ pub fn SetupTableCellConstraintSpaceBuilder(
     initial_indefinite: bool,
     table_size_specified: bool,
     collapsed: bool,
-    cache: layout_assembly::internal::constraint_space::LayoutResultCacheSlot,
-    builder: &mut layout_assembly::internal::constraint_space_builder::ConstraintSpaceBuilder,
+    cache: layout_base::internal::constraint_space::LayoutResultCacheSlot,
+    builder: &mut layout_base::internal::constraint_space_builder::ConstraintSpaceBuilder,
 ) {
     use foundation::{kIndefiniteSize, EEmptyCells, IsParallelWritingMode};
     use layout_geometry::geometry::logical_size::LogicalSize;
@@ -309,11 +309,11 @@ pub fn ComputeSectionInlineConstraints(
     fixed: bool,
     first_section: bool,
     direction: foundation::WritingDirectionMode,
-    borders: &layout_assembly::internal::table_borders::TableBorders,
+    borders: &layout_base::internal::table_borders::TableBorders,
     section_index: u32,
     row_index: &mut u32,
-    cells: &mut layout_assembly::internal::table_layout_algorithm_types::CellInlineConstraints,
-    colspan: &mut layout_assembly::internal::table_layout_algorithm_types::ColspanCells,
+    cells: &mut layout_base::internal::table_layout_algorithm_types::CellInlineConstraints,
+    colspan: &mut layout_base::internal::table_layout_algorithm_types::ColspanCells,
 ) {
     let mut tabulator = ColspanCellTabulator::default();
     let mut first_row = true;
@@ -350,7 +350,7 @@ pub fn ComputeSectionInlineConstraints(
                     }
                 } else {
                     colspan.push(
-                        layout_assembly::internal::table_layout_algorithm_types::ColspanCell::new(
+                        layout_base::internal::table_layout_algorithm_types::ColspanCell::new(
                             &constraint,
                             tabulator.CurrentColumn(),
                             span,
@@ -370,8 +370,8 @@ pub fn ComputeSectionInlineConstraints(
 // cpp: layoutng_table/table_layout_utils.cc:1450-1485
 pub fn ComputeColumnConstraints(
     table: &BlockNode,
-    grouped: &layout_assembly::internal::table_layout_algorithm_types::TableGroupedChildren,
-    borders: &layout_assembly::internal::table_borders::TableBorders,
+    grouped: &layout_base::internal::table_layout_algorithm_types::TableGroupedChildren,
+    borders: &layout_base::internal::table_borders::TableBorders,
     _border_padding: &layout_geometry::geometry::box_strut::BoxStrut,
 ) -> std::sync::Arc<Columns> {
     let style = table.Style();

@@ -6,7 +6,7 @@
 // third_party/blink/renderer/core/layout/layout_box.cc:2897-2929.
 
 use foundation::DynamicTo;
-use layout_assembly::internal::{layout_box::LayoutBox, layout_object::LayoutObject};
+use layout_base::internal::{layout_box::LayoutBox, layout_object::LayoutObject};
 
 // LayoutBox's lifecycle calls this through its existing multicol-owner slot
 // when a style change alters whether the box permits spanner descendants.

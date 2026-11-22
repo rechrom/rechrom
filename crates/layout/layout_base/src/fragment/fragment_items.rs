@@ -5,12 +5,12 @@ use foundation::{
     ClearCollectionScope, DynamicTo, HeapHashMap, HeapVector, IsParallelWritingMode, Member,
     RuntimeEnabledFeatures, String, To, Traceable, Visitor,
 };
-use layout_core::internal::fragmentation_utils::IsBreakInside;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
+use crate::internal::fragmentation_utils::IsBreakInside;
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_inline::LayoutInline;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_text::LayoutText;
 
 use crate::fragment_item::{FragmentItem, FragmentItemType};
 use crate::fragment_items_builder::FragmentItemsBuilder;

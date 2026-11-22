@@ -1,5 +1,5 @@
 //! Link-time definitions for LayoutNG functions that the reduced LayoutNG
-//! source snapshot declares (`extern` blocks in layout_core, layout_style,
+//! source snapshot declares (`extern` blocks in layout_base, layout_style,
 //! layout_algo_inline, ...) but never defines, because their Chromium bodies
 //! have not been translated.
 //!

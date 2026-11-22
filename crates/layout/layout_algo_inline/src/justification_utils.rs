@@ -9,8 +9,8 @@ use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::blink_geometry::geometry::TextRunLayoutUnit;
 use foundation::{IsRtl, LayoutUnit, StringView, TextDirection, TextJustify};
 use crate::logical_line_item::LogicalLineItem;
-use layout_core::internal::inline_item::InlineItemType;
-use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
+use layout_base::internal::inline_item::InlineItemType;
+use layout_base::internal::inline_item_result::{InlineItemResult, InlineItemResults};
 
 use crate::inline_item_result_ruby_column::InlineItemResultRubyColumn;
 use crate::line_info::LineInfo;

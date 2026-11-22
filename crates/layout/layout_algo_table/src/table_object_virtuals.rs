@@ -8,7 +8,7 @@ use crate::{
     layout_table_row::LayoutTableRow, layout_table_section::LayoutTableSection,
 };
 use foundation::{OverlayScrollbarClipBehavior, PhysicalOffset, PhysicalRect, PhysicalSize};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_block::LayoutBlock,
     layout_block_flow::LayoutBlockFlow,
     layout_box::LayoutBox,
@@ -239,9 +239,9 @@ fn UpdateFromElement(object: &mut LayoutObject) {
 fn QuadsInAncestor(
     object: &LayoutObject,
     quads: &mut foundation::Vector<foundation::gfx::QuadF>,
-    ancestor: *const layout_assembly::internal::layout_box_model_object::LayoutBoxModelObject,
-    mode: layout_assembly::internal::map_coordinates_flags::MapCoordinatesFlags,
-    box_type: layout_assembly::internal::layout_object::BoxQuadType,
+    ancestor: *const layout_base::internal::layout_box_model_object::LayoutBoxModelObject,
+    mode: layout_base::internal::map_coordinates_flags::MapCoordinatesFlags,
+    box_type: layout_base::internal::layout_object::BoxQuadType,
 ) {
     if object.RuntimeClass() == LayoutObjectClass::TableColumn {
         unsafe { &*(object as *const LayoutObject).cast::<LayoutTableColumn>() }

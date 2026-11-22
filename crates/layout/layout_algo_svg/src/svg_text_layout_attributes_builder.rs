@@ -3,14 +3,14 @@
 use foundation::{
     DynamicTo, HeapVector, MakeGarbageCollected, Member, String as BlinkString, StringView, To,
 };
-use layout_assembly::internal::inline_item::{InlineItemType, InlineItems};
-use layout_assembly::internal::inline_node::InlineNode;
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_input::ElementData;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::svg_character_data::SvgCharacterData;
-use layout_assembly::internal::svg_inline_node_data::{SvgInlineNodeData, SvgTextContentRange};
+use layout_base::internal::inline_item::{InlineItemType, InlineItems};
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_input::ElementData;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::svg_character_data::SvgCharacterData;
+use layout_base::internal::svg_inline_node_data::{SvgInlineNodeData, SvgTextContentRange};
 
 // C++ ClampTo<float> compares the f64 input against f32 bounds before casting.
 fn ClampToFloat(value: f64) -> f32 {

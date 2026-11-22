@@ -1,11 +1,11 @@
 use foundation::{DynamicTo, RuntimeEnabledFeatures, To};
 use layout_style::style::scroll_snap_data::cc;
-use layout_core::internal::layout_box_model_object::PaintLayer;
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::hit_test_phase::HitTestPhase;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_core::internal::layout_object::LayoutObject;
+use crate::internal::layout_box_model_object::PaintLayer;
+use crate::internal::layout_node_metadata::Node;
+use crate::internal::hit_test_phase::HitTestPhase;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_object::LayoutObject;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipX, kOverflowClipY, OverflowClipAxes,
 };

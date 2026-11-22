@@ -293,7 +293,7 @@ impl ContentData for TextContentData {
     // cpp: layoutng_style/style/content_data.h:158
     fn CreateLayoutObject(&self, _owner: &mut LayoutObject) -> *mut LayoutObject {
         // Chromium creates LayoutTextFragment here. layout_style deliberately
-        // has no dependency on the concrete layout_core crate, so production
+        // has no dependency on the concrete layout_base crate, so production
         // generated text is materialized by layoutng's pseudo-content adapter.
         // Keep this impossible reverse dependency explicit instead of retaining
         // an unresolved source symbol or manufacturing an opaque LayoutObject.

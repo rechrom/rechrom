@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layout_core::internal::algorithm_entry::LayoutAlgorithmEntryFor;
-use layout_core::layout_registry::LayoutRegistry;
+use layout_base::internal::algorithm_entry::LayoutAlgorithmEntryFor;
+use layout_base::layout_registry::LayoutRegistry;
 
 use crate::block_layout_algorithm::BlockLayoutAlgorithm;
 

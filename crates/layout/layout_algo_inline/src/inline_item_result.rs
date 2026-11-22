@@ -4,10 +4,10 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{Member, String, StringView, Visitor};
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
-use layout_core::internal::text_fit_scale::TextFitBlockScale;
-use layout_core::internal::text_offset_range::TextOffsetRange;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType};
+use layout_base::internal::inline_item_result::{InlineItemResult, InlineItemResults};
+use layout_base::internal::text_fit_scale::TextFitBlockScale;
+use layout_base::internal::text_offset_range::TextOffsetRange;
 
 use crate::inline_item_result_ruby_column::InlineItemResultRubyColumn;
 

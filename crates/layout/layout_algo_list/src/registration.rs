@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
 use foundation::{AtomicString, EListStylePosition, LayoutUnit, MakeGarbageCollected, To};
-use layout_assembly::internal::layout_input::NodeKind;
-use layout_assembly::internal::layout_node_metadata::{Element, Node};
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::internal::layout_input::NodeKind;
+use layout_base::internal::layout_node_metadata::{Element, Node};
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::layout_inline_list_item::LayoutInlineListItem;

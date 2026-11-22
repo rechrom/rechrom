@@ -11,8 +11,8 @@ use crate::break_token::BreakToken;
 use crate::fragment_items_builder::FragmentItemsBuilder;
 use crate::inline_break_token::InlineBreakToken;
 use crate::logical_line_item::LogicalLineItems;
-use layout_core::internal::inline_item::InlineItems;
-use layout_core::internal::inline_node::InlineNode;
+use layout_base::internal::inline_item::InlineItems;
+use layout_base::internal::inline_node::InlineNode;
 
 use crate::inline_box_state::InlineLayoutStateStack;
 use crate::line_info::LineInfo;
@@ -47,7 +47,7 @@ pub struct InlineChildLayoutContext {
 // `registration::Register`; this is the only definition.
 // cpp: layoutng_inline/inline_child_layout_context.h:64-66
 pub fn InlineChildLayoutContextParallelFlowBreakTokens<'a>(
-    context: &'a layout_core::internal::algorithm_forward::InlineChildLayoutContext,
+    context: &'a layout_base::internal::algorithm_forward::InlineChildLayoutContext,
 ) -> &'a HeapVector<Member<BreakToken>> {
     unsafe { &*(context as *const _ as *const InlineChildLayoutContext) }.ParallelFlowBreakTokens()
 }

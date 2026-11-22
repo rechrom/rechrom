@@ -5,7 +5,7 @@
 use crate::algorithms::*;
 use foundation::{HeapVector, Member, Traceable, Visitor, WtfSizeT};
 use crate::inline_break_token::InlineBreakToken;
-use layout_core::internal::positioned_float::PositionedFloat;
+use layout_base::internal::positioned_float::PositionedFloat;
 
 // cpp: layoutng_inline/leading_floats.h:17-33
 pub struct LeadingFloat {

@@ -224,7 +224,7 @@ mod tests {
 
         let mut tracked = old.clone().unwrap();
         tracked.tracked_element_sub_rects.push(
-            layout_assembly::internal::layout_input::TrackedElementSubRect {
+            crate::internal::layout_input::TrackedElementSubRect {
                 feature: 7,
                 id: [3, 4],
                 should_add_to_compositor_frame_metadata: true,

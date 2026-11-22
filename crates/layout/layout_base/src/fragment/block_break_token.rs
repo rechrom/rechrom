@@ -5,9 +5,9 @@ use foundation::{
     LayoutUnit, MakeGarbageCollected, MakeGarbageCollectedWithAdditionalBytes, Member,
     RuntimeEnabledFeatures, String, StringBuilder, Visitor,
 };
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_input_node::LayoutInputNode;
+use crate::internal::block_node::BlockNode;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_input_node::LayoutInputNode;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 
 use crate::box_fragment_builder::BoxFragmentBuilder;

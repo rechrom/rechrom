@@ -2,8 +2,8 @@
 #![allow(non_snake_case)]
 
 use foundation::Visitor;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_node_metadata::Element;
+use crate::internal::layout_inline::LayoutInline;
+use crate::internal::layout_node_metadata::Element;
 
 // cpp: layoutng_inline/layout_inline_data.cc:14-16
 pub fn LayoutInlineNew(element: *mut Element) -> LayoutInline {

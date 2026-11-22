@@ -4,34 +4,34 @@ use foundation::{
     RuntimeEnabledFeatures, String, StringBuilder, TextDirection, To, TransformState,
     WritingDirectionMode, WritingMode,
 };
-use layout_core::internal::anchor_map::{AnchorMap, AnchorMapSetOptions};
-use layout_core::internal::anchor_scope::ToAnchorScopedName;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::break_appeal::{kBreakAppealPerfect, BreakAppeal};
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::early_break::EarlyBreak;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::fragmentation_utils::UpdateMinimalSpaceShortage;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_input_node::LayoutInputNode;
-use layout_core::internal::layout_node_metadata::Element;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_object_tree::IndexCache;
-use layout_core::internal::oof_positioned_node::{
+use crate::internal::anchor_map::{AnchorMap, AnchorMapSetOptions};
+use crate::internal::anchor_scope::ToAnchorScopedName;
+use crate::internal::block_node::BlockNode;
+use crate::internal::break_appeal::{kBreakAppealPerfect, BreakAppeal};
+use crate::internal::constraint_space::ConstraintSpace;
+use crate::internal::early_break::EarlyBreak;
+use crate::internal::exclusions::exclusion_space::ExclusionSpace;
+use crate::internal::fragmentation_utils::UpdateMinimalSpaceShortage;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_inline::LayoutInline;
+use crate::internal::layout_input_node::LayoutInputNode;
+use crate::internal::layout_node_metadata::Element;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_object_tree::IndexCache;
+use crate::internal::oof_positioned_node::{
     LogicalOofNodeForFragmentation, LogicalOofPositionedNode, MulticolWithPendingOofs,
     OofContainingBlock, OofInlineContainer, PhysicalOofPositionedNodeToLogical,
     RelativeInsetToLogical,
 };
-use layout_core::internal::snap_area::SnapArea;
-use layout_core::internal::split_axis_item::SplitAxisItem;
-use layout_core::internal::style_variant::StyleVariant;
-use layout_core::internal::transform_utils::UpdateTransformState;
-use layout_core::internal::trigger_scoped_name::{
+use crate::internal::snap_area::SnapArea;
+use crate::internal::split_axis_item::SplitAxisItem;
+use crate::internal::style_variant::StyleVariant;
+use crate::internal::transform_utils::UpdateTransformState;
+use crate::internal::trigger_scoped_name::{
     ToTriggerScopedName, TriggerScopedName, TriggerScopedNameMap,
 };
-use layout_core::internal::unpositioned_list_marker::UnpositionedListMarker;
+use crate::internal::unpositioned_list_marker::UnpositionedListMarker;
 use layout_geometry::geometry::axis::{
     kPhysicalAxesBoth, kPhysicalAxesHorizontal, kPhysicalAxesNone, kPhysicalAxesVertical,
     PhysicalAxes,

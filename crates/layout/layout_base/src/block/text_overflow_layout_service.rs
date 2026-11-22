@@ -2,10 +2,10 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, RuntimeEnabledFeatures};
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::text_overflow_post_layout_snapshot::TextOverflowPostLayoutSnapshot;
 
 // cpp: layoutng_inline/text_overflow_layout_service.cc:41-71
 pub fn LayoutBlockFlowShouldTruncateOverflowingTextFromInline(

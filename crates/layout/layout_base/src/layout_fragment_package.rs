@@ -1,11 +1,10 @@
 // The fragment tree (Chromium `core/layout` fragment classes): break tokens,
 // builders, PhysicalFragment/PhysicalBoxFragment, FragmentItem(s),
 // InlineCursor, LayoutResult and the fragment Paint sidecars. Fragments are
-// base: the sources live in `layout_core/src/fragment/` and these modules
-// mount them at the assembly root paths (`crate::physical_box_fragment`, ...)
+// base: the sources live in `fragment/` and these modules
+// mount them at the crate root paths (`crate::physical_box_fragment`, ...)
 // that base and the algorithm crates name. The module keeps its historical
 // `layout_fragment_package` name so profiler symbols stay comparable.
-// `layout_algo_inline_assembly` declares this same file.
 //
 // `api`, `internal_headers`, and `runtime` are Bazel targets of one package.
 // This module keeps their modules together; callers should use only

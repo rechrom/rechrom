@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
 use foundation::{To, Traceable, Visitor};
-use layout_assembly::internal::layout_block_flow::LayoutBlockFlow;
-use layout_assembly::internal::layout_node_metadata::Element;
-use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::internal::layout_object::{LayoutObjectClass, StyleChangeContext};
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_object::{LayoutObjectClass, StyleChangeContext};
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;
 

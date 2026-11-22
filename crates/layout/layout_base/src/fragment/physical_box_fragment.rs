@@ -11,28 +11,28 @@ use foundation::{
     WritingMode,
 };
 use graphics_types::graphics::overlay_scrollbar_clip_behavior::OverlayScrollbarClipBehavior;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
-use layout_core::internal::frame_set_layout_data::FrameSetLayoutData;
-use layout_core::internal::gap::gap_geometry::{GapDecorationInkOutsets, GapGeometry};
-use layout_core::internal::ink_overflow::{InkOverflow, InkOverflowType};
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_box_core_services::ApplyVisibleOverflowToClipRect;
-use layout_core::internal::layout_node_metadata::ContentLockBlocksChildLayout;
-use layout_core::internal::layout_node_metadata::{ContainerNode, Element, Node};
-use layout_core::internal::layout_object::{HitTestLocation, HitTestResult};
-use layout_core::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::layout_view::LayoutView;
-use layout_core::internal::mathml_paint_info::MathMLPaintInfo;
-use layout_core::internal::outline_geometry::OutlineOutsetExtent;
-use layout_core::internal::outline_info::LayoutOutlineInfo;
-use layout_core::internal::outline_rect_collector::{OutlineRectCollector, UnionOutlineRectCollector};
-use layout_core::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
-use layout_core::internal::scrollable_overflow_calculator::ScrollableOverflowCalculator;
-use layout_core::internal::table_borders::TableBorders;
-use layout_core::internal::table_fragment_data::{
+use crate::internal::block_node::BlockNode;
+use crate::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
+use crate::internal::frame_set_layout_data::FrameSetLayoutData;
+use crate::internal::gap::gap_geometry::{GapDecorationInkOutsets, GapGeometry};
+use crate::internal::ink_overflow::{InkOverflow, InkOverflowType};
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_box::LayoutBox;
+use crate::internal::layout_box_core_services::ApplyVisibleOverflowToClipRect;
+use crate::internal::layout_node_metadata::ContentLockBlocksChildLayout;
+use crate::internal::layout_node_metadata::{ContainerNode, Element, Node};
+use crate::internal::layout_object::{HitTestLocation, HitTestResult};
+use crate::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use crate::internal::layout_pass_scope::LayoutPassScope;
+use crate::internal::layout_view::LayoutView;
+use crate::internal::mathml_paint_info::MathMLPaintInfo;
+use crate::internal::outline_geometry::OutlineOutsetExtent;
+use crate::internal::outline_info::LayoutOutlineInfo;
+use crate::internal::outline_rect_collector::{OutlineRectCollector, UnionOutlineRectCollector};
+use crate::internal::pagination_utils::{GetPageArea, GetPageBorderBox};
+use crate::internal::scrollable_overflow_calculator::ScrollableOverflowCalculator;
+use crate::internal::table_borders::TableBorders;
+use crate::internal::table_fragment_data::{
     CollapsedTableBordersGeometry, GCedTableColumnGeometries,
 };
 use layout_geometry::geometry::box_sides::PhysicalBoxSides;

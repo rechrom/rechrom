@@ -1,5 +1,5 @@
 use foundation::{HeapVector, Member, String, StringBuilder, Visitor};
-use layout_core::internal::layout_input_node::LayoutInputNode;
+use crate::internal::layout_input_node::LayoutInputNode;
 
 use crate::block_break_token::BlockBreakToken;
 use crate::inline_break_token::InlineBreakToken;

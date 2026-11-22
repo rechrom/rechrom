@@ -5,14 +5,14 @@ use foundation::{
     StringView, TextDirection, To, WritingDirectionMode,
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
-use layout_core::internal::inline_item::InlineItem;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_node_metadata::Node;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_text::LayoutText;
-use layout_core::internal::style_variant::{StyleVariant, UsesFirstLineStyle};
-use layout_core::internal::text_offset_range::TextOffsetRange;
+use crate::internal::inline_item::InlineItem;
+use crate::internal::layout_block_flow::LayoutBlockFlow;
+use crate::internal::layout_inline::LayoutInline;
+use crate::internal::layout_node_metadata::Node;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::layout_text::LayoutText;
+use crate::internal::style_variant::{StyleVariant, UsesFirstLineStyle};
+use crate::internal::text_offset_range::TextOffsetRange;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
@@ -610,7 +610,7 @@ impl Default for InlineCursor {
 #[derive(Clone)]
 struct CulledInlineTraversal {
     current_object_: *const LayoutObject,
-    layout_inline_: *const layout_core::internal::layout_inline::LayoutInline,
+    layout_inline_: *const crate::internal::layout_inline::LayoutInline,
     use_fragment_tree_: bool,
 }
 

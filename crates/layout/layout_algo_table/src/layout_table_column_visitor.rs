@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::HeapVector;
-use layout_assembly::internal::block_node::BlockNode;
+use layout_base::internal::block_node::BlockNode;
 
 // cpp: layoutng_table/layout_table_column_visitor.h:22-32
 pub trait ColumnVisitor {

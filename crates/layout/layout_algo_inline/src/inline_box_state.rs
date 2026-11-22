@@ -19,16 +19,16 @@ use crate::box_fragment_builder::BoxFragmentBuilder;
 use crate::layout_result::LayoutResult;
 use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
 use crate::physical_fragment::BoxType;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::inline_item::{InlineItem, InlineItemType};
-use layout_core::internal::inline_item_result::InlineItemResult;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_box::LayoutBox;
-use layout_core::internal::layout_inline::LayoutInline;
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::text_fit_scale::TextFitBlockScale;
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType};
+use layout_base::internal::inline_item_result::InlineItemResult;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_box::LayoutBox;
+use layout_base::internal::layout_inline::LayoutInline;
+use layout_base::internal::layout_object::LayoutObject;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::text_fit_scale::TextFitBlockScale;
 use layout_geometry::geometry::box_sides::LineLogicalBoxSides;
 use layout_geometry::geometry::box_strut::{BoxStrut, LineBoxStrut};
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
@@ -46,7 +46,7 @@ use crate::line_info::LineInfo;
 use crate::line_utils::{
     CalculateLeadingSpace, ComputeRelativeOffsetForInline, ComputeRelativeOffsetForOOFInInline,
 };
-use layout_core::internal::used_font::UsedFont;
+use layout_base::internal::used_font::UsedFont;
 
 // cpp: layoutng_inline/inline_box_state.h:33-40
 pub struct PendingPositions {

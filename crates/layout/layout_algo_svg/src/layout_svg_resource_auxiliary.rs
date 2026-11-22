@@ -4,7 +4,7 @@
 //! descendants; this resource identity never consumes flattened paint data.
 use crate::layout_svg_resource_clipper::LayoutSVGResourceContainer;
 use foundation::{Traceable, Visitor};
-use layout_assembly::internal::{
+use layout_base::internal::{
     layout_node_metadata::Element,
     layout_object::{LayoutObject, LayoutObjectClass},
 };
@@ -34,7 +34,7 @@ impl LayoutSVGResourceAuxiliary {
         self.filter
     }
 
-    fn MarkerData(&self) -> layout_assembly::internal::layout_input::SvgMarkerData {
+    fn MarkerData(&self) -> layout_base::internal::layout_input::SvgMarkerData {
         let element = foundation::DynamicTo::<Element>(self.GetNode());
         unsafe { element.as_ref() }
             .and_then(|element| element.InputElementData().as_ref())
@@ -70,7 +70,7 @@ impl LayoutSVGResourceAuxiliary {
         position: &crate::svg_marker_data::MarkerPosition,
         stroke_width: f32,
     ) -> foundation::blink_geometry::transforms::affine_transform::AffineTransform {
-        use layout_assembly::internal::layout_input::SvgMarkerOrient as Orient;
+        use layout_base::internal::layout_input::SvgMarkerOrient as Orient;
         let data = self.MarkerData();
         let scale = if data.stroke_width_units {
             stroke_width
@@ -109,13 +109,13 @@ impl LayoutSVGResourceAuxiliary {
     }
     pub fn UpdateSVGLayout(
         &mut self,
-        info: &layout_assembly::internal::svg_layout_info::SVGLayoutInfo,
-    ) -> layout_assembly::internal::svg_layout_info::SVGLayoutResult {
+        info: &layout_base::internal::svg_layout_info::SVGLayoutInfo,
+    ) -> layout_base::internal::svg_layout_info::SVGLayoutResult {
         if self.filter {
             return self.resource.UpdateSVGLayout(info);
         }
         if self.is_in_layout.replace(true) {
-            return layout_assembly::internal::svg_layout_info::SVGLayoutResult::new(
+            return layout_base::internal::svg_layout_info::SVGLayoutResult::new(
                 false, false,
             );
         }

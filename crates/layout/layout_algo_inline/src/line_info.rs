@@ -13,11 +13,11 @@ use crate::inline_break_token::InlineBreakToken;
 use crate::inline_items_data::InlineItemsData;
 use crate::layout_result::EStatus;
 use crate::layout_result::LayoutResult;
-use layout_core::internal::inline_item::InlineItemType;
-use layout_core::internal::inline_item_result::InlineItemResult;
-use layout_core::internal::inline_item_result::InlineItemResults;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node::InlineNode;
+use layout_base::internal::inline_item::InlineItemType;
+use layout_base::internal::inline_item_result::InlineItemResult;
+use layout_base::internal::inline_item_result::InlineItemResults;
+use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
+use layout_base::internal::inline_node::InlineNode;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_style::css::white_space::WhiteSpaceCollapse;
 use layout_style::style::computed_style::ComputedStyle;
@@ -750,7 +750,7 @@ impl LineInfo {
             let item = unsafe { &*item_ptr };
 
             if item.EndCollapseType()
-                == layout_core::internal::inline_item::CollapseType::kOpaqueToCollapsing
+                == layout_base::internal::inline_item::CollapseType::kOpaqueToCollapsing
             {
                 continue;
             }

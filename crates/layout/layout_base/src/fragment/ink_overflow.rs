@@ -24,7 +24,7 @@ use crate::text_decoration_info::{
     ComputeTextDecorationFragmentContext, IsSvgText, TextDecorationFragmentContext,
     TextDecorationInfo,
 };
-use layout_core::internal::text_decoration_offset::TextDecorationOffset;
+use crate::internal::text_decoration_offset::TextDecorationOffset;
 use layout_style::style::applied_text_decoration::AppliedTextDecoration;
 
 pub struct ReadUnsetAsNoneScope;

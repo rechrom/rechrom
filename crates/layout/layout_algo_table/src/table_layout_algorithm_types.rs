@@ -5,7 +5,7 @@ use foundation::{
     kIndefiniteSize, EBoxSizing, EDisplay, EVisibility, HeapVector, IsHorizontalWritingMode,
     IsParallelWritingMode, LayoutUnit, To, WritingDirectionMode,
 };
-use layout_assembly::internal::{
+use layout_base::internal::{
     block_node::BlockNode,
     constraint_space::LayoutResultCacheSlot,
     constraint_space_builder::ConstraintSpaceBuilder,

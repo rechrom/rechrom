@@ -13,7 +13,7 @@
 
 #![allow(non_snake_case)]
 
-// Link the layout facade (and layout_assembly's untranslated-symbol stubs) into the unit-test binary
+// Link the layout facade (and layout_base's untranslated-symbol stubs) into the unit-test binary
 // (layout_style declares extern functions MSVC link.exe must resolve).
 #[cfg(test)]
 extern crate layout as _;

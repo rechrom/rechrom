@@ -18,17 +18,17 @@ pub mod paint_resource_usage;
 
 pub use foundation::graphics_types::graphics::paint::display_item_client_types::RasterEffectOutset;
 use foundation::{LayoutOffset as Offset, LayoutSize as Size};
-use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;
-use layout_core::internal::layout_input::{
+use crate::internal::layout_box_model_object::LayoutBoxModelObject;
+use crate::internal::layout_input::{
     BorderLineStyle, BoxDecorationBreak, Display, Edges, FloatSide, FocusedImageMapArea,
     ListStyleType, NodeKind, Overflow, OverscrollBehavior, PaintStyle, Position, SvgShapeData,
     SvgViewBoxData, TextDecorationPaint, TextDirection, TransformMatrix, WritingMode,
 };
-use layout_core::internal::layout_object::LayoutObject;
-use layout_core::internal::paint_layer::PaintLayer;
+use crate::internal::layout_object::LayoutObject;
+use crate::internal::paint_layer::PaintLayer;
 use foundation::graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use foundation::PaintInvalidationReason;
-use layout_core::internal::layout_text::LayoutText;
+use crate::internal::layout_text::LayoutText;
 
 /// A DisplayItemClient's PaintController-visible state, read from the live
 /// source client (or from a detached payload's stored state).
@@ -38,7 +38,7 @@ pub struct PaintClientState {
     pub is_cacheable: bool,
     pub is_just_created: bool,
 }
-use layout_core::internal::selection_state::SelectionState;
+use crate::internal::selection_state::SelectionState;
 
 /// Opaque reference to a resident source LayoutObject that PrePaint retains
 /// only until the end of its current walk: PaintInvalidator's
@@ -57,7 +57,7 @@ impl PrePaintSourceObject {
     }
 }
 
-// The C++ definitions are public API; all layout_core::* names above retain their
+// The C++ definitions are public API; all crate::* names above retain their
 // owner in the later layoutng crate. The Cargo cycle needs an interface split.
 
 // cpp: layoutng_fragment_tree/fragment_tree.h:25
@@ -1359,7 +1359,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
 
     fn ViewScrollGeometry(&self) -> (Size, Option<Size>, bool) {
         let layout_box = self.ResidentBoxFragment().and_then(|box_fragment| unsafe {
-            foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(
+            foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(
                 box_fragment.GetLayoutObject(),
             )
             .as_ref()
@@ -1384,7 +1384,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     fn ViewReplacedContent(&self) -> Option<ReplacedContentPaintData> {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => {
-                let replaced = foundation::DynamicTo::<layout_core::internal::layout_replaced::LayoutReplaced>(
+                let replaced = foundation::DynamicTo::<crate::internal::layout_replaced::LayoutReplaced>(
                     box_fragment.GetLayoutObject(),
                 );
                 (!replaced.is_null()).then(|| {
@@ -1780,7 +1780,7 @@ impl ResidentBoxGeometry for FragmentPaintData {
     fn ViewIsReplaced(&self) -> bool {
         match self.ResidentBoxFragment() {
             Some(box_fragment) => !foundation::DynamicTo::<
-                layout_core::internal::layout_replaced::LayoutReplaced,
+                crate::internal::layout_replaced::LayoutReplaced,
             >(box_fragment.GetLayoutObject())
             .is_null(),
             None => self.paint.replaced_content.is_some(),
@@ -2546,7 +2546,7 @@ impl PaintProperties {
             return None;
         }
         let canvas = object.CanvasForDrawingLayoutObjectInfo()?;
-        let element = foundation::DynamicTo::<layout_core::internal::layout_node_metadata::Element>(
+        let element = foundation::DynamicTo::<crate::internal::layout_node_metadata::Element>(
             object.GetNode(),
         );
         let matrix = unsafe { element.as_ref()? }
@@ -2630,7 +2630,7 @@ impl PaintProperties {
     pub fn RequiresMainThreadScrollingForBackgroundAttachmentFixed(&self) -> Option<bool> {
         match self.SourceObject() {
             Some(object) => unsafe {
-                foundation::DynamicTo::<layout_core::internal::layout_view::LayoutView>(
+                foundation::DynamicTo::<crate::internal::layout_view::LayoutView>(
                     object as *const LayoutObject,
                 )
                 .as_ref()
@@ -2713,7 +2713,7 @@ impl PaintProperties {
     pub fn BackgroundPaintLocation(&self) -> BackgroundPaintLocation {
         self.SourceObject()
             .and_then(|object| {
-                unsafe { foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object).as_ref() }
+                unsafe { foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).as_ref() }
                     .map(crate::internal::boundary::layout_boundary::LiveBackgroundPaintLocation)
             })
             .unwrap_or(self.background_paint_location)
@@ -2722,7 +2722,7 @@ impl PaintProperties {
     pub fn CssClip(&self) -> Option<FragmentPaintRect> {
         self.SourceObject()
             .and_then(|object| {
-                unsafe { foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object).as_ref() }
+                unsafe { foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).as_ref() }
                     .map(crate::internal::boundary::layout_boundary::LiveCssClip)
             })
             .flatten()
@@ -2791,7 +2791,7 @@ impl PaintProperties {
     pub fn BackgroundShouldAlwaysBeClipped(&self) -> bool {
         self.SourceObject()
             .map(|object| {
-                let box_ = foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object);
+                let box_ = foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object);
                 !box_.is_null() && unsafe { &*box_ }.BackgroundShouldAlwaysBeClipped()
             })
             .unwrap_or(false)
@@ -2800,7 +2800,7 @@ impl PaintProperties {
     pub fn CanCompositeBackgroundAttachmentFixed(&self) -> bool {
         self.SourceObject()
             .map(|object| {
-                !foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object).is_null()
+                !foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).is_null()
                     && object.CanCompositeBackgroundAttachmentFixed()
             })
             .unwrap_or(false)
@@ -2808,7 +2808,7 @@ impl PaintProperties {
 
     pub fn IsLayoutBox(&self) -> bool {
         self.SourceObject().map(|object| {
-            !foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object).is_null()
+            !foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).is_null()
         })
             .unwrap_or(self.is_layout_box)
     }
@@ -3273,7 +3273,7 @@ impl PaintProperties {
     pub fn IsTextCombine(&self) -> bool {
         match self.SourceObject() {
             Some(object) => !foundation::DynamicTo::<
-                layout_core::internal::layout_text_combine::LayoutTextCombine,
+                crate::internal::layout_text_combine::LayoutTextCombine,
             >(object as *const LayoutObject)
             .is_null(),
             None => self.text_combine.is_some(),
@@ -3300,7 +3300,7 @@ impl PaintProperties {
     /// The source PaintLayerScrollableArea of this payload's LayoutObject.
     fn SourceScrollableArea(
         &self,
-    ) -> Option<&layout_core::internal::layout_scrollable_area::PaintLayerScrollableArea> {
+    ) -> Option<&crate::internal::layout_scrollable_area::PaintLayerScrollableArea> {
         let object = self.SourceObjectPointer();
         if object.is_null() {
             return None;
@@ -3371,12 +3371,12 @@ impl PaintProperties {
         self.live_style_facts.then(|| self.style.Source()).flatten()
     }
 
-    fn FactLayoutBox(&self) -> Option<&layout_core::internal::layout_box::LayoutBox> {
+    fn FactLayoutBox(&self) -> Option<&crate::internal::layout_box::LayoutBox> {
         if !self.live_style_facts {
             return None;
         }
         self.SourceObject().map(|object| unsafe {
-            foundation::DynamicTo::<layout_core::internal::layout_box::LayoutBox>(object).as_ref()
+            foundation::DynamicTo::<crate::internal::layout_box::LayoutBox>(object).as_ref()
         })?
     }
 

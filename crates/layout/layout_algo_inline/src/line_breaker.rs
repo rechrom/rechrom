@@ -38,34 +38,34 @@ use crate::inline_items_data::{InlineItemsData, OpenTagItems};
 use crate::layout_result::EStatus;
 use crate::logical_fragment::LogicalFragment;
 use crate::physical_box_fragment::PhysicalBoxFragment;
-use layout_core::internal::block_node::BlockNode;
-use layout_core::internal::column_spanner_path::ColumnSpannerPath;
-use layout_core::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
-use layout_core::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
-use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
-use layout_core::internal::fragmentation_utils::FollowColumnSpannerPath;
-use layout_core::internal::hyphen_result::HyphenResult;
-use layout_core::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
-use layout_core::internal::inline_item_segment::InlineItemSegment;
-use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
-use layout_core::internal::inline_node::InlineNode;
-use layout_core::internal::layout_block_flow::LayoutBlockFlow;
-use layout_core::internal::layout_input_node::MinMaxSizesFloatInput;
-use layout_core::internal::layout_node_metadata::Element;
-use layout_core::internal::layout_pass_scope::LayoutPassScope;
-use layout_core::internal::layout_text_combine::LayoutTextCombine;
-use layout_core::internal::length_utils::{
+use layout_base::internal::block_node::BlockNode;
+use layout_base::internal::column_spanner_path::ColumnSpannerPath;
+use layout_base::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
+use layout_base::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
+use layout_base::internal::exclusions::exclusion_space::ExclusionSpace;
+use layout_base::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
+use layout_base::internal::fragmentation_utils::FollowColumnSpannerPath;
+use layout_base::internal::hyphen_result::HyphenResult;
+use layout_base::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_item_result::{InlineItemResult, InlineItemResults};
+use layout_base::internal::inline_item_segment::InlineItemSegment;
+use layout_base::internal::inline_item_text_index::InlineItemTextIndex;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_block_flow::LayoutBlockFlow;
+use layout_base::internal::layout_input_node::MinMaxSizesFloatInput;
+use layout_base::internal::layout_node_metadata::Element;
+use layout_base::internal::layout_pass_scope::LayoutPassScope;
+use layout_base::internal::layout_text_combine::LayoutTextCombine;
+use layout_base::internal::length_utils::{
     ComputeBordersForInline, ComputeLineBorders, ComputeLineMarginsForSelf,
     ComputeLineMarginsForVisualContainer, ComputeLinePadding, ComputeMarginsForSelf,
     ComputeMinAndMaxContentContribution, ComputePadding,
 };
-use layout_core::internal::resolved_text_layout_attributes_iterator::ResolvedTextLayoutAttributesIterator;
-use layout_core::internal::svg_length_adjust_type::SVGLengthAdjustType;
-use layout_core::internal::text_item_type::TextItemType;
-use layout_core::internal::text_offset_range::TextOffsetRange;
-use layout_core::internal::unpositioned_float::UnpositionedFloat;
+use layout_base::internal::resolved_text_layout_attributes_iterator::ResolvedTextLayoutAttributesIterator;
+use layout_base::internal::svg_length_adjust_type::SVGLengthAdjustType;
+use layout_base::internal::text_item_type::TextItemType;
+use layout_base::internal::text_offset_range::TextOffsetRange;
+use layout_base::internal::unpositioned_float::UnpositionedFloat;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_geometry::geometry::box_strut::LineBoxStrut;
 use layout_geometry::geometry::logical_rect::LogicalRect;
@@ -3922,7 +3922,7 @@ impl LineBreaker {
             } else {
                 BaselineAlgorithmType::kDefault
             };
-            let child = BlockNode::new(To::<layout_core::internal::layout_box::LayoutBox>(
+            let child = BlockNode::new(To::<layout_base::internal::layout_box::LayoutBox>(
                 item.GetLayoutObject(),
             ));
             let constraint_space = unsafe { &*self.constraint_space_ };
@@ -3989,7 +3989,7 @@ impl LineBreaker {
         }
 
         debug_assert!(mode == LineBreakerMode::kMinContent || size_cache.is_null());
-        let child = BlockNode::new(To::<layout_core::internal::layout_box::LayoutBox>(
+        let child = BlockNode::new(To::<layout_base::internal::layout_box::LayoutBox>(
             item.GetLayoutObject(),
         ));
         let constraint_space = unsafe { &*self.constraint_space_ };
@@ -4041,7 +4041,7 @@ impl LineBreaker {
         debug_assert!(
             block_break_token.is_null()
                 || unsafe { &*block_break_token }.InputNode().GetLayoutBox()
-                    == To::<layout_core::internal::layout_box::LayoutBox>(item.GetLayoutObject())
+                    == To::<layout_base::internal::layout_box::LayoutBox>(item.GetLayoutObject())
         );
 
         if !line_info.Results().empty() {
@@ -4060,7 +4060,7 @@ impl LineBreaker {
                 .GetExclusionSpace()
                 .MoveAndUpdateDerivedGeometry(exclusion_space);
 
-            let block_node = BlockNode::new(To::<layout_core::internal::layout_box::LayoutBox>(
+            let block_node = BlockNode::new(To::<layout_base::internal::layout_box::LayoutBox>(
                 item.GetLayoutObject(),
             ));
             let mut modified_space = None;
@@ -4355,7 +4355,7 @@ impl LineBreaker {
         let bfc_block_offset = self.line_opportunity_.bfc_block_offset;
         let constraint_space = unsafe { &*self.constraint_space_ };
         let is_hidden_for_paint = constraint_space.GetLineClampData().ShouldHideForPaint();
-        let float_node = BlockNode::new(To::<layout_core::internal::layout_box::LayoutBox>(
+        let float_node = BlockNode::new(To::<layout_base::internal::layout_box::LayoutBox>(
             item.GetLayoutObject(),
         ));
         let percentage_size = if float_node.IsReplaced() {

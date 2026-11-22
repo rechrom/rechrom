@@ -1,17 +1,17 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, Length, MakeGarbageCollected, To};
-use layout_assembly::fragment_items_builder::FragmentItemsBuilder;
-use layout_assembly::internal::fragment_item_with_offset_fwd::FragmentItemWithOffsetList;
-use layout_assembly::internal::inline_node::InlineNode;
-use layout_assembly::internal::layout_input::NodeKind;
-use layout_assembly::internal::layout_node_metadata::{Element, Node, Text};
-use layout_assembly::internal::layout_object::{LayoutObject, LayoutObjectClass};
-use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
-use layout_assembly::internal::svg_text_attributes_request::{
+use layout_base::fragment_items_builder::FragmentItemsBuilder;
+use layout_base::internal::fragment_item_with_offset_fwd::FragmentItemWithOffsetList;
+use layout_base::internal::inline_node::InlineNode;
+use layout_base::internal::layout_input::NodeKind;
+use layout_base::internal::layout_node_metadata::{Element, Node, Text};
+use layout_base::internal::layout_object::{LayoutObject, LayoutObjectClass};
+use layout_base::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult};
+use layout_base::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
 };
-use layout_assembly::layout_registry::LayoutRegistry;
+use layout_base::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::block_style::{SquaredLocalSvgTextScale, UpdateSvgBlockStyle};
@@ -426,8 +426,8 @@ fn SvgLocalToParentTransform(
 fn SvgPaintGeometry(
     object: &LayoutObject,
 ) -> (
-    Option<layout_assembly::internal::layout_input::TransformMatrix>,
-    Option<layout_assembly::fragment_tree::SvgViewportGeometry>,
+    Option<layout_base::internal::layout_input::TransformMatrix>,
+    Option<layout_base::fragment_tree::SvgViewportGeometry>,
     Option<foundation::gfx::RectF>,
 ) {
     match object.RuntimeClass() {

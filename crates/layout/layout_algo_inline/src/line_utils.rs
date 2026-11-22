@@ -5,8 +5,8 @@
 use crate::algorithms::*;
 use font_engine::fonts::font_height::FontHeight;
 use foundation::{EPosition, LayoutUnit};
-use layout_core::internal::constraint_space::ConstraintSpace;
-use layout_core::internal::relative_utils::ComputeRelativeOffset;
+use layout_base::internal::constraint_space::ConstraintSpace;
+use layout_base::internal::relative_utils::ComputeRelativeOffset;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_style::style::computed_style::ComputedStyle;
 

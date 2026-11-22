@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use crate::algorithms::*;
 use foundation::{ECaptionSide, To};
-use layout_assembly::{
+use layout_base::{
     block_break_token::BlockBreakToken,
     internal::{
         block_node::BlockNode,

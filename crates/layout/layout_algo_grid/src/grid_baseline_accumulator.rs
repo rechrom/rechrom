@@ -1,11 +1,11 @@
 use crate::grid_layout_utils::BaselineAccumulator;
 use font_engine::FontBaseline;
 use foundation::LayoutUnit;
-use layout_assembly::internal::grid_item::GridItemData;
-use layout_assembly::internal::grid_track_collection::{
+use layout_base::internal::grid_item::GridItemData;
+use layout_base::internal::grid_track_collection::{
     GridLayoutTrackCollection, GridTrackBaselines,
 };
-use layout_assembly::logical_box_fragment::LogicalBoxFragment;
+use layout_base::logical_box_fragment::LogicalBoxFragment;
 use layout_style::style::grid_area::GridArea;
 use layout_style::style::grid_enums::GridTrackSizingDirection::kForRows;
 

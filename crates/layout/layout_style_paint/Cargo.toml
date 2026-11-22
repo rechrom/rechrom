@@ -6,7 +6,7 @@ edition = "2021"
 # Rechrom's ComputedStyle -> paint-value projection, shared by Style (SVG
 # paint servers, generated images, viewport-unit scrollbar widths) and Layout
 # (PaintStyle publication). Only lower value crates may be named here: never
-# `style`, layout_core, layout_assembly or a layout_* engine package.
+# `style`, layout_base or a layout_* engine package.
 [dependencies]
 foundation = { path = "../../foundation" }
 image_resource = { path = "../../image_resource" }
@@ -15,7 +15,7 @@ paint_input_types = { path = "../paint_input_types" }
 
 [dev-dependencies]
 # Test binaries only: MSVC link.exe needs the untranslated-symbol stubs that the
-# layout facade links (layout_assembly) for layout_style's extern declarations.
+# layout facade links (layout_base) for layout_style's extern declarations.
 layout = { path = "../layout" }
 
 [lib]

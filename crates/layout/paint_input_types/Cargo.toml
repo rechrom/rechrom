@@ -5,7 +5,7 @@ edition = "2021"
 
 # Plain retained paint values shared by Layout (producer), Paint, Raster,
 # Compositor and Style. Only lower value crates may be named here: never
-# layout_core, layout_assembly or a layout_* package.
+# layout_base or a layout_* package.
 [dependencies]
 canvas = { path = "../../canvas" }
 foundation = { path = "../../foundation" }

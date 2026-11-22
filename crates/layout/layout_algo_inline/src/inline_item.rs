@@ -10,10 +10,10 @@
 use crate::algorithms::*;
 use font_engine::RunSegmenterRange;
 use foundation::{MakeGarbageCollected, Member};
-use layout_core::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
-use layout_core::internal::inline_item_segment::InlineItemSegment;
-use layout_core::internal::layout_invalidation_reason;
-use layout_core::internal::layout_object::LayoutObject;
+use layout_base::internal::inline_item::{InlineItem, InlineItemType, InlineItems};
+use layout_base::internal::inline_item_segment::InlineItemSegment;
+use layout_base::internal::layout_invalidation_reason;
+use layout_base::internal::layout_object::LayoutObject;
 use layout_style::style::computed_style::ComputedStyle;
 
 // cpp: layoutng_inline/inline_item.cc:17-24

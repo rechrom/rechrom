@@ -371,7 +371,7 @@ mod tests {
 
     fn svg_profile_exports_shape_fragments() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../layout_core/src/pixel_testdata/algorithm_profiles/svg.html");
+            .join("../../../layout_base/src/pixel_testdata/algorithm_profiles/svg.html");
         let url = format!("file://{}", fixture.display());
         let root = LayoutUrl(&url, 400, 320).unwrap();
         fn inspect(node: &FragmentPaintData, shapes: &mut usize) {
@@ -492,7 +492,7 @@ mod tests {
     const SIZE_LIMITS_REFERENCE: &[u8] =
         include_bytes!("../tests/fixtures/block-size-limits-reference.png");
     const SOURCE_BLOCK_PROFILE: &str =
-        include_str!("../../../../layout_core/src/pixel_testdata/algorithm_profiles/block.html");
+        include_str!("../../../../layout_base/src/pixel_testdata/algorithm_profiles/block.html");
     const SOURCE_BLOCK_PROFILE_REFERENCE: &[u8] =
         include_bytes!("../tests/fixtures/block-profile-reference.png");
 
