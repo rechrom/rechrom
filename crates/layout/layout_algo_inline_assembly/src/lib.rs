@@ -2,16 +2,16 @@
 // Compile their owning module files once in this assembly boundary. No
 // translated implementation is copied into a new package.
 extern crate self as layout_algo_inline;
-extern crate self as layout_fragment;
 extern crate self as layout_core;
 
 pub use foundation::UnsupportedLayout;
 
 include!("../../layout_core/src/lib.rs");
 
-pub mod layout_fragment_package {
-    include!("../../layout_fragment/src/lib.rs");
-}
+// Fragment-tree modules still compiled with base; fragment data is the real
+// `layout_fragment` crate.
+#[path = "../../layout_assembly/src/layout_fragment_package.rs"]
+pub mod layout_fragment_package;
 pub use layout_fragment_package::*;
 
 pub mod layout_algo_inline_package {

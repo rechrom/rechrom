@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{IsHorizontalWritingMode, LayoutUnit, MakeGarbageCollected, Member, PhysicalRect};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::overflow_clip_axes::{
     kOverflowClipBothAxis, kOverflowClipX, kOverflowClipY, OverflowClipAxes,

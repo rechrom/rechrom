@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapHashMap, Member, PhysicalRect, PhysicalSize, Traceable, Visitor};
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
+use crate::box_fragment_builder::BoxFragmentBuilder;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 
 use super::super::layout_box::LayoutBox;

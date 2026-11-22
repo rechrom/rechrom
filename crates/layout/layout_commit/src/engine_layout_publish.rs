@@ -85,8 +85,8 @@ pub(super) fn publish_layout_output(
             .take()
             .or(engine.scroll_paint_index_spare_.take());
         engine.scroll_paint_index_ = Some({
-            let _trace = layout_fragment_boundary::trace::span(
-                layout_fragment_boundary::trace::TracePhase::BuildScrollIndex,
+            let _trace = layout_fragment::trace::span(
+                layout_fragment::trace::TracePhase::BuildScrollIndex,
             );
             let cached_objects = engine.CachedScrollIndexObjects();
             // RunLayout's temporary pass has ended. Walking source SVG

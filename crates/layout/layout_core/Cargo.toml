@@ -18,6 +18,7 @@ paint_input_types = { path = "../paint_input_types" }
 layout_invalidation = { path = "../layout_invalidation" }
 layout_reuse = { path = "../layout_reuse" }
 layout_commit = { path = "../layout_commit" }
+layout_fragment = { path = "../layout_fragment" }
 skia = { path = "../../skia" }
 
 [lib]

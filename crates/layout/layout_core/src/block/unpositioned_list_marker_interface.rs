@@ -2,9 +2,9 @@
 
 use font_engine::FontBaseline;
 use foundation::{LayoutUnit, Member, Visitor};
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::layout_result::LayoutResult;
+use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_style::style::computed_style::ComputedStyle;
 

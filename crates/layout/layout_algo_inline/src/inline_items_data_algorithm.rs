@@ -4,7 +4,7 @@
 #![allow(non_snake_case)]
 
 use foundation::TextOffsetMap;
-use layout_fragment::inline_items_data::{
+use crate::inline_items_data::{
     InlineItemsData, InlineItemsDataWithOffsetMap, OpenTagItems,
 };
 use layout_core::internal::inline_item::InlineItemType;

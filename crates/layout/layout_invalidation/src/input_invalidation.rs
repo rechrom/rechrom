@@ -188,7 +188,7 @@ impl<'a> PaintResourceFacts<'a> {
     }
 
     pub(crate) fn FromPaintResources(
-        resources: &'a layout_fragment::fragment_tree::PaintResources,
+        resources: &'a crate::fragment_tree::PaintResources,
     ) -> Self {
         Self {
             fonts: &resources.fonts,

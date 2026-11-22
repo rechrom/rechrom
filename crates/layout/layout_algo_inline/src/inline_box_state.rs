@@ -13,10 +13,10 @@ use foundation::{
     TextEmphasisMark, To, Traceable, UnsupportedLayout, ValueForLength, ValuesEquivalent, Visitor,
     WritingDirectionMode, WtfSizeT,
 };
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::logical_line_item::{LogicalLineItem, LogicalLineItems};
-use layout_fragment::physical_fragment::BoxType;
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::layout_result::LayoutResult;
+use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
+use crate::physical_fragment::BoxType;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};

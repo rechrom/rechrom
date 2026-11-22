@@ -4,17 +4,17 @@
 use foundation::{
     LayoutUnit, PhysicalSize, TextDirection, ToLineWritingMode, WritingDirectionMode,
 };
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::fragment_item::{FragmentItem, ItemType};
-use layout_fragment::fragment_items::FragmentItems;
-use layout_fragment::fragment_items_builder::{
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::fragment_item::{FragmentItem, ItemType};
+use crate::fragment_items::FragmentItems;
+use crate::fragment_items_builder::{
     AddPreviousItemsResult, FragmentItemWithOffset, FragmentItemsBuilder,
 };
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_break_token::InlineBreakToken;
+use crate::inline_cursor::InlineCursor;
 #[cfg(debug_assertions)]
-use layout_fragment::physical_box_fragment::AllowPostLayoutScope;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_box_fragment::AllowPostLayoutScope;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::inline_node::InlineNode;
 use layout_geometry::geometry::logical_size::ToLogicalSize;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;

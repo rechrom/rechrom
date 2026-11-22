@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{ETextAlign, LayoutUnit, RuntimeEnabledFeatures, WtfSizeT};
-use layout_fragment::inline_break_token::InlineBreakToken;
+use crate::inline_break_token::InlineBreakToken;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
 use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;

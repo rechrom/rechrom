@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layout_fragment::fragment_tree::LayoutResultHandle;
-use layout_fragment::layout_result::LayoutResult;
+use crate::fragment_tree::LayoutResultHandle;
+use crate::layout_result::LayoutResult;
 use layout_style::style::computed_style::ComputedStyle as StyleComputedStyle;
 use std::sync::Arc;
 

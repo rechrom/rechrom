@@ -11,7 +11,7 @@ use std::ops::{Deref, DerefMut};
 use foundation::{
     gfx, LayoutUnit, PhysicalOffset, PhysicalRect, To, TransformState, Vector, Visitor,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_style::style::computed_style::ComputedStyle;

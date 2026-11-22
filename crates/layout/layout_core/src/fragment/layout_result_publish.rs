@@ -20,8 +20,8 @@ pub(super) fn install_layout_result_paint_state(
     purpose: LayoutUpdateKind,
     cache: &mut LayoutBoundaryCache,
 ) -> LayoutResultHandle {
-    let mut trace = layout_fragment_boundary::trace::span(
-        layout_fragment_boundary::trace::TracePhase::InstallLayoutResultPaintState,
+    let mut trace = layout_fragment::trace::span(
+        layout_fragment::trace::TracePhase::InstallLayoutResultPaintState,
     );
     trace.set("cache_warm", (!cache.objects.is_empty()) as u8 as f64);
     let result_identity = result as *const LayoutResult as usize;
@@ -36,8 +36,8 @@ pub(super) fn install_layout_result_paint_state(
     // A topology mutation cleared the object index.
     let objects_rebuilt = cache.objects.is_empty();
     if objects_rebuilt {
-        let _phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::IndexObjects,
+        let _phase = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::IndexObjects,
         );
         EnsureLayoutBoundaryObjectIndex(root, cache);
     }

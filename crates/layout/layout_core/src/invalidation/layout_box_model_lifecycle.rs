@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 
 use foundation::DynamicTo;
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::style_difference::StyleDifference;
 use layout_style::style::style_position_anchor::Type as AnchorType;

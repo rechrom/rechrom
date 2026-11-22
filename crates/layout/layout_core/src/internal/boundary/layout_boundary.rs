@@ -32,9 +32,9 @@ use foundation::{
     PhysicalSize, String as BlinkString, TextDecorationLine, TextEmphasisMark, TextOffsetMap, To,
     UnsupportedLayout, WritingMode as StyleWritingMode,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::fragment_item::{FragmentItem, ItemType};
-use layout_fragment::fragment_tree::{
+use crate::block_break_token::BlockBreakToken;
+use crate::fragment_item::{FragmentItem, ItemType};
+use crate::fragment_tree::{
     BackgroundPaintLocation, CollapsedTableEdge,
     CollapsedTablePaintData, CollapsedTableSection, ColumnRule, ColumnRulePaintData,
     FieldsetPaintData, FormControlPaintData, FragmentBoxSides, FragmentKind, FragmentPaintData,
@@ -46,10 +46,10 @@ use layout_fragment::fragment_tree::{
     SelfOutlinePaintData, StickyAxisPaintData, StickyPositionPaintData, StitchedDecorationData,
     SvgTextPaintData, TablePaintColumn, TablePaintData, TextCombineEmphasisPaintData,
 };
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::layout_result::LayoutResult;
+use crate::logical_fragment::LogicalFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::axis::{
     kPhysicalAxesHorizontal, kPhysicalAxesVertical, PhysicalAxes, PhysicalAxis,
 };
@@ -346,8 +346,8 @@ pub(crate) fn RefreshCompatiblePaintCache(cache: &mut LayoutBoundaryCache) {
 /// used to snapshot.
 pub(crate) fn LiveBackgroundPaintLocation(
     layout_box: &crate::internal::layout_box::LayoutBox,
-) -> layout_fragment::fragment_tree::BackgroundPaintLocation {
-    use layout_fragment::fragment_tree::BackgroundPaintLocation;
+) -> crate::fragment_tree::BackgroundPaintLocation {
+    use crate::fragment_tree::BackgroundPaintLocation;
     match layout_box.GetBackgroundPaintLocation() {
         crate::internal::layout_object::kBackgroundPaintInBorderBoxSpace => {
             BackgroundPaintLocation::BorderBox

@@ -11,7 +11,7 @@ use crate::{
     },
     layout_engine::LayoutEngine,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 use std::rc::Rc;
 fn GetNextSoftBreak(mapping: &OffsetMapping, cursor: &mut InlineCursor) -> Position {
     while cursor.IsNotNull() {

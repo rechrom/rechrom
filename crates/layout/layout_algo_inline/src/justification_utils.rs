@@ -6,7 +6,7 @@ use font_engine::fonts::shaping::shape_result_spacing::{ExpansionSetup, ShapeRes
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::blink_geometry::geometry::TextRunLayoutUnit;
 use foundation::{IsRtl, LayoutUnit, StringView, TextDirection, TextJustify};
-use layout_fragment::logical_line_item::LogicalLineItem;
+use crate::logical_line_item::LogicalLineItem;
 use layout_core::internal::inline_item::InlineItemType;
 use layout_core::internal::inline_item_result::{InlineItemResult, InlineItemResults};
 

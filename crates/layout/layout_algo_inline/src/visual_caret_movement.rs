@@ -10,7 +10,7 @@ use crate::internal::editing::forward::{
 };
 use crate::offset_mapping::OffsetMapping;
 use foundation::{DynamicTo, TextDirection};
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisualCaretMoveDirection {

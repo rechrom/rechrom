@@ -2,8 +2,8 @@
 #![allow(non_snake_case)]
 
 use foundation::{LayoutUnit, MakeGarbageCollected, TextDirection};
-use layout_fragment::physical_fragment::{FragmentType, PhysicalFragment, PhysicalFragmentFlags};
-use layout_fragment::physical_line_box_fragment::PhysicalLineBoxFragment;
+use crate::physical_fragment::{FragmentType, PhysicalFragment, PhysicalFragmentFlags};
+use crate::physical_line_box_fragment::PhysicalLineBoxFragment;
 
 use crate::line_box_fragment_builder::LineBoxFragmentBuilder;
 

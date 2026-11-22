@@ -4,7 +4,7 @@
 use std::ops::{Index, IndexMut};
 
 use foundation::WtfSizeT;
-use layout_fragment::inline_break_token::InlineBreakToken;
+use crate::inline_break_token::InlineBreakToken;
 
 use crate::line_info::LineInfo;
 

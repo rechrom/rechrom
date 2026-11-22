@@ -3,6 +3,11 @@ name = "layout_fragment"
 version = "0.0.1"
 edition = "2021"
 
+# Fragment data (layer L1 in `crates/layout/PACKAGE_MAP.md`). It depends only
+# on the shared roots below and never on base (`layout_core`, compiled inside
+# `layout_assembly`); base depends on this crate. A LayoutObject, Node or
+# PaintLayer is named only through the opaque handles in `src/opaque.rs`;
+# behaviour that needs the concrete object lives in base extension traits.
 [dependencies]
 scroll_snap = { path = "../../compositor/scroll_snap" }
 browser_tracing = { path = "../../tracing" }
@@ -10,18 +15,15 @@ canvas = { path = "../../canvas" }
 foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 image_resource = { path = "../../image_resource" }
+layout_geometry = { path = "../layout_geometry" }
+layout_style = { path = "../layout_style" }
 paint_input_types = { path = "../paint_input_types" }
 
 [lib]
-path = "src/package.rs"
+path = "src/lib.rs"
 
-# Pending Bazel dependencies: layoutng:internal_headers and shared_api,
-# foundation APIs: blink_base, blink_geometry, core_export, graphics_types,
-# layout_features, style_values and the transitive PaintLayer declaration;
-# remaining source font behavior; icu_bidi:unicode_headers.
-# layoutng_inline: OffsetMapping type and the three InlineItemsData algorithm
-# methods declared in the fragment-tree header but defined in that package.
-# The source translated modules still have reciprocal declarations with
-# layoutng and are composed by layout_assembly. The standalone crate owns
-# the opaque result lifetime boundary; source dereferencing stays in the
-# assembly adapter until those concrete declarations are split.
+# Pending: the fragment-tree types that still dereference LayoutObject
+# behaviour (PhysicalFragment, PhysicalBoxFragment, FragmentItem(s),
+# InlineCursor, LayoutResult, break tokens, ...) are compiled by
+# `layout_assembly` until their base-dependent methods move into base
+# extension traits; see PACKAGE_MAP.md §7 (R4 status).

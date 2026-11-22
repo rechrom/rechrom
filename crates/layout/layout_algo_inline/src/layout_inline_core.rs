@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, EDisplay, IsA, RuntimeEnabledFeatures};
-use layout_fragment::fragment_items::FragmentItems;
+use crate::fragment_items::FragmentItems;
 use layout_core::internal::layout_block_flow::LayoutBlockFlow;
 use layout_core::internal::layout_box::LayoutBox;
 use layout_core::internal::layout_box_model_object::LayoutBoxModelObject;

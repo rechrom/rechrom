@@ -27,10 +27,10 @@ use crate::inline_item_result_ruby_column::InlineItemResultRubyColumn;
 use crate::justification_utils::{ApplyJustification, ComputeRubyBaseInset, JustificationTarget};
 use crate::line_info::LineInfo;
 use foundation::Member;
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::logical_line_container::LogicalLineContainer;
-use layout_fragment::logical_line_item::{LogicalLineItem, LogicalLineItems};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::logical_fragment::LogicalFragment;
+use crate::logical_line_container::LogicalLineContainer;
+use crate::logical_line_item::{LogicalLineItem, LogicalLineItems};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;
 use layout_style::style::computed_style_constants::LineLogicalSide;
 

@@ -14,8 +14,8 @@ pub(super) trait EnginePaintUpdate {
 impl EnginePaintUpdate for LayoutEngine {
     #[inline(never)]
     fn publish_paint_data(&mut self) -> bool {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::PublishPaintData,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::PublishPaintData,
         );
         if self.tree_.is_none() {
             trace.set("rejected", 1.0);
@@ -61,8 +61,8 @@ impl EnginePaintUpdate for LayoutEngine {
         if self.output_kind != LayoutUpdateKind::Paint {
             return false;
         }
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::RefreshTargetedPaintData,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::RefreshTargetedPaintData,
         );
         let Some(fragments) = &mut self.fragments else {
             trace.set("rejected", 1.0);
@@ -94,8 +94,8 @@ impl EnginePaintUpdate for LayoutEngine {
         if self.output_kind != LayoutUpdateKind::Paint {
             return false;
         }
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::RefreshTargetedPaintInputs,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::RefreshTargetedPaintInputs,
         );
         if self.tree_.is_none() {
             return false;
@@ -129,8 +129,8 @@ impl EnginePaintUpdate for LayoutEngine {
 
     #[inline(never)]
     fn refresh_scroll_cull_data(&mut self, fragments: &mut LayoutResultHandle) -> bool {
-        let mut trace = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::RefreshScrollCullData,
+        let mut trace = layout_fragment::trace::span(
+            layout_fragment::trace::TracePhase::RefreshScrollCullData,
         );
         let Some(tree) = self.tree_.as_ref() else {
             return false;
@@ -170,8 +170,8 @@ impl EnginePaintUpdate for LayoutEngine {
                 .take()
                 .or(self.scroll_paint_index_spare_.take());
             self.scroll_paint_index_ = Some({
-                let _phase = layout_fragment_boundary::trace::span(
-                    layout_fragment_boundary::trace::TracePhase::BuildScrollPaintIndex,
+                let _phase = layout_fragment::trace::span(
+                    layout_fragment::trace::TracePhase::BuildScrollPaintIndex,
                 );
                 ScrollPaintPropertyIndex::new(
                     unsafe { &mut *root },
@@ -216,8 +216,8 @@ impl EnginePaintUpdate for LayoutEngine {
         };
         trace.set("committed_origins", committed as f64);
         {
-            let _phase = layout_fragment_boundary::trace::span(
-                layout_fragment_boundary::trace::TracePhase::UpdatePrePaintInputs,
+            let _phase = layout_fragment::trace::span(
+                layout_fragment::trace::TracePhase::UpdatePrePaintInputs,
             );
             UpdatePrePaintInputs(fragments, &self.objects_);
         }

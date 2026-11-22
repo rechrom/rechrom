@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, HeapVector, Member, PhysicalOffset, Visitor};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::inline_cursor::InlineCursor;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::BoxType;
+use crate::block_break_token::BlockBreakToken;
+use crate::inline_cursor::InlineCursor;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::BoxType;
 
 use super::layout_box::LayoutBox;
 use super::layout_box_model_object::LayoutBoxModelObject;

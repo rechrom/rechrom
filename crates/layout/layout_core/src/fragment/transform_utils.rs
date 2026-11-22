@@ -3,8 +3,8 @@
 use foundation::{
     gfx, ETransformBox, PhysicalOffset, PhysicalRect, PhysicalSize, To, TransformState,
 };
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_style::style::computed_style_constants::CoordBox;
 use layout_style::style::style_transform::{

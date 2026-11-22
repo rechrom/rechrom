@@ -3,7 +3,7 @@
 use std::ops::{Deref, DerefMut};
 
 use foundation::{Member, Visitor};
-use layout_fragment::inline_items_data::{
+use crate::inline_items_data::{
     InlineItemsData, InlineItemsDataType, TraceInlineNodeDataAfterDispatch,
 };
 

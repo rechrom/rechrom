@@ -5,9 +5,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{MakeGarbageCollected, PhysicalRect, To, WritingMode};
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::inline_cursor::InlineCursor;
-use layout_fragment::layout_result::LayoutResult;
+use crate::break_token::BreakToken;
+use crate::inline_cursor::InlineCursor;
+use crate::layout_result::LayoutResult;
 use layout_core::internal::algorithm_forward::InlineChildLayoutContext;
 use layout_core::internal::column_spanner_path::ColumnSpannerPath;
 use layout_core::internal::constraint_space::ConstraintSpace;

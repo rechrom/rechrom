@@ -12,8 +12,8 @@ pub(super) fn refresh_scroll_paint_properties(
     fragments: crate::layout_engine::PaintFragmentCursor<'_>,
     reuse_sticky_constraints: bool,
 ) {
-    let _trace = layout_fragment_boundary::trace::span(
-        layout_fragment_boundary::trace::TracePhase::RefreshScrollPaintProperties,
+    let _trace = layout_fragment::trace::span(
+        layout_fragment::trace::TracePhase::RefreshScrollPaintProperties,
     );
     let root_ptr: *mut LayoutObject = root;
     let mut object = root_ptr;

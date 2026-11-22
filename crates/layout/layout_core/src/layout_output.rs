@@ -6,13 +6,13 @@ use crate::internal::{
     layout_node_metadata::Element,
 };
 use foundation::{gfx, PhysicalOffset, PhysicalRect, PhysicalSize};
-use layout_fragment::fragment_tree::{
+use crate::fragment_tree::{
     FragmentPaintData, LayoutResultHandle, PaintPropertiesHandle,
 };
-use layout_fragment::fragment_data::{FragmentPaintBinding, FragmentPaintSidecar};
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::fragment_data::{FragmentPaintBinding, FragmentPaintSidecar};
+use crate::layout_result::LayoutResult;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use layout_style::style::style_transform::{
     ApplyIndependentTransformProperties, ApplyMotionPath, ApplyTransformOperations,
@@ -201,8 +201,8 @@ pub enum FragmentCursor<'a> {
         offset: PhysicalOffset,
     },
     Inline {
-        item: &'a layout_fragment::fragment_item::FragmentItem,
-        items: &'a layout_fragment::fragment_items::FragmentItems,
+        item: &'a crate::fragment_item::FragmentItem,
+        items: &'a crate::fragment_items::FragmentItems,
         container: &'a PhysicalBoxFragment,
         index: usize,
         offset: PhysicalOffset,
@@ -215,7 +215,7 @@ pub enum FragmentCursor<'a> {
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum PaintFragmentOwner {
     Physical(*const PhysicalFragment),
-    Inline(*const layout_fragment::fragment_items::FragmentItems, usize),
+    Inline(*const crate::fragment_items::FragmentItems, usize),
 }
 
 impl PaintFragmentOwner {
@@ -238,10 +238,10 @@ impl PaintFragmentOwner {
                         );
                     }
                 }
-                layout_fragment::fragment_tree::PhysicalFragmentInstanceId(fragment)
+                crate::fragment_tree::PhysicalFragmentInstanceId(fragment)
             }
             Self::Inline(items, index) => {
-                layout_fragment::fragment_tree::InlineItemInstanceId(unsafe { &*items }, index)
+                crate::fragment_tree::InlineItemInstanceId(unsafe { &*items }, index)
             }
         }
     }
@@ -342,7 +342,7 @@ pub(crate) struct LayoutPaintState {
     /// reads these from the Document / LocalFrame / LocalFrameView / Settings
     /// that own the painted LayoutObjects, never from a per-fragment copy, so
     /// every fragment of the result shares this one value.
-    document_resources: UnsafeCell<Option<Arc<layout_fragment::fragment_tree::PaintResources>>>,
+    document_resources: UnsafeCell<Option<Arc<crate::fragment_tree::PaintResources>>>,
 }
 
 impl LayoutPaintState {
@@ -366,7 +366,7 @@ impl LayoutPaintState {
     /// The document paint resources this result's fragments paint with.
     pub(crate) fn DocumentResources(
         &self,
-    ) -> Option<&Arc<layout_fragment::fragment_tree::PaintResources>> {
+    ) -> Option<&Arc<crate::fragment_tree::PaintResources>> {
         unsafe { &*self.document_resources.get() }.as_ref()
     }
 
@@ -376,7 +376,7 @@ impl LayoutPaintState {
     /// Font keep theirs.
     pub(crate) fn SetDocumentResources(
         &self,
-        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+        resources: Arc<crate::fragment_tree::PaintResources>,
     ) -> bool {
         let slot = unsafe { &mut *self.document_resources.get() };
         let changed = slot.as_ref().is_none_or(|previous| {
@@ -424,7 +424,7 @@ impl LayoutPaintState {
     /// previously installed resources stay valid under these.
     pub(crate) fn InstallPublication(
         &self,
-        resources: Arc<layout_fragment::fragment_tree::PaintResources>,
+        resources: Arc<crate::fragment_tree::PaintResources>,
         compatible: bool,
         exported_styles: Option<crate::internal::layout_input::ExportedStyleCacheKey>,
     ) {
@@ -478,7 +478,7 @@ impl LayoutPaintState {
                         &*(fragment as *const PhysicalFragment as *const PhysicalBoxFragment)
                     };
                     let instance =
-                        layout_fragment::fragment_tree::FragmentainerInstanceId(box_fragment);
+                        crate::fragment_tree::FragmentainerInstanceId(box_fragment);
                     // A fragmentainer is not a CSS box: GetLayoutObject()
                     // hides the fragmentation-context owner it was laid out
                     // for, which owns its (owner, sequence) identity.
@@ -492,12 +492,12 @@ impl LayoutPaintState {
                 let object = fragment.GetLayoutObject();
                 if object.is_null() || fragment.IsLineBox() {
                     return self.FallbackSidecar(
-                        layout_fragment::fragment_tree::PhysicalFragmentInstanceId(fragment),
+                        crate::fragment_tree::PhysicalFragmentInstanceId(fragment),
                     );
                 }
                 let object = unsafe { &*object };
                 let list = object.PaintSidecarFragments();
-                let fragment_data: &layout_fragment::fragment_data::FragmentData =
+                let fragment_data: &crate::fragment_data::FragmentData =
                     if !fragment.IsBox() {
                         list.front()
                     } else if object.WasDestroyedForTreeUpdate() {
@@ -522,7 +522,7 @@ impl LayoutPaintState {
             }
             PaintFragmentOwner::Inline(items, index) => {
                 let items = unsafe { &*items };
-                let instance = layout_fragment::fragment_tree::InlineItemInstanceId(items, index);
+                let instance = crate::fragment_tree::InlineItemInstanceId(items, index);
                 match items
                     .Items()
                     .get(index)
@@ -645,7 +645,7 @@ impl LayoutPaintState {
         match owner {
             PaintFragmentOwner::Physical(fragment) => {
                 let fragment = unsafe { &*fragment };
-                output.resident_owner = layout_fragment_boundary::ResidentFragmentOwner::Physical(
+                output.resident_owner = layout_fragment::ResidentFragmentOwner::Physical(
                     fragment as *const PhysicalFragment as usize,
                 );
                 crate::internal::boundary::layout_boundary::InitializePhysicalFragmentPaintData(
@@ -660,7 +660,7 @@ impl LayoutPaintState {
             }
             PaintFragmentOwner::Inline(items, index) => {
                 output.resident_owner =
-                    layout_fragment_boundary::ResidentFragmentOwner::InlineItem {
+                    layout_fragment::ResidentFragmentOwner::InlineItem {
                         items: items as usize,
                         index,
                     };
@@ -1038,7 +1038,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// The style is the selected fragment's PaintStyle projection.
     pub fn CanvasBackground(
         self,
-    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+    ) -> Option<crate::fragment_tree::CanvasBackgroundPaintView<'a>> {
         let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
         if !object.IsLayoutView() {
             return None;
@@ -1050,7 +1050,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// background invalidation geometry).
     pub fn ViewBackground(
         self,
-    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+    ) -> Option<crate::fragment_tree::CanvasBackgroundPaintView<'a>> {
         let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
         if !object.IsLayoutView() {
             return None;
@@ -1064,7 +1064,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// root fragment's PaintStyle projection, borrowed.
     pub fn DocumentElementBackground(
         self,
-    ) -> Option<layout_fragment::fragment_tree::CanvasBackgroundPaintView<'a>> {
+    ) -> Option<crate::fragment_tree::CanvasBackgroundPaintView<'a>> {
         let object = unsafe { self.source.GetLayoutObject().as_ref() }?;
         crate::internal::boundary::layout_boundary::DocumentElementBackgroundForObject(object, self)
     }
@@ -1369,7 +1369,7 @@ impl<'a> PaintFragmentCursor<'a> {
     pub fn FragmentainerInstanceId(self) -> Option<u64> {
         match self.source {
             FragmentCursor::Physical { fragment, .. } if fragment.IsFragmentainerBox() => {
-                Some(layout_fragment::fragment_tree::FragmentainerInstanceId(
+                Some(crate::fragment_tree::FragmentainerInstanceId(
                     unsafe { &*(fragment as *const PhysicalFragment as *const PhysicalBoxFragment) },
                 ))
             }
@@ -1414,7 +1414,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// into an embedded LocalFrame's result sees that frame's resources.
     pub fn DocumentResources(
         self,
-    ) -> Option<&'a Arc<layout_fragment::fragment_tree::PaintResources>> {
+    ) -> Option<&'a Arc<crate::fragment_tree::PaintResources>> {
         self.state?.DocumentResources()
     }
 
@@ -1425,7 +1425,7 @@ impl<'a> PaintFragmentCursor<'a> {
     /// projection during Layout publication.
     pub fn PaintGlyphRuns(
         self,
-    ) -> Option<std::sync::Arc<Vec<layout_fragment::fragment_tree::PaintGlyphRun>>> {
+    ) -> Option<std::sync::Arc<Vec<crate::fragment_tree::PaintGlyphRun>>> {
         layout_fragment_text_fragment_queries::paint_glyph_runs(self)
     }
 
@@ -1547,7 +1547,7 @@ impl<'a> FragmentCursor<'a> {
         }
     }
 
-    pub fn InlineItem(self) -> Option<&'a layout_fragment::fragment_item::FragmentItem> {
+    pub fn InlineItem(self) -> Option<&'a crate::fragment_item::FragmentItem> {
         match self {
             Self::Physical { .. } => None,
             Self::Inline { item, .. } => Some(item),

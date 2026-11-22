@@ -497,7 +497,7 @@ fn ContainingLineItem(items: &[FragmentItem], index: usize) -> Option<&FragmentI
 /// ComputeBoxRect's `parent_offset`): the line top relative to the item and
 /// the line height. `None` for items that are not text or outside a line.
 pub(crate) fn LiveTextLineGeometry(
-    items: &layout_fragment::fragment_items::FragmentItems,
+    items: &crate::fragment_items::FragmentItems,
     index: usize,
 ) -> Option<(f64, f64)> {
     let span = items.Items();
@@ -519,7 +519,7 @@ pub(crate) fn LiveTextLineGeometry(
 /// offset in that container. `container` owns `items`.
 pub(crate) fn LiveTextLineSnapDelta(
     container: &PhysicalBoxFragment,
-    items: &layout_fragment::fragment_items::FragmentItems,
+    items: &crate::fragment_items::FragmentItems,
     index: usize,
 ) -> Option<f64> {
     let span = items.Items();

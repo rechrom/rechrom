@@ -1,9 +1,10 @@
-// LayoutNG and its fragment tree are mutually recursive C++ packages. Cargo
-// cannot express that cycle between two crates, so compile their translated
-// modules once in one assembly crate. The include paths point to the owning
-// crates' source files and do not copy or relocate implementations.
+// LayoutNG and the fragment-tree types that still call LayoutObject behaviour
+// are mutually recursive C++ packages. Cargo cannot express that cycle
+// between two crates, so compile their translated modules once in one
+// assembly crate. The include paths point to the owning crates' source files
+// and do not copy or relocate implementations. Fragment data that needs no
+// base type is the real `layout_fragment` crate, a dependency of this one.
 extern crate self as layout_algo_inline;
-extern crate self as layout_fragment;
 extern crate self as layout_core;
 extern crate self as layout_assembly;
 
@@ -14,9 +15,7 @@ include!("../../layout_core/src/lib.rs");
 /// Keep mutually recursive translated sources in their owning module paths.
 /// Root re-exports preserve the existing assembly API while profiler symbols
 /// identify the source package instead of flattening everything into assembly.
-pub mod layout_fragment_package {
-    include!("../../layout_fragment/src/lib.rs");
-}
+pub mod layout_fragment_package;
 pub use layout_fragment_package::*;
 
 pub mod layout_algo_inline_package {
@@ -276,13 +275,7 @@ mod package_contract_tests {
                     continue;
                 }
                 let dependency_key = dependency_key.trim();
-                let assembly_fragment_boundary = manifest_path
-                    .parent()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name.to_string_lossy().ends_with("_assembly"))
-                    && dependency_key == "layout_fragment_boundary"
-                    && target == "layout_fragment";
-                if dependency_key != target && !assembly_fragment_boundary {
+                if dependency_key != target {
                     violations.push(format!(
                         "{} aliases performance owner {target} as {dependency_key}",
                         manifest_path

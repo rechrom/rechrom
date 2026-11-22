@@ -3,7 +3,7 @@
 use foundation::{
     DynamicTo, EBoxSizing, IsParallelWritingMode, LayoutUnit, RuntimeEnabledFeatures,
 };
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
+use crate::box_fragment_builder::BoxFragmentBuilder;
 use layout_geometry::geometry::bfc_offset::BfcOffset;
 use layout_style::style::computed_style::ComputedStyle;
 

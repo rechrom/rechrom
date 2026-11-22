@@ -7,9 +7,9 @@ use foundation::{
     HeapVector, LayoutUnit, Member, String, TextDirection, TextOffsetMap, Vector, Visitor,
     WritingMode,
 };
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::inline_items_data::InlineItemsData;
-use layout_fragment::layout_result::LayoutResult;
+use crate::break_token::BreakToken;
+use crate::inline_items_data::InlineItemsData;
+use crate::layout_result::LayoutResult;
 use layout_style::style::computed_style::ComputedStyle;
 
 use super::super::algorithm_forward::{InlineChildLayoutContext, OffsetMapping, TextDiffRange};

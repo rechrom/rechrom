@@ -5,15 +5,15 @@ use foundation::{
     EClear, LayoutUnit, MakeGarbageCollected, Member, PhysicalOffset, PhysicalSize, To, Visitor,
     WritingDirectionMode,
 };
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::break_token_algorithm_data::BreakTokenAlgorithmData;
-use layout_fragment::fragment_builder::FragmentBuilder;
-use layout_fragment::layout_result::{EStatus, LayoutResult};
-use layout_fragment::logical_fragment::LogicalFragment;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
+use crate::block_break_token::BlockBreakToken;
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::break_token::BreakToken;
+use crate::break_token_algorithm_data::BreakTokenAlgorithmData;
+use crate::fragment_builder::FragmentBuilder;
+use crate::layout_result::{EStatus, LayoutResult};
+use crate::logical_fragment::LogicalFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_fragment::PhysicalFragment;
 use layout_geometry::geometry::box_sides::LogicalBoxSides;
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::logical_offset::LogicalOffset;

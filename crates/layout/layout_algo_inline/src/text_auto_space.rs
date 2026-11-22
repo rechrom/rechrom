@@ -9,7 +9,7 @@ use font_engine::FontOrientation;
 use foundation::{
     ETextAutospace, EastAsianSpacingType, IsLtr, Member, RuntimeEnabledFeatures, String,
 };
-use layout_fragment::inline_items_data::InlineItemsData;
+use crate::inline_items_data::InlineItemsData;
 use layout_core::internal::inline_item::{InlineItem, InlineItemType};
 use layout_core::internal::inline_node::InlineNode;
 use layout_style::style::computed_style::ComputedStyle;

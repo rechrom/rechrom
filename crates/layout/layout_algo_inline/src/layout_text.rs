@@ -8,9 +8,9 @@ use foundation::{
     graphics_types::graphics::paint::display_item_client::DisplayItemClient, DynamicTo,
     ETextSecurity, ETextTransform, String, StringView, TextOffsetMap, To, Visitor,
 };
-use layout_fragment::fragment_items::FragmentItems;
-use layout_fragment::inline_cursor::InlineCursor;
-use layout_fragment::inline_items_data::InlineItemsData;
+use crate::fragment_items::FragmentItems;
+use crate::inline_cursor::InlineCursor;
+use crate::inline_items_data::InlineItemsData;
 use layout_core::internal::inline_item_span::InlineItemSpan;
 use layout_core::internal::layout_invalidation_reason;
 use layout_core::internal::layout_node_metadata::{Node, Text};

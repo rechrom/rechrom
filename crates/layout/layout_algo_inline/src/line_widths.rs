@@ -3,7 +3,7 @@
 
 use font_engine::fonts::shaping::shape_result_view::ShapeResultView;
 use foundation::{LayoutUnit, Member, WtfSizeT};
-use layout_fragment::inline_break_token::InlineBreakToken;
+use crate::inline_break_token::InlineBreakToken;
 use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunity;
 use layout_core::internal::inline_item::InlineItemType;
 use layout_core::internal::inline_node::InlineNode;

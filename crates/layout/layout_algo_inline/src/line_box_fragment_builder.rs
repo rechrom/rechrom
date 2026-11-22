@@ -10,13 +10,13 @@ use foundation::{
     IsLtr, LayoutUnit, MakeGarbageCollected, TextDirection, To, ToLineWritingMode,
     WritingDirectionMode,
 };
-use layout_fragment::fragment_builder::FragmentBuilder;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::logical_line_container::LogicalLineContainer;
-use layout_fragment::logical_line_item::LogicalLineItems;
-use layout_fragment::physical_fragment::PhysicalFragment;
-use layout_fragment::physical_line_box_fragment::{LineBoxType, PhysicalLineBoxFragment};
+use crate::fragment_builder::FragmentBuilder;
+use crate::inline_break_token::InlineBreakToken;
+use crate::layout_result::LayoutResult;
+use crate::logical_line_container::LogicalLineContainer;
+use crate::logical_line_item::LogicalLineItems;
+use crate::physical_fragment::PhysicalFragment;
+use crate::physical_line_box_fragment::{LineBoxType, PhysicalLineBoxFragment};
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::constraint_space::ConstraintSpace;
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;

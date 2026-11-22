@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use foundation::{HeapVector, Member, Traceable, Visitor, WtfSizeT};
-use layout_fragment::inline_break_token::InlineBreakToken;
+use crate::inline_break_token::InlineBreakToken;
 use layout_core::internal::positioned_float::PositionedFloat;
 
 // cpp: layoutng_inline/leading_floats.h:17-33

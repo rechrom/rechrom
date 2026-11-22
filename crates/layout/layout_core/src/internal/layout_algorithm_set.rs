@@ -1,12 +1,12 @@
 use font_engine::Font;
 use foundation::{AtomicString, LayoutUnit, Length, PhysicalRect, PhysicalSize, WritingMode};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::fragment_items_builder::FragmentItemsBuilder;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::block_break_token::BlockBreakToken;
+use crate::box_fragment_builder::BoxFragmentBuilder;
+use crate::break_token::BreakToken;
+use crate::fragment_items_builder::FragmentItemsBuilder;
+use crate::inline_break_token::InlineBreakToken;
+use crate::layout_result::LayoutResult;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_geometry::geometry::logical_size::LogicalSize;
 use layout_style::style::computed_style::ComputedStyle;
@@ -315,7 +315,7 @@ pub struct SvgLayoutSupport {
             &LayoutObject,
         ) -> (
             Option<super::layout_input::TransformMatrix>,
-            Option<layout_fragment::fragment_tree::SvgViewportGeometry>,
+            Option<crate::fragment_tree::SvgViewportGeometry>,
             Option<foundation::gfx::RectF>,
         ),
     >,

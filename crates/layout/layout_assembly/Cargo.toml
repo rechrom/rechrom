@@ -18,9 +18,8 @@ paint_input_types = { path = "../paint_input_types" }
 layout_style_paint = { path = "../../layout/layout_style_paint" }
 layout_invalidation = { path = "../layout_invalidation" }
 layout_reuse = { path = "../layout_reuse" }
-# `layout_fragment` is already the self-alias used by included translated
-# sources; this key names the standalone ownership boundary inside assembly.
-layout_fragment_boundary = { package = "layout_fragment", path = "../layout_fragment" }
+# Fragment data crate (L1): base depends on it, never the reverse.
+layout_fragment = { path = "../layout_fragment" }
 layout_commit = { path = "../layout_commit" }
 layout_algo_mathml = { path = "../layout_algo_mathml" }
 icu_bidi = { path = "../../icu_bidi" }

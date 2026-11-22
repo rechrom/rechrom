@@ -8,9 +8,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, EClear, LayoutUnit, MakeGarbageCollected, To};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::layout_result::{EStatus, LayoutResult};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::block_break_token::BlockBreakToken;
+use crate::layout_result::{EStatus, LayoutResult};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::fragment_geometry::FragmentGeometry;
 
 use crate::internal::block_node::BlockNode;

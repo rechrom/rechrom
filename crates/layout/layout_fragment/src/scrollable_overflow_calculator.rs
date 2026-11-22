@@ -4,10 +4,10 @@ use foundation::{
     gfx, DynamicTo, LayoutUnit, PhysicalOffset, PhysicalRect, PhysicalSize, RuntimeEnabledFeatures,
     To, WritingDirectionMode,
 };
-use layout_fragment::fragment_item::FragmentItem;
-use layout_fragment::fragment_items::FragmentItems;
-use layout_fragment::fragment_items_builder::ItemWithOffset;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::fragment_item::FragmentItem;
+use crate::fragment_items::FragmentItems;
+use crate::fragment_items_builder::ItemWithOffset;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::box_strut::PhysicalBoxStrut;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, kOverflowClipX, kOverflowClipY, OverflowClipAxes,

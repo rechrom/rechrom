@@ -6,7 +6,7 @@ use crate::internal::layout_text::LayoutText;
 use crate::layout_text_fragment::LayoutTextFragment;
 use crate::offset_mapping::OffsetMapping;
 use foundation::{DynamicTo, EDisplay, EVisibility, String};
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 unsafe extern "Rust" {
     fn LayoutInnerTextTableRowNeedsNewline(object: *const LayoutObject) -> bool;
 }

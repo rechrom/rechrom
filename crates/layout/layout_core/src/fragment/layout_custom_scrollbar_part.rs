@@ -19,7 +19,7 @@ pub struct LayoutCustomScrollbarPart {
     style_: Member<ComputedStyle>,
     scrollbar_: Member<CustomScrollbar>,
     overridden_size_: PhysicalSize,
-    fragment_data_: layout_fragment::fragment_data::FragmentData,
+    fragment_data_: crate::fragment_data::FragmentData,
     part_: ScrollbarPart,
 }
 
@@ -35,7 +35,7 @@ impl LayoutCustomScrollbarPart {
             style_: Member::from_ptr(style as *mut ComputedStyle),
             scrollbar_: Member::from_ptr(scrollbar),
             overridden_size_: PhysicalSize::default(),
-            fragment_data_: layout_fragment::fragment_data::FragmentData::default(),
+            fragment_data_: crate::fragment_data::FragmentData::default(),
             part_: part,
         }
     }
@@ -152,7 +152,7 @@ impl LayoutCustomScrollbarPart {
             LayoutUnit::from_signed(rect.height()),
         ));
     }
-    pub fn FirstFragment(&self) -> &layout_fragment::fragment_data::FragmentData {
+    pub fn FirstFragment(&self) -> &crate::fragment_data::FragmentData {
         &self.fragment_data_
     }
 

@@ -3,7 +3,7 @@
 use foundation::{
     DynamicTo, Member, PaintInvalidationReason, SubtreePaintPropertyUpdateReason, Visitor,
 };
-use layout_fragment::fragment_items::FragmentItems;
+use crate::fragment_items::FragmentItems;
 
 use super::super::layout_inline::LayoutInline;
 use super::super::layout_invalidation_reason;

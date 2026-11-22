@@ -7,10 +7,10 @@ use foundation::{
     ERubyAlign, ETextAlign, ETextAlignLast, HeapVector, LayoutUnit, Member, String, TextDirection,
     Traceable, Visitor, WtfSizeT,
 };
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::inline_items_data::InlineItemsData;
-use layout_fragment::layout_result::EStatus;
-use layout_fragment::layout_result::LayoutResult;
+use crate::inline_break_token::InlineBreakToken;
+use crate::inline_items_data::InlineItemsData;
+use crate::layout_result::EStatus;
+use crate::layout_result::LayoutResult;
 use layout_core::internal::inline_item::InlineItemType;
 use layout_core::internal::inline_item_result::InlineItemResult;
 use layout_core::internal::inline_item_result::InlineItemResults;

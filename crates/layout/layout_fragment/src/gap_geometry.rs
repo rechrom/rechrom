@@ -6,7 +6,7 @@ use foundation::{
     HashSet, LayoutUnit, PhysicalRect, PhysicalSize, RuleVisibilityItems, String, StringBuilder,
     ValueForLength, Vector, Visitor, WritingDirectionMode,
 };
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::logical_offset::LogicalOffset;
 use layout_geometry::geometry::logical_rect::LogicalRect;
 use layout_geometry::geometry::writing_mode_converter::WritingModeConverter;

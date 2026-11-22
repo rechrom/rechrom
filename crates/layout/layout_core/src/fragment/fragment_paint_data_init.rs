@@ -303,7 +303,7 @@ pub(crate) fn InitializePhysicalFragmentPaintData(
 /// current publication (see InitializePhysicalFragmentPaintData).
 #[inline(never)]
 pub(crate) fn InitializeInlineItemPaintData(
-    items: &layout_fragment::fragment_items::FragmentItems,
+    items: &crate::fragment_items::FragmentItems,
     index: usize,
     output: &mut FragmentPaintData,
     retained: bool,

@@ -5,7 +5,7 @@ use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 pub(crate) struct InlineClientGeometry {
     pub bounds: PhysicalRect,
     pub rects: Vec<(
-        *const layout_fragment::physical_box_fragment::PhysicalBoxFragment,
+        *const crate::physical_box_fragment::PhysicalBoxFragment,
         PhysicalRect,
     )>,
 }

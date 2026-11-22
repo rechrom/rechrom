@@ -12,8 +12,8 @@ use foundation::{
 };
 use graphics_types::graphics::paint::display_item_client::DisplayItemClient;
 use graphics_types::graphics::visual_rect_flags::VisualRectFlags;
-use layout_fragment::fragment_data::{FragmentData, FragmentDataList};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::fragment_data::{FragmentData, FragmentDataList};
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::axis::PhysicalAxis;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, OverflowClipAxes,

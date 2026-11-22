@@ -4,10 +4,10 @@ use foundation::{
     kIndefiniteSize, DynamicTo, InfiniteIntRect, LayoutUnit, PhysicalRect, ScopedCSSName,
     UnsupportedLayout,
 };
-use layout_fragment::inline_cursor::InlineCursor;
+use crate::inline_cursor::InlineCursor;
 #[cfg(debug_assertions)]
-use layout_fragment::physical_box_fragment::AllowPostLayoutScope;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use crate::physical_box_fragment::AllowPostLayoutScope;
+use crate::physical_box_fragment::PhysicalBoxFragment;
 use layout_geometry::geometry::overflow_clip_axes::{
     kNoOverflowClip, kOverflowClipBothAxis, kOverflowClipX, kOverflowClipY, OverflowClipAxes,
 };
