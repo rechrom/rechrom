@@ -392,7 +392,6 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
         Some(result)
     }
     fn NonLocatedRectFromRootFrame(&self, rect: gfx::Rect) -> Option<gfx::Rect> {
-        use interaction::event_dispatcher::MouseFrameGeometry;
         let points = [
             (rect.x(), rect.y()),
             (rect.right(), rect.y()),

@@ -1,5 +1,9 @@
 //! URL-based byte loading for HTTP(S), file:, data: and registered memory: URLs.
 //! Document parsing, resource scheduling and render blocking belong upstream.
+
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case)]
+
 mod data;
 mod default_url_loader;
 mod file;

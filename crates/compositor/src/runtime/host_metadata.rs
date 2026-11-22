@@ -26,9 +26,9 @@ use crate::{
     adapter::{
         geometry::{Rect, Vector2dF},
         layer_tree_host_impl::{
-            HostCheckerboardMode, HostCompositorFrame, HostDrawSequence, HostImplDServices,
+            HostCheckerboardMode, HostDrawSequence, HostImplDServices,
             HostImplDelegateId, HostImplFrameSinkId, HostImplRenderingStatsId,
-            HostImplVideoFrameControllerId, HostMetadataTransitionRequest,
+            HostImplVideoFrameControllerId,
             HostSharedImageInterfaceId, HostTraceValue,
         },
         time::{TimeDelta, TimeTicks},

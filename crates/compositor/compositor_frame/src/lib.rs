@@ -3,6 +3,9 @@
 //! Frame values do not retain compositor tree, tile, scheduler, or raster-job
 //! owners.
 
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
+
 pub mod draw_submission;
 pub mod frame_data;
 pub mod frame_data_boundary;

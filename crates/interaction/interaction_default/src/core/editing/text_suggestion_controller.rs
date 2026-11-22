@@ -4,7 +4,7 @@ use super::{
     markers::document_marker_controller::{
         DocumentMarker, DocumentMarkerController, MarkerType, MarkerTypes,
     },
-    position::{Position, PositionTree},
+    position::Position,
     position_iterator::{NextGraphemePosition, PositionIteratorContext, PreviousGraphemePosition},
 };
 use std::{cell::Cell, hash::Hash, rc::Rc};

@@ -51,7 +51,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use interaction_dispatch::core::dom::events::event::{EventRef, EventTargetRef};
-use interaction_dispatch::core::events::keyboard_event::{KeyboardEvent, KeyboardEventRef};
+use interaction_dispatch::core::events::keyboard_event::KeyboardEventRef;
 use interaction_dispatch::core::events::mouse_event::MouseEvent;
 use interaction_dispatch::core::events::ui_event::InputDeviceCapabilitiesRef;
 use interaction_dispatch::public::platform::web_input_event_result::WebInputEventResult;

@@ -10,7 +10,7 @@ use paint_input_types::layout_input::{
 };
 use paint_input_types::layout_input_types::Color;
 use paint_input_types::paint_input::{
-    PaintStyleData, SvgMarkerInstance, SvgMarkerPrimitive, SvgPaintComponent, SvgPaintServer,
+    SvgMarkerInstance, SvgMarkerPrimitive, SvgPaintComponent, SvgPaintServer,
     SvgPaintServerReferenceBox, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
 

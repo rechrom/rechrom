@@ -356,7 +356,7 @@ pub fn RebalanceWhitespaceAt<C: StructuralEditingContext>(
 
 // Source composite_edit_command.cc:2128-2214.
 use super::{
-    break_blockquote_command::{self, BreakBlockquoteContext},
+    break_blockquote_command,
     paragraph_editing_context::EditingAborted,
     replace_selection_command,
     typing_command::TypingDeletionStructuralContext,

@@ -1,3 +1,6 @@
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case, non_upper_case_globals)]
+
 pub(crate) mod text_decoder;
 
 pub mod diagnostic_scanner;

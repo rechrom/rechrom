@@ -3,6 +3,7 @@
 use layout::fragment::ResidentBoxGeometry as _;
 use foundation::TrustedIdentityHashMap as HashMap;
 use paint_input_types::PaintGlyphRun;
+#[cfg(test)]
 use paint_input_types::paint_input::PaintBlendMode;
 use layout::paint::PaintFragmentCursor;
 use std::sync::Arc;
@@ -1172,7 +1173,7 @@ impl<'o> PaintContext<'o> {
         client: DisplayItemClientInfo,
         rect: PaintRect,
     ) {
-        let fragment = node
+        let _fragment = node
             .fragment
             .as_deref()
             .expect("resizer scroll hit-test fragment");

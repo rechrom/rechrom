@@ -651,7 +651,7 @@ impl ResourceFetcher {
                 destination: RequestDestination::kImage,
                 ..Default::default()
             });
-            let (mut resource, content) = self.StartImageRequestWithReloadAndPolicy(
+            let (resource, content) = self.StartImageRequestWithReloadAndPolicy(
                 &image.source,
                 request,
                 false,

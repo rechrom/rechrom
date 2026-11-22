@@ -44,7 +44,7 @@ use javascript::script_engine::ScriptEngine;
 use layout::fragment::LayoutResultHandle;
 use layout::lifecycle::LayoutUpdateKind;
 use layout::paint::{LayoutPaintOutput, PaintFragmentCursor};
-use layout::{editing::DocumentSelection, fragment::FragmentKind, paint::{FragmentPaintData, PaintResources}, input::{ConstraintSpace, Offset, Color, IntSize}};
+use layout::{editing::DocumentSelection, fragment::FragmentKind, paint::PaintResources, input::{ConstraintSpace, Offset, Color, IntSize}};
 pub use open::OpenStatus;
 use open::{script_scheduler::ScriptLoadClient, OpenEngine};
 use page_mutation::{PageMutation, ResourceMutation};
@@ -8399,7 +8399,7 @@ impl Page {
         }
 
         if !result.default_prevented {
-            if let ::interaction::input_event::InputEvent::Wheel(wheel) = &routed_input {
+            if let ::interaction::input_event::InputEvent::Wheel(_) = &routed_input {
                 if compositor_wheel.compositor_owned {
                     self.ApplyCompositorWheelEffects(compositor_wheel.effects)?;
                     if compositor_wheel.submitted {

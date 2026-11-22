@@ -751,7 +751,7 @@ impl InputState {
             } if !is_synthetic => {
                 let key = key_name(&event.logical_key);
                 let down = event.state == ElementState::Pressed;
-                let (mut text, mut unmodified_text, native_key_code, ime_processed, committed_text) =
+                let (text, unmodified_text, native_key_code, ime_processed, committed_text) =
                     native_keyboard_text(event);
                 if down && !event.repeat && !ime_processed && !self.composing {
                     let command = self.modifiers.control_key() || self.modifiers.super_key();

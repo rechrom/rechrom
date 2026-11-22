@@ -1,3 +1,6 @@
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case, non_upper_case_globals)]
+
 pub mod http_request;
 pub mod http_transport_options;
 mod local_network_access;

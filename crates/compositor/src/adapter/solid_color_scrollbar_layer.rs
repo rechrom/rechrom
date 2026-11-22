@@ -1,7 +1,6 @@
 //! Same-package concrete solid-scrollbar constructor/setter dispatch only.
 use super::{
     layer_tree_impl::Color4f,
-    main_layer::MainLayerImplTree,
     scrollbar_layer_base::{ScrollbarLayerImplTarget, ScrollbarLayerTypes},
 };
 use crate::cc::{

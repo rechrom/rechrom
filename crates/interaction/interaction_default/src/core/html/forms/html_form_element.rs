@@ -985,7 +985,7 @@ impl HTMLFormElement {
     pub fn ScheduleFormSubmission(
         &self,
         event: Option<&EventRef>,
-        mut submitter: Option<FormControlRef>,
+        submitter: Option<FormControlRef>,
     ) {
         self.ScheduleFormSubmissionWithScope(event, submitter, &FormDispatchScope::default());
     }

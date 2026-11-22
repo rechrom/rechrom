@@ -24,7 +24,7 @@ use crate::{
             HostImageDecodingMode, HostImplContextProviderId, HostImplDelegateId,
             HostImplFrameSinkId, HostImplGServices, HostImplPostedCompositorTask,
             HostImplResourceReturnServices, HostImplTaskRunnerId, HostImplTaskRunnerProviderId,
-            HostImplTaskRunnerServices, HostImplWeak, HostSharedImageInterfaceId,
+            HostImplTaskRunnerServices, HostImplWeak,
             HostTargetColorParams, HostUIResourceReleaseClient,
         },
         task_runner::TaskLocation,

@@ -8,7 +8,6 @@ use layout::fragment::ResidentBoxGeometry as _;
 use std::sync::Arc;
 
 use layout::paint::FragmentPaintData;
-use layout::fragment::ResidentBoxGeometry as _;
 use layout::input::NodeKind;
 use paint_input_types::layout_input::Offset;
 use paint_model::geometry_mapper::SourceToDestinationRect;

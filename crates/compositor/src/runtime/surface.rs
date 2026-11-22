@@ -117,7 +117,7 @@ use crate::adapter::{
     damage_context::{DamageFilters, DamageSurface},
     input_types::ElementId,
     occlusion::{OcclusionFilters, OcclusionRenderSurface, SkBlendMode, SkMatrix},
-    property_types::{FilterOperations, PropertyPath, ViewTransitionElementResourceId},
+    property_types::ViewTransitionElementResourceId,
 };
 use crate::cc::trees::effect_node::EffectNode;
 impl<B: RenderSurfaceTypes> DamageSurface<B::Transform, i32> for RenderSurfaceImpl<B> {
@@ -458,7 +458,7 @@ where
             .map(|layer| layer.id())
     }
     fn LayerDrawsContent(&self, layer: i32) -> bool {
-        use crate::adapter::layer_tree_impl::{LayerTreeLayer, LayerTreeLayerList};
+        use crate::adapter::layer_tree_impl::LayerTreeLayerList;
         crate::adapter::layer_impl::LayerImplOwner::impl_base(
             self.layers.LayerById(layer).expect("source resident layer"),
         )

@@ -34,7 +34,7 @@ use crate::core::input::{
 };
 pub use gesture_targeting_binding::PageEventHandlerGestureTargeting;
 use interaction_default::core::editing::selection_controller::{
-    IsSelectionOverLink, SelectionGeometry,
+    IsSelectionOverLink,
 };
 use interaction_dispatch::core::{
     clipboard::data_transfer::DragOperation, events::ui_event::InputDeviceCapabilitiesRef,

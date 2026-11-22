@@ -852,7 +852,7 @@ impl<'image>
     }
     fn Playback(
         &mut self,
-        mut request: RasterPlayback<
+        request: RasterPlayback<
             '_,
             RasterSourceStorage<SkRegion>,
             RasterTransform,

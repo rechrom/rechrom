@@ -1867,13 +1867,13 @@ pub mod host_impl_chunk_c {
     // machine, resource policy, callback arithmetic, or tree copy belongs here.
     use crate::adapter::{
         begin_frame::BeginFrameArgs,
-        geometry::{Rect, RectF},
+        geometry::RectF,
         image_animation::{PaintImageId, WhichTree},
         layer_tree_host_impl::{
             ContentColorUsage, HostImplContextProviderId, HostImplDelegateId, HostImplFrameSinkId,
             HostImplTaskRunnerId, HostImplTypes, HostImplWeak, HostUIResourceReleaseClient,
         },
-        layer_tree_impl::{LayerTreeLayerList, LayerTreeTypes},
+        layer_tree_impl::LayerTreeTypes,
         property_types::ViewTransitionElementResourceId,
         time::TimeDelta,
     };
@@ -2170,7 +2170,6 @@ pub mod host_impl_chunk_g {
         geometry::{PointF, RectF, Vector2dF},
         image_animation::PaintImageId,
         input_types::ElementId,
-        layer_tree_host_impl::*,
         layer_tree_impl::{LayerTreeTypes, PropertyTreesFor},
         time::{TimeDelta, TimeTicks},
     };

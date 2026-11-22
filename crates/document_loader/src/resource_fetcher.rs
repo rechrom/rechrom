@@ -19,7 +19,7 @@ use image_resource::{
 };
 use layout::input::{ConstraintSpace, FontFace, PaintImage};
 use page_mutation::{
-    DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged, FontResourceReady,
+    DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged,
     ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation, VideoFrameChanged,
 };
 pub use raw_resource_fetcher::RawResourceFetchOptions;
@@ -505,7 +505,7 @@ impl ResourceFetcher {
             }
             self.SelectResponsiveImageInDocument(owner.GetDocument(), node)
         };
-        let changed = self
+        let _changed = self
             .document
             .borrow_mut()
             .GetDocumentMut()
@@ -1657,9 +1657,9 @@ impl ResourceFetcher {
             constraints: &ConstraintSpace,
             selector: Option<&ResponsiveImageSelector>,
             is_loaded: &dyn Fn(&str) -> bool,
-            admitted: &HashSet<String>,
-            seen: &mut HashSet<String>,
-            requests: &mut Vec<(String, bool, bool, Option<ReferrerPolicy>)>,
+            _admitted: &HashSet<String>,
+            _seen: &mut HashSet<String>,
+            _requests: &mut Vec<(String, bool, bool, Option<ReferrerPolicy>)>,
             selections: &mut Vec<(
                 usize,
                 Option<dom::persistent_document::ResponsiveImageSelection>,

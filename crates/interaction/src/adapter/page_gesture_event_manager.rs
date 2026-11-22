@@ -21,10 +21,10 @@ use crate::core::input::{
         PointerEventDOMPort, PointerEventEnvironment, PointerEventManager, PointerMouseManager,
     },
 };
-use foundation::{gfx, PhysicalOffset, PhysicalSize};
+use foundation::{gfx, PhysicalSize};
 use interaction_dispatch::core::{
     events::pointer_event_factory::PointerTargetRef,
-    input::event_handling_util::{ToWebInputEventResult, WebInputEventResult},
+    input::event_handling_util::WebInputEventResult,
 };
 use interaction_hit_test::core::{
     layout::{hit_test_location::HitTestLocation, hit_test_request::RequestType},

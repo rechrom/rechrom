@@ -734,7 +734,7 @@ impl Page {
     pub(super) fn ApplyWheelDefaultWithoutLifecycle(
         &mut self,
         wheel: &WheelEvent,
-        target_node_id: Option<u64>,
+        _target_node_id: Option<u64>,
     ) -> io::Result<()> {
         // User scrolling interrupts ProgrammaticScrollAnimator in Chromium.
         self.state.ProgrammaticAnimations().CancelAll();

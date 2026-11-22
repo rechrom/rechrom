@@ -1,7 +1,6 @@
 // Copyright The Chromium Authors. BSD license; see Chromium LICENSE.
 // Chromium: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
 // Source: html_dialog_element.cc:148-238,552-616,664-676,709-750.
-use foundation::popup_types::*;
 
 pub trait DialogLifecycleEnvironment {
     type Error;

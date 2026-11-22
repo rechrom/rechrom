@@ -7,10 +7,10 @@
 //! by this module.
 
 use layout::fragment::ResidentBoxGeometry;
-use layout::paint::{FragmentBoxSides, FragmentPaintData, PaintProperties};
+use layout::paint::{FragmentBoxSides, FragmentPaintData};
 use layout::input::PaintStyle;
 use paint_input_types::layout_input::{Edges, Offset, PaintPathCommand, PaintPathVerb, Size};
-use paint_input_types::paint_input::{PaintCornerRadii, PaintCornerRadius, PaintStyleData};
+use paint_input_types::paint_input::{PaintCornerRadii, PaintCornerRadius};
 
 use crate::PaintRect;
 

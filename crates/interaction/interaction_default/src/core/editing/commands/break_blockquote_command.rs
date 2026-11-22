@@ -8,7 +8,7 @@ use super::{
     },
 };
 use crate::core::editing::{
-    position::{Position, PositionTree},
+    position::Position,
     text_offset_mapping::{IsDescendantOf, NextNode},
 };
 

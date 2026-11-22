@@ -3,7 +3,7 @@
 // Source: core/editing/visible_units_line.cc:434-481.
 use super::{
     position::{Position, PositionWithAffinity},
-    text_offset_mapping::{self, TextOffsetMappingContext},
+    text_offset_mapping::TextOffsetMappingContext,
 };
 use crate::core::editing::visible_position::DownstreamVisiblePositionContext;
 pub trait VisibleLineContext: TextOffsetMappingContext {
@@ -176,7 +176,7 @@ pub fn LogicalLineBoundary<C: LogicalLineContext>(
 ) -> PositionWithAffinity<C::Node> {
     use super::{
         editing_boundaries::EditableBoundaryContext, position::PositionAnchorType,
-        visible_position::VisiblePositionContext, visible_units::EditingBoundaryCrossingRule,
+        visible_units::EditingBoundaryCrossingRule,
     };
     let position = &current.position;
     let needs_normalization = !position.IsNull()

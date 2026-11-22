@@ -2,7 +2,7 @@
 //!
 //! Pixel playback and storage remain injected services owned by `raster`.
 
-#![allow(non_camel_case_types)]
+#![allow(non_camel_case_types, non_snake_case)]
 
 pub mod completion_stats;
 pub mod completion_task;

@@ -3,7 +3,6 @@
 
 pub use crate::{MemoryAllocation, PriorityCutoff};
 
-use crate::ResourceId;
 use compositor_tree::geometry::Size;
 
 // Source vocabulary: cc/tiles/tile_priority.h:66-80

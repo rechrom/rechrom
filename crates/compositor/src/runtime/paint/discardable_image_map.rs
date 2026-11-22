@@ -24,7 +24,7 @@ fn image_decoding_mode(mode: paint::paint_engine::PaintImageDecodingMode) -> Ima
 }
 use paint::cc::paint::{
     discardable_image_map::*,
-    paint_op_buffer_iterator::{PaintOpType, PaintOpView},
+    paint_op_buffer_iterator::PaintOpView,
 };
 use skia::{
     include::{core::SkClipOp::SkClipOp, utils::SkNoDrawCanvas::SkNoDrawCanvas},

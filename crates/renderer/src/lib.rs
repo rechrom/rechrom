@@ -1,5 +1,9 @@
 //! Manage VizOutput through Chromium's translated DirectRenderer core.
 //! The embedding injects drawing and output capabilities through RendererBackend.
+
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case)]
+
 pub mod host_output;
 pub use components::viz::{
     common::display::renderer_settings::RendererSettings,

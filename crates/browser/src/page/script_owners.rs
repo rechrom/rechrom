@@ -251,7 +251,7 @@ impl PageWindowScriptSnapshot {
                 });
                 // The normal mutation has released all DOM borrows. Resume
                 // its source lifecycle in this same host runtime before return.
-                let mut client = client.into_inner();
+                let client = client.into_inner();
                 popup
                     .DrainPopupLifecycle(client.runtime)
                     .map_err(super::super::popup_tasks::PopupMutationError)?;

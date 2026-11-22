@@ -128,7 +128,7 @@ impl ShapeResultSpacing {
         assert!(self.has_spacing_);
         let mut character =
             i32::from(self.text_.Span16().expect("non-null spacing text")[index as usize]);
-        let mut is_space = (Character::TreatAsSpace(character)
+        let is_space = (Character::TreatAsSpace(character)
             || (self.normalize_space_ && Character::IsNormalizedCanvasSpaceCharacter(character)))
             && (character != i32::from(b'\t') || !self.allow_tabs_);
         if is_space && character != 0x00A0 {

@@ -24,7 +24,6 @@ use std::rc::Rc;
 
 use foundation::{gfx, CompositorElementId, PhysicalOffset, PhysicalRect, TextDirection};
 
-use super::geometry::physical_rect::PhysicalRectHitTestExt;
 use super::hit_test_location::HitTestLocation;
 use super::hit_test_request::{HitTestRequest, ListBasedHitTestBehavior};
 use crate::ui::gfx::geometry::quad_f::QuadFHitTestExt;

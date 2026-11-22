@@ -133,7 +133,7 @@ pub trait SelectElement: SelectOptionCollection {
     fn OwnsOption(&self, option: &OptionRef) -> bool;
     fn AccessKeyEventQueueScope(
         &self,
-    ) -> interaction_dispatch::core::dom::events::scoped_event_queue::EventQueueScope;
+    ) -> interaction_dispatch::core::dom::events::scoped_event_queue::EventQueueScope<'_>;
     fn AccessKeySelectBehavior(&self) -> Rc<dyn SelectBehavior>;
     fn IsMultiple(&self) -> bool;
     fn IsRequired(&self) -> bool;

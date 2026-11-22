@@ -4,7 +4,7 @@ use super::{CpuPaintOpBuffer, CpuPaintRecord, CpuPaintTypes};
 use crate::{
     adapter::{
         geometry::{Rect, Size},
-        layer_tree_impl::{Color4f, LayerTreeTypes},
+        layer_tree_impl::Color4f,
         picture_layer_impl::{DirectlyCompositedImageInfo, PictureRasterSource},
         picture_layer_tiling::TilingRasterSource,
         property_types::PropertyTrace,

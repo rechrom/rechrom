@@ -5,6 +5,9 @@
 //! backend and owns the resulting resources. It has no render-pass, window, swap or
 //! presentation responsibilities.
 
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case)]
+
 pub mod convert;
 mod png;
 mod reflection_mask;

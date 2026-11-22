@@ -1,3 +1,6 @@
+// Chromium identifiers keep their source spelling.
+#![allow(non_snake_case)]
+
 // Diagnostic builds alone replace Rust's global allocation entry point. The
 // ordinary Release build retains the standard allocator without header overhead.
 #[cfg(feature = "allocation_diagnostics")]

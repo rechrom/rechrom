@@ -6,7 +6,7 @@ use super::{
 };
 use crate::adapter::{
     paint_worklet::PaintWorkletTypes, picture_layer::PictureLayerTypes,
-    picture_layer_impl::PictureLayerImplTypes, picture_layer_tiling::PictureLayerTilingTypes,
+    picture_layer_impl::PictureLayerImplTypes,
     tile::TileTypes,
 };
 impl<R: CpuSkiaBackend> crate::adapter::paint_artifact_compositor::PaintArtifactCompositorTypes

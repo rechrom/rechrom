@@ -7358,7 +7358,6 @@ fn BackgroundBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Paint
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let style = &fragment.paint;
     let decoration = DecorationRect(node);
     let x = decoration.x;
     let y = decoration.y;
@@ -7396,7 +7395,6 @@ fn BackgroundBoxRectWithin(
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let paint = &fragment.paint;
     let border = IncludedBorderEdges(fragment);
     rect.x += border.left;
     rect.y += border.top;
@@ -7451,7 +7449,7 @@ fn EffectiveBackgroundAttachment(
 }
 
 fn FixedBackgroundPositioningArea(node: &PaintTreeNode<'_>) -> Option<PaintRect> {
-    let fragment = node.fragment.as_deref()?;
+    let _fragment = node.fragment.as_deref()?;
     let resources = node.DocumentResources()?;
     let viewport = resources.viewport?;
     let zoom = resources.layout_zoom_factor.max(f64::MIN_POSITIVE);
@@ -7530,7 +7528,6 @@ fn BackgroundPositioningBoxRect(node: &PaintTreeNode<'_>, box_type: BackgroundBo
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let paint = &fragment.paint;
     let box_type = UsedBackgroundGeometryBox(box_type);
     if let Some(page) = fragment
         .IsPageContainer()
@@ -7607,7 +7604,6 @@ fn BackgroundInsets(node: &PaintTreeNode<'_>, box_type: BackgroundBox) -> Edges 
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");
-    let style = &fragment.paint;
     let box_type = UsedBackgroundGeometryBox(box_type);
     if box_type == BackgroundBox::kBorderBox {
         return Edges::default();
@@ -7717,7 +7713,7 @@ fn FindAvailableReplacedImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Optio
 }
 
 fn FindAvailableImage<'a>(node: &'a PaintTreeNode<'_>, id: u64) -> Option<&'a PaintImage> {
-    let fragment = node
+    let _fragment = node
         .fragment
         .as_deref()
         .expect("paint tree node has a fragment");

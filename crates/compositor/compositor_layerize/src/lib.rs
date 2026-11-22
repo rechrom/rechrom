@@ -3,7 +3,7 @@
 //! Inputs are immutable Paint values. Outputs are compositor layer/tree
 //! mutations; this package does not own Paint production or Viz submission.
 
-#![allow(non_snake_case)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 pub mod background_color;
 pub mod chunk_policy;

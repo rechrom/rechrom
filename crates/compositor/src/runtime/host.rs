@@ -6,7 +6,6 @@ use crate::adapter::{
     input_types::ElementId,
     layer_impl::LayerImplTraceValue,
     layer_tree_host_impl::{HostColorSpace, HostColorSpacePrimaryID, HostTraceValue},
-    property_types::PropertyTrace,
 };
 impl HostColorSpace for RasterColorSpace {
     fn CreateSRGB() -> Self {

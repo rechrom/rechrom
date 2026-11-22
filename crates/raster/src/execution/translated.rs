@@ -3146,7 +3146,7 @@ fn translated_reference_filter(
 ) -> io::Result<TranslatedFilterValue> {
     use crate::raster_commands::filter_graph::{
         RenderSvgBlend, RenderSvgComposite, RenderSvgEdgeMode, RenderSvgFilterKind, RenderSvgLight,
-        RenderSvgLightingType, RenderSvgTransfer,
+        RenderSvgLightingType,
     };
     use skia::include::core::SkSize::SkISize;
     use skia::src::core::{
@@ -3442,7 +3442,7 @@ fn translated_reference_filter(
             RenderSvgFilterKind::Composite {
                 input2,
                 operator,
-                k,
+                k: _,
             } => {
                 let background = lookup(input2, &previous, &named)?;
                 let background = translated_filter_space(

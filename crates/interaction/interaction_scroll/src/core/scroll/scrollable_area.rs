@@ -453,7 +453,6 @@ pub(crate) fn InjectScrollbarGestureScroll(
 ) {
     use super::scrollbar::ScrollbarGesture;
     use foundation::gfx::Vector2dF;
-    use interaction_input::public::common::input::web_input_event::Type;
     let scale = if matches!(
         granularity,
         ScrollGranularity::kScrollByPrecisePixel | ScrollGranularity::kScrollByPixel

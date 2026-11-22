@@ -133,7 +133,6 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let paint = &fragment.paint;
         let math = fragment
             .ViewMathML()
             .expect("fraction requires MathML paint data");
@@ -263,7 +262,6 @@ impl<'n, 'f, 'c, 'o> MathMLPainter<'n, 'f, 'c, 'o> {
             .fragment
             .as_deref()
             .expect("paint tree node has a fragment");
-        let paint = &fragment.paint;
         let math = fragment
             .ViewMathML()
             .expect("radical requires MathML paint data");

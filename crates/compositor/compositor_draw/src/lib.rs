@@ -3,7 +3,7 @@
 //! This package builds compositor draw decisions but owns no Viz surface or
 //! renderer target.
 
-#![allow(non_camel_case_types, non_upper_case_globals)]
+#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case)]
 
 pub mod append_quads_context;
 pub mod append_quads_data;
