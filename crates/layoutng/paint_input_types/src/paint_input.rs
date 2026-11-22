@@ -1590,7 +1590,7 @@ impl Default for SvgMarkerPrimitive {
 pub struct SvgMarkerPaint {
     pub resource_client_id: u64,
     pub transform: TransformMatrix,
-    pub viewport_clip: Option<layout_fragment::fragment_tree::FragmentPaintRect>,
+    pub viewport_clip: Option<crate::FragmentPaintRect>,
 }
 
 #[derive(Clone, Default, PartialEq)]

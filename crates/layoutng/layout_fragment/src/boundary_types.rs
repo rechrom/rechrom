@@ -12,12 +12,8 @@ use std::sync::Arc;
 // by `paint_input_types`; this boundary re-exports them at their old path.
 pub use paint_input_types::{PaintGlyph, PaintGlyphRun, PaintResources};
 
-/// A source physical ink rect, relative to the owning fragment's origin.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct FragmentPaintRect {
-    pub offset: LayoutOffset,
-    pub size: LayoutSize,
-}
+// A source physical ink rect, owned by `paint_input_types` (plain values).
+pub use paint_input_types::FragmentPaintRect;
 
 /// PhysicalBoxFragment::AddSelfOutlineRects output for the style actually
 /// selected by BoxFragmentPainter. Rects remain fragment-local until PrePaint

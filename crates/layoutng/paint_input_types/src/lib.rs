@@ -18,3 +18,10 @@ pub mod paint_resources;
 
 pub use caret_shape::CaretShape;
 pub use paint_resources::{PaintGlyph, PaintGlyphRun, PaintResources};
+
+/// A source physical ink rect, relative to the owning fragment's origin.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FragmentPaintRect {
+    pub offset: foundation::LayoutOffset,
+    pub size: foundation::LayoutSize,
+}
