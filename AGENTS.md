@@ -34,7 +34,7 @@ URL / input
   -> Loader      resource, url_loader, document_loader, open, html
   -> DOM         dom, cssom
   -> Style       style_*
-  -> Layout      layout_core, layout_*
+  -> Layout      layout (facade) over layout_core, layout_*
   -> Paint       prepaint, paint_*
   -> Compositor  compositor_*        (layerization, layers, tiles, raster scheduling)
   -> Viz         viz                 (surface aggregation, display scheduling)
@@ -60,7 +60,7 @@ owners**: no copied trees. Boundaries 5–8 can cross threads and pass
 |---|---|---|---|
 | 1 | Loader → DOM | `url_loader` request/response bytes feed `open`'s `HTMLDocumentParser`; edits are `dom::DOMMutation`; navigation lifecycle is `open::OpenMutation` → `OpenEffect`. | The parser builds into the Page's shared `Rc<RefCell<DOM>>` owner. |
 | 2 | DOM → Style | `DocumentStyleEngine::Update(owner: &mut impl StyleDocument, &MediaValuesCachedData, UserAgentStyleSheetInput) -> StyleUpdateImpact` | Style reads the live DOM through `StyleDocument` and stores each `ComputedStyle` owner on its element. |
-| 3 | Style → Layout | `LayoutEngine::ApplyMutation(LayoutMutation<'_>)` then `Layout()`; `TreeUpdate(&mut dyn FnMut(&mut LayoutTreeUpdate))` lends Layout's tree builder for one synchronous attach transaction. | DOM's `LayoutTreeBuilder` attaches layout objects in place, sharing the same `ComputedStyle` owner. |
+| 3 | Style → Layout | `layout::LayoutEngine::ApplyMutation(LayoutMutation<'_>)` then `Layout()`; the `LayoutMutation::TreeUpdate(&mut dyn FnMut(&mut LayoutTreeUpdate))` variant lends Layout's tree builder for one synchronous attach transaction. Side commands (form controls, selection, scroll, pointer, event registry) are `LayoutMutation` family variants; engine queries are borrowed `layout::views::*` views. | DOM's `LayoutTreeBuilder` attaches layout objects in place, sharing the same `ComputedStyle` owner. |
 | 4 | Layout → Paint | `PaintEngine::Paint(&LayoutPaintOutput, EditingPaintState)`; `LayoutPaintOutput` wraps a `LayoutResultHandle`, walked with `PaintFragmentCursor`; resources arrive as `PaintMutation` / `PaintResourceUpdate`. | Paint walks the resident fragments and their attached Paint sidecars in place. |
 | 5 | Paint → Compositor | `CompositorEngine::Commit(Arc<PaintArtifact>, CompositorViewportState) -> CompositorOutput`; other changes arrive as `CompositorMutation`. | Immutable, revisioned `PaintArtifact` behind an `Arc`. |
 | 6 | Compositor → Viz | `CompositorFrame { metadata, render_pass_list, resource_list }`, plus frame-scoped raster read leases; Viz returns `FrameSubmission` with returned resources. | Immutable value per frame. |
@@ -119,8 +119,12 @@ effects). Shared model: `style_model`.
   second layout-style model. Extra boundary values are only for facts that are
   not in `ComputedStyle`.
 
-**Layout**: `LayoutMutation` applied by `layout_assembly` (attach, style
-binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
+**Layout**: `layout` is the facade and the only Layout package other engines
+may depend on (besides the shared roots below). Its `LayoutEngine` wraps the
+core engine and exposes only grouped entry points (construction, mutation,
+lifecycle, paint, queries); boundary types are re-exported explicitly by topic,
+never as whole packages or `internal` modules. Internally: `LayoutMutation`
+applied by `layout_assembly` (attach, style binding) → `layout_invalidation` → `layout_reuse` (cache hits) → algorithms
 (`layout_algo_block`, `_inline`, `_flex`, `_grid`, `_table`, `_multicol`,
 `_float`, `_out_of_flow`, `_replaced`, `_svg`, `_forms`, `_list`) →
 `layout_fragment` (resident fragment tree) → `layout_commit` (typed
@@ -136,6 +140,13 @@ Compositor and Style name them without depending on Layout), `foundation`
   Paint data stays attached to those owners.
 - Synchronous geometry queries read the same resident fragments and must not
   materialize or cache a parallel document-wide tree.
+- Algorithm packages stay separate crates and register their entry points in
+  the `LayoutAssembly` table once, from `layout`; the core calls through that
+  table (cycle-free stand-in for Blink's direct calls within one target).
+- Where Chromium code outside `core/layout` reads a LayoutObject or PaintLayer
+  directly (hit testing, cursor selection, LayoutTreeBuilder), the facade
+  re-exports that type under a named topic with a citation; tests use the
+  hidden `layout::testing` module.
 - Layout owns the resident LayoutObject tree and the translated LayoutNG
   algorithms. It does not parse CSS, fetch resources, record final paint
   commands, raster or present.
