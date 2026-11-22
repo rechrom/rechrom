@@ -12,7 +12,8 @@ use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 
-use crate::layout_replaced::LayoutReplacedRespectsCSSOverflow;
+use layout_assembly::internal::layout_replaced::layout_replaced_core::LayoutReplacedRespectsCSSOverflow;
+use layout_assembly::internal::layout_replaced::layout_video;
 use crate::replaced_layout_algorithm::ReplacedLayoutAlgorithm;
 
 // cpp: layoutng_replaced/assembly.cc:14-18
@@ -74,7 +75,7 @@ fn UpdateVideoPosterResource(
         video.UpdateNaturalDimensionsFromImageResource();
     }
     if notified {
-        crate::layout_video::UpdateNaturalSize(video);
+        layout_video::UpdateNaturalSize(video);
         video.InvalidateCompositing();
         video.SetShouldDoFullPaintInvalidation();
     }

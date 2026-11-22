@@ -2,7 +2,7 @@
 //! core/layout/layout_media.cc:100-187. Coordinates stay on the resident object.
 #![allow(non_snake_case)]
 use foundation::{gfx, DynamicTo, LayoutUnit, PhysicalRect};
-use layout_assembly::internal::{
+use crate::internal::{
     layout_input::MediaPanelMainFrame,
     layout_node_metadata::Element,
     layout_replaced::LayoutMedia,
@@ -10,8 +10,7 @@ use layout_assembly::internal::{
     scrollbar_mode::mojom::blink::ScrollbarMode,
 };
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutMediaComputePanelWidth(
+pub fn LayoutMediaComputePanelWidth(
     this: &LayoutMedia,
     media_rect: &PhysicalRect,
 ) -> LayoutUnit {
@@ -33,7 +32,7 @@ pub extern "Rust" fn LayoutMediaComputePanelWidth(
         return media_rect.size.width;
     }
     let view = unsafe { this.View().as_ref() };
-    let horizontal_mode = |view: &layout_assembly::internal::layout_view::LayoutView| {
+    let horizontal_mode = |view: &crate::internal::layout_view::LayoutView| {
         let mut horizontal = ScrollbarMode::kAuto;
         let mut vertical = ScrollbarMode::kAuto;
         view.CalculateScrollbarModes(&mut horizontal, &mut vertical, None, None);

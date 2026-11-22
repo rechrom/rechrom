@@ -18,7 +18,7 @@ use crate::internal::layout_object_child_list::LayoutObjectChildList;
 use crate::internal::layout_object_factory_set::SvgRootChildren;
 use crate::internal::layout_pass_scope::LayoutObjectFactoryScope;
 use crate::internal::layout_replaced::{
-    LayoutMedia, LayoutReplaced, LayoutVideo, VideoDisplayMode,
+    LayoutInputReplaced, LayoutMedia, LayoutReplaced, LayoutVideo, VideoDisplayMode,
 };
 use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_view::LayoutView;
@@ -52,45 +52,10 @@ type GridStyleDidChange = fn(
     &StyleChangeContext,
 );
 static GRID_STYLE_DID_CHANGE: OnceLock<GridStyleDidChange> = OnceLock::new();
-type ReplacedStyleDidChange = fn(
-    *mut LayoutObject,
-    StyleDifference,
-    *const ComputedStyle,
-    &ComputedStyle,
-    &StyleChangeContext,
-);
-static REPLACED_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
-static IMAGE_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
-static VIDEO_STYLE_DID_CHANGE: OnceLock<ReplacedStyleDidChange> = OnceLock::new();
-type ReplacedRecalcVisualOverflow = fn(*mut LayoutObject);
-static REPLACED_RECALC_VISUAL_OVERFLOW: OnceLock<ReplacedRecalcVisualOverflow> = OnceLock::new();
 static SVG_ROOT_CHILDREN: OnceLock<SvgRootChildren> = OnceLock::new();
 
 pub fn RegisterGridStyleDidChange(callback: GridStyleDidChange) {
     let existing = GRID_STYLE_DID_CHANGE.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-/// LayoutReplaced lives in the downstream replaced-element package. Register
-/// its lifecycle override at construction so LayoutObject's virtual call site
-/// keeps the Chromium base/derived order without introducing a Cargo cycle.
-pub fn RegisterReplacedStyleDidChange(callback: ReplacedStyleDidChange) {
-    let existing = REPLACED_STYLE_DID_CHANGE.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterImageStyleDidChange(callback: ReplacedStyleDidChange) {
-    let existing = IMAGE_STYLE_DID_CHANGE.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterVideoStyleDidChange(callback: ReplacedStyleDidChange) {
-    let existing = VIDEO_STYLE_DID_CHANGE.get_or_init(|| callback);
-    assert_eq!(*existing as usize, callback as usize);
-}
-
-pub fn RegisterReplacedRecalcVisualOverflow(callback: ReplacedRecalcVisualOverflow) {
-    let existing = REPLACED_RECALC_VISUAL_OVERFLOW.get_or_init(|| callback);
     assert_eq!(*existing as usize, callback as usize);
 }
 
@@ -1606,11 +1571,7 @@ pub extern "Rust" fn DispatchLayoutObjectRecalcVisualOverflow(object: *mut Layou
         runtime_class,
         LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot
     ) {
-        REPLACED_RECALC_VISUAL_OVERFLOW
-            .get()
-            .expect("replaced RecalcVisualOverflow virtual dispatch is not registered")(
-            object
-        );
+        unsafe { &mut *object.cast::<LayoutReplaced>() }.RecalcVisualOverflow();
         if runtime_class == LayoutObjectClass::SvgRoot {
             let algorithms = crate::internal::layout_pass_scope::LayoutPassScope::Algorithms();
             let add = unsafe { algorithms.as_ref() }
@@ -2046,23 +2007,23 @@ pub extern "Rust" fn DispatchLayoutObjectStyleDidChange(
             unsafe { &mut *object.cast::<LayoutBlock>() }
                 .StyleDidChange(difference, old_style, new_style, context)
         }
-        LayoutObjectClass::Replaced if unsafe { &*object }.IsVideo() => VIDEO_STYLE_DID_CHANGE
-            .get()
-            .expect("video StyleDidChange is registered by its concrete constructor")(
-            object, difference, old_style, new_style, context,
-        ),
-        LayoutObjectClass::Replaced if IsLayoutImage(object) || unsafe { &*object }.IsMedia() => {
-            IMAGE_STYLE_DID_CHANGE
-                .get()
-                .expect("image StyleDidChange virtual dispatch is not registered")(
-                object, difference, old_style, new_style, context,
+        LayoutObjectClass::Replaced if unsafe { &*object }.IsVideo() => {
+            crate::internal::layout_replaced::layout_video::StyleDidChange(
+                unsafe { &mut *object.cast::<LayoutVideo>() },
+                difference,
+                old_style,
+                new_style,
+                context,
             )
         }
-        LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot => REPLACED_STYLE_DID_CHANGE
-            .get()
-            .expect("replaced StyleDidChange virtual dispatch is not registered")(
-            object, difference, old_style, new_style, context,
-        ),
+        LayoutObjectClass::Replaced if IsLayoutImage(object) || unsafe { &*object }.IsMedia() => {
+            unsafe { &mut *object.cast::<LayoutInputReplaced>() }
+                .StyleDidChange(difference, old_style, new_style, context)
+        }
+        LayoutObjectClass::Replaced | LayoutObjectClass::SvgRoot => {
+            unsafe { &mut *object.cast::<LayoutReplaced>() }
+                .StyleDidChange(difference, old_style, new_style, context)
+        }
         LayoutObjectClass::Box => unsafe { &mut *object.cast::<LayoutBox>() }
             .StyleDidChange(difference, old_style, new_style, context),
         LayoutObjectClass::BoxModelObject => unsafe { &mut *object.cast::<LayoutBoxModelObject>() }

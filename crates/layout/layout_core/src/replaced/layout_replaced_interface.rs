@@ -21,66 +21,12 @@ use super::super::layout_node_metadata::Element;
 use super::super::layout_object::{HitTestLocation, HitTestResult, LayoutObject, PaintInfo};
 use super::super::loader::fetch::resource_priority::ResourcePriority;
 
-// Other non-inline LayoutReplaced bodies correspond to
-// core/layout/layout_replaced.cc.
-unsafe extern "Rust" {
-    fn LayoutReplacedNew(element: *mut Element) -> LayoutReplaced;
-    fn LayoutReplacedStyleDidChange(
-        this: &mut LayoutReplaced,
-        diff: StyleDifference,
-        old_style: *const ComputedStyle,
-        new_style: &ComputedStyle,
-        style_change_context: &super::super::layout_object::StyleChangeContext,
-    );
-    fn LayoutReplacedNaturalSizeChanged(this: &mut LayoutReplaced);
-    fn LayoutReplacedComputeSpeculativeDecodeSize(this: &LayoutReplaced) -> gfx::Size;
-    fn LayoutReplacedLocalSelectionVisualRect(this: &LayoutReplaced) -> PhysicalRect;
-    fn LayoutReplacedPositionForPoint(
-        this: &LayoutReplaced,
-        point: &PhysicalOffset,
-    ) -> super::super::editing::forward::PositionWithAffinity;
-    fn LayoutReplacedHitTestChildren(
-        this: &LayoutReplaced,
-        result: &mut HitTestResult,
-        location: &HitTestLocation,
-        accumulated_offset: &PhysicalOffset,
-        phase: HitTestPhase,
-    ) -> bool;
-    fn LayoutReplacedRecalcVisualOverflow(this: &mut LayoutReplaced);
-    fn LayoutReplacedContentRect(this: &LayoutReplaced) -> PhysicalRect;
-    fn LayoutReplacedContentRectFrom(this: &LayoutReplaced, base: &PhysicalRect) -> PhysicalRect;
-    fn LayoutReplacedDefaultWidth() -> i32;
-    fn LayoutReplacedDefaultHeight() -> i32;
-    fn DispatchLayoutReplacedGetNaturalDimensions(
-        this: &LayoutReplaced,
-    ) -> PhysicalNaturalSizingInfo;
-    fn LayoutReplacedComputeNaturalSizingInfo(this: &LayoutReplaced) -> PhysicalNaturalSizingInfo;
-    fn LayoutReplacedClipsToContentBox(this: &LayoutReplaced) -> bool;
-    fn LayoutReplacedComputeReplacedContentRect(
-        this: &LayoutReplaced,
-        base: &PhysicalRect,
-        sizing: &PhysicalNaturalSizingInfo,
-    ) -> PhysicalRect;
-    fn LayoutReplacedComputeObjectViewBoxRect(
-        this: &LayoutReplaced,
-        sizing: &PhysicalNaturalSizingInfo,
-    ) -> Option<PhysicalRect>;
-    fn LayoutReplacedComputeObjectFitAndPositionRect(
-        this: &LayoutReplaced,
-        base: &PhysicalRect,
-        sizing: &PhysicalNaturalSizingInfo,
-    ) -> PhysicalRect;
-    fn LayoutInputReplacedGetNaturalDimensions(
-        this: &LayoutInputReplaced,
-    ) -> PhysicalNaturalSizingInfo;
-    fn LayoutInputReplacedStyleDidChange(
-        this: &mut LayoutInputReplaced,
-        diff: StyleDifference,
-        old_style: *const ComputedStyle,
-        new_style: &ComputedStyle,
-        style_change_context: &super::super::layout_object::StyleChangeContext,
-    );
-}
+// The member bodies are base modules beside this interface (R7a):
+// `layout_replaced_core` (core/layout/layout_replaced.cc, layout_image.cc),
+// `layout_video` (layout_video.cc) and `layout_media` (layout_media.cc).
+use super::layout_media as media_impl;
+use super::layout_replaced_core as core_impl;
+use super::layout_video as video_impl;
 
 // cpp: core/layout/layout_replaced.h:46-195
 #[repr(C)]
@@ -98,8 +44,8 @@ impl foundation::DowncastFrom<LayoutObject> for LayoutReplaced {
 const _: () = assert!(std::mem::offset_of!(LayoutReplaced, box_) == 0);
 
 impl LayoutReplaced {
-    // The owning layoutng_replaced crate supplies the C++ constructor body;
-    // this base-first helper exposes only the core LayoutBox field construction.
+    // Base-first helper for the core LayoutBox field construction; the C++
+    // constructor body is `layout_replaced_core::LayoutReplacedNew`.
     pub fn FromLayoutBox(box_: LayoutBox) -> Self {
         Self { box_ }
     }
@@ -107,15 +53,15 @@ impl LayoutReplaced {
     // cpp: core/layout/layout_replaced.h:48-49
     // This base is abstract in C++; only derived constructors call it.
     pub fn new(element: *mut Element) -> Self {
-        unsafe { LayoutReplacedNew(element) }
+        core_impl::LayoutReplacedNew(element)
     }
 
     // cpp: core/layout/layout_replaced.h:51-69
     pub fn ReplacedContentRect(&self) -> PhysicalRect {
-        unsafe { LayoutReplacedContentRect(self) }
+        core_impl::LayoutReplacedContentRect(self)
     }
     pub fn ReplacedContentRectFrom(&self, base: &PhysicalRect) -> PhysicalRect {
-        unsafe { LayoutReplacedContentRectFrom(self, base) }
+        core_impl::LayoutReplacedContentRectFrom(self, base)
     }
     pub fn PreSnappedRectForPersistentSizing(rect: &PhysicalRect) -> PhysicalRect {
         // cpp: core/layout/layout_replaced.cc:504-507
@@ -129,10 +75,10 @@ impl LayoutReplaced {
         )
     }
     pub fn kDefaultWidth() -> i32 {
-        unsafe { LayoutReplacedDefaultWidth() }
+        core_impl::LayoutReplacedDefaultWidth()
     }
     pub fn kDefaultHeight() -> i32 {
-        unsafe { LayoutReplacedDefaultHeight() }
+        core_impl::LayoutReplacedDefaultHeight()
     }
 
     // cpp: core/layout/layout_replaced.h:70-89
@@ -154,14 +100,14 @@ impl LayoutReplaced {
 
     // cpp: core/layout/layout_replaced.h:98-123
     pub fn GetNaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
-        unsafe { DispatchLayoutReplacedGetNaturalDimensions(self) }
+        core_impl::DispatchLayoutReplacedGetNaturalDimensions(self)
     }
     pub fn ComputeNaturalSizingInfo(&self) -> PhysicalNaturalSizingInfo {
-        unsafe { LayoutReplacedComputeNaturalSizingInfo(self) }
+        core_impl::LayoutReplacedComputeNaturalSizingInfo(self)
     }
     // cpp: core/layout/layout_replaced.h:111-117,156-159
     pub fn NaturalSizeChanged(&mut self) {
-        unsafe { LayoutReplacedNaturalSizeChanged(self) }
+        core_impl::LayoutReplacedNaturalSizeChanged(self)
     }
     pub fn StyleDidChange(
         &mut self,
@@ -170,13 +116,11 @@ impl LayoutReplaced {
         new_style: &ComputedStyle,
         style_change_context: &super::super::layout_object::StyleChangeContext,
     ) {
-        unsafe {
-            LayoutReplacedStyleDidChange(self, diff, old_style, new_style, style_change_context)
-        }
+        core_impl::LayoutReplacedStyleDidChange(self, diff, old_style, new_style, style_change_context)
     }
     // cpp: core/layout/layout_replaced.h:64-64
     pub fn RecalcVisualOverflow(&mut self) {
-        unsafe { LayoutReplacedRecalcVisualOverflow(self) }
+        core_impl::LayoutReplacedRecalcVisualOverflow(self)
     }
     pub fn RespectsCSSOverflow(&self) -> bool {
         // RecalcVisualOverflow also runs from PrePaint, after the temporary
@@ -189,22 +133,22 @@ impl LayoutReplaced {
         callback(self)
     }
     pub fn ClipsToContentBox(&self) -> bool {
-        unsafe { LayoutReplacedClipsToContentBox(self) }
+        core_impl::LayoutReplacedClipsToContentBox(self)
     }
     // cpp: core/layout/layout_replaced.h:179-180
     pub fn ComputeSpeculativeDecodeSize(&self) -> gfx::Size {
-        unsafe { LayoutReplacedComputeSpeculativeDecodeSize(self) }
+        core_impl::LayoutReplacedComputeSpeculativeDecodeSize(self)
     }
     // cpp: core/layout/layout_replaced.h:83-83
     pub fn LocalSelectionVisualRect(&self) -> PhysicalRect {
-        unsafe { LayoutReplacedLocalSelectionVisualRect(self) }
+        core_impl::LayoutReplacedLocalSelectionVisualRect(self)
     }
     // cpp: core/layout/layout_replaced.h:161-161
     pub fn PositionForPoint(
         &self,
         point: &PhysicalOffset,
     ) -> super::super::editing::forward::PositionWithAffinity {
-        unsafe { LayoutReplacedPositionForPoint(self, point) }
+        core_impl::LayoutReplacedPositionForPoint(self, point)
     }
 
     // cpp: core/layout/layout_replaced.h:125-154
@@ -219,7 +163,7 @@ impl LayoutReplaced {
         offset: &PhysicalOffset,
         phase: HitTestPhase,
     ) -> bool {
-        unsafe { LayoutReplacedHitTestChildren(self, result, location, offset, phase) }
+        core_impl::LayoutReplacedHitTestChildren(self, result, location, offset, phase)
     }
     // cpp: core/layout/layout_replaced.h:139-147
     pub fn IsInSelfHitTestingPhase(&self, phase: HitTestPhase) -> bool {
@@ -235,7 +179,7 @@ impl LayoutReplaced {
         base: &PhysicalRect,
         sizing: &PhysicalNaturalSizingInfo,
     ) -> PhysicalRect {
-        unsafe { LayoutReplacedComputeReplacedContentRect(self, base, sizing) }
+        core_impl::LayoutReplacedComputeReplacedContentRect(self, base, sizing)
     }
 
     // cpp: core/layout/layout_replaced.h:163-177
@@ -254,14 +198,14 @@ impl LayoutReplaced {
 
     // cpp: core/layout/layout_replaced.h:186-194
     fn ComputeObjectViewBoxRect(&self, sizing: &PhysicalNaturalSizingInfo) -> Option<PhysicalRect> {
-        unsafe { LayoutReplacedComputeObjectViewBoxRect(self, sizing) }
+        core_impl::LayoutReplacedComputeObjectViewBoxRect(self, sizing)
     }
     fn ComputeObjectFitAndPositionRect(
         &self,
         base: &PhysicalRect,
         sizing: &PhysicalNaturalSizingInfo,
     ) -> PhysicalRect {
-        unsafe { LayoutReplacedComputeObjectFitAndPositionRect(self, base, sizing) }
+        core_impl::LayoutReplacedComputeObjectFitAndPositionRect(self, base, sizing)
     }
 
     // cpp: core/layout/layout_replaced.h:197-202
@@ -402,7 +346,7 @@ impl LayoutInputReplaced {
         }
     }
     pub fn GetNaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
-        unsafe { LayoutInputReplacedGetNaturalDimensions(self) }
+        core_impl::LayoutInputReplacedGetNaturalDimensions(self)
     }
     pub fn NaturalDimensions(&self) -> PhysicalNaturalSizingInfo {
         self.CheckIsNotDestroyed();
@@ -564,15 +508,13 @@ impl LayoutInputReplaced {
         new_style: &ComputedStyle,
         style_change_context: &super::super::layout_object::StyleChangeContext,
     ) {
-        unsafe {
-            LayoutInputReplacedStyleDidChange(
+        core_impl::LayoutInputReplacedStyleDidChange(
                 self,
                 diff,
                 old_style,
                 new_style,
                 style_change_context,
             )
-        }
     }
 
     // cpp: core/layout/layout_image.cc:241-269
@@ -648,7 +590,7 @@ impl LayoutMedia {
         }
     }
     pub fn ComputePanelWidth(&self, media_rect: &PhysicalRect) -> LayoutUnit {
-        unsafe { LayoutMediaComputePanelWidth(self, media_rect) }
+        media_impl::LayoutMediaComputePanelWidth(self, media_rect)
     }
     pub fn IsChildAllowed(&self, child: &LayoutObject, style: &ComputedStyle) -> bool {
         self.CheckIsNotDestroyed();
@@ -739,10 +681,10 @@ impl LayoutVideo {
         self.media_.image_.UpdateNaturalDimensionsFromElementInput();
     }
     pub fn UpdateFromElement(&mut self) {
-        unsafe { LayoutVideoUpdateFromElement(self) }
+        video_impl::LayoutVideoUpdateFromElement(self)
     }
     pub fn InvalidateCompositing(&mut self) {
-        unsafe { LayoutVideoInvalidateCompositing(self) }
+        video_impl::LayoutVideoInvalidateCompositing(self)
     }
 }
 impl Deref for LayoutVideo {
@@ -755,11 +697,6 @@ impl DerefMut for LayoutVideo {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.media_
     }
-}
-unsafe extern "Rust" {
-    fn LayoutMediaComputePanelWidth(this: &LayoutMedia, media_rect: &PhysicalRect) -> LayoutUnit;
-    fn LayoutVideoUpdateFromElement(this: &mut LayoutVideo);
-    fn LayoutVideoInvalidateCompositing(this: &mut LayoutVideo);
 }
 const _: () = assert!(std::mem::offset_of!(LayoutMedia, image_) == 0);
 const _: () = assert!(std::mem::offset_of!(LayoutVideo, media_) == 0);

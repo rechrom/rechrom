@@ -519,9 +519,12 @@ old `layoutng_*` source-package names at the repository boundary.
   accessor and non-scaling-stroke summary bit are colocated there as inlineable
   SVG-owned state.
   The typed `LayoutReplaced`/`LayoutInputReplaced` interface is likewise owned by
-  `layout_core/src/replaced/layout_replaced_interface.rs`; heavy natural sizing and
-  content-rect work remains routed through the replaced provider symbols and its
-  existing package-qualified sampling entry.
+  `layout_core/src/replaced/layout_replaced_interface.rs`, and its member bodies
+  (Chromium `layout_replaced.cc`, `layout_image.cc`, `layout_video.cc`,
+  `layout_media.cc`) by the sibling `layout_replaced_core.rs`, `layout_video.rs`
+  and `layout_media.rs` (R7a); they are direct calls. Cross-algorithm natural
+  sizing keeps its package-qualified `layout_algo_replaced.NaturalSizingInfo`
+  sampling entry.
   Multicol break-token state is physically owned by
   `layout_core/src/multicol/multicol_break_token_data.rs`, keeping retained
   algorithm state adjacent to the code that creates and consumes it.
@@ -1019,6 +1022,21 @@ never names the crate; there is no `extern "Rust"`/`#[no_mangle]` coupling
 The `inline_support` readers raise `UnsupportedLayout` when inline is not
 installed, and `validate_performance_ownership` requires the slots and
 `performance_owner` to be installed together.
+
+`layout_algo_replaced` holds only `ReplacedLayoutAlgorithm` (Chromium
+`core/layout/replaced_layout_algorithm.cc`) and its registration. LayoutReplaced,
+LayoutImage, LayoutMedia and LayoutVideo are object-model classes in base
+(`layout_core/src/replaced/`, R7a); base never names the replaced crate and there
+is no `extern "Rust"`/`#[no_mangle]` coupling. Replaced slots, all filled by
+`layout_algo_replaced::registration::Register`:
+
+| slot | signature | read through |
+|---|---|---|
+| `LayoutAlgorithmSet::replaced` | `LayoutAlgorithmEntry` (`ReplacedLayoutAlgorithm`) | active pass |
+| `replaced_sizing.natural_sizing_info` | `fn(&LayoutInputNode) -> PhysicalNaturalSizingInfo` | active pass (out of line for `layout_algo_replaced.NaturalSizingInfo` attribution) |
+| `LayoutObjectFactorySet::replaced` | `fn(&mut Node, &ComputedStyle) -> *mut LayoutObject` | `LayoutObjectFactoryScope` (tree building) |
+| `replaced_respects_css_overflow` | `fn(&LayoutReplaced) -> bool` (base body `layout_replaced_core::LayoutReplacedRespectsCSSOverflow`) | the object's retained `FactorySet()` |
+| `replaced_image_state_updater`, `replaced_image_resource_updater`, `replaced_video_poster_resource_updater`, `replaced_broken_image_resource_updater`, `replaced_image_resource_facts`, `replaced_video_state_updater` | existing factory signatures | factory set (resource/state updates) |
 
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
