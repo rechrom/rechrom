@@ -724,10 +724,11 @@ old `layoutng_*` source-package names at the repository boundary.
   `scroll_paint_property_index.rs`; rebuild and refresh remain
   out-of-line, and targeted refresh emits
   `layout_fragment.RefreshScrollPaintIndex` with dirty-id and fragment counts.
-  Chromium `ComputedStyle` and clip-path projection are also physically located
-  in `layout_fragment/src/paint_style_export.rs` and
-  `clip_path_paint_export.rs`; the old core module is a re-export-only facade,
-  and the high-level style projection entries stay out of line for sampling.
+  The pure Chromium `ComputedStyle` and clip-path projection is owned by
+  `crates/layout/layout_style_paint` (a Layout shared root that Style also names); the `PaintStyle` publication
+  wrappers stay in `layout_fragment/src/paint_style_export.rs`, which
+  re-exports it. The old core module is a re-export-only facade, and the
+  high-level style projection entries stay out of line for sampling.
   Retained paint-input admission and mutation live in
   `paint_input_update.rs`; the `PaintInput` and `ValidatePaintInput`
   phases now contain fragment-owned sampling frames rather than builder logic.

@@ -149,6 +149,8 @@ pub mod testing {
     pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
     pub use layout_assembly::internal::layout_view::LayoutView;
     pub use layout_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    pub use layout_assembly::internal::css_zoom::ZoomedStyle;
+    pub use layout_assembly::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }
 
 /// Platform services the embedding injects into the Layout assembly. They are

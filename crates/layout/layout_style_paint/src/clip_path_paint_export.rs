@@ -17,7 +17,7 @@ use layout_style::style::{
     style_path::StylePath,
 };
 
-use crate::internal::{
+use paint_input_types::{
     layout_input::{Offset, PaintPathCommand, PaintPathVerb},
     paint_input::{
         ClipPathCircle, ClipPathEllipse, ClipPathInset, ClipPathLength, ClipPathPaint,
@@ -293,7 +293,7 @@ fn ArcToCubics(current: Offset, segment: &Segment, output: &mut Vec<PaintPathCom
 
 /// Normalize relative, H/V, smooth, quadratic and arc segments into the
 /// Move/Line/Cubic/Close vocabulary used by Paint and Raster.
-pub(crate) fn NormalizePath(bytes: &[u8]) -> Vec<PaintPathCommand> {
+pub fn NormalizePath(bytes: &[u8]) -> Vec<PaintPathCommand> {
     let mut reader = ByteStreamReader::new(bytes);
     let mut output = Vec::new();
     let mut current = Offset::default();

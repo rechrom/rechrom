@@ -4255,7 +4255,7 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         width: EScrollbarWidth,
         writing_mode: WritingMode,
     ) -> gfx::Size {
-        use layout_core::internal::layout_scrollable_area::{
+        use layout_style_paint::scrollbar_metrics::{
             ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
         };
         use paint_input_types::layout_input_types::ScrollbarThemeMetrics;

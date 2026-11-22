@@ -2404,6 +2404,7 @@ dependencies = [
  "layout_invalidation",
  "layout_reuse",
  "layout_style",
+ "layout_style_paint",
  "paint_input_types",
  "skia",
 ]
@@ -2511,6 +2512,7 @@ dependencies = [
  "layout_invalidation",
  "layout_reuse",
  "layout_style",
+ "layout_style_paint",
  "paint_input_types",
  "resize_observer",
  "scroll_snap",
@@ -2569,6 +2571,17 @@ dependencies = [
  "foundation",
  "image_resource",
  "layout_geometry",
+]
+
+[[package]]
+name = "layout_style_paint"
+version = "0.0.1"
+dependencies = [
+ "foundation",
+ "image_resource",
+ "layout",
+ "layout_style",
+ "paint_input_types",
 ]
 
 [[package]]
@@ -4403,8 +4416,9 @@ dependencies = [
  "foundation",
  "html",
  "image_resource",
- "layout_assembly",
+ "layout",
  "layout_style",
+ "layout_style_paint",
  "paint_input_types",
  "style_commit",
  "style_diff",

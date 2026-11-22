@@ -15,9 +15,9 @@ const INTERNAL: &[&str] = &[
     "layout_algo_",
 ];
 
-/// Style still converts ComputedStyle into paint values through Layout's
-/// `style_projection` / `paint_style_export`; it moves in a later stage.
-const ALLOWED: &[&str] = &["crates/style/style/Cargo.toml"];
+/// Manifests outside `crates/layout` temporarily allowed to name a Layout
+/// internal. Keep it empty; an entry needs a recorded migration stage.
+const ALLOWED: &[&str] = &[];
 
 fn manifests(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };

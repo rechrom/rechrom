@@ -744,7 +744,7 @@ fn PatternComputedStyle(style: &ResolvedNodeStyle) -> Result<&ComputedStyle, Pat
 fn PatternPaint(
     style: &ResolvedNodeStyle,
 ) -> Result<paint_input_types::paint_input::PaintStyleData, PatternContentError> {
-    Ok(layout_core::internal::boundary::paint_style_export::Export(
+    Ok(layout_style_paint::paint_style_export::Export(
         PatternComputedStyle(style)?,
         None,
     ))
@@ -847,7 +847,7 @@ fn PatternMask(
     // layout-style projection intentionally omits effect/stroke/mask fields.
     let canonical = Style(document, pending, node)
         .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
-        .map(|style| layout_core::internal::boundary::paint_style_export::Export(style, None));
+        .map(|style| layout_style_paint::paint_style_export::Export(style, None));
     let paint = canonical.as_ref().unwrap_or(paint);
     if paint.mask_images.is_empty() {
         return Ok(None);
@@ -1144,7 +1144,7 @@ fn PatternPrimitivesWithShapes(
                 match computed_style.FillPaint().paint_type {
                     SVGPaintType::kContextFill => {
                         fill_is_context = true;
-                        fill = layout_core::internal::boundary::paint_style_export::SvgColor(
+                        fill = layout_style_paint::paint_style_export::SvgColor(
                             computed_style,
                             context.style.FillPaint(),
                             context.style.InternalVisitedFillPaint(),
@@ -1161,7 +1161,7 @@ fn PatternPrimitivesWithShapes(
                     }
                     SVGPaintType::kContextStroke => {
                         fill_is_context = true;
-                        fill = layout_core::internal::boundary::paint_style_export::SvgColor(
+                        fill = layout_style_paint::paint_style_export::SvgColor(
                             computed_style,
                             context.style.StrokePaint(),
                             context.style.InternalVisitedStrokePaint(),
@@ -1181,7 +1181,7 @@ fn PatternPrimitivesWithShapes(
                 match computed_style.StrokePaint().paint_type {
                     SVGPaintType::kContextFill => {
                         stroke_is_context = true;
-                        stroke = layout_core::internal::boundary::paint_style_export::SvgColor(
+                        stroke = layout_style_paint::paint_style_export::SvgColor(
                             computed_style,
                             context.style.FillPaint(),
                             context.style.InternalVisitedFillPaint(),
@@ -1198,7 +1198,7 @@ fn PatternPrimitivesWithShapes(
                     }
                     SVGPaintType::kContextStroke => {
                         stroke_is_context = true;
-                        stroke = layout_core::internal::boundary::paint_style_export::SvgColor(
+                        stroke = layout_style_paint::paint_style_export::SvgColor(
                             computed_style,
                             context.style.StrokePaint(),
                             context.style.InternalVisitedStrokePaint(),
@@ -2335,7 +2335,7 @@ pub(crate) fn ResolveMaskDefinition(
                 return Err("mask content without its own layout box".into());
             }
             let paint =
-                layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
+                layout_style_paint::paint_style_export::Export(computed_style, None);
             let paint = &paint;
             if matches!(
                 computed_style.FillPaint().paint_type,

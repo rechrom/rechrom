@@ -14,6 +14,8 @@ font_engine = { path = "../../font_engine" }
 layout_geometry = { path = "../layout_geometry" }
 layout_style = { path = "../layout_style" }
 paint_input_types = { path = "../paint_input_types" }
+# Pure ComputedStyle -> paint-value projection shared with Style.
+layout_style_paint = { path = "../../layout/layout_style_paint" }
 layout_invalidation = { path = "../layout_invalidation" }
 layout_reuse = { path = "../layout_reuse" }
 # `layout_fragment` is already the self-alias used by included translated

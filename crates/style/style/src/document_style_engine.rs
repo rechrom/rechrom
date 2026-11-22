@@ -7748,7 +7748,7 @@ impl DocumentStyleEngine {
                         known_to_be_opaque: image.StyleImage().KnownToBeOpaque(computed_style),
                     });
                 } else if let Some(shader) = unsafe { image.as_ref() }.and_then(|image| {
-                    layout_core::internal::boundary::paint_style_export::ExportGeneratedImageShader(
+                    layout_style_paint::paint_style_export::ExportGeneratedImageShader(
                         computed_style,
                         image,
                     )

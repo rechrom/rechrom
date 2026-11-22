@@ -1,4 +1,4 @@
-use foundation::{EScrollbarWidth, UnsupportedLayout};
+use foundation::UnsupportedLayout;
 
 // cpp: layoutng/internal/scrollbar_theme_metrics.h:8-12
 pub use super::layout_input_types::ScrollbarThemeMetrics;
@@ -35,11 +35,5 @@ pub fn ValidateScrollbarThemeMetrics(metrics: &ScrollbarThemeMetrics) {
 }
 
 // cpp: layoutng/internal/scrollbar_theme_metrics.cc:19-26
-#[allow(non_snake_case)]
-pub fn ScrollbarThemeThickness(metrics: &ScrollbarThemeMetrics, width: EScrollbarWidth) -> i32 {
-    match width {
-        EScrollbarWidth::kAuto => metrics.auto_thickness,
-        EScrollbarWidth::kThin => metrics.thin_thickness,
-        EScrollbarWidth::kNone => 0,
-    }
-}
+// Owned by `layout_style_paint`, which Style's viewport-unit cascade shares.
+pub use layout_style_paint::scrollbar_metrics::ScrollbarThemeThickness;

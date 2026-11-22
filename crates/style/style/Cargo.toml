@@ -21,9 +21,11 @@ font_engine = { path = "../../font_engine" }
 
 dom = { path = "../../dom" }
 cssom = { path = "../../cssom" }
-layout_core = { package = "layout_assembly", path = "../../layout/layout_assembly" }
+layout_style_paint = { path = "../../layout/layout_style_paint" }
 url = "2"
 
 [dev-dependencies]
 html = { path = "../../document/html" }
 image_resource = { path = "../../image_resource" }
+# Layout internals for tests only, through the facade's hidden `testing` module.
+layout = { path = "../../layout/layout" }

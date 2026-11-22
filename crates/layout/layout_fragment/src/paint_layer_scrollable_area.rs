@@ -84,67 +84,12 @@ fn RectContainsPoint(rect: gfx::Rect, point: &gfx::Point) -> bool {
         && point.y() < rect.bottom()
 }
 
-// Source: core/paint/paint_layer_scrollable_area.h:708-714.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StyleBasedScrollbarData {
-    pub overflow_x: EOverflow,
-    pub overflow_y: EOverflow,
-    pub gutter: ScrollbarGutter,
-    pub width: EScrollbarWidth,
-    pub writing_mode: foundation::WritingMode,
-}
-
-// The source method reads these values through LayoutView, Settings and Page.
-// StyleCascade runs before it can borrow the retained LayoutView, so its
-// package boundary calls this same algorithm with the immutable host facts.
-// Source: core/paint/paint_layer_scrollable_area.cc:1698-1738.
-pub fn ComputeScrollbarWidthsForViewportUnitsFromInputs(
-    scrollbar_properties: StyleBasedScrollbarData,
-    visual_viewport_supplies_scrollbars: bool,
-    hide_scrollbars: bool,
-    theme: &super::super::layout_input_types::ScrollbarThemeMetrics,
-) -> gfx::Size {
-    if visual_viewport_supplies_scrollbars
-        || hide_scrollbars
-        || theme.uses_overlay_scrollbars
-        || scrollbar_properties.width == EScrollbarWidth::kNone
-    {
-        return gfx::Size::default();
-    }
-
-    let mode = |overflow: EOverflow| match overflow {
-        EOverflow::kScroll => ScrollbarMode::kAlwaysOn,
-        EOverflow::kHidden | EOverflow::kClip => ScrollbarMode::kAlwaysOff,
-        _ => ScrollbarMode::kAuto,
-    };
-    let horizontal_mode = mode(scrollbar_properties.overflow_x);
-    let vertical_mode = mode(scrollbar_properties.overflow_y);
-    let scrollbar_thickness = ScrollbarThemeThickness(theme, scrollbar_properties.width);
-    let mut scrollbar_thicknesses = gfx::Size::default();
-    if horizontal_mode == ScrollbarMode::kAlwaysOn {
-        scrollbar_thicknesses.set_height(scrollbar_thickness);
-    }
-    if vertical_mode == ScrollbarMode::kAlwaysOn {
-        scrollbar_thicknesses.set_width(scrollbar_thickness);
-    }
-    if scrollbar_properties.gutter.value() & ScrollbarGutter::kScrollbarGutterBothEdges.value() != 0
-    {
-        if foundation::IsVerticalWritingMode(scrollbar_properties.writing_mode) {
-            scrollbar_thicknesses.set_height(scrollbar_thickness * 2);
-        } else {
-            scrollbar_thicknesses.set_width(scrollbar_thickness * 2);
-        }
-    } else if scrollbar_properties.gutter.value() & ScrollbarGutter::kScrollbarGutterStable.value()
-        != 0
-    {
-        if foundation::IsVerticalWritingMode(scrollbar_properties.writing_mode) {
-            scrollbar_thicknesses.set_height(scrollbar_thickness);
-        } else {
-            scrollbar_thicknesses.set_width(scrollbar_thickness);
-        }
-    }
-    scrollbar_thicknesses
-}
+// Source: core/paint/paint_layer_scrollable_area.h:708-714 and
+// paint_layer_scrollable_area.cc:1698-1738. Style's viewport-unit cascade
+// shares this pure algorithm, so `layout_style_paint` owns it.
+pub use layout_style_paint::scrollbar_metrics::{
+    ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
+};
 
 fn ResolveScrollbarModes(box_: &LayoutBox) -> (ScrollbarMode, ScrollbarMode) {
     if box_.IsLayoutView() {

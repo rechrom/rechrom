@@ -131,8 +131,13 @@ applied by `layout_assembly` (attach, style binding) â†’ `layout_invalidation` â
 publication). Shared roots: `layout_geometry`, `layout_style` (the single
 `ComputedStyle` owner), `paint_input_types` (plain paint values Layout
 publishes: paint-input schema, `PaintResources`, glyph runs; Paint, Raster,
-Compositor and Style name them without depending on Layout), `foundation`
-(shared base types, in `crates/foundation`).
+Compositor and Style name them without depending on Layout), `layout_style_paint`
+(pure ComputedStyle -> paint-value projection and style-based scrollbar
+thickness; Style calls it for SVG paint servers, generated-image content and
+viewport units), `foundation` (shared base types, in `crates/foundation`).
+Everything under `crates/layout/` is one engine: its public surface is the
+`layout` facade plus these shared roots; all other `crates/layout` packages are
+internal.
 
 - Output is a retained `LayoutResultHandle` and borrowed `LayoutOutput` access
   to resident geometry. Paint and Interaction traverse native

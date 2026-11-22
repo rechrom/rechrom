@@ -4937,7 +4937,7 @@ mod package_contract_tests {
             "pub(crate) fn ExportGeometryStyle",
             "pub(crate) fn ExportStyle",
             "pub(crate) fn SetResolvedOffsetTransform",
-            "clip_path_paint_export.rs",
+            "pub use layout_style_paint::paint_style_export::*;",
         ] {
             assert!(
                 owner.contains(owned_entry),
@@ -4948,10 +4948,20 @@ mod package_contract_tests {
             owner.matches("#[inline(never)]").count() >= 4,
             "fragment paint-style projection entries must remain visible to sampling profilers"
         );
+        // The pure ComputedStyle -> paint-value projection is owned by
+        // `layout_style_paint`, a Layout shared root that Style also names.
+        let layout_style_paint = root.join("layout_style_paint/src");
+        let projection = std::fs::read_to_string(layout_style_paint.join("paint_style_export.rs"))
+            .expect("read layout_style_paint paint-style projection");
         assert!(
-            root.join("layout_fragment/src/clip_path_paint_export.rs")
-                .is_file(),
-            "clip-path projection must be physically owned by layout_fragment"
+            projection.contains("pub fn Export(")
+                && projection.contains("clip_path_paint_export.rs")
+                && layout_style_paint.join("clip_path_paint_export.rs").is_file(),
+            "the pure paint-style and clip-path projection must be owned by layout_style_paint"
+        );
+        assert!(
+            !owner.contains("fn Backgrounds(") && !owner.contains("fn ExportForPaint("),
+            "layout_fragment must re-export, not duplicate, the layout_style_paint projection"
         );
 
         let facade = std::fs::read_to_string(

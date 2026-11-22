@@ -2053,7 +2053,7 @@ fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.SourceURL(), source);
     assert_eq!(fetched.ResourceId(), 0);
-    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_style_paint::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images.len(), 1);
     assert_eq!(paint.background_images[0].source_url, source);
     assert_eq!(paint.background_images[0].resource_id, 0);
@@ -2075,7 +2075,7 @@ fn url_images_cross_computed_style_style_resource_and_paint_boundaries() {
     let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!(fetched.ResourceId(), 41);
-    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_style_paint::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].resource_id, 41);
     assert_eq!(paint.background_images[0].source_url, source);
 }
@@ -2156,7 +2156,7 @@ fn image_set_reselects_for_device_scale_and_exports_per_use_resolution() {
     let computed_style = unsafe { &*resolved.computed_style_owner.Get() };
     let fetched = FetchedImage(unsafe { &*computed_style.BackgroundLayers().GetImage() }).unwrap();
     assert_eq!((fetched.ResourceId(), fetched.ResolutionScale()), (52, 2.0));
-    let paint = layout_core::internal::boundary::paint_style_export::Export(computed_style, None);
+    let paint = layout_style_paint::paint_style_export::Export(computed_style, None);
     assert_eq!(paint.background_images[0].image_resolution_scale, 2.0);
 
     let mut low_density = media();
@@ -2193,7 +2193,7 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let pending = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let pending = unsafe { &*pending.computed_style_owner.Get() };
-    assert!(layout_core::style_projection::ProjectListMarkerImage(pending).is_none());
+    assert!(layout::testing::ProjectListMarkerImage(pending).is_none());
 
     for (source, id, width, height) in [(one, 61, 80.0, 40.0), (two, 62, 160.0, 80.0)] {
         owner.GetDocumentMut().SetImageResource(
@@ -2212,7 +2212,7 @@ fn list_marker_image_projects_selected_intrinsic_size_and_rebuilds_after_load() 
     engine.Update(&mut owner, &high_density, &[]).unwrap();
     let resolved = owner.GetDocument().ResolvedStyleFor(target).unwrap();
     let resolved = unsafe { &*resolved.computed_style_owner.Get() };
-    let image = layout_core::style_projection::ProjectListMarkerImage(resolved)
+    let image = layout::testing::ProjectListMarkerImage(resolved)
         .expect("loaded list-style-image boundary data");
     assert_eq!((image.resource_id, image.resolution_scale), (62, 2.0));
     assert_eq!((image.natural_width, image.natural_height), (40.0, 80.0));
@@ -2818,7 +2818,7 @@ fn svg_presentation_attributes_enter_the_author_cascade() {
     let group_resolved = owner.GetDocument().ResolvedStyleFor(group).unwrap();
     let group = unsafe { &*group_resolved.computed_style_owner.Get() };
     assert_eq!(group.Transform().size(), 1);
-    let projected_group = layout_core::style_projection::ProjectComputedStyle(group).unwrap();
+    let projected_group = layout::testing::ProjectComputedStyle(group).unwrap();
     assert_eq!(
         projected_group.paint.transform.as_ref().unwrap().operations[0]
             .matrix
@@ -3016,7 +3016,7 @@ fn svg_paint_server_alpha_is_quantized_without_quantizing_solid_fallback() {
         .ResolvedStyleFor(node(&owner, "gradient-client"))
         .and_then(|style| unsafe { style.computed_style_owner.Get().as_ref() })
         .expect("gradient client style");
-    let fallback = layout_core::internal::boundary::paint_style_export::Export(style, None)
+    let fallback = layout_style_paint::paint_style_export::Export(style, None)
         .svg_fill
         .expect("solid fallback");
     assert!((fallback.alpha - 0.7 * 0.503).abs() < 1e-6);
@@ -3301,7 +3301,7 @@ fn compound_class_background_and_zoom_cross_the_layout_boundary_once() {
     assert!((computed_style.ColumnGap().as_ref().unwrap().Pixels() - 20.736).abs() < 0.001);
     assert!(computed_style.BackgroundColor().GetColor().Param2() > 0.1);
     assert!(computed_style.HasAuthorBackground());
-    let neutral = layout_core::style_projection::ProjectComputedStyle(computed_style).unwrap();
+    let neutral = layout::testing::ProjectComputedStyle(computed_style).unwrap();
     assert_eq!(neutral.width, Some(200.0));
     assert_eq!(neutral.extended.as_ref().unwrap().font_size, 40.0);
     assert!(neutral.extended.as_ref().unwrap().has_author_background);
@@ -3312,7 +3312,7 @@ fn compound_class_background_and_zoom_cross_the_layout_boundary_once() {
     assert_eq!(neutral.paint.box_shadows[0].blur_radius, 6.0);
     assert_eq!(neutral.paint.box_shadows[0].spread, 8.0);
     assert!((neutral.extended.as_ref().unwrap().column_gap.unwrap() - 41.472).abs() < 0.001);
-    let used = layout_core::internal::css_zoom::ZoomedStyle(&neutral);
+    let used = layout::testing::ZoomedStyle(&neutral);
     assert_eq!(used.width, Some(100.0));
     assert_eq!(used.extended.as_ref().unwrap().font_size, 20.0);
     assert_eq!(used.paint.border_radii.unwrap().top_left.x, 10.0);

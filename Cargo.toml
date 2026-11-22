@@ -46,6 +46,7 @@ members = [
     "crates/style/style_resolve",
     "crates/style/style_diff",
     "crates/style/style_commit",
+    "crates/layout/layout_style_paint",
     "crates/style/style",
     "crates/layout/layout_algo_custom",
     "crates/paint/paint_model",
