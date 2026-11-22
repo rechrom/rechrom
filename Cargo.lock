@@ -2390,6 +2390,7 @@ name = "layout_algo_inline_assembly"
 version = "0.0.1"
 dependencies = [
  "browser_tracing",
+ "css_parser",
  "cssom",
  "font_engine",
  "foundation",
@@ -2495,6 +2496,7 @@ version = "0.0.1"
 dependencies = [
  "browser_tracing",
  "canvas",
+ "css_parser",
  "cssom",
  "font_engine",
  "foundation",
