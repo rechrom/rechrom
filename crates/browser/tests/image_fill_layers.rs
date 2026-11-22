@@ -4,7 +4,7 @@ mod test_thread;
 
 use browser::page::{Page, PreferredColorScheme};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::internal::layout_input::FontFace;
+use layout::input::FontFace;
 use page_mutation::PageMutation;
 use paint::paint_engine::{DisplayItemType, PaintRect};
 use std::sync::Arc;

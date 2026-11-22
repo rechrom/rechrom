@@ -5,7 +5,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::internal::layout_input::FontFace;
+use layout::input::FontFace;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

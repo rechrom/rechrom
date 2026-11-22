@@ -1,7 +1,7 @@
 use super::*;
 use crate::page::{Page, PageClient, PageState};
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::internal::layout_input::{ConstraintSpace, Offset, PaintImage, Size};
+use layout::input::{ConstraintSpace, Offset, PaintImage, Size};
 use page_mutation::{
     AnimationStyleSample, AnimationTick, InteractionStateMutation, PageMutation,
     ResourceLoadFailed, ResourceMutation, ScrollMutation, ViewportMutation,

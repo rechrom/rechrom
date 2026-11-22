@@ -6,10 +6,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::{
-    internal::layout_input::{FontFace, NodeKind},
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{input::{FontFace, NodeKind}, paint::PaintFragmentCursor};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

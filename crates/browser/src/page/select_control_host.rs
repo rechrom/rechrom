@@ -66,7 +66,7 @@ impl ResidentSelectControlHost {
             }
         }
     }
-    fn ApplyScroll(&self, result: layout_assembly::native_scroll_source::NativeScrollResult) {
+    fn ApplyScroll(&self, result: layout::scroll::NativeScrollResult) {
         match &self.0 {
             InteractionScrollOwner::Root(page) => {
                 if let Some(page) = page.upgrade() {

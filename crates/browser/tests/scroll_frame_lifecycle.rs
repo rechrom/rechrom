@@ -3,8 +3,8 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::internal::layout_input::FontFace;
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::input::FontFace;
+use layout::paint::PaintFragmentCursor;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -115,16 +115,16 @@ fn pixels(page: &mut Page) -> Vec<u32> {
 }
 
 fn root_scroll_state(
-    fragments: &layout_assembly::fragment_tree::LayoutResultHandle,
+    fragments: &layout::fragment::LayoutResultHandle,
 ) -> Option<(
-    layout_assembly::internal::layout_input::Offset,
-    Option<layout_assembly::internal::layout_input::Offset>,
+    layout::input::Offset,
+    Option<layout::input::Offset>,
 )> {
     fn find(
         node: PaintFragmentCursor<'_>,
     ) -> Option<(
-        layout_assembly::internal::layout_input::Offset,
-        Option<layout_assembly::internal::layout_input::Offset>,
+        layout::input::Offset,
+        Option<layout::input::Offset>,
     )> {
         if node.paint.scroll_size.height > node.size.height
             && node.paint.LastCullRectUpdateScrollPosition().is_some()
@@ -263,7 +263,7 @@ fn root_sticky_fixed_and_clipped_pixels_follow_scroll_and_return() {
 fn compositor_delta_acknowledgement_follows_commit_and_skips_second_default() {
     test_thread::run(|| {
         use interaction::input_event::{InputEvent, Offset as InputOffset, WheelEvent, WheelPhase};
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         let mut page = fixture("body{height:230px}", "<div></div>", true);
         let wheel = WheelEvent {
             compositor_owned: true,

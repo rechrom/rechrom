@@ -5,14 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::{
-        layout_input::{FontFace, TransformMatrix},
-        layout_object::LayoutObject,
-        layout_pass_scope::LayoutObjectFactoryScope,
-    },
-};
+use layout::{paint::FragmentPaintData, input::{FontFace, TransformMatrix}, object::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use paint::{
     geometry_mapper::{MapRectToRoot, MultiplyTransforms},

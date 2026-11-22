@@ -4,14 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle, ResidentBoxGeometry as _},
-    internal::{
-        layout_input::FontFace, layout_object::LayoutObject,
-        layout_pass_scope::LayoutObjectFactoryScope,
-    },
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::{LayoutResultHandle, ResidentBoxGeometry as _}, input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
 use std::{cell::RefCell, io, rc::Rc};
@@ -405,7 +398,7 @@ fn resource_units_transforms_visibility_and_use_target_refresh() {
 fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
     test_thread::run(|| {
         use dom::persistent_document::DOMAttribute;
-        use layout_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        use layout::{LayoutEngine, mutation::LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(&format!(
             "<!doctype html><body style='margin:0'>{CLIPPED}"
@@ -531,8 +524,8 @@ fn targeted_layout_update_retains_binding_and_rejects_stale_version() {
 fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
     test_thread::run(|| {
         use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
-        use layout_assembly::internal::paint_input::SvgClipGeometry;
-        use layout_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        use layout::paint_input::SvgClipGeometry;
+        use layout::{LayoutEngine, mutation::LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(
             r##"<!doctype html><body><svg width="1" height="1"><defs><clipPath id="clip"><rect width="40" height="40"/></clipPath></defs></svg><div id="host" style="width:80px;height:80px;clip-path:url(#clip)"></div>"##,
@@ -635,7 +628,7 @@ fn canonical_inherited_reference_keeps_originating_scope_across_shadow_root() {
             .unwrap();
         assert_eq!(own_clip.reference_scope, Some(shadow_scope));
         assert_eq!(inherited_clip.reference_scope, Some(document_scope));
-        let width = |clip: &layout_assembly::internal::paint_input::ClipPathPaint| match clip
+        let width = |clip: &layout::paint_input::ClipPathPaint| match clip
             .reference_graph
             .as_ref()
             .unwrap()
@@ -762,7 +755,7 @@ fn foundation_asset_inline_and_fetched_retains_real_clip_content() {
 #[test]
 fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
     test_thread::run(|| {
-        use layout_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        use layout::{LayoutEngine, mutation::LayoutMutation};
         let _heap = foundation::LayoutHeapScope::new();
         let mut owner = html::html_parser::ParseHTML(&format!(
             "<!doctype html><style>.wide #geometry{{width:50px}}</style><body style='margin:0'><div id='label' style='color:red'>label</div>{CLIPPED}"
@@ -967,7 +960,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
             .as_ref()
             .unwrap();
         match graph.children[0].geometry.as_ref().unwrap() {
-            layout_assembly::internal::paint_input::SvgClipGeometry::kRect { width, .. } => {
+            layout::paint_input::SvgClipGeometry::kRect { width, .. } => {
                 assert_eq!(width.value, 50.)
             }
             _ => panic!("expected rectangle resource"),
@@ -978,9 +971,7 @@ fn html_paint_input_updates_retain_text_geometry_fonts_and_svg_catalog() {
 mod active_filter_inventory {
     use super::*;
     use dom::persistent_document::{DOMAttribute, DOMNamespace, DOMShadowRootMode};
-    use layout_assembly::internal::paint_input::{
-        SvgFilterGraph, SvgFilterInput, SvgFilterPrimitiveKind, SvgLightSource, SvgTransferFunction,
-    };
+    use layout::paint_input::{SvgFilterGraph, SvgFilterInput, SvgFilterPrimitiveKind, SvgLightSource, SvgTransferFunction};
 
     fn element(
         owner: &mut dom::DOM,
@@ -1010,7 +1001,7 @@ mod active_filter_inventory {
         node
     }
     fn graphs(owner: &mut dom::DOM) -> std::sync::Arc<Vec<SvgFilterGraph>> {
-        use layout_assembly::layout_engine::{LayoutEngine, LayoutMutation};
+        use layout::{LayoutEngine, mutation::LayoutMutation};
         let mut style = style::StyleEngine::new(owner);
         style
             .Update(
@@ -1140,7 +1131,7 @@ mod active_filter_inventory {
             assert!(graph.primitives[0].region.width.unwrap().percentage);
             assert_eq!(
                 graph.primitives[0].input,
-                layout_assembly::internal::paint_input::SvgFilterInput::kNamed(
+                layout::paint_input::SvgFilterInput::kNamed(
                     " SourceAlpha ".into()
                 )
             );

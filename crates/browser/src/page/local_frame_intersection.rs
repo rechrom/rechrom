@@ -164,9 +164,9 @@ impl IntersectionObserverTarget for FrameIntersectionTarget {
                     return Err(RequiredIntersectionMechanism::CrossFrameGeometry);
                 }
                 Some(if root.IsDocumentRoot() {
-                    layout_assembly::layout_engine::NativeIntersectionRoot::Document
+                    layout::output::NativeIntersectionRoot::Document
                 } else {
-                    layout_assembly::layout_engine::NativeIntersectionRoot::Element(root.NodeId())
+                    layout::output::NativeIntersectionRoot::Element(root.NodeId())
                 })
             }
         };
@@ -219,7 +219,7 @@ impl LocalFrameDomain {
     pub(super) fn WithLayout<T>(
         &self,
         frame: u64,
-        read: impl FnOnce(&layout_assembly::layout_engine::LayoutEngine) -> T,
+        read: impl FnOnce(&layout::LayoutEngine) -> T,
     ) -> Option<T> {
         if frame == self.root {
             let page = self.page.upgrade()?;

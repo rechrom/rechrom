@@ -3,10 +3,7 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::layout_input::{FontFace, Offset},
-};
+use layout::{paint::FragmentPaintData, input::{FontFace, Offset}};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -97,7 +94,7 @@ fn find_fragment<'a>(
         .find_map(|child| find_fragment(child, absolute, predicate))
 }
 
-fn item(page: &Page, name: &str) -> (Offset, layout_assembly::internal::layout_input::Size) {
+fn item(page: &Page, name: &str) -> (Offset, layout::input::Size) {
     let owner = page.Document();
     let doc = owner.GetDocument();
     let index = (0..doc.NodeCount())

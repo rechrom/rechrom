@@ -6,11 +6,7 @@ mod test_thread;
 
 use browser::page::Page;
 use interaction::input_event::{InputEvent, MouseButton, MouseEvent, MouseEventType, Offset};
-use layout_assembly::{
-    internal::layout_input::{FontFace, NodeKind},
-    fragment_tree::ResidentBoxGeometry as _,
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{input::{FontFace, NodeKind}, fragment::ResidentBoxGeometry as _, paint::PaintFragmentCursor};
 use paint::paint_engine::DisplayItemType;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};

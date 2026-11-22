@@ -4,13 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    internal::{
-        layout_input::FontFace, layout_object::LayoutObject,
-        layout_pass_scope::LayoutObjectFactoryScope,
-    },
-};
+use layout::{paint::FragmentPaintData, input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
 use page_mutation::PageMutation;
 use paint::paint_engine::PaintArtifact;
 use std::{cell::RefCell, io, rc::Rc};
@@ -176,12 +170,12 @@ fn hidden_svg_source_kinds_keep_descendant_layout_and_empty_visual_geometry() {
             (
                 "defs",
                 false,
-                layout_assembly::internal::layout_input::NodeKind::kSvgHiddenContainer,
+                layout::input::NodeKind::kSvgHiddenContainer,
             ),
             (
                 "clip",
                 true,
-                layout_assembly::internal::layout_input::NodeKind::kSvgResourceClipper,
+                layout::input::NodeKind::kSvgResourceClipper,
             ),
         ] {
             let object = native(&page, name);

@@ -2,7 +2,7 @@ use crate::page::{Page, PageClient, PageFrame};
 use dom::Document;
 use image_decoder::skia_image_decoder::SkiaImageDecoder;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layout_assembly::internal::layout_input::FontFace;
+use layout::input::FontFace;
 use std::{cell::RefCell, io, path::PathBuf, rc::Rc};
 use url_loader::{RequestDestination, URLLoadOperation, URLLoader, URLRequest, URLResponse};
 struct Operation(usize, Option<URLResponse>);
@@ -695,7 +695,7 @@ fn scroll_event_updates_intersection_observer_after_geometry_commit() {
 #[test]
 fn viewport_scroll_reaches_window_and_updates_client_rects() {
     crate::test_thread::run(|| {
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
         let root =
             std::env::temp_dir().join(format!("layoutng-viewport-scroll-{}", std::process::id()));
@@ -844,7 +844,7 @@ fn begin_frame_recomputes_hover_after_layout_under_stationary_mouse() {
 fn scrolling_preserves_old_fragment_snapshots_caret_and_late_resource_discovery() {
     crate::test_thread::run(|| {
         use interaction::input_event::{FocusEvent, InputEvent};
-        use layout_assembly::internal::layout_input::Offset;
+        use layout::input::Offset;
         use page_mutation::{PageMutation, ScrollMutation};
         let root =
             std::env::temp_dir().join(format!("layoutng-scroll-retention-{}", std::process::id()));
@@ -1406,8 +1406,8 @@ impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
             }]
             .into(),
             resources: Some(std::sync::Arc::new(
-                layout_assembly::fragment_tree::PaintResources {
-                    images: vec![layout_assembly::internal::layout_input::PaintImage {
+                layout::paint::PaintResources {
+                    images: vec![layout::input::PaintImage {
                         id: nested_image_id,
                         revision: 1,
                         width: decoded.width,

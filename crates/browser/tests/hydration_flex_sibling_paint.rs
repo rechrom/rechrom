@@ -5,10 +5,7 @@ use browser::page::{Page, ScriptEnvironment};
 use dom::persistent_document::DOMNodeType;
 use dom::Document;
 use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-use layout_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle},
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 
@@ -55,7 +52,7 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 fn fixture() -> Page {
     let assembly = browser::CreateLayoutAssembly();
     let mut constraints = browser::CreateBrowserConstraints(800, 400);
-    constraints.fonts = vec![layout_assembly::internal::layout_input::FontFace {
+    constraints.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
         bytes: include_bytes!("../../../assets/fonts/Roboto-Regular.ttf")
             .as_slice()

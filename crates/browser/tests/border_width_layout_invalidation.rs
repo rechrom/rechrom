@@ -5,11 +5,7 @@
 mod test_thread;
 
 use browser::page::{Page, ScriptEnvironment};
-use layout_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle},
-    internal::layout_input::{FontFace, Size},
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, input::{FontFace, Size}};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

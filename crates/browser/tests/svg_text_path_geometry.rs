@@ -3,13 +3,10 @@
 mod test_thread;
 
 use browser::page::Page;
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use dom::dom_mutation::{DOMMutation, DOMMutationType};
-use layout_assembly::internal::{
-    layout_input::FontFace, layout_object::LayoutObject,
-    layout_pass_scope::LayoutObjectFactoryScope,
-};
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::{input::FontFace, object::{LayoutObject, LayoutObjectFactoryScope}};
+use layout::paint::PaintFragmentCursor;
 use page_mutation::PageMutation;
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
@@ -273,7 +270,7 @@ fn retained_svg_bounds_refresh_after_dy_mutation_and_preserve_old_artifact() {
 
 fn first_svg_data(
     node: PaintFragmentCursor<'_>,
-) -> Option<std::sync::Arc<layout_assembly::fragment_tree::SvgTextPaintData>> {
+) -> Option<std::sync::Arc<layout::paint::SvgTextPaintData>> {
     if let Some(svg) = node.PaintData().ViewSvgText() {
         return Some(svg);
     }

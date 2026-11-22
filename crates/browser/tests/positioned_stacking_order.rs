@@ -5,14 +5,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::DynamicTo;
-use layout_assembly::{
-    fragment_tree::{FragmentPaintData, LayoutResultHandle},
-    internal::{
-        layout_box_model_object::LayoutBoxModelObject, layout_input::FontFace,
-        layout_object::LayoutObject,
-    },
-    layout_engine::PaintFragmentCursor,
-};
+use layout::{paint::{FragmentPaintData, PaintFragmentCursor}, fragment::LayoutResultHandle, object::{LayoutBoxModelObject, LayoutObject}, input::FontFace};
 use std::{cell::RefCell, io, rc::Rc};
 use url_loader::{URLLoadOperation, URLLoader, URLRequest, URLResponse};
 

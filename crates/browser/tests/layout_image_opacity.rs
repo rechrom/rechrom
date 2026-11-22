@@ -4,16 +4,7 @@ mod test_thread;
 
 use browser::page::Page;
 use foundation::{DynamicTo, RespectImageOrientationEnum};
-use layout_assembly::internal::{
-    hit_test_phase::HitTestPhase,
-    layout_box::LayoutBox,
-    layout_input::FontFace,
-    layout_object::{LayoutObject, StyleChangeContext},
-    layout_pass_scope::LayoutObjectFactoryScope,
-    layout_replaced::{LayoutInputReplaced, LayoutReplaced},
-    loader::fetch::resource_priority::VisibilityStatus,
-    selection_state::SelectionState,
-};
+use layout::{object::{HitTestPhase, LayoutBox, LayoutObject, StyleChangeContext, LayoutObjectFactoryScope, LayoutInputReplaced, LayoutReplaced, SelectionState}, input::{FontFace, VisibilityStatus}};
 use layout_style::style::{
     computed_style::ComputedStyleBuilder, style_difference::StyleDifference,
 };

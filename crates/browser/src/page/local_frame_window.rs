@@ -935,7 +935,7 @@ fn FrameDOMHost(frame: &Rc<LocalFrame>, runtime: &Rc<LocalFrameRuntime>) -> DOMB
                 })
         })),
         read_metric: Some(Box::new(move |id, name| {
-            let query = layout_assembly::layout_engine::LayoutMetric::try_from(name).ok()?;
+            let query = layout::output::LayoutMetric::try_from(name).ok()?;
             metric
                 .layout
                 .borrow()
