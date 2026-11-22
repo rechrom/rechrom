@@ -6,7 +6,6 @@ use crate::persistent_document::{DOMNodeType, DOMOwnerHandle, PersistentDocument
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
-#[path = "range_transaction.rs"]
 mod transaction;
 pub(crate) use transaction::{DeleteContents, InsertNode};
 

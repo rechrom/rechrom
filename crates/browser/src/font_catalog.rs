@@ -224,7 +224,6 @@ fn LoadDemoFonts() -> Vec<FontFace> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[path = "font_catalog_linux.rs"]
 mod linux;
 
 #[cfg(test)]

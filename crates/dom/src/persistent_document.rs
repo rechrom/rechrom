@@ -14,67 +14,49 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-#[path = "svg_document_extensions.rs"]
 mod svg_document_extensions;
-#[path = "svg_use_instances.rs"]
 mod svg_use_instances;
 pub use svg_use_instances::SVGUseInstanceStatus;
 
-#[path = "date_time_custom_style.rs"]
 mod date_time_custom_style;
 pub use date_time_custom_style::{
     DateTimeCustomStyleError, DateTimeCustomStyleTextMetrics, DateTimeEditCustomStyle,
     DateTimeStyleChild,
 };
 
-#[path = "user_action_elements.rs"]
 mod user_action_elements;
 pub use user_action_elements::FocusedElementChangeObserver;
 
-#[path = "image_resource_content.rs"]
 mod image_resource_content;
 pub use image_resource_content::{DOMDecodedImage, DOMImageResourceContent, ImageContentStatus};
-#[path = "html_image_loader.rs"]
 mod html_image_loader;
 pub use html_image_loader::{
     HTMLImageLoader, HTMLImageLoaderEventTicket, HTMLImageLoaderTask, ImageDecodeResult,
     ImageDecodeState, ImageLoaderEvent, ImageLoaderInputContent, ImageLoaderTaskKind,
     ImageLoaderUpdate,
 };
-#[path = "hit_test_element.rs"]
 mod hit_test_element;
 pub use hit_test_element::DOMHitTestElementKind;
-#[path = "content_frames.rs"]
 pub mod content_frames;
-#[path = "editing_serialization_mutation.rs"]
 mod editing_serialization_mutation;
-#[path = "html_inner_text.rs"]
 mod html_inner_text;
-#[path = "html_source_element.rs"]
 mod html_source_element;
-#[path = "html_track_element.rs"]
 mod html_track_element;
-#[path = "media_layout_children.rs"]
 mod media_layout_children;
 pub use media_layout_children::{
     MediaChildKind, MediaControlDivClass, MediaControlInputClass, MediaControlsEventState,
 };
-#[path = "media_element_state.rs"]
 mod media_element_state;
 pub use media_element_state::{
     DOMMediaPlayerLayoutFacts, DOMMediaPlayerLayoutSource, DOMMediaSourceAttachment,
     DOMMediaSourceHandle, DOMMediaSrcObject, DOMMediaStreamDescriptor, DOMPictureInPictureState,
     DOMVideoVisibilityTracker, HTMLMediaElementState, MediaDownloadFactsForURL, VideoPosterUpdate,
 };
-#[path = "canvas_element_state.rs"]
 mod canvas_element_state;
-#[path = "canvas_subtree.rs"]
 mod canvas_subtree;
 pub use canvas_element_state::DOMCanvasDrawElementGeometry;
-#[path = "radio_button_group_scope.rs"]
 mod radio_button_group_scope;
 pub use radio_button_group_scope::DOMRadioGroupScope;
-#[path = "view_transition_participation.rs"]
 mod view_transition_participation;
 pub use view_transition_participation::{
     ViewTransition, ViewTransitionCSSDiscoveryError, ViewTransitionCSSLayerFacts,
@@ -82,63 +64,43 @@ pub use view_transition_participation::{
     ViewTransitionSupplement, ViewTransitionTerminalState, ViewTransitionTrackerState,
 };
 
-#[path = "table_row_cells.rs"]
 mod table_row_cells;
 
-#[path = "focusgroup.rs"]
 mod focusgroup;
 use focusgroup::ElementFocusgroupData;
 
-#[path = "security_context.rs"]
 mod security_context;
 pub use security_context::{
     ExecutionContextIsolation, SecurityContext, SecurityOrigin, SecurityOriginSchemeRegistry,
     SecurityOriginTuple,
 };
-#[path = "descendant_cursor.rs"]
 mod descendant_cursor;
-#[path = "document_versions.rs"]
 mod document_versions;
 pub use descendant_cursor::DOMInclusiveDescendantCursor;
-#[path = "editing_mutation_facts.rs"]
 mod editing_mutation_facts;
-#[path = "layout_tree_detachment.rs"]
 mod layout_tree_detachment;
 pub use layout_tree_detachment::{DocumentLayoutTreeDetachment, PendingSVGResourceInvalidation};
-#[path = "editing_node.rs"]
 mod editing_node;
-#[path = "pseudo_element_node.rs"]
 mod pseudo_element_node;
-#[path = "scroll_marker_group_data.rs"]
 mod scroll_marker_group_data;
 pub use editing_mutation_facts::DocumentEditingMutation;
 pub use scroll_marker_group_data::{DOMScrollMarkerGroupState, DOMScrollMarkerInvalidation};
-#[path = "spellcheck_node.rs"]
 mod spellcheck_node;
 pub use pseudo_element_node::DOMPseudoElementFacts;
-#[path = "text_iterator_node.rs"]
 mod text_iterator_node;
 pub use text_iterator_node::InputAltTextLocale;
 
-#[path = "element_attribute_reference.rs"]
 mod element_attribute_reference;
-#[path = "html_data_list_owner.rs"]
 mod html_data_list_owner;
-#[path = "html_image_map.rs"]
 mod html_image_map;
-#[path = "html_select_owner.rs"]
 mod html_select_owner;
 pub use html_image_map::{DOMImageMapAreaShape, DOMImageMapContainer};
-#[path = "html_select_shadow.rs"]
 mod html_select_shadow;
 pub use html_select_owner::{DOMSelectSourceFeatures, DOMSelectUAPartKind};
-#[path = "html_details_owner.rs"]
 mod html_details_owner;
-#[path = "popup_top_layer.rs"]
 mod popup_top_layer;
 use editing_node::DOMNodeClass;
 pub use element_attribute_reference::{ContextMenuAutofillDOMFacts, HTMLElementCommandClass};
-#[path = "display_lock.rs"]
 mod display_lock;
 pub use display_lock::{
     DisplayLockActivationReason, DisplayLockForcedEffect, DisplayLockForcedPhase,
@@ -146,13 +108,10 @@ pub use display_lock::{
 };
 use display_lock::{DisplayLockContext, DisplayLockDocumentState};
 
-#[path = "input_image_fallback.rs"]
 mod input_image_fallback;
 
-#[path = "input_type_shadow.rs"]
 mod input_type_shadow;
 
-#[path = "overscroll_area_tracker.rs"]
 mod overscroll_area_tracker;
 pub use overscroll_area_tracker::{
     DOMOverscrollAction, DOMOverscrollGeometry, DOMOverscrollOffset, DOMOverscrollOpenBox,
@@ -160,21 +119,16 @@ pub use overscroll_area_tracker::{
 };
 use overscroll_area_tracker::{ElementOverscrollData, OverscrollDocumentData};
 
-#[path = "form_control_state.rs"]
 mod form_control_state;
 pub use form_control_state::{DOMFormControlClass, DOMSelectCollection};
 
-#[path = "focus_navigation.rs"]
 mod focus_navigation;
-#[path = "fragment_anchor.rs"]
 mod fragment_anchor;
 pub use fragment_anchor::AutoExpandableAncestorKind;
 
-#[path = "editable_facts.rs"]
 mod editable_facts;
 pub use editable_facts::DOMEditableFacts;
 
-#[path = "node_child_removal_tracker.rs"]
 mod node_child_removal_tracker;
 pub use node_child_removal_tracker::NodeChildRemovalTracker;
 use user_action_elements::UserActionElements;
@@ -11904,60 +11858,45 @@ pub struct DocumentTappedBadTarget {
     pub highly_zoomed: Option<bool>,
 }
 
-#[path = "serialization_attributes.rs"]
 mod serialization_attributes;
 
-#[path = "temporal_input_shadow.rs"]
 mod temporal_input_shadow;
 
-#[path = "url_attributes.rs"]
 mod url_attributes;
 
-#[path = "html_image_element.rs"]
 mod html_image_element;
 pub use html_image_element::HTMLImageLayoutDisposition;
 
-#[path = "svg_element_kind.rs"]
 mod svg_element_kind;
 pub use svg_element_kind::SVGElementKind;
-#[path = "resize_observer_data.rs"]
 mod resize_observer_data;
 
-#[path = "intersection_observer_data.rs"]
 mod intersection_observer_data;
 
-#[path = "speculation_rules_supplement.rs"]
 mod speculation_rules_supplement;
 pub use speculation_rules_supplement::DocumentSpeculationRules;
 
-#[path = "editing_font_settings.rs"]
 mod editing_font_settings;
 
-#[path = "anchor_metrics_supplement.rs"]
 mod anchor_metrics_supplement;
 pub use anchor_metrics_supplement::{
     DocumentAnchorMetricsOwner, ShadowIncludingAnchorMetricsCursor,
 };
 
-#[path = "anchor_viewport_supplement.rs"]
 mod anchor_viewport_supplement;
 pub use anchor_viewport_supplement::DocumentAnchorViewportOwner;
 
-#[path = "static_document_security.rs"]
 mod static_document_security;
 pub use static_document_security::JavaScriptURLDocumentSecurity;
 
-#[path = "vtt_node.rs"]
 mod vtt_node;
 pub use vtt_node::{VTTCueBackgroundSource, VTTCueBoxSource, VTTElementSource, VTTTextStyleSource};
 
 pub(crate) use vtt_node::VTTLifecycleChange;
 
-#[path = "navigation_api_window.rs"]
 mod navigation_api_window;
 pub use navigation_api_window::WindowNavigationApiOwner;
 
-#[path = "navigation_optional_state.rs"]
 mod navigation_optional_state;
 pub use navigation_optional_state::{
     NavigationPhase, NavigationStateSupplement, NavigationTraverseType, SkeletonDocument,
@@ -11966,13 +11905,10 @@ pub use navigation_optional_state::{
 
 pub use view_transition_participation::NavigationPreviewRequired;
 
-#[path = "markup_parser_support.rs"]
 mod markup_parser_support;
 
-#[path = "node_traversal.rs"]
 mod node_traversal;
 
-#[path = "paint_timing_facts.rs"]
 mod paint_timing_facts;
 
 impl PersistentDocument {
