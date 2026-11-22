@@ -1,7 +1,7 @@
 //! Document-owned snapshots for local SVG <clipPath> resources.
 use crate::{persistent_document::DOMNamespace, Child, Element};
-use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
-use layout_assembly::internal::paint_input::{
+use layout::input::{Offset, PaintPathCommand, PaintPathVerb};
+use layout::paint_input::{
     SvgClipGeometry, SvgClipLength, SvgClipPathChild, SvgClipPathGraph, SvgClipPathUnits,
     SvgClipResourceEntry, SvgClipResourceSnapshot, SvgClipResourceVersion, SvgClipText,
     SvgClipTextAnchor, SvgClipTextPath, SvgClipTransform, SvgClipTransformStep,
@@ -118,7 +118,7 @@ struct GraphDocument<'a> {
     computed_geometry: HashMap<usize, Result<Option<SvgClipGeometry>, String>>,
     computed_use_offsets: HashMap<usize, Result<(SvgClipLength, SvgClipLength), String>>,
     unavailable_targets: HashSet<usize>,
-    mask_graphs: HashMap<usize, Arc<layout_assembly::internal::paint_input::SvgMaskGraph>>,
+    mask_graphs: HashMap<usize, Arc<layout::paint_input::SvgMaskGraph>>,
     use_instances: HashMap<usize, Result<Option<usize>, String>>,
 }
 
@@ -1752,8 +1752,8 @@ pub fn SVGMaskShape(
     document: &crate::Document,
     index: usize,
     source: &layout_style::style::computed_style::ComputedStyle,
-) -> Result<Option<layout_assembly::internal::layout_input::SvgShapeData>, String> {
-    use layout_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
+) -> Result<Option<layout::input::SvgShapeData>, String> {
+    use layout::input::{SvgShapeData, SvgShapeGeometry};
     let node = document.Node(index);
     if matches!(node.Name(), "path" | "line" | "polyline" | "polygon") {
         if node.Name() == "path" && !source.D().is_null() {

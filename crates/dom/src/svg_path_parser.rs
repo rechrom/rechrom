@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
+use layout::input::{Offset, PaintPathCommand, PaintPathVerb};
 
 unsafe extern "C" {
     fn isalpha(c: std::ffi::c_int) -> std::ffi::c_int;

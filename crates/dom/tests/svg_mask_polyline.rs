@@ -1,5 +1,5 @@
 use dom::persistent_document::{DOMAttribute, DOMNamespace};
-use layout_assembly::internal::layout_input::{Offset, PaintPathVerb, SvgShapeGeometry};
+use layout::input::{Offset, PaintPathVerb, SvgShapeGeometry};
 use layout_style::style::computed_style::ComputedStyle;
 
 #[test]

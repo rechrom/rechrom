@@ -13,7 +13,7 @@ use dom::{
     Document, DOM,
 };
 use html::html_parser::ParseHTMLFragment;
-use layout_assembly::internal::layout_input::Offset;
+use layout::input::Offset;
 use std::{
     cell::{Ref, RefCell, RefMut},
     rc::Rc,

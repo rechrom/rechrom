@@ -18,7 +18,7 @@ html = { path = "../document/html" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 image_resource = { path = "../image_resource" }
-layout_assembly = { path = "../layout/layout_assembly" }
+layout = { path = "../layout/layout" }
 page_mutation = { path = "../page_mutation" }
 font_engine = { path = "../font_engine" }
 style_parser = { path = "../style/style_parser" }
@@ -27,4 +27,3 @@ style = { path = "../style/style" }
 
 [dev-dependencies]
 image_decoder = { path = "../image_decoder" }
-layout_assembly = { path = "../layout/layout_assembly", features = ["translation_in_progress"] }

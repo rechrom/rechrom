@@ -17,7 +17,7 @@ use dom::{Document, DOM};
 use image_resource::{
     ContainerKey, DocumentImageMutation, DocumentPaintContent, PaintImageContent,
 };
-use layout_assembly::internal::layout_input::{ConstraintSpace, FontFace, PaintImage};
+use layout::input::{ConstraintSpace, FontFace, PaintImage};
 use page_mutation::{
     DocumentImageFrameChanged, DocumentImageIntrinsicSizeChanged, FontResourceReady,
     ImageResourceReady, ResourceKind, ResourceLoadFailed, ResourceMutation, VideoFrameChanged,
