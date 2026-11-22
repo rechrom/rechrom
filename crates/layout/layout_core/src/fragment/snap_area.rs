@@ -1,10 +1,10 @@
-use crate::opaque::OpaqueNode;
+use super::super::layout_node_metadata::Element;
 use foundation::{Member, Visitor, WritingDirectionMode};
 use layout_geometry::geometry::axis::{kPhysicalAxesNone, PhysicalAxes};
 
 #[derive(Clone)]
 pub struct SnapArea {
-    element_: Member<OpaqueNode>,
+    element_: Member<Element>,
     consumed_axes_: PhysicalAxes,
     pending_axes_: PhysicalAxes,
     writing_direction_mode_: Option<WritingDirectionMode>,
@@ -23,7 +23,7 @@ impl Default for SnapArea {
 
 #[allow(non_snake_case)]
 impl SnapArea {
-    pub fn from_element(element: *mut OpaqueNode) -> Self {
+    pub fn from_element(element: *mut Element) -> Self {
         Self {
             element_: Member::from_ptr(element),
             ..Self::default()
@@ -31,7 +31,7 @@ impl SnapArea {
     }
 
     pub fn new(
-        element: *mut OpaqueNode,
+        element: *mut Element,
         consumed: PhysicalAxes,
         pending: PhysicalAxes,
         writing_direction_mode: Option<WritingDirectionMode>,
@@ -44,11 +44,7 @@ impl SnapArea {
         }
     }
 
-    // The typed Chromium accessors `GetElementIfConsumed()` / `GetElement()`
-    // are the base extension trait `SnapAreaExt`
-    // (`layout_core/src/internal/snap_area.rs`); these return the opaque
-    // Element handle.
-    pub fn GetElementHandleIfConsumed(&self) -> *mut OpaqueNode {
+    pub fn GetElementIfConsumed(&self) -> *mut Element {
         assert!(self.Resolved());
         if self.consumed_axes_ != kPhysicalAxesNone {
             self.element_.Get()
@@ -61,7 +57,7 @@ impl SnapArea {
         !self.Resolved() || self.pending_axes_ != kPhysicalAxesNone
     }
 
-    pub fn GetElementHandle(&self) -> *mut OpaqueNode {
+    pub fn GetElement(&self) -> *mut Element {
         self.element_.Get()
     }
 

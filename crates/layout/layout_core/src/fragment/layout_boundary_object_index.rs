@@ -2,8 +2,7 @@
 //!
 //! This file is compiled by LayoutNG at the reciprocal assembly boundary. It
 //! keeps the document-order traversal under a fragment-qualified sampling
-//! module without adding LayoutObject dependencies to the standalone
-//! `layout_fragment` crate.
+//! module (`layout_fragment_object_index`).
 
 use std::sync::Arc;
 

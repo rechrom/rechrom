@@ -6,10 +6,10 @@ use layout_algo_inline::inline_child_layout_context::{
 };
 use layout_algo_inline::score_line_break_context::{kMaxLinesForBalance, kMaxLinesForOptimal};
 use layout_algo_inline::text_fit_utils::{MeasurePerBlockScale, ParagraphScale};
-use layout_fragment::fragment_items::FragmentItems;
-use layout_fragment::inline_break_token::InlineBreakToken;
-use layout_fragment::layout_result::{EStatus, LayoutResult};
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
+use layout_core::fragment_items::FragmentItems;
+use layout_core::inline_break_token::InlineBreakToken;
+use layout_core::layout_result::{EStatus, LayoutResult};
+use layout_core::physical_box_fragment::PhysicalBoxFragment;
 use layout_core::internal::algorithm_forward::InlineChildLayoutContext;
 use layout_core::internal::disable_layout_side_effects_scope::DisableLayoutSideEffectsScope;
 use layout_core::internal::inline_node::InlineNode;

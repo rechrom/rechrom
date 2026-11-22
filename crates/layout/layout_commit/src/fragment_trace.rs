@@ -1,6 +1,12 @@
-//! Package-owned trace entry points for fragment work performed by source
-//! assembly adapters. Keeping the complete phase vocabulary here prevents
-//! assembly and commit code from relabelling fragment costs as their own.
+//! Trace entry points for fragment work performed by base adapters
+//! (fragment publication, Paint-sidecar refresh, client rects). Keeping the
+//! complete phase vocabulary here prevents base and commit code from
+//! relabelling fragment costs as their own.
+//!
+//! The names keep the historical `layout_fragment.` category prefix: it was
+//! the fragment package's name before fragments moved into base, and recorded
+//! traces, `devtools` owner attribution and `tracing::diagnostics` phase
+//! mapping key on it.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TracePhase {

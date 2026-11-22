@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use foundation::{IsLtr, LayoutUnit, MinimumValueForLength};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
+use layout_core::block_break_token::BlockBreakToken;
+use layout_core::box_fragment_builder::BoxFragmentBuilder;
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
 use layout_core::internal::fragmentation_utils::{IsBreakInside, ShouldIncludeBlockEndBorderPadding};
 use layout_core::internal::layout_alignment_utils::BlockContentAlignment;

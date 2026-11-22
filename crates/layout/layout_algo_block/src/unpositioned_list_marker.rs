@@ -4,12 +4,12 @@ use font_engine::FontBaseline;
 use foundation::{
     LayoutUnit, RuntimeEnabledFeatures, TextDirection, To, UnsupportedLayout, Visitor,
 };
-use layout_fragment::box_fragment_builder::BoxFragmentBuilder;
-use layout_fragment::layout_result::LayoutResult;
-use layout_fragment::logical_box_fragment::LogicalBoxFragment;
-use layout_fragment::physical_box_fragment::PhysicalBoxFragment;
-use layout_fragment::physical_fragment::PhysicalFragment;
-use layout_fragment::physical_line_box_fragment::PhysicalLineBoxFragment;
+use layout_core::box_fragment_builder::BoxFragmentBuilder;
+use layout_core::layout_result::LayoutResult;
+use layout_core::logical_box_fragment::LogicalBoxFragment;
+use layout_core::physical_box_fragment::PhysicalBoxFragment;
+use layout_core::physical_fragment::PhysicalFragment;
+use layout_core::physical_line_box_fragment::PhysicalLineBoxFragment;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
 use layout_core::internal::layout_pass_scope::LayoutPassScope;

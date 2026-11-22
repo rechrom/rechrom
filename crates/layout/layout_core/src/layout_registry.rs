@@ -69,8 +69,8 @@ impl LayoutRegistry {
         root: &mut crate::internal::layout_object::LayoutObject,
         cache: &mut crate::layout_boundary_support::LayoutBoundaryCache,
     ) {
-        let mut trace = layout_fragment::trace::span(
-            layout_fragment::trace::TracePhase::RebuildBoundaryObjectIndex,
+        let mut trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::RebuildBoundaryObjectIndex,
         );
         let _heap = foundation::LayoutHeapScope::new();
         let _pass = crate::internal::layout_pass_scope::LayoutPassScope::new(

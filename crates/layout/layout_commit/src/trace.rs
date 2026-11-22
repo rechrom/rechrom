@@ -48,6 +48,7 @@ mod tests {
 
     #[test]
     fn phases_are_attributed_to_commit_with_the_expected_category() {
+        let _trace_test = crate::TRACE_TEST_LOCK.lock().unwrap();
         let recording = browser_tracing::start(Default::default()).unwrap();
         drop(span(TracePhase::PublishLayoutResult));
         drop(span(TracePhase::CommitPrePaintInputs));

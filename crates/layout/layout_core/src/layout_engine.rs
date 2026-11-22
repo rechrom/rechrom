@@ -1017,8 +1017,8 @@ impl LayoutEngine {
     /// newer resource catalog to the move-only output. This walks the existing
     /// source graph by reference; it creates no fragment snapshot or Paint copy.
     pub fn RefreshOutputPrePaintInputs(&mut self, output: &mut LayoutPaintOutput) {
-        let mut trace = layout_fragment::trace::span(
-            layout_fragment::trace::TracePhase::UpdatePrePaintInputs,
+        let mut trace = layout_commit::fragment_trace::span(
+            layout_commit::fragment_trace::TracePhase::UpdatePrePaintInputs,
         );
         let nodes = UpdatePrePaintInputs(&output.fragments, &self.objects_);
         trace.set("nodes", nodes as f64);

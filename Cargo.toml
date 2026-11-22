@@ -15,7 +15,6 @@ members = [
     "crates/layout/paint_input_types",
     "crates/layout/layout_invalidation",
     "crates/layout/layout_reuse",
-    "crates/layout/layout_fragment",
     "crates/layout/layout_commit",
     "crates/layout/layout_assembly",
     "crates/layout/layout",

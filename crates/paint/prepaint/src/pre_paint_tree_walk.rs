@@ -7049,7 +7049,7 @@ impl PrePaintTreeWalk {
         }
         // LayoutImage::last_paint_rect_ belongs to the retained LayoutImage,
         // not to one immutable PhysicalFragment generation. Rechrom keeps the
-        // same lifecycle value on layout_fragment's shared Paint payload, so
+        // same lifecycle value on the fragment's shared Paint payload, so
         // carry it across a rebuilt fragment only when the source
         // DisplayItemClient identity is unchanged.
         // cpp: core/layout/layout_image.h:202-203

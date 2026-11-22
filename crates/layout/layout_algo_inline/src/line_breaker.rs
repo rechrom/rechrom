@@ -41,7 +41,6 @@ use layout_core::internal::column_spanner_path::ColumnSpannerPath;
 use layout_core::internal::constraint_space::{BaselineAlgorithmType, ConstraintSpace};
 use layout_core::internal::constraint_space_builder_style::MinMaxConstraintSpaceBuilder;
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunityExt;
 use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
 use layout_core::internal::fragmentation_utils::FollowColumnSpannerPath;
 use layout_core::internal::hyphen_result::HyphenResult;

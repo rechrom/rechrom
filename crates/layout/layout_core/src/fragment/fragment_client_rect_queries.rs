@@ -160,7 +160,7 @@ pub(super) fn client_rects(node: &LayoutNode<'_>) -> Vec<LayoutRect> {
         &node.output.engine.algorithms_,
         &node.output.engine.objects_,
     );
-    let mut trace = layout_fragment::trace::client_rects();
+    let mut trace = layout_commit::fragment_trace::client_rects();
     if node.object.IsSVGHiddenContainer() {
         return Vec::new();
     }

@@ -5,7 +5,6 @@ use super::*;
 use crate::internal::layout_box_model_object::LayoutBoxModelObject;
 use crate::internal::layout_object::BoxQuadType;
 use crate::internal::map_coordinates_flags::MapCoordinatesMode;
-use crate::internal::snap_area::SnapAreaExt;
 use foundation::WritingDirectionMode;
 use layout_style::style::scroll_snap_data::cc as style_cc;
 use scroll_snap::geometry as cc_gfx;

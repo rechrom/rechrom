@@ -1,7 +1,7 @@
 //! Paint-backed inline-fragment admission policy.
 //!
 //! The policy determines fragment materialization from typed or source style
-//! and therefore belongs to `layout_fragment`, even when called during
+//! and therefore belongs to the fragment area, even when called during
 //! object construction or invalidation preparation.
 
 #![allow(non_snake_case)]

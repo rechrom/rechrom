@@ -646,7 +646,7 @@ impl LayoutPaintState {
         match owner {
             PaintFragmentOwner::Physical(fragment) => {
                 let fragment = unsafe { &*fragment };
-                output.resident_owner = layout_fragment::ResidentFragmentOwner::Physical(
+                output.resident_owner = crate::boundary_types::ResidentFragmentOwner::Physical(
                     fragment as *const PhysicalFragment as usize,
                 );
                 crate::internal::boundary::layout_boundary::InitializePhysicalFragmentPaintData(
@@ -661,7 +661,7 @@ impl LayoutPaintState {
             }
             PaintFragmentOwner::Inline(items, index) => {
                 output.resident_owner =
-                    layout_fragment::ResidentFragmentOwner::InlineItem {
+                    crate::boundary_types::ResidentFragmentOwner::InlineItem {
                         items: items as usize,
                         index,
                     };
@@ -1071,7 +1071,7 @@ impl<'a> PaintFragmentCursor<'a> {
     }
 
     /// Enter the source fragment graph through the opaque owner supplied by
-    /// the standalone `layout_fragment` package. Concrete type recovery stays
+    /// `LayoutResultHandle` (`layout_result_handle.rs`). Concrete type recovery stays
     /// inside the LayoutNG assembly adapter.
     pub fn TryFromHandle(handle: &'a LayoutResultHandle) -> Option<Self> {
         let source = FragmentCursor::Physical {

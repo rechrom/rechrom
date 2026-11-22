@@ -1,30 +1,29 @@
-//! Scoped-name identity for style invalidation.
-//!
-//! The scope element is an opaque Element handle. Resolving it by walking
-//! the element's ancestors (`NamingScope::FindScopeElement`,
-//! naming_scope.cc:19-36,45-69) is the base extension trait `NamingScopeExt`
-//! (`layout_core/src/internal/naming_scope.rs`).
+//! Scoped-name identity and ancestor resolution for style invalidation.
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
 use std::hash::{Hash, Hasher};
 
-use foundation::{AddIntToHash, AtomicString, GetHash, Member, ScopedCSSName, ValuesEquivalent, Visitor};
+use foundation::{
+    AddIntToHash, AtomicString, GetHash, Member, ScopedCSSName, StyleNameScope, ValuesEquivalent,
+    Visitor,
+};
+use layout_style::style::computed_style::ComputedStyle;
 
-use crate::opaque::OpaqueNode;
+use crate::internal::layout_node_metadata::Element;
 
 // cpp: layoutng/internal/naming_scope.h:36-70
 pub struct NamingScope {
     name_: Member<ScopedCSSName>,
-    scope_element_: Member<OpaqueNode>,
+    scope_element_: Member<Element>,
 }
 
 impl NamingScope {
     // cpp: layoutng/internal/naming_scope.h:38-39
-    pub fn new(name: &ScopedCSSName, scope_element: *const OpaqueNode) -> Self {
+    pub fn new(name: &ScopedCSSName, scope_element: *const Element) -> Self {
         Self {
             name_: Member::from_ptr(name as *const ScopedCSSName as *mut ScopedCSSName),
-            scope_element_: Member::from_ptr(scope_element.cast_mut()),
+            scope_element_: Member::from_ptr(scope_element as *mut Element),
         }
     }
 
@@ -49,6 +48,31 @@ impl NamingScope {
         visitor.Trace(&self.name_);
         visitor.Trace(&self.scope_element_);
     }
+
+    // cpp: layoutng/internal/naming_scope.cc:45-69
+    #[inline(never)]
+    pub fn FindScopeElement<F>(
+        name: &ScopedCSSName,
+        start_element: &Element,
+        get_scope: F,
+    ) -> *const Element
+    where
+        F: for<'a> Fn(&'a ComputedStyle) -> &'a StyleNameScope,
+    {
+        let mut element = start_element as *const Element;
+        while !element.is_null() {
+            let node = unsafe { &(*element).container.node };
+            let style = node.GetComputedStyle();
+            if !style.is_null() {
+                let scope = get_scope(unsafe { &*style });
+                if IsWithinScope(name, scope) {
+                    return element;
+                }
+            }
+            element = node.parentElement();
+        }
+        std::ptr::null()
+    }
 }
 
 // cpp: layoutng/internal/naming_scope.h:44-47
@@ -57,6 +81,24 @@ impl PartialEq for NamingScope {
         ValuesEquivalent(&self.name_, &other.name_)
             && self.scope_element_.Get() == other.scope_element_.Get()
     }
+}
+
+// cpp: layoutng/internal/naming_scope.cc:19-36
+fn IsWithinScope(lookup_name: &ScopedCSSName, scope: &StyleNameScope) -> bool {
+    if scope.IsNone() {
+        return false;
+    }
+    if scope.IsAll() {
+        return scope.AllTreeScope() == lookup_name.GetTreeScope();
+    }
+    let scoped_names = scope.Names();
+    assert!(!scoped_names.is_null());
+    for scoped_name in unsafe { &*scoped_names }.GetNames() {
+        if unsafe { &*scoped_name.Get() } == lookup_name {
+            return true;
+        }
+    }
+    false
 }
 
 // C++ specializes HashTraits<Member<NamingScope>> for value-based lookup.

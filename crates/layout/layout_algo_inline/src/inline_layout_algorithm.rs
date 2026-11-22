@@ -22,7 +22,7 @@ use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::column_spanner_path::ColumnSpannerPath;
 use layout_core::internal::constraint_space::{AdjoiningObjectTypeValue, ConstraintSpace};
 use layout_core::internal::exclusions::exclusion_space::ExclusionSpace;
-use layout_core::internal::exclusions::layout_opportunity::{LayoutOpportunity, LayoutOpportunityExt};
+use layout_core::internal::exclusions::layout_opportunity::LayoutOpportunity;
 use layout_core::internal::exclusions::line_layout_opportunity::LineLayoutOpportunity;
 use layout_core::internal::form_control_types::FormControlType;
 use layout_core::internal::inline_item::{CollapseType, InlineItem, InlineItemType, InlineItems};

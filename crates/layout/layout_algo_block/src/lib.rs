@@ -4,7 +4,6 @@
 // one compilation unit that resolves their mutually recursive types.
 #[cfg(feature = "inline_extension")]
 extern crate layout_assembly as layout_algo_inline;
-extern crate layout_assembly as layout_fragment;
 extern crate layout_assembly as layout_core;
 
 pub mod registration;

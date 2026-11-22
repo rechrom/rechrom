@@ -7,6 +7,18 @@ use std::{collections::HashSet, sync::Arc};
 pub mod trace;
 pub use trace::{span as trace_span, TracePhase};
 
+/// Trace entry points for fragment publication and fragment Paint-sidecar
+/// work done by base adapters. Their category prefix stays
+/// `layout_fragment.` (the name of the former fragment package) so recorded
+/// traces, DevTools owner attribution and the profiling tools keep reading
+/// the same names; this crate owns the declarations because it owns
+/// publication.
+pub mod fragment_trace;
+
+// Recordings are process-global; trace tests in this crate run one at a time.
+#[cfg(test)]
+pub(crate) static TRACE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Layout updates retain source fragments for borrowed queries. Paint also
 /// materializes the current paint boundary output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +143,7 @@ impl<E> LayoutCommitTransaction<E> {
         commit_environment: impl FnOnce(E, &mut C),
     ) -> O {
         let output = {
-            let _phase = layout_fragment::trace::publish_fragment_tree();
+            let _phase = fragment_trace::publish_fragment_tree();
             export_fragments(context)
         };
         finalize(context);

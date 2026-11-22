@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
 use foundation::{DynamicTo, RuntimeEnabledFeatures, To};
-use layout_fragment::block_break_token::BlockBreakToken;
-use layout_fragment::break_token::BreakToken;
-use layout_fragment::inline_break_token::InlineBreakToken;
+use layout_core::block_break_token::BlockBreakToken;
+use layout_core::break_token::BreakToken;
+use layout_core::inline_break_token::InlineBreakToken;
 use layout_core::internal::block_node::BlockNode;
 use layout_core::internal::layout_input_node::LayoutInputNode;
 
