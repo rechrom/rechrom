@@ -20,6 +20,9 @@ use crate::internal::grid_layout_data::{
 use crate::internal::grid_track_collection::{GridLayoutTrackCollection, GridTrackBaselines};
 use crate::internal::line_clamp_data::LineClampAncestorChain;
 use crate::internal::mathml_paint_info::MathMLPaintInfo;
+use crate::internal::naming_scope::NamingScope;
+use crate::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
+use crate::internal::snap_area::SnapArea;
 use crate::internal::split_axis_item::SplitAxisItem;
 use crate::internal::text_fit_scale::TextFitScale;
 use crate::internal::used_font::UsedFont;
@@ -55,6 +58,9 @@ trace_source_method!(
     GridLayoutTrackCollection,
     GridTrackBaselines,
     MathMLPaintInfo,
+    NamingScope,
+    NonOverflowingScrollRange,
+    SnapArea,
     TextFitScale,
     UsedFont,
 );

@@ -50,9 +50,7 @@ use crate::internal::layout_text::LayoutText;
 use crate::internal::layout_text_combine::LayoutTextCombine;
 use crate::internal::layout_view::LayoutView;
 use crate::internal::measure_cache::MeasureCache;
-use crate::internal::naming_scope::NamingScope;
 use crate::internal::node_rare_data_field::NodeRareDataField;
-use crate::internal::non_overflowing_scroll_range::NonOverflowingScrollRange;
 use crate::internal::oof_positioned_node::{
     FragmentedOofData, MulticolWithPendingOofs, OofContainingBlock, OofInlineContainer,
     OofPositionedNode, PhysicalOofNodeForFragmentation,
@@ -60,7 +58,6 @@ use crate::internal::oof_positioned_node::{
 use crate::internal::overflow_model::BoxOverflowModel;
 use crate::internal::positioned_float::PositionedFloat;
 use crate::internal::shapes::shape_outside_info::ShapeOutsideInfo;
-use crate::internal::snap_area::SnapArea;
 use crate::internal::sticky_position_scrolling_constraints::PerAxisData;
 use crate::internal::svg_inline_node_data::{SvgInlineNodeData, SvgTextContentRange};
 use crate::internal::table_borders::{Edge, TableBorders};
@@ -127,12 +124,9 @@ trace_source_method!(
     PaintLayerScrollableArea,
     LayoutTextCombine,
     MeasureCache,
-    NamingScope,
     NodeRareDataField,
-    NonOverflowingScrollRange,
     PositionedFloat,
     ShapeOutsideInfo,
-    SnapArea,
     PerAxisData,
     Edge,
     TableBorders,

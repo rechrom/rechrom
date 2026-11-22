@@ -7,7 +7,6 @@ pub mod internal {
     pub mod anchor_map;
     pub mod anchor_map_services;
     pub mod anchor_position_scroll_data;
-    #[path = "../../../layout_fragment/src/core/anchor_scope.rs"]
     pub mod anchor_scope;
     pub mod anchor_scroll_services;
     pub mod boundary {
@@ -155,7 +154,7 @@ pub mod internal {
     pub mod multicol_break_token_data;
     pub mod naming_scope;
     pub mod node_rare_data_field;
-    pub mod non_overflowing_scroll_range;
+    pub use layout_fragment::internal::non_overflowing_scroll_range;
     pub mod oof_positioned_node;
     pub mod outline_geometry;
     pub use layout_fragment::internal::outline_info;

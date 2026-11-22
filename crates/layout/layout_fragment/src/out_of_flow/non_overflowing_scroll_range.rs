@@ -1,4 +1,4 @@
-use super::super::layout_node_metadata::Element;
+use crate::opaque::OpaqueNode;
 use foundation::{Member, PhysicalOffset, Visitor};
 use layout_geometry::geometry::scroll_offset_range::PhysicalScrollRange;
 
@@ -6,7 +6,7 @@ use layout_geometry::geometry::scroll_offset_range::PhysicalScrollRange;
 #[derive(Clone, Default)]
 pub struct NonOverflowingScrollRange {
     pub containing_block_range: PhysicalScrollRange,
-    pub anchor_element: Member<Element>,
+    pub anchor_element: Member<OpaqueNode>,
 }
 
 #[allow(non_snake_case)]

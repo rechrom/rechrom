@@ -36,6 +36,9 @@ mod trace_bindings;
 /// shape here (a private source module plus a glob re-export), so the
 /// translated `super::` paths inside the source files resolve unchanged.
 pub mod internal {
+    // Base adds `ToAnchorScopedName` beside this alias.
+    #[path = "../core/anchor_scope.rs"]
+    pub mod anchor_scope;
     #[path = "../core/constraint_space.rs"]
     pub mod constraint_space;
     #[path = "../core/disable_layout_side_effects_scope.rs"]
@@ -179,10 +182,28 @@ pub mod internal {
     pub mod min_max_sizes {
         pub use layout_geometry::geometry::min_max_sizes::*;
     }
+    // Base adds `NamingScopeExt::FindScopeElement`.
+    #[allow(non_upper_case_globals)]
+    pub mod naming_scope {
+        #[path = "../../invalidation/naming_scope.rs"]
+        mod layout_invalidation_naming_scope;
+        pub use layout_invalidation_naming_scope::*;
+    }
+    pub mod non_overflowing_scroll_range {
+        #[path = "../../out_of_flow/non_overflowing_scroll_range.rs"]
+        mod layout_algo_out_of_flow_non_overflowing_scroll_range;
+        pub use layout_algo_out_of_flow_non_overflowing_scroll_range::*;
+    }
     pub mod outline_info {
         #[path = "../../outline_info.rs"]
         mod layout_fragment_outline_info;
         pub use layout_fragment_outline_info::*;
+    }
+    // Base adds the typed accessors as `SnapAreaExt`.
+    pub mod snap_area {
+        #[path = "../../snap_area.rs"]
+        mod layout_fragment_snap_area;
+        pub use layout_fragment_snap_area::*;
     }
     pub mod table_column_location {
         #[path = "../../table/table_column_location.rs"]
@@ -203,6 +224,12 @@ pub mod internal {
         #[path = "../../inline/text_item_type.rs"]
         mod layout_algo_inline_text_item_type;
         pub use layout_algo_inline_text_item_type::*;
+    }
+    // Base adds `ToTriggerScopedName`.
+    pub mod trigger_scoped_name {
+        #[path = "../../trigger_scoped_name.rs"]
+        mod layout_fragment_trigger_scoped_name;
+        pub use layout_fragment_trigger_scoped_name::*;
     }
     pub mod used_font {
         #[path = "../../inline/used_font_interface.rs"]
