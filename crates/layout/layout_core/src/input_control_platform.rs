@@ -1,5 +1,32 @@
 //! Thin HTML-control routes to the canonical LayoutObject/ComputedStyle owner.
 use super::*;
+
+/// Form-control commands carried by `LayoutMutation::FormControl`. Each
+/// variant runs exactly the engine route named after it.
+pub enum FormControlMutation {
+    /// PasswordInputType::CapsLockStateMayHaveChanged,
+    /// password_input_type.cc:141-145.
+    InvalidateInputCapsLockIndicatorPaint { node_id: u64 },
+    /// LayoutObject::SetModifiedStyleOutsideStyleRecalc on an inner control.
+    SetInputModifiedStyleOutsideStyleRecalc {
+        node_id: u64,
+        style: foundation::Persistent<StyleComputedStyle>,
+    },
+}
+
+impl LayoutEngine {
+    pub(crate) fn ApplyFormControlMutation(&mut self, mutation: FormControlMutation) -> bool {
+        match mutation {
+            FormControlMutation::InvalidateInputCapsLockIndicatorPaint { node_id } => {
+                self.InvalidateInputCapsLockIndicatorPaint(node_id)
+            }
+            FormControlMutation::SetInputModifiedStyleOutsideStyleRecalc { node_id, style } => {
+                self.SetInputModifiedStyleOutsideStyleRecalc(node_id, style)
+            }
+        }
+    }
+}
+
 impl LayoutEngine {
     /// ListBoxSelectType::ScrollToOptionTask, select_type.cc:1720-1754.
     /// Scroll only the resident list-box ScrollableArea; parent containers

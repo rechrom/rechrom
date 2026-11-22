@@ -40,6 +40,7 @@ mod layout_tree_update;
 pub use layout_tree_update::LayoutTreeUpdate;
 #[path = "input_control_platform.rs"]
 mod input_control_platform;
+pub use input_control_platform::FormControlMutation;
 #[path = "native_document_markers.rs"]
 mod native_document_markers;
 #[path = "native_input_paint.rs"]
@@ -198,6 +199,12 @@ pub enum LayoutMutation<'a> {
     },
     EditingState(Rc<LayoutEditingState>),
     PasswordEchoTimerFired(crate::password_echo::PasswordEchoTimerToken),
+    // Wave E: form_control
+    /// HTML form-control invalidations routed to the resident LayoutObject.
+    FormControl(FormControlMutation),
+    // Wave E: event_registry
+    /// EventHandlerRegistry invalidation of one resident LayoutObject.
+    EventRegistry(crate::native_event_registry_source::EventRegistryMutation<'a>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

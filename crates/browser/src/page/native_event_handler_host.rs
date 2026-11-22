@@ -228,6 +228,7 @@ impl InteractionHost for NativeEventHandlerHost {
         let embedded = domain
             .WithLayout(token, |layout| {
                 layout
+                    .EventRegistry()
                     .EventRegistryLayout(Some(focused))
                     .is_some_and(|layout| layout.IsEmbeddedObject())
             })

@@ -88,6 +88,18 @@ impl EngineMutation for LayoutEngine {
 
     #[inline(never)]
     fn apply_mutation(&mut self, mutation: LayoutMutation<'_>) -> bool {
+        // Wave E: form_control / event_registry. These commands are the former
+        // direct engine routes; they run before any retained bookkeeping is
+        // cleared so their side effects match the direct call exactly.
+        let mutation = match mutation {
+            LayoutMutation::FormControl(mutation) => {
+                return self.ApplyFormControlMutation(mutation);
+            }
+            LayoutMutation::EventRegistry(mutation) => {
+                return self.ApplyEventRegistryMutation(mutation);
+            }
+            mutation => mutation,
+        };
         // A cancelled/restarted timer has no source mutation. Reject it before
         // clearing any retained paint/scroll/local-layout bookkeeping.
         if let LayoutMutation::PasswordEchoTimerFired(token) = &mutation {
@@ -567,6 +579,10 @@ impl EngineMutation for LayoutEngine {
                 } else {
                     false
                 }
+            }
+            // Wave E: form_control / event_registry (returned above).
+            LayoutMutation::FormControl(_) | LayoutMutation::EventRegistry(_) => {
+                unreachable!("Wave E command mutations return before bookkeeping")
             }
         }
     }

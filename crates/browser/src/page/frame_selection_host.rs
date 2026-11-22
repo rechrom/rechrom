@@ -92,10 +92,13 @@ impl ResidentFrameSelectionHost {
         };
         match effect {
             E::InvalidateInputCapsLockIndicatorPaint(node) => {
-                state
-                    .layout_engine
-                    .borrow_mut()
-                    .InvalidateInputCapsLockIndicatorPaint(node);
+                state.layout_engine.borrow_mut().ApplyMutation(
+                    layout::mutation::LayoutMutation::FormControl(
+                        layout::views::form_control::FormControlMutation::InvalidateInputCapsLockIndicatorPaint {
+                            node_id: node,
+                        },
+                    ),
+                );
                 state.dirty.set(true);
             }
             E::MarkSelectionEndpointPaintingLayerNeedsRepaint(node) => {
@@ -315,7 +318,13 @@ impl FrameSelectionOwners {
         let (frame, runtime) = self.child.as_ref().expect("child effects owner");
         match effect {
             E::InvalidateInputCapsLockIndicatorPaint(node) => {
-                runtime.layout.borrow_mut().InvalidateInputCapsLockIndicatorPaint(node);
+                runtime.layout.borrow_mut().ApplyMutation(
+                    layout::mutation::LayoutMutation::FormControl(
+                        layout::views::form_control::FormControlMutation::InvalidateInputCapsLockIndicatorPaint {
+                            node_id: node,
+                        },
+                    ),
+                );
             }
             E::MarkSelectionEndpointPaintingLayerNeedsRepaint(node) => runtime.layout.borrow_mut().MarkSelectionEndpointPaintingLayerNeedsRepaint(node),
             E::InvalidateCompositionMarkerPaint(node) => {
@@ -382,6 +391,7 @@ impl
             let has_layout = owners
                 .Layout()
                 .borrow()
+                .EventRegistry()
                 .EventRegistryLayout(Some(document.Node(node).Id()))
                 .is_some();
             document.InvalidateFocusStateStyle(node, has_layout);
@@ -906,6 +916,7 @@ impl interaction::adapter::page_frame_selection::PageFrameSelectionHost
             owner
                 .Layout()
                 .borrow()
+                .EventRegistry()
                 .EventRegistryLayout(Some(node_id))
                 .is_some()
         })

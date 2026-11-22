@@ -133,14 +133,23 @@ impl SelectControlHost for ResidentSelectControlHost {
         };
         if let Some(result) = self
             .0
-            .WithLayout(|layout| layout.ScrollSelectOptionIntoView(container, option))
+            .WithLayout(|layout| {
+                layout
+                    .FormControl()
+                    .ScrollSelectOptionIntoView(container, option)
+            })
         {
             self.ApplyScroll(result);
         }
     }
     fn HasLayoutObject(&self, node: u64) -> bool {
         self.0
-            .WithLayout(|layout| layout.EventRegistryLayout(Some(node)).is_some())
+            .WithLayout(|layout| {
+                layout
+                    .EventRegistry()
+                    .EventRegistryLayout(Some(node))
+                    .is_some()
+            })
             .unwrap_or(false)
     }
     fn SetInnerModifiedStyleOutsideStyleRecalc(
@@ -149,7 +158,14 @@ impl SelectControlHost for ResidentSelectControlHost {
         style: foundation::Persistent<layout_style::style::computed_style::ComputedStyle>,
     ) {
         self.0
-            .WithLayout(|layout| layout.SetInputModifiedStyleOutsideStyleRecalc(inner, style));
+            .WithLayout(|layout| {
+                layout.ApplyMutation(layout::mutation::LayoutMutation::FormControl(
+                    layout::views::form_control::FormControlMutation::SetInputModifiedStyleOutsideStyleRecalc {
+                        node_id: inner,
+                        style,
+                    },
+                ))
+            });
         if let Some(page) = self.0.Page() {
             page.dirty.set(true);
             page.scroll_only.set(false);
