@@ -21,13 +21,10 @@ use style_model::{
     properties::css_property::CSSProperty,
 };
 
-#[path = "editing_style_serialization.rs"]
 mod serialization;
 pub use serialization::QuerySerializationEditingStyle;
-#[path = "editing_style_replacement.rs"]
 mod replacement;
 pub use replacement::QueryReplacementEditingStyle;
-#[path = "editing_style_apply.rs"]
 mod apply;
 pub use apply::QueryApplyEditingStyle;
 

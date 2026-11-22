@@ -2433,7 +2433,6 @@ impl ScriptLoadClient for ScriptClient {
 }
 
 #[cfg(test)]
-#[path = "page/layout_output_tests.rs"]
 mod layout_output_tests;
 struct PendingImageEvent {
     id: u64,

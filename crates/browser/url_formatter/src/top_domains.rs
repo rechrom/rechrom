@@ -1,9 +1,7 @@
 //! Chromium net/extras/preload_data/decoder.cc:18-319 and
 //! idn_spoof_checker.cc:34-93,648-686. Immutable Huffman preload data.
 use crate::{Error, SkeletonType, TopDomainEntry};
-mod data {
-    include!("top_domains_data.rs");
-}
+mod data;
 const HUFFMAN: &[u8] = include_bytes!("../data/top_domains_huffman.bin");
 const TRIE: &[u8] = include_bytes!("../data/top_domains_trie.bin");
 struct BitReader {

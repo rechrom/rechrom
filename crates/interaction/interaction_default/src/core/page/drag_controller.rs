@@ -373,6 +373,5 @@ impl DragController {
     }
 }
 
-#[path = "drag_controller_target.rs"]
 mod target;
 pub use target::*;

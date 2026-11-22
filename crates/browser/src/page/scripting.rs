@@ -6,7 +6,6 @@ use open::{
     dynamic_scripts::DynamicScriptTasks, script_scheduler::ScriptScheduler, OpenScriptServices,
 };
 
-#[path = "script_owners.rs"]
 mod owners;
 
 /// Script-side values needed when installing a document's interaction facade.

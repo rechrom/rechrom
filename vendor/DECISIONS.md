@@ -24,7 +24,7 @@ change, not an exact line count.
 | crabby-avif `8f2b74b` | GitHub (Chromium DEPS pin) | 1 new adapter (`codecs/rav1d.rs`, 542 lines) + about 20 lines of registration; decode-only manifest | KEEP: no external-codec API upstream | none |
 | ttf-parser 0.25.1 | crates.io | 1 file, +24/-2 (GPOS PairSet) | REPLACE with stock 0.25.1: the patched code path is unreachable in Rechrom | XS |
 | zune-jpeg 0.5.15 | crates.io | +606 src lines (+395 license text), all behind opt-in `source_compat` | KEEP: libjpeg-turbo/Skia pixel parity, no upstream equivalent | none |
-| softbuffer 0.4.8 | crates.io | 5 files, +1,186/-11; behaviour change is macOS-only | REPLACE: stock softbuffer on Windows/Linux, with the macOS IOSurface presenter moved into `apps/rechrom` | M |
+| softbuffer 0.4.8 | crates.io | 5 files, +1,185/-11; behaviour change is macOS-only | REPLACE: stock softbuffer on Windows/Linux, with the macOS IOSurface presenter moved into `apps/rechrom` | M |
 | smithay-clipboard 0.7.2 | crates.io | 3 files, about +194/-33 stmt (raw +352/-88) | KEEP for now; fold into the app-owned Wayland data-device module later (see winit) | none now |
 | winit 0.30.13 | crates.io (latest 0.30) | 33 src files, raw +4,330/-943, about +2,550/-620 stmt; 2 new files. After the Windows moves (rows 1, 4, 8): 27 src files, `-w` +3,236/-773 (was +4,339/-980 by the same measure); 1 new file | KEEP but shrink: move the A items to `apps/rechrom`, turn C items into small hooks, re-evaluate at winit 0.31 stable | M-L |
 
@@ -254,9 +254,9 @@ Things that surprised me:
 ## softbuffer 0.4.8 (apps/rechrom)
 
 - Source: crates.io (0.4.8 is the latest).
-- Patch: 5 files, +1,186/-11.
-  - New `backends/cg_iosurface.rs` (515): a bounded 4-slot IOSurface pool.
-  - `backends/cg.rs` (+411/-5): prepared buffers, CALayer.contents
+- Patch: 5 files, +1,185/-11.
+  - New `backends/cg/iosurface.rs` (515): a bounded 4-slot IOSurface pool.
+  - `backends/cg.rs` (+410/-5): prepared buffers, CALayer.contents
     submission, CA transaction observer, presentation feedback.
   - `lib.rs` (+203/-6): `PreparedBuffer`, `BufferFormat`, `PresentCallback`,
     `PresentationFeedback`, `NativeTransactionObserver`, `row_stride`,
@@ -346,7 +346,7 @@ Things that surprised me:
   `KeyEventExtMacOS`, `from_rgba_with_scale_factor`),
   `native_keyboard_modifiers.rs` (`caps_lock_state`),
   `native_drag/{windows,x11,wayland}.rs` (`drag_source_seat`),
-  `primary_clipboard_windows.rs` (`clipboard_virtual_files`).
+  `primary_clipboard/windows.rs` (`clipboard_virtual_files`).
 
 ### Classification
 

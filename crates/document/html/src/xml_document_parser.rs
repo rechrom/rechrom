@@ -19,7 +19,6 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-#[path = "xml_entities.rs"]
 mod entities;
 use xml::{
     common::Position,

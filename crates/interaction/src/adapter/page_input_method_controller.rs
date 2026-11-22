@@ -39,10 +39,8 @@ use interaction_dispatch::core::{
 use layout::editing::{DOMSelection, EditingPosition, EditingTextAffinity};
 use std::{cell::RefCell, rc::Rc};
 
-#[path = "page_event_handler_text_input.rs"]
 pub mod event_handler_text_input;
 
-#[path = "page_ime_typing.rs"]
 mod typing;
 pub(crate) use typing::{ImeTypingSelection, ImeTypingState};
 

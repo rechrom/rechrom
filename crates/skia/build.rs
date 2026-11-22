@@ -1,4 +1,3 @@
-#[path = "build_support/ostream_abi.rs"]
 mod ostream_abi;
 
 // Embedding configuration only; no Skia algorithm/source-row credit.

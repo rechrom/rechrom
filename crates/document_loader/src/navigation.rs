@@ -827,7 +827,6 @@ impl SameDocumentCommit {
     }
 }
 
-#[path = "static_document_commit.rs"]
 mod static_document_commit;
 pub(crate) use static_document_commit::StaticDataNavigationBodyLoader;
 pub use static_document_commit::{

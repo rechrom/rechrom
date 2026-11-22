@@ -57,5 +57,4 @@ impl CascadeFilter {
 }
 
 #[cfg(test)]
-#[path = "cascade_filter_test.rs"]
 mod tests;

@@ -3173,6 +3173,5 @@ impl<B: SelectorCheckerBackend> SelectorChecker<B> {
     }
 }
 
-#[path = "easy_selector_checker.rs"]
 mod easy_selector_checker;
 pub use easy_selector_checker::EasySelectorChecker;

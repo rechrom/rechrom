@@ -8,10 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-#[path = "window_performance_timing.rs"]
 mod window_performance_timing;
 pub use window_performance_timing::WindowPerformanceTiming;
-#[path = "window_event_timing.rs"]
 mod window_event_timing;
 use xhr_transport::*;
 

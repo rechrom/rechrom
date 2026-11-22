@@ -24,7 +24,6 @@ use crate::{
     DisplayItem, PaintRecording, RecordedDisplayItem, RecordedDisplayItemKind, SubsequenceMarkers,
 };
 
-#[path = "paint_controller_debug_data.rs"]
 pub(crate) mod paint_controller_debug_data;
 
 pub(crate) struct CachedDrawing {

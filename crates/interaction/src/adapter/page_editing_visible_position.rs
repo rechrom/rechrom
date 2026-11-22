@@ -39,34 +39,23 @@ use layout::editing::{
 use layout::output::{LayoutNode, LayoutOutput};
 use std::cmp::Ordering;
 
-#[path = "page_nonlocated_context_menu_geometry.rs"]
 mod nonlocated_context_menu_geometry;
 pub use nonlocated_context_menu_geometry::{
     NonLocatedGeometryQuery, NonLocatedGeometryResult,
 };
-#[path = "page_clipboard_geometry.rs"]
 mod clipboard_geometry;
-#[path = "page_markup_geometry.rs"]
 mod markup_geometry;
 pub use markup_geometry::{
     SerializeMarkupBody, SerializeMarkupRange, SerializeMarkupRangeWithAncestor,
 };
-#[path = "page_apply_style_geometry.rs"]
 pub(super) mod apply_style_geometry;
-#[path = "page_composition_text.rs"]
 mod composition_text;
-#[path = "page_editor_selection_geometry.rs"]
 mod editor_selection_geometry;
-#[path = "page_editor_target_range_geometry.rs"]
 mod editor_target_range_geometry;
 pub use editor_selection_geometry::{EditorSelectionGeometryQuery, EditorSelectionGeometryResult};
-#[path = "page_mouse_selection_geometry.rs"]
 mod mouse_selection_geometry;
-#[path = "page_replace_selection_geometry.rs"]
 mod replace_selection_geometry;
-#[path = "page_selection_geometry.rs"]
 mod selection_geometry;
-#[path = "page_typing_deletion_geometry.rs"]
 pub(super) mod typing_deletion_geometry;
 pub use composition_text::{
     CompositionMarkerOwner, CompositionMarkerUpdate, CompositionTextQuery, CompositionTextResult,

@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 //! Source Page resource state. Page supplies mutation and event delivery, so
 //! decoding and polling do not replace the source DOM/dirty/task lifecycle.
-#[path = "font_face_resources.rs"]
 mod font_face_resources;
 pub use font_face_resources::FontFaceSourceInput;
-#[path = "raw_resource_fetcher.rs"]
 mod raw_resource_fetcher;
 use crate::{
     resource_loader::{RequireResponse, ResourceLoadResult, ResourceLoader},
@@ -2271,5 +2269,4 @@ fn ImageResultBoundary<T>(work: impl FnOnce() -> io::Result<T>) -> io::Result<T>
     }
 }
 
-#[path = "html_image_loader.rs"]
 mod html_image_loader;

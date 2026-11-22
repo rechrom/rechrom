@@ -17,14 +17,11 @@ use style_model::css_property_value_set::{
     CSSPropertyValueSet, CSSPropertyValueSetBackend, MutableCSSPropertyValueSet,
 };
 
-#[path = "production_counter_value.rs"]
 mod counter_value;
 pub use counter_value::{counter, CSSCounterValue};
-#[path = "production_scoped_keyword_value.rs"]
 mod scoped_keyword_value;
 pub use scoped_keyword_value::{scoped_keyword, CSSScopedKeywordValue};
 
-#[path = "production_font_style_value.rs"]
 mod font_style_value;
 pub use font_style_value::CSSFontStyleRangeValue;
 
@@ -490,7 +487,6 @@ impl CSSValueCustomHash for CSSContentDistributionValue {
 // cpp: css_custom_ident_value.h:21-78; .cc:20-30,85-106,118-126.
 // Parsing constructs literal names/property IDs. TreeScope/ident() bindings are
 // unavailable in this dispatch and are explicit collaborators, never fabricated.
-#[path = "production_grid_values.rs"]
 mod grid_values;
 pub use crate::production_border_image_values::{CSSBorderImageSliceValue, CSSQuadValue};
 pub use grid_values::CSSGridTemplateAreasValue;

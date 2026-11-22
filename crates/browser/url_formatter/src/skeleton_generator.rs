@@ -6,7 +6,8 @@ use std::{
     collections::{BTreeSet, VecDeque},
     sync::Mutex,
 };
-include!("skeleton_rules.rs");
+mod rules;
+use rules::{DIACRITIC_RULES, EXTRA_RULES};
 pub struct SkeletonGenerator {
     diacritics: Mutex<Transliterator>,
     extra: Mutex<Transliterator>,

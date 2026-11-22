@@ -222,10 +222,9 @@
  }
 --- a/src/backends/cg.rs
 +++ b/src/backends/cg.rs
-@@ -1,11 +1,21 @@
+@@ -1,11 +1,20 @@
  //! Softbuffer implementation using CoreGraphics.
 +#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
-+#[path = "cg_iosurface.rs"]
 +mod iosurface;
  use crate::backend_interface::*;
  use crate::error::InitError;
@@ -246,7 +245,7 @@
  use objc2_core_graphics::{
      CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
      CGImageByteOrderInfo, CGImageComponentInfo, CGImagePixelFormatInfo,
-@@ -20,10 +30,13 @@
+@@ -20,10 +29,13 @@
  
  use std::ffi::c_void;
  use std::marker::PhantomData;
@@ -261,7 +260,7 @@
  
  define_class!(
      #[unsafe(super(NSObject))]
-@@ -98,11 +111,16 @@
+@@ -98,11 +110,16 @@
  pub struct CGImpl<D, W> {
      /// Our layer.
      layer: SendCALayer,
@@ -278,7 +277,7 @@
      color_space: CFRetained<CGColorSpace>,
      /// The width of the underlying buffer.
      width: usize,
-@@ -172,6 +190,13 @@
+@@ -172,6 +189,13 @@
          let layer = CALayer::new();
          root_layer.addSublayer(&layer);
  
@@ -292,7 +291,7 @@
          // Set the anchor point and geometry. Softbuffer's uses a coordinate system with the origin
          // in the top-left corner.
          //
-@@ -226,6 +251,7 @@
+@@ -226,6 +250,7 @@
          layer.setContentsGravity(unsafe { kCAGravityTopLeft });
  
          // Initialize color space here, to reduce work later on.
@@ -300,7 +299,7 @@
          let color_space = CGColorSpace::new_device_rgb().unwrap();
  
          // Grab initial width and height from the layer (whose properties have just been initialized
-@@ -237,8 +263,13 @@
+@@ -237,8 +262,13 @@
  
          Ok(Self {
              layer: SendCALayer(layer),
@@ -314,7 +313,7 @@
              color_space,
              width,
              height,
-@@ -260,16 +291,133 @@
+@@ -260,16 +290,133 @@
  
      fn buffer_mut(&mut self) -> Result<BufferImpl<'_, D, W>, SoftBufferError> {
          Ok(BufferImpl {
@@ -448,7 +447,7 @@
  }
  
  impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_, D, W> {
-@@ -283,18 +431,43 @@
+@@ -283,18 +430,43 @@
  
      #[inline]
      fn pixels(&self) -> &[u32] {
@@ -494,7 +493,7 @@
      fn present(self) -> Result<(), SoftBufferError> {
          unsafe extern "C-unwind" fn release(
              _info: *mut c_void,
-@@ -307,6 +480,8 @@
+@@ -307,6 +479,8 @@
              drop(unsafe { Box::from_raw(slice) })
          }
  
@@ -503,7 +502,7 @@
          let data_provider = {
              let len = self.buffer.len() * size_of::<u32>();
              let buffer: *mut [u32] = Box::into_raw(self.buffer.0.into_boxed_slice());
-@@ -320,6 +495,7 @@
+@@ -320,6 +494,7 @@
              }
          };
  
@@ -511,7 +510,7 @@
          // `CGBitmapInfo` consists of a combination of `CGImageAlphaInfo`, `CGImageComponentInfo`
          // `CGImageByteOrderInfo` and `CGImagePixelFormatInfo` (see e.g. `CGBitmapInfoMake`).
          //
-@@ -348,16 +524,97 @@
+@@ -348,16 +523,97 @@
          }
          .unwrap();
  
@@ -609,7 +608,7 @@
          Ok(())
      }
  
-@@ -366,6 +623,155 @@
+@@ -366,6 +622,155 @@
      }
  }
  
@@ -766,7 +765,7 @@
  struct SendCALayer(Retained<CALayer>);
  
 --- /dev/null
-+++ b/src/backends/cg_iosurface.rs
++++ b/src/backends/cg/iosurface.rs
 @@ -0,0 +1,515 @@
 +//! Opt-in macOS IOSurface storage for the existing Core Animation backend.
 +//! Ownership follows Chromium SoftwareOutputDeviceMac: at most four retained

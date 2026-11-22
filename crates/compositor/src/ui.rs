@@ -6,18 +6,8 @@
 pub mod gfx {
     pub mod animation {
         pub mod keyframe {
-            pub mod keyframe_effect {
-                include!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/src/ui/gfx/animation/keyframe/keyframe_effect.rs"
-                ));
-            }
-            pub mod keyframe_model {
-                include!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/src/ui/gfx/animation/keyframe/keyframe_model.rs"
-                ));
-            }
+            pub mod keyframe_effect;
+            pub mod keyframe_model;
         }
     }
 }

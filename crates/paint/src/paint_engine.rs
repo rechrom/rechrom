@@ -5,7 +5,6 @@
 
 use layout::fragment::ResidentBoxGeometry as _;
 use std::sync::Arc;
-#[path = "drag_image.rs"]
 pub mod drag_image;
 
 use paint_input_types::PaintResources;
