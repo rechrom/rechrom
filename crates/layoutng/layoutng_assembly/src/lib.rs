@@ -4784,6 +4784,10 @@ mod package_contract_tests {
             "pub(crate) fn update_sticky_offsets",
             "for object in objects",
             "while !ancestor.is_null()",
+            "fn EnqueueForStickyUpdateIfNeeded",
+            "fn UpdateAllStickyConstraints",
+            "fragment.StickyDescendants()",
+            "item.GetIfConsumed()",
             "ComputeStickyPositionConstraintsForLayout",
             "ComputeStickyOffset",
         ] {
@@ -9661,20 +9665,26 @@ mod package_contract_tests {
             std::fs::read_to_string(root.join("layout_fragment/src/sticky_layout_commit.rs"))
                 .expect("read source sticky layout-commit owner");
         for owned_policy in [
-            "fn update_sticky_offsets_after_layout",
+            "fn execute_pending_sticky_updates_after_layout",
             "TracePhase::UpdateStickyOffsets",
-            "while !object.is_null()",
-            "NextInPreOrder(root)",
-            "UpdateStickyOffsets(objects, false)",
+            ".ExecutePendingStickyUpdates()",
         ] {
             assert!(
                 owner.contains(owned_policy),
                 "layout_fragment sticky layout commit lost {owned_policy}"
             );
         }
+        // Chromium's LocalFrameView::ExecutePendingStickyUpdates visits only
+        // queued scroll containers; no document-wide object walk remains.
+        for removed_scan in ["NextInPreOrder(root)", "UpdateStickyOffsets("] {
+            assert!(
+                !owner.contains(removed_scan),
+                "sticky layout commit regained a full-object scan {removed_scan}"
+            );
+        }
         assert!(
             owner.contains("#[inline(never)]"),
-            "post-layout sticky traversal must retain a fragment sampling frame"
+            "post-layout sticky update must retain a fragment sampling frame"
         );
 
         let adapter = std::fs::read_to_string(root.join("layoutng/src/layout_engine.rs"))
@@ -9682,14 +9692,14 @@ mod package_contract_tests {
         assert!(
             adapter.contains("layout_fragment/src/sticky_layout_commit.rs")
                 && adapter.contains(
-                    "layout_fragment_sticky_layout_commit::update_sticky_offsets_after_layout"
+                    "layout_fragment_sticky_layout_commit::execute_pending_sticky_updates_after_layout"
                 ),
-            "LayoutEngine must delegate post-layout sticky traversal to layout_fragment"
+            "LayoutEngine must delegate post-layout sticky updates to layout_fragment"
         );
         for leaked_policy in [
             "TracePhase::UpdateStickyOffsets",
             "while !object.is_null()",
-            "UpdateStickyOffsets(\n                            objects, false",
+            "UpdateStickyOffsets(",
         ] {
             assert!(
                 !adapter.contains(leaked_policy),

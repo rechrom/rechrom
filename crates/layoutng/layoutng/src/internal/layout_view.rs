@@ -203,6 +203,15 @@ pub struct LayoutView {
             Member<super::layout_scrollable_area::PaintLayerScrollableArea>,
         >,
     >,
+    // LocalFrameView::pending_sticky_updates_ (core/frame/local_frame_view.h):
+    // scroll containers whose consumed sticky descendants need constraints
+    // after layout, keyed by the same native area identity.
+    pending_sticky_updates_: std::cell::RefCell<
+        std::collections::BTreeMap<
+            usize,
+            Member<super::layout_scrollable_area::PaintLayerScrollableArea>,
+        >,
+    >,
     pending_snap_target_notifications_:
         std::cell::RefCell<Vec<super::layout_scrollable_area::NativeLayoutSnapPlan>>,
     // LocalFrameView::background_attachment_fixed_objects_
@@ -274,6 +283,7 @@ impl LayoutView {
             scrollbar_activity_queue_: Default::default(),
             pending_snap_updates_: Default::default(),
             pending_perform_snap_: Default::default(),
+            pending_sticky_updates_: Default::default(),
             pending_snap_target_notifications_: Default::default(),
             background_attachment_fixed_objects_: Default::default(),
         };
@@ -316,6 +326,9 @@ impl LayoutView {
             visitor.Trace(area);
         }
         for area in self.pending_perform_snap_.borrow().values() {
+            visitor.Trace(area);
+        }
+        for area in self.pending_sticky_updates_.borrow().values() {
             visitor.Trace(area);
         }
         for object in self.background_attachment_fixed_objects_.borrow().values() {
@@ -448,6 +461,42 @@ impl LayoutView {
                     .borrow_mut()
                     .insert(area.Get() as usize, area);
             }
+        }
+    }
+}
+
+impl LayoutView {
+    // LocalFrameView::AddPendingStickyUpdate/RemovePendingStickyUpdate,
+    // core/frame/local_frame_view.cc:5542-5556.
+    pub(crate) fn AddPendingStickyUpdate(
+        &self,
+        area: *mut super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        self.pending_sticky_updates_
+            .borrow_mut()
+            .insert(area as usize, Member::from_ptr(area));
+    }
+    pub(crate) fn RemovePendingStickyUpdate(
+        &self,
+        area: *mut super::layout_scrollable_area::PaintLayerScrollableArea,
+    ) {
+        self.pending_sticky_updates_
+            .borrow_mut()
+            .remove(&(area as usize));
+    }
+    // LocalFrameView::ExecutePendingStickyUpdates, cc:5566-5578, run from
+    // PerformPostLayoutTasks (cc:1916). Iteration order of the areas does not
+    // matter: sticky objects are contained within each scrollable area.
+    pub(crate) fn ExecutePendingStickyUpdates(&self) {
+        let pending = std::mem::take(&mut *self.pending_sticky_updates_.borrow_mut());
+        for (_, area) in pending {
+            let Some(owner) = (unsafe { area.Get().as_ref() }) else {
+                continue;
+            };
+            if owner.HasBeenDisposed() {
+                continue;
+            }
+            owner.UpdateAllStickyConstraints();
         }
     }
 }

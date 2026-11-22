@@ -1273,7 +1273,6 @@ impl LayoutEngine {
         root: &mut LayoutObject,
         space: &ConstraintSpace,
         publish: bool,
-        purpose: LayoutUpdateKind,
     ) -> Option<LayoutResultHandle> {
         let _coverage =
             layoutng_geometry::shape_coverage::ShapeCoverageScope::new(self.shape_coverage_);
@@ -1438,6 +1437,10 @@ impl LayoutEngine {
                 "BlockNode::Layout did not produce a successful result",
             ));
         }
+        // LocalFrameView::PerformPostLayoutTasks runs ExecutePendingStickyUpdates
+        // once after layout; scroll clamps and anchoring above have settled the
+        // scroll positions the sticky offsets read.
+        layout_fragment_sticky_layout_commit::execute_pending_sticky_updates_after_layout(root);
         // BlockNode stores the result on the LayoutBox; the tree owns its lifetime.
         // Publication uses the same assembly callbacks, font bindings and
         // layout pass as the source result, before committing the environment.
@@ -1452,13 +1455,7 @@ impl LayoutEngine {
                         &mut self.boundary_cache_,
                     )
                 },
-                |root| {
-                    if purpose == LayoutUpdateKind::Layout {
-                        layout_fragment_sticky_layout_commit::update_sticky_offsets_after_layout(
-                            root,
-                        );
-                    }
-                },
+                |_| {},
                 |mut environment, root| environment.Commit(root),
             ))
         } else {
@@ -1484,9 +1481,9 @@ impl LayoutEngine {
         publish: bool,
         purpose: LayoutUpdateKind,
     ) -> Option<LayoutResultHandle> {
-        let mut result = self.RunLayout(root, space, publish, purpose);
+        let mut result = self.RunLayout(root, space, publish);
         if purpose == LayoutUpdateKind::Paint && UpdateTextOverflowPostLayoutSnapshots(root) {
-            result = self.RunLayout(root, space, publish, purpose);
+            result = self.RunLayout(root, space, publish);
         }
         result
     }

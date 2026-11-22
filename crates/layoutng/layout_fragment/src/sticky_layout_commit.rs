@@ -1,19 +1,18 @@
-// Post-layout sticky projection walks source objects but publishes
-// fragment-local paint geometry, so both its trace and sampling frame belong
-// to layout_fragment.
+// Post-layout sticky constraint update publishes fragment-local paint
+// geometry, so both its trace and sampling frame belong to layout_fragment.
 
 use super::*;
 
+// Source: LocalFrameView::PerformPostLayoutTasks -> ExecutePendingStickyUpdates
+// (core/frame/local_frame_view.cc:1916,5566-5578). Only the scroll containers
+// that PaintLayerScrollableArea::UpdateAfterLayout queued during this layout
+// are visited, each over its own consumed StickyDescendants().
 #[inline(never)]
-pub(super) fn update_sticky_offsets_after_layout(root: &mut LayoutObject) {
+pub(super) fn execute_pending_sticky_updates_after_layout(root: &mut LayoutObject) {
     let _phase = layout_fragment_boundary::trace::span(
         layout_fragment_boundary::trace::TracePhase::UpdateStickyOffsets,
     );
-    let mut objects = Vec::new();
-    let mut object = root as *mut LayoutObject;
-    while !object.is_null() {
-        objects.push(object);
-        object = unsafe { &*object }.NextInPreOrder(root);
-    }
-    crate::internal::boundary::layout_boundary::UpdateStickyOffsets(objects, false);
+    assert!(root.IsLayoutView());
+    unsafe { &*(root as *const LayoutObject as *const crate::internal::layout_view::LayoutView) }
+        .ExecutePendingStickyUpdates();
 }

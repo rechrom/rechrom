@@ -482,7 +482,7 @@ impl PaintLayerScrollableArea {
 
 impl PaintLayerScrollableArea {
     // Native equivalent of this Page's LocalFrameView alias, never a copied tree.
-    fn SnapUpdateView(&self) -> Option<&crate::internal::layout_view::LayoutView> {
+    pub(crate) fn SnapUpdateView(&self) -> Option<&crate::internal::layout_view::LayoutView> {
         let mut object = self.GetLayoutBox() as *mut LayoutObject;
         while let Some(owner) = unsafe { object.as_ref() } {
             if owner.IsLayoutView() {

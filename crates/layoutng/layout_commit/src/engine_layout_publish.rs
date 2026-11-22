@@ -68,12 +68,7 @@ fn run_layout_without_publication_impl(
             LayoutUpdateKind::Paint,
         );
     } else {
-        let _ = engine.RunLayout(
-            unsafe { &mut *root },
-            &constraints,
-            false,
-            LayoutUpdateKind::Paint,
-        );
+        let _ = engine.RunLayout(unsafe { &mut *root }, &constraints, false);
     }
 }
 

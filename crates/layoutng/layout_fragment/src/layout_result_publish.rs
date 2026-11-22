@@ -66,12 +66,10 @@ pub(super) fn install_layout_result_paint_state(
     EnsureBoundaryStyleIndices(cache);
     let objects = &cache.objects;
     trace.set("objects", objects.len() as f64);
-    {
-        let _phase = layout_fragment_boundary::trace::span(
-            layout_fragment_boundary::trace::TracePhase::UpdateStickyOffsets,
-        );
-        UpdateStickyOffsets(objects.iter().copied(), false);
-    }
+    // Sticky constraints and offsets are not refreshed here. Like Chromium's
+    // LocalFrameView::ExecutePendingStickyUpdates, the layout lifecycle
+    // updates only the queued scroll containers' sticky descendants once
+    // after layout (sticky_layout_commit.rs); publication reads them.
     // Isolated SVG image documents paint into an image record whose canvas is
     // transparent. They must not inherit the ordinary page FrameView's opaque
     // white base backdrop; the outer page supplies whatever is behind the

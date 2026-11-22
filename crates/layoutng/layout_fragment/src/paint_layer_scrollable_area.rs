@@ -1909,10 +1909,10 @@ impl PaintLayerScrollableArea {
     }
 
     // Source: core/paint/paint_layer_scrollable_area.cc:1029,1033-1043.
-    // Native snap queue retains the FrameView update order; sticky updates
-    // remain a separate translated lifecycle stage.
+    // Native snap and sticky queues retain the FrameView update order.
     pub fn UpdateAfterLayout(&mut self) {
         self.EnqueueForSnapUpdateIfNeeded();
+        self.EnqueueForStickyUpdateIfNeeded();
         let freeze_state = unsafe { &*self.GetLayoutBox() }.GetScrollbarFreezeState();
         let horizontal_frozen =
             !freeze_state.is_null() && unsafe { &*freeze_state }.IsHorizontalScrollbarFrozen();
@@ -2636,6 +2636,10 @@ impl PaintLayerScrollableArea {
         if let Some(view) = unsafe { self.registered_view_.Get().as_ref() } {
             view.UnregisterScrollableArea(self);
         }
+        // Source: core/paint/paint_layer_scrollable_area.cc:212-215.
+        if let Some(view) = self.StickyUpdateView() {
+            view.RemovePendingStickyUpdate(self as *const Self as *mut Self);
+        }
         self.registered_view_ = foundation::WeakMember::default();
         self.scroll_anchor_.Dispose();
         // Source: core/paint/paint_layer_scrollable_area.cc:218-220.
@@ -2937,6 +2941,11 @@ impl PaintLayerScrollableArea {
             view.RegisterScrollableArea(self);
             self.registered_view_ = foundation::WeakMember::from_ptr(view as *const _ as *mut _);
         }
+    }
+
+    // GetLayoutBox()->GetFrameView(): the view this area registered with.
+    pub(crate) fn RegisteredFrameView(&self) -> Option<&super::super::layout_view::LayoutView> {
+        unsafe { self.registered_view_.Get().as_ref() }
     }
 }
 
