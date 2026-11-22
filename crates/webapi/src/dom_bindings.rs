@@ -13,7 +13,7 @@ use javascript::javascript_runtime::{
     JavaScriptHostBindings, JavaScriptHostObjectNamespace, JavaScriptHostRuntime, JavaScriptNull,
     JavaScriptRealm, JavaScriptValue, WeakJavaScriptHostObjectNamespace, WeakJavaScriptRealm,
 };
-use layout_assembly::internal::layout_input::PaintPathVerb;
+use layout::input::PaintPathVerb;
 
 #[path = "dom_attributes.rs"]
 mod attributes;
@@ -2331,8 +2331,7 @@ impl DOMJavaScriptBindings {
             let supported = !value.is_empty()
                 && match property.as_str() {
                     "color" | "background-color" | "border-color" => {
-                        value == "currentcolor"
-                            || layout_assembly::css_color_parser::ParseCSSColor(value).is_some()
+                        value == "currentcolor" || layout::input::ParseCSSColor(value).is_some()
                     }
                     "width" | "height" | "font-size" | "margin-left" | "padding-left" => {
                         value == "auto"

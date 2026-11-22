@@ -20,7 +20,7 @@ javascript = { path = "../javascript" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }
 css_parser = { path = "../css_parser", features = ["tokenizer"] }
-layout_assembly = { path = "../layout/layout_assembly" }
+layout = { path = "../layout/layout" }
 xhr_transport = { path = "../xhr_transport" }
 url = "2.5.8"
 percent-encoding = "2.3.2"
@@ -33,6 +33,3 @@ webgl = { path = "webgl" }
 [dev-dependencies]
 html = { path = "../document/html" }
 http_transport = { path = "../http_transport" }
-# Standalone Web API tests link the assembly dispatch's real replaced-object
-# provider; browser executables already supply it through their layout bundle.
-layout_algo_replaced = { path = "../layout/layout_algo_replaced" }

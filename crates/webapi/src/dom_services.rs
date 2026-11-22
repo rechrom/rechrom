@@ -184,18 +184,10 @@ pub struct DOMBindingsHost {
     pub read_viewport_scroll: Option<Box<dyn FnMut() -> Option<ViewportScrollState>>>,
     /// Programmatic viewport scrolls retain their behavior so Page can route
     /// smooth requests through the translated Chromium animation curve.
-    pub write_viewport_scroll: Option<
-        Box<
-            dyn FnMut(
-                HostObjectId,
-                layout_assembly::internal::layout_input::Offset,
-                ViewportScrollBehavior,
-            ),
-        >,
-    >,
+    pub write_viewport_scroll:
+        Option<Box<dyn FnMut(HostObjectId, layout::input::Offset, ViewportScrollBehavior)>>,
     pub read_geometry: Option<Box<dyn FnMut(HostObjectId) -> Vec<paint::PaintRect>>>,
-    pub write_scroll:
-        Option<Box<dyn FnMut(HostObjectId, layout_assembly::internal::layout_input::Offset)>>,
+    pub write_scroll: Option<Box<dyn FnMut(HostObjectId, layout::input::Offset)>>,
     /// Document.fonts reflects the connected resource loader instead of a
     /// JavaScript-only readiness guess. True means at least one selected face
     /// still has transport or decode work.
@@ -1946,9 +1938,7 @@ mod tests {
     use dom::persistent_document::ResolvedNodeStyle;
     use interaction::event::{EventType, MakeSyntheticEvent};
     use javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime;
-    use layout_assembly::internal::layout_input::{
-        Display, ExtendedStyle, Position, TextDirection,
-    };
+    use layout::input::{Display, ExtendedStyle, Position, TextDirection};
 
     fn check(runtime: &mut dyn JavaScriptRuntime, realm: &JavaScriptRealm, source: &str) {
         let result = runtime.Evaluate(realm, source, "services-test.js");
@@ -2173,9 +2163,8 @@ mod tests {
                         font_weight: 700.0,
                         font_italic: true,
                         line_height_percent: Some(150.0),
-                        text_align: layout_assembly::internal::layout_input::TextAlign::kCenter,
-                        text_align_last:
-                            layout_assembly::internal::layout_input::TextAlignLast::kRight,
+                        text_align: layout::input::TextAlign::kCenter,
+                        text_align_last: layout::input::TextAlignLast::kRight,
                         ..Default::default()
                     }
                     .into(),
