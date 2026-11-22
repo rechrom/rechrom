@@ -20,7 +20,7 @@ change, not an exact line count.
 | xml 1.4.0 | crates.io + Chromium `patches/xml-v1` | 3 files, +213/-4; vendored `src/` is byte-identical to upstream + Chromium patch | KEEP: Chromium parity (DTD ATTLIST default attributes) | none |
 | sfv 0.15.0 | crates.io + Chromium `patches/sfv-v0_15` | 1 file, +93/-16; byte-identical to upstream + Chromium patch | KEEP: no lenient mode in sfv 0.16.1 | none |
 | hyper-util 0.1.21 | crates.io | about 35 functional lines in 3 files (raw +65/-33 including rustfmt churn) | KEEP: an own client would be 1.5-2k lines | none |
-| rav1d 1.1.0 | crates.io (tag v1.1.0, `782dab2`) | 2 files, +3/-3 (two upstream backports) | REPLACE with pinned git rev `6c6f463` (contains both fixes, version 1.1.0) | S |
+| rav1d 1.1.0 | crates.io (tag v1.1.0, `782dab2`) | 2 files, +3/-3 (two upstream backports) | KEEP the 3-line backport until a crates.io release past 1.1.0 ships both fixes (a git rev pulls 206 unreleased commits and a GitHub build dependency) | none |
 | crabby-avif `8f2b74b` | GitHub (Chromium DEPS pin) | 1 new adapter (`codecs/rav1d.rs`, 542 lines) + about 20 lines of registration; decode-only manifest | KEEP: no external-codec API upstream | none |
 | ttf-parser 0.25.1 | crates.io | 1 file, +24/-2 (GPOS PairSet) | REPLACE with stock 0.25.1: the patched code path is unreachable in Rechrom | XS |
 | zune-jpeg 0.5.15 | crates.io | +606 src lines (+395 license text), all behind opt-in `source_compat` | KEEP: libjpeg-turbo/Skia pixel parity, no upstream equivalent | none |
@@ -151,7 +151,11 @@ Things that surprised me:
     picture}` still exist.
   - The extra commits are mostly dav1d 1.5.0 backports, perf work, lint and
     CI. For conformant streams AV1 output is bit-exact by spec.
-- Decision: REPLACE with
+- Decision (revised 2026-11-22): KEEP the vendored 3-line backport. A git
+  dependency would pull 206 unreleased commits and make builds depend on
+  GitHub; stock crates.io 1.1.0 would reintroduce the abort and underflow.
+  Switch to crates.io once a release past 1.1.0 contains both fixes.
+- Rejected alternative: REPLACE with
   `rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "6c6f463785a546dea18fd9ca0f14634c2ee0557c" }`
   in `[patch.crates-io]`. It still satisfies the `=1.1.0` requirement.
   - Required follow-up: in `vendor/crabby-avif/src/codecs/rav1d.rs`, change

@@ -153,7 +153,6 @@ opt-level = 3
 [patch.crates-io]
 rav1d = { path = "vendor/rav1d" }
 zune-jpeg = { path = "vendor/zune-jpeg" }
-ttf-parser = { path = "vendor/ttf-parser" }
 softbuffer = { path = "vendor/softbuffer" }
 winit = { path = "vendor/winit" }
 
