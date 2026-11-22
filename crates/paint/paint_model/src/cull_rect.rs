@@ -3,7 +3,7 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/platform/graphics/paint/cull_rect.{h,cc}`.
 
-use layout_assembly::internal::layout_input::{Offset, TransformMatrix};
+use paint_input_types::layout_input::{Offset, TransformMatrix};
 
 use crate::geometry_mapper::{
     LocalToAncestorClipRect, MapRectWithTransforms, SourceToDestinationApproximateMinimumScale,

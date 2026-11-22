@@ -12,15 +12,15 @@
 
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::collections::HashMap;
 
 use foundation::{LayoutOffset as Offset, LayoutSize as Size};
-use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData, StitchedDecorationData};
-use layout_assembly::internal::layout_input::{
-    BoxDecorationBreak, Display, TextDirection, WritingMode,
-};
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::fragment::FragmentKind;
+use layout::paint::{FragmentPaintData, StitchedDecorationData};
+use layout::input::{BoxDecorationBreak, Display};
+use paint_input_types::layout_input::{TextDirection, WritingMode};
+use layout::paint::PaintFragmentCursor;
 
 /// `fragmentainer` is the identity of the enclosing column/page area, carried
 /// by the walk the way PrePaintTreeWalk carries `fragmentainer_idx`

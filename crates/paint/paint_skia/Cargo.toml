@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 layout_geometry = { path = "../../layout/layout_geometry" }
-layout_assembly = { path = "../../layout/layout_assembly" }
+paint_input_types = { path = "../../layout/paint_input_types" }
 layout_style = { path = "../../layout/layout_style" }
 paint_model = { path = "../paint_model" }
 foundation = { path = "../../foundation" }

@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use foundation::TrustedIdentityHashMap as HashMap;
-use layout_assembly::fragment_tree::PaintGlyphRun;
-use layout_assembly::internal::paint_input::PaintBlendMode;
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use paint_input_types::PaintGlyphRun;
+use paint_input_types::paint_input::PaintBlendMode;
+use layout::paint::PaintFragmentCursor;
 use std::sync::Arc;
 
 use crate::contoured_border_geometry::UniformCornerRadius;
@@ -23,7 +23,7 @@ use crate::pre_paint_tree_walk::{
 };
 use crate::PaintRecording;
 use crate::PaintRect;
-use layout_assembly::internal::layout_input::Offset;
+use paint_input_types::layout_input::Offset;
 
 struct TextPaintAggregation {
     node_id: u64,
@@ -74,17 +74,17 @@ pub struct PaintContext<'o> {
     pub walk_metrics: paint_model::PaintWalkMetrics,
     pub caret: Option<crate::paint_engine::CaretPosition>,
     pub drag_caret: Option<crate::paint_engine::CaretPosition>,
-    pub drag_caret_local_rect: Option<layout_assembly::caret::geometry::LocalCaretRect>,
+    pub drag_caret_local_rect: Option<layout::editing::LocalCaretRect>,
     pub text_control_selection:
-        Option<layout_assembly::editing_state::TextControlSelectionPaintState>,
-    pub document_selection: Option<layout_assembly::editing_state::DocumentSelection>,
+        Option<layout::editing::TextControlSelectionPaintState>,
+    pub document_selection: Option<layout::editing::DocumentSelection>,
     pub document_composition_markers:
-        std::rc::Rc<[layout_assembly::editing_state::DocumentCompositionMarker]>,
+        std::rc::Rc<[layout::editing::DocumentCompositionMarker]>,
     pub selection_handles_visible: bool,
-    pub caret_local_rect: Option<layout_assembly::caret::geometry::LocalCaretRect>,
+    pub caret_local_rect: Option<layout::editing::LocalCaretRect>,
     /// Effective FrameCaret shape for this recording. IME composition forces
     /// this to bar independently of the owner's computed caret-shape.
-    pub caret_shape: Option<layout_assembly::internal::caret_rect::CaretShape>,
+    pub caret_shape: Option<paint_input_types::CaretShape>,
     drawing_recorder: Option<(
         DisplayItemId,
         DisplayItemClientInfo,
@@ -444,8 +444,8 @@ impl<'o> PaintContext<'o> {
         ) {
             if matches!(
                 cursor.ViewKind(),
-                layout_assembly::fragment_tree::FragmentKind::kText
-                    | layout_assembly::fragment_tree::FragmentKind::kGeneratedText
+                layout::fragment::FragmentKind::kText
+                    | layout::fragment::FragmentKind::kGeneratedText
             ) {
                 output.insert(cursor.FragmentInstanceId(), cursor);
             }
@@ -1078,7 +1078,7 @@ impl<'o> PaintContext<'o> {
         &mut self,
         node: &PaintTreeNode<'_>,
         element_paint_rect: PaintRect,
-        sub_rects: &[layout_assembly::internal::layout_input::TrackedElementSubRect],
+        sub_rects: &[layout::input::TrackedElementSubRect],
     ) {
         let fragment = node.fragment.as_deref().expect("tracked-element fragment");
         self.RecordTrackedElementDataWithClient(
@@ -1096,11 +1096,9 @@ impl<'o> PaintContext<'o> {
         client_id: u64,
         client: DisplayItemClientInfo,
         element_paint_rect: PaintRect,
-        sub_rects: &[layout_assembly::internal::layout_input::TrackedElementSubRect],
+        sub_rects: &[layout::input::TrackedElementSubRect],
     ) {
-        use layout_assembly::internal::layout_input::{
-            TrackedElementFrameToken, TrackedElementSubRectType,
-        };
+        use layout::input::{TrackedElementFrameToken, TrackedElementSubRectType};
         use paint_chunk::{
             PaintFrameToken, PaintTrackedElementRelativeRect, PaintTrackedElementSubRect,
             PaintTrackedElementSubRectType,
@@ -1867,7 +1865,7 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
                 filter_space_origin: Offset::default(),
                 filter_reference_scale: 1.0,
                 opacity: if caret.visible { 1.0 } else { 0.001 },
-                blend_mode: layout_assembly::internal::paint_input::PaintBlendMode::kNormal,
+                blend_mode: paint_input_types::paint_input::PaintBlendMode::kNormal,
                 filters: Default::default(),
                 backdrop_filters: Default::default(),
                 backdrop_filter_has_reference: false,
@@ -2060,10 +2058,8 @@ impl<'c, 'o> ScopedPaintChunkProperties<'c, 'o> {
 #[cfg(test)]
 mod opaque_record_tests {
     use super::*;
-    use layout_assembly::internal::layout_input_types::Color;
-    use layout_assembly::internal::paint_input::{
-        PaintCornerRadii, PaintCornerRadius, PaintShader,
-    };
+    use paint_input_types::layout_input_types::Color;
+    use paint_input_types::paint_input::{PaintCornerRadii, PaintCornerRadius, PaintShader};
     use paint_chunk::PaintChunker;
 
     #[test]

@@ -6,15 +6,11 @@
 //! `BorderShapeUtils`/`BorderShapePainter` subsystem and is never substituted
 //! by this module.
 
-use layout_assembly::fragment_tree::{
-    FragmentBoxSides, FragmentPaintData, PaintProperties, ResidentBoxGeometry,
-};
-use layout_assembly::internal::layout_input::{
-    Edges, Offset, PaintPathCommand, PaintPathVerb, PaintStyle, Size,
-};
-use layout_assembly::internal::paint_input::{
-    PaintCornerRadii, PaintCornerRadius, PaintStyleData,
-};
+use layout::fragment::ResidentBoxGeometry;
+use layout::paint::{FragmentBoxSides, FragmentPaintData, PaintProperties};
+use layout::input::PaintStyle;
+use paint_input_types::layout_input::{Edges, Offset, PaintPathCommand, PaintPathVerb, Size};
+use paint_input_types::paint_input::{PaintCornerRadii, PaintCornerRadius, PaintStyleData};
 
 use crate::PaintRect;
 

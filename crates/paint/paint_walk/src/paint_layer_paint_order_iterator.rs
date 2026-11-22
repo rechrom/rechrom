@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use layout_assembly::internal::layout_input::Position;
+use layout::input::Position;
 
 use crate::pre_paint_tree_walk::PaintTreeNode;
 
@@ -385,7 +385,7 @@ pub fn EnsureResidentHitTestLayerOrder(root: &PaintTreeNode<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::FragmentPaintData;
+    use layout::paint::FragmentPaintData;
 
     fn layer(node_id: u64) -> Box<PaintTreeNode<'static>> {
         let mut fragment = FragmentPaintData::default();

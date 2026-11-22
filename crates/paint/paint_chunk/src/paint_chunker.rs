@@ -1,6 +1,6 @@
 //! Chunk identity/state algorithm translated from Blink paint_chunker.cc.
 //! Chunk ranges address semantic DisplayItems, independent of replay op counts.
-use layout_assembly::fragment_tree::RasterEffectOutset;
+use layout::paint::RasterEffectOutset;
 use paint_model::display_item_id::DisplayItemId;
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_model::PaintRect;
@@ -488,10 +488,10 @@ fn UnionHitTestOpaqueness(
 // Source primitive: ui/gfx/color_utils.cc:577-614. Quantize to source SkColor,
 // source alpha normalization, ClampRound and conversion back to SkColor4f.
 fn ResultingPaintColor(
-    f: layout_assembly::internal::layout_input_types::Color,
-    b: layout_assembly::internal::layout_input_types::Color,
-) -> layout_assembly::internal::layout_input_types::Color {
-    use layout_assembly::internal::layout_input_types::Color;
+    f: paint_input_types::layout_input_types::Color,
+    b: paint_input_types::layout_input_types::Color,
+) -> paint_input_types::layout_input_types::Color {
+    use paint_input_types::layout_input_types::Color;
     let q = |v: f32| (v * 255.).round().clamp(0., 255.);
     let a = q(f.alpha) / 255.;
     let fa = [q(f.red), q(f.green), q(f.blue), 255.];

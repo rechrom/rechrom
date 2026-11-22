@@ -1,8 +1,8 @@
-use layout_assembly::fragment_tree::PaintResources;
-use layout_assembly::internal::layout_input::{Offset, Size};
-use layout_assembly::internal::paint_input::{
-    BackgroundRepeatRule, InterpolationQuality, PaintCornerRadii, PaintMaskComposite,
-    PaintMaskMode, PaintShader,
+use paint_input_types::PaintResources;
+use paint_input_types::layout_input::{Offset, Size};
+use paint_input_types::paint_input::{
+    BackgroundRepeatRule, InterpolationQuality, PaintCornerRadii, PaintMaskComposite, PaintMaskMode,
+    PaintShader,
 };
 
 use crate::PaintRect;
@@ -61,7 +61,7 @@ impl Default for DisplayMaskLayer {
 }
 
 pub fn ResolveDocumentImageContainerKey(
-    image: &layout_assembly::internal::layout_input::PaintImage,
+    image: &paint_input_types::layout_input::PaintImage,
     target_size: Size,
     effective_zoom: f64,
     resources: Option<&PaintResources>,

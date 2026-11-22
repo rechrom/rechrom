@@ -3,15 +3,17 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/box_paint_invalidator.{h,cc}`.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use foundation::{
     AppearanceValue, BorderLineStyle, IsFullPaintInvalidationReason,
     IsLayoutFullPaintInvalidationReason, PaintInvalidationReason,
 };
-use layout_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect, PreviousBoxGeometry};
-use layout_assembly::internal::layout_input::{Offset, Size};
-use layout_assembly::layout_engine::PaintFragmentCursor;
-use layout_assembly::internal::paint_input::{
+use layout::fragment::PreviousBoxGeometry;
+use layout::paint::FragmentPaintData;
+use paint_input_types::FragmentPaintRect;
+use paint_input_types::layout_input::{Offset, Size};
+use layout::paint::PaintFragmentCursor;
+use paint_input_types::paint_input::{
     BackgroundBox, BackgroundImageLayer, BackgroundRepeat, BackgroundRepeatRule, BackgroundSizeMode,
 };
 
@@ -553,8 +555,8 @@ fn ShouldFullyInvalidateBackgroundLayersOnSizeChange(
 
 fn ShouldFullyInvalidateBackgroundOnScrollableOverflowChange(
     fragment: &FragmentPaintData,
-    old: layout_assembly::fragment_tree::FragmentPaintRect,
-    new: layout_assembly::fragment_tree::FragmentPaintRect,
+    old: paint_input_types::FragmentPaintRect,
+    new: paint_input_types::FragmentPaintRect,
 ) -> bool {
     if old == new || !BackgroundGeometryDependsOnScrollableOverflowRect(fragment) {
         return false;
@@ -608,12 +610,13 @@ fn SizeHasFraction(size: Size) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::{
-        BackgroundPaintLocation, CanvasBackgroundPaintData, FragmentPaintRect, GapRule,
-        GapRulePaintData, ScrollContainerPaintData,
+    use layout::paint::{
+        BackgroundPaintLocation, CanvasBackgroundPaintData, GapRule, GapRulePaintData,
+        ScrollContainerPaintData,
     };
-    use layout_assembly::internal::layout_input::Edges;
-    use layout_assembly::internal::paint_input::BackgroundAttachment;
+    use paint_input_types::FragmentPaintRect;
+    use paint_input_types::layout_input::Edges;
+    use paint_input_types::paint_input::BackgroundAttachment;
     use std::sync::Arc;
 
     fn incremental_fragment() -> FragmentPaintData {

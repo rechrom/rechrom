@@ -1,9 +1,10 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layout_assembly::internal::layout_input::{NodeKind, Position};
-use layout_assembly::internal::paint_input::PaintBlendMode;
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::fragment::FragmentKind;
+use layout::paint::FragmentPaintData;
+use layout::input::{NodeKind, Position};
+use paint_input_types::paint_input::PaintBlendMode;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PaintLayerClassification {

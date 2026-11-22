@@ -4,10 +4,9 @@
 //! verbs would change even-odd and opposite-winding overlap semantics. Paint
 //! therefore retains one value per child, while compositor selects and builds
 //! the concrete legacy or translated Skia path exactly once during lowering.
-pub use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
-use layout_assembly::internal::{
-    layout_input::PaintClipPathChild, paint_input::PaintCornerRadii,
-};
+pub use paint_input_types::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
+use paint_input_types::layout_input::PaintClipPathChild;
+use paint_input_types::paint_input::PaintCornerRadii;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -407,7 +406,7 @@ fn normalized_path_radii(rect: crate::PaintRect, mut radii: PaintCornerRadii) ->
     }
     crate::contoured_border_geometry::Normalize(
         &mut radii,
-        layout_assembly::internal::layout_input::Size {
+        paint_input_types::layout_input::Size {
             width: rect.width,
             height: rect.height,
         },
@@ -928,7 +927,7 @@ mod containment_tests {
         let invalid = PaintPath::rounded_rect(
             rect,
             PaintCornerRadii {
-                top_left: layout_assembly::internal::paint_input::PaintCornerRadius {
+                top_left: paint_input_types::paint_input::PaintCornerRadius {
                     x: f64::NAN,
                     y: 5.0,
                 },

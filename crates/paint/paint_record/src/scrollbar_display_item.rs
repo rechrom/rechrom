@@ -8,7 +8,7 @@ use std::sync::Arc;
 use foundation::{
     CompositorElementId, CompositorElementIdNamespace, NamespaceFromCompositorElementId,
 };
-use layout_assembly::internal::layout_input_types::Color;
+use paint_input_types::layout_input_types::Color;
 use paint_chunk::PaintHitTestOpaqueness;
 use paint_model::{paint_property_tree::TransformPaintPropertyNode, PaintRect};
 

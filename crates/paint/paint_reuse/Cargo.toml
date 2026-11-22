@@ -4,5 +4,5 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-layout_assembly = { path = "../../layout/layout_assembly" }
+paint_input_types = { path = "../../layout/paint_input_types" }
 paint_model = { path = "../paint_model" }

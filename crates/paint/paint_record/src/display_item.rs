@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use foundation::ETextDecorationSkipInk;
-use layout_assembly::fragment_tree::{PaintGlyph, PaintGlyphRun, RasterEffectOutset};
-use layout_assembly::internal::layout_input::{
+use layout::paint::RasterEffectOutset;
+use paint_input_types::{PaintGlyph, PaintGlyphRun};
+use paint_input_types::layout_input::{
     BorderLineStyle, FontSmoothing, FontVariation, Offset, PaintPathCommand, Size,
     TextDecorationStyle, TransformMatrix, WritingMode,
 };
-use layout_assembly::internal::layout_input_types::Color;
-use layout_assembly::internal::paint_input::{
+use paint_input_types::layout_input_types::Color;
+use paint_input_types::paint_input::{
     BackgroundRepeatRule, InterpolationQuality, PaintBlendMode, PaintCornerRadii,
     PaintImageTileRule, PaintShader, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
@@ -91,7 +92,7 @@ pub struct DisplayItem {
     /// ScopedTextShadowPainter's parallel shadow-only filter branches. The
     /// decorated source geometry is drawn once inside this layer; Raster
     /// merges these branches before compositing the shadow result.
-    pub text_shadow_filters: Vec<layout_assembly::internal::layout_input::PaintShadow>,
+    pub text_shadow_filters: Vec<paint_input_types::layout_input::PaintShadow>,
     pub mask_layers: Vec<DisplayMaskLayer>,
     pub round_cap: bool,
     pub resource_id: u64,
@@ -595,8 +596,8 @@ mod recorded_display_item_debug_tests {
     }
 }
 
-pub use layout_assembly::caret::CaretPaintState as CaretPosition;
-pub use layout_assembly::editing_state::EditingPaintState;
+pub use layout::editing::CaretPaintState as CaretPosition;
+pub use layout::editing::EditingPaintState;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaretGeometry {
     pub node_id: u64,

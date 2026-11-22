@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::fragment_tree::FragmentKind;
-use layout_assembly::internal::layout_input::FloatSide;
-use layout_assembly::internal::paint_input::PaintFilterType;
+use layout::fragment::FragmentKind;
+use layout::input::FloatSide;
+use paint_input_types::paint_input::PaintFilterType;
 
 use crate::box_fragment_painter::BoxFragmentPainter;
 use crate::geometry_mapper::{MapRectFromRoot, MapRectToRoot};
@@ -62,7 +62,7 @@ fn HiddenForPositionVisibility(node: &PaintTreeNode<'_>) -> bool {
 }
 
 // Source: core/paint/paint_layer_painter.cc:289-295,300-302.
-fn ShouldSkipForLayout(fragment: &layout_assembly::fragment_tree::FragmentPaintData) -> bool {
+fn ShouldSkipForLayout(fragment: &layout::paint::FragmentPaintData) -> bool {
     (fragment.paint.NeedsLayout() && !fragment.paint.ChildLayoutBlockedByDisplayLock())
         || fragment.paint.IsFragmentLessBox()
 }
@@ -82,7 +82,7 @@ fn HasReferenceFilter(node: &PaintTreeNode<'_>) -> bool {
         .any(|operation| operation.r#type == PaintFilterType::kReference)
 }
 
-fn FragmentRect(rect: layout_assembly::fragment_tree::FragmentPaintRect) -> PaintRect {
+fn FragmentRect(rect: paint_input_types::FragmentPaintRect) -> PaintRect {
     PaintRect {
         x: rect.offset.x,
         y: rect.offset.y,
@@ -1085,8 +1085,9 @@ impl<'n, 'f, 'c, 'o> PaintLayerPainter<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect, PaintResources};
-    use layout_assembly::internal::layout_input::{Offset, Size};
+    use layout::paint::FragmentPaintData;
+    use paint_input_types::{FragmentPaintRect, PaintResources};
+    use paint_input_types::layout_input::{Offset, Size};
     use paint_model::geometry_mapper::TranslationTransform;
     use paint_model::paint_property_tree::TransformPaintPropertyNode;
     use paint_record::{DisplayItem, PaintRecording};

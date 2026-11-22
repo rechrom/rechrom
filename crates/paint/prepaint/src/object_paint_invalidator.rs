@@ -3,11 +3,12 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/object_paint_invalidator.{h,cc}`.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use foundation::PaintInvalidationReason;
-use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layout_assembly::internal::layout_input::Offset;
-use layout_assembly::internal::paint_input::BackgroundBox;
+use layout::fragment::FragmentKind;
+use layout::paint::FragmentPaintData;
+use paint_input_types::layout_input::Offset;
+use paint_input_types::paint_input::BackgroundBox;
 
 use crate::paint_invalidator::PaintInvalidatorContext;
 

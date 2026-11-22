@@ -1,12 +1,10 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::internal::background_bleed_avoidance::{
-    BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
-};
-use layout_assembly::internal::paint_input::{BackgroundBox, PaintBlendMode};
+use layout::paint_input::{BackgroundBleedAvoidance, BleedAvoidanceIsClipping};
+use paint_input_types::paint_input::{BackgroundBox, PaintBlendMode};
 
 use crate::box_decoration_data::BoxDecorationData;
 use crate::box_fragment_painter::{BackgroundRadii, BoxFragmentPainter};

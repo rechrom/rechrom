@@ -8,7 +8,8 @@ canvas = { path = "../canvas" }
 animation = { path = "../animation" }
 browser_tracing = { path = "../tracing" }
 foundation = { path = "../foundation" }
-layout_assembly = { path = "../layout/layout_assembly" }
+layout = { path = "../layout/layout" }
+paint_input_types = { path = "../layout/paint_input_types" }
 image_resource = { path = "../image_resource" }
 paint_model = { path = "paint_model" }
 paint_walk = { path = "paint_walk" }

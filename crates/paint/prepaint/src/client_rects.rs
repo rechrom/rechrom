@@ -1,14 +1,16 @@
 //! DOM box geometry does not need clips, display items, outlines or effects.
 //! Keep physical coordinate mapping separate from logical paint traversal order.
 #![allow(non_snake_case)]
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use crate::pre_paint_tree_walk::{
     ChildGeometryOrigin, FlatToWorldSpaceOffset, ResolveChildGeometryOrigin,
     ResolveFragmentGeometry, SvgViewBoxTransform,
 };
-use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layout_assembly::internal::layout_input::{Offset, Position, TransformMatrix};
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::fragment::FragmentKind;
+use layout::paint::FragmentPaintData;
+use layout::input::Position;
+use paint_input_types::layout_input::{Offset, TransformMatrix};
+use layout::paint::PaintFragmentCursor;
 use paint_model::geometry_mapper::{MapRectToRoot, MultiplyTransforms, TranslationTransform};
 use paint_model::PaintRect;
 use std::collections::HashMap;
@@ -55,7 +57,7 @@ struct InlineRectMapper<'a> {
         Vec<(
             u64,
             usize,
-            &'a layout_assembly::fragment_tree::FragmentPaintRect,
+            &'a paint_input_types::FragmentPaintRect,
         )>,
     >,
     rects: HashMap<u64, Vec<Option<PaintRect>>>,

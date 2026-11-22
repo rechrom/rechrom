@@ -7,7 +7,7 @@ use super::{
     EditingPaintState, PaintArtifact, PaintContext, PaintEngine, PaintLifecycleObserver,
     PaintLifecyclePhase, PaintRect,
 };
-use layout_assembly::internal::layout_input::{Offset, Size};
+use paint_input_types::layout_input::{Offset, Size};
 use paint_model::paint_flags::{PaintFlag, PaintFlags};
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_record::PaintRecording;

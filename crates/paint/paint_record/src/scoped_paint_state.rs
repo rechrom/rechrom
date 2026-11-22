@@ -4,12 +4,13 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/scoped_paint_state.cc:130-164`.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::sync::Arc;
 
-use layout_assembly::fragment_tree::FragmentPaintData;
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::internal::layout_input::{NodeKind, Offset};
+use layout::paint::FragmentPaintData;
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::input::NodeKind;
+use paint_input_types::layout_input::Offset;
 use paint_model::geometry_mapper::SourceToDestinationRect;
 use paint_model::geometry_mapper::TranslationTransform;
 use paint_model::paint_property_tree::PaintPropertyRole;
@@ -42,7 +43,7 @@ fn IsSvgLayoutChild(kind: NodeKind) -> bool {
     )
 }
 
-fn FragmentRect(rect: layout_assembly::fragment_tree::FragmentPaintRect) -> PaintRect {
+fn FragmentRect(rect: paint_input_types::FragmentPaintRect) -> PaintRect {
     PaintRect {
         x: rect.offset.x,
         y: rect.offset.y,
@@ -361,10 +362,9 @@ impl<'n, 'f, 'c, 'o> ScopedBoxContentsPaintState<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::{
-        FragmentPaintData, FragmentPaintRect, ScrollContainerPaintData,
-    };
-    use layout_assembly::internal::layout_input::{Offset, Size};
+    use layout::paint::{FragmentPaintData, ScrollContainerPaintData};
+    use paint_input_types::FragmentPaintRect;
+    use paint_input_types::layout_input::{Offset, Size};
     use paint_model::paint_property_tree::TransformPaintPropertyNode;
     use std::cell::RefCell;
 

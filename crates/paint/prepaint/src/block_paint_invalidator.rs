@@ -4,8 +4,8 @@
 //! `third_party/blink/renderer/core/paint/block_paint_invalidator.{h,cc}`.
 
 use foundation::PaintInvalidationReason;
-use layout_assembly::fragment_tree::FragmentPaintData;
-use layout_assembly::internal::layout_input::Offset;
+use layout::paint::FragmentPaintData;
+use paint_input_types::layout_input::Offset;
 
 use crate::box_paint_invalidator::BoxPaintInvalidator;
 use crate::paint_invalidator::PaintInvalidatorContext;

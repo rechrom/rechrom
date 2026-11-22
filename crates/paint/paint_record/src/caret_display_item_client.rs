@@ -1,7 +1,7 @@
 //! Blink paints block carets before editor text and bar/underscore carets
 //! after it, under the normal clip/transform/effect state
 //! (BoxFragmentPainter::PaintCaretsIfNeeded).
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
 use crate::drawing_recorder::DrawingRecorder;
 use crate::paint_chunker::DisplayItemClientInfo;
@@ -12,7 +12,7 @@ use crate::{
     pre_paint_tree_walk::PaintTreeNode,
     PaintRect,
 };
-use layout_assembly::fragment_tree::FragmentKind;
+use layout::fragment::FragmentKind;
 use std::cell::RefCell;
 
 #[allow(non_snake_case)]
@@ -42,7 +42,7 @@ fn PaintCaretWithState(
     node: &PaintTreeNode<'_>,
     context: &RefCell<PaintContext<'_>>,
     caret: crate::paint_engine::CaretPosition,
-    local: layout_assembly::caret::geometry::LocalCaretRect,
+    local: layout::editing::LocalCaretRect,
     drag: bool,
 ) {
     if caret.selection.is_some() && caret.composition.is_none() {
@@ -66,7 +66,7 @@ fn PaintCaretWithState(
         .map_or_else(|| fragment.paint.style.caret_color(), |native| native.color);
     if caret.native.is_none()
         && context.borrow().caret_shape
-            == Some(layout_assembly::internal::caret_rect::CaretShape::kBlock)
+            == Some(paint_input_types::CaretShape::kBlock)
         && fragment
             .paint
             .style

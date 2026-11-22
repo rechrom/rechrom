@@ -4,7 +4,7 @@ use foundation::{
     native_path::{NativePath, StrokeData},
     LineCap, LineJoin, WindRule,
 };
-use layout_assembly::internal::layout_input::{SvgShapeData, SvgShapeGeometry};
+use paint_input_types::layout_input::{SvgShapeData, SvgShapeGeometry};
 use skia::{
     include::core::SkPathTypes::{SkPathDirection, SkPathFillType},
     src::core::{
