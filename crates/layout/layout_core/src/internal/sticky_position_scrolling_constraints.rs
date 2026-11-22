@@ -1,8 +1,8 @@
-//! Compatibility facade for fragment-owned sticky scrolling constraints.
+//! Base facade for sticky scrolling constraints (PaintLayer-side data).
 
 #![allow(non_snake_case)]
 
-#[path = "../../../layout_fragment/src/sticky_position_scrolling_constraints.rs"]
-mod layout_fragment_sticky_position_scrolling_constraints;
+#[path = "../fragment/sticky_position_scrolling_constraints.rs"]
+mod layout_core_sticky_position_scrolling_constraints;
 
-pub use layout_fragment_sticky_position_scrolling_constraints::*;
+pub use layout_core_sticky_position_scrolling_constraints::*;

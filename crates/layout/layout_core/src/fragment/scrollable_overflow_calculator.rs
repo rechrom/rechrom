@@ -19,7 +19,7 @@ use super::super::layout_box::LayoutBox;
 use super::super::layout_object::{AncestorSkipInfo, LayoutObject};
 use super::super::transform_utils::GetTransformForChildFragment;
 
-#[path = "../../layout_core/src/fragment/scrollable_overflow_calculation.rs"]
+#[path = "scrollable_overflow_calculation.rs"]
 mod layout_fragment_scrollable_overflow_calculation;
 
 // The source stores a value-copy of BlockNode. Recreating it from the same
