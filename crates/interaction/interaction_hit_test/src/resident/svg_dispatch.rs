@@ -27,7 +27,8 @@ use foundation::{
     native_path::{NativePath, ShapeFillGeometry, ShapeStrokeGeometry},
     EPointerEvents, EVisibility, PhysicalOffset, PhysicalRect, WindRule,
 };
-use layout_assembly::layout_engine::{NativeHitTestCursor, PaintFragmentCursor};
+use ::layout::output::NativeHitTestCursor;
+use ::layout::paint::PaintFragmentCursor;
 
 pub struct ResidentSvgSource<'a> {
     pub source: NativeHitTestCursor<'a>,

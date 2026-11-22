@@ -43,7 +43,7 @@ use interaction_default::{
 use interaction_dispatch::core::{
     dom::events::event::EventTargetRef, events::ui_event::InputDeviceCapabilitiesRef,
 };
-use layout_assembly::layout_engine::LayoutFocusNavigationFacts;
+use layout::output::LayoutFocusNavigationFacts;
 use layout_style::style::computed_style_constants::PseudoId;
 
 use super::{

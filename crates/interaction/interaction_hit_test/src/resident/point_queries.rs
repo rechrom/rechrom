@@ -14,20 +14,15 @@
 //! The legacy nearest-text query below also preserves its existing contract;
 //! replacing it with complete native PositionForPoint is separate work.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use ::layout::fragment::ResidentBoxGeometry as _;
 use super::{ResidentCursorGeometry, ResidentCursorGeometryError};
 use crate::core::layout::hit_test_location::HitTestLocation;
 use foundation::{gfx, DynamicTo, Persistent, PhysicalOffset, PhysicalRect, PhysicalSize};
-use layout_assembly::internal::{
-    layout_box_model_object::LayoutBoxModelObject, layout_scrollable_area::OverflowControlHit,
-    scrollbar::Scrollbar,
-};
-use layout_assembly::{
-    editing_state::DocumentSelectionPosition,
-    fragment_tree::FragmentPaintData,
-    internal::layout_input::{Display, FloatSide, NodeKind, Offset},
-    layout_engine::PaintFragmentCursor,
-};
+use ::layout::object::LayoutBoxModelObject;
+use ::layout::scroll::{OverflowControlHit, Scrollbar};
+use ::layout::editing::DocumentSelectionPosition;
+use ::layout::paint::{FragmentPaintData, PaintFragmentCursor};
+use ::layout::input::{Display, FloatSide, NodeKind, Offset};
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use paint::path_hit_test::PaintPathHitTestFactory;
 use std::cell::Cell;
@@ -104,7 +99,7 @@ fn LocalPoint(
     // borrow its style without establishing another transform node.
     if fragment.ViewEstablishesPaintState()
         && fragment.paint.HasSource()
-        && fragment.paint.Position() == layout_assembly::internal::layout_input::Position::kSticky
+        && fragment.paint.Position() == ::layout::input::Position::kSticky
     {
         point.x -= fragment.paint.StickyOffset().x;
         point.y -= fragment.paint.StickyOffset().y;
@@ -178,7 +173,7 @@ impl<'a> PointQuery<'a> {
     fn border_contains(
         &self,
         fragment: &ResidentFragmentSource<'_>,
-        size: layout_assembly::internal::layout_input::Size,
+        size: ::layout::input::Size,
         point: Offset,
         absolute: Offset,
         inner: bool,
@@ -187,10 +182,10 @@ impl<'a> PointQuery<'a> {
     ) -> bool {
         let cursor = fragment.Cursor();
         let style = match cursor.Cursor() {
-            layout_assembly::layout_engine::FragmentCursor::Physical { fragment, .. } => {
+            ::layout::output::FragmentCursor::Physical { fragment, .. } => {
                 fragment.Style()
             }
-            layout_assembly::layout_engine::FragmentCursor::Inline { item, .. } => item.Style(),
+            ::layout::output::FragmentCursor::Inline { item, .. } => item.Style(),
         };
         let mut rect = PhysicalRect::new(
             PhysicalOffset::new(
@@ -210,7 +205,7 @@ impl<'a> PointQuery<'a> {
                 // LayoutBox owner's overflow-clip-margin outsets.
                 let object = cursor.Cursor().GetLayoutObject();
                 if let Some(box_) = unsafe {
-                    foundation::DynamicTo::<layout_assembly::internal::layout_box::LayoutBox>(
+                    foundation::DynamicTo::<::layout::object::LayoutBox>(
                         object,
                     )
                     .as_ref()
@@ -242,7 +237,7 @@ impl<'a> PointQuery<'a> {
 fn ContouredBorderContainsAt(
     query: &PointQuery<'_>,
     fragment: &ResidentFragmentSource<'_>,
-    size: layout_assembly::internal::layout_input::Size,
+    size: ::layout::input::Size,
     point: Offset,
     absolute: Offset,
     include_fragment_sides: bool,
@@ -287,7 +282,7 @@ fn LineSelfBordersContain(
     point: Offset,
     absolute: Offset,
 ) -> bool {
-    if fragment.ViewKind() != layout_assembly::fragment_tree::FragmentKind::kLine {
+    if fragment.ViewKind() != ::layout::fragment::FragmentKind::kLine {
         return true;
     }
     let Some(containing_box) = containing_box else {
@@ -327,7 +322,7 @@ fn HitGeometry(
     }
     let (point, absolute) =
         LocalPoint(fragment, fragment.Cursor().ViewOffsetInContainer(), point, parent)?;
-    if fragment.ViewKind() == layout_assembly::fragment_tree::FragmentKind::kLine {
+    if fragment.ViewKind() == ::layout::fragment::FragmentKind::kLine {
         if let Some(overflow) = fragment.ViewInkOverflow() {
             let left = absolute.x + overflow.offset.x;
             let top = absolute.y + overflow.offset.y;
@@ -344,7 +339,7 @@ fn HitGeometry(
         }
     }
     let hit_bounds = fragment.ViewTextHitTestBounds().unwrap_or(
-        layout_assembly::fragment_tree::FragmentPaintRect {
+        ::layout::paint::FragmentPaintRect {
             offset: Offset::default(),
             size: fragment.ViewSize(),
         },
@@ -448,7 +443,7 @@ fn ScrollbarHitTarget<'f>(
 // targets themselves. Visual-overflow/occlusion testing is a separate request
 // kind and does not enter this event-targeting path.
 fn CanHitTestSelf(fragment: &FragmentPaintData) -> bool {
-    if fragment.ViewKind() == layout_assembly::fragment_tree::FragmentKind::kLine
+    if fragment.ViewKind() == ::layout::fragment::FragmentKind::kLine
         && matches!(fragment.paint.SourceKind(), NodeKind::kSvgText)
     {
         return false;
@@ -624,9 +619,9 @@ fn IsSvgHitObject(kind: NodeKind) -> bool {
 fn SelfHitPhase(fragment: &FragmentPaintData) -> EventHitPhase {
     if matches!(
         fragment.ViewKind(),
-        layout_assembly::fragment_tree::FragmentKind::kText
-            | layout_assembly::fragment_tree::FragmentKind::kGeneratedText
-            | layout_assembly::fragment_tree::FragmentKind::kLine
+        ::layout::fragment::FragmentKind::kText
+            | ::layout::fragment::FragmentKind::kGeneratedText
+            | ::layout::fragment::FragmentKind::kLine
     ) || fragment.paint.IsLayoutInline()
         || fragment.ViewIsInlineBox()
         || fragment.ViewIsReplaced()
@@ -912,7 +907,7 @@ pub fn HitTest<'f>(
 /// `layout` resolves the chosen node's document tree order through
 /// LayoutNode::LogicalTreeOrder instead of a copied fragment-slot value.
 pub fn TextPositionAtPoint<'a>(
-    layout: layout_assembly::layout_engine::LayoutOutput<'_>,
+    layout: ::layout::output::LayoutOutput<'_>,
     fragment: impl Into<ResidentFragmentSource<'a>>,
     point: Offset,
     require_inside: bool,
@@ -933,8 +928,8 @@ pub fn TextPositionAtPoint<'a>(
         };
         if matches!(
             fragment.ViewKind(),
-            layout_assembly::fragment_tree::FragmentKind::kText
-                | layout_assembly::fragment_tree::FragmentKind::kGeneratedText
+            ::layout::fragment::FragmentKind::kText
+                | ::layout::fragment::FragmentKind::kGeneratedText
         ) && fragment.paint.TextControlHost().is_none()
             && {
                 let style = fragment.ViewStyle();

@@ -26,7 +26,7 @@ use interaction_dispatch::core::dom::events::{
     event::{Event, EventInterface, EventRef},
     event_dispatch_result::DispatchEventResult,
 };
-use layout_assembly::{editing_state::DOMSelection, EditingPosition, EditingTextAffinity};
+use layout::editing::{DOMSelection, EditingPosition, EditingTextAffinity};
 
 struct ExtendedContext<'a, 'listener, 'frame>(&'a EventDispatcher<'listener, 'frame>, u128);
 impl MarkCommandContext for ExtendedContext<'_, '_, '_> {
@@ -231,9 +231,7 @@ impl
             .is_some_and(|node| document.IsConnectedToDocument(node))
     }
     fn SelectAllChildren(&self, root: u64, canonicalize: bool) -> S {
-        use layout_assembly::{
-            editing_state::DOMSelection, EditingPosition, EditingTextAffinity,
-        };
+        use layout::editing::{DOMSelection, EditingPosition, EditingTextAffinity};
         let selection = {
             let owner = self.0.document.borrow();
             let document = owner.GetDocument();

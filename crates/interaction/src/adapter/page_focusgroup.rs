@@ -224,7 +224,7 @@ use interaction_default::core::page::{
     },
 };
 use interaction_dispatch::core::events::keyboard_event::KeyboardEventRef;
-use layout_assembly::layout_engine::{LayoutOutput, TableFocusgroupCursor};
+use layout::output::{LayoutOutput, TableFocusgroupCursor};
 
 struct BorrowedGrid<'a> {
     document: &'a Document,

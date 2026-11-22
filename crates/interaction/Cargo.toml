@@ -7,10 +7,9 @@ publish = false
 [dependencies]
 paint = { path = "../paint" }
 # The resident editing adapters call the translated InlineCursor,
-# OffsetMapping, and PhysicalBoxFragment editing queries.  Those source-owned
-# reciprocal modules are assembled behind LayoutNG's translation feature; the
-# Interaction facade must select the same production assembly as Browser.
-layout_assembly = { path = "../layout/layout_assembly", features = ["translation_in_progress"] }
+# OffsetMapping, and PhysicalBoxFragment editing queries through the Layout
+# facade, which compiles the same production assembly as Browser.
+layout = { path = "../layout/layout" }
 foundation = { path = "../foundation" }
 dom = { path = "../dom" }
 cssom = { path = "../cssom" }

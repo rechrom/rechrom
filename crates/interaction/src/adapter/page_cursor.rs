@@ -6,7 +6,7 @@
 //! ports; overflow controls and locked-selection preparation stay explicit.
 //! Native window cursor creation stays with the host.
 use dom::{persistent_document::DOMNodeType, Document};
-use layout_assembly::internal::paint_input::ECursor as StyleCursor;
+use layout::paint_input::ECursor as StyleCursor;
 
 pub(crate) use interaction_hit_test::resident::point_queries::ResidentHitTarget as ResidentCursorHit;
 
@@ -53,7 +53,7 @@ pub trait ResidentCursorResolver {
         &'a self,
         document: &'a crate::ownership::InteractionDocument,
         paint_root: paint::resident_hit_test::ResidentPaintHitTest<'a>,
-        fragments: layout_assembly::layout_engine::PaintFragmentCursor<'a>,
+        fragments: layout::paint::PaintFragmentCursor<'a>,
     ) -> Result<
         Box<
             dyn interaction_hit_test::core::paint::paint_layer_hit_test::PaintLayerHitTest<
@@ -97,18 +97,18 @@ impl crate::core::input::event_handler_cursor::CursorHitTestLocation for Residen
 /// successful query against an approximate fragment walk.
 pub fn HitTestAtResident<'a>(
     document: &'a crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     paint_engine: &'a paint::PaintEngine,
-    fragments: layout_assembly::layout_engine::PaintFragmentCursor<'a>,
+    fragments: layout::paint::PaintFragmentCursor<'a>,
     resolver: &'a dyn ResidentCursorResolver,
 ) -> Result<ResidentCursorHitResult, ResidentCursorError> {
     HitTestAtResidentWithFlags(document, point, paint_engine, fragments, resolver, 0)
 }
 fn HitTestAtResidentWithFlags<'a>(
     document: &'a crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     paint_engine: &'a paint::PaintEngine,
-    fragments: layout_assembly::layout_engine::PaintFragmentCursor<'a>,
+    fragments: layout::paint::PaintFragmentCursor<'a>,
     resolver: &'a dyn ResidentCursorResolver,
     extra_flags: u32,
 ) -> Result<ResidentCursorHitResult, ResidentCursorError> {
@@ -168,9 +168,9 @@ fn HitTestAtResidentWithFlags<'a>(
 
 pub fn CursorAtResident<'a>(
     document: &'a crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     paint_engine: &'a paint::PaintEngine,
-    fragments: layout_assembly::layout_engine::PaintFragmentCursor<'a>,
+    fragments: layout::paint::PaintFragmentCursor<'a>,
     resolver: &'a dyn ResidentCursorResolver,
 ) -> Result<Option<crate::cursor::Cursor>, ResidentCursorError> {
     let result = HitTestAtResident(document, point, paint_engine, fragments, resolver)?;
@@ -249,13 +249,10 @@ use interaction_hit_test::core::{
 pub use interaction_hit_test::resident::child_frame_query::{
     PreparedLocalChildFrameQueries, UnavailableLocalChildFrameQueries,
 };
-use layout_assembly::{
-    internal::{
-        layout_box::LayoutBox, layout_box_model_object::LayoutBoxModelObject,
-        layout_node_metadata::Node as NativeNode, layout_object::LayoutObject,
-    },
-    layout_engine::{LayoutOutput, PaintFragmentCursor},
-};
+use layout::object::{LayoutBox, LayoutBoxModelObject, LayoutObject};
+use layout::input::Node as NativeNode;
+use layout::output::LayoutOutput;
+use layout::paint::PaintFragmentCursor;
 use layout_style::style::computed_style::ComputedStyle;
 use std::{
     cell::{Cell, RefCell},
@@ -546,7 +543,7 @@ struct NativeCursorArea {
 impl NativeCursorArea {
     fn Native(
         &self,
-    ) -> Option<&layout_assembly::internal::layout_scrollable_area::PaintLayerScrollableArea>
+    ) -> Option<&layout::scroll::PaintLayerScrollableArea>
     {
         let object = self.value.Object()?;
         let object: &LayoutBoxModelObject = match self.kind {
@@ -567,7 +564,7 @@ impl NativeCursorArea {
 impl source_cursor::CursorScrollableArea for NativeCursorArea {
     fn IsAbsolutePointInResizeControlForPointer(&self, point: source_cursor::Point) -> bool {
         self.Native().is_some_and(|area| area.IsAbsolutePointInResizeControl(&gfx::Point::new(point.x, point.y),
-            layout_assembly::internal::layout_scrollable_area::ResizerHitTestType::kResizerForPointer))
+            layout::scroll::ResizerHitTestType::kResizerForPointer))
     }
     fn ScrollCornerStyle(&self) -> Option<&dyn source_cursor::CursorComputedStyle> {
         self.Native()?.ScrollCornerStyle().map(|_| self as _)
@@ -718,7 +715,7 @@ impl hit::HitTestNode for ResidentDOMCursorNode {
             return Box::new(std::iter::empty());
         };
         Box::new(
-            layout_assembly::layout_engine::NativeHitTestCursor::ForObject(object)
+            layout::output::NativeHitTestCursor::ForObject(object)
                 .ScrollableAreas()
                 .map(|area| area.GetScrollElementId()),
         )
@@ -973,7 +970,7 @@ impl hit::HitTestLayout for ResidentDOMCursorNode {
             return None;
         }
         let image = unsafe {
-            foundation::DynamicTo::<layout_assembly::internal::layout_replaced::LayoutInputReplaced>(object).as_ref()
+            foundation::DynamicTo::<layout::object::LayoutInputReplaced>(object).as_ref()
         }?;
         let content = image.ImageResource().CachedImage()?;
         Some(Rc::new(super::resident_hit_metadata::ResidentImageContent(
@@ -1134,7 +1131,7 @@ impl source_cursor::CursorLayoutObject for ResidentDOMCursorNode {
         self.view_area.Native().map(|_| &self.view_area as _)
     }
     fn GetCursor(&self, point: source_cursor::PointF) -> source_cursor::CursorDirective {
-        use layout_assembly::internal::layout_object::CursorDirective as Native;
+        use layout::object::CursorDirective as Native;
         match self
             .value
             .Object()
@@ -1179,12 +1176,12 @@ impl NativeCursorStyleAccess for NativeCursorLayer {
 // Source event_handler.cc:215-252; custom_scrollbar.cc:426-449. Each
 // style read borrows the canonical part style; no cursor list is copied.
 struct ResidentCursorScrollbar {
-    owner: Persistent<layout_assembly::internal::scrollbar::Scrollbar>,
+    owner: Persistent<layout::scroll::Scrollbar>,
     part: Cell<u32>,
     gap: CursorGap,
 }
 impl ResidentCursorScrollbar {
-    fn Native(&self) -> &layout_assembly::internal::scrollbar::Scrollbar {
+    fn Native(&self) -> &layout::scroll::Scrollbar {
         unsafe { &*self.owner.Get() }
     }
 }
@@ -1463,7 +1460,7 @@ pub struct PreparedResidentCursorQuery<'a> {
     pub paint: &'a paint::PaintEngine,
     pub scroll: &'a ResidentCursorScrollOwner,
     pub paths: &'a dyn paint::path_hit_test::PaintPathHitTestFactory,
-    pub selections: &'a layout_assembly::editing_state::SelectionState,
+    pub selections: &'a layout::editing::SelectionState,
     pub lifecycle_clean: bool,
     pub child_frames: &'a dyn PreparedLocalChildFrameQueries,
     pub host_metrics: ResidentCursorHostMetrics,
@@ -1477,7 +1474,7 @@ pub struct PreparedResidentCursorQuery<'a> {
 /// Source hit preparation borrows resident geometry. Cursor policy uses only
 /// the short-query provider, allowing its source lifecycle barriers to run.
 struct PreparedCursorFrame<'a> {
-    selections: &'a layout_assembly::editing_state::SelectionState,
+    selections: &'a layout::editing::SelectionState,
     layout: Option<LayoutOutput<'a>>,
     queries: Option<&'a dyn super::resident_editing_positions::ResidentEditingPositionQueries>,
     host_metrics: ResidentCursorHostMetrics,
@@ -1663,7 +1660,7 @@ impl interaction_hit_test::resident::query_services::ResidentQueryNodes
 fn QueryPreparedResident(
     interaction: &super::interaction::Interaction<'_>,
     document: &crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     query: PreparedResidentCursorQuery<'_>,
     scroll_query: bool,
     block_query: bool,
@@ -1782,7 +1779,7 @@ pub struct PreparedResidentCursorHit {
 pub fn PrepareResidentCursor(
     interaction: &super::interaction::Interaction<'_>,
     document: &crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     query: PreparedResidentCursorQuery<'_>,
 ) -> Result<PreparedResidentCursorHit, ResidentCursorError> {
     let PreparedQueryResult::Cursor(hit) =
@@ -1798,7 +1795,7 @@ pub fn SelectPreparedResidentCursor(
     interaction: &super::interaction::Interaction<'_>,
     hit: PreparedResidentCursorHit,
     scroll: &ResidentCursorScrollOwner,
-    selections: &layout_assembly::editing_state::SelectionState,
+    selections: &layout::editing::SelectionState,
     queries: &dyn super::resident_editing_positions::ResidentEditingPositionQueries,
     host_metrics: ResidentCursorHostMetrics,
     preferred_color_scheme: source_cursor::ColorScheme,
@@ -1829,7 +1826,7 @@ pub fn SelectEventHandlerCursor(
     document: &crate::ownership::InteractionDocument,
     location: &interaction_hit_test::core::layout::hit_test_location::HitTestLocation,
     result: &ResidentCursorHitResult,
-    selections: &layout_assembly::editing_state::SelectionState,
+    selections: &layout::editing::SelectionState,
     queries: Rc<dyn super::resident_editing_positions::ResidentEditingPositionQueries>,
     host_metrics: ResidentCursorHostMetrics,
     preferred_color_scheme: source_cursor::ColorScheme,
@@ -1908,7 +1905,7 @@ pub fn SelectEventHandlerCursor(
 pub fn QueryPreparedResidentScrollContainer(
     interaction: &super::interaction::Interaction<'_>,
     document: &crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     query: PreparedResidentCursorQuery<'_>,
 ) -> Result<Option<foundation::CompositorElementId>, ResidentCursorError> {
     let layout = query.layout;
@@ -1938,7 +1935,7 @@ pub fn QueryPreparedResidentScrollContainer(
 pub fn QueryPreparedResidentBlockBounds(
     interaction: &super::interaction::Interaction<'_>,
     document: &crate::ownership::InteractionDocument,
-    point: layout_assembly::internal::layout_input::Offset,
+    point: layout::input::Offset,
     query: PreparedResidentCursorQuery<'_>,
 ) -> Result<gfx::Rect, ResidentCursorError> {
     let layout = query.layout;
