@@ -125,7 +125,7 @@ unsafe extern "Rust" {
 #[repr(C)]
 #[derive(Clone)]
 pub struct InlineNode {
-    pub(crate) base: LayoutInputNode,
+    pub base: LayoutInputNode,
 }
 
 // cpp: layoutng/internal/inline_node.h:205-211

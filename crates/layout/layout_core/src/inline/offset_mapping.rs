@@ -36,11 +36,11 @@ mod translated {
     #[derive(Clone)]
     pub struct OffsetMappingUnit {
         pub(crate) type_: OffsetMappingUnitType,
-        pub(crate) layout_object_: Member<LayoutObject>,
-        pub(crate) dom_start_: u32,
-        pub(crate) dom_end_: u32,
-        pub(crate) text_content_start_: u32,
-        pub(crate) text_content_end_: u32,
+        pub layout_object_: Member<LayoutObject>,
+        pub dom_start_: u32,
+        pub dom_end_: u32,
+        pub text_content_start_: u32,
+        pub text_content_end_: u32,
     }
 
     impl OffsetMappingUnit {
@@ -242,7 +242,7 @@ mod translated {
     pub struct OffsetMapping {
         pub(crate) units_: UnitVector,
         pub(crate) ranges_: RangeMap,
-        pub(crate) text_: String,
+        pub text_: String,
     }
 
     // These declared position APIs have no C++ definitions in this checkout.

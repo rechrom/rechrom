@@ -868,7 +868,7 @@ impl LayoutResult {
 
     // cpp: layoutng_fragment_tree/layout_result.h:764
     // cpp: layoutng_fragment_tree/layout_result.cc:281-287
-    pub(crate) fn EnsureRareData(&self) -> &mut LayoutResultRareData {
+    pub fn EnsureRareData(&self) -> &mut LayoutResultRareData {
         let member = unsafe { &mut *self.rare_data_.get() };
         if member.Get().is_null() {
             *member = Member::from_ptr(MakeGarbageCollected(LayoutResultRareDataCell(

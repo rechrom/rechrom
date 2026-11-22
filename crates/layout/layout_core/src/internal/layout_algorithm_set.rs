@@ -1,5 +1,7 @@
 use font_engine::Font;
-use foundation::{AtomicString, LayoutUnit, Length, PhysicalRect, PhysicalSize, WritingMode};
+use foundation::{
+    AtomicString, HeapVector, LayoutUnit, Length, Member, PhysicalRect, PhysicalSize, WritingMode,
+};
 use crate::block_break_token::BlockBreakToken;
 use crate::box_fragment_builder::BoxFragmentBuilder;
 use crate::break_token::BreakToken;
@@ -118,6 +120,12 @@ pub struct InlineLayoutSupport {
     pub measure: Option<
         fn(&InlineNode, WritingMode, &ConstraintSpace, &MinMaxSizesFloatInput) -> MinMaxSizesResult,
     >,
+    // cpp: layoutng_inline/inline_child_layout_context.h:64-66
+    // `InlineChildLayoutContext::ParallelFlowBreakTokens()`. The block
+    // algorithm reads it through the base forward declaration of the
+    // inline-owned context; `layout_algo_inline` is its only definition.
+    pub parallel_flow_break_tokens:
+        Option<fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>>,
 }
 
 // cpp: layoutng/internal/layout_algorithm_set.h:87-99
@@ -418,7 +426,8 @@ impl LayoutAlgorithmSet {
                 || self.inline_support.layout_block_child.is_some()
                 || self.inline_support.reuse_fragments.is_some()
                 || self.inline_support.layout.is_some()
-                || self.inline_support.measure.is_some(),
+                || self.inline_support.measure.is_some()
+                || self.inline_support.parallel_flow_break_tokens.is_some(),
         );
         validate_support_performance_owner(
             "table_support",

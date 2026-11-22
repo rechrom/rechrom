@@ -65,7 +65,7 @@ use crate::physical_line_box_fragment::PhysicalLineBoxFragment;
 // cpp: layoutng_fragment_tree/box_fragment_builder.h:812-908
 #[repr(C)]
 pub struct BoxFragmentBuilder {
-    pub(crate) base_: FragmentBuilder,
+    pub base_: FragmentBuilder,
     pub(crate) initial_fragment_geometry_: *const FragmentGeometry,
     pub(crate) border_padding_: BoxStrut,
     pub(crate) border_scrollbar_padding_: BoxStrut,
@@ -85,7 +85,7 @@ pub struct BoxFragmentBuilder {
     pub(crate) should_prevent_break_before_block_end_decorations_: bool,
     pub(crate) did_break_self_: bool,
     pub(crate) has_inflow_child_break_inside_: bool,
-    pub(crate) has_forced_break_: bool,
+    pub has_forced_break_: bool,
     pub(crate) has_seen_all_children_: bool,
     pub(crate) has_subsequent_children_: bool,
     pub(crate) has_column_spanner_: bool,
@@ -120,7 +120,7 @@ pub struct BoxFragmentBuilder {
     pub(crate) table_cell_column_index_: Option<u32>,
     pub(crate) table_section_start_row_index_: u32,
     pub(crate) table_section_row_offsets_: Vec<LayoutUnit>,
-    pub(crate) column_spanner_path_: *const ColumnSpannerPath,
+    pub column_spanner_path_: *const ColumnSpannerPath,
     pub(crate) break_token_data_: *mut BreakTokenAlgorithmData,
     pub(crate) grid_layout_data_: *const GridLayoutData,
     pub(crate) flex_layout_data_: *const DevtoolsFlexInfo,

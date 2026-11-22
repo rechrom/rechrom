@@ -383,6 +383,17 @@ pub mod layout_fragment_object_index;
 #[path = "fragment/paint_layer_scrollable_area_sticky_offsets.rs"]
 pub mod layout_fragment_sticky_offsets;
 
+// LayoutTextFragment (Chromium core/layout/layout_text_fragment.h) and
+// OffsetMapping (core/layout/inline/offset_mapping.h) are LayoutObject and
+// DOM-position classes that base, editing and inline all name. They sit under
+// `inline/` with the other LayoutText/LayoutInline classes; base declares them
+// so `layout_algo_inline` only depends on base, never the reverse.
+#[cfg(feature = "translation_in_progress")]
+#[path = "inline/layout_text_fragment.rs"]
+pub mod layout_text_fragment;
+#[path = "inline/offset_mapping.rs"]
+pub mod offset_mapping;
+
 pub mod layout_registry;
 pub mod layout_boundary_support;
 pub mod layout_engine;

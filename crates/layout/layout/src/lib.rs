@@ -184,7 +184,7 @@ pub mod testing {
     };
     pub use layout_assembly::internal::layout_replaced::{LayoutInputReplaced, LayoutReplaced};
     pub use layout_assembly::internal::layout_view::LayoutView;
-    pub use layout_assembly::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
+    pub use layout_algo_inline::text_overflow_layout_service::LayoutBlockFlowShouldTruncateOverflowingTextFromInline;
     pub use layout_assembly::internal::css_zoom::ZoomedStyle;
     pub use layout_assembly::style_projection::{ProjectComputedStyle, ProjectListMarkerImage};
 }
@@ -225,7 +225,7 @@ pub struct LayoutPlatformServices {
 /// 10. `layout_algo_svg::registration::Register`
 /// 11. the embedding's platform services (`svg_shape_path`, `shape_coverage`)
 /// 12. only with feature `inline_layout`: `layout_algo_inline`'s
-///     `registration::Register` (compiled in `layout_assembly`), then
+///     `registration::Register` (the `layout_algo_inline` crate), then
 ///     `layout_algo_block::block_inline_layout::RegisterInlineSupport`, then
 ///     `layout_algo_out_of_flow::registration::Register`
 /// 13. the base boundary, `layout_core`'s
@@ -246,7 +246,7 @@ pub fn CreateLayoutRegistry(services: LayoutPlatformServices) -> LayoutRegistry 
     registry.shape_coverage = services.shape_coverage;
     #[cfg(feature = "inline_layout")]
     {
-        layout_assembly::layout_algo_inline_package::registration::Register(&mut registry);
+        layout_algo_inline::registration::Register(&mut registry);
         layout_algo_block::block_inline_layout::RegisterInlineSupport(&mut registry);
         layout_algo_out_of_flow::registration::Register(&mut registry);
     }

@@ -1,100 +1,73 @@
-#[cfg(feature = "translation_in_progress")]
+// The inline layout algorithm package (Chromium core/layout/inline/; snapshot
+// //src/layoutng_inline). It compiles as its own crate above base
+// (`layout_assembly`) and reaches base only through its public API. Base
+// reaches it back through the slots `registration::Register` fills and the
+// `extern "Rust"` declarations of the LayoutText / LayoutInline / InlineNode /
+// InlineItem members whose Chromium bodies live in this package's .cc files
+// (see crates/layout/PACKAGE_MAP.md, R5 status).
+#![allow(non_snake_case)]
+
+// The translated sources name base items through Chromium's `layoutng`
+// package path, like the block package does.
+extern crate layout_assembly as layout_core;
+
+// Fragment-tree modules that are still compiled with base. The inline sources
+// keep their `crate::<module>` paths for them.
+use layout_assembly::{
+    block_break_token, box_fragment_builder, break_token, fragment_builder, fragment_item,
+    fragment_items, fragment_items_builder, inline_break_token, inline_cursor, inline_items_data,
+    layout_result, logical_box_fragment, logical_fragment, logical_line_container,
+    logical_line_item, physical_box_fragment, physical_fragment, physical_line_box_fragment,
+};
+// Base LayoutObject / DOM-position classes that the inline sources name
+// beside their own modules.
+pub use layout_assembly::{layout_text_fragment, offset_mapping};
+
 pub mod registration;
-#[cfg(feature = "translation_in_progress")]
 pub mod empty_offset_mapping_builder;
-#[cfg(feature = "translation_in_progress")]
 pub mod fragment_items_builder_inline;
-#[cfg(feature = "translation_in_progress")]
 pub mod hyphen_result;
-#[cfg(feature = "translation_in_progress")]
 pub mod initial_letter_utils;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_box_state;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_child_layout_context;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_item;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_item_result;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_item_result_ruby_column;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_item_segment;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_items_builder;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_items_data_algorithm;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_layout_algorithm;
-#[cfg(feature = "translation_in_progress")]
 pub mod inline_node;
-#[cfg(feature = "translation_in_progress")]
 pub mod justification_utils;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_br;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_counter;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_inline_core;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_inline_data;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_ruby_as_block;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_text;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_text_combine;
-#[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_core/src/inline/layout_text_fragment.rs"]
-pub mod layout_text_fragment;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_word_break;
-#[cfg(feature = "translation_in_progress")]
 pub mod leading_floats;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_box_fragment_builder;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_break_candidate;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_break_point;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_breaker;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_info;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_info_list;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_truncator;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_utils;
-#[cfg(feature = "translation_in_progress")]
 pub mod line_widths;
-#[cfg(feature = "translation_in_progress")]
 pub mod logical_line_builder;
-#[path = "../../layout_core/src/inline/offset_mapping.rs"]
-pub mod offset_mapping;
-#[cfg(feature = "translation_in_progress")]
 pub mod offset_mapping_builder;
-#[cfg(feature = "translation_in_progress")]
 pub mod paragraph_line_breaker;
-#[cfg(feature = "translation_in_progress")]
 pub mod physical_line_box_fragment_builder;
-#[cfg(feature = "translation_in_progress")]
 pub mod ruby_utils;
-#[cfg(feature = "translation_in_progress")]
 pub mod score_line_break_context;
-#[cfg(feature = "translation_in_progress")]
 pub mod score_line_breaker;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_auto_space;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_combine_style_service;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_combine_tree;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_diff_range;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_fit_utils;
-#[cfg(feature = "translation_in_progress")]
 pub mod text_overflow_layout_service;
 pub mod transformed_string;

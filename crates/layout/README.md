@@ -970,7 +970,7 @@ old `layoutng_*` source-package names at the repository boundary.
   algorithm pass. Each concrete resolver retains its functional owner.
 
 `layout_assembly` remains the temporary composition boundary for translated
-LayoutNG, fragment, and inline sources that still have reciprocal C++ type
+LayoutNG and fragment-tree sources that still have reciprocal C++ type
 dependencies. A source directory or `#[path]` module records functional source
 ownership; only a Cargo manifest compiled as a dependency establishes an
 independent crate boundary. Documentation and ownership tests must preserve
@@ -983,6 +983,16 @@ so there is no fragment crate, dependency key or alias; the
 `layout_fragment.` trace prefix and the `layout_fragment_*` sampling module
 names are kept for profile continuity.
 
+`layout_algo_inline` is a real crate above base, like the other algorithm
+packages: it depends on `layout_assembly` and registers through
+`registration::Register`. Base reaches it through `InlineLayoutSupport` and
+`LayoutObjectFactorySet` slots, and through the `extern "Rust"` declarations
+of LayoutText/LayoutInline/InlineNode/InlineItem members whose Chromium
+bodies live in the inline package's `.cc` files; base never names the crate.
+The facade links it unconditionally and registers it under `inline_layout`.
+Base still compiles the editing query files under `layout_algo_inline/src/`
+through `#[path]` (`PACKAGE_MAP.md` §7, R5 status).
+
 The public Layout/Paint writing mode is explicitly named
 `LayoutPaintWritingMode` at the foundation boundary. It intentionally differs
 from Chromium's five-value source `WritingMode`: `sideways-rl` collapses to its
@@ -991,10 +1001,8 @@ text rotation and selection-bound edge orientation differ from `vertical-lr`.
 The source-to-artifact adapter is the only place where that equivalence is
 applied.
 
-`layout_algo_inline_assembly` is a compile-only composition profile used to
-verify the same reciprocal inline source set. It is not a performance owner;
-runtime work from those sources must retain the `layout_algo_inline.*` prefix
-and `layout_algo_inline_package::*` sampling path.
+Runtime work from the inline sources keeps the `layout_algo_inline.*` trace
+prefix, and its sampling frames are `layout_algo_inline::*` crate symbols.
 Chromium hyphenation, text-transform, and phrase-break provider adapters are
 physically owned by `layout_core/src/inline/text_input_environment.rs`;
 their validation calls retain sampling frames without per-word trace events.
@@ -1136,9 +1144,7 @@ TLS scope, and current-resolver contract are colocated in
   `IndexObjects` inclusive time and sampling stacks agree on the fragment
   owner.
 
-The fragment tree and the inline implementation have reciprocal
-concrete-type dependencies with LayoutNG and are composed by
-`layout_assembly`. Those sources remain nested under
-`layout_fragment_package` and `layout_algo_inline_package`, so demangled
-sampling symbols retain their owner while the remaining concrete declarations
-are split behind assembly adapters.
+The fragment tree has reciprocal concrete-type dependencies with LayoutNG
+and compiles as base modules composed by `layout_assembly`, nested under
+`layout_fragment_package` so demangled sampling symbols retain their owner.
+The inline implementation is the `layout_algo_inline` crate.

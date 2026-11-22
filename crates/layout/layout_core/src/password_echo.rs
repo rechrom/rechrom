@@ -38,26 +38,26 @@ impl Default for PasswordEchoLayoutSettings {
 }
 // Source: layout_text.cc:105-147. Moved from the weak LayoutText-keyed map
 // into its canonical native LayoutText allocation; no parallel text is held.
-pub(crate) struct SecureTextTimer {
-    pub(crate) last_typed_character_offset: Option<u32>,
-    pub(crate) token: Option<PasswordEchoTimerToken>,
-    pub(crate) handle: Option<Box<dyn PasswordEchoTimerHandle>>,
+pub struct SecureTextTimer {
+    pub last_typed_character_offset: Option<u32>,
+    pub token: Option<PasswordEchoTimerToken>,
+    pub handle: Option<Box<dyn PasswordEchoTimerHandle>>,
 }
 impl SecureTextTimer {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             last_typed_character_offset: None,
             token: None,
             handle: None,
         }
     }
-    pub(crate) fn Stop(&mut self) {
+    pub fn Stop(&mut self) {
         self.token = None;
         if let Some(handle) = self.handle.take() {
             handle.Stop();
         }
     }
-    pub(crate) fn Invalidate(&mut self) {
+    pub fn Invalidate(&mut self) {
         self.last_typed_character_offset = None;
     }
 }

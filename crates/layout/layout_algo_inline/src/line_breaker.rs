@@ -2060,7 +2060,7 @@ impl LineBreaker {
             debug_assert!(!item_result.item.Get().is_null());
             let item = unsafe { &*item_result.item.Get() };
             if item_result.IsRubyColumn() {
-                let ruby_column = unsafe { &mut *item_result.ruby_column.Get() };
+                let ruby_column = unsafe { &mut *item_result.ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
                 if self.ComputeTrailingCollapsibleSpaceHelper(&mut ruby_column.base_line) {
                     if let Some(space) = self.trailing_collapsible_space_.as_mut() {
                         if space.item_result_index != kNotFound {
@@ -2200,7 +2200,7 @@ impl LineBreaker {
         for &(results, index) in &space.ancestor_ruby_columns {
             let ruby_column = unsafe { &mut (&mut *results)[index as usize] };
             assert!(ruby_column.IsRubyColumn());
-            let ruby = unsafe { &mut *ruby_column.ruby_column.Get() };
+            let ruby = unsafe { &mut *ruby_column.ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
             let base_line = &mut ruby.base_line;
             let mut new_width = base_line.ComputeWidth();
             base_line.SetWidth(base_line.AvailableWidth(), new_width);
@@ -2232,7 +2232,7 @@ impl LineBreaker {
         for &(results, index) in &space.ancestor_ruby_columns {
             let ruby_column = unsafe { &mut (&mut *results)[index as usize] };
             assert!(ruby_column.IsRubyColumn());
-            let ruby = unsafe { &mut *ruby_column.ruby_column.Get() };
+            let ruby = unsafe { &mut *ruby_column.ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
             let mut new_width = ruby.base_line.Width() - width_diff;
             for line in &ruby.annotation_line_list {
                 new_width = new_width.max(line.Width());
@@ -3793,13 +3793,13 @@ impl LineBreaker {
                 && width_to_rewind < LayoutUnit::default()
                 && unsafe { &*item_result }.may_break_inside
             {
-                let ruby_column = unsafe { &*(*item_result).ruby_column.Get() };
+                let ruby_column = unsafe { &*(*item_result).ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
                 let base_line = &ruby_column.base_line as *const LineInfo;
                 let base_width = unsafe { &*base_line }.Width();
                 self.Rewind(index, line_info);
                 self.HandleRuby(line_info, base_width);
                 let new_ruby_column =
-                    unsafe { &*line_info.Results().last().unwrap().ruby_column.Get() };
+                    unsafe { &*line_info.Results().last().unwrap().ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
                 let new_base_line = &new_ruby_column.base_line;
                 let new_width = new_base_line.Width();
                 if new_width > LayoutUnit::default() && new_width != unsafe { &*base_line }.Width()
@@ -4832,7 +4832,7 @@ impl LineBreaker {
         if !self.auto_wrap_ {
             return false;
         }
-        let base_line = &unsafe { &*column_result.ruby_column.Get() }.base_line;
+        let base_line = &unsafe { &*column_result.ruby_column.Get().cast::<InlineItemResultRubyColumn>() }.base_line;
         if !base_line.GetBreakToken().is_null() {
             return true;
         }
@@ -5001,7 +5001,7 @@ impl LineBreaker {
             self.current_ = *line_info.Start();
             let item_results = line_info.Results();
             if !item_results.empty() && item_results[0].IsRubyColumn() {
-                let ruby_column = unsafe { &*item_results[0].ruby_column.Get() };
+                let ruby_column = unsafe { &*item_results[0].ruby_column.Get().cast::<InlineItemResultRubyColumn>() };
                 self.ruby_break_token_ = ruby_column.start_ruby_break_token.Get();
             }
             self.trailing_whitespace_ = WhitespaceState::kLeading;

@@ -35,7 +35,7 @@ pub mod fragment {
         FragmentKind, PrePaintSourceObject, PreviousBoxGeometry, ResidentBoxGeometry,
     };
     pub use layout_assembly::inline_cursor::InlineCursor;
-    pub use layout_assembly::layout_text_combine::DispatchIsLayoutTextCombine;
+    pub use layout_algo_inline::layout_text_combine::DispatchIsLayoutTextCombine;
 }
 
 pub mod paint {

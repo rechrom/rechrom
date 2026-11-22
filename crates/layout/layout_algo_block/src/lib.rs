@@ -1,9 +1,8 @@
 #![allow(non_snake_case)]
 
 // The block package sees both original C++ package namespaces through the
-// one compilation unit that resolves their mutually recursive types.
-#[cfg(feature = "inline_extension")]
-extern crate layout_assembly as layout_algo_inline;
+// one compilation unit that resolves their mutually recursive types. With
+// `inline_extension`, `layout_algo_inline` is the real inline crate.
 extern crate layout_assembly as layout_core;
 
 pub mod registration;

@@ -94,7 +94,7 @@ impl Traceable for InlineBreakTokenRareData {
 // cpp: layoutng_fragment_tree/inline_break_token.h:157-162
 #[repr(C)]
 pub struct InlineBreakToken {
-    pub(crate) base_: BreakToken,
+    pub base_: BreakToken,
     style_: Member<ComputedStyle>,
     start_: InlineItemTextIndex,
     rare_data_: [InlineBreakTokenRareData; 0],

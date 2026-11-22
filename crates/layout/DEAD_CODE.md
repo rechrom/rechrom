@@ -79,7 +79,7 @@ Scope: every package under `crates/layout/`, including `paint_input_types` and
    `InlineNode::SetTextWithOffset` (Chromium's incremental text-edit fast path,
    `layout_text.cc` → `inline_node.cc`) would abort, even though it is fully
    translated.
-2. **`layout_algo_inline_assembly` is a second, unused assembly crate.** It
+2. **`layout_algo_inline_assembly` is a second, unused assembly crate.** (Deleted in R5.) It
    `include!`s `layout_core`, `layout_fragment` and `layout_algo_inline` a
    second time, and nothing depends on it. Only `cargo build --workspace`
    builds it; the app build does not.
@@ -550,7 +550,7 @@ The remaining 4 "unused fn" warnings are real bodies:
 | `StyleSVGResource` (`layout_style/src/style/style_svg_resource.rs`) | 69 lines | Constructor, `Drop`, `AddClient` and `RemoveClient` are all stubs; it is never constructed, but the type is referenced by live Style code | Unclear (c) |
 | `UnresolvedRelativeColor`, `UnresolvedContrastColor`, `UnresolvedAlphaColor` (`layout_style/src/css/style_color.rs:299-430`) | ~130 lines | Constructor, `Resolve` and `ToCSSValue` are all stubs; never constructed | Gap (b) |
 | LayoutObject-side paint / hit-test entry points spread over `layout_core/src/fragment/layout_object_fragment_queries.rs` (194), `layout_view_fragment_queries.rs` (96), `layout_object_paint_dispatch.rs` (150), `layout_core/src/invalidation/layout_object_layer_mutation.rs` (47), `layout_object_image_observers.rs` (132) | mixed files | About 30 stub-calling wrappers; these files also hold live helpers | Delete function by function |
-| `layout_algo_inline_assembly` package | 27-line `lib.rs` + manifest | No dependents; it re-`include!`s `layout_core`, `layout_fragment` and `layout_algo_inline` | Delete the package (workspace member + `Cargo.lock` entry) |
+| `layout_algo_inline_assembly` package | 27-line `lib.rs` + manifest | No dependents; it re-`include!`s `layout_core`, `layout_fragment` and `layout_algo_inline` | Deleted in R5 (the `Cargo.lock` entry drops on the next build) |
 | Generic `MatchedPropertiesCache::Find` (Style, outside scope) | ~95 lines | Never instantiated; production uses `FindForNonHighlightWithStylesAndData` | Leftover for Style to decide |
 
 ## Uncompiled and stray files
@@ -562,9 +562,10 @@ The remaining 4 "unused fn" warnings are real bodies:
 - **Shell packages that compile nothing used by the app:**
   - `layout_algo_fragmentation/src/lib.rs` and `layout_algo_sizing/src/lib.rs`:
     doc comment only.
-  - `layout_algo_inline/src/lib.rs`: all modules are gated on a package feature
+  - `layout_algo_inline/src/lib.rs` (before R5, when it became a real crate):
+    all modules were gated on a package feature
     that nothing enables.
-  - `layout_algo_inline_assembly/src/lib.rs`: no dependents.
+  - `layout_algo_inline_assembly/src/lib.rs`: no dependents (deleted in R5).
 
   These source directories are still the owning location of files that
   `layout_assembly` compiles through `#[path]`, so only the package shells (and

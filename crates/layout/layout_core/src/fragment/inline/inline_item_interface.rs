@@ -87,19 +87,19 @@ pub type InlineItems = HeapVector<Member<InlineItem>>;
 // named state and branching order; this record is not a C++ ABI boundary.
 // cpp: layoutng/internal/inline_item.h:27-326
 pub struct InlineItem {
-    pub(crate) start_offset_: u32,
-    pub(crate) end_offset_: u32,
-    pub(crate) shape_result_: Member<ShapeResult>,
-    pub(crate) layout_object_: Member<LayoutObject>,
-    pub(crate) index_: u32,
+    pub start_offset_: u32,
+    pub end_offset_: u32,
+    pub shape_result_: Member<ShapeResult>,
+    pub layout_object_: Member<LayoutObject>,
+    pub index_: u32,
     pub(crate) type_: InlineItemType,
     pub(crate) text_type_: u8,
     pub(crate) style_variant_: u8,
     pub(crate) end_collapse_type_: CollapseType,
     pub(crate) bidi_level_: u8,
-    pub(crate) segment_data_: u32,
-    pub(crate) is_empty_item_: bool,
-    pub(crate) is_block_level_: bool,
+    pub segment_data_: u32,
+    pub is_empty_item_: bool,
+    pub is_block_level_: bool,
     pub(crate) is_end_collapsible_newline_: bool,
     pub(crate) is_generated_for_line_break_: bool,
     pub(crate) is_unsafe_to_reuse_shape_result_: bool,
@@ -117,7 +117,7 @@ impl InlineItem {
     // This source-owned initializer keeps private fields inside the shared
     // LayoutNG/inline assembly instead of duplicating InlineItem's type.
     // cpp: layoutng_inline/inline_item.cc:71-83
-    pub(crate) fn new_base_for_inline(
+    pub fn new_base_for_inline(
         type_: InlineItemType,
         start: u32,
         end: u32,
@@ -144,7 +144,7 @@ impl InlineItem {
     }
 
     // cpp: layoutng_inline/inline_item.cc:85-108
-    pub(crate) fn clone_adjusted_base_for_inline(
+    pub fn clone_adjusted_base_for_inline(
         other: &Self,
         start: u32,
         end: u32,
@@ -491,7 +491,7 @@ impl InlineItem {
     pub fn Trace(&self, visitor: &mut Visitor) {
         unsafe { InlineItemTrace(self, visitor) }
     }
-    pub(crate) fn ComputeBoxProperties(&mut self) {
+    pub fn ComputeBoxProperties(&mut self) {
         unsafe { InlineItemComputeBoxProperties(self) }
     }
 

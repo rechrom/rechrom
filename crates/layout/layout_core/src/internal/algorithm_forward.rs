@@ -12,29 +12,37 @@ pub enum GridLanesSubgriddedItemsRequest {}
 pub enum InlineChildLayoutContext {}
 
 // cpp: layoutng_inline/inline_child_layout_context.h:64-66
-// The context is owned by the excluded inline extension. A non-null context
-// requires that extension's implementation at link time.
+// The context is owned by `layout_algo_inline`, which installs the accessor
+// into `InlineLayoutSupport::parallel_flow_break_tokens`. A non-null context
+// exists only while an inline formatting context is laid out, so the slot is
+// read from the active pass.
 impl InlineChildLayoutContext {
     pub fn ParallelFlowBreakTokens(
         &self,
     ) -> &foundation::HeapVector<foundation::Member<crate::break_token::BreakToken>> {
-        unsafe { InlineChildLayoutContextParallelFlowBreakTokens(self) }
+        let algorithms = super::layout_pass_scope::LayoutPassScope::Algorithms();
+        let callback = if algorithms.is_null() {
+            None
+        } else {
+            unsafe { &*algorithms }.inline_support.parallel_flow_break_tokens
+        };
+        let callback = callback.unwrap_or_else(|| {
+            std::panic::panic_any(foundation::UnsupportedLayout::new(
+                "inline layout module is not installed",
+            ))
+        });
+        callback(self)
     }
 }
 
-unsafe extern "Rust" {
-    fn InlineChildLayoutContextParallelFlowBreakTokens(
-        context: &InlineChildLayoutContext,
-    ) -> &foundation::HeapVector<foundation::Member<crate::break_token::BreakToken>>;
-}
-pub use layout_algo_inline::offset_mapping::OffsetMapping;
+pub use crate::offset_mapping::OffsetMapping;
 pub enum TextDiffRange {}
 
 // cpp: layoutng/internal/inline_item_result.h:31
-#[cfg(not(feature = "translation_in_progress"))]
+// Forward declaration of the inline-owned column (`layout_algo_inline`'s
+// `inline_item_result_ruby_column`). Inline casts `InlineItemResult::ruby_column`
+// to its concrete type; base only tests the member for null.
 pub enum InlineItemResultRubyColumn {}
-#[cfg(feature = "translation_in_progress")]
-pub use crate::inline_item_result_ruby_column::InlineItemResultRubyColumn;
 
 // cpp: layoutng/internal/layout_box.h:50
 pub enum CustomLayoutChild {}

@@ -27,6 +27,7 @@ use layout_core::internal::text_combine_style_service::{
 use layout_core::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
+use crate::inline_child_layout_context::InlineChildLayoutContextParallelFlowBreakTokens;
 use crate::layout_br::LayoutBR;
 use crate::layout_ruby_as_block::LayoutRubyAsBlock;
 use crate::layout_text::layout_text_is_selected;
@@ -181,4 +182,6 @@ pub fn Register(registry: &mut LayoutRegistry) {
     });
     registry.algorithms.inline_support.layout = Some(LayoutInlineAlgorithm);
     registry.algorithms.inline_support.measure = Some(MeasureInline);
+    registry.algorithms.inline_support.parallel_flow_break_tokens =
+        Some(InlineChildLayoutContextParallelFlowBreakTokens);
 }

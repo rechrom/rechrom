@@ -70,7 +70,7 @@ use crate::physical_fragment_rare_data::{FieldId, PhysicalFragmentRareData, Rare
 // cpp: layoutng_fragment_tree/physical_box_fragment.cc:52-61
 #[repr(C)]
 pub struct PhysicalBoxFragment {
-    pub(crate) base_: UnsafeCell<PhysicalFragment>,
+    pub base_: UnsafeCell<PhysicalFragment>,
     bit_field_: AtomicU32,
     first_baseline_: LayoutUnit,
     last_baseline_: LayoutUnit,
