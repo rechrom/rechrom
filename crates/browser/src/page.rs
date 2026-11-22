@@ -4000,8 +4000,8 @@ impl PageState {
     pub(super) fn PublishPreparedDocumentInputs(&self) {
         if self.document_font_inputs.pending.replace(false) {
             let mut constraints = self.constraints.borrow_mut();
-            constraints.images.clear();
-            constraints.canvases.clear();
+            constraints.images = Default::default();
+            constraints.canvases = Default::default();
             constraints.fullscreen_element_blocks_layout_view_scroll = false;
             constraints.font_engine = Some(self.document_font_inputs.engine.clone());
             constraints.font_queries = self.document_font_inputs.queries.clone();
@@ -6372,7 +6372,7 @@ impl PageState {
     fn ApplyResourceMutation(&self, m: ResourceMutation) {
         match m {
             ResourceMutation::PlatformImageResourceReady(image) => {
-                self.constraints.borrow_mut().images.push(image);
+                self.constraints.borrow_mut().PushImage(image);
                 self.dirty.set(true);
             }
             ResourceMutation::ImageResourceReady(m) => {
@@ -6463,13 +6463,13 @@ impl PageState {
                     .insert(m.node_id, m.resource);
                 let mut constraints = self.constraints.borrow_mut();
                 if let Some(existing) = constraints
-                    .images
+                    .ImagesMut()
                     .iter_mut()
                     .find(|image| image.id == m.frame.id)
                 {
                     *existing = m.frame;
                 } else {
-                    constraints.images.push(m.frame);
+                    constraints.PushImage(m.frame);
                 }
                 drop(constraints);
                 if geometry_changed {
@@ -6482,7 +6482,7 @@ impl PageState {
             ResourceMutation::DocumentImageFrameChanged(m) => {
                 let mut constraints = self.constraints.borrow_mut();
                 let image = constraints
-                    .images
+                    .ImagesMut()
                     .iter_mut()
                     .find(|image| image.id == m.frame.resource_id)
                     .unwrap_or_else(|| {
@@ -6528,7 +6528,7 @@ impl PageState {
             ResourceMutation::DocumentImageIntrinsicSizeChanged(m) => {
                 let mut constraints = self.constraints.borrow_mut();
                 let image = constraints
-                    .images
+                    .ImagesMut()
                     .iter_mut()
                     .find(|image| image.id == m.resource_id)
                     .unwrap_or_else(|| {
@@ -9539,7 +9539,7 @@ impl Page {
             .borrow()
             .GetDocument()
             .SnapshotCanvasPaintResources();
-        self.state.constraints.borrow_mut().canvases = canvases;
+        self.state.constraints.borrow_mut().canvases = canvases.into();
         let profile = std::env::var_os("BROWSER_PROFILE_INPUT").map(|_| std::time::Instant::now());
         // Resource completions are separate Page tasks. An offset-only input
         // must not synchronously decode images or dispatch unrelated load

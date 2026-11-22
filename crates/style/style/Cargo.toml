@@ -16,6 +16,7 @@ style_commit = { path = "../style_commit" }
 browser_tracing = { path = "../../tracing" }
 foundation = { path = "../../foundation" }
 layoutng_style = { path = "../../layoutng/layoutng_style" }
+paint_input_types = { path = "../../layoutng/paint_input_types" }
 font_engine = { path = "../../font_engine" }
 
 dom = { path = "../../dom" }

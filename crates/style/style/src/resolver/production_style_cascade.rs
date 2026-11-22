@@ -4255,12 +4255,10 @@ impl StyleCascadeBackend for ProductionStyleCascadeBackend<'_> {
         width: EScrollbarWidth,
         writing_mode: WritingMode,
     ) -> gfx::Size {
-        use layoutng::internal::{
-            layout_input_types::ScrollbarThemeMetrics,
-            layout_scrollable_area::{
-                ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
-            },
+        use layoutng::internal::layout_scrollable_area::{
+            ComputeScrollbarWidthsForViewportUnitsFromInputs, StyleBasedScrollbarData,
         };
+        use paint_input_types::layout_input_types::ScrollbarThemeMetrics;
 
         let theme = ScrollbarThemeMetrics {
             auto_thickness: self.media.scrollbar_theme_auto_thickness,

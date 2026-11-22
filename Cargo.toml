@@ -12,6 +12,7 @@ members = [
     "crates/font_engine",
     "crates/layoutng/layoutng_geometry",
     "crates/layoutng/layoutng_style",
+    "crates/layoutng/paint_input_types",
     "crates/layoutng/layout_invalidation",
     "crates/layoutng/layout_reuse",
     "crates/layoutng/layout_fragment",

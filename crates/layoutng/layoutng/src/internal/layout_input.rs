@@ -133,12 +133,7 @@ pub enum NodeKind {
 }
 
 // cpp: layoutng/internal/layout_input.h:54-57
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TextDirection {
-    kLtr,
-    kRtl,
-}
+pub use paint_input_types::layout_input::TextDirection;
 pub use foundation::LayoutPaintWritingMode as WritingMode;
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1305,168 +1300,13 @@ impl FrameDimension {
     }
 }
 
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ObjectFit {
-    kFill,
-    kContain,
-    kCover,
-    kNone,
-    kScaleDown,
-}
-
-// cpp: layoutng/internal/layout_input.h:655-677
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PaintShadow {
-    pub offset: Offset,
-    pub blur_radius: f64,
-    pub spread: f64,
-    pub color: Color,
-    pub inset: bool,
-}
-impl Default for PaintShadow {
-    fn default() -> Self {
-        Self {
-            offset: Offset::default(),
-            blur_radius: 0.0,
-            spread: 0.0,
-            color: Color::default(),
-            inset: false,
-        }
-    }
-}
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TextDecorationStyle {
-    kSolid,
-    kDouble,
-    kDotted,
-    kDashed,
-    kWavy,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct TextDecorationPaint {
-    pub underline: bool,
-    pub overline: bool,
-    pub line_through: bool,
-    pub spelling_error: bool,
-    pub grammar_error: bool,
-    pub color: Option<Color>,
-    pub style: TextDecorationStyle,
-    pub thickness: foundation::TextDecorationThickness,
-    pub underline_offset: f64,
-    pub underline_offset_auto: bool,
-    pub skip_ink: foundation::ETextDecorationSkipInk,
-}
-impl Default for TextDecorationPaint {
-    fn default() -> Self {
-        Self {
-            underline: false,
-            overline: false,
-            line_through: false,
-            spelling_error: false,
-            grammar_error: false,
-            color: None,
-            style: TextDecorationStyle::kSolid,
-            thickness: foundation::TextDecorationThickness::default(),
-            underline_offset: 0.0,
-            underline_offset_auto: true,
-            skip_ink: foundation::ETextDecorationSkipInk::kAuto,
-        }
-    }
-}
-
-// cpp: layoutng/internal/layout_input.h:687-702
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PaintPathVerb {
-    kMoveTo,
-    kLineTo,
-    kQuadraticTo,
-    kConicTo,
-    kCubicTo,
-    kClose,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PaintPathCommand {
-    pub verb: PaintPathVerb,
-    pub control1: Offset,
-    pub control2: Offset,
-    pub point: Offset,
-    pub conic_weight: f64,
-}
-impl Default for PaintPathCommand {
-    fn default() -> Self {
-        Self {
-            verb: PaintPathVerb::kMoveTo,
-            control1: Offset::default(),
-            control2: Offset::default(),
-            point: Offset::default(),
-            conic_weight: 1.0,
-        }
-    }
-}
-
-/// One independently filled path in a synthesized clip.  SVG clipPath child
-/// graphics are combined by coverage union, while the clipPath as a whole is
-/// intersected with its ancestor clip chain.  Keeping the fill rule per child
-/// avoids the lossy "concatenate every contour and use one rule" shortcut.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PaintClipPathChild {
-    pub commands: Vec<PaintPathCommand>,
-    pub even_odd: bool,
-}
-
-// cpp: layoutng/internal/layout_input.h:704-718
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SvgShapeGeometry {
-    kPath,
-    kRectangle,
-    kEllipse,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct SvgShapeData {
-    pub geometry: SvgShapeGeometry,
-    pub bounds_offset: Offset,
-    pub bounds_width: f64,
-    pub bounds_height: f64,
-    pub rectangle_radius_x: f64,
-    pub rectangle_radius_y: f64,
-    pub path: Vec<PaintPathCommand>,
-    pub local_transform: Option<TransformMatrix>,
-}
-impl Default for SvgShapeData {
-    fn default() -> Self {
-        Self {
-            geometry: SvgShapeGeometry::kPath,
-            bounds_offset: Offset::default(),
-            bounds_width: 0.0,
-            bounds_height: 0.0,
-            rectangle_radius_x: 0.0,
-            rectangle_radius_y: 0.0,
-            path: Vec::new(),
-            local_transform: None,
-        }
-    }
-}
-
-// cpp: layoutng/internal/layout_input.h:720-732
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SvgViewBoxData {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    pub preserve_none: bool,
-    pub slice: bool,
-    pub align_x: i8,
-    pub align_y: i8,
-    // cpp: SVGViewSpec::Transform / SVGSVGElement::ViewBoxToViewTransform.
-    // This is distinct from the root element's authored CSS/SVG transform and
-    // is concatenated after the viewBox-to-viewport mapping.
-    pub view_transform: Option<TransformMatrix>,
-}
+// cpp: layoutng/internal/layout_input.h:655-732
+// ObjectFit, PaintShadow, text decoration, path, SVG shape and viewBox values
+// are plain paint values owned by `paint_input_types`.
+pub use paint_input_types::layout_input::{
+    ObjectFit, PaintClipPathChild, PaintPathCommand, PaintPathVerb, PaintShadow,
+    SvgShapeData, SvgShapeGeometry, SvgViewBoxData, TextDecorationPaint, TextDecorationStyle,
+};
 
 // cpp: core/svg/svg_viewport_container_element.cc (Chromium
 // 6c1d401fcca5e1b0030563a90c2f2bba168e0c15). Nested SVG viewport geometry is
@@ -1501,7 +1341,7 @@ impl Default for SvgViewportData {
 }
 
 // cpp: layoutng/internal/layout_input.h:734-754
-// The concrete PaintStyleData is defined by paint_input.h in this package.
+// The concrete PaintStyleData is a plain value in paint_input_types.
 // Mutable dereference detaches shared storage, as the C++ accessors do.
 #[derive(Clone)]
 pub struct PaintStyle {
@@ -2450,10 +2290,11 @@ pub struct ConstraintSpace {
     /// Shared immutable font resources. Clones retain the same snapshot;
     /// mutation creates a new catalog generation through copy-on-write.
     pub fonts: font_engine::FontFaceCatalog,
-    pub images: Vec<PaintImage>,
+    /// Shared with each published PaintResources by reference count.
+    pub images: std::sync::Arc<[PaintImage]>,
     /// Immutable front-buffer snapshots supplied by the Canvas package for
     /// this lifecycle. Layout carries identity/geometry; Paint consumes bytes.
-    pub canvases: Vec<canvas::CanvasPaintResource>,
+    pub canvases: std::sync::Arc<[canvas::CanvasPaintResource]>,
 }
 impl Default for ConstraintSpace {
     fn default() -> Self {
@@ -2485,9 +2326,29 @@ impl Default for ConstraintSpace {
             font_engine: None,
             font_queries: None,
             fonts: font_engine::FontFaceCatalog::default(),
-            images: Vec::new(),
-            canvases: Vec::new(),
+            images: Default::default(),
+            canvases: Default::default(),
         }
+    }
+}
+
+#[allow(non_snake_case)]
+impl ConstraintSpace {
+    /// Admit one image into the shared catalog. PaintResources published from
+    /// the previous catalog keep that generation; only this space sees the
+    /// appended entry.
+    pub fn PushImage(&mut self, image: PaintImage) {
+        let mut images = Vec::with_capacity(self.images.len() + 1);
+        images.extend_from_slice(&self.images);
+        images.push(image);
+        self.images = images.into();
+    }
+
+    /// In-place access to catalog entries. A catalog still shared with a
+    /// published PaintResources is detached first (copy-on-write), as the
+    /// previous per-publication copy guaranteed.
+    pub fn ImagesMut(&mut self) -> &mut [PaintImage] {
+        std::sync::Arc::make_mut(&mut self.images)
     }
 }
 
@@ -2514,7 +2375,7 @@ mod shared_image_pixels_tests {
             "admission moves the decoded allocation"
         );
         let mut original = ConstraintSpace::default();
-        original.images.push(image);
+        original.images = Arc::from(vec![image]);
         let clone = original.clone();
         let paint_catalog = original.images.clone();
         assert!(Arc::ptr_eq(

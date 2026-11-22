@@ -96,7 +96,7 @@ fn render(avif: bool, scale: f64, background: &str) -> Vec<u32> {
             .display_items
             .resources
             .iter()
-            .flat_map(|r| &r.images)
+            .flat_map(|r| r.images.iter())
             .collect::<Vec<_>>()
             .is_empty(),
         "decoded image reaches paint resources"

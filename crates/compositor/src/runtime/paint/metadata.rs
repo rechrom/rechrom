@@ -194,7 +194,7 @@ mod tests {
     use super::{image_usage, visit_shader_images};
     use crate::{adapter::layer_tree_host_impl::ContentColorUsage, runtime::paint::PaintRecord};
     use canvas::CanvasPaintResource;
-    use layoutng_assembly::fragment_tree::PaintResources;
+    use paint_input_types::PaintResources;
     use paint::paint_engine::{
         PaintArtifact, PaintShader, PaintShaderKind, SvgPatternCommand, SvgPatternData,
         SvgPatternImage,
@@ -242,7 +242,7 @@ mod tests {
                     origin_clean: true,
                     is_clear: false,
                     pixels: Arc::new(vec![0, 0, 0, 0]),
-                }],
+                }].into(),
                 ..Default::default()
             })),
             ..Default::default()

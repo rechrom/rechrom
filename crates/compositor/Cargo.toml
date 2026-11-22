@@ -31,4 +31,4 @@ serde_json = "1"
 getrandom = "0.4"
 
 [dev-dependencies]
-layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
+paint_input_types = { path = "../layoutng/paint_input_types" }

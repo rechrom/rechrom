@@ -81,15 +81,16 @@ pub(super) fn install_layout_result_paint_state(
         } else {
             Vec::new().into()
         },
+        // Shared catalogs: publication takes a reference, never a copy.
         images: if purpose == LayoutUpdateKind::Paint {
-            space.images.clone()
+            Arc::clone(&space.images)
         } else {
-            Vec::new()
+            Default::default()
         },
         canvases: if purpose == LayoutUpdateKind::Paint {
-            space.canvases.clone()
+            Arc::clone(&space.canvases)
         } else {
-            Vec::new()
+            Default::default()
         },
         device_pixel_ratio: space.device_pixel_ratio,
         preferred_color_scheme: space.preferred_color_scheme,

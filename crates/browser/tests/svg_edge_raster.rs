@@ -110,7 +110,7 @@ fn render(page: &Page, label: &str) -> Vec<u32> {
         )
         .unwrap();
         dump_artifact(artifact, &dir.join(format!("{label}.txt")));
-        for image in artifact.resources.iter().flat_map(|r| &r.images) {
+        for image in artifact.resources.iter().flat_map(|r| r.images.iter()) {
             if let image_resource::PaintImageContent::Document(content) = &image.content {
                 for (i, variant) in content.variants().iter().enumerate() {
                     let record = paint::paint_engine::downcast_document_paint_record::<

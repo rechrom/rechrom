@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::raster_commands::commands as target;
 use crate::raster_commands::filter_graph::RenderReflectionMaskLayer;
-use layoutng_assembly::internal::paint_input::PaintReflectionMaskLayer;
+use paint_input_types::paint_input::PaintReflectionMaskLayer;
 
 use crate::convert::ToSkia;
 

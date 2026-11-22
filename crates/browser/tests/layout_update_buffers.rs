@@ -251,9 +251,7 @@ fn complete_dom_projection_matches_fresh_after_input_changes() {
             (100, 12, 7, [255, 0, 0, 255]),
             (200, 52, 29, [0, 0, 255, 255]),
         ] {
-            space
-                .images
-                .push(layoutng_assembly::internal::layout_input::PaintImage {
+            space.PushImage(layoutng_assembly::internal::layout_input::PaintImage {
                     id,
                     width,
                     height,

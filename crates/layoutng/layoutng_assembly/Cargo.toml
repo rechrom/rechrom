@@ -13,6 +13,7 @@ foundation = { path = "../../foundation" }
 font_engine = { path = "../../font_engine" }
 layoutng_geometry = { path = "../layoutng_geometry" }
 layoutng_style = { path = "../layoutng_style" }
+paint_input_types = { path = "../paint_input_types" }
 layout_invalidation = { path = "../layout_invalidation" }
 layout_reuse = { path = "../layout_reuse" }
 # `layout_fragment` is already the self-alias used by included translated

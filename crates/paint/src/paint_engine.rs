@@ -93,7 +93,7 @@ fn document_image_container_proof_uses_the_artifacts_own_catalog() {
                     image_resource::DocumentPaintContent::new(initial.clone(), record(&initial)),
                 )),
                 ..Default::default()
-            }],
+            }].into(),
             ..Default::default()
         })),
         ..Default::default()
@@ -101,7 +101,7 @@ fn document_image_container_proof_uses_the_artifacts_own_catalog() {
     assert!(!artifact.HasExactDocumentImageContainerRecords());
 
     let resources = Arc::make_mut(artifact.resources.as_mut().unwrap());
-    resources.images[0].content = PaintImageContent::Document(Arc::new(
+    Arc::make_mut(&mut resources.images)[0].content = PaintImageContent::Document(Arc::new(
         image_resource::DocumentPaintContent::new(requested.clone(), record(&requested)),
     ));
     assert!(artifact.HasExactDocumentImageContainerRecords());
@@ -212,7 +212,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
                 ),
             )),
             ..Default::default()
-        }],
+        }].into(),
         ..Default::default()
     });
     let old = Arc::new(PaintArtifact {
@@ -304,7 +304,7 @@ fn ValidateReplayResources(resources: Option<&PaintResources>) {
         }
     }
     let mut image_ids = HashSet::new();
-    for image in &resources.images {
+    for image in resources.images.iter() {
         let width = image.width as usize;
         let height = image.height as usize;
         let dimensions_fit = width != 0 && height != 0 && width <= usize::MAX / 4 / height;
@@ -715,10 +715,14 @@ fn RecordPaint(
                     }
                 }
             }
-            for image in &resources.images {
+            // The catalogs are shared immutable slices; append the missing
+            // entries in one rebuild instead of growing them in place.
+            let mut added_images: Vec<image_resource::PaintImage> = Vec::new();
+            for image in resources.images.iter() {
                 if let Some(existing) = catalog
                     .images
                     .iter()
+                    .chain(added_images.iter())
                     .find(|existing| existing.id == image.id)
                 {
                     assert_eq!(
@@ -726,17 +730,30 @@ fn RecordPaint(
                         "shared PaintImage identity must have one revision"
                     );
                 } else {
-                    catalog.images.push(image.clone());
+                    added_images.push(image.clone());
                 }
             }
-            for canvas in &resources.canvases {
+            if !added_images.is_empty() {
+                catalog.images = catalog.images.iter().cloned().chain(added_images).collect();
+            }
+            let mut added_canvases: Vec<canvas::CanvasPaintResource> = Vec::new();
+            for canvas in resources.canvases.iter() {
                 if !catalog
                     .canvases
                     .iter()
+                    .chain(added_canvases.iter())
                     .any(|existing| existing.resource_id == canvas.resource_id)
                 {
-                    catalog.canvases.push(canvas.clone());
+                    added_canvases.push(canvas.clone());
                 }
+            }
+            if !added_canvases.is_empty() {
+                catalog.canvases = catalog
+                    .canvases
+                    .iter()
+                    .cloned()
+                    .chain(added_canvases)
+                    .collect();
             }
         } else {
             output.resources = Some(resources.clone());

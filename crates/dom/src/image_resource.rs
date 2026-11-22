@@ -86,5 +86,5 @@ pub fn AddImageResourceWithContent(
         },
         Some(content),
     );
-    constraints.images.push(image);
+    constraints.PushImage(image);
 }

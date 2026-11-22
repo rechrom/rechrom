@@ -4963,8 +4963,8 @@ mod package_contract_tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("layoutng package root");
-        let schema = std::fs::read_to_string(root.join("layout_fragment/src/paint_input.rs"))
-            .expect("read fragment-owned paint-input schema");
+        let schema = std::fs::read_to_string(root.join("paint_input_types/src/paint_input.rs"))
+            .expect("read plain paint-input schema");
         for owned_type in [
             "pub struct ClipPathPaint",
             "pub struct PaintShader",
@@ -4973,9 +4973,29 @@ mod package_contract_tests {
         ] {
             assert!(
                 schema.contains(owned_type),
-                "fragment paint-input schema lost {owned_type}"
+                "plain paint-input schema lost {owned_type}"
             );
         }
+        let fragment_schema =
+            std::fs::read_to_string(root.join("layout_fragment/src/paint_input.rs"))
+                .expect("read fragment paint-input schema facade");
+        assert!(
+            fragment_schema.contains("pub use paint_input_types::paint_input::*;")
+                && fragment_schema.contains("impl PaintStyle {")
+                && !fragment_schema.contains("pub struct PaintStyleData"),
+            "fragment paint-input schema must re-export the plain values and keep PaintStyle"
+        );
+        let schema_manifest =
+            std::fs::read_to_string(root.join("paint_input_types/Cargo.toml"))
+                .expect("read plain paint-input manifest");
+        assert!(
+            !schema_manifest.lines().map(str::trim).any(|line| {
+                line.starts_with("layoutng =")
+                    || line.starts_with("layoutng_assembly")
+                    || line.starts_with("layout_")
+            }),
+            "paint_input_types must stay below Layout"
+        );
         let schema_facade =
             std::fs::read_to_string(root.join("layoutng/src/internal/paint_input.rs"))
                 .expect("read paint-input compatibility facade");

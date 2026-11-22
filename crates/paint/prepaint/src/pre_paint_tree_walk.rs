@@ -10834,8 +10834,8 @@ mod tests {
                 orientation: image_resource::ImageOrientation::kRotate90,
                 content: image_resource::PaintImageContent::Bitmap(vec![255_u8; 2 * 1 * 4].into()),
                 ..Default::default()
-            }],
-            canvases: Vec::new(),
+            }].into(),
+            canvases: Default::default(),
             device_pixel_ratio: 1.0,
             preferred_color_scheme: 0,
             layout_zoom_factor: 1.0,

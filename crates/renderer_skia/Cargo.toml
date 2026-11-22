@@ -15,7 +15,6 @@ viz = { path = "../viz" }
 raster = { path = "../raster" }
 
 [dev-dependencies]
-layoutng_assembly = { path = "../layoutng/layoutng_assembly" }
 
 [features]
 default = []

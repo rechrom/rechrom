@@ -268,7 +268,7 @@ mod tests {
                 is_cors_same_origin,
                 content: PaintImageContent::Bitmap(Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8])),
                 ..Default::default()
-            }],
+            }].into(),
             ..Default::default()
         }));
         fragment

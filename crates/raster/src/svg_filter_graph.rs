@@ -5,7 +5,7 @@ use crate::raster_commands::filter_graph::{
     RenderSvgFilterKind, RenderSvgFilterPrimitive, RenderSvgLight, RenderSvgLightingType,
     RenderSvgMeetOrSlice, RenderSvgPreserveAspectRatioAlign, RenderSvgTransfer,
 };
-use layoutng_assembly::internal::paint_input::{
+use paint_input_types::paint_input::{
     PaintCanvasFilter, PaintComponentTransferType, PaintConvolveEdgeMode, PaintTurbulenceType,
     SvgBlendMode, SvgColorMatrixType, SvgCompositeOperator, SvgFilterGraph, SvgFilterInput,
     SvgFilterLength, SvgFilterPrimitive, SvgFilterPrimitiveKind, SvgFilterRegion, SvgFilterUnits,
@@ -331,23 +331,23 @@ pub fn TranslateSvgFilterGraphWithTransform(
             }
             SvgFilterPrimitiveKind::kComponentTransfer { functions } => {
                 RenderSvgFilterKind::ComponentTransfer(functions.clone().map(|f| match f {
-                    layoutng_assembly::internal::paint_input::SvgTransferFunction::kIdentity => {
+                    paint_input_types::paint_input::SvgTransferFunction::kIdentity => {
                         RenderSvgTransfer::Identity
                     }
-                    layoutng_assembly::internal::paint_input::SvgTransferFunction::kTable(v) => {
+                    paint_input_types::paint_input::SvgTransferFunction::kTable(v) => {
                         RenderSvgTransfer::Table(v.into_iter().map(|x| x as f32).collect())
                     }
-                    layoutng_assembly::internal::paint_input::SvgTransferFunction::kDiscrete(v) => {
+                    paint_input_types::paint_input::SvgTransferFunction::kDiscrete(v) => {
                         RenderSvgTransfer::Discrete(v.into_iter().map(|x| x as f32).collect())
                     }
-                    layoutng_assembly::internal::paint_input::SvgTransferFunction::kLinear {
+                    paint_input_types::paint_input::SvgTransferFunction::kLinear {
                         slope,
                         intercept,
                     } => RenderSvgTransfer::Linear {
                         slope: slope as f32,
                         intercept: intercept as f32,
                     },
-                    layoutng_assembly::internal::paint_input::SvgTransferFunction::kGamma {
+                    paint_input_types::paint_input::SvgTransferFunction::kGamma {
                         amplitude,
                         exponent,
                         offset,
@@ -365,7 +365,7 @@ pub fn TranslateSvgFilterGraphWithTransform(
             } => RenderSvgFilterKind::Morphology {
                 dilate: matches!(
                     operator,
-                    layoutng_assembly::internal::paint_input::SvgMorphologyOperator::kDilate
+                    paint_input_types::paint_input::SvgMorphologyOperator::kDilate
                 ),
                 x: geometry.scale_primitive_x(*radius_x).max(0.0),
                 y: geometry.scale_primitive_y(*radius_y).max(0.0),
@@ -399,7 +399,7 @@ pub fn TranslateSvgFilterGraphWithTransform(
                 stitch: *stitch,
                 fractal_noise: matches!(
                     kind,
-                    layoutng_assembly::internal::paint_input::SvgTurbulenceType::kFractalNoise
+                    paint_input_types::paint_input::SvgTurbulenceType::kFractalNoise
                 ),
             },
             SvgFilterPrimitiveKind::kTile => RenderSvgFilterKind::Tile {
@@ -475,13 +475,13 @@ pub fn TranslateSvgFilterGraphWithTransform(
                 target_x: *target_x,
                 target_y: *target_y,
                 edge_mode: match edge_mode {
-                    layoutng_assembly::internal::paint_input::SvgFilterEdgeMode::kNone => {
+                    paint_input_types::paint_input::SvgFilterEdgeMode::kNone => {
                         RenderSvgEdgeMode::None
                     }
-                    layoutng_assembly::internal::paint_input::SvgFilterEdgeMode::kDuplicate => {
+                    paint_input_types::paint_input::SvgFilterEdgeMode::kDuplicate => {
                         RenderSvgEdgeMode::Duplicate
                     }
-                    layoutng_assembly::internal::paint_input::SvgFilterEdgeMode::kWrap => {
+                    paint_input_types::paint_input::SvgFilterEdgeMode::kWrap => {
                         RenderSvgEdgeMode::Wrap
                     }
                 },
@@ -555,7 +555,7 @@ pub fn TranslateSvgFilterGraphWithTransform(
             kind,
         });
     }
-    let color = |value: Option<layoutng_assembly::internal::layout_input_types::Color>| {
+    let color = |value: Option<paint_input_types::layout_input_types::Color>| {
         value.map(|c| [c.red, c.green, c.blue, c.alpha])
     };
     Ok(RenderSvgFilterGraph {
@@ -675,7 +675,7 @@ mod tests {
                 href: "memory:image".into(),
                 local_subtree: false,
                 preserve_aspect_ratio:
-                    layoutng_assembly::internal::paint_input::SvgPreserveAspectRatio {
+                    paint_input_types::paint_input::SvgPreserveAspectRatio {
                         align: SvgPreserveAspectRatioAlign::kXMaxYMin,
                         meet_or_slice: SvgMeetOrSlice::kSlice,
                     },
@@ -902,7 +902,7 @@ mod tests {
             linear_rgb: false,
             origin_tainted: false,
             kind: SvgFilterPrimitiveKind::kMorphology {
-                operator: layoutng_assembly::internal::paint_input::SvgMorphologyOperator::kErode,
+                operator: paint_input_types::paint_input::SvgMorphologyOperator::kErode,
                 radius_x: 0.4,
                 radius_y: 0.6,
             },
@@ -950,8 +950,8 @@ mod tests {
             kind: SvgFilterPrimitiveKind::kDisplacementMap {
                 input2: SvgFilterInput::kSourceGraphic,
                 scale: 3.0,
-                x_channel: layoutng_assembly::internal::paint_input::SvgFilterChannel::kA,
-                y_channel: layoutng_assembly::internal::paint_input::SvgFilterChannel::kA,
+                x_channel: paint_input_types::paint_input::SvgFilterChannel::kA,
+                y_channel: paint_input_types::paint_input::SvgFilterChannel::kA,
             },
         });
         let translated = TranslateSvgFilterGraphWithTransform(
@@ -995,7 +995,7 @@ mod tests {
                 sigma_y: 3.0,
                 dx: 4.0,
                 dy: 5.0,
-                color: layoutng_assembly::internal::layout_input_types::Color {
+                color: paint_input_types::layout_input_types::Color {
                     red: 0.1,
                     green: 0.2,
                     blue: 0.3,
@@ -1053,7 +1053,7 @@ mod tests {
                     y: 0.25,
                     z: 1.0,
                 }),
-                color: layoutng_assembly::internal::layout_input_types::Color {
+                color: paint_input_types::layout_input_types::Color {
                     red: 1.0,
                     green: 1.0,
                     blue: 1.0,
@@ -1115,7 +1115,7 @@ mod tests {
                     y: 5.0,
                     z: 6.0,
                 }),
-                color: layoutng_assembly::internal::layout_input_types::Color {
+                color: paint_input_types::layout_input_types::Color {
                     red: 1.0,
                     green: 1.0,
                     blue: 1.0,

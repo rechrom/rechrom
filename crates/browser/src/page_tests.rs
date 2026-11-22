@@ -1414,7 +1414,7 @@ impl image_resource::DocumentImageDecoder for FixtureImageDecoder {
                         height: decoded.height,
                         content: image_resource::PaintImageContent::Bitmap(decoded.rgba8.into()),
                         ..Default::default()
-                    }],
+                    }].into(),
                     ..Default::default()
                 },
             )),
