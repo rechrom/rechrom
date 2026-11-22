@@ -1,9 +1,9 @@
 //! Chromium DisplayItemClient commit adapter.
 //!
-//! This source is compiled by LayoutNG at its reciprocal assembly boundary.
-//! Keeping the two hot traversals here gives sampling profiles the same
-//! `layout_commit_package` owner as their package-owned trace phases without
-//! adding concrete LayoutObject dependencies to the standalone crate.
+//! A base module mounted as `layout_commit_package`. Keeping the two hot
+//! traversals here gives sampling profiles the same commit owner as their
+//! `layout_commit` trace phases without adding LayoutObject dependencies to
+//! the `layout_commit` vocabulary crate.
 
 #![allow(non_snake_case)]
 

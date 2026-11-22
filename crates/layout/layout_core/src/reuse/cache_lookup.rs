@@ -1,9 +1,10 @@
 //! Chromium LayoutNG adapter for the complete cached-layout-result lookup.
 //!
-//! This file is compiled by `layoutng` at its reciprocal assembly boundary,
-//! not by the standalone `layout_reuse` crate. It lives with the reuse owner
-//! so the hot decision tree has a package-qualified sampling symbol while the
-//! standalone crate remains independent of source LayoutObject types.
+//! A base module: the lookup runs once per box on the layout hot path and
+//! reads LayoutBox/ConstraintSpace directly. It mounts as
+//! `layout_reuse_package` so the hot decision tree keeps a reuse-qualified
+//! sampling symbol, while the `layout_reuse` vocabulary crate (cache policy,
+//! statuses, trace) stays independent of LayoutObject types.
 
 #![allow(non_snake_case)]
 

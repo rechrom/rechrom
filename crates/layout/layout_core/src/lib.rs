@@ -363,14 +363,14 @@ mod used_font_implementation;
 #[path = "fragment/grid/gap_segment_state_aggregator.rs"]
 pub mod grid_gap_segment_state_aggregator;
 
-// The source cache lookup is compiled at the reciprocal LayoutNG assembly
-// boundary but physically owned by layout_reuse for profiler attribution.
-#[path = "../../layout_reuse/src/cache_lookup.rs"]
+// The per-box cached-result lookup is base code (`reuse/`); the module name
+// keeps its reuse profiler attribution.
+#[path = "reuse/cache_lookup.rs"]
 pub mod layout_reuse_package;
 
-// Completed-client tree traversal is compiled at the reciprocal assembly
-// boundary but physically owned by layout_commit for profiler attribution.
-#[path = "../../layout_commit/src/client_commit.rs"]
+// Completed-client tree traversal is base code (`commit/`); the module name
+// keeps its commit profiler attribution.
+#[path = "commit/client_commit.rs"]
 pub mod layout_commit_package;
 
 // Layout boundary object indexing lives in `fragment/`; the module name keeps

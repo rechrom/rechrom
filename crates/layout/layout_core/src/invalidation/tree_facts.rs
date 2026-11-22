@@ -1,8 +1,8 @@
 //! Cached facts collected from the resident source LayoutObject tree.
 //!
-//! This source is included by `layout_engine` at the reciprocal assembly
-//! boundary. Keeping the full-tree walk here gives both interval traces and
-//! sampling profilers the same invalidation package owner.
+//! A base module (child of `layout_engine`). Keeping the full-tree walk in
+//! the `layout_invalidation_tree_facts` module gives both interval traces and
+//! sampling profilers the same invalidation owner.
 
 use foundation::TextEmphasisMark;
 

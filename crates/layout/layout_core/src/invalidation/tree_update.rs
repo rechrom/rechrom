@@ -1,9 +1,10 @@
 //! Chromium LayoutObject-tree update transaction.
 //!
-//! This source is included as a child of `layout_object_builder` at the
-//! reciprocal assembly boundary. The standalone invalidation package remains
-//! free of source LayoutObject types, while subtree preparation, retirement,
-//! and failure cleanup retain an invalidation-qualified sampling path.
+//! A base module (child of `layout_object_builder`, which owns the tree's
+//! private storage). The `layout_invalidation` vocabulary crate stays free of
+//! LayoutObject types, while subtree preparation, retirement and failure
+//! cleanup keep an invalidation-qualified sampling path through the
+//! `layout_invalidation_package` module name.
 
 use super::*;
 

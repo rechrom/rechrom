@@ -1,11 +1,18 @@
 //! Layout invalidation vocabulary shared by LayoutNG algorithms and commit.
 //!
-//! Stable reason symbols and tree-agnostic policy compile standalone. Chromium
-//! `LayoutObject` mutation lives in assembly-only modules under this package,
-//! so sampling profiles still attribute structural work to invalidation.
+//! A vocabulary crate below base: stable reason symbols, marking state,
+//! tree-agnostic propagation over traits and the `layout_invalidation.*`
+//! trace phases. It names no base type. Chromium `LayoutObject` mutation and
+//! the engine's tree-update / node-input / mutation phases are base modules
+//! (`layout_core/src/invalidation/`) that call this crate's trace phases, so
+//! profiles still attribute structural work to invalidation.
 
 pub mod content_change_type;
 pub mod layout_invalidation_reason;
+// Definitions of the `layout_invalidation_reason.h` extern arrays
+// (layout_invalidation_reason.cc). They live beside the declarations so the
+// reason symbols resolve inside this crate, not through a base definition.
+mod layout_invalidation_reason_symbols;
 pub mod layout_invalidation_state;
 pub mod propagation;
 pub mod trace;

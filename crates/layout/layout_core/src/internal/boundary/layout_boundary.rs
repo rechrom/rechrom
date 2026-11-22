@@ -111,7 +111,7 @@ use crate::layout_boundary_support::LayoutBoundaryEnvironment;
 // Paint export retains an optical axis selected implicitly by the source face.
 const OPTICAL_SIZE_TAG: u32 = u32::from_be_bytes(*b"opsz");
 
-#[path = "../../../../layout_reuse/src/layout_environment_cache.rs"]
+#[path = "../../reuse/layout_environment_cache.rs"]
 mod layout_reuse_layout_environment_cache;
 use layout_reuse_layout_environment_cache::FontBinding;
 pub(crate) use layout_reuse_layout_environment_cache::ReusableLayoutEnvironment;

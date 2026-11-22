@@ -30,28 +30,28 @@ mod layout_algo_block_fragmentation_context;
 mod layout_algo_inline_collapsible_whitespace;
 #[path = "../commit/output_node_lookup.rs"]
 mod layout_commit_output_node_lookup;
-#[path = "../../../layout_commit/src/scroll_offset_snapshot.rs"]
+#[path = "../commit/scroll_offset_snapshot.rs"]
 mod layout_commit_scroll_offset_snapshot;
 #[path = "../fragment/paint_input_update.rs"]
 mod layout_fragment_paint_input;
 #[path = "../fragment/scroll_input_update.rs"]
 mod layout_fragment_scroll_input;
-#[path = "../../../layout_invalidation/src/input_invalidation.rs"]
+#[path = "../invalidation/input_invalidation.rs"]
 mod layout_invalidation_input_updates;
 pub(crate) use layout_invalidation_input_updates::PaintResourceFacts;
 #[path = "../invalidation/managed_input_admission.rs"]
 mod layout_invalidation_managed_input_admission;
 #[path = "../invalidation/managed_object_update.rs"]
 mod layout_invalidation_managed_object_update;
-#[path = "../../../layout_invalidation/src/node_input_update.rs"]
+#[path = "../invalidation/node_input_update.rs"]
 mod layout_invalidation_node_input;
-#[path = "../../../layout_invalidation/src/tree_update.rs"]
+#[path = "../invalidation/tree_update.rs"]
 mod layout_invalidation_package;
 #[path = "../reuse/managed_input_index.rs"]
 mod layout_reuse_managed_input_index;
 #[path = "../reuse/managed_object_compatibility.rs"]
 mod layout_reuse_managed_object_compatibility;
-#[path = "../../../layout_reuse/src/paint_only_font_binding.rs"]
+#[path = "../reuse/paint_only_font_binding.rs"]
 mod layout_reuse_paint_only_font_binding;
 use layout_invalidation_managed_input_admission::{
     ControlPaintStateChanged, ElementCaptureStateChanged, GeometryMetadataEqual,

@@ -31,7 +31,7 @@ use crate::layout_registry::LayoutRegistry;
 use crate::layout_boundary_support::{LayoutBoundarySupport, LayoutUpdateKind};
 pub use layout_commit::{PaintClientCommit, PaintCommitOutput};
 
-#[path = "../../layout_invalidation/src/tree_facts.rs"]
+#[path = "invalidation/tree_facts.rs"]
 mod layout_invalidation_tree_facts;
 use layout_invalidation_tree_facts::{collect_layout_tree_facts, LayoutTreeFacts};
 
@@ -103,17 +103,17 @@ use layout_invalidation_constraint_equivalence::{
     SameConstraintScalars, SameConstraints, SameImageCatalogGeometry, SameOptionalArc,
     SameShapeImageCatalog,
 };
-#[path = "../../layout_invalidation/src/engine_mutation.rs"]
+#[path = "invalidation/engine_mutation.rs"]
 mod layout_invalidation_engine_mutation;
 use layout_invalidation_engine_mutation::EngineMutation;
 #[path = "commit/engine_paint_commit.rs"]
 mod layout_commit_engine_paint_commit;
 use layout_commit_engine_paint_commit::PaintCommit;
-#[path = "../../layout_commit/src/container_query_sizes.rs"]
+#[path = "commit/container_query_sizes.rs"]
 mod layout_commit_container_query_sizes;
-#[path = "../../layout_commit/src/engine_layout_publish.rs"]
+#[path = "commit/engine_layout_publish.rs"]
 mod layout_commit_engine_layout_publish;
-#[path = "../../layout_reuse/src/engine_output_reuse.rs"]
+#[path = "reuse/engine_output_reuse.rs"]
 mod layout_reuse_engine_output_reuse;
 /// Native invalidation outcome of HTMLMediaElement::UpdateLayoutObject.
 /// Page routes its existing lifecycle wake from this scalar; it does not infer

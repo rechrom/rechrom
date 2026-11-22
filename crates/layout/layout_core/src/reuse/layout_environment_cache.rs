@@ -1,8 +1,10 @@
 //! Reusable source font environment and per-pass resolver binding.
 //!
-//! Included by the reciprocal source boundary. Snapshot admission, cache
-//! transfer, and resolver lifetime remain assembly-aware while trace and
-//! sampling ownership resolve to `layout_reuse`.
+//! A base module (child of `internal::boundary::layout_boundary`). Snapshot
+//! admission, cache transfer and resolver lifetime use base types, while the
+//! `layout_reuse.FontEnvironment` span (`layout_reuse::trace`) and the
+//! `layout_reuse_layout_environment_cache` module name keep trace and
+//! sampling ownership with reuse.
 
 #![allow(non_snake_case)]
 
@@ -129,7 +131,7 @@ pub(super) struct FontBinding {
 impl FontBinding {
     #[inline(never)]
     pub(super) fn new(root: &mut LayoutObject, space: &ConstraintSpace) -> Self {
-        let mut trace = browser_tracing::span("layout", "layout_reuse.FontEnvironment");
+        let mut trace = layout_reuse::trace::font_environment_span();
         let root_node = root.GetNode();
         if root_node.is_null() {
             panic!("Layout root requires standalone metadata");
