@@ -173,7 +173,7 @@ fn inline_style_control_source_geometry_computed_style_and_pixels_match_old_fall
             let q = element(document.borrow().GetDocument(), "q");
             let qid = document.borrow().GetDocument().Node(q).Id();
             let interaction = dom::UserInteractionState::default();
-            let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
             let before = crate::LayoutPersistentDocument(
                 &mut layout_engine,
                 &mut document.borrow_mut(),
@@ -629,13 +629,13 @@ fn profile_loading_resource_and_shared_heap() {
         );
         let cs = crate::CreateBrowserConstraints(1024, 768);
         let interaction = dom::UserInteractionState::default();
-        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let _large =
             crate::LayoutPersistentDocument(&mut layout_engine, &mut owner, &interaction, &cs);
         let mut toolbar =
             html::html_parser::ParseHTML("<html><body><input value='address'></body></html>");
         update(&mut toolbar);
-        let mut toolbar_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut toolbar_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let _first =
             crate::LayoutPersistentDocument(&mut toolbar_engine, &mut toolbar, &interaction, &cs);
         for i in 0..3 {
@@ -722,7 +722,7 @@ fn image_completion_updates_intrinsic_size_and_keeps_unrelated_styles() {
             .Id();
         let mut cs = crate::CreateBrowserConstraints(320, 200);
         let interaction = dom::UserInteractionState::default();
-        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let _initial =
             crate::LayoutPersistentDocument(&mut layout_engine, &mut owner, &interaction, &cs);
         owner.GetDocumentMut().StyleStateMut().impact = Default::default();
@@ -1121,7 +1121,7 @@ fn bounded_has_source_control_cssom_geometry_pixels_match_full_recalc() {
             let q = element(document.borrow().GetDocument(), "q");
             let qid = document.borrow().GetDocument().Node(q).Id();
             let interaction = dom::UserInteractionState::default();
-            let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut layout_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
             let before = crate::LayoutPersistentDocument(
                 &mut layout_engine,
                 &mut document.borrow_mut(),
@@ -1202,7 +1202,7 @@ fn parent_changed_stops_at_unchanged_children_and_matches_source_fresh_pixels() 
             owner
         }
         let mut optimized = owner();
-        let mut optimized_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut optimized_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let constraints = crate::CreateBrowserConstraints(320, 200);
         let interaction = dom::UserInteractionState::default();
         crate::style_services::ResolveLayoutStyles(&mut optimized, &constraints);
@@ -1234,7 +1234,7 @@ fn parent_changed_stops_at_unchanged_children_and_matches_source_fresh_pixels() 
             let old_rects = paint::paint_engine::FragmentClientRects(&before, qid);
             // Independently parsed owner has no persistent native layout tree.
             let mut baseline = owner();
-            let mut baseline_engine = crate::LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut baseline_engine = crate::LayoutEngine::new(&crate::CreateLayoutRegistry());
             attribute(&mut optimized, "a", "style", value);
             attribute(&mut baseline, "a", "style", value);
             baseline.GetDocumentMut().InvalidateAllStyles();

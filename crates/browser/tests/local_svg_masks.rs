@@ -41,9 +41,9 @@ impl URLLoader for Loader {
 }
 fn fixture(markup: &str) -> (Page, Rc<RefCell<Vec<String>>>) {
     let requests = Rc::new(RefCell::new(Vec::new()));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let constraints = browser::CreateBrowserConstraints(140, 80);
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page=Page::Create(Rc::new(RefCell::new(Loader{html:format!("<!doctype html><style>body{{margin:0;background:white}}svg,img{{display:block}}</style>{markup}"),requests:requests.clone()})),Rc::new(RefCell::new(image_decoder::skia_image_decoder::SkiaImageDecoder)),Rc::new(RefCell::new(decoder)),constraints,None,None);
     page.Open("https://local-mask.test/", 16384, 4096).unwrap();
     settle(&mut page);
@@ -451,8 +451,8 @@ fn inherited_mask_reference_keeps_originating_scope_across_shadow_root() {
             .Update(&mut owner, &Default::default(), &host_styles())
             .unwrap();
         owner.UpdateSVGResources();
-        let assembly = browser::CreateLayoutAssembly();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = browser::CreateLayoutRegistry();
+        let mut engine = LayoutEngine::new(&registry);
         engine.ApplyMutation(LayoutMutation::Constraints(
             &browser::CreateBrowserConstraints(320, 240),
         ));

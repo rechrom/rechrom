@@ -15,7 +15,7 @@ use image_resource::{
     ContainerKey, CreatedDocumentImage, DocumentImage, DocumentImageEffect, DocumentImageFrame,
     DocumentImageMutation, ImageId, IntrinsicSize, MutationCause,
 };
-use layout::LayoutAssembly;
+use layout::LayoutRegistry;
 use style::media_queries::media_query_backend::{ForMediaValues, ParseMediaQuerySet};
 use style::media_queries::{MediaValuesCached, MediaValuesCachedData};
 use style::PreferredColorScheme;
@@ -36,7 +36,7 @@ fn PreferredScheme(value: u8) -> PreferredColorScheme {
 
 // cpp: image_decoder/svg_image_decoder.h:8-20
 pub struct SVGImageDecoder {
-    assembly_: LayoutAssembly,
+    registry_: LayoutRegistry,
     host_constraints_: layout::input::ConstraintSpace,
     // SVGImage's isolated document uses the same namespace-specific UA rules
     // as any other document (StyleResolver::ForEachUARulesForElement). Keep
@@ -298,12 +298,12 @@ impl SVGImageDecoder {
     /// The embedding supplies complete host constraints and retained UA sheets,
     /// including SVG defaults. Container geometry is applied during creation.
     pub fn new_with_constraints(
-        assembly: &LayoutAssembly,
+        registry: &LayoutRegistry,
         constraints: &layout::input::ConstraintSpace,
         user_agent_sheets: &[Rc<CSSStyleSheet>],
     ) -> Self {
         Self {
-            assembly_: *assembly,
+            registry_: *registry,
             host_constraints_: constraints.clone(),
             user_agent_sheets_: user_agent_sheets.to_vec(),
         }
@@ -476,7 +476,7 @@ impl SVGImageDecoder {
             document,
             style_engine,
             user_agent_sheets: self.user_agent_sheets_.clone(),
-            engine: layout::LayoutEngine::new(&self.assembly_),
+            engine: layout::LayoutEngine::new(&self.registry_),
             paint_engine: paint::paint_engine::PaintEngine::new(),
             constraints,
             intrinsic_sizing,

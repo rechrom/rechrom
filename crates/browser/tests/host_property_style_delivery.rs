@@ -65,7 +65,7 @@ fn evaluate(page: &mut Page, script: &str) {
 }
 
 fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(640, 800);
     constraints.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
@@ -81,7 +81,7 @@ fn fixture() -> (Page, Rc<RefCell<Vec<String>>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         Some(ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(

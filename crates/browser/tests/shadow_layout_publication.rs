@@ -52,7 +52,7 @@ fn evaluate(page: &mut Page, script: &str) {
 }
 
 fn fixture() -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(640, 800);
     constraints.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
@@ -67,7 +67,7 @@ fn fixture() -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         Some(ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(
@@ -151,8 +151,8 @@ fn count(root: &FragmentPaintData, id: u64) -> usize {
 // retained native tree when checking uniqueness of the file status span.
 fn layout_object_count(page: &Page, id: u64) -> usize {
     use layout::testing::{LayoutObject, LayoutObjectFactoryScope};
-    let assembly = browser::CreateLayoutAssembly();
-    let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _factories = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;

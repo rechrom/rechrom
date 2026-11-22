@@ -54,7 +54,7 @@ fn collect_text<'a>(fragment: PaintFragmentCursor<'a>, output: &mut Vec<PaintFra
 }
 
 fn load_page(html: &[u8]) -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(360, 100);
     constraints.fonts = vec![FontFace {
         family: "SelectionDecorationFixture".into(),
@@ -69,7 +69,7 @@ fn load_page(html: &[u8]) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         None,
         None,
@@ -216,7 +216,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let html = br#"<!doctype html><style>::selection{color:#123456;background-color:#abcdef;text-decoration-color:lime;text-shadow:4px 5px 0 magenta}</style><body style="margin:0"><span style="font:24px/32px SelectionDecorationFixture;text-decoration-line:underline line-through;text-decoration-color:red;text-decoration-thickness:3px;text-decoration-skip-ink:none;text-shadow:1px 2px 0 orange">selection</span></body>"#;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut constraints = browser::CreateBrowserConstraints(360, 100);
         constraints.fonts = vec![FontFace {
             family: "SelectionDecorationFixture".into(),
@@ -231,7 +231,7 @@ fn selection_splits_originating_and_selection_decoration_passes() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             None,

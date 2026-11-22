@@ -75,8 +75,8 @@ fn body() {
                 .map(|a| (a.value.clone(), i))
         })
         .collect();
-    let assembly = crate::CreateLayoutAssembly();
-    let mut engine = crate::LayoutEngine::new(&assembly);
+    let registry = crate::CreateLayoutRegistry();
+    let mut engine = crate::LayoutEngine::new(&registry);
     for stage in 0..3 {
         let d = owner.GetDocumentMut();
         let mut attr = |id: &str, name: &str, value: &str| {
@@ -123,7 +123,7 @@ fn body() {
             .GetLayoutResult()
             .expect("successful layout has fragments");
         let _scope = layout::testing::LayoutObjectFactoryScope::new(
-            &assembly.objects,
+            &registry.objects,
         );
         let mut columns = std::collections::BTreeMap::new();
         fn collect(

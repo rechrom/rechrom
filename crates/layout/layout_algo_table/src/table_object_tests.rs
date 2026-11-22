@@ -10,7 +10,7 @@ use layout_assembly::internal::{
     layout_object_factory_set::LayoutObjectFactorySet, layout_pass_scope::LayoutObjectFactoryScope,
     table_layout_algorithm_types::TableGroupedChildren, table_node::TableNode,
 };
-use layout_assembly::{engine_assembly::LayoutAssembly, layout_engine::LayoutEngine};
+use layout_assembly::{layout_registry::LayoutRegistry, layout_engine::LayoutEngine};
 use std::collections::BTreeMap;
 
 #[test]
@@ -53,12 +53,12 @@ fn objects_body() {
         })
         .collect();
     let mut factories = LayoutObjectFactorySet::default();
-    crate::assembly::InstallTableObjects(&mut factories);
-    let assembly = LayoutAssembly {
+    crate::registration::RegisterTableObjects(&mut factories);
+    let registry = LayoutRegistry {
         objects: factories,
-        ..LayoutAssembly::default()
+        ..LayoutRegistry::default()
     };
-    let mut engine = LayoutEngine::new(&assembly);
+    let mut engine = LayoutEngine::new(&registry);
     let root = BuildDOMProjection(
         &mut owner,
         &dom::UserInteractionState::default(),

@@ -43,7 +43,7 @@ impl URLLoader for Loader {
 fn page_fixture(markup: &str, image: Option<&str>) -> Page {
     let html =
         format!("<!doctype html><style>body{{margin:0}}svg,img{{display:block}}</style>{markup}");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 240);
     constraints.fonts = vec![FontFace {
         family: "SvgTextPathFixture".into(),
@@ -53,7 +53,7 @@ fn page_fixture(markup: &str, image: Option<&str>) -> Page {
         ..Default::default()
     }]
     .into();
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.into_bytes(),
@@ -98,8 +98,8 @@ fn id(page: &Page, name: &str) -> u64 {
 
 fn native<'a>(page: &'a Page, name: &str) -> &'a LayoutObject {
     let wanted = id(page, name);
-    let assembly = browser::CreateLayoutAssembly();
-    let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _factories = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
@@ -273,8 +273,8 @@ fn text_path_requires_an_eligible_svg_text_parent() {
             r##"<svg width="300" height="100"><text><tspan>Control<a style="display:contents"><textPath id="invalid">Ignored</textPath></a></tspan></text></svg>"##,
         ] {
             let page = fixture(markup);
-            let assembly = browser::CreateLayoutAssembly();
-            let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+            let registry = browser::CreateLayoutRegistry();
+            let _factories = LayoutObjectFactoryScope::new(&registry.objects);
             let engine = page.GetLayoutEngine();
             let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
             let mut object = root as *const LayoutObject;

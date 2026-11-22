@@ -1,5 +1,5 @@
 // C++: layoutng_inline/assembly.h/.cc.
-// The inline installer is owned by this package. Concrete object constructors
+// The inline registration is owned by this package. Concrete object constructors
 // and InlineNode::Layout remain in their source-owned modules and must be
 // linked in the shared LayoutNG/inline assembly before enabling this module.
 #![allow(non_snake_case)]
@@ -24,7 +24,7 @@ use layout_core::internal::selection_state::SelectionState;
 use layout_core::internal::text_combine_style_service::{
     AdjustStyleForCombinedText, AdjustStyleForTextCombine,
 };
-use layout_core::engine_assembly::LayoutAssembly;
+use layout_core::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 
 use crate::layout_br::LayoutBR;
@@ -157,28 +157,28 @@ fn RecalcTextCombineContentsInkOverflow(object: &LayoutObject, cursor: *const ()
 
 // cpp: layoutng_inline/assembly.h:4-4
 // cpp: layoutng_inline/assembly.cc:95-112
-pub fn InstallInlineAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.inline_support.performance_owner = Some("layout_algo_inline");
-    assembly.objects.block_ruby = Some(CreateBlockRubyObject);
-    assembly.objects.inline_box = Some(CreateInlineObject);
-    assembly.objects.inline_line_break = Some(CreateLineBreakObject);
-    assembly.objects.inline_text = Some(CreateTextObject);
-    assembly.objects.insert_inline_text_child = Some(InsertInlineTextChild);
-    assembly.objects.inline_word_break = Some(CreateWordBreakObject);
-    assembly.objects.update_inline_style = Some(UpdateInlineStyle);
-    assembly.objects.update_anonymous_text_combine_style = Some(UpdateAnonymousTextCombineStyle);
-    assembly.objects.adjust_combined_text_style = Some(AdjustCombinedTextStyle);
-    assembly.objects.is_text_fragment_selected = Some(IsTextFragmentSelected);
-    assembly.objects.text_fragment_selection_facts = Some(TextFragmentSelectionFacts);
-    assembly.objects.adjust_text_combine_bounding_box = Some(AdjustTextCombineBoundingBox);
-    assembly.objects.recalc_text_combine_contents_ink_overflow =
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.algorithms.inline_support.performance_owner = Some("layout_algo_inline");
+    registry.objects.block_ruby = Some(CreateBlockRubyObject);
+    registry.objects.inline_box = Some(CreateInlineObject);
+    registry.objects.inline_line_break = Some(CreateLineBreakObject);
+    registry.objects.inline_text = Some(CreateTextObject);
+    registry.objects.insert_inline_text_child = Some(InsertInlineTextChild);
+    registry.objects.inline_word_break = Some(CreateWordBreakObject);
+    registry.objects.update_inline_style = Some(UpdateInlineStyle);
+    registry.objects.update_anonymous_text_combine_style = Some(UpdateAnonymousTextCombineStyle);
+    registry.objects.adjust_combined_text_style = Some(AdjustCombinedTextStyle);
+    registry.objects.is_text_fragment_selected = Some(IsTextFragmentSelected);
+    registry.objects.text_fragment_selection_facts = Some(TextFragmentSelectionFacts);
+    registry.objects.adjust_text_combine_bounding_box = Some(AdjustTextCombineBoundingBox);
+    registry.objects.recalc_text_combine_contents_ink_overflow =
         Some(RecalcTextCombineContentsInkOverflow);
-    assembly.algorithms.inline_support.is_block_level = Some(|node| {
+    registry.algorithms.inline_support.is_block_level = Some(|node| {
         node.PrepareLayoutIfNeeded();
         let block = unsafe { &*node.GetLayoutBlockFlow() };
         let data = unsafe { &*block.GetInlineNodeData() };
         data.IsBlockLevel()
     });
-    assembly.algorithms.inline_support.layout = Some(LayoutInlineAlgorithm);
-    assembly.algorithms.inline_support.measure = Some(MeasureInline);
+    registry.algorithms.inline_support.layout = Some(LayoutInlineAlgorithm);
+    registry.algorithms.inline_support.measure = Some(MeasureInline);
 }

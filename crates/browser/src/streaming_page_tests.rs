@@ -64,7 +64,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
     let body = Rc::new(RefCell::new(VecDeque::new()));
     let resources = Rc::new(RefCell::new(HashMap::new()));
     let finished = Rc::new(Cell::new(0));
-    let assembly = crate::CreateLayoutAssembly();
+    let registry = crate::CreateLayoutRegistry();
     let scripts = scripting.then(|| ScriptEnvironment {
         runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::new()),
         xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&Default::default()).unwrap(),
@@ -78,7 +78,7 @@ fn create(scripting: bool) -> (Page, Events, Responses, Rc<Cell<usize>>) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         crate::CreateBrowserConstraints(320, 200),
         scripts,
         Some(Rc::new(RefCell::new(Client(
@@ -817,7 +817,7 @@ fn real_http() {
         max_retries: 0,
         ..Default::default()
     };
-    let assembly = crate::CreateLayoutAssembly();
+    let registry = crate::CreateLayoutRegistry();
     let mut page = Page::Create(
         Rc::new(RefCell::new(
             url_loader::DefaultURLLoader::new(options).unwrap(),
@@ -825,7 +825,7 @@ fn real_http() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         crate::CreateBrowserConstraints(320, 200),
         None,
         None,
@@ -907,7 +907,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
                 socket.write_all(source.as_bytes()).unwrap();
             }
         });
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(
                 url_loader::DefaultURLLoader::new(url_loader::DefaultURLLoaderOptions {
@@ -919,7 +919,7 @@ fn real_http_module_dependency_wait_keeps_page_frames_and_tasks_running() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(320, 200),
             Some(ScriptEnvironment {
                 runtime: Box::new(

@@ -6,7 +6,7 @@ use layout_assembly::internal::form_control_types::FormControlType;
 use layout_assembly::internal::layout_input::{NodeConstructionData, NodeKind};
 use layout_assembly::internal::layout_node_metadata::{Element, Node};
 use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::control_intrinsic_size::{ControlIntrinsicBlockSize, ControlIntrinsicInlineSize};
@@ -66,23 +66,23 @@ fn CreateFormsMetadata(input: &NodeConstructionData, style: *const ComputedStyle
 
 // cpp: layoutng_forms/assembly.h:3-3
 // cpp: layoutng_forms/assembly.cc:52-61
-pub fn InstallFormsAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.forms_support.performance_owner = Some("layout_algo_forms");
-    assembly.objects.forms = Some(CreateFormsObject);
-    assembly.objects.forms_metadata = Some(CreateFormsMetadata);
-    assembly.objects.remove_inner_editor_child = Some(RemoveInnerEditorChild);
-    assembly.objects.inner_editor_allows_inline_children = Some(InnerEditorAllowsInlineChildren);
-    assembly.objects.inner_editor_add_child = Some(InnerEditorAddChild);
-    assembly.objects.inner_editor_style_did_change = Some(InnerEditorStyleDidChange);
-    assembly.objects.fieldset_add_child = Some(FieldsetAddChild);
-    assembly.objects.fieldset_inserted_into_tree = Some(FieldsetInsertedIntoTree);
-    assembly.objects.fieldset_update_anonymous_child_style =
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.algorithms.forms_support.performance_owner = Some("layout_algo_forms");
+    registry.objects.forms = Some(CreateFormsObject);
+    registry.objects.forms_metadata = Some(CreateFormsMetadata);
+    registry.objects.remove_inner_editor_child = Some(RemoveInnerEditorChild);
+    registry.objects.inner_editor_allows_inline_children = Some(InnerEditorAllowsInlineChildren);
+    registry.objects.inner_editor_add_child = Some(InnerEditorAddChild);
+    registry.objects.inner_editor_style_did_change = Some(InnerEditorStyleDidChange);
+    registry.objects.fieldset_add_child = Some(FieldsetAddChild);
+    registry.objects.fieldset_inserted_into_tree = Some(FieldsetInsertedIntoTree);
+    registry.objects.fieldset_update_anonymous_child_style =
         Some(FieldsetUpdateAnonymousChildStyle);
-    assembly.objects.fieldset_content_layout_box = Some(FieldsetContentLayoutBox);
-    assembly.objects.fieldset_scroll_width = Some(FieldsetScrollWidth);
-    assembly.objects.fieldset_scroll_height = Some(FieldsetScrollHeight);
-    assembly.algorithms.fieldset =
+    registry.objects.fieldset_content_layout_box = Some(FieldsetContentLayoutBox);
+    registry.objects.fieldset_scroll_width = Some(FieldsetScrollWidth);
+    registry.objects.fieldset_scroll_height = Some(FieldsetScrollHeight);
+    registry.algorithms.fieldset =
         LayoutAlgorithmEntryFor::<FieldsetLayoutAlgorithm>("layout_algo_forms");
-    assembly.algorithms.forms_support.intrinsic_inline_size = Some(ControlIntrinsicInlineSize);
-    assembly.algorithms.forms_support.intrinsic_block_size = Some(ControlIntrinsicBlockSize);
+    registry.algorithms.forms_support.intrinsic_inline_size = Some(ControlIntrinsicInlineSize);
+    registry.algorithms.forms_support.intrinsic_block_size = Some(ControlIntrinsicBlockSize);
 }

@@ -31,13 +31,13 @@ impl EnginePaintUpdate for LayoutEngine {
             trace.set("needs_layout", 1.0);
             return false;
         }
-        let assembly = LayoutAssembly {
+        let registry = LayoutRegistry {
             algorithms: self.algorithms_,
             objects: self.objects_,
             boundary: self.boundary_,
             shape_coverage: self.shape_coverage_,
         };
-        let fragments = assembly.PublishLayoutResult(
+        let fragments = registry.PublishLayoutResult(
             unsafe { &mut *root },
             &self.constraints_,
             &mut self.boundary_cache_,
@@ -158,13 +158,13 @@ impl EnginePaintUpdate for LayoutEngine {
         };
         trace.set("indexed_refresh", indexed as u8 as f64);
         if !indexed {
-            let assembly = LayoutAssembly {
+            let registry = LayoutRegistry {
                 algorithms: self.algorithms_,
                 objects: self.objects_,
                 boundary: self.boundary_,
                 shape_coverage: self.shape_coverage_,
             };
-            assembly.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
+            registry.RefreshScrollPaintProperties(unsafe { &mut *root }, fragments, true);
             let reuse = self
                 .scroll_paint_index_
                 .take()

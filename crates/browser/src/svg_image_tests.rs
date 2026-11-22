@@ -26,8 +26,8 @@ const TURBULENCE_FILTER_SVG: &[u8] = br#"
 #[test]
 fn document_image_svg_filter_uses_the_svg_visual_reference_box() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
-        let mut decoder = crate::CreateSVGImageDecoder(&assembly);
+        let registry = crate::CreateLayoutRegistry();
+        let mut decoder = crate::CreateSVGImageDecoder(&registry);
         let container = ContainerKey::new(160, 160, 1.0, 1.0);
         let created = decoder
             .create(
@@ -57,11 +57,11 @@ fn document_image_svg_filter_uses_the_svg_visual_reference_box() {
 #[test]
 fn document_image_timeline_publishes_immutable_changed_records_only() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut host = crate::CreateBrowserConstraints(64, 32);
         host.device_pixel_ratio = 2.0;
         host.layout_zoom_factor = 2.0;
-        let mut decoder = crate::CreateSVGImageDecoderWithConstraints(&assembly, &host);
+        let mut decoder = crate::CreateSVGImageDecoderWithConstraints(&registry, &host);
         let container = ContainerKey::new(64, 32, 1.0, 2.0);
         let mut created = decoder
             .create(17, Arc::from(ANIMATED_SVG), "image/svg+xml", &container)
@@ -119,8 +119,8 @@ fn document_image_timeline_publishes_immutable_changed_records_only() {
 #[test]
 fn document_image_container_is_part_of_the_published_snapshot() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
-        let mut decoder = crate::CreateSVGImageDecoder(&assembly);
+        let registry = crate::CreateLayoutRegistry();
+        let mut decoder = crate::CreateSVGImageDecoder(&registry);
         let original = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(23, Arc::from(ANIMATED_SVG), "image/svg+xml", &original)

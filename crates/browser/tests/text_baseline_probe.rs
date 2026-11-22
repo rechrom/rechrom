@@ -14,7 +14,7 @@ fn open(url: &str, width: u32, height: u32, scale: f64) -> Page {
     let loader = Rc::new(RefCell::new(
         url_loader::DefaultURLLoader::new(options).unwrap(),
     ));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(width, height);
     constraints.device_pixel_ratio = scale;
     let mut page = Page::Create(
@@ -22,7 +22,7 @@ fn open(url: &str, width: u32, height: u32, scale: f64) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         None,
         Some(Rc::new(RefCell::new(Client::default()))),

@@ -51,7 +51,7 @@ fn fixture_with_theme(
     let html = format!(
         "<!doctype html><style>html{{font-size:16px}}body{{margin:0}}{css}</style>{children}"
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut space = browser::CreateBrowserConstraints(300, 200);
     let theme = space.scrollbar_theme.as_mut().unwrap();
     theme.uses_overlay_scrollbars = overlay;
@@ -71,7 +71,7 @@ fn fixture_with_theme(
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(

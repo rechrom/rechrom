@@ -81,7 +81,7 @@ fn background_module_compile_completion_wakes_the_page_owner() {
         ),
         URLLoadEvent::Finished,
     ]));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let scripts = ScriptEnvironment {
         runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::new()),
         xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&Default::default()).unwrap(),
@@ -99,7 +99,7 @@ fn background_module_compile_completion_wakes_the_page_owner() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(320, 200),
         Some(scripts),
         None,
@@ -193,7 +193,7 @@ fn eight_deferred_module_roots_with_dependencies_drain_only_from_owner_wakes() {
         URLLoadEvent::Data(html.into_bytes()),
         URLLoadEvent::Finished,
     ]));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let scripts = ScriptEnvironment {
         runtime: Box::new(javascript::quickjs_javascript_runtime::QuickJsJavaScriptRuntime::new()),
         xhr: xhr_transport::CreateHTTPXMLHttpRequestTransport(&Default::default()).unwrap(),
@@ -211,7 +211,7 @@ fn eight_deferred_module_roots_with_dependencies_drain_only_from_owner_wakes() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(320, 200),
         Some(scripts),
         None,

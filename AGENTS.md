@@ -145,9 +145,11 @@ internal.
   Paint data stays attached to those owners.
 - Synchronous geometry queries read the same resident fragments and must not
   materialize or cache a parallel document-wide tree.
-- Algorithm packages stay separate crates and register their entry points in
-  the `LayoutAssembly` table once, from `layout`; the core calls through that
-  table (cycle-free stand-in for Blink's direct calls within one target).
+- Algorithm packages stay separate crates. Each exposes one
+  `registration::Register(&mut LayoutRegistry)`; `layout::CreateLayoutRegistry`
+  calls them once, in a fixed order, and `LayoutEngine::new` takes the
+  registry. The core calls through that table (cycle-free stand-in for
+  Blink's direct calls within one target).
 - Where Chromium code outside `core/layout` reads a LayoutObject or PaintLayer
   directly (hit testing, cursor selection, LayoutTreeBuilder), the facade
   re-exports that type under a named topic with a citation; tests use the

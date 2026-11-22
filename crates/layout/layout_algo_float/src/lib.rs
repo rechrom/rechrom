@@ -1,4 +1,4 @@
-pub mod assembly;
+pub mod registration;
 pub mod ellipse_shape;
 pub mod float_layout_algorithm;
 pub mod inset_shape;

@@ -52,14 +52,14 @@ impl PageClient for Client {
 #[test]
 fn parsing_after_a_style_read_invalidates_page_styles_before_the_next_script() {
     crate::test_thread::run(|| {
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let client = Rc::new(RefCell::new(Client::default()));
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(160, 96),
             Some(crate::page::ScriptEnvironment {
                 runtime: Box::new(QuickJsJavaScriptRuntime::new()),

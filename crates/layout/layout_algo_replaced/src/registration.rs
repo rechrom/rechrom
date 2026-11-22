@@ -8,7 +8,7 @@ use layout_assembly::internal::layout_object::LayoutObject;
 use layout_assembly::internal::layout_replaced::{
     LayoutInputReplaced, LayoutMedia, LayoutReplaced, LayoutVideo,
 };
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 use layout_style::style::natural_sizing_info::PhysicalNaturalSizingInfo;
 
@@ -119,17 +119,17 @@ fn UpdateVideoState(replaced: &mut LayoutReplaced) {
 
 // cpp: layoutng_replaced/assembly.h:3-3
 // cpp: layoutng_replaced/assembly.cc:26-30
-pub fn InstallReplacedAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.replaced_sizing.performance_owner = Some("layout_algo_replaced");
-    assembly.objects.replaced = Some(CreateReplacedObject);
-    assembly.objects.replaced_respects_css_overflow = Some(LayoutReplacedRespectsCSSOverflow);
-    assembly.objects.replaced_image_state_updater = Some(UpdateImageState);
-    assembly.objects.replaced_image_resource_updater = Some(UpdateImageResource);
-    assembly.objects.replaced_video_poster_resource_updater = Some(UpdateVideoPosterResource);
-    assembly.objects.replaced_broken_image_resource_updater = Some(UseBrokenImageResource);
-    assembly.objects.replaced_image_resource_facts = Some(ImageResourceFacts);
-    assembly.objects.replaced_video_state_updater = Some(UpdateVideoState);
-    assembly.algorithms.replaced =
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.algorithms.replaced_sizing.performance_owner = Some("layout_algo_replaced");
+    registry.objects.replaced = Some(CreateReplacedObject);
+    registry.objects.replaced_respects_css_overflow = Some(LayoutReplacedRespectsCSSOverflow);
+    registry.objects.replaced_image_state_updater = Some(UpdateImageState);
+    registry.objects.replaced_image_resource_updater = Some(UpdateImageResource);
+    registry.objects.replaced_video_poster_resource_updater = Some(UpdateVideoPosterResource);
+    registry.objects.replaced_broken_image_resource_updater = Some(UseBrokenImageResource);
+    registry.objects.replaced_image_resource_facts = Some(ImageResourceFacts);
+    registry.objects.replaced_video_state_updater = Some(UpdateVideoState);
+    registry.algorithms.replaced =
         LayoutAlgorithmEntryFor::<ReplacedLayoutAlgorithm>("layout_algo_replaced");
-    assembly.algorithms.replaced_sizing.natural_sizing_info = Some(NaturalSizingInfo);
+    registry.algorithms.replaced_sizing.natural_sizing_info = Some(NaturalSizingInfo);
 }

@@ -62,7 +62,7 @@ impl URLLoader for Loader {
 fn page() -> (Page, Events, Responses) {
     let body = Rc::new(RefCell::new(VecDeque::new()));
     let resources = Rc::new(RefCell::new(HashMap::new()));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let page = Page::Create(
         Rc::new(RefCell::new(Loader {
             body: body.clone(),
@@ -71,7 +71,7 @@ fn page() -> (Page, Events, Responses) {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(320, 200),
         None,
         None,

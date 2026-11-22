@@ -5,7 +5,7 @@ use layout_assembly::internal::algorithm_entry::LayoutAlgorithmEntryFor;
 use layout_assembly::internal::layout_block::LayoutBlock;
 use layout_assembly::internal::layout_node_metadata::{Element, Node};
 use layout_assembly::internal::layout_object::LayoutObject;
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::flex_layout_algorithm::FlexLayoutAlgorithm;
@@ -24,8 +24,8 @@ fn CreateAnonymousFlexObject() -> *mut LayoutBlock {
 
 // cpp: layoutng_flex/assembly.h:3-3
 // cpp: layoutng_flex/assembly.cc:19-23
-pub fn InstallFlexAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.objects.flex = Some(CreateFlexObject);
-    assembly.objects.anonymous_flex = Some(CreateAnonymousFlexObject);
-    assembly.algorithms.flex = LayoutAlgorithmEntryFor::<FlexLayoutAlgorithm>("layout_algo_flex");
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.objects.flex = Some(CreateFlexObject);
+    registry.objects.anonymous_flex = Some(CreateAnonymousFlexObject);
+    registry.algorithms.flex = LayoutAlgorithmEntryFor::<FlexLayoutAlgorithm>("layout_algo_flex");
 }

@@ -441,7 +441,7 @@ pub(crate) fn create_document(
     let images = Rc::new(RefCell::new(
         image_decoder::skia_image_decoder::SkiaImageDecoder,
     ));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraintsWithFontBackendFactory(
         width.ceil() as u32,
         height.ceil() as u32,
@@ -476,7 +476,7 @@ pub(crate) fn create_document(
     // LayoutUnit precision at high DPI instead of scaling a DPR-1 layout.
     constraints.layout_zoom_factor = scale;
     let document_images = Rc::new(RefCell::new(browser::CreateSVGImageDecoderWithConstraints(
-        &assembly,
+        &registry,
         &constraints,
     )));
     let environment = if scripting {

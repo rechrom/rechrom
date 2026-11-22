@@ -54,7 +54,7 @@ fn fixture(author_color: bool) -> Page {
         <button id=right style='text-align:right'>Search</button>
         <div class=row><button id=flex style='position:relative'> Search </button></div>"#
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut space = browser::CreateBrowserConstraints(640, 480);
     space.fonts = vec![FontFace {
         family: "ButtonFixture".into(),
@@ -69,7 +69,7 @@ fn fixture(author_color: bool) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(

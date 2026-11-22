@@ -14,7 +14,7 @@ use layout_assembly::{
     internal::{
         algorithm_entry::LayoutAlgorithmEntryFor, layout_algorithm_set::TableLayoutSupport,
     },
-    engine_assembly::LayoutAssembly,
+    layout_registry::LayoutRegistry,
 };
 use layout_style::style::computed_style::ComputedStyle;
 // cpp: layoutng_table/assembly.cc:22-44
@@ -36,10 +36,10 @@ fn CreateTableObject(node: &mut Node, style: &ComputedStyle) -> *mut LayoutObjec
         other => panic!("CreateTableObject is unreachable for {other:?}"),
     }
 }
-// Object-only installation is restricted to the object-construction oracle.
-// Production installs the source algorithms and objects together.
+// Object-only registration is restricted to the object-construction oracle.
+// Production registers the source algorithms and objects together.
 // cpp: layoutng_table/assembly.cc:62-63
-pub(crate) fn InstallTableObjects(objects: &mut LayoutObjectFactorySet) {
+pub(crate) fn RegisterTableObjects(objects: &mut LayoutObjectFactorySet) {
     objects.table = Some(CreateTableObject);
     objects.insert_table_child = Some(crate::table_tree_insertion::InsertTableChild);
     objects.table_virtuals = Some(crate::table_object_virtuals::Virtuals());
@@ -47,18 +47,18 @@ pub(crate) fn InstallTableObjects(objects: &mut LayoutObjectFactorySet) {
 
 // cpp: layoutng_table/assembly.h:3-3
 // cpp: layoutng_table/assembly.cc:61-72
-pub fn InstallTableAlgorithm(assembly: &mut LayoutAssembly) {
-    InstallTableObjects(&mut assembly.objects);
-    assembly.algorithms.table = LayoutAlgorithmEntryFor::<
+pub fn Register(registry: &mut LayoutRegistry) {
+    RegisterTableObjects(&mut registry.objects);
+    registry.algorithms.table = LayoutAlgorithmEntryFor::<
         crate::table_layout_algorithm::TableLayoutAlgorithm,
     >("layout_algo_table");
-    assembly.algorithms.table_row = LayoutAlgorithmEntryFor::<
+    registry.algorithms.table_row = LayoutAlgorithmEntryFor::<
         crate::table_row_layout_algorithm::TableRowLayoutAlgorithm,
     >("layout_algo_table");
-    assembly.algorithms.table_section = LayoutAlgorithmEntryFor::<
+    registry.algorithms.table_section = LayoutAlgorithmEntryFor::<
         crate::table_section_layout_algorithm::TableSectionLayoutAlgorithm,
     >("layout_algo_table");
-    assembly.algorithms.table_support = TableLayoutSupport {
+    registry.algorithms.table_support = TableLayoutSupport {
         performance_owner: Some("layout_algo_table"),
         inline_size: Some(crate::table_node::TableNodeComputeTableInlineSizeFromTable),
         caption_block_size: Some(crate::table_node::TableNodeComputeCaptionBlockSizeFromTable),

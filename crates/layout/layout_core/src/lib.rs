@@ -10,7 +10,7 @@ pub mod internal {
     pub mod anchor_scope;
     pub mod anchor_scroll_services;
     pub mod boundary {
-        pub mod assembly;
+        pub mod registration;
         pub mod control_theme_validation;
         pub mod font_from_selector;
         pub mod input;
@@ -233,7 +233,7 @@ pub mod layout_fragment_object_index;
 #[path = "../../layout_fragment/src/paint_layer_scrollable_area_sticky_offsets.rs"]
 pub mod layout_fragment_sticky_offsets;
 
-pub mod engine_assembly;
+pub mod layout_registry;
 pub mod layout_boundary_support;
 pub mod layout_engine;
 mod layoutng_trace_bindings;

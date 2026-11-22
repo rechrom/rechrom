@@ -33,14 +33,14 @@ impl URLLoader for FixtureLoader {
 }
 
 fn fixture_with_options(body: &'static [u8], device_scale: f64, printing: bool) -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 200);
     constraints.device_pixel_ratio = device_scale;
     constraints.printing = printing;
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(body))),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         None,
         None,

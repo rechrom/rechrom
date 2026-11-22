@@ -42,7 +42,7 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 }
 
 fn editing_fixture() -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut space = browser::CreateBrowserConstraints(640, 480);
     space.fonts = vec![layout::input::FontFace {
         family: "sans-serif".into(),
@@ -55,7 +55,7 @@ fn editing_fixture() -> Page {
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader)),
         Rc::new(RefCell::new(SkiaImageDecoder)),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::with_max_stack_size(

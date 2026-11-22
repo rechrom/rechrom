@@ -4383,7 +4383,7 @@ impl PageState {
         constraints.font_queries = Some(font_engine::FontQueryCollector::default());
         Self::WithDocumentEngines(
             document,
-            layout::LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            layout::LayoutEngine::new(&crate::CreateLayoutRegistry()),
             paint::PaintEngine::new(),
             None,
             constraints,
@@ -4611,7 +4611,7 @@ impl PageState {
     fn new(constraints: ConstraintSpace, client: Rc<RefCell<dyn PageClient>>) -> Rc<Self> {
         Self::WithEngines(
             Rc::new(DocumentEngine::new()),
-            layout::LayoutEngine::new(&crate::CreateLayoutAssembly()),
+            layout::LayoutEngine::new(&crate::CreateLayoutRegistry()),
             paint::PaintEngine::new(),
             PageRenderPipeline::default(),
             constraints,
@@ -7302,7 +7302,7 @@ impl Page {
         ));
         let document = Rc::new(DocumentEngine::new());
         let layout_engine =
-            layout::LayoutEngine::new(&crate::CreateLayoutAssembly());
+            layout::LayoutEngine::new(&crate::CreateLayoutRegistry());
         let paint_engine = paint::PaintEngine::new();
         let rendering = PageRenderPipeline::new_with_executors(
             if threads.raster {
@@ -10518,13 +10518,13 @@ fn cursor_hit_test_same_point_reuses_clean_frame_and_scroll_invalidates() {
                 Err(io::Error::other("unexpected fixture network request"))
             }
         }
-        let assembly = crate::CreateLayoutAssembly();
+        let registry = crate::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(NoNetwork)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
             crate::CreateBrowserConstraints(320, 200),
             None,
             None,
@@ -11011,13 +11011,13 @@ pub(crate) fn OpenUrlWithDefaultLoader(
 ) -> io::Result<Page> {
     let loader = Rc::new(RefCell::new(loader));
     let xhr = xhr_transport::CreateHTTPXMLHttpRequestTransport(&options)?;
-    let assembly = crate::CreateLayoutAssembly();
+    let registry = crate::CreateLayoutRegistry();
     let mut page = Page::Create(
         loader,
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(crate::CreateSVGImageDecoder(&registry))),
         crate::CreateBrowserConstraints(width, height),
         Some(ScriptEnvironment {
             runtime: Box::new(

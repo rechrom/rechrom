@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-pub mod assembly;
+pub mod registration;
 pub mod flex_break_token_data;
 pub mod flex_child_iterator;
 pub mod flex_gap_accumulator;

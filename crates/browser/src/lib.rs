@@ -5,7 +5,7 @@ use layout::fragment::LayoutResultHandle;
 use layout::paint::FragmentPaintData;
 use layout::input::{ConstraintSpace, OverscrollType, Size, ViewportGeometry};
 use layout::input::{ControlThemeMetrics, IntSize, ScrollbarThemeMetrics};
-use layout::LayoutAssembly;
+use layout::LayoutRegistry;
 pub use layout::LayoutEngine;
 use std::cell::RefCell;
 use std::io;
@@ -41,10 +41,10 @@ mod text_transform;
 pub use persistent_layout::LayoutPersistentDocument;
 mod user_agent_styles;
 
-// Shared translated assembly; missing source package slots retain source
+// Shared Layout registry; missing source package slots retain source
 // capability errors, and are not replaced with generic boxes.
-pub fn CreateLayoutAssembly() -> LayoutAssembly {
-    layout::CreateLayoutAssembly(layout::LayoutPlatformServices {
+pub fn CreateLayoutRegistry() -> LayoutRegistry {
+    layout::CreateLayoutRegistry(layout::LayoutPlatformServices {
         svg_shape_path: Some(paint_skia::svg_shape_path::CreateSvgShapePath),
         shape_coverage: Some(&paint_skia::shape_coverage::SkiaShapeCoverageRasterizer),
     })
@@ -53,35 +53,35 @@ pub fn CreateLayoutAssembly() -> LayoutAssembly {
 #[cfg(test)]
 #[test]
 fn installed_layout_algorithms_keep_their_performance_owner() {
-    let assembly = CreateLayoutAssembly();
+    let registry = CreateLayoutRegistry();
     let entries = [
-        ("block", assembly.algorithms.block, "layout_algo_block"),
-        ("flex", assembly.algorithms.flex, "layout_algo_flex"),
-        ("grid", assembly.algorithms.grid, "layout_algo_grid"),
-        ("table", assembly.algorithms.table, "layout_algo_table"),
+        ("block", registry.algorithms.block, "layout_algo_block"),
+        ("flex", registry.algorithms.flex, "layout_algo_flex"),
+        ("grid", registry.algorithms.grid, "layout_algo_grid"),
+        ("table", registry.algorithms.table, "layout_algo_table"),
         (
             "table_row",
-            assembly.algorithms.table_row,
+            registry.algorithms.table_row,
             "layout_algo_table",
         ),
         (
             "table_section",
-            assembly.algorithms.table_section,
+            registry.algorithms.table_section,
             "layout_algo_table",
         ),
         (
             "replaced",
-            assembly.algorithms.replaced,
+            registry.algorithms.replaced,
             "layout_algo_replaced",
         ),
         (
             "fieldset",
-            assembly.algorithms.fieldset,
+            registry.algorithms.fieldset,
             "layout_algo_forms",
         ),
         (
             "multicol",
-            assembly.algorithms.multicol,
+            registry.algorithms.multicol,
             "layout_algo_multicol",
         ),
     ];
@@ -94,32 +94,32 @@ fn installed_layout_algorithms_keep_their_performance_owner() {
     let mut support_owners = vec![
         (
             "table_support",
-            assembly.algorithms.table_support.performance_owner,
+            registry.algorithms.table_support.performance_owner,
             "layout_algo_table",
         ),
         (
             "float_support",
-            assembly.algorithms.float_support.performance_owner,
+            registry.algorithms.float_support.performance_owner,
             "layout_algo_float",
         ),
         (
             "replaced_sizing",
-            assembly.algorithms.replaced_sizing.performance_owner,
+            registry.algorithms.replaced_sizing.performance_owner,
             "layout_algo_replaced",
         ),
         (
             "list_support",
-            assembly.algorithms.list_support.performance_owner,
+            registry.algorithms.list_support.performance_owner,
             "layout_algo_list",
         ),
         (
             "forms_support",
-            assembly.algorithms.forms_support.performance_owner,
+            registry.algorithms.forms_support.performance_owner,
             "layout_algo_forms",
         ),
         (
             "svg_support",
-            assembly.algorithms.svg_support.performance_owner,
+            registry.algorithms.svg_support.performance_owner,
             "layout_algo_svg",
         ),
     ];
@@ -127,12 +127,12 @@ fn installed_layout_algorithms_keep_their_performance_owner() {
     support_owners.extend([
         (
             "inline_support",
-            assembly.algorithms.inline_support.performance_owner,
+            registry.algorithms.inline_support.performance_owner,
             "layout_algo_inline",
         ),
         (
             "out_of_flow_support",
-            assembly.algorithms.out_of_flow_support.performance_owner,
+            registry.algorithms.out_of_flow_support.performance_owner,
             "layout_algo_out_of_flow",
         ),
     ]);
@@ -142,22 +142,22 @@ fn installed_layout_algorithms_keep_their_performance_owner() {
 }
 
 /// Assemble an isolated SVG document with the browser's retained UA rules.
-pub fn CreateSVGImageDecoder(assembly: &LayoutAssembly) -> document_image::SVGImageDecoder {
+pub fn CreateSVGImageDecoder(registry: &LayoutRegistry) -> document_image::SVGImageDecoder {
     // The image container replaces this placeholder viewport before Layout.
     // Reuse the existing immutable browser font/theme inputs rather than the
     // empty generic ConstraintSpace, which is not a complete browser host.
-    CreateSVGImageDecoderWithConstraints(assembly, &CreateBrowserConstraints(0, 0))
+    CreateSVGImageDecoderWithConstraints(registry, &CreateBrowserConstraints(0, 0))
 }
 
 /// SVG image documents share the embedding's platform constraints and UA rules,
 /// while retaining their own container, style, layout and paint lifecycle.
 pub fn CreateSVGImageDecoderWithConstraints(
-    assembly: &LayoutAssembly,
+    registry: &LayoutRegistry,
     constraints: &ConstraintSpace,
 ) -> document_image::SVGImageDecoder {
     let user_agent = user_agent_styles::UserAgentStyleSheets::new();
     document_image::SVGImageDecoder::new_with_constraints(
-        assembly,
+        registry,
         constraints,
         user_agent.Sheets(),
     )

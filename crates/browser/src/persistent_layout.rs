@@ -433,7 +433,7 @@ mod tests {
         crate::test_thread::run(|| {
             use layout::input::Offset;
 
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div id=s style='height:100px;overflow:scroll'><div style='height:3000px;background:red'></div></div></body></html>",
             );
@@ -480,7 +480,7 @@ mod tests {
                 "<html><body><div style='display:block;width:80px;height:30px'></div></body></html>",
             );
             resolve(&mut owner);
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
             let interaction = UserInteractionState::default();
@@ -518,7 +518,7 @@ mod tests {
                 "<html><body><div style='display:block;width:80px;height:30px'></div></body></html>",
             );
             resolve_for(&mut owner, 320, 200);
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let constraints = crate::CreateBrowserConstraints(320, 200);
             let interaction = UserInteractionState::default();
 
@@ -552,11 +552,11 @@ mod tests {
         crate::test_thread::run(|| {
             use layout::input::Offset;
 
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner=html::html_parser::ParseHTML("<html><body style='margin:0'><div id=s style='width:100px;height:40px;overflow:hidden;zoom:80%'><div style='width:200px;height:120px;background:red'>scrolling text</div></div></body></html>");
             let cs = crate::CreateBrowserConstraints(320, 200);
             crate::style_services::ResolveLayoutStyles(&mut owner, &cs);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let mut fragments = LayoutPersistentDocument(
                 &mut engine,
                 &mut owner,
@@ -610,7 +610,7 @@ mod tests {
                         .scroll_offset,
                     offset
                 );
-                let mut fresh_engine = LayoutEngine::new(&assembly);
+                let mut fresh_engine = LayoutEngine::new(&registry);
                 let fresh = LayoutPersistentDocument(
                     &mut fresh_engine,
                     &mut owner,
@@ -630,7 +630,7 @@ mod tests {
         crate::test_thread::run(|| {
             use layout::input::Offset;
             for position in ["sticky", "fixed", "absolute"] {
-                let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+                let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
                 let mut owner=html::html_parser::ParseHTML(&format!("<html><body><div id=s style='height:40px;overflow:scroll'><div style='position:{position};top:0;height:20px'></div><div style='height:200px'></div></div></body></html>"));
                 resolve(&mut owner);
                 let cs = crate::CreateBrowserConstraints(320, 200);
@@ -679,11 +679,11 @@ mod tests {
                 "float:left",
             ] {
                 for root_scroll in [false, true] {
-                    let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+                    let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
                     let mut owner = html::html_parser::ParseHTML(&format!("<html><body style='margin:0'><div id=s style='position:relative;width:180px;height:80px;overflow:scroll;background:white'><div id=p style='{placement};width:40px;height:25px;background:blue'></div><svg width='10' height='10'><rect width='10' height='10' fill='blue'/></svg><div style='width:220px;height:350px;background:red'>text</div></div><div style='height:600px;background:green'></div></body></html>"));
                     resolve(&mut owner);
                     let cs = crate::CreateBrowserConstraints(320, 200);
-                    let assembly = crate::CreateLayoutAssembly();
+                    let registry = crate::CreateLayoutRegistry();
                     let mut persistent = LayoutPersistentDocument(
                         &mut engine,
                         &mut owner,
@@ -742,7 +742,7 @@ mod tests {
                             fragment(&persistent, scroller_id).paint.ScrollOffset(),
                             offset
                         );
-                        let mut fresh_engine = LayoutEngine::new(&assembly);
+                        let mut fresh_engine = LayoutEngine::new(&registry);
                         let fresh = LayoutPersistentDocument(
                             &mut fresh_engine,
                             &mut owner,
@@ -770,13 +770,13 @@ mod tests {
         crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML("<html><body><div id=a style='width:80px;height:30px;background-color:blue;color:black'>hello</div></body></html>");
             resolve(&mut owner);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let _factories =
                 layout::testing::LayoutObjectFactoryScope::new(
-                    &assembly.objects,
+                    &registry.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
             let before = LayoutPersistentDocument(
@@ -819,7 +819,7 @@ mod tests {
                 "root geometry must also be retained"
             );
 
-            let mut fresh_engine = LayoutEngine::new(&assembly);
+            let mut fresh_engine = LayoutEngine::new(&registry);
             let fresh = LayoutPersistentDocument(
                 &mut fresh_engine,
                 &mut owner,
@@ -876,11 +876,11 @@ mod tests {
         crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner =
                 html::html_parser::ParseHTML("<html><body><span id=a>hello</span></body></html>");
             resolve(&mut owner);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let cs = crate::CreateBrowserConstraints(320, 200);
             LayoutPersistentDocument(
                 &mut engine,
@@ -908,7 +908,7 @@ mod tests {
                     &cs,
                 );
 
-                let mut fresh_engine = LayoutEngine::new(&assembly);
+                let mut fresh_engine = LayoutEngine::new(&registry);
                 let fresh = LayoutPersistentDocument(
                     &mut fresh_engine,
                     &mut owner,
@@ -932,15 +932,15 @@ mod tests {
     #[test]
     fn persistent_tree_noop_reuses_objects_styles_and_cached_results() {
         crate::test_thread::run(|| {
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div id='a' style='width:80px;height:30px'>hello</div><div id='b' style='height:40px'></div></body></html>"
             );
             resolve(&mut owner);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let _factories =
                 layout::testing::LayoutObjectFactoryScope::new(
-                    &assembly.objects,
+                    &registry.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
@@ -988,15 +988,15 @@ mod tests {
     fn persistent_tree_style_text_structure_and_reattach_update_in_place() {
         crate::test_thread::run(|| {
             use dom::persistent_document::{DOMAttribute, DOMNamespace};
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div id='a' style='width:80px;height:30px'>hello</div><div id='b' style='height:40px'></div></body></html>"
             );
             resolve(&mut owner);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let _factories =
                 layout::testing::LayoutObjectFactoryScope::new(
-                    &assembly.objects,
+                    &registry.objects,
                 );
             let cs = crate::CreateBrowserConstraints(320, 200);
             engine.ApplyMutation(LayoutMutation::Constraints(&cs));
@@ -1105,12 +1105,12 @@ mod tests {
         crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
 
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><div id='parent' style='width:220px'><span id='a' style='background:red'>first</span><div id='block' style='height:20px;background:green'></div><span id='b' style='background:blue'>second</span><input id='input' value='hello'></div></body></html>"
             );
             resolve(&mut owner);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let cs = crate::CreateBrowserConstraints(320, 200);
             LayoutPersistentDocument(
                 &mut engine,
@@ -1142,7 +1142,7 @@ mod tests {
                 &cs,
             );
 
-            let mut fresh_engine = LayoutEngine::new(&assembly);
+            let mut fresh_engine = LayoutEngine::new(&registry);
             let fresh = LayoutPersistentDocument(
                 &mut fresh_engine,
                 &mut owner,
@@ -1163,7 +1163,7 @@ mod tests {
     fn persistent_tree_recovers_after_failed_projection() {
         crate::test_thread::run(|| {
             use dom::persistent_document::DOMAttribute;
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML("<html><body>hello</body></html>");
             resolve(&mut owner);
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn line_clamp_relayout_finishes_for_nested_video_titles() {
         crate::test_thread::run(|| {
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner = html::html_parser::ParseHTML(
                 "<html><body><section style='display:grid;grid-template-columns:100px 100px'>\
                  <article><h3 id='title' style='display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:14px;line-height:20px;margin:0'>\
@@ -1371,7 +1371,7 @@ mod tests {
         crate::test_thread::run(tree_body);
     }
     fn tree_body() {
-        let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+        let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
         let mut owner = html::html_parser::ParseHTML(include_str!(
             "../../../artifacts/cpp-reference/persistent-tree.html"
         ));
@@ -1420,12 +1420,12 @@ mod tests {
                 );
             }
             resolve_for(&mut owner, 1024, 768);
-            let assembly = crate::CreateLayoutAssembly();
+            let registry = crate::CreateLayoutRegistry();
             let root =
                 crate::test_thread::BuildDOMProjection(&mut owner, &interaction, &mut engine);
             let _factory_scope =
                 layout::testing::LayoutObjectFactoryScope::new(
-                    &assembly.objects,
+                    &registry.objects,
                 );
             let mut actual = BTreeMap::new();
             dump(unsafe { &*root }, "0", &mut actual);
@@ -1505,7 +1505,7 @@ mod heap_lifecycle_tests {
                     Sentinel(traces.clone()),
                 ));
             }
-            let mut engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut owner =
                 html::html_parser::ParseHTML("<html><body><input value=address></body></html>");
             let cs = crate::CreateBrowserConstraints(320, 200);
@@ -1523,7 +1523,7 @@ mod heap_lifecycle_tests {
                 "unchanged lifecycle must not trace unrelated resident Page objects"
             );
             assert_eq!(foundation::LayoutHeapAllocationCountForTesting(), count);
-            let mut second_engine = LayoutEngine::new(&crate::CreateLayoutAssembly());
+            let mut second_engine = LayoutEngine::new(&crate::CreateLayoutRegistry());
             let mut second = html::html_parser::ParseHTML("<html><body>another Page</body></html>");
             crate::style_services::ResolveLayoutStyles(&mut second, &cs);
             LayoutPersistentDocument(&mut second_engine, &mut second, &interaction, &cs);

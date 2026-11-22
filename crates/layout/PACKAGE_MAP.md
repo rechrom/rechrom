@@ -5,7 +5,7 @@ Analysis only; no code was changed. Snapshot: `main` at `3d5c7d8d`
 "real Layout packages" plan (R1–R7): every package under `crates/layout`
 becomes a crate that compiles only its own files, dependencies point one way,
 and packages above the base register into a `LayoutEngine`-owned registry with
-one `Register(&mut LayoutEngine)` function.
+one `Register(&mut LayoutRegistry)` function.
 
 Target layering used for "upward" below (bottom to top):
 
@@ -230,7 +230,7 @@ the definition, so the duplicate has to become one slot.
 | `LayoutBoundarySupport` (`create_environment`, `prepare_constraints`, `prepare_tree`, `publish_layout_result`) | `layout_core/src/layout_boundary_support.rs` | 4 |
 | `OnceLock` statics with `Register*` functions (flex/grid row-gap, grid/replaced/image/video `StyleDidChange`, replaced visual overflow, SVG root children, `GridObjectVirtuals` ×4) | `layout_assembly/src/block_virtual_dispatch.rs` | 13 |
 | `RegisterSvgInlineTextFontVirtuals` (2 `OnceLock`s) | `layout_algo_inline/src/layout_text_interface.rs` | 2 |
-| `FullLayoutAssembly()` (`extern "Rust"`; `layout/src/lib.rs` fills the table through 14 `Install*` calls) | `layout_core/src/engine_assembly.rs` | 1 |
+| `FullLayoutRegistry()` (`extern "Rust"`; `layout/src/lib.rs` `CreateLayoutRegistry` fills the table through 14 `Register` calls, named `Install*` before R1) | `layout_core/src/layout_registry.rs` | 1 |
 
 That is about 234 fn pointers, plus the ~70 cross-package link-time symbols
 above.
@@ -638,7 +638,7 @@ multicol, inline, reuse and invalidation.** They name `BlockNode`,
 - table → block: `BlockChildIterator`. **(a)** to base (Chromium
   `core/layout/block_child_iterator.h`).
 - block → inline: 6 items from `block_inline_layout.rs`. **(c)** move
-  `InstallBlockInlineSupport` into inline, which then fills the existing
+  `RegisterInlineSupport` into inline, which then fills the existing
   `inline_support` slot.
 
 ### 4.3 What remains after the moves (needs slots or method-level work)
@@ -788,11 +788,20 @@ is a decision for R4 or R6.
 
 `LayoutAlgorithmSet` (140), `LayoutObjectFactorySet` (74),
 `LayoutBoundarySupport` (4), the `block_virtual_dispatch` `OnceLock`s (13),
-the inline SVG text-font `OnceLock`s (2) and `FullLayoutAssembly` (1, removed)
+the inline SVG text-font `OnceLock`s (2) and `FullLayoutRegistry` (1, removed)
 come to about 234 fields. The 14 `Install*Algorithm` / `Install*Module`
 functions become `Register`. Global `OnceLock`s become per-engine fields. The
 registry is still reached during layout through `LayoutPassScope`
 (thread-local), so no hot-path signature changes.
+
+R1 status: the table is `LayoutRegistry` (`layout_core/src/layout_registry.rs`,
+same fields as the former `LayoutAssembly`). Each algorithm crate exposes
+`registration::Register(&mut LayoutRegistry)`; block keeps the feature-gated
+`block_inline_layout::RegisterInlineSupport`, and the base boundary is
+`internal::boundary::registration::Register`. `layout::CreateLayoutRegistry`
+calls them in the former install order and `LayoutEngine::new(&LayoutRegistry)`
+still copies the table, so construction is unchanged. The `OnceLock` slots are
+not moved yet.
 
 ### 6.2 New slots required by the upward edges
 
@@ -851,13 +860,13 @@ The stage boundaries are a proposal (**guess**); the counts are measured.
 
 | stage | content | files moved | lines moved | new slots | main risks |
 |---|---|---:|---:|---:|---|
-| R1 registry | `LayoutEngine` owns a registry built from `LayoutAlgorithmSet`, `LayoutObjectFactorySet`, `LayoutBoundarySupport`, the 12 `OnceLock` statics (15 fn pointers) and `FullLayoutAssembly`; `Install*` → `Register`; front crate calls them | 0 (≈20 edited) | — | 0 (≈234 re-homed) | process-global `OnceLock` → per-engine (tests that build several engines); `LayoutPassScope` access stays thread-local |
+| R1 registry | `LayoutEngine` owns a registry built from `LayoutAlgorithmSet`, `LayoutObjectFactorySet`, `LayoutBoundarySupport`, the 12 `OnceLock` statics (15 fn pointers) and `FullLayoutRegistry`; `Install*` → `Register` (rename done, see §6.1); front crate calls them | 0 (≈20 edited) | — | 0 (≈234 re-homed) | process-global `OnceLock` → per-engine (tests that build several engines); `LayoutPassScope` access stays thread-local |
 | R2 leaf algorithms | move base-owned files out of float, out_of_flow, grid, svg, table, forms, list, custom, flex, multicol, replaced into `layout_core/`; their fragment-data files into `layout_fragment/`; move the `Traceable` impls to their types; fold sizing and fragmentation into base | 64 (+11 sizing/fragmentation) | ≈13.9k (+5.0k) | ≈8 (table 4 + 2 editing, forms 1, list 1) | `grid_track_collection.rs` `#[no_mangle]` bodies and `gap_segment_state_aggregator.rs` coherence (impl on a fragment-declared type); a clean `#[path]` removal still compiles in the assembly until R6 |
 | R3 lifecycle | invalidation/reuse/commit: 61 LayoutObject-bound files → base, 1 → fragment (≈10.8k lines); engine phases stay above with slots; decide §5.1 (root crate + engine half) | 62 | ≈10.8k | ≈29 | trace-ownership contract; per-object hot paths must stay direct calls; `tree_update` generic closures become `dyn` |
 | R4 fragment | fragment data crate (39 own + 3 standalone + 12 core + 29 algo data files (moved in R2) ≈ 82 files); 111 fragment files → base; builders → base; LayoutObject opaque handle; ≈113 base behaviours called from data → base extension traits; split `fragment_tree.rs` | ≈123 (111 up, 12 down) | ≈33.1k | 5–15 (**guess**) | the largest edge (160 items + 286 methods); `LayoutResult` embeds `ConstraintSpace` (closure into exclusions, line clamp, table/grid/custom rare data); `PaintStyle` (141 fns impl'd in fragment on a core type); fragment API churn for Paint/Interaction through the front crate |
 | R5 inline | 16 base-cited inline files → base (LayoutText/LayoutInline/… ≈3.6k lines), 6 data files → fragment (≈1.1k); 19 editing-query files → extension traits in inline (118 fns); `block_inline_layout.rs` → inline; link-time symbols → slots; drop the `translation_in_progress` gating | 23 + 19 converted | ≈4.7k moved | ≈9 | inline is 37.5k lines and has never compiled standalone; the duplicate `InlineChildLayoutContextParallelFlowBreakTokens` definition; editing API surface used by DOM/Interaction via the front crate |
 | R6 base crate | `layout_core` → `layout_base`, absorbing the assembly's real code (`block_virtual_dispatch.rs` 2.8k, `out_of_flow_element_data`, `layout_invalidation_reason_symbols`); distribute `untranslated_symbols.rs` stubs to the declaring crates (or delete them per `DEAD_CODE.md`); delete the `include!`s and `layout_algo_inline_assembly` | 5 + 2 crates removed | ≈3.5k | 0 | 783 `layout_assembly::` paths in 145 files and about 2,300 `crate::`/`super::` paths in core/fragment/inline need a scripted rewrite; MSVC needs every extern symbol defined in the linked crate set |
-| R7 front crate | `layout` builds the engine and calls every `Register`; remove the `extern crate layout_assembly as …` aliases in block; one-way Cargo graph check; README | ≈20 edited | — | 0 | the ordering of `Register` calls (replaces today's `Install*` order in `layout/src/lib.rs`) |
+| R7 front crate | `layout` builds the engine and calls every `Register`; remove the `extern crate layout_assembly as …` aliases in block; one-way Cargo graph check; README | ≈20 edited | — | 0 | the ordering of `Register` calls (the order `CreateLayoutRegistry` in `layout/src/lib.rs` documents) |
 
 ### Suggested order inside R4 (fragment)
 
@@ -900,7 +909,7 @@ The stage boundaries are a proposal (**guess**); the counts are measured.
    `LayoutObject`, `InlineCursor` and `PhysicalBoxFragment` into extension
    traits. Move the base wrapper methods that name the editing facts up into
    inline, and re-export them through the front crate.
-4. Move `block_inline_layout.rs` (`InstallBlockInlineSupport`) into inline.
+4. Move `block_inline_layout.rs` (`RegisterInlineSupport`) into inline.
 5. Remove the `translation_in_progress` gating so inline compiles standalone
    on base + fragment.
 

@@ -37,13 +37,13 @@ impl xhr_transport::XMLHttpRequestTransport for Xhr {
 
 fn page() -> Page {
     let html = b"<!doctype html><style>body{margin:0}#before{height:300px}#anchor{height:60px;background:yellow}#after{height:1200px}</style><div id=before></div><div id=anchor></div><div id=after></div>";
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut page = Page::Create(
         Rc::new(RefCell::new(FixtureLoader(html.to_vec()))),
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(300, 200),
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(

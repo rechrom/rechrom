@@ -3348,8 +3348,8 @@ mod tests {
             }
         }
 
-        let assembly = layout::LayoutAssembly::default();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = layout::LayoutRegistry::default();
+        let mut engine = LayoutEngine::new(&registry);
         let interaction = UserInteractionState::default();
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
         let state = owner.GetDocument().StyleState();
@@ -3440,8 +3440,8 @@ mod tests {
         }
         let changed_id = owner.GetDocument().Node(ids["changed"]).Id();
         let sibling_id = owner.GetDocument().Node(ids["sibling"]).Id();
-        let assembly = layout::LayoutAssembly::default();
-        let mut engine = LayoutEngine::new(&assembly);
+        let registry = layout::LayoutRegistry::default();
+        let mut engine = LayoutEngine::new(&registry);
         let interaction = UserInteractionState::default();
         owner.EmitLayoutMutations(&interaction, |mutation| engine.ApplyMutation(mutation));
         let root =

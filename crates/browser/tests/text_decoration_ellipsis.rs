@@ -45,7 +45,7 @@ fn generated_ellipsis_paints_glyphs_without_text_decoration() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
         let html = br#"<!doctype html><body style="margin:0"><div style="width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:24px/32px EllipsisDecorationFixture;text-decoration:underline 3px red;text-decoration-skip-ink:none">decorated text must overflow</div></body>"#;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut constraints = browser::CreateBrowserConstraints(240, 80);
         constraints.fonts = vec![FontFace {
             family: "EllipsisDecorationFixture".into(),
@@ -60,7 +60,7 @@ fn generated_ellipsis_paints_glyphs_without_text_decoration() {
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             constraints,
             None,
             None,

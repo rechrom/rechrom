@@ -1,4 +1,4 @@
-pub mod assembly;
+pub mod registration;
 pub mod control_intrinsic_size;
 pub mod control_theme_size;
 pub mod fieldset_break_token_data;

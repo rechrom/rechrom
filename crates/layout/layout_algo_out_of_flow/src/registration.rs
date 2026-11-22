@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use layout_assembly::box_fragment_builder::BoxFragmentBuilder;
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 
 use crate::out_of_flow_layout_part::OutOfFlowLayoutPart;
 
@@ -13,7 +13,7 @@ fn RunOutOfFlowLayout(builder: &mut BoxFragmentBuilder) {
 
 // cpp: layoutng_out_of_flow/assembly.h:3-5
 // cpp: layoutng_out_of_flow/assembly.cc:15-17
-pub fn InstallOutOfFlowAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.algorithms.out_of_flow_support.performance_owner = Some("layout_algo_out_of_flow");
-    assembly.algorithms.out_of_flow_support.run = Some(RunOutOfFlowLayout);
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.algorithms.out_of_flow_support.performance_owner = Some("layout_algo_out_of_flow");
+    registry.algorithms.out_of_flow_support.run = Some(RunOutOfFlowLayout);
 }

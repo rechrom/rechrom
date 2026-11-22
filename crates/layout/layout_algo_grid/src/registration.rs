@@ -7,7 +7,7 @@ use layout_assembly::{
         layout_node_metadata::{Element, Node},
         layout_object::LayoutObject,
     },
-    engine_assembly::LayoutAssembly,
+    layout_registry::LayoutRegistry,
 };
 use layout_style::style::computed_style::ComputedStyle;
 
@@ -21,8 +21,8 @@ fn CreateAnonymousGridObject() -> *mut LayoutBlock {
 }
 // cpp: layoutng_grid/assembly.h:3-3
 // cpp: layoutng_grid/assembly.cc:17-21
-pub fn InstallGridAlgorithm(assembly: &mut LayoutAssembly) {
-    assembly.objects.grid = Some(CreateGridObject);
-    assembly.objects.anonymous_grid = Some(CreateAnonymousGridObject);
-    assembly.algorithms.grid = LayoutAlgorithmEntryFor::<GridLayoutAlgorithm>("layout_algo_grid");
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.objects.grid = Some(CreateGridObject);
+    registry.objects.anonymous_grid = Some(CreateAnonymousGridObject);
+    registry.algorithms.grid = LayoutAlgorithmEntryFor::<GridLayoutAlgorithm>("layout_algo_grid");
 }

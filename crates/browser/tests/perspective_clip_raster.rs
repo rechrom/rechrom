@@ -40,9 +40,9 @@ fn render(perspective: &str, nested: bool) -> Vec<u32> {
         .content{{width:240px;height:180px;background:linear-gradient(135deg,red,blue)}}
         </style><div class="outer"><div class="slides"><div class="slide"><div class="nested"><div class="clip"><div class="content"></div></div></div></div></div></div>"#
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let constraints = browser::CreateBrowserConstraints(320, 200);
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader(html.into_bytes()))),
         Rc::new(RefCell::new(

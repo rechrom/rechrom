@@ -30,13 +30,13 @@ impl URLLoader for FixtureLoader {
 }
 
 fn page() -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     Page::Create(
         Rc::new(RefCell::new(FixtureLoader)),
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         browser::CreateBrowserConstraints(160, 96),
         None,
         None,

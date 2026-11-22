@@ -43,7 +43,7 @@ fn fixture_with_attributes(image: &[u8], extra_style: &str, attributes: &str) ->
     let html = format!(
         "<!doctype html><style>body{{margin:0}}img{{display:block;width:80px;height:80px;background:red;{extra_style}}}</style><img id=target src=fixture.png {attributes}>"
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(160, 120);
     constraints.fonts = vec![FontFace {
         family: "LayoutImageOpacity".into(),
@@ -53,7 +53,7 @@ fn fixture_with_attributes(image: &[u8], extra_style: &str, attributes: &str) ->
         ..Default::default()
     }]
     .into();
-    let svg = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let svg = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.into_bytes(),
@@ -89,7 +89,7 @@ fn rounded_box_fixture() -> Page {
       #target{width:100px;height:100px;overflow:hidden;border:1px solid black;border-radius:8px;background:red}
       #child{width:100%;height:100%;background:black}
       </style><div id=target><div id=child></div></div>"#;
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(160, 120);
     constraints.fonts = vec![FontFace {
         family: "LayoutBoxBackground".into(),
@@ -99,7 +99,7 @@ fn rounded_box_fixture() -> Page {
         ..Default::default()
     }]
     .into();
-    let svg = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let svg = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html: html.to_vec(),
@@ -326,8 +326,8 @@ fn rounded_box_background_is_skipped_when_opaque_child_obscures_it() {
 fn layout_image_replaced_content_matches_object_fit_position_and_clip_contract() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
-        let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+        let registry = browser::CreateLayoutRegistry();
+        let _factories = LayoutObjectFactoryScope::new(&registry.objects);
         let image =
             include_bytes!("../../image_decoder/tests/fixtures/avif-source/paris_icc_exif_xmp.png");
 
@@ -484,8 +484,8 @@ fn layout_image_style_changes_follow_replaced_lifecycle() {
             include_bytes!("../../image_decoder/tests/fixtures/avif-source/paris_icc_exif_xmp.png");
 
         let page = fixture(image, "");
-        let assembly = browser::CreateLayoutAssembly();
-        let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+        let registry = browser::CreateLayoutRegistry();
+        let _factories = LayoutObjectFactoryScope::new(&registry.objects);
         let replaced = unsafe { &mut *image_box_ptr(&page) };
         let natural_size =
             unsafe { &*(replaced as *mut LayoutReplaced).cast::<LayoutInputReplaced>() }
@@ -541,8 +541,8 @@ fn layout_image_visual_overflow_matches_replaced_effect_geometry() {
         let _heap = foundation::LayoutHeapScope::new();
         let image =
             include_bytes!("../../image_decoder/tests/fixtures/avif-source/paris_icc_exif_xmp.png");
-        let assembly = browser::CreateLayoutAssembly();
-        let _factories = LayoutObjectFactoryScope::new(&assembly.objects);
+        let registry = browser::CreateLayoutRegistry();
+        let _factories = LayoutObjectFactoryScope::new(&registry.objects);
 
         for (style, expected) in [
             ("", [0.0, 0.0, 80.0, 80.0]),

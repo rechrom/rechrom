@@ -20,9 +20,9 @@ fn svg_presentation_transform_and_fill_reach_document_paint_record() {
             <path fill="#062142" d="M355 388C355 347 386 320 427 327L728 376C757 381 775 403 775 432V476C760 454 745 446 717 441L441 392C422 388 409 399 409 419V575C409 591 418 602 434 605L701 648C714 651 722 645 722 631V461C750 467 775 486 775 512V651C775 692 747 716 710 709L410 660C377 654 355 630 355 595Z"/>
           </g>
         </svg>"##;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let constraints = browser::CreateBrowserConstraints(220, 190);
-        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
         let frame = decoder
             .create(
                 99,
@@ -68,9 +68,9 @@ fn on_layout_thread(test: impl FnOnce() + Send + 'static) {
 #[test]
 fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
     on_layout_thread(|| {
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let constraints = browser::CreateBrowserConstraints(320, 200);
-        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
         let container = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(7, Arc::from(SVG), "image/svg+xml", &container)
@@ -118,9 +118,9 @@ fn changed_samples_publish_new_immutable_records_without_zero_time_churn() {
 #[test]
 fn container_configuration_versions_the_record_cache_key() {
     on_layout_thread(|| {
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let constraints = browser::CreateBrowserConstraints(320, 200);
-        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+        let mut decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
         let initial = ContainerKey::new(64, 32, 1.0, 1.0);
         let mut created = decoder
             .create(9, Arc::from(RESPONSIVE_SVG), "image/svg+xml", &initial)
@@ -168,11 +168,11 @@ fn svg_user_agent_rules_survive_repeated_isolated_document_lifecycles() {
             <rect width="20" height="10" fill="blue"/>
           </g>
         </svg>"##;
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let constraints = browser::CreateBrowserConstraints(220, 190);
         for mut decoder in [
-            browser::CreateSVGImageDecoder(&assembly),
-            browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints),
+            browser::CreateSVGImageDecoder(&registry),
+            browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints),
         ] {
             let container = ContainerKey::new(220, 190, 1.0, 1.0);
             let mut created = decoder

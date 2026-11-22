@@ -1190,7 +1190,7 @@ impl LocalFrame {
             resources,
             style: RefCell::new(style),
             layout: RefCell::new(layout::LayoutEngine::new(
-                &crate::CreateLayoutAssembly(),
+                &crate::CreateLayoutRegistry(),
             )),
             constraints,
             view: self

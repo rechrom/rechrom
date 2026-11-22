@@ -12,7 +12,7 @@ use layout_assembly::internal::svg_layout_info::{SVGLayoutInfo, SVGLayoutResult}
 use layout_assembly::internal::svg_text_attributes_request::{
     SvgTextAttributesBuildRequest, SvgTextAttributesBuildResult,
 };
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_style::style::computed_style::ComputedStyle;
 
 use crate::block_style::{SquaredLocalSvgTextScale, UpdateSvgBlockStyle};
@@ -242,16 +242,16 @@ fn SvgIsChildAllowed(
 
 // cpp: layoutng_svg/assembly.h:2-2
 // cpp: layoutng_svg/assembly.cc:107-120
-pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
-    assembly.objects.svg_context_reference_box = Some(crate::svg_resources::ObjectBoundingBox);
-    assembly.objects.svg_marker_paints = Some(|object| {
+pub fn Register(registry: &mut LayoutRegistry) {
+    registry.objects.svg_context_reference_box = Some(crate::svg_resources::ObjectBoundingBox);
+    registry.objects.svg_marker_paints = Some(|object| {
         if object.RuntimeClass() != LayoutObjectClass::SvgShape {
             return Vec::new();
         }
         unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.MarkerPaints()
     });
-    assembly.algorithms.svg_support.performance_owner = Some("layout_algo_svg");
-    let svg = &mut assembly.algorithms.svg_support;
+    registry.algorithms.svg_support.performance_owner = Some("layout_algo_svg");
+    let svg = &mut registry.algorithms.svg_support;
     svg.hit_test_reference_box = Some(crate::svg_resources::ReferenceBoxForEffects);
     svg.hit_test_resolve_clip = Some(|tree, object, reference| {
         crate::svg_resources::ResolveClipPathTarget(tree, object, reference)
@@ -315,81 +315,81 @@ pub fn InstallSvgModule(assembly: &mut LayoutAssembly) {
     svg.hit_test_has_paint_server = Some(crate::svg_resources::HasPaintServer);
     layout_assembly::RegisterSvgRootChildren(SvgRootChildren);
     RegisterSvgInlineTextFontVirtuals(SvgInlineTextScaledFont, SvgInlineTextScalingFactor);
-    assembly.objects.svg = Some(CreateSvgObject);
-    assembly.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
-    assembly.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);
-    assembly.objects.svg_group_add_child = Some(SvgGroupAddChild);
-    assembly.objects.svg_shape_style_did_change =
+    registry.objects.svg = Some(CreateSvgObject);
+    registry.objects.svg_block_text_scale = Some(SquaredLocalSvgTextScale);
+    registry.objects.update_svg_block_style = Some(UpdateSvgBlockStyle);
+    registry.objects.svg_group_add_child = Some(SvgGroupAddChild);
+    registry.objects.svg_shape_style_did_change =
         Some(crate::layout_svg_shape::SvgShapeStyleDidChange);
-    assembly.objects.svg_container_style_did_change =
+    registry.objects.svg_container_style_did_change =
         Some(crate::layout_svg_group::SvgContainerStyleDidChange);
-    assembly.objects.svg_is_child_allowed = Some(SvgIsChildAllowed);
-    assembly.objects.svg_text_add_child = Some(SvgTextAddChild);
-    assembly.objects.svg_text_remove_child = Some(SvgTextRemoveChild);
-    assembly.objects.svg_text_inserted_into_tree = Some(SvgTextInsertedIntoTree);
-    assembly.objects.svg_text_will_be_removed_from_tree = Some(SvgTextWillBeRemovedFromTree);
-    assembly.objects.svg_text_needs_metrics_update = Some(SvgTextSetNeedsMetricsUpdate);
-    assembly.objects.svg_inline_text_update_scaled_font = Some(SvgInlineTextUpdateScaledFont);
-    assembly.objects.svg_inline_text_scaled_font = Some(SvgInlineTextScaledFont);
-    assembly.objects.svg_inline_text_scaling_factor = Some(SvgInlineTextScalingFactor);
-    assembly.objects.svg_root_add_child = Some(SvgRootAddChild);
-    assembly.objects.svg_root_remove_child = Some(SvgRootRemoveChild);
-    assembly.objects.svg_root_children = Some(SvgRootChildren);
-    assembly.algorithms.svg_support.object_bounding_box =
+    registry.objects.svg_is_child_allowed = Some(SvgIsChildAllowed);
+    registry.objects.svg_text_add_child = Some(SvgTextAddChild);
+    registry.objects.svg_text_remove_child = Some(SvgTextRemoveChild);
+    registry.objects.svg_text_inserted_into_tree = Some(SvgTextInsertedIntoTree);
+    registry.objects.svg_text_will_be_removed_from_tree = Some(SvgTextWillBeRemovedFromTree);
+    registry.objects.svg_text_needs_metrics_update = Some(SvgTextSetNeedsMetricsUpdate);
+    registry.objects.svg_inline_text_update_scaled_font = Some(SvgInlineTextUpdateScaledFont);
+    registry.objects.svg_inline_text_scaled_font = Some(SvgInlineTextScaledFont);
+    registry.objects.svg_inline_text_scaling_factor = Some(SvgInlineTextScalingFactor);
+    registry.objects.svg_root_add_child = Some(SvgRootAddChild);
+    registry.objects.svg_root_remove_child = Some(SvgRootRemoveChild);
+    registry.objects.svg_root_children = Some(SvgRootChildren);
+    registry.algorithms.svg_support.object_bounding_box =
         Some(crate::svg_resources::ObjectBoundingBox);
-    assembly
+    registry
         .algorithms
         .svg_support
         .resize_observer_bbox_diagnostics =
         Some(crate::svg_resources::ResizeObserverBBoxDiagnostics);
-    assembly.algorithms.svg_support.stroke_bounding_box =
+    registry.algorithms.svg_support.stroke_bounding_box =
         Some(crate::svg_resources::StrokeBoundingBox);
-    assembly.algorithms.svg_support.retained_shape = Some(|object| {
+    registry.algorithms.svg_support.retained_shape = Some(|object| {
         if !object.IsSVGShape() {
             return None;
         }
         unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGShape>() }.RetainedShape()
     });
-    assembly
+    registry
         .algorithms
         .svg_support
         .foreign_object_physical_location = Some(|object| {
         unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGForeignObject>() }
             .PhysicalLocation()
     });
-    assembly.algorithms.svg_support.decorated_bounding_box =
+    registry.algorithms.svg_support.decorated_bounding_box =
         Some(crate::svg_resources::DecoratedBoundingBox);
-    assembly.algorithms.svg_support.root_add_visual_overflow = Some(|object| {
+    registry.algorithms.svg_support.root_add_visual_overflow = Some(|object| {
         unsafe { &mut *(object as *mut LayoutObject).cast::<LayoutSVGRoot>() }
             .AddSVGContentsVisualOverflow()
     });
-    assembly
+    registry
         .algorithms
         .svg_support
         .root_visual_overflow_including_filters = Some(|object| {
         unsafe { &*(object as *const LayoutObject).cast::<LayoutSVGRoot>() }
             .VisualOverflowRectIncludingFilters()
     });
-    assembly.algorithms.svg_support.update_object = Some(UpdateSvgObjectLayout);
-    assembly.algorithms.svg_support.local_to_parent_transform = Some(SvgLocalToParentTransform);
-    assembly.algorithms.svg_support.paint_geometry = Some(SvgPaintGeometry);
-    assembly.algorithms.svg_support.text_object_bounding_box =
+    registry.algorithms.svg_support.update_object = Some(UpdateSvgObjectLayout);
+    registry.algorithms.svg_support.local_to_parent_transform = Some(SvgLocalToParentTransform);
+    registry.algorithms.svg_support.paint_geometry = Some(SvgPaintGeometry);
+    registry.algorithms.svg_support.text_object_bounding_box =
         Some(crate::svg_text_visual_rect::ObjectBoundingBox);
-    assembly.algorithms.svg_support.text_visual_rect =
+    registry.algorithms.svg_support.text_visual_rect =
         Some(crate::svg_text_visual_rect::VisualRectInLocalSVGCoordinates);
-    assembly.algorithms.svg_support.viewport_size = Some(crate::svg_viewport::ResolveViewport);
-    assembly.algorithms.svg_support.root_natural_dimensions = Some(SvgRootNaturalDimensions);
-    assembly.algorithms.svg_support.root_sizing_info = Some(QuerySvgRootSizing);
-    assembly.algorithms.svg_support.set_root_container_size =
+    registry.algorithms.svg_support.viewport_size = Some(crate::svg_viewport::ResolveViewport);
+    registry.algorithms.svg_support.root_natural_dimensions = Some(SvgRootNaturalDimensions);
+    registry.algorithms.svg_support.root_sizing_info = Some(QuerySvgRootSizing);
+    registry.algorithms.svg_support.set_root_container_size =
         Some(crate::layout_svg_root::SvgRootSetContainerSize);
-    assembly.algorithms.svg_support.set_root_container_scale =
+    registry.algorithms.svg_support.set_root_container_scale =
         Some(crate::layout_svg_root::SvgRootSetContainerScale);
-    assembly.algorithms.svg_support.layout_root = Some(SvgRootLayout);
-    assembly.algorithms.svg_support.compute_scaled_font = Some(ComputeScaledSvgFont);
-    assembly.algorithms.svg_support.screen_font_scale = Some(CalculateScreenFontSizeScalingFactor);
-    assembly.algorithms.svg_support.resolve_length = Some(ResolveSvgLength);
-    assembly.algorithms.svg_support.build_text_attributes = Some(BuildSvgTextAttributes);
-    assembly.algorithms.svg_support.layout_text = Some(LayoutSvgText);
+    registry.algorithms.svg_support.layout_root = Some(SvgRootLayout);
+    registry.algorithms.svg_support.compute_scaled_font = Some(ComputeScaledSvgFont);
+    registry.algorithms.svg_support.screen_font_scale = Some(CalculateScreenFontSizeScalingFactor);
+    registry.algorithms.svg_support.resolve_length = Some(ResolveSvgLength);
+    registry.algorithms.svg_support.build_text_attributes = Some(BuildSvgTextAttributes);
+    registry.algorithms.svg_support.layout_text = Some(LayoutSvgText);
 }
 
 fn SvgLocalToParentTransform(

@@ -42,7 +42,7 @@ impl URLLoader for Loader {
 }
 
 fn fixture(device_pixel_ratio: f64, padding_top: f64) -> Page {
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(320, 160);
     constraints.device_pixel_ratio = device_pixel_ratio;
     constraints.fonts = vec![FontFace {
@@ -58,7 +58,7 @@ fn fixture(device_pixel_ratio: f64, padding_top: f64) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         None,
         None,

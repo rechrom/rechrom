@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use foundation::{gfx, CompositorElementId, PhysicalOffset};
 use layout_assembly::editing_state::LayoutEditingState;
-use layout_assembly::engine_assembly::LayoutAssembly;
+use layout_assembly::layout_registry::LayoutRegistry;
 use layout_assembly::fragment_tree::LayoutResultHandle;
 use layout_assembly::internal::layout_input::{ConstraintSpace, ElementData};
 use layout_assembly::internal::layout_object_builder::LayoutObjectTree;
@@ -41,12 +41,12 @@ pub struct LayoutEngine {
 
 /// Construction.
 impl LayoutEngine {
-    /// An empty engine over an assembled algorithm set (see
-    /// [`crate::CreateLayoutAssembly`]).
+    /// An empty engine over a registered algorithm set (see
+    /// [`crate::CreateLayoutRegistry`]).
     #[inline]
-    pub fn new(assembly: &LayoutAssembly) -> Self {
+    pub fn new(registry: &LayoutRegistry) -> Self {
         Self {
-            engine: CoreLayoutEngine::new(assembly),
+            engine: CoreLayoutEngine::new(registry),
         }
     }
 }

@@ -37,7 +37,7 @@ impl xhr_transport::XMLHttpRequestTransport for XHR {
 
 fn fixture(css: &str, children: &str) -> Page {
     let html = format!("<!doctype html><style>html{{font-size:16px}}body{{margin:0}}#grid{{display:grid;width:1180px;{css}}}</style><div id=grid>{children}</div>");
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut space = browser::CreateBrowserConstraints(1180, 757);
     space.fonts = vec![FontFace {
         family: "ButtonFixture".into(),
@@ -52,7 +52,7 @@ fn fixture(css: &str, children: &str) -> Page {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         space,
         Some(browser::page::ScriptEnvironment {
             runtime: Box::new(

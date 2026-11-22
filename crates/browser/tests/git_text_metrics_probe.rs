@@ -77,7 +77,7 @@ fn git_text_metrics_probe() {
         inner: url_loader::DefaultURLLoader::new(options.clone()).unwrap(),
         requests: requests.clone(),
     }));
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let mut constraints = browser::CreateBrowserConstraints(1280, 720);
     constraints.device_pixel_ratio = 2.0;
     let errors = Rc::new(RefCell::new(Vec::new()));
@@ -87,7 +87,7 @@ fn git_text_metrics_probe() {
         Rc::new(RefCell::new(
             image_decoder::skia_image_decoder::SkiaImageDecoder,
         )),
-        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+        Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
         constraints,
         Some(ScriptEnvironment {
             runtime: Box::new(QuickJsJavaScriptRuntime::new()),

@@ -58,13 +58,13 @@ fn find(
 fn content_box_publication_recalculates_rules_before_page_paint() {
     test_thread::run(|| {
         let _heap = foundation::LayoutHeapScope::new();
-        let assembly = browser::CreateLayoutAssembly();
+        let registry = browser::CreateLayoutRegistry();
         let mut page = Page::Create(
             Rc::new(RefCell::new(Loader)),
             Rc::new(RefCell::new(
                 image_decoder::skia_image_decoder::SkiaImageDecoder,
             )),
-            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&assembly))),
+            Rc::new(RefCell::new(browser::CreateSVGImageDecoder(&registry))),
             browser::CreateBrowserConstraints(600, 300),
             None,
             None,

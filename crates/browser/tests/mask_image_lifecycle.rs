@@ -91,9 +91,9 @@ fn fixture(
     let html = format!(
         r#"<!doctype html><style>body{{margin:0;background:white}}{selector}{{content:"";display:block;width:100px;height:100px;background:red;mask-image:{layers};mask-size:100px 100px;mask-repeat:no-repeat;mask-composite:{composite}}}</style><div id="target"></div>"#
     );
-    let assembly = browser::CreateLayoutAssembly();
+    let registry = browser::CreateLayoutRegistry();
     let constraints = browser::CreateBrowserConstraints(160, 120);
-    let decoder = browser::CreateSVGImageDecoderWithConstraints(&assembly, &constraints);
+    let decoder = browser::CreateSVGImageDecoderWithConstraints(&registry, &constraints);
     let mut page = Page::Create(
         Rc::new(RefCell::new(Loader {
             html,
@@ -131,8 +131,8 @@ fn native(page: &Page) -> &LayoutObject {
                 .map(|_| doc.Node(i).Id())
         })
         .unwrap();
-    let assembly = browser::CreateLayoutAssembly();
-    let _scope = LayoutObjectFactoryScope::new(&assembly.objects);
+    let registry = browser::CreateLayoutRegistry();
+    let _scope = LayoutObjectFactoryScope::new(&registry.objects);
     let engine = page.GetLayoutEngine();
     let root = engine.Pointer().ResidentLayoutTree().unwrap().Root();
     let mut object = root as *const LayoutObject;
