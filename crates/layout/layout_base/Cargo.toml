@@ -1,5 +1,5 @@
 [package]
-name = "layout_assembly"
+name = "layout_base"
 version = "0.0.1"
 edition = "2021"
 
@@ -36,5 +36,3 @@ default = []
 translation_in_progress = []
 expensive_dchecks = []
 
-# This is an assembly boundary, not a sixth translated Bazel package. Both
-# selected packages retain their source files and per-file source maps.

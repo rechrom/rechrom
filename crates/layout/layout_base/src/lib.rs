@@ -1,3 +1,17 @@
+//! `layout_base`: Layout's base crate. It holds the LayoutObject tree, the
+//! LayoutNG shared runtime (constraint spaces, layout inputs, algorithm
+//! dispatch), the fragment tree and its Paint sidecars, editing/caret/selection
+//! geometry, and the `LayoutEngine` boundary. The `layout_algo_*` crates sit
+//! above it and connect through `registration::Register` /
+//! `LayoutAlgorithmSet` / `LayoutObjectFactorySet`; the vocabulary crates
+//! (`layout_invalidation`, `layout_reuse`, `layout_commit`) sit below it.
+//!
+//! R7a turned base's former link-time pairs into direct calls; the callers'
+//! former `unsafe { Extern(...) }` blocks now wrap safe functions.
+#![allow(unused_unsafe)]
+
+pub use foundation::UnsupportedLayout;
+
 // `shared_api`, `internal_headers`, `nodes`, `shared_runtime`, boundary, and
 // top-level core targets belong to this Bazel package. Modules are introduced
 // as their production source files are translated.
@@ -450,3 +464,35 @@ pub(crate) mod layout_algo_inline_editing_caret;
 pub(crate) mod layout_algo_inline_editing_caret_rect;
 
 
+
+// The fragment tree (break tokens, builders, PhysicalFragment, FragmentItems,
+// InlineCursor, LayoutResult and fragment Paint sidecars) is mounted at the
+// crate root paths (`crate::physical_box_fragment`, ...) through this module.
+// `layout_fragment_package` is a profiler attribution name: the module keeps it
+// so symbols stay comparable with recorded `layout_fragment` profiles.
+pub mod layout_fragment_package;
+pub use layout_fragment_package::*;
+
+// Chromium's core/paint/ decorating-box, inline-paint-context, line-relative
+// geometry and text-decoration metrics are consumed by Layout's own
+// fragment-tree code (FragmentItem, InlineCursor, PhysicalBoxFragment and
+// ink_overflow) and name FragmentItem/UsedFont directly. They live beside
+// those fragment-tree users in `fragment/`. Paint reaches them through
+// `layout::paint::<module>` re-exports and does not compile them.
+#[path = "fragment/decorating_box.rs"]
+pub mod decorating_box;
+#[path = "fragment/inline_paint_context.rs"]
+pub mod inline_paint_context;
+#[path = "fragment/line_relative_rect.rs"]
+pub mod line_relative_rect;
+#[path = "fragment/text_decoration_info.rs"]
+pub mod text_decoration_info;
+
+// The CSS colour parser is owned and compiled by `css_parser` (feature
+// `color_parser`). It names only `paint_input_types` values, so Layout
+// re-exports that compile unit instead of compiling the file a second time.
+pub use css_parser::color_parser as css_color_parser;
+
+mod block_virtual_dispatch;
+mod untranslated_symbols;
+mod out_of_flow_element_data;
