@@ -1,3 +1,5 @@
+#![allow(unused_unsafe)]
+
 use foundation::{
     HeapHashMap, IsHorizontalWritingMode, LayoutUnit, MakeGarbageCollectedDefault, Member,
     PhysicalSize, String, TextDirection, ToLineWritingMode, Visitor, WritingDirectionMode,
@@ -47,8 +49,17 @@ pub struct AddPreviousItemsResult {
     pub succeeded: bool,
 }
 
-// The implementation belongs to the excluded //src/layoutng_inline package.
-// Keep its declared fragment-tree method as a typed link for later assembly.
+// Chromium core/layout/inline/fragment_items_builder.cc: the FragmentItems builder stays with the fragment tree (R5 exception C).
+#[cfg(feature = "translation_in_progress")]
+#[path = "fragment_items_builder_inline.rs"]
+pub mod fragment_items_builder_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::fragment_items_builder_members::{
+    FragmentItemsBuilderNewForInline,
+    FragmentItemsBuilderAddPreviousItemsFromInline,
+};
+#[cfg(not(feature = "translation_in_progress"))]
 extern "Rust" {
     fn FragmentItemsBuilderNewForInline(
         node: &InlineNode,

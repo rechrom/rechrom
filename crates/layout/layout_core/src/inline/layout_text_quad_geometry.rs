@@ -8,8 +8,7 @@ use layout_core::internal::{
     layout_text::ClippingOption, map_coordinates_flags::MapCoordinatesFlags,
 };
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextQuadsInAncestorInternal(
+pub fn LayoutTextQuadsInAncestorInternal(
     this: &LayoutText,
     quads: &mut Vector<gfx::QuadF>,
     ancestor: *const LayoutBoxModelObject,
@@ -26,8 +25,7 @@ pub extern "Rust" fn LayoutTextQuadsInAncestorInternal(
 }
 
 // Source: core/layout/layout_text.cc:482-499.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCollectLineBoxRects(
+pub fn LayoutTextCollectLineBoxRects(
     this: &LayoutText,
     collector: &dyn Fn(&PhysicalRect),
     option: ClippingOption,
@@ -50,14 +48,12 @@ pub extern "Rust" fn LayoutTextCollectLineBoxRects(
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextGetOffsetMapping(this: &LayoutText) -> *const OffsetMapping {
+pub fn LayoutTextGetOffsetMapping(this: &LayoutText) -> *const OffsetMapping {
     this.CheckIsNotDestroyed();
     OffsetMapping::GetForLayoutObject(this as *const LayoutText as *const LayoutObject)
 }
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextMapDOMOffsetToTextContentOffset(
+pub fn LayoutTextMapDOMOffsetToTextContentOffset(
     this: &LayoutText,
     mapping: &OffsetMapping,
     start: &mut u32,
@@ -105,8 +101,7 @@ pub extern "Rust" fn LayoutTextMapDOMOffsetToTextContentOffset(
     true
 }
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextAbsoluteQuadsForRange(
+pub fn LayoutTextAbsoluteQuadsForRange(
     this: &LayoutText,
     quads: &mut Vector<gfx::QuadF>,
     mut start: u32,

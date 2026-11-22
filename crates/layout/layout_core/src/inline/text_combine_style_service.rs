@@ -15,8 +15,7 @@ use layout_style::style::style_intrinsic_length::{
 };
 
 // cpp: layoutng_inline/text_combine_style_service.cc:9-29
-#[unsafe(no_mangle)]
-pub extern "Rust" fn AdjustStyleForCombinedText(builder: &mut ComputedStyleBuilder) {
+pub fn AdjustStyleForCombinedText(builder: &mut ComputedStyleBuilder) {
     builder.ResetTextCombine();
     builder.SetLetterSpacing(&Length::Fixed(0.0));
     builder.SetTextAlign(ETextAlign::kCenter);
@@ -47,8 +46,7 @@ pub extern "Rust" fn AdjustStyleForCombinedText(builder: &mut ComputedStyleBuild
 // cpp: layoutng_inline/text_combine_style_service.cc:31-46
 // The source's release build has an empty body; its assertions are preserved
 // in Rust debug builds and exported for LayoutTextCombine's owner forwarding.
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutTextCombineAssertStyleIsValid(style: &ComputedStyle) {
+pub fn LayoutTextCombineAssertStyleIsValid(style: &ComputedStyle) {
     #[cfg(debug_assertions)]
     {
         debug_assert_eq!(style.GetTextDecorationLine(), TextDecorationLine::kNone);
@@ -66,8 +64,7 @@ pub extern "Rust" fn LayoutTextCombineAssertStyleIsValid(style: &ComputedStyle) 
 }
 
 // cpp: layoutng_inline/text_combine_style_service.cc:48-65
-#[unsafe(no_mangle)]
-pub extern "Rust" fn AdjustStyleForTextCombine(builder: &mut ComputedStyleBuilder) {
+pub fn AdjustStyleForTextCombine(builder: &mut ComputedStyleBuilder) {
     debug_assert_eq!(builder.Display(), EDisplay::kInlineBlock);
     let font = unsafe { &*builder.GetFont() };
     debug_assert!(IsVerticalBaseline(font.GetFontDescription().Orientation()));

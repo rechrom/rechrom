@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 
 use foundation::graphics_types;
 use std::cell::Cell;
@@ -33,7 +33,54 @@ use super::super::layout_object_factory_set::{
 use super::super::map_coordinates_flags::MapCoordinatesFlags;
 use super::super::variable_length_transform_result::VariableLengthTransformResult;
 
-// The constructor and most non-inline methods belong to //src/layoutng_inline.
+// Chromium core/layout/layout_text.cc: the LayoutText member bodies are base code (R5).
+#[cfg(feature = "translation_in_progress")]
+#[path = "layout_text.rs"]
+pub mod layout_text_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::layout_text_members::{
+    LayoutTextNew,
+    LayoutTextTrace,
+    LayoutTextIsWordBreak,
+    LayoutTextOriginalText,
+    LayoutTextOriginalTextLength,
+    LayoutTextHasInlineFragments,
+    LayoutTextClearFirstInlineFragmentItemIndex,
+    LayoutTextSetFirstInlineFragmentItemIndex,
+    LayoutTextPlainText,
+    LayoutTextGetVariableLengthTransformResult,
+    LayoutTextClearHasVariableLengthTransform,
+    LayoutTextFirstCharacterAfterWhitespaceCollapsing,
+    LayoutTextLastCharacterAfterWhitespaceCollapsing,
+    LayoutTextSetTextIfNeeded,
+    LayoutTextForceSetText,
+    LayoutTextSetTextInternal,
+    LayoutTextTransformAndSecureOriginalText,
+    LayoutTextTransformAndSecureText,
+    LayoutTextLocalSelectionVisualRect,
+    LayoutTextMomentarilyRevealLastTypedCharacter,
+    LayoutTextPasswordEchoTimerFired,
+    LayoutTextIsAllCollapsibleWhitespace,
+    LayoutTextRemoveAndDestroyTextBoxes,
+    LayoutTextPreviousCharacter,
+    LayoutTextSetInlineItems,
+    LayoutTextClearInlineItems,
+    LayoutTextInlineItems,
+    LayoutTextInvalidateSubtreeLayoutForFontUpdates,
+    LayoutTextSetPreviousLogicalStartingPoint,
+    LayoutTextWillBeDestroyed,
+    LayoutTextStyleDidChange,
+    LayoutTextInLayoutNGInlineFormattingContextWillChange,
+    LayoutTextTextDidChange,
+    LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation,
+    LayoutTextTextDidChangeWithoutInvalidation,
+    LayoutTextDeleteTextBoxes,
+    LayoutTextSecureText,
+    LayoutTextSetVariableLengthTransformResult,
+    LayoutTextGetSelectionDisplayItemClient,
+};
+#[cfg(not(feature = "translation_in_progress"))]
 unsafe extern "Rust" {
     fn LayoutTextNew(node: *mut Node, text: String) -> LayoutText;
     fn LayoutTextTrace(this: &LayoutText, visitor: &mut Visitor);
@@ -48,37 +95,8 @@ unsafe extern "Rust" {
         this: &LayoutText,
     ) -> VariableLengthTransformResult;
     fn LayoutTextClearHasVariableLengthTransform(this: &mut LayoutText);
-    fn LayoutTextQuadsInAncestorInternal(
-        this: &LayoutText,
-        quads: &mut Vector<gfx::QuadF>,
-        ancestor: *const LayoutBoxModelObject,
-        flags: MapCoordinatesFlags,
-        quad_type: BoxQuadType,
-    );
-    fn LayoutTextAbsoluteQuadsForRange(
-        this: &LayoutText,
-        quads: &mut Vector<gfx::QuadF>,
-        start_offset: u32,
-        end_offset: u32,
-    );
-    fn LayoutTextLocalBoundingBoxRectForAccessibility(
-        this: &LayoutText,
-        include_descendants: IncludeDescendants,
-    ) -> gfx::RectF;
-    fn LayoutTextLocalQuadsInFlippedBlocksDirection(
-        this: &LayoutText,
-        quads: &mut Vector<gfx::QuadF>,
-        option: ClippingOption,
-    );
-    fn LayoutTextPositionForPoint(
-        this: &LayoutText,
-        point: &PhysicalOffset,
-    ) -> PositionWithAffinity;
     fn LayoutTextFirstCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> foundation::UChar32;
     fn LayoutTextLastCharacterAfterWhitespaceCollapsing(this: &LayoutText) -> foundation::UChar32;
-    fn LayoutTextPhysicalLinesBoundingBox(this: &LayoutText) -> PhysicalRect;
-    fn LayoutTextVisualOverflowRect(this: &LayoutText) -> PhysicalRect;
-    fn LayoutTextInvalidateVisualOverflow(this: &mut LayoutText);
     fn LayoutTextSetTextIfNeeded(this: &mut LayoutText, text: String);
     fn LayoutTextForceSetText(this: &mut LayoutText, text: String);
     fn LayoutTextSetTextInternal(this: &mut LayoutText, text: String);
@@ -89,16 +107,6 @@ unsafe extern "Rust" {
         offset_map: &mut foundation::TextOffsetMap,
     ) -> String;
     fn LayoutTextLocalSelectionVisualRect(this: &LayoutText) -> PhysicalRect;
-    fn LayoutTextPositionForCaretOffset(this: &LayoutText, offset: u32) -> Position;
-    fn LayoutTextCaretOffsetForPosition(this: &LayoutText, position: &Position) -> Option<u32>;
-    fn LayoutTextContainsCaretOffset(this: &LayoutText, offset: i32) -> bool;
-    fn LayoutTextIsBeforeNonCollapsedCharacter(this: &LayoutText, offset: u32) -> bool;
-    fn LayoutTextIsAfterNonCollapsedCharacter(this: &LayoutText, offset: u32) -> bool;
-    fn LayoutTextCaretMinOffset(this: &LayoutText) -> usize;
-    fn LayoutTextCaretMaxOffset(this: &LayoutText) -> usize;
-    fn LayoutTextResolvedTextLength(this: &LayoutText) -> u32;
-    fn LayoutTextHasNonCollapsedText(this: &LayoutText) -> bool;
-    fn LayoutTextSetTextWithOffset(this: &mut LayoutText, text: String, diff: &TextDiffRange);
     fn LayoutTextMomentarilyRevealLastTypedCharacter(
         this: &mut LayoutText,
         offset: u32,
@@ -112,16 +120,7 @@ unsafe extern "Rust" {
     ) -> bool;
     fn LayoutTextIsAllCollapsibleWhitespace(this: &LayoutText) -> bool;
     fn LayoutTextRemoveAndDestroyTextBoxes(this: &mut LayoutText);
-    fn LayoutTextFirstAbstractInlineTextBox(this: &mut LayoutText) -> *mut AbstractInlineTextBox;
-    fn LayoutTextDebugRect(this: &LayoutText) -> PhysicalRect;
     fn LayoutTextPreviousCharacter(this: &LayoutText) -> foundation::UChar;
-    fn LayoutTextGetOffsetMapping(this: &LayoutText) -> *const OffsetMapping;
-    fn LayoutTextMapDOMOffsetToTextContentOffset(
-        this: &LayoutText,
-        mapping: &OffsetMapping,
-        start: &mut u32,
-        end: &mut u32,
-    ) -> bool;
     fn LayoutTextSetInlineItems(
         this: &mut LayoutText,
         data: *mut InlineItemsData,
@@ -142,17 +141,11 @@ unsafe extern "Rust" {
     );
     fn LayoutTextInLayoutNGInlineFormattingContextWillChange(this: &mut LayoutText, value: bool);
     fn LayoutTextTextDidChange(this: &mut LayoutText);
-    fn LayoutTextInvalidatePaint(this: &LayoutText, context: &PaintInvalidatorContext);
     fn LayoutTextSetNeedsLayoutAndIntrinsicWidthsRecalcAndFullPaintInvalidation(
         this: &mut LayoutText,
         reason: *const c_char,
     );
     fn LayoutTextTextDidChangeWithoutInvalidation(this: &mut LayoutText);
-    fn LayoutTextCollectLineBoxRects(
-        this: &LayoutText,
-        collector: &dyn Fn(&PhysicalRect),
-        option: ClippingOption,
-    );
     fn LayoutTextDeleteTextBoxes(this: &mut LayoutText);
     fn LayoutTextSecureText(
         this: &LayoutText,
@@ -167,7 +160,90 @@ unsafe extern "Rust" {
     fn LayoutTextGetSelectionDisplayItemClient(
         this: &LayoutText,
     ) -> *const graphics_types::graphics::paint::display_item_client::DisplayItemClient;
+}
+#[cfg(feature = "translation_in_progress")]
+use self::layout_text_members::editing_queries::{
+    LayoutTextPositionForCaretOffset,
+    LayoutTextCaretOffsetForPosition,
+    LayoutTextContainsCaretOffset,
+    LayoutTextIsBeforeNonCollapsedCharacter,
+    LayoutTextIsAfterNonCollapsedCharacter,
+    LayoutTextCaretMinOffset,
+    LayoutTextCaretMaxOffset,
+    LayoutTextResolvedTextLength,
+    LayoutTextHasNonCollapsedText,
+    LayoutTextNonCollapsedCaretMaxOffset,
+};
+#[cfg(not(feature = "translation_in_progress"))]
+unsafe extern "Rust" {
+    fn LayoutTextPositionForCaretOffset(this: &LayoutText, offset: u32) -> Position;
+    fn LayoutTextCaretOffsetForPosition(this: &LayoutText, position: &Position) -> Option<u32>;
+    fn LayoutTextContainsCaretOffset(this: &LayoutText, offset: i32) -> bool;
+    fn LayoutTextIsBeforeNonCollapsedCharacter(this: &LayoutText, offset: u32) -> bool;
+    fn LayoutTextIsAfterNonCollapsedCharacter(this: &LayoutText, offset: u32) -> bool;
+    fn LayoutTextCaretMinOffset(this: &LayoutText) -> usize;
+    fn LayoutTextCaretMaxOffset(this: &LayoutText) -> usize;
+    fn LayoutTextResolvedTextLength(this: &LayoutText) -> u32;
+    fn LayoutTextHasNonCollapsedText(this: &LayoutText) -> bool;
     fn LayoutTextNonCollapsedCaretMaxOffset(this: &LayoutText) -> u32;
+}
+#[cfg(feature = "translation_in_progress")]
+use self::layout_text_members::quad_geometry::{
+    LayoutTextQuadsInAncestorInternal,
+    LayoutTextAbsoluteQuadsForRange,
+    LayoutTextGetOffsetMapping,
+    LayoutTextMapDOMOffsetToTextContentOffset,
+    LayoutTextCollectLineBoxRects,
+};
+#[cfg(not(feature = "translation_in_progress"))]
+unsafe extern "Rust" {
+    fn LayoutTextQuadsInAncestorInternal(
+        this: &LayoutText,
+        quads: &mut Vector<gfx::QuadF>,
+        ancestor: *const LayoutBoxModelObject,
+        flags: MapCoordinatesFlags,
+        quad_type: BoxQuadType,
+    );
+    fn LayoutTextAbsoluteQuadsForRange(
+        this: &LayoutText,
+        quads: &mut Vector<gfx::QuadF>,
+        start_offset: u32,
+        end_offset: u32,
+    );
+    fn LayoutTextGetOffsetMapping(this: &LayoutText) -> *const OffsetMapping;
+    fn LayoutTextMapDOMOffsetToTextContentOffset(
+        this: &LayoutText,
+        mapping: &OffsetMapping,
+        start: &mut u32,
+        end: &mut u32,
+    ) -> bool;
+    fn LayoutTextCollectLineBoxRects(
+        this: &LayoutText,
+        collector: &dyn Fn(&PhysicalRect),
+        option: ClippingOption,
+    );
+}
+unsafe extern "Rust" {
+    fn LayoutTextLocalBoundingBoxRectForAccessibility(
+        this: &LayoutText,
+        include_descendants: IncludeDescendants,
+    ) -> gfx::RectF;
+    fn LayoutTextLocalQuadsInFlippedBlocksDirection(
+        this: &LayoutText,
+        quads: &mut Vector<gfx::QuadF>,
+        option: ClippingOption,
+    );
+    fn LayoutTextPositionForPoint(
+        this: &LayoutText,
+        point: &PhysicalOffset,
+    ) -> PositionWithAffinity;
+    fn LayoutTextPhysicalLinesBoundingBox(this: &LayoutText) -> PhysicalRect;
+    fn LayoutTextVisualOverflowRect(this: &LayoutText) -> PhysicalRect;
+    fn LayoutTextInvalidateVisualOverflow(this: &mut LayoutText);
+    fn LayoutTextSetTextWithOffset(this: &mut LayoutText, text: String, diff: &TextDiffRange);
+    fn LayoutTextFirstAbstractInlineTextBox(this: &mut LayoutText) -> *mut AbstractInlineTextBox;
+    fn LayoutTextDebugRect(this: &LayoutText) -> PhysicalRect;
+    fn LayoutTextInvalidatePaint(this: &LayoutText, context: &PaintInvalidatorContext);
 }
 
 static SVG_INLINE_TEXT_SCALED_FONT: OnceLock<SvgInlineTextScaledFont> = OnceLock::new();

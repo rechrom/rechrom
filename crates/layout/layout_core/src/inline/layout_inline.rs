@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, unused_unsafe)]
 #[path = "../fragment/layout_inline_visual_rect.rs"]
 mod visual_rect;
 
@@ -55,43 +55,34 @@ use layout_fragment_inline_quad_geometry::{
     LayoutInlineQuadsInAncestorInternal,
 };
 
-// Non-inline methods live mainly in //src/layoutng_inline. Declarations with
-// no definition in the supplied tree remain typed but unconnected.
+// Declarations with no definition in the supplied tree remain typed but
+// unconnected (untranslated stubs).
+// Chromium core/layout/layout_inline.cc: the LayoutInline member bodies are base code (R5).
+#[cfg(feature = "translation_in_progress")]
+#[path = "layout_inline_core.rs"]
+pub mod layout_inline_core_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::layout_inline_core_members::{
+    LayoutInlineAddChild,
+    LayoutInlineUpdateShouldCreateBoxFragment,
+    LayoutInlineWillBeDestroyed,
+    LayoutInlineStyleDidChange,
+    LayoutInlineComputeInitialShouldCreateBoxFragment,
+    LayoutInlineComputeInitialShouldCreateBoxFragmentWithStyle,
+    LayoutInlineAddChildAsBlockInInline,
+    LayoutInlineCreateAnonymousContainerForBlockChildren,
+    LayoutInlineCreateAnonymousBoxToSplit,
+};
+#[cfg(not(feature = "translation_in_progress"))]
 unsafe extern "Rust" {
-    fn LayoutInlineNew(element: *mut Element) -> LayoutInline;
-    fn LayoutInlineTrace(this: &LayoutInline, visitor: &mut Visitor);
     fn LayoutInlineAddChild(
         this: &mut LayoutInline,
         child: *mut LayoutObject,
         before: *mut LayoutObject,
     );
-    fn LayoutInlineLocalBoundingBoxRectForAccessibility(
-        this: &LayoutInline,
-        include_descendants: IncludeDescendants,
-    ) -> gfx::RectF;
-    fn LayoutInlinePhysicalLinesBoundingBox(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlineLinesVisualOverflowBoundingBox(this: &LayoutInline) -> PhysicalRect;
-    fn LayoutInlineCollectLineBoxRects(
-        this: &LayoutInline,
-        collector: &mut dyn FnMut(&PhysicalRect),
-    );
-    fn LayoutInlineHasInlineFragments(this: &LayoutInline) -> bool;
-    fn LayoutInlineClearFirstInlineFragmentItemIndex(this: &mut LayoutInline);
-    fn LayoutInlineSetFirstInlineFragmentItemIndex(this: &mut LayoutInline, index: usize);
     fn LayoutInlineUpdateShouldCreateBoxFragment(this: &mut LayoutInline);
-    fn LayoutInlineHitTestCulledInline(
-        this: &mut LayoutInline,
-        result: &mut HitTestResult,
-        location: &HitTestLocation,
-        offset: &PhysicalOffset,
-        cursor: &InlineCursor,
-    ) -> bool;
-    fn LayoutInlineDebugRect(this: &LayoutInline) -> PhysicalRect;
     fn LayoutInlineWillBeDestroyed(this: &mut LayoutInline);
-    fn LayoutInlineInLayoutNGInlineFormattingContextWillChange(
-        this: &mut LayoutInline,
-        value: bool,
-    );
     fn LayoutInlineStyleDidChange(
         this: &mut LayoutInline,
         diff: StyleDifference,
@@ -104,7 +95,6 @@ unsafe extern "Rust" {
         this: &LayoutInline,
         style: &ComputedStyle,
     ) -> bool;
-    fn LayoutInlineCulledInlineVisualOverflowBoundingBox(this: &LayoutInline) -> PhysicalRect;
     fn LayoutInlineAddChildAsBlockInInline(
         this: &mut LayoutInline,
         child: *mut LayoutObject,
@@ -117,6 +107,52 @@ unsafe extern "Rust" {
         this: &LayoutInline,
         box_to_split: *const LayoutBox,
     ) -> *mut LayoutBox;
+}
+// Chromium core/layout/layout_inline.cc (construction, Trace, fragment-item index).
+#[cfg(feature = "translation_in_progress")]
+#[path = "layout_inline_data.rs"]
+pub mod layout_inline_data_members;
+
+#[cfg(feature = "translation_in_progress")]
+use self::layout_inline_data_members::{
+    LayoutInlineNew,
+    LayoutInlineTrace,
+    LayoutInlineClearFirstInlineFragmentItemIndex,
+    LayoutInlineSetFirstInlineFragmentItemIndex,
+    LayoutInlineInLayoutNGInlineFormattingContextWillChange,
+};
+#[cfg(not(feature = "translation_in_progress"))]
+unsafe extern "Rust" {
+    fn LayoutInlineNew(element: *mut Element) -> LayoutInline;
+    fn LayoutInlineTrace(this: &LayoutInline, visitor: &mut Visitor);
+    fn LayoutInlineClearFirstInlineFragmentItemIndex(this: &mut LayoutInline);
+    fn LayoutInlineSetFirstInlineFragmentItemIndex(this: &mut LayoutInline, index: usize);
+    fn LayoutInlineInLayoutNGInlineFormattingContextWillChange(
+        this: &mut LayoutInline,
+        value: bool,
+    );
+}
+unsafe extern "Rust" {
+    fn LayoutInlineLocalBoundingBoxRectForAccessibility(
+        this: &LayoutInline,
+        include_descendants: IncludeDescendants,
+    ) -> gfx::RectF;
+    fn LayoutInlinePhysicalLinesBoundingBox(this: &LayoutInline) -> PhysicalRect;
+    fn LayoutInlineLinesVisualOverflowBoundingBox(this: &LayoutInline) -> PhysicalRect;
+    fn LayoutInlineCollectLineBoxRects(
+        this: &LayoutInline,
+        collector: &mut dyn FnMut(&PhysicalRect),
+    );
+    fn LayoutInlineHasInlineFragments(this: &LayoutInline) -> bool;
+    fn LayoutInlineHitTestCulledInline(
+        this: &mut LayoutInline,
+        result: &mut HitTestResult,
+        location: &HitTestLocation,
+        offset: &PhysicalOffset,
+        cursor: &InlineCursor,
+    ) -> bool;
+    fn LayoutInlineDebugRect(this: &LayoutInline) -> PhysicalRect;
+    fn LayoutInlineCulledInlineVisualOverflowBoundingBox(this: &LayoutInline) -> PhysicalRect;
     fn LayoutInlineMarkMayContainAnchor(this: &mut LayoutInline);
     fn LayoutInlinePaint(this: &LayoutInline, info: &PaintInfo);
     fn LayoutInlineNodeAtPoint(

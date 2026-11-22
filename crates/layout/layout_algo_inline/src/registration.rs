@@ -30,7 +30,7 @@ use layout_style::style::computed_style::{ComputedStyle, ComputedStyleBuilder};
 use crate::inline_child_layout_context::InlineChildLayoutContextParallelFlowBreakTokens;
 use crate::layout_br::LayoutBR;
 use crate::layout_ruby_as_block::LayoutRubyAsBlock;
-use crate::layout_text::layout_text_is_selected;
+use layout_core::internal::layout_text::layout_text_members::layout_text_is_selected;
 use crate::layout_word_break::LayoutWordBreak;
 use crate::text_combine_tree::InsertInlineTextChild;
 
@@ -116,12 +116,12 @@ fn UpdateAnonymousTextCombineStyle(child: &mut LayoutObject, builder: &mut Compu
         );
         return;
     }
-    unsafe { AdjustStyleForTextCombine(builder) };
+    AdjustStyleForTextCombine(builder);
 }
 
 // cpp: core/css/resolver/style_adjuster.cc:414-431
 fn AdjustCombinedTextStyle(builder: &mut ComputedStyleBuilder) {
-    unsafe { AdjustStyleForCombinedText(builder) };
+    AdjustStyleForCombinedText(builder);
 }
 
 fn TextFragmentSelectionFacts(
