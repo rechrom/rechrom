@@ -3097,7 +3097,10 @@ impl interaction::adapter::page_scroll_manager::PageScrollFrameState
             .WithLayout(|layout| {
                 debug_assert!(layout.Output().is_some());
                 if let Some(node_id) = node_id {
-                    debug_assert!(layout.EventRegistryLayout(Some(node_id)).is_some());
+                    debug_assert!(layout
+                        .EventRegistry()
+                        .EventRegistryLayout(Some(node_id))
+                        .is_some());
                 }
             })
             .expect("logical-scroll Frame owner remains alive");
@@ -3505,6 +3508,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for PageMouseFrameGeometr
             state
                 .layout_engine
                 .borrow()
+                .EventRegistry()
                 .EventRegistryLayout(Some(node_id))
                 .is_some()
         })

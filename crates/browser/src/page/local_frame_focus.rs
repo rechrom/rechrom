@@ -374,6 +374,7 @@ impl PageElementFocusLayout for ChildFocusServices {
             runtime
                 .layout
                 .borrow()
+                .EventRegistry()
                 .EventRegistryLayout(Some(node))
                 .is_some()
         })

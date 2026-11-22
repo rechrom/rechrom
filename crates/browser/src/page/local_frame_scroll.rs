@@ -81,8 +81,14 @@ impl InteractionScrollOwner {
             }
             let node = node.filter(|node| Some(*node) != document_root.map(|root| root.Id()));
             owner.WithLayout(|layout| {
-                if let Some(target) = layout.EventRegistryLayout(node) {
-                    layout.InvalidateEventRegistryLayout(&target, true);
+                let target = layout.EventRegistry().EventRegistryLayout(node);
+                if let Some(target) = target {
+                    layout.ApplyMutation(layout::mutation::LayoutMutation::EventRegistry(
+                        layout::views::event_registry::EventRegistryMutation::Invalidate {
+                            target: &target,
+                            blocking_wheel: true,
+                        },
+                    ));
                 }
             });
             match &owner {

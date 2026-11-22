@@ -337,6 +337,7 @@ impl interaction::event_dispatcher::MouseFrameGeometry for ChildInputGeometry {
             runtime
                 .layout
                 .borrow()
+                .EventRegistry()
                 .EventRegistryLayout(Some(node))
                 .is_some()
         })

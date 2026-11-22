@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use foundation::{gfx, CompositorElementId, Persistent, PhysicalOffset};
+use foundation::{gfx, CompositorElementId, PhysicalOffset};
 use layout_assembly::editing_state::LayoutEditingState;
 use layout_assembly::engine_assembly::LayoutAssembly;
 use layout_assembly::fragment_tree::LayoutResultHandle;
@@ -23,7 +23,6 @@ use layout_assembly::layout_selection::{LayoutSelectionRange, SelectionStyleAndP
 use layout_assembly::native_autoscroll_source::{
     NativeAutoscrollLayout, NativeAutoscrollSource, NativeLogicalScrollArea,
 };
-use layout_assembly::native_event_registry_source::NativeEventRegistryLayout;
 use layout_assembly::native_mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
@@ -34,7 +33,7 @@ use layout_assembly::native_pointer_scroll_controls::{
 };
 use layout_assembly::native_scroll_source::{
     NativeCompositorScrollArea, NativeCompositorScrollUpdate, NativeScrollFrameGeometry,
-    NativeScrollResult, NativeScrollSource,
+    NativeScrollSource,
 };
 use layout_assembly::native_user_scroll_source::NativeUserScrollSource;
 use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
@@ -401,49 +400,6 @@ impl LayoutEngine {
     ) -> bool {
         self.engine
             .MomentarilyRevealLastTypedCharacterIfSecure(node_id, offset, settings, scheduler)
-    }
-
-    // Form-control routes.
-
-    #[inline]
-    pub fn InvalidateInputCapsLockIndicatorPaint(&mut self, id: u64) -> bool {
-        self.engine.InvalidateInputCapsLockIndicatorPaint(id)
-    }
-
-    #[inline]
-    pub fn SetInputModifiedStyleOutsideStyleRecalc(
-        &mut self,
-        id: u64,
-        style: Persistent<ComputedStyle>,
-    ) -> bool {
-        self.engine
-            .SetInputModifiedStyleOutsideStyleRecalc(id, style)
-    }
-
-    #[inline]
-    pub fn ScrollSelectOptionIntoView(
-        &mut self,
-        container: u64,
-        option: u64,
-    ) -> NativeScrollResult {
-        self.engine.ScrollSelectOptionIntoView(container, option)
-    }
-
-    // Event-handler registry.
-
-    #[inline]
-    pub fn EventRegistryLayout(&self, node: Option<u64>) -> Option<NativeEventRegistryLayout> {
-        self.engine.EventRegistryLayout(node)
-    }
-
-    #[inline]
-    pub fn InvalidateEventRegistryLayout(
-        &mut self,
-        target: &NativeEventRegistryLayout,
-        blocking_wheel: bool,
-    ) {
-        self.engine
-            .InvalidateEventRegistryLayout(target, blocking_wheel)
     }
 
     // Native scroll sources and scroll side effects.

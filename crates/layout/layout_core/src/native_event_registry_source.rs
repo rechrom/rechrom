@@ -14,6 +14,31 @@ impl NativeEventRegistryLayout {
         !object.WasDestroyedForTreeUpdate() && object.IsEmbeddedObject()
     }
 }
+/// Event-handler registry commands carried by `LayoutMutation::EventRegistry`.
+pub enum EventRegistryMutation<'a> {
+    /// EventHandlerRegistry::NotifyHandlersChanged invalidation of the
+    /// blocking-wheel or touch-action owner of `target`.
+    Invalidate {
+        target: &'a NativeEventRegistryLayout,
+        blocking_wheel: bool,
+    },
+}
+impl LayoutEngine {
+    pub(crate) fn ApplyEventRegistryMutation(
+        &mut self,
+        mutation: EventRegistryMutation<'_>,
+    ) -> bool {
+        match mutation {
+            EventRegistryMutation::Invalidate {
+                target,
+                blocking_wheel,
+            } => {
+                self.InvalidateEventRegistryLayout(target, blocking_wheel);
+                true
+            }
+        }
+    }
+}
 impl LayoutEngine {
     /// None names Window::ContentLayoutObject (the same native LayoutView).
     pub fn EventRegistryLayout(&self, node: Option<u64>) -> Option<NativeEventRegistryLayout> {
