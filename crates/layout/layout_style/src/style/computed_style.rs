@@ -14,7 +14,7 @@ use foundation::{
     EOverlay, EOverscrollContainerType, EPageMarginSafety, EPointerEvents, EPosition, EResize,
     EScrollTargetGroup, EScrollbarWidth, ETableLayout, ETextBoxTrim, ETextCombine,
     ETransformStyle3D, EUserModify, EUserSelect, EVisibility, EWordBreak, GCedHeapHashSet,
-    GCedHeapVector, HashSet, LayoutUnit, Length, LengthBox, LengthPoint, LineBreak,
+    HashSet, LayoutUnit, Length, LengthBox, LengthPoint, LineBreak,
     MakeGarbageCollected, Member, PhysicalToLogical, RuntimeEnabledFeatures, String, TabSize,
     TabSizeValueType, TextDirection, VectorExt, Visitor, WeakMember, WritingDirectionMode,
 };
@@ -49,8 +49,7 @@ use super::fill_layer::FillLayer;
 use super::filter_operations::FilterOperationVector;
 use super::font_size_style::FontSizeStyle;
 use super::forward::{
-    CSSAnimationData, CSSTransitionData, CSSValue, CSSVariableData, Element, Longhand, Node,
-    StyleRule,
+    CSSAnimationData, CSSTransitionData, CSSValue, CSSVariableData, Element, Longhand, StyleRule,
 };
 use super::gap_data_list::GapDataList;
 use super::grid_enums::GridTrackSizingDirection;
@@ -5170,6 +5169,7 @@ impl std::hash::Hash for super::style_cached_data::PseudoElementStyleCacheKey {
 mod difference_tests {
     use super::super::computed_style_base::FieldDifference as F;
     use super::*;
+    use foundation::GCedHeapVector;
 
     fn initial() -> &'static ComputedStyle {
         unsafe { &*ComputedStyle::GetInitialStyleSingleton() }

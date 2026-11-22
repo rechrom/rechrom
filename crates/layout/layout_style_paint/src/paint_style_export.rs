@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use foundation::{
     BlendMode, CSSPropertyID, EBackfaceVisibility, EBorderStyle, ECaretShape, EForcedColorAdjust,
-    EImageRendering, EIsolation, EObjectFit, EPointerEvents, EPrintColorAdjust, EShapeRendering,
+    EIsolation, EObjectFit, EPointerEvents, EPrintColorAdjust, EShapeRendering,
     ETransformBox, EUserSelect, EVectorEffect, EVisibility, Length, LineCap, LineJoin,
     TransformOperationType, TranslateTransformOperation, WindRule,
 };
@@ -535,7 +535,6 @@ pub fn ExportGeneratedImageShader(
             F::kOklch => P::kOklch,
             F::kXYZD50 => P::kXYZD50,
             F::kXYZD65 => P::kXYZD65,
-            _ => panic!("unsupported generated-gradient interpolation space {space:?}"),
         };
         let hue = match hue {
             foundation::HueInterpolationMethod::kShorter => PaintHueInterpolationMethod::kShorter,
