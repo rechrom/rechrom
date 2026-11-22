@@ -834,7 +834,7 @@ moves. "→ down" marks a recommended alternative that needs no slot.
 | `commit_paint_client_state` | `fn(&LayoutObjectTree, &HashSet<u64>, &mut LayoutResultHandle)` | commit | `client_commit` |
 | `container_query_sizes` | `fn(&LayoutEngine) -> Vec<ContainerQuerySizeSnapshot>` | commit | `container_query_sizes` |
 | `scroll_offsets.commit` / `.output` | `fn(&mut LayoutObjectTree)` / `fn(&LayoutObjectTree) -> Vec<(u64, Offset)>` | commit | `scroll_offset_snapshot` |
-| `inline_support.parallel_flow_break_tokens` | current `InlineChildLayoutContextParallelFlowBreakTokens` signature | inline | link-time symbol (declared in core, defined in inline *and* block) |
+| `inline_support.parallel_flow_break_tokens` | `fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>` | inline | **done (R5)**; was a link-time symbol declared in core, defined in inline *and* block |
 | `inline_support.position_for_point_in_fragments` | current `LayoutBoxPositionForPointInFragmentsProvider` signature | inline | link-time symbol |
 | `inline_support.should_truncate_overflowing_text` | `fn(*const LayoutBlockFlow) -> bool` | inline | `LayoutBlockFlowShouldTruncateOverflowingTextFromInline` |
 | `inline_items_data` (3) | `check_consistency`, `open_tag_items`, `offset_map: fn(&InlineItemsData) -> &Option<TextOffsetMap>` | inline | fragment → inline link-time symbols (or move `InlineItemsData` callers up) |
@@ -1144,6 +1144,106 @@ The R4 scripts are in `C:\Users\Administrator\rechrom-handoff\tools\r4\`. Run
 R4 before R5 is assumed. LayoutText and LayoutInline are referenced by
 fragment data (`LayoutInline` ×17 files), so the opaque handle from R4 step 1
 must exist first.
+
+### Status: R5 inline crate (crate boundary done, link-time ABI kept)
+
+Done; no behaviour change, nothing built yet. `layout_algo_inline` is a real
+crate above base. `layout_assembly` no longer `include!`s its `lib.rs`, the
+`extern crate self as layout_algo_inline` alias is gone, and
+`layout_algo_inline_assembly` (no dependents) is deleted. The crate depends on
+`layout_assembly` with `translation_in_progress`, which the facade already
+enabled for every build, so its 48 modules are declared without gating.
+`expensive_dchecks` forwards to the assembly's feature.
+
+**Inventory of base → inline references after R2/R3:**
+
+| class | count | resolution |
+|---|---:|---|
+| (a) base data declared by inline's `lib.rs` | 2 modules | `layout_text_fragment` and `offset_mapping` (files already in `layout_core/src/inline/`) are declared at the base root; `layout_text_fragment` keeps its `translation_in_progress` gate. Base's two `layout_algo_inline::offset_mapping` paths became `crate::`. |
+| (a) inline type named by base | 1 | `InlineItemResultRubyColumn` embeds `LineInfo`, so it stays in inline. Base keeps the forward declaration (`algorithm_forward`, Chromium `inline_item_result.h:31`) for every feature set; inline casts `InlineItemResult::ruby_column` to its column at the 9 sites that did not cast yet. |
+| (b) base calls inline behaviour, made a slot | 1 | `InlineLayoutSupport::parallel_flow_break_tokens` (below). |
+| (b) base calls inline behaviour, still link-time | ≈179 `#[no_mangle]` fns | Chromium header in `core/layout`, `.cc` body in `core/layout/inline` (LayoutText, LayoutInline, LayoutTextCombine, InlineNode, InlineItem, InlineItemSegment(s), InlineItemResult, InlineItemsData, FragmentItemsBuilder, LineFitter, text-combine style, editing text queries). Base declares them `extern "Rust"`; they are direct calls and never name the crate, like the table/forms symbols base already links. See "Unresolved". |
+| (c) inherent impls on base types in inline modules | 0 | Inline already implements foreign members as free `#[no_mangle]` fns. `BlockLayoutAlgorithm::LayoutInlineChild*` (`block_inline_layout.rs`) is block's inherent impl, so it stays in block (Chromium `layoutng_block/block_inline_layout.cc`); block's `inline_extension` enables the optional `layout_algo_inline` dependency instead of aliasing `layout_assembly`. |
+| visibility | 89 members in 15 base files | `pub(crate)`/`pub(super)` builder, LayoutText, OffsetMapping, InlineItem(Segment), password-echo and physical-fragment members that inline reads or constructs became `pub`. |
+
+Base still compiles 19 files that sit physically in `layout_algo_inline/src/`
+through `#[path]` (the editing queries and facts: `editing_*`,
+`layout_output_editing_queries`, `visual_caret_movement`,
+`spatial_navigation_geometry`, `inline_cursor_editing_queries`,
+`physical_box_editing_queries`, `layout_inline_caret`,
+`collapsible_whitespace`, `engine_password_echo`). They name only base and
+fragment-tree types. Step 3 above (extension traits in inline) is not done.
+
+**Slot added** (`layout_core/src/internal/layout_algorithm_set.rs`):
+
+```rust
+pub parallel_flow_break_tokens:
+    Option<fn(&InlineChildLayoutContext) -> &HeapVector<Member<BreakToken>>>,
+```
+
+`InlineChildLayoutContext::ParallelFlowBreakTokens` (`algorithm_forward.rs`)
+reads it from `LayoutPassScope::Algorithms()` and raises `UnsupportedLayout`
+when inline is not installed, like `InlineNode::IsBlockLevel`. Inline's
+`registration::Register` fills it; `validate_performance_ownership` counts it.
+This resolves the duplicate symbol: block's
+`cfg(not(feature = "inline_extension"))` stub and inline's `#[no_mangle]`
+definition are both gone, so there is one owner and every feature set links.
+Block's block-only stubs for `LayoutInlineHasInlineFragments` (defined by the
+fragment tree) and `LayoutTextTransformAndSecureOriginalText` (defined by
+inline) were duplicates of always-linked definitions and are removed too.
+
+**Facade.** `layout` depends on `layout_algo_inline` unconditionally (base's
+`extern "Rust"` declarations need its definitions, as when inline was compiled
+inside the assembly). `CreateLayoutRegistry` calls
+`layout_algo_inline::registration::Register` under `inline_layout`, in the same
+position. `DispatchIsLayoutTextCombine` and
+`LayoutBlockFlowShouldTruncateOverflowingTextFromInline` are re-exported from
+the crate.
+
+**Module layout.** The inline `lib.rs` privately imports the fragment-tree
+modules still compiled with base (`block_break_token`, `box_fragment_builder`,
+`break_token`, `fragment_builder`, `fragment_item(s)`,
+`fragment_items_builder`, `inline_break_token`, `inline_cursor`,
+`inline_items_data`, `layout_result`, `logical_*`, `physical_*`) and re-exports
+`layout_text_fragment`/`offset_mapping`, so the sources keep their `crate::`
+paths. `extern crate layout_assembly as layout_core` keeps the `layoutng`
+package path, as block does. When R4 moves those modules, only this import
+list changes.
+
+**Unresolved (needs a decision):**
+
+1. **Link-time ABI vs slots.** About 179 base → inline calls are link-time
+   symbols. Converting them to registry fn pointers adds a thread-local load
+   and an indirect call per call, on hot per-item and per-text paths
+   (`InlineItemSegments*`, `LayoutText*`, `InlineNode*`), and some run outside
+   a `LayoutPassScope` (tree building, style change, destruction). The map's
+   ≈9 inline slots assumed those bodies moved to base. Options: keep the
+   link-time split (Chromium's own header/.cc split), or move the bodies that
+   are LayoutText/LayoutInline members (`layout_text.rs`,
+   `layout_inline_core.rs`, `layout_inline_data.rs`, `layout_text_combine.rs`,
+   the `inline_item*` bodies) into base.
+2. **Editing files** (19, above): move them physically into base, or convert
+   them into inline extension traits (step 3).
+
+**Checks run** (no cargo): every `crate::`, `super::`, `layout_core::` and
+`layout_assembly::` path in the 50 inline crate files resolves (scratch
+`check.pl`). Scans found no inherent or orphan impls on foreign types, no base
+macros, and no other base → inline paths. `pub(crate)` uses were audited with
+`vis2.pl` and struct literals with `lit.pl`.
+
+**Build risks:**
+
+- `Cargo.lock` loses `layout_algo_inline_assembly` and gains
+  `layout_algo_inline`'s new dependencies (`layout_assembly`,
+  `layout_geometry`, `layout_style`) on the first build.
+- A widened member missed by the scans shows up as E0616/E0624 (private
+  field/method) in `layout_algo_inline`; fix it by making that member `pub`.
+- Cross-crate inlining: base helpers that inline calls are no longer in the
+  same crate. Release uses fat LTO, so this matters only for non-LTO
+  profiles.
+- `cargo test -p layout_assembly` cannot link on MSVC: base's `extern "Rust"`
+  declarations are defined in `layout_algo_inline` above it (already true for
+  the table and forms symbols).
 
 ## Appendix A: `#[path]` / `include!` inventory (assembly unit)
 
