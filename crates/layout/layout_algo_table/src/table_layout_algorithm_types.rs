@@ -1,7 +1,9 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use foundation::{
     kIndefiniteSize, EBoxSizing, EDisplay, EVisibility, HeapVector, IsHorizontalWritingMode,
-    IsParallelWritingMode, LayoutUnit, To, Visitor, WritingDirectionMode,
+    IsParallelWritingMode, LayoutUnit, To, WritingDirectionMode,
 };
 use layout_assembly::internal::{
     block_node::BlockNode,
@@ -83,8 +85,7 @@ fn InlineSizesFromStyle(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:86-122
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableTypesCreateColumnFromTable(
+pub fn TableTypesCreateColumnFromTable(
     style: &ComputedStyle,
     default_inline_size: Option<LayoutUnit>,
     is_table_fixed: bool,
@@ -116,8 +117,7 @@ pub extern "Rust" fn TableTypesCreateColumnFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:128-213
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableTypesCreateCellInlineConstraintFromTable(
+pub fn TableTypesCreateCellInlineConstraintFromTable(
     node: &BlockNode,
     table_writing_direction: WritingDirectionMode,
     is_fixed_layout: bool,
@@ -209,8 +209,7 @@ pub extern "Rust" fn TableTypesCreateCellInlineConstraintFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:215-236
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableTypesCreateSectionFromTable(
+pub fn TableTypesCreateSectionFromTable(
     node: &LayoutInputNode,
     start_row: u32,
     row_count: u32,
@@ -230,8 +229,7 @@ pub extern "Rust" fn TableTypesCreateSectionFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:238-262
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableCellInlineConstraintEncompassFromTable(
+pub fn TableCellInlineConstraintEncompassFromTable(
     constraint: &mut CellInlineConstraint,
     other: &CellInlineConstraint,
 ) {
@@ -252,8 +250,7 @@ pub extern "Rust" fn TableCellInlineConstraintEncompassFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:264-306
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableColumnEncompassFromTable(
+pub fn TableColumnEncompassFromTable(
     column: &mut Column,
     cell: &Option<CellInlineConstraint>,
 ) {
@@ -300,8 +297,7 @@ pub extern "Rust" fn TableColumnEncompassFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:308-343
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenConstructFromTable(
+pub fn TableGroupedChildrenConstructFromTable(
     table: &BlockNode,
 ) -> TableGroupedChildren {
     let mut grouped = TableGroupedChildren {
@@ -347,28 +343,8 @@ fn block_child_next(child: &LayoutInputNode) -> LayoutInputNode {
     BlockNode::from(child.clone()).NextSibling()
 }
 
-// cpp: layoutng_table/table_layout_algorithm_types.cc:345-351
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenTraceFromTable(
-    children: &TableGroupedChildren,
-    visitor: &mut Visitor,
-) {
-    for node in &children.captions {
-        node.Trace(visitor);
-    }
-    for node in &children.columns {
-        node.Trace(visitor);
-    }
-    children.header.Trace(visitor);
-    for node in &children.bodies {
-        node.Trace(visitor);
-    }
-    children.footer.Trace(visitor);
-}
-
 // cpp: layoutng_table/table_layout_algorithm_types.cc:361-371
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorConstructFromTable(
+pub fn TableGroupedChildrenIteratorConstructFromTable(
     grouped_children: &TableGroupedChildren,
     is_end: bool,
 ) -> TableGroupedChildrenIterator {
@@ -389,8 +365,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorConstructFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:373-393
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorIncrementFromTable(
+pub fn TableGroupedChildrenIteratorIncrementFromTable(
     iterator: &mut TableGroupedChildrenIterator,
 ) {
     match iterator.current_section_ {
@@ -409,8 +384,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorIncrementFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:395-414
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorDecrementFromTable(
+pub fn TableGroupedChildrenIteratorDecrementFromTable(
     iterator: &mut TableGroupedChildrenIterator,
 ) {
     match iterator.current_section_ {
@@ -429,8 +403,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorDecrementFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:416-428
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorDereferenceFromTable(
+pub fn TableGroupedChildrenIteratorDereferenceFromTable(
     iterator: &TableGroupedChildrenIterator,
 ) -> BlockNode {
     let grouped = unsafe { &*iterator.grouped_children_ };
@@ -445,8 +418,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorDereferenceFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:430-437
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorEqualFromTable(
+pub fn TableGroupedChildrenIteratorEqualFromTable(
     left: &TableGroupedChildrenIterator,
     right: &TableGroupedChildrenIterator,
 ) -> bool {
@@ -456,8 +428,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorEqualFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:439-460
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorAdvanceForwardFromTable(
+pub fn TableGroupedChildrenIteratorAdvanceForwardFromTable(
     iterator: &mut TableGroupedChildrenIterator,
 ) {
     let grouped = unsafe { &*iterator.grouped_children_ };
@@ -488,8 +459,7 @@ pub extern "Rust" fn TableGroupedChildrenIteratorAdvanceForwardFromTable(
 }
 
 // cpp: layoutng_table/table_layout_algorithm_types.cc:462-478
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableGroupedChildrenIteratorAdvanceBackwardFromTable(
+pub fn TableGroupedChildrenIteratorAdvanceBackwardFromTable(
     iterator: &mut TableGroupedChildrenIterator,
 ) {
     let grouped = unsafe { &*iterator.grouped_children_ };

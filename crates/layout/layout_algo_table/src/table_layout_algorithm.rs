@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table_column_visitor::VisitLayoutTableColumn,
     table_break_token_data::TableBreakTokenData,

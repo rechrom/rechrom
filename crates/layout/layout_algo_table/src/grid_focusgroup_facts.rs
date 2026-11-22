@@ -2,6 +2,8 @@
 //! Chromium: 6c1d401fcca5e1b0030563a90c2f2bba168e0c15
 //! Source: core/page/grid_focusgroup_structure_info.cc:31-486.
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table::LayoutTable, layout_table_cell::LayoutTableCell,
     layout_table_row::LayoutTableRow, layout_table_section::LayoutTableSection,

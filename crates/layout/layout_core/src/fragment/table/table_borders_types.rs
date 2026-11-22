@@ -1,87 +1,17 @@
 #![allow(non_snake_case)]
 
-use foundation::{
-    EBorderStyle, HeapVector, LayoutUnit, Member, String as BlinkString, Vector, Visitor,
-    WritingDirectionMode,
-};
+use foundation::{EBorderStyle, HeapVector, LayoutUnit, Member, Vector, Visitor};
 use layout_geometry::geometry::box_strut::BoxStrut;
 use layout_style::style::computed_style::ComputedStyle;
 
-use super::super::block_node::BlockNode;
-
-// Bodies for these non-inline members are owned by //src/layoutng_table.
-unsafe extern "Rust" {
-    fn TableBordersComputeFromTable(table: &BlockNode) -> *const TableBorders;
-    fn TableBordersConstructFromTable(table_border: &BoxStrut, is_collapsed: bool) -> TableBorders;
-    #[cfg(debug_assertions)]
-    fn TableBordersDumpEdgesFromTable(borders: &mut TableBorders) -> BlinkString;
-    #[cfg(debug_assertions)]
-    fn TableBordersEqualFromTable(left: &TableBorders, right: &TableBorders) -> bool;
-    fn TableBordersCellBorderFromTable(
-        borders: &TableBorders,
-        cell: &BlockNode,
-        row: u32,
-        column: u32,
-        section: u32,
-        table_writing_direction: WritingDirectionMode,
-    ) -> BoxStrut;
-    fn TableBordersCellPaddingForMeasureFromTable(
-        borders: &TableBorders,
-        cell_style: &ComputedStyle,
-        table_writing_direction: WritingDirectionMode,
-    ) -> BoxStrut;
-    fn TableBordersUpdateTableBorderFromTable(
-        borders: &mut TableBorders,
-        table_row_count: u32,
-        table_column_count: u32,
-    );
-    fn TableBordersMergeBordersFromTable(
-        borders: &mut TableBorders,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        colspan: u32,
-        source_style: &ComputedStyle,
-        source: EdgeSource,
-        box_order: u32,
-        table_writing_direction: WritingDirectionMode,
-        section_index: u32,
-    );
-    fn TableBordersGetCellBordersFromTable(
-        borders: &TableBorders,
-        row: u32,
-        column: u32,
-        rowspan: u32,
-        colspan: u32,
-    ) -> BoxStrut;
-    fn TableBordersEnsureCellColumnFitsFromTable(borders: &mut TableBorders, cell_column: u32);
-    fn TableBordersEnsureCellRowFitsFromTable(borders: &mut TableBorders, cell_row: u32);
-    fn TableBordersMergeRowAxisBorderFromTable(
-        borders: &mut TableBorders,
-        start_row: u32,
-        start_column: u32,
-        colspan: u32,
-        source_style: &ComputedStyle,
-        box_order: u32,
-        side: EdgeSide,
-    );
-    fn TableBordersMergeColumnAxisBorderFromTable(
-        borders: &mut TableBorders,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        source_style: &ComputedStyle,
-        box_order: u32,
-        side: EdgeSide,
-    );
-    fn TableBordersMarkInnerBordersAsDoNotFillFromTable(
-        borders: &mut TableBorders,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        colspan: u32,
-    );
-}
+// The non-inline members (ComputeTableBorders, the constructor, DumpEdges,
+// Equals, CellBorder, CellPaddingForMeasure, UpdateTableBorder, MergeBorders,
+// GetCellBorders, EnsureCell*Fits, Merge*AxisBorder,
+// MarkInnerBordersAsDoNotFill) are the table algorithm of Chromium
+// core/layout/table/table_borders.cc. Only the table package calls them, so
+// they are its `TableBordersAlgorithms` extension trait
+// (`layout_algo_table::algorithms`). The record, its inline readers and Trace
+// stay here: the fragment tree retains collapsed borders and paint reads them.
 
 // cpp: layoutng/internal/table_borders.h:73-77
 #[repr(i32)]
@@ -141,28 +71,8 @@ pub struct TableBorders {
 }
 
 impl TableBorders {
-    // cpp: layoutng/internal/table_borders.h:62-66
-    pub fn ComputeTableBorders(table: &BlockNode) -> *const Self {
-        unsafe { TableBordersComputeFromTable(table) }
-    }
-
-    pub fn new(table_border: &BoxStrut, is_collapsed: bool) -> Self {
-        unsafe { TableBordersConstructFromTable(table_border, is_collapsed) }
-    }
-
     pub fn Trace(&self, visitor: &mut Visitor) {
         visitor.Trace(&self.edges_);
-    }
-
-    // cpp: layoutng/internal/table_borders.h:68-71
-    #[cfg(debug_assertions)]
-    pub fn DumpEdges(&mut self) -> BlinkString {
-        unsafe { TableBordersDumpEdgesFromTable(self) }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn Equals(&self, other: &Self) -> bool {
-        unsafe { TableBordersEqualFromTable(self, other) }
     }
 
     // cpp: layoutng/internal/table_borders.h:94-110
@@ -239,95 +149,6 @@ impl TableBorders {
 
     pub fn TableBorder(&self) -> &BoxStrut {
         &self.table_border_
-    }
-
-    // cpp: layoutng/internal/table_borders.h:175-198
-    pub fn CellBorder(
-        &self,
-        cell: &BlockNode,
-        row: u32,
-        column: u32,
-        section: u32,
-        table_writing_direction: WritingDirectionMode,
-    ) -> BoxStrut {
-        unsafe {
-            TableBordersCellBorderFromTable(
-                self,
-                cell,
-                row,
-                column,
-                section,
-                table_writing_direction,
-            )
-        }
-    }
-
-    pub fn CellPaddingForMeasure(
-        &self,
-        cell_style: &ComputedStyle,
-        table_writing_direction: WritingDirectionMode,
-    ) -> BoxStrut {
-        unsafe {
-            TableBordersCellPaddingForMeasureFromTable(self, cell_style, table_writing_direction)
-        }
-    }
-
-    pub fn UpdateTableBorder(&mut self, table_row_count: u32, table_column_count: u32) {
-        unsafe { TableBordersUpdateTableBorderFromTable(self, table_row_count, table_column_count) }
-    }
-
-    pub fn MergeBorders(
-        &mut self,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        colspan: u32,
-        source_style: &ComputedStyle,
-        source: EdgeSource,
-        box_order: u32,
-        table_writing_direction: WritingDirectionMode,
-        section_index: u32,
-    ) {
-        unsafe {
-            TableBordersMergeBordersFromTable(
-                self,
-                start_row,
-                start_column,
-                rowspan,
-                colspan,
-                source_style,
-                source,
-                box_order,
-                table_writing_direction,
-                section_index,
-            )
-        }
-    }
-
-    // Rust has no default arguments; this preserves the source's kNotFound
-    // section-index default without changing the MergeBorders call order.
-    pub fn MergeBordersWithoutSection(
-        &mut self,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        colspan: u32,
-        source_style: &ComputedStyle,
-        source: EdgeSource,
-        box_order: u32,
-        table_writing_direction: WritingDirectionMode,
-    ) {
-        self.MergeBorders(
-            start_row,
-            start_column,
-            rowspan,
-            colspan,
-            source_style,
-            source,
-            box_order,
-            table_writing_direction,
-            u32::MAX,
-        );
     }
 
     // cpp: layoutng/internal/table_borders.h:200-210
@@ -409,80 +230,5 @@ impl TableBorders {
                 .row_count
                 .wrapping_sub(table_row_index.wrapping_sub(section.start_row)),
         )
-    }
-
-    // cpp: layoutng/internal/table_borders.h:261-287
-    pub fn GetCellBorders(&self, row: u32, column: u32, rowspan: u32, colspan: u32) -> BoxStrut {
-        unsafe { TableBordersGetCellBordersFromTable(self, row, column, rowspan, colspan) }
-    }
-
-    pub fn EnsureCellColumnFits(&mut self, cell_column: u32) {
-        unsafe { TableBordersEnsureCellColumnFitsFromTable(self, cell_column) }
-    }
-
-    pub fn EnsureCellRowFits(&mut self, cell_row: u32) {
-        unsafe { TableBordersEnsureCellRowFitsFromTable(self, cell_row) }
-    }
-
-    pub fn MergeRowAxisBorder(
-        &mut self,
-        start_row: u32,
-        start_column: u32,
-        colspan: u32,
-        source_style: &ComputedStyle,
-        box_order: u32,
-        side: EdgeSide,
-    ) {
-        unsafe {
-            TableBordersMergeRowAxisBorderFromTable(
-                self,
-                start_row,
-                start_column,
-                colspan,
-                source_style,
-                box_order,
-                side,
-            )
-        }
-    }
-
-    pub fn MergeColumnAxisBorder(
-        &mut self,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        source_style: &ComputedStyle,
-        box_order: u32,
-        side: EdgeSide,
-    ) {
-        unsafe {
-            TableBordersMergeColumnAxisBorderFromTable(
-                self,
-                start_row,
-                start_column,
-                rowspan,
-                source_style,
-                box_order,
-                side,
-            )
-        }
-    }
-
-    pub fn MarkInnerBordersAsDoNotFill(
-        &mut self,
-        start_row: u32,
-        start_column: u32,
-        rowspan: u32,
-        colspan: u32,
-    ) {
-        unsafe {
-            TableBordersMarkInnerBordersAsDoNotFillFromTable(
-                self,
-                start_row,
-                start_column,
-                rowspan,
-                colspan,
-            )
-        }
     }
 }

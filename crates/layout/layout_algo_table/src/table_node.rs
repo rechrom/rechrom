@@ -1,9 +1,10 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use layout_assembly::internal::table_node::TableNode;
 
 // cpp: layoutng_table/table_node.cc:60-81
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeAllowColumnPercentagesFromTable(
+pub fn TableNodeAllowColumnPercentagesFromTable(
     node: &TableNode,
     layout_pass: bool,
 ) -> bool {
@@ -25,8 +26,7 @@ pub extern "Rust" fn TableNodeAllowColumnPercentagesFromTable(
 }
 
 // cpp: layoutng_table/table_node.cc:13-30
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeGetTableBordersFromTable(
+pub fn TableNodeGetTableBordersFromTable(
     node: &TableNode,
 ) -> *const layout_assembly::internal::table_borders::TableBorders {
     let _trace = browser_tracing::span("layout", "layout_algo_table.ResolveBorders");
@@ -48,15 +48,13 @@ pub extern "Rust" fn TableNodeGetTableBordersFromTable(
     borders
 }
 // cpp: layoutng_table/table_node.cc:32-34
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeGetTableBordersStrutFromTable(
+pub fn TableNodeGetTableBordersStrutFromTable(
     node: &TableNode,
 ) -> *const layout_geometry::geometry::box_strut::BoxStrut {
     unsafe { &*TableNodeGetTableBordersFromTable(node) }.TableBorder()
 }
 // cpp: layoutng_table/table_node.cc:36-49
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeGetColumnConstraintsFromTable(
+pub fn TableNodeGetColumnConstraintsFromTable(
     node: &TableNode,
     grouped: &layout_assembly::internal::table_layout_algorithm_types::TableGroupedChildren,
     border_padding: &layout_geometry::geometry::box_strut::BoxStrut,
@@ -78,8 +76,7 @@ pub extern "Rust" fn TableNodeGetColumnConstraintsFromTable(
 }
 
 // cpp: layoutng_table/table_node.cc:47-51
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeComputeTableInlineSizeFromTable(
+pub fn TableNodeComputeTableInlineSizeFromTable(
     node: &TableNode,
     space: &layout_assembly::internal::constraint_space::ConstraintSpace,
     border_padding: &layout_geometry::geometry::box_strut::BoxStrut,
@@ -88,8 +85,7 @@ pub extern "Rust" fn TableNodeComputeTableInlineSizeFromTable(
     crate::table_layout_support::ComputeTableInlineSize(node, space, border_padding)
 }
 // cpp: layoutng_table/table_node.cc:53-58
-#[unsafe(no_mangle)]
-pub extern "Rust" fn TableNodeComputeCaptionBlockSizeFromTable(
+pub fn TableNodeComputeCaptionBlockSizeFromTable(
     node: &TableNode,
     space: &layout_assembly::internal::constraint_space::ConstraintSpace,
 ) -> foundation::LayoutUnit {

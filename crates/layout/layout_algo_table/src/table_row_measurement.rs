@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::table_layout_utils::{
     ColspanCellTabulator, DistributeRowspanCellToRows, DistributeSectionFixedBlockSizeToRows,
     RowBaselineTabulator, SetupTableCellConstraintSpaceBuilder,

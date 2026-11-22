@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     table_break_token_data::TableBreakTokenData, table_child_iterator::TableChildIterator,
     table_layout_algorithm::TableLayoutAlgorithm, table_layout_support::*,

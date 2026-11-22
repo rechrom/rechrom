@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table::LayoutTable, layout_table_row::LayoutTableRow,
     layout_table_section::LayoutTableSection, table_constants::*,
@@ -19,15 +21,13 @@ use layout_style::style::{
 };
 use std::ops::{Deref, DerefMut};
 // cpp: layoutng_table/layout_table_cell.cc:22-30
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputNodeTableCellColspanFromTable(
+pub fn LayoutInputNodeTableCellColspanFromTable(
     node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(unsafe { &*node.GetLayoutBox() }.IsTableCell());
     unsafe { &*To::<LayoutTableCell>(node.GetLayoutBox()) }.ColSpan()
 }
-#[unsafe(no_mangle)]
-pub extern "Rust" fn LayoutInputNodeTableCellRowspanFromTable(
+pub fn LayoutInputNodeTableCellRowspanFromTable(
     node: &layout_assembly::internal::layout_input_node::LayoutInputNode,
 ) -> u32 {
     debug_assert!(unsafe { &*node.GetLayoutBox() }.IsTableCell());

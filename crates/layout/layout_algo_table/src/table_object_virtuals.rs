@@ -1,5 +1,7 @@
 //! Rust dispatch of the source table subclasses' virtual methods.
 #![allow(non_snake_case)]
+#[allow(unused_imports)]
+use crate::algorithms::*;
 use crate::{
     layout_table::LayoutTable, layout_table_caption::LayoutTableCaption,
     layout_table_cell::LayoutTableCell, layout_table_column::LayoutTableColumn,
@@ -271,5 +273,7 @@ pub(crate) fn Virtuals() -> TableObjectVirtuals {
         overflow_clip_rect: OverflowClipRect,
         computed_row_span: ComputedRowSpan,
         update_from_element: UpdateFromElement,
+        inner_text_row_needs_newline: crate::layout_table::LayoutInnerTextTableRowNeedsNewline,
+        text_iterator_table_facts: crate::layout_table::LayoutTextIteratorTableFacts,
     }
 }
