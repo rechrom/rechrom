@@ -554,7 +554,9 @@ impl LogicalLineBuilder {
         line_box: &mut LogicalLineItems,
         mut box_state: *mut InlineBoxState,
     ) -> *mut InlineBoxState {
-        let ruby_column_ptr = item_result.ruby_column.Get();
+        let ruby_column_ptr = item_result.ruby_column
+            .Get()
+            .cast::<crate::inline_item_result_ruby_column::InlineItemResultRubyColumn>();
         let ruby_column = unsafe { &mut *ruby_column_ptr };
         let mut on_start_edge = false;
         let mut on_end_edge = false;
@@ -657,7 +659,9 @@ impl LogicalLineBuilder {
         annotation_line: &mut LineInfo,
         logical_column: &mut LogicalRubyColumn,
     ) {
-        let ruby_column = unsafe { &*item_result.ruby_column.Get() };
+        let ruby_column = unsafe { &*item_result.ruby_column
+            .Get()
+            .cast::<crate::inline_item_result_ruby_column::InlineItemResultRubyColumn>() };
         let insets = ApplyRubyAlign(
             line_available_size.unwrap_or(
                 item_result.inline_size

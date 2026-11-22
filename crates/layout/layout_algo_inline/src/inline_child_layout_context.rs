@@ -41,9 +41,10 @@ pub struct InlineChildLayoutContext {
 
 // layoutng's declaration-only context is passed as this inline-owned context
 // by the algorithm callbacks. The cast preserves the source pointer identity.
+// Installed as `InlineLayoutSupport::parallel_flow_break_tokens` by
+// `registration::Register`; this is the only definition.
 // cpp: layoutng_inline/inline_child_layout_context.h:64-66
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineChildLayoutContextParallelFlowBreakTokens<'a>(
+pub fn InlineChildLayoutContextParallelFlowBreakTokens<'a>(
     context: &'a layout_core::internal::algorithm_forward::InlineChildLayoutContext,
 ) -> &'a HeapVector<Member<BreakToken>> {
     unsafe { &*(context as *const _ as *const InlineChildLayoutContext) }.ParallelFlowBreakTokens()

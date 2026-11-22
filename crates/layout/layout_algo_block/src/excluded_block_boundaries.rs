@@ -9,13 +9,9 @@ use foundation::transform_operations::{
     RotateTransformOperation, ScaleTransformOperation, TranslateTransformOperation,
 };
 use foundation::{gfx, Length, PhysicalRect, TextDirection, TransformOperations};
-use layout_core::break_token::BreakToken;
-use layout_core::internal::algorithm_forward::InlineChildLayoutContext;
-use layout_core::internal::layout_inline::LayoutInline;
 use layout_core::internal::layout_object::LayoutObject;
 #[cfg(not(feature = "replaced_extension"))]
 use layout_core::internal::layout_replaced::LayoutReplaced;
-use layout_core::internal::layout_text::LayoutText;
 use layout_style::style::content_data::ContentData;
 use std::ffi::c_void;
 
@@ -45,18 +41,4 @@ excluded! {
 #[cfg(not(feature = "replaced_extension"))]
 excluded! {
     fn LayoutReplacedContentRect(replaced: &LayoutReplaced) -> PhysicalRect;
-}
-
-#[cfg(not(feature = "inline_extension"))]
-excluded! {
-    fn LayoutInlineHasInlineFragments(inline: &LayoutInline) -> bool;
-    fn LayoutTextTransformAndSecureOriginalText(text: &mut LayoutText) -> ();
-}
-
-#[cfg(not(feature = "inline_extension"))]
-#[unsafe(no_mangle)]
-pub extern "Rust" fn InlineChildLayoutContextParallelFlowBreakTokens<'a>(
-    context: &'a InlineChildLayoutContext,
-) -> &'a foundation::HeapVector<foundation::Member<BreakToken>> {
-    panic!("InlineChildLayoutContext requires the excluded inline package")
 }

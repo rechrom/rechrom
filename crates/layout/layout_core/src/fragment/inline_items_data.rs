@@ -6,7 +6,7 @@ use layout_core::internal::inline_item_segment::InlineItemSegments;
 use layout_core::internal::inline_item_text_index::InlineItemTextIndex;
 use layout_core::internal::inline_node_data::InlineNodeData;
 use layout_core::internal::svg_inline_node_data::SvgInlineNodeData;
-use layout_algo_inline::offset_mapping::OffsetMapping;
+use crate::offset_mapping::OffsetMapping;
 
 // C++ stores this discriminator in one byte and uses it for checked casts.
 // cpp: layoutng_fragment_tree/inline_items_data.h:82-87

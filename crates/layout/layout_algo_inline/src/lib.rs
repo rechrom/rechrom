@@ -45,9 +45,6 @@ pub mod layout_text;
 #[cfg(feature = "translation_in_progress")]
 pub mod layout_text_combine;
 #[cfg(feature = "translation_in_progress")]
-#[path = "../../layout_core/src/inline/layout_text_fragment.rs"]
-pub mod layout_text_fragment;
-#[cfg(feature = "translation_in_progress")]
 pub mod layout_word_break;
 #[cfg(feature = "translation_in_progress")]
 pub mod leading_floats;
@@ -71,8 +68,6 @@ pub mod line_utils;
 pub mod line_widths;
 #[cfg(feature = "translation_in_progress")]
 pub mod logical_line_builder;
-#[path = "../../layout_core/src/inline/offset_mapping.rs"]
-pub mod offset_mapping;
 #[cfg(feature = "translation_in_progress")]
 pub mod offset_mapping_builder;
 #[cfg(feature = "translation_in_progress")]
