@@ -2,21 +2,13 @@
 
 #![allow(non_snake_case)]
 
-use super::{
-    computed_style::ComputedStyle, forward::CSSValue, natural_sizing_info::NaturalSizingInfo,
-    style_image::*,
-};
+use super::{forward::CSSValue, natural_sizing_info::NaturalSizingInfo, style_image::*};
 use crate::css::{
-    css_gradient_value::{
-        CSSGeneratedGradientValue, GeneratedGradientData, GradientStop, LinearGradientData,
-    },
+    css_gradient_value::{GeneratedGradientData, LinearGradientData},
     css_image_generator_value::CSSImageGeneratorValue,
     css_to_length_conversion_data::ContainerSizes,
-    style_color::StyleColor,
 };
-use foundation::{
-    Color, ColorSpace, HueInterpolationMethod, MakeGarbageCollected, Member, Traceable, Visitor,
-};
+use foundation::{Member, Traceable, Visitor};
 
 // cpp: core/style/style_generated_image.h:41-88
 #[repr(C)]
@@ -120,7 +112,13 @@ static GENERATED_VTABLE: StyleImageVTable = StyleImageVTable {
 
 #[cfg(test)]
 mod tests {
+    use super::super::computed_style::ComputedStyle;
     use super::*;
+    use crate::css::{
+        css_gradient_value::{CSSGeneratedGradientValue, GradientStop},
+        style_color::StyleColor,
+    };
+    use foundation::{Color, ColorSpace, HueInterpolationMethod, MakeGarbageCollected};
 
     fn generated_with_color(color: Color) -> *mut StyleGeneratedImage {
         let value = MakeGarbageCollected(CSSGeneratedGradientValue::FromResolved(

@@ -4,7 +4,7 @@ use super::scroll_snap_data::cc;
 use font_engine::Font;
 use foundation::gfx;
 use foundation::{
-    AtomicString, BlendMode, CSSBitset, Color, DynamicRangeLimit, DynamicRangeLimitKind,
+    AtomicString, BlendMode, Color, DynamicRangeLimit, DynamicRangeLimitKind,
     EAlignmentBaseline, EAspectRatioType, EBackfaceVisibility, EBaselineSource, EBlockEllipsis,
     EBorderCollapse, EBorderStyle, EBoxAlignment, EBoxDecorationBreak, EBoxDirection, EBoxOrient,
     EBoxPack, EBoxSizing, EBreakBetween, EBreakInside, EBufferedRendering, ECaptionSide,
@@ -158,7 +158,7 @@ pub enum IsAtShadowBoundary {
 impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:352
     pub fn IndependentInheritedEqual(&self, other: &Self) -> bool {
-        ((self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
+        (self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
             || (unsafe { &*self.misc_inherited_data_.Get() }.empty_cells_bit()
                 == unsafe { &*other.misc_inherited_data_.Get() }.empty_cells_bit()
                 && unsafe { &*self.misc_inherited_data_.Get() }.interactivity_bit()
@@ -177,12 +177,12 @@ impl ComputedStyleBase {
             && self.data_.is_css_inert_bit() == other.data_.is_css_inert_bit()
             && self.data_.is_html_inert_bit() == other.data_.is_html_inert_bit()
             && self.data_.list_style_position_bit() == other.data_.list_style_position_bit()
-            && self.data_.rtl_ordering_bit() == other.data_.rtl_ordering_bit())
+            && self.data_.rtl_ordering_bit() == other.data_.rtl_ordering_bit()
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:354
     pub fn NonIndependentInheritedEqual(&self, other: &Self) -> bool {
-        ((self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
+        (self.misc_inherited_data_.Get() == other.misc_inherited_data_.Get()
             || (foundation::ValuesEquivalent(
                 &unsafe { &*self.misc_inherited_data_.Get() }.misc_inherited_1_data_,
                 &unsafe { &*other.misc_inherited_data_.Get() }.misc_inherited_1_data_,
@@ -323,14 +323,14 @@ impl ComputedStyleBase {
             && self.data_.prefers_default_scrollbar_styles_bit()
                 == other.data_.prefers_default_scrollbar_styles_bit()
             && self.data_.print_color_adjust_bit() == other.data_.print_color_adjust_bit()
-            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit())
+            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit()
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:356
     pub fn InheritedVariablesEqual(&self, other: &Self) -> bool {
-        (self.inherited_data_.Get() == other.inherited_data_.Get()
+        self.inherited_data_.Get() == other.inherited_data_.Get()
             || (unsafe { &*self.inherited_data_.Get() }.inherited_variables_
-                == unsafe { &*other.inherited_data_.Get() }.inherited_variables_))
+                == unsafe { &*other.inherited_data_.Get() }.inherited_variables_)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:358
@@ -340,7 +340,7 @@ impl ComputedStyleBase {
 
     // cpp: layoutng_style/style/computed_style_base.h:360
     pub fn NonInheritedEqual(&self, other: &Self) -> bool {
-        (foundation::ValuesEquivalent(&self.misc_data_, &other.misc_data_)
+        foundation::ValuesEquivalent(&self.misc_data_, &other.misc_data_)
             && foundation::ValuesEquivalent(&self.visual_data_, &other.visual_data_)
             && foundation::ValuesEquivalent(&self.box_data_, &other.box_data_)
             && foundation::ValuesEquivalent(&self.svg_data_, &other.svg_data_)
@@ -394,7 +394,7 @@ impl ComputedStyleBase {
                     .data_
                     .should_ignore_overflow_property_for_inline_block_baseline_bit()
             && self.data_.skips_contents_bit() == other.data_.skips_contents_bit()
-            && self.data_.table_layout_bit() == other.data_.table_layout_bit())
+            && self.data_.table_layout_bit() == other.data_.table_layout_bit()
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:362
@@ -409,7 +409,7 @@ impl ComputedStyleBase {
 
     // cpp: layoutng_style/style/computed_style_base.h:368
     pub fn InheritedEqualIncludingInheritedVariables(&self, other: &Self) -> bool {
-        (foundation::ValuesEquivalent(&self.misc_inherited_data_, &other.misc_inherited_data_)
+        foundation::ValuesEquivalent(&self.misc_inherited_data_, &other.misc_inherited_data_)
             && foundation::ValuesEquivalent(&self.inherited_data_, &other.inherited_data_)
             && foundation::ValuesEquivalent(&self.svginherited_data_, &other.svginherited_data_)
             && self.data_.pointer_events_bits() == other.data_.pointer_events_bits()
@@ -431,7 +431,7 @@ impl ComputedStyleBase {
                 == other.data_.prefers_default_scrollbar_styles_bit()
             && self.data_.print_color_adjust_bit() == other.data_.print_color_adjust_bit()
             && self.data_.rtl_ordering_bit() == other.data_.rtl_ordering_bit()
-            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit())
+            && self.data_.text_wrap_mode_bit() == other.data_.text_wrap_mode_bit()
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:1572-1574
@@ -442,13 +442,13 @@ impl ComputedStyleBase {
                 .Get()
         }
         .effective_touch_action_bits();
-        unsafe { TouchAction::from_bits(bits) }
+        TouchAction::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:1899-1901
     pub fn GetHangingPunctuation(&self) -> HangingPunctuation {
         let bits = unsafe { &*self.misc_inherited_data_.Get() }.hanging_punctuation_bits();
-        unsafe { HangingPunctuation::from_bits(bits) }
+        HangingPunctuation::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:4295-4297
@@ -472,7 +472,7 @@ impl ComputedStyleBase {
     // cpp: layoutng_style/style/computed_style_base.h:4546-4548
     pub fn GetTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_data_.Get()).misc_6_data_.Get() }.touch_action_bits();
-        unsafe { TouchAction::from_bits(bits) }
+        TouchAction::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:6927-6930
@@ -676,12 +676,12 @@ impl ComputedStyleBuilderBase {
     pub fn EffectiveTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_inherited_data_).misc_inherited_2_data_.Get() }
             .effective_touch_action_bits();
-        unsafe { TouchAction::from_bits(bits) }
+        TouchAction::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:12661-12664
     pub fn SetEffectiveTouchAction(&mut self, value: TouchAction) {
-        let bits = unsafe { value.bits() as u32 };
+        let bits = value.bits() as u32;
         if unsafe { &*(*self.misc_inherited_data_).misc_inherited_2_data_.Get() }
             .effective_touch_action_bits()
             != bits
@@ -709,7 +709,7 @@ impl ComputedStyleBuilderBase {
             &self.access_.misc_inherited_2_data_,
         );
         unsafe { &mut *inner }
-            .set_effective_touch_action_bits(unsafe { TouchAction::kAuto.bits() as u32 });
+            .set_effective_touch_action_bits(TouchAction::kAuto.bits() as u32);
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:20327-20329
@@ -728,12 +728,12 @@ impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:13298-13300
     pub fn GetHangingPunctuation(&self) -> HangingPunctuation {
         let bits = unsafe { &*self.misc_inherited_data_ }.hanging_punctuation_bits();
-        unsafe { HangingPunctuation::from_bits(bits) }
+        HangingPunctuation::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:13302-13305
     pub fn SetHangingPunctuation(&mut self, value: HangingPunctuation) {
-        let bits = unsafe { value.bits() };
+        let bits = value.bits();
         if unsafe { &*self.misc_inherited_data_ }.hanging_punctuation_bits() != bits {
             let data = Self::AccessPtr(
                 &mut self.misc_inherited_data_,
@@ -750,7 +750,7 @@ impl ComputedStyleBuilderBase {
             &self.access_.misc_inherited_data_,
         );
         unsafe { &mut *data }
-            .set_hanging_punctuation_bits(unsafe { HangingPunctuation::kNone.bits() });
+            .set_hanging_punctuation_bits(HangingPunctuation::kNone.bits());
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:17791-17793
@@ -830,12 +830,12 @@ impl ComputedStyleBuilderBase {
     // cpp: layoutng_style/style/computed_style_base.h:18292-18294
     pub fn GetTouchAction(&self) -> TouchAction {
         let bits = unsafe { &*(*self.misc_data_).misc_6_data_.Get() }.touch_action_bits();
-        unsafe { TouchAction::from_bits(bits) }
+        TouchAction::from_bits(bits)
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:18296-18299
     pub fn SetTouchAction(&mut self, value: TouchAction) {
-        let bits = unsafe { value.bits() as u32 };
+        let bits = value.bits() as u32;
         if unsafe { &*(*self.misc_data_).misc_6_data_.Get() }.touch_action_bits() != bits {
             let outer = Self::AccessPtr(&mut self.misc_data_, &self.access_.misc_data_);
             let inner = Self::AccessMember(
@@ -853,7 +853,7 @@ impl ComputedStyleBuilderBase {
             unsafe { &mut (*outer).misc_6_data_ },
             &self.access_.misc_6_data_,
         );
-        unsafe { &mut *inner }.set_touch_action_bits(unsafe { TouchAction::kAuto.bits() as u32 });
+        unsafe { &mut *inner }.set_touch_action_bits(TouchAction::kAuto.bits() as u32);
     }
 
     // cpp: layoutng_style/style/computed_style_base.h:23651-23653
@@ -25768,13 +25768,13 @@ impl ComputedStyleBase {
                     .Get()
             {
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .hyphenation_string_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25785,14 +25785,14 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     unsafe {
-                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                        &*(&*a.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
                     .quotes_
                     .get(),
                     unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25804,13 +25804,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                        &*(&*a.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
                     .list_style_image_,
                     &unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25821,13 +25821,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                        &*(&*a.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
                     .list_style_type_,
                     &unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25838,13 +25838,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                        &*(&*a.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
                     .scrollbar_color_,
                     &unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25854,13 +25854,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kScrollbarColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .dynamic_range_limit_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25869,13 +25869,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .tab_size_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25885,13 +25885,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .text_fit_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25900,13 +25900,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kLayout.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .text_size_adjust_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25916,13 +25916,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .accent_color_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25931,13 +25931,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kAccentColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .caret_color_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25946,13 +25946,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .text_emphasis_color_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25961,13 +25961,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .orphans_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -25976,13 +25976,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kLayout.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_1_data_
                         .Get()
                 }
                 .hyphenate_limit_chars_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_1_data_
                             .Get()
                     }
@@ -26000,13 +26000,13 @@ impl ComputedStyleBase {
                     .Get()
             {
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_emphasis_custom_mark_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26017,13 +26017,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.misc_inherited_data_.Get() }
+                        &*(&*a.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
                     .text_shadow_,
                     &unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26033,13 +26033,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_indent_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26050,13 +26050,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_underline_offset_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26065,13 +26065,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kTextDecoration.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_stroke_width_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26081,13 +26081,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .effective_zoom_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26097,13 +26097,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kPaint.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_fill_color_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26112,13 +26112,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .text_stroke_color_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -26127,13 +26127,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.misc_inherited_data_.Get() }
+                    &*(&*a.misc_inherited_data_.Get())
                         .misc_inherited_2_data_
                         .Get()
                 }
                 .widows_
                     != unsafe {
-                        &*unsafe { &*b.misc_inherited_data_.Get() }
+                        &*(&*b.misc_inherited_data_.Get())
                             .misc_inherited_2_data_
                             .Get()
                     }
@@ -27281,13 +27281,13 @@ impl ComputedStyleBase {
                     .Get()
             {
                 if unsafe {
-                    &*unsafe { &*a.inherited_data_.Get() }
+                    &*(&*a.inherited_data_.Get())
                         .inherited_visited_data_
                         .Get()
                 }
                 .internal_visited_caret_color_
                     != unsafe {
-                        &*unsafe { &*b.inherited_data_.Get() }
+                        &*(&*b.inherited_data_.Get())
                             .inherited_visited_data_
                             .Get()
                     }
@@ -27296,13 +27296,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.inherited_data_.Get() }
+                    &*(&*a.inherited_data_.Get())
                         .inherited_visited_data_
                         .Get()
                 }
                 .internal_visited_text_emphasis_color_
                     != unsafe {
-                        &*unsafe { &*b.inherited_data_.Get() }
+                        &*(&*b.inherited_data_.Get())
                             .inherited_visited_data_
                             .Get()
                     }
@@ -27311,13 +27311,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.inherited_data_.Get() }
+                    &*(&*a.inherited_data_.Get())
                         .inherited_visited_data_
                         .Get()
                 }
                 .internal_visited_text_fill_color_
                     != unsafe {
-                        &*unsafe { &*b.inherited_data_.Get() }
+                        &*(&*b.inherited_data_.Get())
                             .inherited_visited_data_
                             .Get()
                     }
@@ -27326,13 +27326,13 @@ impl ComputedStyleBase {
                     diff |= FieldDifference::kColor.bits();
                 }
                 if unsafe {
-                    &*unsafe { &*a.inherited_data_.Get() }
+                    &*(&*a.inherited_data_.Get())
                         .inherited_visited_data_
                         .Get()
                 }
                 .internal_visited_text_stroke_color_
                     != unsafe {
-                        &*unsafe { &*b.inherited_data_.Get() }
+                        &*(&*b.inherited_data_.Get())
                             .inherited_visited_data_
                             .Get()
                     }
@@ -27513,13 +27513,13 @@ impl ComputedStyleBase {
             {
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.svginherited_data_.Get() }
+                        &*(&*a.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
                     .marker_end_resource_,
                     &unsafe {
-                        &*unsafe { &*b.svginherited_data_.Get() }
+                        &*(&*b.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
@@ -27530,13 +27530,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.svginherited_data_.Get() }
+                        &*(&*a.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
                     .marker_mid_resource_,
                     &unsafe {
-                        &*unsafe { &*b.svginherited_data_.Get() }
+                        &*(&*b.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
@@ -27547,13 +27547,13 @@ impl ComputedStyleBase {
                 }
                 if !foundation::ValuesEquivalent(
                     &unsafe {
-                        &*unsafe { &*a.svginherited_data_.Get() }
+                        &*(&*a.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
                     .marker_start_resource_,
                     &unsafe {
-                        &*unsafe { &*b.svginherited_data_.Get() }
+                        &*(&*b.svginherited_data_.Get())
                             .resources_data_
                             .Get()
                     }
