@@ -3,10 +3,11 @@
 //! Source: Chromium revision 6c1d401fcca5e1b0030563a90c2f2bba168e0c15,
 //! `third_party/blink/renderer/core/paint/compositing/compositing_reason_finder.{h,cc}`.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use foundation::{CompositingReason, CompositingReasonCombos, CompositingReasons};
-use layout_assembly::fragment_tree::{FragmentKind, FragmentPaintData};
-use layout_assembly::internal::layout_input::{NodeKind, PaintStyle};
+use layout::fragment::FragmentKind;
+use layout::paint::FragmentPaintData;
+use layout::input::{NodeKind, PaintStyle};
 use paint_model::paint_property_tree::PaintPropertyRole;
 use std::cell::Cell;
 

@@ -1,16 +1,15 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::fragment_tree::{
-    CollapsedTablePaintData, CollapsedTableSection, TablePaintColumn,
+use layout::paint::{CollapsedTablePaintData, CollapsedTableSection, TablePaintColumn};
+use layout::input::Display;
+use paint_input_types::layout_input::{
+    BorderLineStyle, Offset, PaintImage, Size, TextDirection, WritingMode,
 };
-use layout_assembly::internal::layout_input::{
-    BorderLineStyle, Display, Offset, PaintImage, Size, TextDirection, WritingMode,
-};
-use layout_assembly::internal::layout_input_types::Color;
-use layout_assembly::internal::paint_input::{BackgroundImageLayer, PaintBlendMode};
+use paint_input_types::layout_input_types::Color;
+use paint_input_types::paint_input::{BackgroundImageLayer, PaintBlendMode};
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::box_fragment_painter::BackgroundForPainting;

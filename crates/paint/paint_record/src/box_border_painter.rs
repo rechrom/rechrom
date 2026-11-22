@@ -1,17 +1,15 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::fragment_tree::GapRuleSide;
-use layout_assembly::internal::background_bleed_avoidance::{
-    BackgroundBleedAvoidance, BleedAvoidanceIsClipping,
-};
-use layout_assembly::internal::layout_input::{
+use layout::paint::GapRuleSide;
+use layout::paint_input::{BackgroundBleedAvoidance, BleedAvoidanceIsClipping};
+use paint_input_types::layout_input::{
     BorderLineStyle, Edges, Offset, PaintPathCommand, PaintPathVerb, Size,
 };
-use layout_assembly::internal::layout_input_types::Color;
-use layout_assembly::internal::paint_input::PaintCornerRadii;
+use paint_input_types::layout_input_types::Color;
+use paint_input_types::paint_input::PaintCornerRadii;
 use paint_model::cc::paint::path_effect::PathEffect;
 use paint_model::styled_stroke_data::{GeometryInfo, StrokeStyle, StyledStrokeData};
 

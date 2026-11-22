@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::fragment_tree::ScrollbarPaintAxis;
-use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb, Size};
-use layout_assembly::internal::layout_input_types::Color;
+use layout::paint::ScrollbarPaintAxis;
+use paint_input_types::layout_input::{Offset, PaintPathCommand, PaintPathVerb, Size};
+use paint_input_types::layout_input_types::Color;
 
 use crate::box_fragment_painter::{GetHitTestOpaqueness, IsVisible};
 use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
@@ -53,7 +53,7 @@ fn AbsoluteRoundedRect(node: &PaintTreeNode<'_>, offset: Offset, size: Size) -> 
 
 // Source: core/paint/scrollable_area_painter.cc:380-391.
 fn ScrollbarHitTestOpaqueness(
-    fragment: &layout_assembly::fragment_tree::FragmentPaintData,
+    fragment: &layout::paint::FragmentPaintData,
     theme_disallows_hit_test: bool,
 ) -> crate::paint_engine::PaintHitTestOpaqueness {
     if theme_disallows_hit_test {
@@ -477,7 +477,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
                     phase: info.phase,
                     node_id: fragment.ViewNodeId(),
                     color,
-                    line_style: layout_assembly::internal::layout_input::BorderLineStyle::kSolid,
+                    line_style: paint_input_types::layout_input::BorderLineStyle::kSolid,
                     stroke_width,
                     path,
                     ..Default::default()
@@ -576,7 +576,7 @@ impl<'n, 'f, 'c, 'o> ScrollableAreaPainter<'n, 'f, 'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::FragmentPaintData;
+    use layout::paint::FragmentPaintData;
 
     fn node(is_paint_layer: bool) -> PaintTreeNode<'static> {
         let fragment = FragmentPaintData::default();

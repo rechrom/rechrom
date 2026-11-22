@@ -1,5 +1,5 @@
-use layout_assembly::fragment_tree::RasterEffectOutset;
-use layout_assembly::internal::layout_input_types::Color;
+use layout::paint::RasterEffectOutset;
+use paint_input_types::layout_input_types::Color;
 use paint_model::display_item_id::DisplayItemId;
 use paint_model::paint_property_tree::PropertyTreeState;
 use paint_model::PaintRect;

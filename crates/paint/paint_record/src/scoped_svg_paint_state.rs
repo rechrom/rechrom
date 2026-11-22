@@ -1,10 +1,11 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::internal::layout_input::{NodeKind, SvgShapeGeometry};
-use layout_assembly::internal::paint_input::PaintFilterType;
+use layout::input::NodeKind;
+use paint_input_types::layout_input::SvgShapeGeometry;
+use paint_input_types::paint_input::PaintFilterType;
 use prepaint::pre_paint_tree_walk::PaintTreeNode;
 
 use crate::display_item_id::DisplayItemIdType;
@@ -138,9 +139,10 @@ mod tests {
     use super::*;
     use crate::paint_engine::DisplayItemType;
     use crate::PaintRecording;
-    use layout_assembly::fragment_tree::{FragmentPaintData, FragmentPaintRect};
-    use layout_assembly::internal::layout_input::{BorderLineStyle, Size};
-    use layout_assembly::internal::layout_input_types::Color;
+    use layout::paint::FragmentPaintData;
+    use paint_input_types::FragmentPaintRect;
+    use paint_input_types::layout_input::{BorderLineStyle, Size};
+    use paint_input_types::layout_input_types::Color;
     use paint_model::{DisplayMaskLayer, PaintRect};
 
     #[test]
@@ -234,8 +236,8 @@ mod tests {
 
     #[test]
     fn shape_disabled_rendering_precedes_reference_filter_behavior() {
-        use layout_assembly::internal::layout_input::SvgShapeData;
-        use layout_assembly::internal::paint_input::PaintFilterOperation;
+        use paint_input_types::layout_input::SvgShapeData;
+        use paint_input_types::paint_input::PaintFilterOperation;
         use paint_model::paint_flags::PaintFlag;
 
         let mut fragment = FragmentPaintData::default();

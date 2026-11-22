@@ -1,10 +1,9 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::internal::layout_input::{
-    BoxDecorationBreak, Display, Offset, PaintImage, Size,
-};
-use layout_assembly::internal::paint_input::{
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::input::{BoxDecorationBreak, Display};
+use paint_input_types::layout_input::{Offset, PaintImage, Size};
+use paint_input_types::paint_input::{
     NinePieceImagePaint, PaintImageTileRule, PaintReflectionMaskLayer,
 };
 

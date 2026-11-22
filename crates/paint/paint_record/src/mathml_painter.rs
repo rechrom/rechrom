@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::fragment_tree::MathMLPaintKind;
-use layout_assembly::internal::layout_input::{Offset, TextDirection};
+use layout::paint::MathMLPaintKind;
+use paint_input_types::layout_input::{Offset, TextDirection};
 
 use crate::box_fragment_painter::DecorationVisualRect;
 use crate::display_item_id::DisplayItemIdType;

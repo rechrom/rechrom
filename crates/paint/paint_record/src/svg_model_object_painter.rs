@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
 use paint_model::PaintRect;
@@ -176,11 +176,11 @@ impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
             .expect("SVG drawing owner must have a fragment");
         if !matches!(
             fragment.paint.SourceKind(),
-            layout_assembly::internal::layout_input::NodeKind::kSvgShape
-                | layout_assembly::internal::layout_input::NodeKind::kSvgText
-                | layout_assembly::internal::layout_input::NodeKind::kSvgInline
-                | layout_assembly::internal::layout_input::NodeKind::kSvgTSpan
-                | layout_assembly::internal::layout_input::NodeKind::kSvgTextPath
+            layout::input::NodeKind::kSvgShape
+                | layout::input::NodeKind::kSvgText
+                | layout::input::NodeKind::kSvgInline
+                | layout::input::NodeKind::kSvgTSpan
+                | layout::input::NodeKind::kSvgTextPath
         ) {
             panic!("SVGDrawingRecorder requires a non-container SVG child");
         }
@@ -215,8 +215,8 @@ impl<'c, 'o> SVGDrawingRecorder<'c, 'o> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::fragment_tree::FragmentPaintData;
-    use layout_assembly::internal::paint_input::{PaintFilterOperation, PaintFilterType};
+    use layout::paint::FragmentPaintData;
+    use paint_input_types::paint_input::{PaintFilterOperation, PaintFilterType};
 
     fn node() -> PaintTreeNode<'static> {
         let mut fragment = FragmentPaintData::default();
@@ -247,8 +247,9 @@ mod tests {
     #[test]
     fn svg_drawing_recorder_uses_source_visual_overflow() {
         use crate::PaintRecording;
-        use layout_assembly::fragment_tree::FragmentPaintRect;
-        use layout_assembly::internal::layout_input::{NodeKind, Offset, Size};
+        use paint_input_types::FragmentPaintRect;
+        use layout::input::NodeKind;
+        use paint_input_types::layout_input::{Offset, Size};
 
         let mut fragment = FragmentPaintData::default();
         fragment.paint.has_source = true;
@@ -281,8 +282,8 @@ mod tests {
 
     #[test]
     fn svg_visual_rect_uses_source_layout_box_visual_overflow_when_ink_is_unset() {
-        use layout_assembly::fragment_tree::FragmentPaintRect;
-        use layout_assembly::internal::layout_input::{Offset, Size};
+        use paint_input_types::FragmentPaintRect;
+        use paint_input_types::layout_input::{Offset, Size};
 
         let mut fragment = FragmentPaintData::default();
         fragment.paint.box_self_visual_overflow = Some(FragmentPaintRect {

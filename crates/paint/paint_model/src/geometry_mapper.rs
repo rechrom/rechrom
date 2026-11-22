@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::internal::layout_input::{Edges, Offset, Size, TransformMatrix};
-use layout_assembly::internal::paint_input::{
+use paint_input_types::layout_input::{Edges, Offset, Size, TransformMatrix};
+use paint_input_types::paint_input::{
     PaintTransform, PaintTransformOperationKind, PaintTransformOrigin, PaintTransformReferenceBox,
 };
 

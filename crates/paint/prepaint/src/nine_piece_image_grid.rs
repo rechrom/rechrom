@@ -2,11 +2,9 @@
 #![allow(non_camel_case_types)]
 
 use foundation::{EvaluationInput, LayoutUnit};
-use layout_assembly::fragment_tree::FragmentBoxSides;
-use layout_assembly::internal::layout_input::{Edges, Offset, Size};
-use layout_assembly::internal::paint_input::{
-    NinePieceImagePaint, NinePieceImageWidth, PaintImageTileRule,
-};
+use layout::paint::FragmentBoxSides;
+use paint_input_types::layout_input::{Edges, Offset, Size};
+use paint_input_types::paint_input::{NinePieceImagePaint, NinePieceImageWidth, PaintImageTileRule};
 
 use paint_model::PaintRect;
 
@@ -540,7 +538,7 @@ impl NinePieceImageGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_assembly::internal::paint_input::NinePieceImageWidths;
+    use paint_input_types::paint_input::NinePieceImageWidths;
 
     fn Slices(value: f64) -> Edges {
         Edges {

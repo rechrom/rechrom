@@ -1,15 +1,15 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::RefCell;
 
-use layout_assembly::internal::layout_input::{
-    BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, PaintStyle, Size, SvgShapeData,
-    SvgShapeGeometry,
+use layout::input::PaintStyle;
+use paint_input_types::layout_input::{
+    BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, Size, SvgShapeData, SvgShapeGeometry,
     TransformMatrix,
 };
-use layout_assembly::internal::layout_input_types::Color;
-use layout_assembly::internal::paint_input::{
+use paint_input_types::layout_input_types::Color;
+use paint_input_types::paint_input::{
     PaintStyleData, SvgMarkerInstance, SvgMarkerPrimitive, SvgPaintComponent, SvgPaintServer,
     SvgPaintServerReferenceBox, SvgStrokeLineCap, SvgStrokeLineJoin,
 };
@@ -338,7 +338,7 @@ fn MarkerStyle(primitive: &SvgMarkerPrimitive) -> ShapePaintStyle {
 // inverse accumulated transform into the shader exactly once.
 fn ResolveShapePaintServer(
     server: &SvgPaintServer,
-    resources: Option<&layout_assembly::fragment_tree::PaintResources>,
+    resources: Option<&paint_input_types::PaintResources>,
     origin: Offset,
     reference_origin: Offset,
     reference_size: Size,
@@ -1002,9 +1002,10 @@ impl<'n, 'f, 'c, 'o> SVGShapePainter<'n, 'f, 'c, 'o> {
 mod tests {
     use std::sync::Arc;
 
-    use layout_assembly::fragment_tree::FragmentPaintData;
-    use layout_assembly::internal::layout_input::{NodeKind, SvgShapeData};
-    use layout_assembly::internal::paint_input::SvgPatternCommand;
+    use layout::paint::FragmentPaintData;
+    use layout::input::NodeKind;
+    use paint_input_types::layout_input::SvgShapeData;
+    use paint_input_types::paint_input::SvgPatternCommand;
 
     use super::*;
     use crate::display_item_id::{DisplayItemId, DisplayItemIdType};
@@ -1179,7 +1180,7 @@ mod tests {
         let server = SvgPaintServer {
             is_in_canvas_subtree: true,
             pattern: Some(Arc::new(
-                layout_assembly::internal::paint_input::SvgPatternData {
+                paint_input_types::paint_input::SvgPatternData {
                     commands: vec![SvgPatternCommand::DrawShape(SvgMarkerPrimitive {
                         fill_server: Some(nested),
                         fill: Some(Color::default()),

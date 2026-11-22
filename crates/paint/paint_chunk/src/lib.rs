@@ -5,8 +5,8 @@
 //! The package owns chunk-boundary and client metadata decisions. It does not
 //! record operations or publish a PaintArtifact.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
-use layout_assembly::fragment_tree::FragmentPaintData;
+use layout::fragment::ResidentBoxGeometry as _;
+use layout::paint::FragmentPaintData;
 use paint_model::display_item_id::DisplayItemIdType;
 
 pub mod hit_test_data;

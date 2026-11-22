@@ -4,12 +4,10 @@
 //! or a mutable owner. Lookup uses the existing DisplayItemClient directory
 //! and verifies source identity; hit testing must prepare lifecycle first.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use foundation::PhysicalOffset;
-use layout_assembly::{
-    fragment_tree::FragmentPaintData,
-    layout_engine::{FragmentCursor, PaintFragmentCursor},
-};
+use layout::output::FragmentCursor;
+use layout::paint::{FragmentPaintData, PaintFragmentCursor};
 use paint_model::{
     paint_property_tree::{
         ClipPaintPropertyNode, EffectPaintPropertyNode, PaintPropertyKey, PaintPropertyNodeStore,
@@ -296,7 +294,7 @@ impl<'a> ResidentPaintHitTest<'a> {
 
     pub fn LayoutObjectIdentity(
         self,
-    ) -> Option<layout_assembly::layout_engine::PaintLayoutObjectIdentity<'a>> {
+    ) -> Option<layout::paint::PaintLayoutObjectIdentity<'a>> {
         self.Fragment().paint.LayoutObjectIdentity()
     }
 

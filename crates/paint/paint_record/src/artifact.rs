@@ -7,8 +7,8 @@ use crate::{
     CaretGeometry, DisplayItem, DisplayItemList, DisplayItemListJsonOption, RecordedDisplayItem,
 };
 use image_resource::downcast_document_paint_record;
-use layout_assembly::fragment_tree::PaintResources;
-use layout_assembly::internal::paint_input::{PaintShader, PaintShaderKind, SvgPatternCommand};
+use paint_input_types::PaintResources;
+use paint_input_types::paint_input::{PaintShader, PaintShaderKind, SvgPatternCommand};
 use paint_chunk::{PaintChunk, PaintChunks};
 use paint_model::PaintCompositorViewport;
 use paint_model::PaintRect;
@@ -702,7 +702,7 @@ impl PaintRecording {
             };
             for command in &pattern.commands {
                 match command {
-                    layout_assembly::internal::paint_input::SvgPatternCommand::DrawImage(
+                    paint_input_types::paint_input::SvgPatternCommand::DrawImage(
                         image,
                     ) => {
                         if let Some(key) = &image.document_container_key {
@@ -712,10 +712,10 @@ impl PaintRecording {
                             }
                         }
                     }
-                    layout_assembly::internal::paint_input::SvgPatternCommand::DrawShape(
+                    paint_input_types::paint_input::SvgPatternCommand::DrawShape(
                         shape,
                     )
-                    | layout_assembly::internal::paint_input::SvgPatternCommand::DrawGlyph(
+                    | paint_input_types::paint_input::SvgPatternCommand::DrawGlyph(
                         shape,
                     ) => {
                         if let Some(shader) = &shape.fill_server {
@@ -725,12 +725,12 @@ impl PaintRecording {
                             pattern_requirements(shader, output);
                         }
                     }
-                    layout_assembly::internal::paint_input::SvgPatternCommand::SaveLayerMask(
+                    paint_input_types::paint_input::SvgPatternCommand::SaveLayerMask(
                         mask,
                     ) => {
                         let nested = PaintShader {
                             pattern: Some(Arc::new(
-                                layout_assembly::internal::paint_input::SvgPatternData {
+                                paint_input_types::paint_input::SvgPatternData {
                                     commands: mask.commands.clone(),
                                     ..Default::default()
                                 },
@@ -906,9 +906,7 @@ mod paint_artifact_tests {
 
     #[test]
     fn vector_pattern_identity_is_not_an_image_dependency() {
-        use layout_assembly::internal::paint_input::{
-            PaintShaderKind, SvgPatternData, SvgPatternImage,
-        };
+        use paint_input_types::paint_input::{PaintShaderKind, SvgPatternData, SvgPatternImage};
 
         let vector_pattern = PaintShader {
             kind: PaintShaderKind::kPattern,
@@ -949,7 +947,7 @@ mod paint_artifact_tests {
             visual_rect: PaintRect::default(),
             visual_rect_is_accurate: true,
             draws_content: true,
-            raster_effect_outset: layout_assembly::fragment_tree::RasterEffectOutset::kNone,
+            raster_effect_outset: layout::paint::RasterEffectOutset::kNone,
             record_rect_known_to_be_opaque: PaintRect::default(),
             record_background: Default::default(),
             record_has_text: false,

@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -11,21 +11,22 @@ pub type FlatTransforms = Arc<[TransformMatrix]>;
 
 use foundation::{PaintInvalidationReason, TrustedIdentityHashMap as HashMap};
 
-use layout_assembly::fragment_tree::{
-    FragmentKind, FragmentPaintData, PaintResources, TextCombinePaintData,
+use layout::fragment::FragmentKind;
+use layout::paint::{FragmentPaintData, TextCombinePaintData};
+use paint_input_types::PaintResources;
+use layout::input::PaintStyle;
+use layout::input::{Display, FloatSide, NodeKind, Overflow, Position};
+use paint_input_types::layout_input::{
+    BorderLineStyle, Edges, Offset, PaintClipPathChild, PaintImage, PaintPathCommand, PaintPathVerb,
+    Size, TransformMatrix,
 };
-use layout_assembly::internal::layout_input::PaintStyle;
-use layout_assembly::internal::layout_input::{
-    BorderLineStyle, Display, Edges, FloatSide, NodeKind, Offset, Overflow, PaintClipPathChild,
-    PaintImage, PaintPathCommand, PaintPathVerb, Position, Size, TransformMatrix,
-};
-use layout_assembly::internal::paint_input::{
+use paint_input_types::paint_input::{
     BackgroundBox, ClipPathLength, ClipPathPaint, ClipPathRadiusKind, ClipPathReferenceBox,
     ClipPathShapeRadius, PaintBlendMode, PaintCornerRadii, PaintCornerRadius, PaintFilterOperation,
     PaintFilterType, PaintMaskImageState, PaintMaskLayer, PaintReflectionDirection, PaintTransform,
     SvgFilterPrimitiveKind,
 };
-use layout_assembly::layout_engine::{PaintFragmentCursor, PaintFragmentLease};
+use layout::paint::{PaintFragmentCursor, PaintFragmentLease};
 
 use crate::background_geometry::{ResolveBackgroundTile, ResolveBackgroundTileSize};
 use crate::block_paint_invalidator::BlockPaintInvalidator;
@@ -80,7 +81,7 @@ pub struct EmbeddedLocalFrameView {
 impl EmbeddedLocalFrameView {
     pub fn new(
         owner: PaintFragmentCursor<'_>,
-        layout: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout: &layout::paint::LayoutPaintOutput,
         cross_origin_to_parent: bool,
     ) -> Self {
         assert!(owner
@@ -212,7 +213,7 @@ fn StickyElementIdForClient(
 }
 
 fn BuildCompositorStickyConstraint(
-    sticky: layout_assembly::fragment_tree::StickyPositionPaintData,
+    sticky: layout::paint::StickyPositionPaintData,
     parent: &Arc<TransformPaintPropertyNode>,
     pixel_snap_offset: Offset,
 ) -> Option<PaintCompositorStickyConstraint> {
@@ -785,7 +786,7 @@ impl PaintTreeNode<'_> {
     /// fixture nodes without a source keep their fixture value.
     pub fn DocumentResources(
         &self,
-    ) -> Option<&Arc<layout_assembly::fragment_tree::PaintResources>> {
+    ) -> Option<&Arc<paint_input_types::PaintResources>> {
         match self.source_cursor {
             Some(cursor) => cursor.DocumentResources(),
             None => self.fragment.as_deref()?.resources.as_ref(),
@@ -2167,19 +2168,19 @@ fn EllipsePath(
         height: radius_y * 2.0,
     };
     let radii = PaintCornerRadii {
-        top_left: layout_assembly::internal::paint_input::PaintCornerRadius {
+        top_left: paint_input_types::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        top_right: layout_assembly::internal::paint_input::PaintCornerRadius {
+        top_right: paint_input_types::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        bottom_right: layout_assembly::internal::paint_input::PaintCornerRadius {
+        bottom_right: paint_input_types::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
-        bottom_left: layout_assembly::internal::paint_input::PaintCornerRadius {
+        bottom_left: paint_input_types::paint_input::PaintCornerRadius {
             x: radius_x,
             y: radius_y,
         },
@@ -2382,8 +2383,8 @@ fn ResolveClipPath(
             width: (reference_box.width - left - right).max(0.0),
             height: (reference_box.height - top - bottom).max(0.0),
         };
-        let radius = |value: layout_assembly::internal::paint_input::ClipPathRadius| {
-            layout_assembly::internal::paint_input::PaintCornerRadius {
+        let radius = |value: paint_input_types::paint_input::ClipPathRadius| {
+            paint_input_types::paint_input::PaintCornerRadius {
                 x: length(value.x, reference_box.width, pixel_scale).max(0.0),
                 y: length(value.y, reference_box.height, pixel_scale).max(0.0),
             }
@@ -2599,7 +2600,7 @@ fn ResolveClipPath(
 
 fn TransformClipPoint(
     point: Offset,
-    transform: layout_assembly::internal::paint_input::SvgClipTransform,
+    transform: paint_input_types::paint_input::SvgClipTransform,
 ) -> Offset {
     let [a, b, c, d, e, f] = transform.values;
     Offset {
@@ -2608,12 +2609,12 @@ fn TransformClipPoint(
     }
 }
 fn MultiplyClipTransform(
-    a: layout_assembly::internal::paint_input::SvgClipTransform,
-    b: layout_assembly::internal::paint_input::SvgClipTransform,
-) -> layout_assembly::internal::paint_input::SvgClipTransform {
+    a: paint_input_types::paint_input::SvgClipTransform,
+    b: paint_input_types::paint_input::SvgClipTransform,
+) -> paint_input_types::paint_input::SvgClipTransform {
     let [a0, a1, a2, a3, a4, a5] = a.values;
     let [b0, b1, b2, b3, b4, b5] = b.values;
-    layout_assembly::internal::paint_input::SvgClipTransform {
+    paint_input_types::paint_input::SvgClipTransform {
         values: [
             a0 * b0 + a2 * b1,
             a1 * b0 + a3 * b1,
@@ -2631,21 +2632,21 @@ fn MultiplyClipTransform(
     }
 }
 fn ResolveClipTransformPercentages(
-    mut transform: layout_assembly::internal::paint_input::SvgClipTransform,
+    mut transform: paint_input_types::paint_input::SvgClipTransform,
     width: f64,
     height: f64,
-) -> layout_assembly::internal::paint_input::SvgClipTransform {
+) -> paint_input_types::paint_input::SvgClipTransform {
     transform.values[4] += transform.percentages[0] * width + transform.percentages[1] * height;
     transform.values[5] += transform.percentages[2] * width + transform.percentages[3] * height;
     transform.percentages = [0.0; 4];
     transform
 }
 fn ResolveSvgClipGeometry(
-    geometry: &layout_assembly::internal::paint_input::SvgClipGeometry,
+    geometry: &paint_input_types::paint_input::SvgClipGeometry,
     width: f64,
     height: f64,
 ) -> Vec<PaintPathCommand> {
-    use layout_assembly::internal::paint_input::{SvgClipGeometry as G, SvgClipLength};
+    use paint_input_types::paint_input::{SvgClipGeometry as G, SvgClipLength};
     let x = |v: SvgClipLength| v.value + v.percentage * width;
     let y = |v: SvgClipLength| v.value + v.percentage * height;
     let diagonal = ((width * width + height * height) * 0.5).sqrt();
@@ -2799,14 +2800,12 @@ fn ResolveSvgClipGeometry(
     }
 }
 fn ResolveSvgClipViewport(
-    viewport: layout_assembly::internal::paint_input::SvgClipViewport,
+    viewport: paint_input_types::paint_input::SvgClipViewport,
     reference_width: f64,
     reference_height: f64,
-) -> layout_assembly::internal::paint_input::SvgClipTransform {
-    use layout_assembly::internal::paint_input::{
-        SvgClipPreserveAspectRatio as P, SvgClipTransform,
-    };
-    let resolve = |length: layout_assembly::internal::paint_input::SvgClipLength, basis| {
+) -> paint_input_types::paint_input::SvgClipTransform {
+    use paint_input_types::paint_input::{SvgClipPreserveAspectRatio as P, SvgClipTransform};
+    let resolve = |length: paint_input_types::paint_input::SvgClipLength, basis| {
         length.value + length.percentage * basis
     };
     let width = resolve(viewport.width, reference_width).max(0.0);
@@ -2843,13 +2842,13 @@ fn ResolveSvgClipViewport(
 }
 
 pub fn ResolveSvgClipText(
-    text: &layout_assembly::internal::paint_input::SvgClipText,
-    fonts: &[layout_assembly::internal::layout_input::FontFace],
+    text: &paint_input_types::paint_input::SvgClipText,
+    fonts: &[paint_input_types::layout_input::FontFace],
     geometry_size: (f64, f64),
     cursor: &mut Offset,
 ) -> Result<Vec<Vec<PaintPathCommand>>, String> {
     use font_engine::{ClipTextFace, ClipTextRequest, OutlineVerb, TextDirection};
-    use layout_assembly::internal::paint_input::SvgClipTextAnchor;
+    use paint_input_types::paint_input::SvgClipTextAnchor;
     let variation_storage = fonts
         .iter()
         .map(|font| {
@@ -2897,7 +2896,7 @@ pub fn ResolveSvgClipText(
         },
         &faces,
     )?;
-    let resolve = |values: &[layout_assembly::internal::paint_input::SvgClipLength],
+    let resolve = |values: &[paint_input_types::paint_input::SvgClipLength],
                    index: usize,
                    basis: f64| {
         values
@@ -3047,20 +3046,18 @@ pub fn ResolveSvgClipText(
     Ok(result)
 }
 pub fn ResolveReferenceClipPath(
-    graph: &layout_assembly::internal::paint_input::SvgClipPathGraph,
+    graph: &paint_input_types::paint_input::SvgClipPathGraph,
     reference: PaintRect,
     paint_offset: Offset,
     effective_zoom: f64,
     svg_owner: bool,
     resource_viewport: Option<Size>,
-    fonts: &[layout_assembly::internal::layout_input::FontFace],
+    fonts: &[paint_input_types::layout_input::FontFace],
     runtime_error: &mut Option<String>,
     output: &mut Vec<PaintPathCommand>,
     children: &mut Vec<PaintClipPathChild>,
 ) -> PaintRect {
-    use layout_assembly::internal::paint_input::{
-        SvgClipPathUnits, SvgClipTransform, SvgClipTransformStep,
-    };
+    use paint_input_types::paint_input::{SvgClipPathUnits, SvgClipTransform, SvgClipTransformStep};
     let first_output_child = children.len();
     if graph.children.iter().any(|child| child.text.is_some()) {
         runtime_error
@@ -3644,7 +3641,7 @@ fn ResolveMaskLayers(
                 ..Default::default()
             };
             if let Some(graph) = reference.graph.as_deref() {
-                use layout_assembly::internal::paint_input::SvgMaskUnits;
+                use paint_input_types::paint_input::SvgMaskUnits;
                 if IsSvgEffectChild(fragment.paint.SourceKind())
                     && fragment.paint.SvgShape().is_none()
                     && (graph.mask_units == SvgMaskUnits::kObjectBoundingBox
@@ -6393,7 +6390,7 @@ impl PrePaintTreeWalk {
         }
         let usage = || {
             cache.resource_usage
-                | layout_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(f)
+                | layout::paint::PaintResourceUsage(f)
         };
         if !self.SameDocumentResources(
             cache.resources.as_ref(),
@@ -6472,7 +6469,7 @@ impl PrePaintTreeWalk {
         }) {
             return same;
         }
-        let same = layout_assembly::fragment_tree::paint_resource_usage::SamePaintResourcesFor(
+        let same = layout::paint::SamePaintResourcesFor(
             recorded, current, usage,
         );
         self.resource_memo
@@ -7073,7 +7070,7 @@ impl PrePaintTreeWalk {
             let resources = fragment.Cursor().DocumentResources().cloned();
             let usage = match previous_resource_usage {
                 Some(usage) if self_unchanged => usage,
-                _ => layout_assembly::fragment_tree::paint_resource_usage::PaintResourceUsage(
+                _ => layout::paint::PaintResourceUsage(
                     &fragment,
                 ),
             };
@@ -8725,16 +8722,19 @@ mod tests {
         ResolveFragmentGeometry, ResolveMaskLayers, RetainImagePaintedRect, SamePhaseInputs,
         SvgTransformToPixelSnappedBorderBox, TransformPropertyRoles,
     };
-    use layout_assembly::fragment_tree::{
-        FieldsetPaintData, FragmentKind, FragmentPaintData, FragmentPaintRect, PaintResources,
-        ScrollContainerPaintData, ScrollbarPaintAxis, ScrollbarPaintData, SelfOutlinePaintData,
+    use layout::fragment::FragmentKind;
+    use layout::paint::{
+        FieldsetPaintData, FragmentPaintData, ScrollContainerPaintData, ScrollbarPaintAxis,
+        ScrollbarPaintData, SelfOutlinePaintData,
     };
-    use layout_assembly::internal::layout_input::{
-        BorderLineStyle, Display, FloatSide, NodeKind, Offset, Overflow, PaintPathCommand,
-        PaintPathVerb, Position, Size, SvgShapeData, SvgShapeGeometry, TransformMatrix,
+    use paint_input_types::{FragmentPaintRect, PaintResources};
+    use layout::input::{Display, FloatSide, NodeKind, Overflow, Position};
+    use paint_input_types::layout_input::{
+        BorderLineStyle, Offset, PaintPathCommand, PaintPathVerb, Size, SvgShapeData,
+        SvgShapeGeometry, TransformMatrix,
     };
-    use layout_assembly::internal::layout_input_types::Color;
-    use layout_assembly::internal::paint_input::{
+    use paint_input_types::layout_input_types::Color;
+    use paint_input_types::paint_input::{
         BackgroundBox, BackgroundImageLayer, ClipPathCircle, ClipPathLength, ClipPathPaint,
         ClipPathRadiusKind, ClipPathShapeRadius, PaintColorStop, PaintCornerRadii,
         PaintFilterOperation, PaintFilterType, PaintMaskImageState, PaintMaskLayer, PaintShader,
@@ -9131,7 +9131,7 @@ mod tests {
         fragment.paint.paint_layer_is_self_painting = true;
         fragment.paint.effective_zoom = 2.0;
         fragment.paint.paint_layer_filter_reference_box =
-            Some(layout_assembly::fragment_tree::FragmentPaintRect {
+            Some(paint_input_types::FragmentPaintRect {
                 offset: Offset { x: 3.0, y: 4.0 },
                 size: Size {
                     width: 40.0,
@@ -9977,10 +9977,10 @@ mod tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.source_kind = NodeKind::kSvgShape;
         fragment.paint.style.clip_path =
-            Some(layout_assembly::internal::paint_input::ClipPathPaint {
+            Some(paint_input_types::paint_input::ClipPathPaint {
                 inset: Some(Default::default()),
                 reference_box:
-                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kFillBox,
+                    paint_input_types::paint_input::ClipPathReferenceBox::kFillBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10032,10 +10032,10 @@ mod tests {
         fragment.paint.establishes_paint_state = true;
         fragment.paint.source_kind = NodeKind::kSvgShape;
         fragment.paint.style.clip_path =
-            Some(layout_assembly::internal::paint_input::ClipPathPaint {
+            Some(paint_input_types::paint_input::ClipPathPaint {
                 inset: Some(Default::default()),
                 reference_box:
-                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kStrokeBox,
+                    paint_input_types::paint_input::ClipPathReferenceBox::kStrokeBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10081,10 +10081,10 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.clip_path =
-            Some(layout_assembly::internal::paint_input::ClipPathPaint {
+            Some(paint_input_types::paint_input::ClipPathPaint {
                 geometry_box_only: true,
                 reference_box:
-                    layout_assembly::internal::paint_input::ClipPathReferenceBox::kBorderBox,
+                    paint_input_types::paint_input::ClipPathReferenceBox::kBorderBox,
                 ..Default::default()
             });
         fragment.size = Size {
@@ -10137,16 +10137,16 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.border_radii = Some(PaintCornerRadii {
-            top_left: layout_assembly::internal::paint_input::PaintCornerRadius {
+            top_left: paint_input_types::paint_input::PaintCornerRadius {
                 x: 8.0,
                 y: 8.0,
             },
             ..Default::default()
         });
         fragment.paint.style.border_corner_curvatures() =
-            layout_assembly::internal::paint_input::PaintCornerCurvatures([4.0, 2.0, 2.0, 2.0]);
+            paint_input_types::paint_input::PaintCornerCurvatures([4.0, 2.0, 2.0, 2.0]);
         fragment.paint.style.clip_path =
-            Some(layout_assembly::internal::paint_input::ClipPathPaint {
+            Some(paint_input_types::paint_input::ClipPathPaint {
                 geometry_box_only: true,
                 ..Default::default()
             });
@@ -10193,7 +10193,7 @@ mod tests {
         fragment.paint.has_source = true;
         fragment.paint.establishes_paint_state = true;
         fragment.paint.style.clip_path =
-            Some(layout_assembly::internal::paint_input::ClipPathPaint {
+            Some(paint_input_types::paint_input::ClipPathPaint {
                 reference_error: Some("clip-path shape()/ray() is unsupported".into()),
                 ..Default::default()
             });
@@ -10304,7 +10304,7 @@ mod tests {
         let mut outlined_fragment = FragmentPaintData::default();
         outlined_fragment.paint.has_source = true;
         outlined_fragment.paint.style.outline_style =
-            layout_assembly::internal::layout_input::BorderLineStyle::kSolid;
+            paint_input_types::layout_input::BorderLineStyle::kSolid;
         outlined_fragment.paint.style.outline_width = 1.0;
         outlined_fragment.paint.style.outline_color.alpha = 1.0;
         let mut outlined = PaintTreeNode::default();
@@ -10373,7 +10373,7 @@ mod tests {
         image.paint.establishes_paint_state = true;
         image.paint.is_layout_box = true;
         image.paint.replaced_content =
-            Some(layout_assembly::fragment_tree::ReplacedContentPaintData {
+            Some(layout::paint::ReplacedContentPaintData {
                 respects_css_overflow: false,
                 clips_to_content_box: true,
                 is_image: true,
@@ -10398,7 +10398,7 @@ mod tests {
             width: 100.0,
             height: 80.0,
         };
-        let radius = layout_assembly::internal::paint_input::PaintCornerRadius { x: 8.0, y: 8.0 };
+        let radius = paint_input_types::paint_input::PaintCornerRadius { x: 8.0, y: 8.0 };
         fragment.paint.style.border_radii = Some(PaintCornerRadii {
             top_left: radius,
             top_right: radius,
@@ -10639,7 +10639,7 @@ mod tests {
             };
             fragment.paint.style.will_change_opacity = force_preferred;
             fragment.paint.scroll_container =
-                Some(layout_assembly::fragment_tree::ScrollContainerPaintData {
+                Some(layout::paint::ScrollContainerPaintData {
                     compositor_element_id: Default::default(),
                     scrollable_axes: [true, true],
                     scroll_origin: Offset::default(),
@@ -11127,7 +11127,7 @@ mod tests {
             height: 80.0,
         };
         fragment.paint.fieldset = Some(Arc::new(FieldsetPaintData {
-            border_outsets: layout_assembly::internal::layout_input::Edges {
+            border_outsets: paint_input_types::layout_input::Edges {
                 top: 7.0,
                 right: 4.0,
                 bottom: 3.0,

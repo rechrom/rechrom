@@ -1,6 +1,6 @@
 //! Selected DecorationLinePainter geometry in Paint-owned path commands.
 #![allow(non_snake_case)]
-use layout_assembly::internal::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
+use paint_input_types::layout_input::{Offset, PaintPathCommand, PaintPathVerb};
 use paint_model::paint_clip_path::{PaintPath, PaintPathFillType};
 
 pub use foundation::{MakeWave, WaveDefinition, WavyPaintRect, WavyPatternBounds};

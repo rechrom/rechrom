@@ -3,15 +3,15 @@
 //! Source paint display-list ABI. The entry point and private painters are
 //! connected after their owning source files have been translated.
 
-use layout_assembly::fragment_tree::ResidentBoxGeometry as _;
+use layout::fragment::ResidentBoxGeometry as _;
 use std::sync::Arc;
 #[path = "drag_image.rs"]
 pub mod drag_image;
 
-use layout_assembly::fragment_tree::PaintResources;
-pub use layout_assembly::fragment_tree::RasterEffectOutset;
+use paint_input_types::PaintResources;
+pub use layout::paint::RasterEffectOutset;
 
-pub use layout_assembly::internal::paint_input::{
+pub use paint_input_types::paint_input::{
     PaintCornerRadii, PaintFilterOperation, PaintMaskComposite, PaintMaskMode, PaintShader,
     PaintShaderKind, SvgPatternCommand, SvgPatternData, SvgPatternImage, SvgStrokeLineCap,
     SvgStrokeLineJoin,
@@ -39,7 +39,7 @@ pub use image_resource::{
     PaintImageContent, PaintImageId as PaintImageResourceId,
     PaintImageMetadataUnavailable as ImageMetadataUnavailable,
 };
-pub use layout_assembly::internal::layout_input::PaintImage as LayoutPaintImage;
+pub use paint_input_types::layout_input::PaintImage as LayoutPaintImage;
 pub use paint_record::drawing_display_item::CalculateRectKnownToBeOpaqueForRecord;
 
 pub use crate::display_item_id::DisplayItemId as PaintChunkId;
@@ -200,7 +200,7 @@ fn document_image_mutation_retains_recording_and_targets_its_client() {
     ));
     let old_record: Arc<dyn image_resource::DocumentPaintRecord> = Arc::new(1u8);
     let resources = Arc::new(PaintResources {
-        images: vec![layout_assembly::internal::layout_input::PaintImage {
+        images: vec![paint_input_types::layout_input::PaintImage {
             id: 7,
             revision: 1,
             width: 80,
@@ -276,7 +276,7 @@ use crate::pre_paint_tree_walk::{PaintFragmentSource, PrePaintTreeWalk};
 use std::cell::RefCell;
 use std::collections::HashSet;
 pub fn FragmentClientRectsByNode(
-    root: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+    root: layout::paint::PaintFragmentCursor<'_>,
 ) -> std::collections::HashMap<u64, Vec<PaintRect>> {
     crate::client_rects::CollectFragmentClientRects(root)
 }
@@ -345,8 +345,8 @@ pub trait PaintLifecycleObserver {
 /// Call-scoped borrow of the native same-Page child LocalFrameView. Layout
 /// retains geometry and FragmentPaintData; Paint retains only opaque leases.
 pub struct LocalFrameViewPaintInput<'a> {
-    pub owner: layout_assembly::layout_engine::PaintFragmentCursor<'a>,
-    pub layout: &'a layout_assembly::layout_engine::LayoutPaintOutput,
+    pub owner: layout::paint::PaintFragmentCursor<'a>,
+    pub layout: &'a layout::paint::LayoutPaintOutput,
     pub is_cross_origin_to_parent: bool,
     pub blocking_wheel_targets: Arc<[u64]>,
     pub lifecycle: &'a dyn PaintLifecycleObserver,
@@ -355,7 +355,7 @@ pub struct LocalFrameViewPaintInput<'a> {
 fn WalkPrePaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
-    source_lease: layout_assembly::layout_engine::PaintFragmentLease,
+    source_lease: layout::paint::PaintFragmentLease,
 ) -> Box<crate::pre_paint_tree_walk::PaintTreeNode<'static>> {
     // Chromium refreshes PaintLayer descendant-dependent flags immediately
     // before PrePaint. Doing this at Layout publication alone is too early:
@@ -471,7 +471,7 @@ fn WalkPrePaint(
 /// A completed resident PrePaint pass. This token carries the same layout
 /// lifetime/identity lease; it contains no copied fragment or Paint tree.
 pub struct PreparedPrePaint {
-    source: layout_assembly::layout_engine::PaintFragmentLease,
+    source: layout::paint::PaintFragmentLease,
 }
 
 /// Paint-property values admitted by Blink's deferred transform/opacity
@@ -653,7 +653,7 @@ fn CollectCompositedAnimationPropertyUpdate(
 fn RecordPaint(
     pre_paint: &mut PrePaintTreeWalk,
     fragments: PaintFragmentSource<'_>,
-    source_lease: layout_assembly::layout_engine::PaintFragmentLease,
+    source_lease: layout::paint::PaintFragmentLease,
     editing: EditingPaintState,
     previous: Option<Arc<PaintArtifact>>,
     previous_subsequences: paint_record::SubsequencesData,
@@ -1001,14 +1001,14 @@ pub struct PaintEngine {
 impl PaintEngine {
     pub fn ReverseResidentLayerOrder(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
     ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
         self.ResidentLayerOrder(source, selection, true)
     }
     pub fn ResidentLayerOrder(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
         selection: crate::resident_hit_test::ResidentLayerSelection,
         reverse: bool,
     ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
@@ -1023,8 +1023,8 @@ impl PaintEngine {
 
     pub fn ResidentOverlayControlsAfter(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
-        child: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
+        child: layout::paint::PaintFragmentCursor<'_>,
     ) -> Option<crate::resident_hit_test::ResidentPaintLayerOrderCursor<'_>> {
         self.pre_paint
             .WithResidentPaintNode(source, paint_walk::EnsureResidentHitTestLayerOrder)?;
@@ -1050,21 +1050,21 @@ impl PaintEngine {
     /// The lease prevents a paint lifecycle mutation while the query runs.
     pub fn ResidentHitTest(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
     ) -> Option<crate::resident_hit_test::ResidentPaintHitTest<'_>> {
         self.pre_paint.ResidentHitTest(source)
     }
 
     pub fn ResidentLayerHitTest(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
     ) -> Option<crate::resident_hit_test::ResidentPaintHitTest<'_>> {
         self.pre_paint.ResidentLayerHitTest(source)
     }
 
     pub fn CalculateResidentLayerClipRects(
         &self,
-        source: layout_assembly::layout_engine::PaintFragmentCursor<'_>,
+        source: layout::paint::PaintFragmentCursor<'_>,
         layer: crate::resident_hit_test::ResidentPaintHitTest<'_>,
         root: crate::resident_hit_test::ResidentPaintHitTest<'_>,
         fragment: crate::resident_hit_test::ResidentPaintHitTest<'_>,
@@ -1096,7 +1096,7 @@ impl PaintEngine {
     /// as if it represented the new inputs.
     pub fn Paint(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         editing: EditingPaintState,
     ) {
         self.PaintInternal(layout_output, editing, None, None, None);
@@ -1119,7 +1119,7 @@ impl PaintEngine {
 
     pub fn PrePaintWithLocalFrameViews(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         views: &[LocalFrameViewPaintInput<'_>],
         lifecycle: &dyn PaintLifecycleObserver,
     ) -> PreparedPrePaint {
@@ -1143,7 +1143,7 @@ impl PaintEngine {
 
     pub fn PaintAfterPrePaintWithLocalFrameViews(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         views: &[LocalFrameViewPaintInput<'_>],
         editing: EditingPaintState,
         lifecycle: &dyn PaintLifecycleObserver,
@@ -1171,7 +1171,7 @@ impl PaintEngine {
 
     pub fn PaintWithLocalFrameViews(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         views: &[LocalFrameViewPaintInput<'_>],
         editing: EditingPaintState,
         lifecycle: &dyn PaintLifecycleObserver,
@@ -1193,7 +1193,7 @@ impl PaintEngine {
     /// and artifact publication to the scheduled rendering lifecycle.
     pub fn PrePaintWithLifecycle(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         lifecycle: &dyn PaintLifecycleObserver,
     ) -> PreparedPrePaint {
         lifecycle.AdvanceTo(PaintLifecyclePhase::InPrePaint);
@@ -1218,7 +1218,7 @@ impl PaintEngine {
     /// ordinary complete PrePaint walk, leaving it prepared for Paint.
     pub fn PrePaintCompositedAnimationUpdate(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         targeted_nodes: &[u64],
         lifecycle: &dyn PaintLifecycleObserver,
     ) -> (
@@ -1269,7 +1269,7 @@ impl PaintEngine {
 
     pub fn PaintAfterPrePaint(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         editing: EditingPaintState,
         lifecycle: &dyn PaintLifecycleObserver,
         document: canvas::CanvasDocumentIdentity,
@@ -1285,7 +1285,7 @@ impl PaintEngine {
     }
     pub fn PaintWithLifecycle(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         editing: EditingPaintState,
         lifecycle: &dyn PaintLifecycleObserver,
         document: canvas::CanvasDocumentIdentity,
@@ -1300,7 +1300,7 @@ impl PaintEngine {
     }
     fn PaintInternal(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
         editing: EditingPaintState,
         lifecycle: Option<&dyn PaintLifecycleObserver>,
         document: Option<canvas::CanvasDocumentIdentity>,
@@ -1467,7 +1467,7 @@ impl PaintEngine {
                 .GetPaintArtifact()
                 .expect("committed Paint result")
                 .clone(),
-            layout_assembly::layout_engine::PaintClientCommit::FromClientSet(clients),
+            layout::paint::PaintClientCommit::FromClientSet(clients),
         )
     }
 
@@ -1483,7 +1483,7 @@ impl PaintEngine {
     #[doc(hidden)]
     pub fn TryUpdateScrollProperties(
         &mut self,
-        layout_output: &layout_assembly::layout_engine::LayoutPaintOutput,
+        layout_output: &layout::paint::LayoutPaintOutput,
     ) -> Result<
         crate::scroll_paint_update::ScrollPropertyUpdate,
         crate::scroll_paint_update::ScrollPaintInvalidation,

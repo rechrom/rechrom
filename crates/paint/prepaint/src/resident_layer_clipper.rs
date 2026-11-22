@@ -2,7 +2,7 @@
 //! Source: core/paint/paint_layer_clipper.cc:97-276, clip_rect.cc:43-91.
 use crate::{pre_paint_tree_walk::PrePaintTreeWalk, resident_hit_test::ResidentPaintHitTest};
 use foundation::{gfx, OverlayScrollbarClipBehavior, PhysicalOffset, PhysicalRect};
-use layout_assembly::layout_engine::PaintFragmentCursor;
+use layout::paint::PaintFragmentCursor;
 use layout_geometry::geometry::physical_rect::PhysicalRectExt;
 use paint_model::{
     geometry_mapper_source::{
