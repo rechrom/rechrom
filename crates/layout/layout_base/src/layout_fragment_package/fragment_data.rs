@@ -135,6 +135,14 @@ pub struct FragmentData {
     // The first entry is never removed by FragmentDataList::Shrink, so the
     // table lives exactly as long as the LayoutObject.
     keyed_paint_sidecars_: UnsafeCell<Option<Box<KeyedPaintSidecars>>>,
+    // Rust-only, first entry only: the Layout paint publication serial under
+    // which this object's FragmentData list was last brought up to date with
+    // its physical fragments (0: never). Chromium grows or shrinks the list
+    // once per object per PrePaintTreeWalk, in
+    // PrePaintTreeWalk::GetOrCreateFragmentData
+    // (core/paint/pre_paint_tree_walk.cc); the stamp lets every later sidecar
+    // lookup of the same publication skip the repeated check.
+    fragment_list_sync_publication_: Cell<u64>,
     #[cfg(debug_assertions)]
     is_first_: bool,
 }
@@ -146,6 +154,7 @@ impl Default for FragmentData {
             rare_data_: Member::default(),
             paint_sidecar_: UnsafeCell::new(None),
             keyed_paint_sidecars_: UnsafeCell::new(None),
+            fragment_list_sync_publication_: Cell::new(0),
             #[cfg(debug_assertions)]
             is_first_: false,
         }
@@ -288,6 +297,17 @@ impl FragmentData {
             .get_or_insert_with(Default::default)
             .entry(key)
             .or_insert_with(FragmentPaintSidecar::New)
+    }
+
+    /// Rust-only, first entry: the paint publication under which the
+    /// object's FragmentData list was last synchronized with its physical
+    /// fragments (see `fragment_list_sync_publication_`).
+    pub fn FragmentListSyncPublication(&self) -> u64 {
+        self.fragment_list_sync_publication_.get()
+    }
+
+    pub fn SetFragmentListSyncPublication(&self, publication: u64) {
+        self.fragment_list_sync_publication_.set(publication);
     }
 
     // cpp: core/paint/fragment_data.h:187-189

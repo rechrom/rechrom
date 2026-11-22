@@ -166,20 +166,22 @@ fn RecordRebindScrollOrigin(box_fragment: &PhysicalBoxFragment, output: &Fragmen
 // PrePaint walks its physical fragments (core/paint/pre_paint_tree_walk.cc,
 // GetOrCreateFragmentData): one entry per physical fragment. The first
 // binding of any of the box's fragments establishes the invariant before the
-// fragment's FragmentData identity is read.
-pub(crate) fn SynchronizeBoxFragmentData(owner: &LayoutObject) {
+// fragment's FragmentData identity is read. Returns whether the list was
+// resized. LayoutPaintState::SynchronizeBoxObjectFragmentData runs this once
+// per object and publication.
+pub(crate) fn SynchronizeBoxFragmentData(owner: &LayoutObject) -> bool {
     let Some(layout_box) =
         (unsafe { DynamicTo::<LayoutBox>(owner as *const LayoutObject).as_ref() })
     else {
-        return;
+        return false;
     };
     let physical_count = layout_box.PhysicalFragmentCount() as u32;
     if physical_count == 0 {
-        return;
+        return false;
     }
     let old_count = owner.GetMutableForPainting().FragmentList().size();
     if old_count == physical_count {
-        return;
+        return false;
     }
     let mut mutable = owner.GetMutableForPainting();
     mutable.FragmentCountChanged();
@@ -192,6 +194,7 @@ pub(crate) fn SynchronizeBoxFragmentData(owner: &LayoutObject) {
     } else {
         mutable.FragmentList().Shrink(physical_count);
     }
+    true
 }
 
 // Source: PrePaintTreeWalk::GetOrCreateFragmentData and
