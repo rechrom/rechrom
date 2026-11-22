@@ -47,7 +47,7 @@ use layout_style::style::computed_style::ComputedStyle;
 /// through the core engine. DOM supplies mutations; Paint consumes the
 /// fragment output.
 pub struct LayoutEngine {
-    engine: CoreLayoutEngine,
+    pub(crate) engine: CoreLayoutEngine,
 }
 
 /// Construction.

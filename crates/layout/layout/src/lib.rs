@@ -35,6 +35,13 @@
 //! several groups; all of them resolve to one re-export.
 
 mod engine;
+mod engine_groups {
+    mod browser;
+    mod document;
+    mod interaction;
+    mod paint;
+    mod webapi;
+}
 // Group seeds are consumed only through the topic globs below.
 #[allow(unused_imports)]
 mod exports {
