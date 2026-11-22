@@ -20,7 +20,7 @@ pub mod mutation {
     // Wave E: scroll
     pub use layout_assembly::layout_engine::ScrollMutation;
     // Wave E: pointer
-    pub use layout_assembly::native_pointer_scroll_controls::PointerMutation;
+    pub use layout_assembly::engine::pointer::pointer_scroll_controls::PointerMutation;
 }
 
 pub mod input {
@@ -83,32 +83,32 @@ pub mod scroll {
     pub use layout_assembly::internal::layout_scrollable_area::NativeUserSnapScrollKind;
     pub use layout_assembly::internal::scrollbar::Scrollbar;
     pub use layout_assembly::layout_engine::SuppressScrollAnchorScope;
-    pub use layout_assembly::native_autoscroll_source::{
+    pub use layout_assembly::engine::scroll::autoscroll_source::{
         NativeAutoscrollLayout, NativeAutoscrollSearch, NativeAutoscrollSource,
         NativeLogicalScrollArea, NativeLogicalScrollBoxFacts, NativeLogicalScrollNodeFacts,
         NativeLogicalScrollingArea,
     };
-    pub use layout_assembly::native_event_registry_source::NativeEventRegistryLayout;
-    pub use layout_assembly::native_mouse_coordinates::{
+    pub use layout_assembly::engine::event_registry::event_registry_source::NativeEventRegistryLayout;
+    pub use layout_assembly::engine::pointer::mouse_coordinates::{
         NativeDragNodeImageGeometry, NativeDragResourceImageFacts, NativeMouseCoordinateLayout,
         NativeRegisteredScrollableArea,
     };
-    pub use layout_assembly::native_page_scale_geometry::NativePageScaleGeometry;
-    pub use layout_assembly::native_pointer_scroll_controls::{
+    pub use layout_assembly::engine::scroll::page_scale_geometry::NativePageScaleGeometry;
+    pub use layout_assembly::engine::pointer::pointer_scroll_controls::{
         NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
         NativeResizePlan, NativeScrollbarInteraction,
     };
-    pub use layout_assembly::native_scroll_source::{
+    pub use layout_assembly::engine::scroll::scroll_source::{
         NativeCompositorScrollArea, NativeCompositorScrollUpdate, NativeLayoutSnapPlan,
         NativeScrollFrameGeometry, NativeScrollResult, NativeSnapAnimationState, ScrollAlignment,
         ScrollAlignmentBehavior, ScrollIntoViewParams,
     };
-    pub use layout_assembly::native_user_scroll_source::{
+    pub use layout_assembly::engine::scroll::user_scroll_source::{
         NativeScrollFinishedPlan, NativeUserScrollAnimationRequest, NativeUserScrollAnimationState,
         NativeUserScrollAreaFacts, NativeUserScrollGranularity, NativeUserScrollPlan,
         NativeUserScrollSource,
     };
-    pub use layout_assembly::native_wheel_scrollable_traversal::{
+    pub use layout_assembly::engine::scroll::wheel_scrollable_traversal::{
         NativeWheelScrollableArea, NativeWheelScrollableAreaTraversal,
     };
 }

@@ -88,7 +88,7 @@ impl LayoutEngine {
         }
         true
     }
-    pub fn PointerScrollbarFadeTimerFired(&self, area: &NativePointerResizeArea) {
+    pub(crate) fn PointerScrollbarFadeTimerFired(&self, area: &NativePointerResizeArea) {
         let _scope = self.NativeScrollPassScope();
         if !area.area().HasBeenDisposed() {
             unsafe { &mut *area.area.Get() }.FadeOverlayScrollbarsTimerFired();
@@ -167,7 +167,11 @@ impl LayoutEngine {
         let _scope = self.NativeScrollPassScope();
         !area.area().HasBeenDisposed() && area.area().InResizeMode()
     }
-    pub fn SetPointerResizeAreaInResizeMode(&self, area: &NativePointerResizeArea, value: bool) {
+    pub(crate) fn SetPointerResizeAreaInResizeMode(
+        &self,
+        area: &NativePointerResizeArea,
+        value: bool,
+    ) {
         let _scope = self.NativeScrollPassScope();
         if !area.area().HasBeenDisposed() {
             unsafe { &mut *area.area.Get() }.SetInResizeMode(value);

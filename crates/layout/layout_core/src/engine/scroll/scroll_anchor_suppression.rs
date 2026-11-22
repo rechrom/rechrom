@@ -1,6 +1,6 @@
 //! TypingCommand::DoApply cc:623-633. The scope crosses only the typed
 //! boundary; it retains the resident ScrollAnchor suppression count itself.
-use super::*;
+use crate::layout_engine::*;
 pub use crate::internal::scroll_anchor::SuppressScrollAnchorScope;
 impl LayoutEngine {
     pub fn SuppressScrollAnchoringForNode(

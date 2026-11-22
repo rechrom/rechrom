@@ -1,7 +1,7 @@
 //! IntersectionGeometry source, Chromium 6c1d401fcca5e1b0030563a90c2f2bba168e0c15.
 //! Borrow the resident LayoutObject/container/clip owners. The observation's
 //! own derived rect cache crosses the boundary, never a parallel layout tree.
-use super::*;
+use crate::layout_engine::*;
 use crate::internal::{
     layout_box_model_object::LayoutBoxModelObject,
     layout_inline::LayoutInline,

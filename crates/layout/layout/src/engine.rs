@@ -18,17 +18,17 @@ use layout_assembly::layout_engine::{
     LayoutMutation, LayoutNode, LayoutOutput, LayoutPaintOutput, LayoutPaintScope,
     NativeIntersectionRoot, PaintCommitOutput, ScrollLayoutUpdate,
 };
-use layout_assembly::native_autoscroll_source::NativeLogicalScrollArea;
-use layout_assembly::native_mouse_coordinates::{
+use layout_assembly::engine::scroll::autoscroll_source::NativeLogicalScrollArea;
+use layout_assembly::engine::pointer::mouse_coordinates::{
     NativeDragNodeImageGeometry, NativeMouseCoordinateLayout, NativeRegisteredScrollableArea,
 };
-use layout_assembly::native_page_scale_geometry::NativePageScaleGeometry;
-use layout_assembly::native_pointer_scroll_controls::{
+use layout_assembly::engine::scroll::page_scale_geometry::NativePageScaleGeometry;
+use layout_assembly::engine::pointer::pointer_scroll_controls::{
     NativeMacScrollbarAnimationUpdate, NativeOverlayVisibilityUpdate, NativePointerResizeArea,
     NativeResizePlan, NativeScrollbarInteraction,
 };
-use layout_assembly::native_scroll_source::NativeCompositorScrollArea;
-use layout_assembly::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
+use layout_assembly::engine::scroll::scroll_source::NativeCompositorScrollArea;
+use layout_assembly::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal;
 use layout_assembly::style_projection::StyleResourceBindings;
 use layout_style::style::computed_style::ComputedStyle;
 

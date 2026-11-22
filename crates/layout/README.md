@@ -312,6 +312,13 @@ old `layoutng_*` source-package names at the repository boundary.
   LayoutObject regular/first-line fallback validity admission is likewise owned
   by `layout_object_font_validity.rs`, giving stale-font cache misses a
   reuse-qualified sampling frame without per-object trace events.
+- `layout_core/src/engine/` holds the core `LayoutEngine`'s method families,
+  one directory per family (`scroll`, `pointer`, `selection`, `form_control`,
+  `observers`, `frame_view`, `event_registry`, `hit_test`), matching the
+  facade's `layout::views::<family>` views and `LayoutMutation` family
+  variants. The module is a child of `layout_engine`, re-exported as
+  `layout_assembly::engine`, so the families keep the engine's private state;
+  files that extend `LayoutNode` are declared from `layout_output.rs`.
 - `layout_algo_*` owns concrete formatting and replaced-content algorithms.
   Shared page/column breaking policy is a base library in
   `layout_core/src/fragmentation/` (its control data, `BreakAppeal` and

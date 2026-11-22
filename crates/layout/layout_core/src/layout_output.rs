@@ -21,12 +21,13 @@ use layout_style::style::style_transform::{
 use std::cell::{Cell, UnsafeCell};
 use std::collections::HashMap;
 use std::sync::Arc;
-#[path = "native_hit_test.rs"]
-mod native_hit_test;
+// Hit-test family (engine/hit_test), compiled as a LayoutOutput child for LayoutNode access.
+#[path = "engine/hit_test/hit_test.rs"]
+mod hit_test;
 #[cfg(feature = "translation_in_progress")]
 #[path = "../../layout_algo_inline/src/spatial_navigation_geometry.rs"]
 mod spatial_navigation_geometry;
-pub use native_hit_test::{
+pub use hit_test::{
     NativeHitTestChildren, NativeHitTestCursor, NativeHitTestInlineItem, NativeHitTestInlineItems,
     NativeHitTestTarget,
 };
@@ -1648,7 +1649,7 @@ impl<'a> LayoutOutput<'a> {
     pub fn WheelScrollableAreaTraversal(
         self,
         target_node_id: u64,
-    ) -> crate::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal {
+    ) -> crate::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal {
         self.engine.WheelScrollableAreaTraversal(target_node_id)
     }
 
@@ -2296,7 +2297,7 @@ impl LayoutNode<'_> {
     }
 }
 
-#[path = "input_control_geometry.rs"]
+#[path = "engine/form_control/input_control_geometry.rs"]
 mod input_control_geometry;
 
 #[cfg(feature = "translation_in_progress")]
@@ -2307,11 +2308,11 @@ pub use layout_algo_inline_editing_find_buffer::{
     EditingFindBlockIdentity, EditingFindMapping, EditingFindStyleFacts,
 };
 
-#[path = "resize_observer_geometry.rs"]
+#[path = "engine/observers/resize_observer_geometry.rs"]
 mod resize_observer_geometry;
 
-#[path = "native_range_geometry.rs"]
-mod native_range_geometry;
+#[path = "engine/selection/range_geometry.rs"]
+mod range_geometry;
 
 #[cfg(feature = "translation_in_progress")]
 #[path = "../../layout_algo_inline/src/editing_apply_style_facts.rs"]
@@ -2319,11 +2320,11 @@ mod editing_apply_style_facts;
 
 impl LayoutOutput<'_> {
     pub fn BlockZoomBoundsForNode(self, node: u64) -> Option<(bool, gfx::Rect)> {
-        crate::native_page_scale_geometry::BlockZoomBoundsForNode(self.engine, node)
+        crate::engine::scroll::page_scale_geometry::BlockZoomBoundsForNode(self.engine, node)
     }
     pub fn PageScaleGeometry(
         self,
-    ) -> Option<crate::native_page_scale_geometry::NativePageScaleGeometry> {
+    ) -> Option<crate::engine::scroll::page_scale_geometry::NativePageScaleGeometry> {
         self.engine.PageScaleGeometry()
     }
 }

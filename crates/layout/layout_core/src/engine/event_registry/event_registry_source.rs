@@ -51,7 +51,7 @@ impl LayoutEngine {
             object: Persistent::from_ptr(object as *const LayoutObject as *mut LayoutObject),
         })
     }
-    pub fn InvalidateEventRegistryLayout(
+    pub(crate) fn InvalidateEventRegistryLayout(
         &mut self,
         target: &NativeEventRegistryLayout,
         blocking_wheel: bool,

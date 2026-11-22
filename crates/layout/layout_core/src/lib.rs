@@ -248,17 +248,13 @@ pub mod layout_fragment_sticky_offsets;
 pub mod layout_registry;
 pub mod layout_boundary_support;
 pub mod layout_engine;
+// The LayoutEngine method families (scroll, pointer, selection, form_control,
+// observers, frame_view, event_registry, hit_test) live in layout_engine's
+// `engine` child module; the facade's `layout::views` mirror them.
+pub use layout_engine::engine;
 mod layoutng_trace_bindings;
-pub mod native_autoscroll_source;
-pub mod native_editing_style;
-pub mod native_event_registry_source;
-pub mod native_scroll_source;
-pub mod native_user_scroll_source;
-pub mod native_wheel_scrollable_traversal;
 pub mod password_echo;
 pub mod style_projection;
-#[cfg(feature = "translation_in_progress")]
-mod text_control_hard_wrap;
 
 pub use internal::form_control_types::{AutofillState, FormControlType};
 pub use internal::layout_algorithm_set::LayoutAlgorithmSet;
@@ -289,12 +285,4 @@ pub(crate) mod layout_algo_inline_editing_caret;
 #[path = "../../layout_algo_inline/src/editing_caret_rect.rs"]
 pub(crate) mod layout_algo_inline_editing_caret_rect;
 
-#[cfg(feature = "translation_in_progress")]
-pub mod native_mouse_coordinates;
-pub mod native_page_scale_geometry;
 
-mod native_anchor_metrics;
-
-mod native_vtt_geometry;
-
-pub mod native_pointer_scroll_controls;

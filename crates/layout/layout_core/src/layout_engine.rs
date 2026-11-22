@@ -38,16 +38,15 @@ use layout_invalidation_tree_facts::{collect_layout_tree_facts, LayoutTreeFacts}
 #[path = "layout_tree_update.rs"]
 mod layout_tree_update;
 pub use layout_tree_update::LayoutTreeUpdate;
-#[path = "input_control_platform.rs"]
-mod input_control_platform;
-pub use input_control_platform::FormControlMutation;
-#[path = "native_document_markers.rs"]
-mod native_document_markers;
-#[path = "native_input_paint.rs"]
-mod native_input_paint;
-#[path = "native_frame_view_updates.rs"]
-mod native_frame_view_updates;
-pub use native_document_markers::DocumentMarkerInvalidationType;
+// `impl LayoutEngine` families, grouped like the facade's `layout::views`.
+// A child of this module so the families keep access to the engine's private
+// state; the crate root re-exports it as `crate::engine`.
+#[path = "engine/mod.rs"]
+pub mod engine;
+pub use self::engine::form_control::input_control_platform::FormControlMutation;
+pub use self::engine::observers::intersection_observer_geometry::NativeIntersectionRoot;
+pub use self::engine::scroll::scroll_anchor_suppression::SuppressScrollAnchorScope;
+pub use self::engine::selection::document_markers::DocumentMarkerInvalidationType;
 
 #[path = "layout_output.rs"]
 mod layout_output;
@@ -204,7 +203,7 @@ pub enum LayoutMutation<'a> {
     FormControl(FormControlMutation),
     // Wave E: event_registry
     /// EventHandlerRegistry invalidation of one resident LayoutObject.
-    EventRegistry(crate::native_event_registry_source::EventRegistryMutation<'a>),
+    EventRegistry(crate::engine::event_registry::event_registry_source::EventRegistryMutation<'a>),
     // Wave E: scroll
     /// Scroll-family commands. `apply_mutation` runs them before any generic
     /// mutation bookkeeping, exactly as their former direct entry points did.
@@ -214,7 +213,7 @@ pub enum LayoutMutation<'a> {
     // Wave E: pointer
     /// Pointer scrollbar/resizer commands on a resident
     /// PaintLayerScrollableArea (scrollbar.cc, pointer_event_manager.cc).
-    Pointer(crate::native_pointer_scroll_controls::PointerMutation<'a>),
+    Pointer(crate::engine::pointer::pointer_scroll_controls::PointerMutation<'a>),
 }
 
 /// Scroll-family commands carried by [`LayoutMutation::Scroll`].
@@ -1524,11 +1523,3 @@ mod layout_algo_forms_spin_button_geometry;
 
 #[cfg(feature = "translation_in_progress")]
 pub use layout_output::{EditingFindBlockIdentity, EditingFindMapping, EditingFindStyleFacts};
-
-#[path = "intersection_observer_geometry.rs"]
-mod intersection_observer_geometry;
-pub use intersection_observer_geometry::NativeIntersectionRoot;
-
-#[path = "native_scroll_anchor_suppression.rs"]
-mod native_scroll_anchor_suppression;
-pub use native_scroll_anchor_suppression::SuppressScrollAnchorScope;

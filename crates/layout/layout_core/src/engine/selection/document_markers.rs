@@ -1,7 +1,7 @@
 //! DocumentMarkerController native invalidation on the original LayoutObject.
 //! Source document_marker_controller.cc:134-174;
 //! highlight/highlight_style_utils.cc:579-598.
-use super::*;
+use crate::layout_engine::*;
 use crate::internal::layout_object::AssociatedLayoutObjectOfDefault;
 use foundation::PaintInvalidationReason;
 #[derive(Clone, Copy)]

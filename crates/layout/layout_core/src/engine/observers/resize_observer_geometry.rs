@@ -22,11 +22,11 @@ struct ResizeObserverLayoutGeometry<'a> {
     engine: &'a LayoutEngine,
 }
 impl ResizeObserverLayoutGeometry<'_> {
-    pub fn ResizeObserverIsNonAtomicInline(&self) -> bool {
+    pub(crate) fn ResizeObserverIsNonAtomicInline(&self) -> bool {
         let _scope = LayoutPassScope::new(&self.engine.algorithms_, &self.engine.objects_);
         self.object.IsNonAtomicInline()
     }
-    pub fn ResizeObserverLayoutBoxGeometry(&self) -> Option<ResizeObserverGeometry> {
+    pub(crate) fn ResizeObserverLayoutBoxGeometry(&self) -> Option<ResizeObserverGeometry> {
         let _scope = LayoutPassScope::new(&self.engine.algorithms_, &self.engine.objects_);
         let box_ = unsafe { DynamicTo::<LayoutBox>(self.object as *const _).as_ref() }?;
         let style = self.object.StyleRef();
@@ -170,7 +170,7 @@ impl LayoutNode<'_> {
         }
         .ResizeObserverGeometry(is_svg_graphics)
     }
-    pub fn ResizeObserverIsNonAtomicInline(&self) -> bool {
+    pub(crate) fn ResizeObserverIsNonAtomicInline(&self) -> bool {
         ResizeObserverLayoutGeometry {
             object: self.object,
             engine: self.output.engine,

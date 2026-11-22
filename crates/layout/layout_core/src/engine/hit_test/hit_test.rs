@@ -2,7 +2,7 @@
 //! Source: layout_object.cc:4524-4544,4602-4610; layout_block.cc:378-403;
 //! layout_inline.cc:597-697. Algorithms remain in Interaction over this cursor.
 use super::PaintLayoutObjectIdentity;
-#[path = "native_svg_hit_test.rs"]
+#[path = "svg_hit_test.rs"]
 mod svg_hit_test;
 use crate::{
     fragment_item::FragmentItem,
@@ -346,8 +346,8 @@ impl<'a> NativeHitTestCursor<'a> {
     /// to the same resident ScrollableAreaTraversal used by wheel handling.
     pub fn ScrollableAreas(
         self,
-    ) -> crate::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal {
-        crate::native_wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal::ForObject(
+    ) -> crate::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal {
+        crate::engine::scroll::wheel_scrollable_traversal::NativeWheelScrollableAreaTraversal::ForObject(
             self.object,
         )
     }
