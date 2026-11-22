@@ -79,16 +79,16 @@ impl Default for AddPreviousItemsResult {
 // cpp: layoutng_fragment_tree/fragment_items_builder.h:45-46
 // cpp: layoutng_fragment_tree/fragment_items_builder.h:157-178
 pub struct FragmentItemsBuilder {
-    pub(crate) items_: Vec<FragmentItemWithOffset>,
-    pub(crate) text_content_: String,
-    pub(crate) first_line_text_content_: String,
+    pub items_: Vec<FragmentItemWithOffset>,
+    pub text_content_: String,
+    pub first_line_text_content_: String,
     current_line_container_: *mut LogicalLineContainer,
     current_line_fragment_: *const PhysicalFragment,
     line_container_map_: HeapHashMap<Member<PhysicalFragment>, Member<LogicalLineContainer>>,
     line_container_pool_: *mut LogicalLineContainer,
-    pub(crate) node_: InlineNode,
+    pub node_: InlineNode,
     writing_direction_: WritingDirectionMode,
-    pub(crate) is_converted_to_physical_: bool,
+    pub is_converted_to_physical_: bool,
     is_line_items_pool_acquired_: bool,
 }
 

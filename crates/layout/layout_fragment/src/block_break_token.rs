@@ -21,7 +21,7 @@ use crate::break_token_algorithm_data::BreakTokenAlgorithmData;
 // cpp: layoutng_fragment_tree/block_break_token.h:266-277
 #[repr(C)]
 pub struct BlockBreakToken {
-    pub(crate) base_: BreakToken,
+    pub base_: BreakToken,
     box_: Member<LayoutBox>,
     data_: Member<BreakTokenAlgorithmData>,
     consumed_block_size_: LayoutUnit,

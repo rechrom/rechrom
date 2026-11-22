@@ -83,8 +83,8 @@ unsafe extern "Rust" {
 // cpp: layoutng/internal/inline_item_segment.h:37-77
 #[derive(Clone)]
 pub struct InlineItemSegment {
-    pub(crate) end_offset_: u32,
-    pub(crate) segment_data_: u32,
+    pub end_offset_: u32,
+    pub segment_data_: u32,
 }
 
 impl InlineItemSegment {
@@ -154,8 +154,8 @@ pub type RunSegmenterRanges = Vector<RunSegmenterRange>;
 // cpp: layoutng/internal/inline_item_segment.h:93-177
 #[derive(Default)]
 pub struct InlineItemSegments {
-    pub(crate) segments_: HeapVector<InlineItemSegment>,
-    pub(crate) items_to_segments_: HeapVector<u32>,
+    pub segments_: HeapVector<InlineItemSegment>,
+    pub items_to_segments_: HeapVector<u32>,
 }
 
 impl InlineItemSegments {

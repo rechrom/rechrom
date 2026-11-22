@@ -90,7 +90,7 @@ impl BoxType {
 // A Cell permits only the intentional late flag updates through const views.
 // cpp: layoutng_fragment_tree/physical_fragment.h:678-718
 #[repr(C)]
-pub(crate) struct PhysicalFragmentFlags([Cell<u8>; 4]);
+pub struct PhysicalFragmentFlags([Cell<u8>; 4]);
 
 impl Clone for PhysicalFragmentFlags {
     fn clone(&self) -> Self {
@@ -114,8 +114,8 @@ impl PhysicalFragmentFlags {
     pub(crate) const DEPENDS_ON_PERCENTAGE_BLOCK_SIZE: (usize, u8) = (1, 2);
     pub(crate) const HAS_RUNNING_ANCHOR_TRANSFORM_ANIMATION: (usize, u8) = (1, 3);
     pub(crate) const CHILDREN_VALID: (usize, u8) = (1, 4);
-    pub(crate) const HAS_PROPAGATED_DESCENDANTS: (usize, u8) = (1, 5);
-    pub(crate) const HAS_HANGING: (usize, u8) = (1, 6);
+    pub const HAS_PROPAGATED_DESCENDANTS: (usize, u8) = (1, 5);
+    pub const HAS_HANGING: (usize, u8) = (1, 6);
     pub(crate) const IS_OPAQUE: (usize, u8) = (1, 7);
     pub(crate) const IS_BLOCK_IN_INLINE: (usize, u8) = (2, 0);
     pub(crate) const IS_LINE_FOR_PARALLEL_FLOW: (usize, u8) = (2, 1);
@@ -132,13 +132,13 @@ impl PhysicalFragmentFlags {
     pub(crate) const HAS_FRAGMENTED_OUT_OF_FLOW_DATA: (usize, u8) = (3, 4);
     pub(crate) const HAS_OUT_OF_FLOW_FRAGMENT_CHILD: (usize, u8) = (3, 5);
     pub(crate) const HAS_OUT_OF_FLOW_IN_FRAGMENTAINER_SUBTREE: (usize, u8) = (3, 6);
-    pub(crate) const BASE_DIRECTION: (usize, u8) = (3, 7);
+    pub const BASE_DIRECTION: (usize, u8) = (3, 7);
 
-    pub(crate) fn get(&self, field: (usize, u8)) -> bool {
+    pub fn get(&self, field: (usize, u8)) -> bool {
         self.0[field.0].get() & (1 << field.1) != 0
     }
 
-    pub(crate) fn set(&self, field: (usize, u8), value: bool) {
+    pub fn set(&self, field: (usize, u8), value: bool) {
         let byte = self.0[field.0].get();
         self.0[field.0].set((byte & !(1 << field.1)) | ((value as u8) << field.1));
     }
@@ -251,11 +251,11 @@ impl OofData {
 // cpp: layoutng_fragment_tree/physical_fragment.h:675-723
 #[repr(C)]
 pub struct PhysicalFragment {
-    pub(crate) layout_object_: UnsafeCell<Member<LayoutObject>>,
-    pub(crate) size_: PhysicalSize,
-    pub(crate) flags_: PhysicalFragmentFlags,
+    pub layout_object_: UnsafeCell<Member<LayoutObject>>,
+    pub size_: PhysicalSize,
+    pub flags_: PhysicalFragmentFlags,
     pub(crate) propagated_data_: Member<PropagatedData>,
-    pub(crate) break_token_: Member<BreakToken>,
+    pub break_token_: Member<BreakToken>,
     pub(crate) oof_data_: Member<OofData>,
 }
 

@@ -209,20 +209,20 @@ pub struct TextBoxInfo {
 #[repr(C)]
 pub struct LayoutText {
     object_: LayoutObject,
-    pub(crate) valid_ng_items_: bool,
+    pub valid_ng_items_: bool,
     pub(crate) has_no_control_items_: bool,
-    pub(crate) has_bidi_control_items_: bool,
+    pub has_bidi_control_items_: bool,
     pub(crate) is_text_fragment_: bool,
-    pub(crate) has_abstract_inline_text_box_: bool,
-    pub(crate) has_variable_length_transform_: bool,
+    pub has_abstract_inline_text_box_: bool,
+    pub has_variable_length_transform_: bool,
     ignore_whitespace_for_accessibility_: Cell<bool>,
     has_cached_ignore_whitespace_for_accessibility_: Cell<bool>,
     node_id_: DOMNodeId,
-    pub(crate) text_: String,
-    pub(crate) previous_logical_starting_point_: Cell<LogicalOffset>,
-    pub(crate) inline_items_: InlineItemSpan,
-    pub(crate) first_fragment_item_index_: usize,
-    pub(crate) secure_text_timer_: Option<crate::password_echo::SecureTextTimer>,
+    pub text_: String,
+    pub previous_logical_starting_point_: Cell<LogicalOffset>,
+    pub inline_items_: InlineItemSpan,
+    pub first_fragment_item_index_: usize,
+    pub secure_text_timer_: Option<crate::password_echo::SecureTextTimer>,
 }
 
 // cpp: layoutng/internal/layout_text.h:509-513
@@ -238,7 +238,7 @@ impl LayoutText {
     // Construction is defined in //src/layoutng_inline/layout_text.cc. The
     // shared assembly invokes this base initializer from that source module.
     // cpp: layoutng_inline/layout_text.cc:31-41
-    pub(crate) fn new_base_for_inline(node: *mut Node, text: String) -> Self {
+    pub fn new_base_for_inline(node: *mut Node, text: String) -> Self {
         debug_assert!(!text.IsNull());
         debug_assert!(node.is_null() || !unsafe { &*node }.IsDocumentNode());
         let result = Self {
@@ -668,7 +668,7 @@ impl LayoutText {
             LayoutTextMomentarilyRevealLastTypedCharacter(self, offset, settings, token, scheduler)
         }
     }
-    pub(crate) fn PasswordEchoTimerMatches(
+    pub fn PasswordEchoTimerMatches(
         &self,
         token: crate::password_echo::PasswordEchoTimerToken,
     ) -> bool {

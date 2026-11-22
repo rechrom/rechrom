@@ -27,8 +27,8 @@ impl LineBoxType {
 // cpp: layoutng_fragment_tree/physical_line_box_fragment.cc:24-29
 #[repr(C)]
 pub struct PhysicalLineBoxFragment {
-    pub(crate) base_: PhysicalFragment,
-    pub(crate) metrics_: FontHeight,
+    pub base_: PhysicalFragment,
+    pub metrics_: FontHeight,
 }
 
 // cpp: layoutng_fragment_tree/physical_line_box_fragment.h:80-86
