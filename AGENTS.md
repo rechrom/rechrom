@@ -524,6 +524,10 @@ each new log.
   (Visual Studio Build Tools on Windows, Xcode command-line tools on macOS).
   Text, fonts and Unicode run on pure-Rust crates (HarfRust, read-fonts/skrifa,
   ICU4X); do not add system-library dependencies.
+- Dependencies come from crates.io, pinned in `Cargo.lock`; no git
+  dependencies. A third-party crate is vendored only when its local patch is
+  necessary; `vendor/README.md` lists each one, and `vendor/patches/` holds
+  its exact diff from upstream (regenerate with `tools/vendor_patches.sh`).
 - Chromium and Skia sources are pinned: Chromium
   `6c1d401fcca5e1b0030563a90c2f2bba168e0c15`, Skia
   `cacf77bdba7ba7df8ea7236d7e14b08c658ff368`. Translate from these revisions

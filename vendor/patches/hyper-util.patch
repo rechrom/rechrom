@@ -1,0 +1,294 @@
+# vendor/hyper-util against pristine upstream
+# upstream: https://static.crates.io/crates/hyper-util/hyper-util-0.1.21.crate
+# sha256:   ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff
+# Regenerate with tools/vendor_patches.sh; see vendor/DECISIONS.md for why it is kept.
+#
+# Upstream files not vendored:
+#   .github/workflows/CI.yml
+#   .github/workflows/rustdoc-preview.yml
+#   .gitignore
+#   Cargo.lock
+#   examples/client.rs
+#   examples/client_tracing.rs
+#   examples/server.rs
+#   examples/server_graceful.rs
+#   tests/legacy_client.rs
+#   tests/proxy.rs
+#   tests/test_utils/mod.rs
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -122,45 +122,6 @@
+ name = "hyper_util"
+ path = "src/lib.rs"
+ 
+-[[example]]
+-name = "client"
+-path = "examples/client.rs"
+-required-features = [
+-    "client-legacy",
+-    "http1",
+-    "tokio",
+-]
+-
+-[[example]]
+-name = "client_tracing"
+-path = "examples/client_tracing.rs"
+-
+-[[example]]
+-name = "server"
+-path = "examples/server.rs"
+-required-features = [
+-    "server",
+-    "http1",
+-    "tokio",
+-]
+-
+-[[example]]
+-name = "server_graceful"
+-path = "examples/server_graceful.rs"
+-required-features = [
+-    "tokio",
+-    "server-graceful",
+-    "server-auto",
+-]
+-
+-[[test]]
+-name = "legacy_client"
+-path = "tests/legacy_client.rs"
+-
+-[[test]]
+-name = "proxy"
+-path = "tests/proxy.rs"
+-
+ [dependencies.base64]
+ version = "0.23"
+ optional = true
+--- a/src/client/legacy/client.rs
++++ b/src/client/legacy/client.rs
+@@ -14,18 +14,18 @@
+ use futures_util::future::{self, Either, FutureExt, TryFutureExt};
+ use http::uri::Scheme;
+ use hyper::client::conn::TrySendError as ConnTrySendError;
+-use hyper::header::{HOST, HeaderValue};
++use hyper::header::{HeaderValue, HOST};
+ use hyper::rt::Timer;
+-use hyper::{Method, Request, Response, Uri, Version, body::Body};
++use hyper::{body::Body, Method, Request, Response, Uri, Version};
+ use tracing::{debug, trace, warn};
+ 
++use super::connect::capture::{CaptureConnectionExtension, CheckConnection};
+ #[cfg(feature = "tokio")]
+ use super::connect::HttpConnector;
+-use super::connect::capture::CaptureConnectionExtension;
+ use super::connect::{Alpn, Connect, Connected, Connection};
+ use super::pool::{self, Ver};
+ 
+-use crate::common::{Exec, Lazy, SyncWrapper, lazy as hyper_lazy, timer};
++use crate::common::{lazy as hyper_lazy, timer, Exec, Lazy, SyncWrapper};
+ 
+ type BoxSendFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+ 
+@@ -287,6 +287,14 @@
+             conn.set(&pooled.conn_info);
+         }
+ 
++        // Rechrom: per-request async transport admission, including pool reuse.
++        // This must precede try_send_request (both HTTP/1 and HTTP/2).
++        if let Some(check) = req.extensions().get::<CheckConnection>().cloned() {
++            check.0.check(&pooled.conn_info).await.map_err(|error| {
++                TrySendError::Nope(e!(Connect, error).with_connect_info(pooled.conn_info.clone()))
++            })?;
++        }
++
+         if pooled.is_http1() {
+             if req.version() == Version::HTTP_2 {
+                 warn!("Connection is HTTP/1, but request requires HTTP/2");
+@@ -321,6 +329,9 @@
+             authority_form(req.uri_mut());
+         }
+ 
++        if let Some(timing) = req.extensions().get::<super::connect::CaptureSendStart>() {
++            *timing.0.lock().expect("send start poisoned") = Some(std::time::Instant::now());
++        }
+         let mut res = match pooled.try_send_request(req).await {
+             Ok(res) => res,
+             Err(mut err) => {
+--- a/src/client/legacy/connect/capture.rs
++++ b/src/client/legacy/connect/capture.rs
+@@ -131,20 +131,18 @@
+             "connection has not been set"
+         );
+         tx.set(&Connected::new().proxy(true));
+-        assert!(
+-            rx.connection_metadata()
+-                .as_ref()
+-                .expect("connected should be set")
+-                .is_proxied()
+-        );
++        assert!(rx
++            .connection_metadata()
++            .as_ref()
++            .expect("connected should be set")
++            .is_proxied());
+ 
+         // ensure it can be called multiple times
+-        assert!(
+-            rx.connection_metadata()
+-                .as_ref()
+-                .expect("connected should be set")
+-                .is_proxied()
+-        );
++        assert!(rx
++            .connection_metadata()
++            .as_ref()
++            .expect("connected should be set")
++            .is_proxied());
+     }
+ 
+     #[tokio::test]
+@@ -155,13 +153,12 @@
+             "connection has not been set"
+         );
+         let test_task = tokio::spawn(async move {
+-            assert!(
+-                rx.wait_for_connection_metadata()
+-                    .await
+-                    .as_ref()
+-                    .expect("connection should be set")
+-                    .is_proxied()
+-            );
++            assert!(rx
++                .wait_for_connection_metadata()
++                .await
++                .as_ref()
++                .expect("connection should be set")
++                .is_proxied());
+             // can be awaited multiple times
+             assert!(
+                 rx.wait_for_connection_metadata().await.is_some(),
+@@ -188,3 +185,18 @@
+         assert!(rx.wait_for_connection_metadata().await.is_none());
+     }
+ }
++
++/// A per-request asynchronous gate after pool selection, before HTTP headers
++/// or body are sent. The same gate runs for newly opened and reused connections.
++/// Protocol-independent policy lives in the caller, not in this transport hook.
++pub trait ConnectionCheck: Send + Sync {
++    /// Inspect the selected connection's original metadata and resume or fail.
++    fn check(
++        &self,
++        connected: &Connected,
++    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>>;
++}
++
++/// Request extension enabling a [`ConnectionCheck`].
++#[derive(Clone)]
++pub struct CheckConnection(pub Arc<dyn ConnectionCheck>);
+--- a/src/client/legacy/connect/http.rs
++++ b/src/client/legacy/connect/http.rs
+@@ -3,9 +3,9 @@
+ use std::io;
+ use std::marker::PhantomData;
+ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+-use std::pin::{Pin, pin};
++use std::pin::{pin, Pin};
+ use std::sync::Arc;
+-use std::task::{self, Poll, ready};
++use std::task::{self, ready, Poll};
+ use std::time::Duration;
+ 
+ use futures_util::future::Either;
+@@ -16,7 +16,7 @@
+ use tokio::time::Sleep;
+ use tracing::{debug, trace, warn};
+ 
+-use super::dns::{self, GaiResolver, Resolve, resolve};
++use super::dns::{self, resolve, GaiResolver, Resolve};
+ use super::{Connected, Connection};
+ use crate::rt::TokioIo;
+ 
+@@ -115,7 +115,11 @@
+         if let Some(retries) = self.retries {
+             ka = Self::ka_with_retries(ka, retries, &mut dirty)
+         };
+-        if dirty { Some(ka) } else { None }
++        if dirty {
++            Some(ka)
++        } else {
++            None
++        }
+     }
+ 
+     #[cfg(
+@@ -1191,8 +1195,8 @@
+         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
+         use std::time::{Duration, Instant};
+ 
+-        use super::ConnectingTcp;
+         use super::dns;
++        use super::ConnectingTcp;
+ 
+         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
+         let addr = server4.local_addr().unwrap();
+--- a/src/client/legacy/connect/mod.rs
++++ b/src/client/legacy/connect/mod.rs
+@@ -65,8 +65,8 @@
+ use std::{
+     fmt::{self, Formatter},
+     sync::{
+-        Arc,
+         atomic::{AtomicBool, Ordering},
++        Arc,
+     },
+ };
+ 
+@@ -83,7 +83,7 @@
+ pub mod proxy;
+ 
+ pub(crate) mod capture;
+-pub use capture::{CaptureConnection, capture_connection};
++pub use capture::{capture_connection, CaptureConnection, CheckConnection, ConnectionCheck};
+ 
+ pub use self::sealed::Connect;
+ 
+@@ -441,3 +441,8 @@
+         assert_eq!(ex2.get::<Ex2>(), Some(&Ex2("hiccup")));
+     }
+ }
++
++/// Per-request network send start, after connection/admission and before the
++/// protocol send operation. This is not the client enqueue timestamp.
++#[derive(Clone, Default)]
++pub struct CaptureSendStart(pub std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>);
+--- a/src/client/legacy/connect/proxy/socks/mod.rs
++++ b/src/client/legacy/connect/proxy/socks/mod.rs
+@@ -164,7 +164,7 @@
+     use tokio::io::AsyncWriteExt;
+ 
+     use super::v5::messages::{AuthMethod, AuthenticationRes, NegotiationRes, ProxyRes, Status};
+-    use super::{SocksError, read_message};
++    use super::{read_message, SocksError};
+     use crate::rt::TokioIo;
+ 
+     // A SOCKS5 ProxyRes message. Successful, bound to 127.0.0.1:8080.
+--- a/src/client/legacy/connect/proxy/tunnel.rs
++++ b/src/client/legacy/connect/proxy/tunnel.rs
+@@ -1,7 +1,7 @@
+ use std::error::Error as StdError;
+ use std::marker::PhantomData;
+ use std::pin::Pin;
+-use std::task::{self, Poll, ready};
++use std::task::{self, ready, Poll};
+ 
+ use http::{HeaderMap, HeaderValue, Uri};
+ use hyper::rt::{Read, Write};
+@@ -264,7 +264,7 @@
+ 
+     use tokio::io::AsyncWriteExt;
+ 
+-    use super::{Headers, TunnelError, tunnel};
++    use super::{tunnel, Headers, TunnelError};
+     use crate::rt::TokioIo;
+ 
+     async fn handshake(response: &'static [u8]) -> Result<(), TunnelError> {

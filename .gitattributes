@@ -1,0 +1,3 @@
+
+# Vendored-crate patches keep upstream LF line endings.
+vendor/patches/*.patch text eol=lf

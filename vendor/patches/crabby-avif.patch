@@ -1,0 +1,1625 @@
+# vendor/crabby-avif against pristine upstream
+# upstream: https://github.com/webmproject/CrabbyAvif/archive/8f2b74b4d8be956395f527020c2190762e086f98.tar.gz
+# sha256:   0ba0db75f208edfbfeed855f1a8fb667b615122f9f5d786ceaeaaa081a4d450c
+# Regenerate with tools/vendor_patches.sh; see vendor/DECISIONS.md for why it is kept.
+#
+# Upstream files not vendored:
+#   .cargo/config.toml
+#   .github/actions/setup-deps/action.yml
+#   .github/dependabot.yml
+#   .github/workflows/android-mediacodec.yml
+#   .github/workflows/build-and-run-tests-avm.yml
+#   .github/workflows/build-and-run-tests-cli.yml
+#   .github/workflows/build-and-run-tests-experimental-features.yml
+#   .github/workflows/build-and-run-tests-libjxl.yml
+#   .github/workflows/build-and-run-tests.yml
+#   .github/workflows/c-header-file.yml
+#   .github/workflows/clippy.yml
+#   .github/workflows/no-default-features.yml
+#   .github/workflows/rustfmt.yml
+#   .github/workflows/toml-formatter.yml
+#   .gitignore
+#   .hgignore
+#   .rustfmt.toml
+#   CONTRIBUTING.md
+#   build.rs
+#   c_api_tests/.clang-format
+#   c_api_tests/CMakeLists.txt
+#   c_api_tests/conformance_tests.cc
+#   c_api_tests/decoder_tests.cc
+#   c_api_tests/encoder_tests.cc
+#   c_api_tests/gainmap_tests.cc
+#   c_api_tests/image_tests.cc
+#   c_api_tests/incremental_tests.cc
+#   c_api_tests/reformat_tests.cc
+#   c_api_tests/sk_crabby_avif_codec_tests.cc
+#   c_api_tests/testutil.cc
+#   c_api_tests/testutil.h
+#   cargo-config.toml
+#   cbindgen.toml
+#   clippy.toml
+#   external/googletest.cmd
+#   external/googletest_android.sh
+#   include/avif/avif.h
+#   include/avif/libavif_compat.h
+#   sys/aom-sys/Cargo.toml
+#   sys/aom-sys/aom.cmd
+#   sys/aom-sys/build.rs
+#   sys/aom-sys/src/lib.rs
+#   sys/aom-sys/wrapper.h
+#   sys/avm-sys/Cargo.toml
+#   sys/avm-sys/avm.cmd
+#   sys/avm-sys/build.rs
+#   sys/avm-sys/src/lib.rs
+#   sys/avm-sys/wrapper.h
+#   sys/dav1d-sys/Cargo.toml
+#   sys/dav1d-sys/build.rs
+#   sys/dav1d-sys/dav1d.cmd
+#   sys/dav1d-sys/dav1d_android.sh
+#   sys/dav1d-sys/src/lib.rs
+#   sys/dav1d-sys/wrapper.h
+#   sys/libjxl-sys/Cargo.toml
+#   sys/libjxl-sys/build.rs
+#   sys/libjxl-sys/libjxl.cmd
+#   sys/libjxl-sys/src/lib.rs
+#   sys/libjxl-sys/wrapper.h
+#   sys/libpng-sys/Cargo.toml
+#   sys/libpng-sys/build.rs
+#   sys/libpng-sys/src/lib.rs
+#   sys/libpng-sys/wrapper.h
+#   sys/libpng-sys/zlibpng.cmd
+#   sys/libpng-sys/zlibpng_windows.cmd
+#   sys/libsharpyuv-sys/Cargo.toml
+#   sys/libsharpyuv-sys/build.rs
+#   sys/libsharpyuv-sys/libsharpyuv.cmd
+#   sys/libsharpyuv-sys/src/lib.rs
+#   sys/libsharpyuv-sys/wrapper.h
+#   sys/libyuv-sys/Cargo.toml
+#   sys/libyuv-sys/build.rs
+#   sys/libyuv-sys/libyuv.cmd
+#   sys/libyuv-sys/libyuv_android.sh
+#   sys/libyuv-sys/src/lib.rs
+#   sys/libyuv-sys/wrapper.h
+#   sys/ndk-sys/Cargo.toml
+#   sys/ndk-sys/build.rs
+#   sys/ndk-sys/mediaimage2_wrapper.hpp
+#   sys/ndk-sys/src/empty.rs
+#   sys/ndk-sys/src/lib.rs
+#   sys/ndk-sys/wrapper.h
+#   tests/av2.rs
+#   tests/avif.rs
+#   tests/conformance.rs
+#   tests/data/README.md
+#   tests/data/abc.png
+#   tests/data/abc_color_irot_alpha_NOirot.avif
+#   tests/data/abc_color_irot_alpha_irot.avif
+#   tests/data/alpha.avif
+#   tests/data/alpha_noispe.avif
+#   tests/data/alpha_premultiplied.avif
+#   tests/data/anim.avif
+#   tests/data/apple_gainmap_new.jpg
+#   tests/data/apple_gainmap_old.jpg
+#   tests/data/circle_auxl_two_targets.avif
+#   tests/data/clap_irot_imir_non_essential.avif
+#   tests/data/clli/clli_0_0.avif
+#   tests/data/clli/clli_0_1.avif
+#   tests/data/clli/clli_0_65535.avif
+#   tests/data/clli/clli_1_0.avif
+#   tests/data/clli/clli_1_1.avif
+#   tests/data/clli/clli_1_65535.avif
+#   tests/data/clli/clli_65535_0.avif
+#   tests/data/clli/clli_65535_1.avif
+#   tests/data/clli/clli_65535_65535.avif
+#   tests/data/color_grid_alpha_grid_gainmap_nogrid.avif
+#   tests/data/color_grid_alpha_grid_tile_shared_in_dimg.avif
+#   tests/data/color_grid_alpha_nogrid.avif
+#   tests/data/color_grid_gainmap_different_grid.avif
+#   tests/data/color_nogrid_alpha_nogrid_gainmap_grid.avif
+#   tests/data/colors-animated-12bpc-keyframes-0-2-3.avif
+#   tests/data/colors-animated-8bpc-alpha-exif-xmp.avif
+#   tests/data/colors-animated-8bpc-audio.avif
+#   tests/data/colors-animated-8bpc-depth-exif-xmp.avif
+#   tests/data/colors-animated-8bpc-unsupported-hdlr-meta.avif
+#   tests/data/colors-animated-8bpc-unsupported-hdlr-moov.avif
+#   tests/data/colors-animated-8bpc.avif
+#   tests/data/dog_exif_extended_xmp_icc.jpg
+#   tests/data/draw_points_idat.avif
+#   tests/data/draw_points_idat_metasize0.avif
+#   tests/data/draw_points_idat_progressive.avif
+#   tests/data/draw_points_idat_progressive_metasize0.avif
+#   tests/data/gainmap_oriented.avif
+#   tests/data/grid_cell0_444_cell1_420.avif
+#   tests/data/grid_icc_individual_cells.avif
+#   tests/data/grid_nclx_individual_cells.avif
+#   tests/data/heic/README.md
+#   tests/data/heic/b_506659035_hvcc_nal_zero_length.heic
+#   tests/data/heic/blue.heic
+#   tests/data/heic/blue_422.heic
+#   tests/data/heic/blue_444.heic
+#   tests/data/heic/blue_alpha.heic
+#   tests/data/heic/blue_gh_issue_692.heic
+#   tests/data/heic/blue_grid_alpha.heic
+#   tests/data/heic/blue_hevc_brand_without_moov.heic
+#   tests/data/heic/nokiatech/autumn_1440x960.heic
+#   tests/data/heic/nokiatech/bird_burst.heic
+#   tests/data/heic/nokiatech/bothie_1440x960.heic
+#   tests/data/heic/nokiatech/candle_animation.heic
+#   tests/data/heic/nokiatech/cheers_1440x960.heic
+#   tests/data/heic/nokiatech/crowd_1440x960.heic
+#   tests/data/heic/nokiatech/grid_960x640.heic
+#   tests/data/heic/nokiatech/lights_1440x960.heic
+#   tests/data/heic/nokiatech/old_bridge_1440x960.heic
+#   tests/data/heic/nokiatech/overlay_1000x680.heic
+#   tests/data/heic/nokiatech/rally_burst.heic
+#   tests/data/heic/nokiatech/random_collection_1440x960.heic
+#   tests/data/heic/nokiatech/sea1_animation.heic
+#   tests/data/heic/nokiatech/season_collection_1440x960.heic
+#   tests/data/heic/nokiatech/ski_jump_1440x960.heic
+#   tests/data/heic/nokiatech/spring_1440x960.heic
+#   tests/data/heic/nokiatech/starfield_animation.heic
+#   tests/data/heic/nokiatech/stereo_1200x800.heic
+#   tests/data/heic/nokiatech/summer_1440x960.heic
+#   tests/data/heic/nokiatech/surfer_1440x960.heic
+#   tests/data/heic/nokiatech/winter_1440x960.heic
+#   tests/data/heic/yuv420_image_with_yuv400_gainmap.heic
+#   tests/data/invalid_color10x10_alpha5x5.avif
+#   tests/data/io/cosmos1650_yuv444_10bpc_p3pq.avif
+#   tests/data/io/kodim03_yuv420_8bpc.avif
+#   tests/data/io/kodim23_yuv420_8bpc.avif
+#   tests/data/mismatch_colr_0_0.avif
+#   tests/data/mismatch_colr_0_1.avif
+#   tests/data/mismatch_colr_0_2.avif
+#   tests/data/mismatch_colr_1_0.avif
+#   tests/data/mismatch_colr_1_1.avif
+#   tests/data/mismatch_colr_1_2.avif
+#   tests/data/missing_colr_0_0.avif
+#   tests/data/missing_colr_0_1.avif
+#   tests/data/missing_colr_0_2.avif
+#   tests/data/missing_colr_1_0.avif
+#   tests/data/missing_colr_1_1.avif
+#   tests/data/missing_colr_1_2.avif
+#   tests/data/overlay_exact_bounds.avif
+#   tests/data/overlay_outside_bounds.avif
+#   tests/data/overlay_with_border.avif
+#   tests/data/overlay_yellow_bg.avif
+#   tests/data/paris_10bpc.avif
+#   tests/data/paris_exif_non_zero_tiff_offset.avif
+#   tests/data/paris_exif_orientation_5.jpg
+#   tests/data/paris_exif_xmp_gainmap_bigendian.jpg
+#   tests/data/paris_exif_xmp_gainmap_littleendian.jpg
+#   tests/data/paris_exif_xmp_icc.jpg
+#   tests/data/paris_exif_xmp_icc_gainmap_bigendian.jpg
+#   tests/data/paris_exif_xmp_modified_icc.jpg
+#   tests/data/paris_extended_xmp.jpg
+#   tests/data/paris_icc_exif_xmp.avif
+#   tests/data/paris_icc_exif_xmp.png
+#   tests/data/paris_identity.avif
+#   tests/data/paris_xmp_trailing_null.jpg
+#   tests/data/paris_ycgco_re.avif
+#   tests/data/poc_b_506387278.avif
+#   tests/data/progressive/progressive_dimension_change.avif
+#   tests/data/progressive/progressive_layered_grid.avif
+#   tests/data/progressive/progressive_quality_change.avif
+#   tests/data/progressive/progressive_same_layers.avif
+#   tests/data/progressive/tiger_3layer_1res.avif
+#   tests/data/progressive/tiger_3layer_3res.avif
+#   tests/data/pyramid_pymd.avif
+#   tests/data/sacre_coeur.png
+#   tests/data/sacre_coeur_2extents.avif
+#   tests/data/seine_hdr_gainmap_wrongaltr.avif
+#   tests/data/seine_hdr_srgb.avif
+#   tests/data/seine_sdr_gainmap_notmapbrand.avif
+#   tests/data/seine_sdr_gainmap_srgb.avif
+#   tests/data/seine_sdr_gainmap_srgb.jpg
+#   tests/data/sofa_grid1x5_420.avif
+#   tests/data/sofa_grid1x5_420_dimg_repeat.avif
+#   tests/data/sofa_grid1x5_420_random_dimg_order.avif
+#   tests/data/supported_gainmap_writer_version_with_extra_bytes.avif
+#   tests/data/tmap_primary_item.avif
+#   tests/data/unsupported_gainmap_minimum_version.avif
+#   tests/data/unsupported_gainmap_version.avif
+#   tests/data/unsupported_gainmap_writer_version_with_extra_bytes.avif
+#   tests/data/weld_16bit.png
+#   tests/data/weld_sato_12plus4bit.avif
+#   tests/data/weld_sato_8plus8bit.avif
+#   tests/data/weld_sato_8plus8bit_alpha.avif
+#   tests/data/white_1x1.avif
+#   tests/data/white_2x2.avif
+#   tests/data/white_2x2_invalid_exif.avif
+#   tests/data/white_2x2_multiple_iloc_entries_for_same_item.avif
+#   tests/data/white_iden_chain_with_imir.avif
+#   tests/data/white_iden_chain_with_imir_primary.avif
+#   tests/data/white_iden_cycle.avif
+#   tests/data/white_iden_irot.avif
+#   tests/data/white_iden_self.avif
+#   tests/decoder.rs
+#   tests/encoder.rs
+#   tests/iloc_extents.rs
+#   tests/jpeg.rs
+#   tests/jxl.rs
+#   tests/lossless.rs
+#   tests/mini.rs
+#   tests/pixi.rs
+#   tests/png.rs
+#   tests/rgb.rs
+#   tests/sample_transform.rs
+#   tests/sample_transform_float.rs
+#   tests/utils/mod.rs
+#   tests/y4m.rs
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,112 +1,24 @@
+-workspace = { members = [
+-  "sys/aom-sys",
+-  "sys/dav1d-sys",
+-  "sys/libpng-sys",
+-  "sys/libsharpyuv-sys",
+-  "sys/libyuv-sys",
+-  "sys/ndk-sys",
+-] }
+-
++# Decode-only packaging of Chromium-pinned CrabbyAvif. See RECHROM.md.
+ [package]
+ name = "crabby-avif"
+ version = "0.1.0"
+-edition = "2021"     # Rust version
++edition = "2021"
++license = "Apache-2.0"
++build = false
++autobins = false
++autotests = false
++autoexamples = false
+ 
+ [lib]
+-crate-type = ["rlib", "cdylib", "staticlib"]
++crate-type = ["rlib"]
+ 
+ [dependencies]
+-libc = { version = "0.2.152" }
+-
+-# The dependencies below are also workspace members in order to include their
+-# custom wrappers (lib.rs) in this project. However, even if their respective
+-# features are disabled, workspace members are still parsed by rust-analyzer
+-# (for example with cargo check --workspace, which is VSCode's default behavior)
+-# and some of the build scripts (build.rs) can panic or return errors when they
+-# cannot find the underlying dependency. To avoid that, the wrappers and build
+-# scripts are guarded by a dependency-level feature, which is only enabled if
+-# the dependency itself is enabled, and that is only the case if the top-level
+-# feature is enabled too. The dependency-level features and the top-level
+-# features have the same names for simplicity, they are just "forwarded down".
+-ndk-sys = { version = "0.1.0", path = "sys/ndk-sys", features = [
+-  "android_mediacodec",
+-], optional = true }
+-dav1d-sys = { version = "0.1.0", path = "sys/dav1d-sys", features = [
+-  "dav1d",
+-], optional = true }
+-
+-libyuv-sys = { version = "0.1.0", path = "sys/libyuv-sys", features = [
+-  "libyuv",
+-], optional = true }
+-libsharpyuv-sys = { version = "0.1.0", path = "sys/libsharpyuv-sys", features = [
+-  "libsharpyuv",
+-], optional = true }
+-aom-sys = { version = "0.1.0", path = "sys/aom-sys", features = [
+-  "aom",
+-], optional = true }
+-avm-sys = { version = "0.1.0", path = "sys/avm-sys", features = [
+-  "avm",
+-], optional = true }
+-libjxl-sys = { version = "0.1.0", path = "sys/libjxl-sys", features = [
+-  "libjxl",
+-], optional = true }
+-libpng-sys = { version = "0.1.0", path = "sys/libpng-sys", features = [
+-  "png",
+-], optional = true }
+-
+-clap = { version = "4.5.28", features = ["derive"], optional = true }
+-clap_derive = { version = "4.5.28", optional = true }
+-image = { version = "0.25.6", features = ["jpeg"], optional = true }
+-gif = { version = "0.13.1", optional = true }
+-gif-dispose = { version = "5.0.1", optional = true }
+-md-5 = { version = "0.10.6", optional = true }
+-xml-rs = { version = "1.0.0", optional = true }
+-zune-jpeg = { version = "0.5.14", optional = true }
+-
+-[dev-dependencies]
+-test-case = "3.3.1"
+-seq-macro = "0.3.5"
+-tempfile = "3.8.1"
+-rand = "0.10.1"
+-
+-[build-dependencies]
+-bindgen = "0.69.1"
+-cbindgen = "0.26.0"
++libc = "0.2.152"
++rav1d = { version = "=1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"], optional = true }
+ 
+ [features]
+-default = ["dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv"]
+-cli = ["dep:clap", "dep:clap_derive"]
+-capi = []
+-dav1d = ["dep:dav1d-sys"]
+-libyuv = ["dep:libyuv-sys"]
+-android_mediacodec = ["dep:ndk-sys"]
+-heic = []
+-disable_cfi = []
+-aom = ["dep:aom-sys", "encoder"]
+-encoder = []
+-avm = ["dep:avm-sys"]
+-png = ["dep:libpng-sys", "dep:md-5"]
+-jpeg = ["dep:image", "dep:xml-rs", "dep:zune-jpeg"]
+-gif = ["dep:gif", "dep:gif-dispose"]
+-sharpyuv = ["dep:libsharpyuv-sys"]
+-jpegxl = ["dep:libjxl-sys"]
+-satofloat = []
+-
+-[package.metadata.capi.header]
+-name = "avif"
+-subdirectory = "avif"
++default = []
++rav1d = ["dep:rav1d"]
+ 
+ [lints.rust]
+-unexpected_cfgs = { level = "warn", check-cfg = [
+-  'cfg(google3)',
+-  'cfg(android_soong)',
+-] }
+-
+-# As of Feb 2026, there is no way to enable dependencies only with cargo --bin
+-# and with cargo run. To avoid the dependencies used only for the crabbyavif
+-# binary to be built even when generating only the library, rely on the
+-# required-features mechanism which will print an error asking for
+-# --features=cli to be passed when running cargo --bin and cargo run.
+-[[bin]]
+-name = "crabbyavif"
+-required-features = ["cli"]
++unexpected_cfgs = { level = "warn", check-cfg = ['cfg(google3)', 'cfg(android_soong)', 'cfg(feature, values("encoder", "capi", "disable_cfi", "dav1d", "libyuv", "png", "jpeg", "gif", "sharpyuv", "cli", "android_mediacodec", "heic", "aom", "avm", "jpegxl", "satofloat"))'] }
+--- a/src/capi/encoder.rs
++++ b/src/capi/encoder.rs
+@@ -139,7 +139,11 @@
+             },
+             header_format: HeaderFormat::default(),
+             keyframe_interval: encoder.keyframeInterval,
+-            timescale: if encoder.timescale == 0 { 1 } else { encoder.timescale },
++            timescale: if encoder.timescale == 0 {
++                1
++            } else {
++                encoder.timescale
++            },
+             repetition_count: RepetitionCount::create_from(encoder.repetitionCount),
+             extra_layer_count: encoder.extraLayerCount,
+             recipe: Recipe::None,
+--- a/src/capi/image.rs
++++ b/src/capi/image.rs
+@@ -829,8 +829,16 @@
+             continue;
+         }
+         let chroma_shift = src.yuvFormat.chroma_shift_x();
+-        let x = if plane == 0 { x } else { (x >> chroma_shift.0) << chroma_shift.1 };
+-        let y = if plane == 0 { y } else { y >> src.yuvFormat.chroma_shift_y() };
++        let x = if plane == 0 {
++            x
++        } else {
++            (x >> chroma_shift.0) << chroma_shift.1
++        };
++        let y = if plane == 0 {
++            y
++        } else {
++            y >> src.yuvFormat.chroma_shift_y()
++        };
+         let offset = match isize_from_u32(y * src.yuvRowBytes[plane] + x * pixel_size) {
+             Ok(x) => x,
+             _ => return avifResult::InvalidArgument,
+--- a/src/codecs/android_mediacodec.rs
++++ b/src/codecs/android_mediacodec.rs
+@@ -579,8 +579,11 @@
+                             break;
+                         }
+                         image.row_bytes[i] = plane_info.row_stride[i];
+-                        let plane_height =
+-                            if i == 0 { image.height } else { (image.height + 1) / 2 };
++                        let plane_height = if i == 0 {
++                            image.height
++                        } else {
++                            (image.height + 1) / 2
++                        };
+                         image.planes[i] = Some(Pixels::from_raw_pointer(
+                             unsafe { buffer.offset(plane_info.offset[i]) },
+                             image.depth as u32,
+@@ -680,7 +683,11 @@
+                     self.enqueue_payload(
+                         input_index,
+                         payload,
+-                        if signal_eos { AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as _ } else { 0 },
++                        if signal_eos {
++                            AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM as _
++                        } else {
++                            0
++                        },
+                     )?;
+                     break;
+                 } else if input_index == AMEDIACODEC_INFO_TRY_AGAIN_LATER as isize {
+--- a/src/codecs/aom.rs
++++ b/src/codecs/aom.rs
+@@ -49,7 +49,11 @@
+             _ => return AvifError::invalid_argument(),
+         },
+     };
+-    Ok(if image.depth > 8 { format | AOM_IMG_FMT_HIGHBITDEPTH } else { format })
++    Ok(if image.depth > 8 {
++        format | AOM_IMG_FMT_HIGHBITDEPTH
++    } else {
++        format
++    })
+ }
+ 
+ fn aom_bps(format: aom_img_fmt_t) -> i32 {
+@@ -383,7 +387,11 @@
+                     encoder_uninit.as_mut_ptr(),
+                     encoder_iface,
+                     &aom_config as *const _,
+-                    if image.depth > 8 { AOM_CODEC_USE_HIGHBITDEPTH } else { 0 } as _,
++                    if image.depth > 8 {
++                        AOM_CODEC_USE_HIGHBITDEPTH
++                    } else {
++                        0
++                    } as _,
+                     AOM_ENCODER_ABI_VERSION as _,
+                 )
+             };
+--- a/src/codecs/avm.rs
++++ b/src/codecs/avm.rs
+@@ -79,7 +79,11 @@
+             _ => return AvifError::invalid_argument(),
+         },
+     };
+-    Ok(if image.depth > 8 { format | AVM_IMG_FMT_HIGHBITDEPTH } else { format })
++    Ok(if image.depth > 8 {
++        format | AVM_IMG_FMT_HIGHBITDEPTH
++    } else {
++        format
++    })
+ }
+ 
+ fn avm_seq_profile(image: &Image, category: Category) -> AvifResult<u32> {
+@@ -609,7 +613,11 @@
+ 
+             self.codec_control(
+                 avm_dec_control_id_AV2D_SET_OUTPUT_ALL_LAYERS,
+-                if self.decoder_config.unwrap_ref().all_layers { 1 } else { 0 },
++                if self.decoder_config.unwrap_ref().all_layers {
++                    1
++                } else {
++                    0
++                },
+             )?;
+ 
+             self.decoder_iter = std::ptr::null();
+--- a/src/codecs/libjxl.rs
++++ b/src/codecs/libjxl.rs
+@@ -94,7 +94,11 @@
+             num_channels: rgb.channel_count(),
+             data_type,
+             endianness: JxlEndianness_JXL_NATIVE_ENDIAN,
+-            align: if rgb.row_bytes == min_row_bytes { 0 } else { rgb.row_bytes as usize },
++            align: if rgb.row_bytes == min_row_bytes {
++                0
++            } else {
++                rgb.row_bytes as usize
++            },
+         },
+         size,
+     ))
+@@ -367,7 +371,11 @@
+         _signal_eos: bool,
+     ) -> AvifResult<()> {
+         // TODO: b/456440247 - Support tracks
+-        let item = if let Some(item) = item { item } else { return AvifError::not_implemented() };
++        let item = if let Some(item) = item {
++            item
++        } else {
++            return AvifError::not_implemented();
++        };
+ 
+         if spatial_id != 0xff {
+             return AvifError::unknown_error(format!(
+--- a/src/codecs/mod.rs
++++ b/src/codecs/mod.rs
+@@ -12,8 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-#[cfg(feature = "dav1d")]
+-pub mod dav1d;
++#[cfg(feature = "rav1d")]
++pub mod rav1d;
+ 
+ #[cfg(feature = "android_mediacodec")]
+ pub mod android_mediacodec;
+--- /dev/null
++++ b/src/codecs/rav1d.rs
+@@ -0,0 +1,542 @@
++// Copyright 2024 Google LLC
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++// Rechrom: adapted from the pinned codecs/dav1d.rs to rav1d 1.1.0 typed Rust API.
++// Scheduling and picture/data ownership follow upstream; see RECHROM.md.
++// rav1d functions retain their historical dav1d_* names but are Rust definitions.
++#![allow(clippy::unnecessary_cast)]
++
++use crate::codecs::Decoder;
++use crate::codecs::DecoderConfig;
++use crate::decoder::item::Item;
++use crate::decoder::GridImageHelper;
++use crate::image::Image;
++use crate::image::YuvRange;
++use crate::internal_utils::u32_from_usize;
++use crate::utils::pixels::*;
++use crate::*;
++
++use rav1d::include::dav1d::{
++    data::Dav1dData,
++    dav1d::{Dav1dContext, Dav1dSettings},
++    picture::Dav1dPicture,
++};
++use rav1d::src::lib::*;
++use std::ptr::NonNull;
++// Same limit as the pinned dav1d API and rav1d's settings validation.
++const DAV1D_MAX_THREADS: i32 = 256;
++
++use std::ffi::CStr;
++use std::mem::MaybeUninit;
++
++#[derive(Default)]
++pub struct Rav1d {
++    context: Option<Dav1dContext>,
++    picture: Option<Dav1dPictureWrapper>,
++    config: Option<DecoderConfig>,
++}
++
++// See https://code.videolan.org/videolan/dav1d/-/blob/9849ede1304da1443cfb4a86f197765081034205/include/dav1d/common.h#L55-59
++const DAV1D_EAGAIN: i32 = if libc::EPERM > 0 {
++    -libc::EAGAIN
++} else {
++    libc::EAGAIN
++};
++
++struct Dav1dPictureWrapper {
++    picture: Dav1dPicture,
++}
++
++impl Default for Dav1dPictureWrapper {
++    fn default() -> Self {
++        Self {
++            picture: Dav1dPicture::default(),
++        }
++    }
++}
++
++impl Dav1dPictureWrapper {
++    fn mut_ptr(&mut self) -> *mut Dav1dPicture {
++        (&mut self.picture) as *mut _
++    }
++
++    fn get(&self) -> &Dav1dPicture {
++        &self.picture
++    }
++
++    fn use_layer(&self, spatial_id: u8) -> bool {
++        // # Safety: frame_hdr is popualated by dav1d and is guaranteed to be valid.
++        spatial_id == 0xFF
++            || spatial_id == unsafe { self.get().frame_hdr.unwrap().as_ref().spatial_id as u8 }
++    }
++}
++
++impl Drop for Dav1dPictureWrapper {
++    fn drop(&mut self) {
++        // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++        unsafe {
++            dav1d_picture_unref(NonNull::new(self.mut_ptr()));
++        }
++    }
++}
++
++struct Dav1dDataWrapper {
++    data: Dav1dData,
++}
++
++impl Default for Dav1dDataWrapper {
++    fn default() -> Self {
++        Self {
++            data: Dav1dData::default(),
++        }
++    }
++}
++
++impl Dav1dDataWrapper {
++    fn mut_ptr(&mut self) -> *mut Dav1dData {
++        (&mut self.data) as *mut _
++    }
++
++    fn has_data(&self) -> bool {
++        self.data.sz > 0 && self.data.data.is_some()
++    }
++
++    fn wrap(&mut self, payload: &[u8]) -> AvifResult<()> {
++        // Rechrom boundary hardening: no owned empty buffer can enter the loop.
++        if payload.is_empty() {
++            return AvifError::unknown_error("empty AV1 payload");
++        }
++        let data = unsafe { dav1d_data_create(Some(NonNull::from(&mut self.data)), payload.len()) };
++        if data.is_null() {
++            return Err(AvifError::UnknownError(
++                "dav1d_data_create returned nullptr".into(),
++            ));
++        }
++        // # Safety: data was allocated in the successful call to dav1d_data_create and is
++        // guaranteed to be large enough to hold payload.len() bytes.
++        unsafe {
++            std::ptr::copy_nonoverlapping(payload.as_ptr(), data, payload.len());
++        }
++        Ok(())
++    }
++}
++
++impl Drop for Dav1dDataWrapper {
++    fn drop(&mut self) {
++        // Rechrom: unref even consumed/empty data. The Rust API accepts a
++        // Default buffer, and ownership is not implied solely by sz > 0.
++        // # Safety: data is initialized live storage, never unref'd elsewhere.
++        unsafe {
++            dav1d_data_unref(NonNull::new(self.mut_ptr()));
++        }
++    }
++}
++
++impl Rav1d {
++    fn initialize_impl(&mut self, low_latency: bool) -> AvifResult<()> {
++        if self.context.is_some() {
++            return Ok(());
++        }
++        let config = self.config.unwrap_ref();
++        let mut settings_uninit: MaybeUninit<Dav1dSettings> = MaybeUninit::uninit();
++        // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++        unsafe { dav1d_default_settings(NonNull::new(settings_uninit.as_mut_ptr()).unwrap()) };
++        // # Safety: settings_uninit was initialized by the Rust API above.
++        let mut settings = unsafe { settings_uninit.assume_init() };
++        if low_latency {
++            settings.max_frame_delay = 1;
++        }
++        settings.n_threads = i32::try_from(config.max_threads)
++            .unwrap_or(1)
++            .clamp(1, DAV1D_MAX_THREADS as _);
++        settings.operating_point = config.operating_point as i32;
++        settings.all_layers = if config.all_layers { 1 } else { 0 };
++        let frame_size_limit = match config.image_size_limit {
++            Some(value) => value.get(),
++            None => 0,
++        };
++        // Set a maximum frame size limit to avoid OOM'ing fuzzers. In 32-bit builds, if
++        // frame_size_limit > 8192 * 8192, dav1d reduces frame_size_limit to 8192 * 8192 and logs
++        // a message, so we set frame_size_limit to at most 8192 * 8192 to avoid the dav1d_log
++        // message.
++        settings.frame_size_limit = if cfg!(target_pointer_width = "32") {
++            frame_size_limit.min(8192 * 8192)
++        } else {
++            frame_size_limit
++        };
++
++        let mut dec = None;
++        // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++        let ret = unsafe {
++            dav1d_open(
++                Some(NonNull::from(&mut dec)),
++                Some(NonNull::from(&mut settings)),
++            )
++            .0
++        };
++        if ret != 0 {
++            return AvifError::unknown_error(format!("dav1d_open returned {ret}"));
++        }
++        self.context = dec;
++        Ok(())
++    }
++
++    fn drop_impl(&mut self) {
++        self.picture = None;
++        if self.context.is_some() {
++            // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++            unsafe { dav1d_close(Some(NonNull::from(&mut self.context))) };
++        }
++        self.context = None;
++    }
++
++    fn picture_to_image(
++        &self,
++        dav1d_picture: &Dav1dPicture,
++        image: &mut Image,
++        category: Category,
++        overwrite_alpha_plane_yuv_range: bool,
++    ) -> AvifResult<()> {
++        // Rechrom boundary validation before Crabby creates raw plane views.
++        // rav1d's default allocator supplies positive strides, but do not turn
++        // an invalid signed field into a large unsigned slice length.
++        if dav1d_picture.p.w <= 0
++            || dav1d_picture.p.h <= 0
++            || !matches!(dav1d_picture.p.bpc, 8 | 10 | 12)
++            || dav1d_picture.seq_hdr.is_none()
++            || dav1d_picture.frame_hdr.is_none()
++            || !(0..=3).contains(&dav1d_picture.p.layout)
++        {
++            return AvifError::unknown_error("invalid rav1d picture metadata");
++        }
++        let plane_count = if category == Category::Alpha || dav1d_picture.p.layout == 0 {
++            1
++        } else {
++            3
++        };
++        let bytes_per_sample = if dav1d_picture.p.bpc == 8 { 1 } else { 2 };
++        for plane in 0..plane_count {
++            let stride = dav1d_picture.stride[usize::from(plane != 0)];
++            let width = if plane != 0 && dav1d_picture.p.layout != 3 {
++                (dav1d_picture.p.w as u64 + 1) / 2
++            } else {
++                dav1d_picture.p.w as u64
++            };
++            if dav1d_picture.data[plane].is_none()
++                || stride <= 0
++                || u32::try_from(stride).is_err()
++                || (stride as u64) < width * bytes_per_sample
++                || stride as u64 % bytes_per_sample != 0
++            {
++                return AvifError::unknown_error("invalid rav1d plane pointer/stride");
++            }
++        }
++        match category {
++            Category::Alpha => {
++                if image.width > 0
++                    && image.height > 0
++                    && (image.width != (dav1d_picture.p.w as u32)
++                        || image.height != (dav1d_picture.p.h as u32)
++                        || image.depth != (dav1d_picture.p.bpc as u8))
++                {
++                    // Alpha plane does not match the previous alpha plane.
++                    return AvifError::unknown_error("");
++                }
++                image.width = dav1d_picture.p.w as u32;
++                image.height = dav1d_picture.p.h as u32;
++                image.depth = dav1d_picture.p.bpc as u8;
++                image.row_bytes[3] = dav1d_picture.stride[0] as u32;
++                image.planes[3] = Some(Pixels::from_raw_pointer(
++                    dav1d_picture.data[0].unwrap().as_ptr().cast::<u8>(),
++                    image.depth as u32,
++                    image.height,
++                    image.row_bytes[3],
++                )?);
++                if overwrite_alpha_plane_yuv_range {
++                    // # Safety: seq_hdr is populated by dav1d and is guaranteed to be valid.
++                    let seq_hdr = unsafe { dav1d_picture.seq_hdr.unwrap().as_ref() };
++                    image.yuv_range = if seq_hdr.color_range == 0 {
++                        YuvRange::Limited
++                    } else {
++                        YuvRange::Full
++                    };
++                }
++            }
++            _ => {
++                image.width = dav1d_picture.p.w as u32;
++                image.height = dav1d_picture.p.h as u32;
++                image.depth = dav1d_picture.p.bpc as u8;
++
++                image.yuv_format = match dav1d_picture.p.layout {
++                    0 => PixelFormat::Yuv400,
++                    1 => PixelFormat::Yuv420,
++                    2 => PixelFormat::Yuv422,
++                    3 => PixelFormat::Yuv444,
++                    _ => return AvifError::unknown_error(""), // not reached.
++                };
++                // # Safety: seq_hdr is popualated by dav1d and is guaranteed to be valid.
++                let seq_hdr = unsafe { dav1d_picture.seq_hdr.unwrap().as_ref() };
++                image.yuv_range = if seq_hdr.color_range == 0 {
++                    YuvRange::Limited
++                } else {
++                    YuvRange::Full
++                };
++                image.chroma_sample_position = (seq_hdr.chr as u32).into();
++
++                image.color_primaries = (seq_hdr.pri as u16).into();
++                image.transfer_characteristics = (seq_hdr.trc as u16).into();
++                image.matrix_coefficients = (seq_hdr.mtrx as u16).into();
++
++                for plane in 0usize..image.yuv_format.plane_count() {
++                    let stride_index = if plane == 0 { 0 } else { 1 };
++                    image.row_bytes[plane] = dav1d_picture.stride[stride_index] as u32;
++                    image.planes[plane] = Some(Pixels::from_raw_pointer(
++                        dav1d_picture.data[plane].unwrap().as_ptr().cast::<u8>(),
++                        image.depth as u32,
++                        u32_from_usize(image.height(plane.into()))?,
++                        image.row_bytes[plane],
++                    )?);
++                }
++                if image.yuv_format == PixelFormat::Yuv400 {
++                    // Clear left over chroma planes from previous frames.
++                    image.clear_chroma_planes();
++                }
++            }
++        }
++        Ok(())
++    }
++
++    fn get_next_image_grid_impl(
++        &mut self,
++        payloads: &[Vec<u8>],
++        spatial_id: u8,
++        grid_image_helper: &mut GridImageHelper,
++    ) -> AvifResult<()> {
++        if self.context.is_none() {
++            self.initialize_impl(false)?;
++        }
++        let mut res;
++        let context = self.context.unwrap();
++        let mut payloads_iter = payloads.iter().peekable();
++        let mut data = Dav1dDataWrapper::default();
++        let max_retries = 500;
++        let mut retries = 0;
++        while !grid_image_helper.is_grid_complete()? {
++            if !data.has_data() && payloads_iter.peek().is_some() {
++                data.wrap(payloads_iter.next().unwrap())?;
++            }
++            if data.has_data() {
++                // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++                res = unsafe { dav1d_send_data(Some(context), NonNull::new(data.mut_ptr())).0 };
++                if res != 0 && res != DAV1D_EAGAIN {
++                    return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
++                }
++            }
++            let mut picture = Dav1dPictureWrapper::default();
++            // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++            res = unsafe { dav1d_get_picture(Some(context), NonNull::new(picture.mut_ptr())).0 };
++            if res != 0 && res != DAV1D_EAGAIN {
++                return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
++            } else if res == 0 && picture.use_layer(spatial_id) {
++                let mut cell_image = Image::default();
++                self.picture_to_image(
++                    picture.get(),
++                    &mut cell_image,
++                    grid_image_helper.category,
++                    true,
++                )?;
++                grid_image_helper.copy_from_cell_image(&mut cell_image)?;
++                retries = 0;
++            } else {
++                retries += 1;
++                if retries > max_retries {
++                    return AvifError::unknown_error(format!(
++                        "dav1d_get_picture never returned a frame after {max_retries} calls"
++                    ));
++                }
++            }
++        }
++        self.flush()?;
++        Ok(())
++    }
++
++    fn flush(&mut self) -> AvifResult<()> {
++        loop {
++            let mut picture = Dav1dPictureWrapper::default();
++            // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++            let res = unsafe { dav1d_get_picture(self.context, NonNull::new(picture.mut_ptr())).0 };
++            if res < 0 && res != DAV1D_EAGAIN {
++                return AvifError::unknown_error(format!("error draining buffered frames {res}"));
++            }
++            if res != 0 {
++                break;
++            }
++        }
++        Ok(())
++    }
++
++    pub(crate) fn version() -> String {
++        let version = match unsafe { CStr::from_ptr(dav1d_version()) }.to_str() {
++            Ok(s) => s.to_owned(),
++            Err(_) => String::new(),
++        };
++        format!("rav1d 1.1.0 (embedded version {version}, Rust without assembly)")
++    }
++}
++
++impl Decoder for Rav1d {
++    fn codec(&self) -> CodecChoice {
++        CodecChoice::Rav1d
++    }
++
++    fn initialize(&mut self, config: &DecoderConfig) -> AvifResult<()> {
++        self.config = Some(config.clone());
++        Ok(())
++    }
++
++    fn get_next_image(
++        &mut self,
++        av1_payload: &[u8],
++        spatial_id: u8,
++        image: &mut Image,
++        category: Category,
++        _item: Option<&Item>,
++        _signal_eos: bool,
++    ) -> AvifResult<()> {
++        if self.context.is_none() {
++            self.initialize_impl(true)?;
++        }
++        let mut data = Dav1dDataWrapper::default();
++        data.wrap(av1_payload)?;
++        let next_picture: Option<Dav1dPictureWrapper>;
++        loop {
++            if data.has_data() {
++                // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++                let res = unsafe { dav1d_send_data(self.context, NonNull::new(data.mut_ptr())).0 };
++                if res < 0 && res != DAV1D_EAGAIN {
++                    return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
++                }
++            }
++
++            let mut picture = Dav1dPictureWrapper::default();
++            // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++            let res = unsafe { dav1d_get_picture(self.context, NonNull::new(picture.mut_ptr())).0 };
++            if res == DAV1D_EAGAIN {
++                if data.has_data() {
++                    continue;
++                }
++                return AvifError::unknown_error("");
++            } else if res < 0 {
++                return AvifError::unknown_error(format!("dav1d_send_picture returned {res}"));
++            } else if picture.use_layer(spatial_id) {
++                // Got a picture.
++                next_picture = Some(picture);
++                break;
++            }
++        }
++        self.flush()?;
++        if next_picture.is_some() {
++            self.picture = next_picture;
++        } else if category == Category::Alpha && self.picture.is_some() {
++            // Special case for alpha, re-use last frame.
++        } else {
++            return AvifError::unknown_error("");
++        }
++        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, true)?;
++        Ok(())
++    }
++
++    fn get_next_image_grid(
++        &mut self,
++        payloads: &[Vec<u8>],
++        spatial_id: u8,
++        grid_image_helper: &mut GridImageHelper,
++    ) -> AvifResult<()> {
++        let res = self.get_next_image_grid_impl(payloads, spatial_id, grid_image_helper);
++        if res.is_err() {
++            self.drop_impl();
++        }
++        res
++    }
++
++    fn get_last_image(
++        &mut self,
++        payloads: &[Vec<u8>],
++        spatial_id: u8,
++        image: &mut Image,
++        category: Category,
++    ) -> AvifResult<()> {
++        if self.context.is_none() {
++            self.initialize_impl(false)?;
++        }
++        let mut res;
++        let context = self.context.unwrap();
++        let mut payloads_iter = payloads.iter().peekable();
++        let mut data = Dav1dDataWrapper::default();
++        let max_retries = 500;
++        let mut retries = 0;
++        let mut got_picture_count = 0;
++        let next_picture: Option<Dav1dPictureWrapper>;
++        loop {
++            if !data.has_data() && payloads_iter.peek().is_some() {
++                data.wrap(payloads_iter.next().unwrap())?;
++            }
++            if data.has_data() {
++                // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++                res = unsafe { dav1d_send_data(Some(context), NonNull::new(data.mut_ptr())).0 };
++                if res != 0 && res != DAV1D_EAGAIN {
++                    return AvifError::unknown_error(format!("dav1d_send_data returned {res}"));
++                }
++            }
++            let mut picture = Dav1dPictureWrapper::default();
++            // # Safety: Calling the Rust rav1d API with valid, live context/storage.
++            res = unsafe { dav1d_get_picture(Some(context), NonNull::new(picture.mut_ptr())).0 };
++            if res != 0 && res != DAV1D_EAGAIN {
++                return AvifError::unknown_error(format!("dav1d_get_picture returned {res}"));
++            } else if res == 0 && picture.use_layer(spatial_id) {
++                got_picture_count += 1;
++                retries = 0;
++                if got_picture_count == payloads.len() {
++                    next_picture = Some(picture);
++                    break;
++                }
++            } else {
++                retries += 1;
++                if retries > max_retries {
++                    return AvifError::unknown_error(format!(
++                        "dav1d_get_picture never returned a frame after {max_retries} calls"
++                    ));
++                }
++            }
++        }
++        self.flush()?;
++        if next_picture.is_some() {
++            self.picture = next_picture;
++        } else if category == Category::Alpha && self.picture.is_some() {
++            // Special case for alpha, re-use last frame.
++        } else {
++            return AvifError::unknown_error("");
++        }
++        // In this case, the source image from the caller is used for both color and alpha planes,
++        // so do not overwrite the yuv_range field when processing the alpha plane.
++        self.picture_to_image(self.picture.unwrap_ref().get(), image, category, false)?;
++        Ok(())
++    }
++}
++
++impl Drop for Rav1d {
++    fn drop(&mut self) {
++        self.drop_impl();
++    }
++}
+--- a/src/decoder/mod.rs
++++ b/src/decoder/mod.rs
+@@ -20,8 +20,8 @@
+ use crate::decoder::tile::*;
+ use crate::decoder::track::*;
+ 
+-#[cfg(feature = "dav1d")]
+-use crate::codecs::dav1d::Dav1d;
++#[cfg(feature = "rav1d")]
++use crate::codecs::rav1d::Rav1d;
+ 
+ #[cfg(feature = "android_mediacodec")]
+ use crate::codecs::android_mediacodec::MediaCodec;
+@@ -84,9 +84,9 @@
+                 if matches!(self, CodecChoice::Auto | CodecChoice::MediaCodec) {
+                     return Some(Box::<MediaCodec>::default());
+                 }
+-                #[cfg(feature = "dav1d")]
+-                if matches!(self, CodecChoice::Auto | CodecChoice::Dav1d) {
+-                    return Some(Box::<Dav1d>::default());
++                #[cfg(feature = "rav1d")]
++                if matches!(self, CodecChoice::Auto | CodecChoice::Rav1d) {
++                    return Some(Box::<Rav1d>::default());
+                 }
+                 None
+             }
+@@ -1783,8 +1783,16 @@
+         let category = decoding_item.category;
+ 
+         let codec = &mut self.codecs[tile.codec_index];
+-        let item = if sample.item_id == 0 { None } else { self.items.get(&sample.item_id) };
+-        let data_buffer = if let Some(item) = item { &item.data_buffer } else { &None };
++        let item = if sample.item_id == 0 {
++            None
++        } else {
++            self.items.get(&sample.item_id)
++        };
++        let data_buffer = if let Some(item) = item {
++            &item.data_buffer
++        } else {
++            &None
++        };
+         let data = match (
+             self.settings.allow_progressive,
+             sample.data(io, data_buffer),
+@@ -2068,7 +2076,7 @@
+         // Has to be a grid.
+         self.tile_info[decoding_item.usize()].is_grid()
+             // Has to be one of the supported codecs.
+-            && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Dav1d)
++            && matches!(codec, CodecChoice::MediaCodec | CodecChoice::Rav1d)
+             // All the tiles must use the same codec instance.
+             && self.tiles[decoding_item.usize()][1..]
+                 .iter()
+@@ -2078,7 +2086,7 @@
+     fn can_use_decode_until(&self) -> bool {
+         self.image.image_sequence_track_present
+             && self.source == Source::Tracks
+-            && cfg!(feature = "dav1d")
++            && cfg!(feature = "rav1d")
+     }
+ 
+     fn decode_tiles(&mut self, image_index: usize) -> AvifResult<()> {
+--- a/src/decoder/tile.rs
++++ b/src/decoder/tile.rs
+@@ -202,7 +202,11 @@
+         // Progressive images offer layers via the a1lxProp, but don't specify a layer selection with
+         // lsel.
+         item.progressive = has_a1lx && (!has_lsel || lsel == 0xFFFF);
+-        let base_item_offset = if item.extents.len() == 1 { item.extents[0].offset } else { 0 };
++        let base_item_offset = if item.extents.len() == 1 {
++            item.extents[0].offset
++        } else {
++            0
++        };
+         if has_lsel && lsel != 0xFFFF {
+             // Layer selection. This requires that the underlying AV1 codec decodes all layers, and
+             // then only returns the requested layer as a single frame. To the user of libavif,
+--- a/src/encoder/item.rs
++++ b/src/encoder/item.rs
+@@ -205,7 +205,11 @@
+         image_metadata: &Image,
+     ) -> AvifResult<()> {
+         let version = 0;
+-        let flags = if image_metadata.alpha_premultiplied { 0x01 } else { 0x00 };
++        let flags = if image_metadata.alpha_premultiplied {
++            0x01
++        } else {
++            0x00
++        };
+         stream.start_full_box("alpi", (version, flags))?;
+         stream.write_u16(image_metadata.max_channel())?; // unsigned int (16) opaque_value;
+         stream.write_u16(0)?; // unsigned int (16) transparent_value;
+@@ -354,7 +358,11 @@
+         stream.write_u16(image_metadata.matrix_coefficients as u16)?;
+         // unsigned int(1) full_range_flag;
+         stream.write_bits(
+-            if image_metadata.yuv_range == YuvRange::Full { 1 } else { 0 },
++            if image_metadata.yuv_range == YuvRange::Full {
++                1
++            } else {
++                0
++            },
+             1,
+         )?;
+         // unsigned int(7) reserved = 0;
+--- a/src/encoder/mini.rs
++++ b/src/encoder/mini.rs
+@@ -219,8 +219,11 @@
+         let has_icc = !image.icc.is_empty();
+         let chroma_subsampling = pixel_format_to_chroma_subsampling(image.yuv_format);
+ 
+-        let default_color_primaries =
+-            if has_icc { ColorPrimaries::Unspecified } else { ColorPrimaries::Bt709 };
++        let default_color_primaries = if has_icc {
++            ColorPrimaries::Unspecified
++        } else {
++            ColorPrimaries::Bt709
++        };
+         let default_transfer_characteristics = if has_icc {
+             TransferCharacteristics::Unspecified
+         } else {
+@@ -602,8 +605,16 @@
+             + image.icc.len()
+             + tmap_icc_size
+             + gainmap_metadata_size
+-            + if has_alpha { alpha_data.unwrap().len() } else { 0 }
+-            + if has_gainmap { gainmap_data.unwrap().len() } else { 0 }
++            + if has_alpha {
++                alpha_data.unwrap().len()
++            } else {
++                0
++            }
++            + if has_gainmap {
++                gainmap_data.unwrap().len()
++            } else {
++                0
++            }
+             + color_data.len()
+             + image.exif.len()
+             + image.xmp.len();
+--- a/src/encoder/mod.rs
++++ b/src/encoder/mod.rs
+@@ -82,7 +82,11 @@
+                 let image_area = width * height;
+                 let tiles_log2 =
+                     floor_log2(std::cmp::min(image_area.div_ceil(512 * 512), 8)) as i32;
+-                let (dim1, dim2) = if width >= height { (width, height) } else { (height, width) };
++                let (dim1, dim2) = if width >= height {
++                    (width, height)
++                } else {
++                    (height, width)
++                };
+                 let diff_log2 = floor_log2(dim1 / dim2) as i32;
+                 let diff = std::cmp::max(0, tiles_log2 - diff_log2);
+                 let dim2_log2 = diff / 2;
+@@ -382,7 +386,11 @@
+                 infe_name: category.infe_name(),
+                 cell_index,
+                 category,
+-                dimg_from_id: if cell_count > 1 { Some(top_level_item_id) } else { None },
++                dimg_from_id: if cell_count > 1 {
++                    Some(top_level_item_id)
++                } else {
++                    None
++                },
+                 hidden_image: hidden || cell_count > 1,
+                 extra_layer_count: self.settings.extra_layer_count,
+                 codec: Some(codec),
+--- a/src/encoder/mp4box.rs
++++ b/src/encoder/mp4box.rs
+@@ -64,7 +64,11 @@
+     //     unsigned int(FieldLength) output_width;
+     //     unsigned int(FieldLength) output_height;
+     // }
+-    let flags = if grid.width > 65535 || grid.height > 65535 { 1 } else { 0 };
++    let flags = if grid.width > 65535 || grid.height > 65535 {
++        1
++    } else {
++        0
++    };
+     // unsigned int(8) version = 0;
+     stream.write_u8(0)?;
+     // unsigned int(8) flags;
+@@ -661,7 +665,11 @@
+                 }
+                 write_hdlr(
+                     stream,
+-                    if item.category == Category::Alpha { "auxv" } else { "pict" },
++                    if item.category == Category::Alpha {
++                        "auxv"
++                    } else {
++                        "pict"
++                    },
+                 )?;
+                 // minf
+                 {
+--- a/src/encoder/sampletransform.rs
++++ b/src/encoder/sampletransform.rs
+@@ -617,7 +617,11 @@
+                 let mantissa_lsb_row = mantissa_lsb.row16_mut(plane, y)?;
+                 for x in 0..width {
+                     let f = float_plane[y as usize * width + x];
+-                    let f = if f.is_normal() || f.is_subnormal() { f } else { 0.0 };
++                    let f = if f.is_normal() || f.is_subnormal() {
++                        f
++                    } else {
++                        0.0
++                    };
+                     let bits = f.to_bits();
+                     sign_exponent_msb_row[x] = (bits >> 24) as u8;
+                     exponent_lsb_mantissa_msb_row[x] = ((bits >> 12) & 0xFFF) as u16;
+--- a/src/image.rs
++++ b/src/image.rs
+@@ -394,7 +394,7 @@
+         }))
+     }
+ 
+-    #[cfg(any(feature = "dav1d", feature = "avm"))]
++    #[cfg(any(feature = "rav1d", feature = "avm"))]
+     pub(crate) fn free_planes(&mut self, planes: &[Plane]) {
+         for plane in planes {
+             let plane = plane.as_usize();
+@@ -403,7 +403,7 @@
+         }
+     }
+ 
+-    #[cfg(feature = "dav1d")]
++    #[cfg(feature = "rav1d")]
+     pub(crate) fn clear_chroma_planes(&mut self) {
+         self.free_planes(&[Plane::U, Plane::V])
+     }
+--- a/src/internal_utils/io.rs
++++ b/src/internal_utils/io.rs
+@@ -42,8 +42,11 @@
+             return AvifError::io_error();
+         }
+         let available_size: usize = (file_size - offset) as usize;
+-        let size_to_read: usize =
+-            if max_read_size > available_size { available_size } else { max_read_size };
++        let size_to_read: usize = if max_read_size > available_size {
++            available_size
++        } else {
++            max_read_size
++        };
+         if size_to_read > 0 {
+             if self.buffer.capacity() < size_to_read
+                 && self.buffer.try_reserve_exact(size_to_read).is_err()
+@@ -101,8 +104,11 @@
+             return AvifError::io_error();
+         }
+         let available_size: usize = (data_len - offset) as usize;
+-        let size_to_read: usize =
+-            if max_read_size > available_size { available_size } else { max_read_size };
++        let size_to_read: usize = if max_read_size > available_size {
++            available_size
++        } else {
++            max_read_size
++        };
+         let slice_start = usize_from_u64(offset)?;
+         let slice_end = checked_add!(slice_start, size_to_read)?;
+         let range = slice_start..slice_end;
+@@ -130,8 +136,11 @@
+             return AvifError::io_error();
+         }
+         let available_size: usize = (data_len - offset) as usize;
+-        let size_to_read: usize =
+-            if max_read_size > available_size { available_size } else { max_read_size };
++        let size_to_read: usize = if max_read_size > available_size {
++            available_size
++        } else {
++            max_read_size
++        };
+         let slice_start = usize_from_u64(offset)?;
+         let slice_end = checked_add!(slice_start, size_to_read)?;
+         let range = slice_start..slice_end;
+--- a/src/internal_utils/sampletransform.rs
++++ b/src/internal_utils/sampletransform.rs
+@@ -293,8 +293,11 @@
+     pub(crate) fn apply(&self, extra_inputs: &[&Image], output: &mut Image) -> AvifResult<()> {
+         let max_stack_size = self.tokens.len().div_ceil(2);
+         let mut stack: Vec<StackItem> = create_vec_exact(max_stack_size)?;
+-        for plane in if output.has_alpha() { ALL_PLANES.as_slice() } else { YUV_PLANES.as_slice() }
+-        {
++        for plane in if output.has_alpha() {
++            ALL_PLANES.as_slice()
++        } else {
++            YUV_PLANES.as_slice()
++        } {
+             self.apply_internal(*plane, extra_inputs, output, &mut stack)?;
+         }
+         Ok(())
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -63,7 +63,8 @@
+     #[cfg(feature = "avm")]
+     Avm, // AVIF2 (future AV2-HEIF) encoder and decoder. WARNING: experimental.
+     MediaCodec, // AVIF (AV1-HEIF) and HEIC (HEVC-HEIF) decoder on Android.
+-    Dav1d, // AVIF (AV1-HEIF) decoder.
++    Dav1d, // Native AVIF decoder (not packaged in Rechrom).
++    Rav1d, // Rust translation of dav1d; Rechrom decode-only integration.
+     Libgav1, // AVIF (AV1-HEIF) decoder.
+     #[cfg(feature = "jpegxl")]
+     Libjxl, // JPEG XL-HEIF encoder and decoder. WARNING: experimental.
+@@ -573,8 +574,8 @@
+         codecs::aom::Aom::version(),
+         #[cfg(feature = "android_mediacodec")]
+         "android_mediacodec".into(),
+-        #[cfg(feature = "dav1d")]
+-        codecs::dav1d::Dav1d::version(),
++        #[cfg(feature = "rav1d")]
++        codecs::rav1d::Rav1d::version(),
+         #[cfg(feature = "avm")]
+         codecs::avm::Avm::version(),
+         #[cfg(feature = "jpegxl")]
+--- a/src/parser/exif.rs
++++ b/src/parser/exif.rs
+@@ -64,11 +64,18 @@
+     let mut stream = IStream::create(tiff_data);
+     let _ = stream.skip(4); // skip tiff header
+ 
+-    let offset_to_0th_ifd =
+-        if little_endian { stream.read_u32_le()? } else { stream.read_u32()? };
++    let offset_to_0th_ifd = if little_endian {
++        stream.read_u32_le()?
++    } else {
++        stream.read_u32()?
++    };
+     stream.offset = usize_from_u32(offset_to_0th_ifd)?;
+ 
+-    let field_count = if little_endian { stream.read_u16_le()? } else { stream.read_u16()? };
++    let field_count = if little_endian {
++        stream.read_u16_le()?
++    } else {
++        stream.read_u16()?
++    };
+     for _ in 0..field_count {
+         let (tag, field_type, count, value_offset) = if little_endian {
+             (
+--- a/src/parser/mini.rs
++++ b/src/parser/mini.rs
+@@ -377,7 +377,11 @@
+             color_primaries,
+             transfer_characteristics,
+             matrix_coefficients,
+-            yuv_range: if full_range { YuvRange::Full } else { YuvRange::Limited },
++            yuv_range: if full_range {
++                YuvRange::Full
++            } else {
++                YuvRange::Limited
++            },
+         })),
+         // entry 5
+         if has_icc {
+@@ -487,7 +491,11 @@
+                 color_primaries: ColorPrimaries::Unspecified,
+                 transfer_characteristics: TransferCharacteristics::Unspecified,
+                 matrix_coefficients: gainmap_matrix_coefficients,
+-                yuv_range: if gainmap_full_range { YuvRange::Full } else { YuvRange::Limited },
++                yuv_range: if gainmap_full_range {
++                    YuvRange::Full
++                } else {
++                    YuvRange::Limited
++                },
+             }))
+         } else {
+             ItemProperty::Unused
+@@ -513,7 +521,11 @@
+                 color_primaries: tmap_color_primaries,
+                 transfer_characteristics: tmap_transfer_characteristics,
+                 matrix_coefficients: tmap_matrix_coefficients,
+-                yuv_range: if tmap_full_range { YuvRange::Full } else { YuvRange::Limited },
++                yuv_range: if tmap_full_range {
++                    YuvRange::Full
++                } else {
++                    YuvRange::Limited
++                },
+             }))
+         } else {
+             ItemProperty::Unused
+--- a/src/parser/mp4box.rs
++++ b/src/parser/mp4box.rs
+@@ -1175,7 +1175,11 @@
+             ..Nclx::default()
+         };
+         // unsigned int(1) full_range_flag;
+-        nclx.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
++        nclx.yuv_range = if stream.read_bool()? {
++            YuvRange::Full
++        } else {
++            YuvRange::Limited
++        };
+         // unsigned int(7) reserved = 0;
+         if stream.read_bits(7)? != 0 {
+             return AvifError::bmff_parse_failed("colr box contains invalid reserved bits");
+--- a/src/parser/obu.rs
++++ b/src/parser/obu.rs
+@@ -123,8 +123,11 @@
+         let max_frame_height_minus_1 = stream.read_bits(frame_height_bits_minus_1 as usize + 1)?;
+         self.max_width = checked_add!(max_frame_width_minus_1, 1)?;
+         self.max_height = checked_add!(max_frame_height_minus_1, 1)?;
+-        let frame_id_numbers_present_flag =
+-            if self.reduced_still_picture_header { false } else { stream.read_bool()? };
++        let frame_id_numbers_present_flag = if self.reduced_still_picture_header {
++            false
++        } else {
++            stream.read_bool()?
++        };
+         if frame_id_numbers_present_flag {
+             // delta_frame_id_length_minus_2
+             stream.skip_bits(4)?;
+@@ -202,7 +205,11 @@
+         }
+         if self.config.monochrome {
+             let color_range = stream.read_bool()?;
+-            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
++            self.yuv_range = if color_range {
++                YuvRange::Full
++            } else {
++                YuvRange::Limited
++            };
+             self.config.chroma_subsampling_x = 1;
+             self.config.chroma_subsampling_y = 1;
+             self.yuv_format = PixelFormat::Yuv400;
+@@ -215,7 +222,11 @@
+             self.yuv_format = PixelFormat::Yuv444;
+         } else {
+             let color_range = stream.read_bool()?;
+-            self.yuv_range = if color_range { YuvRange::Full } else { YuvRange::Limited };
++            self.yuv_range = if color_range {
++                YuvRange::Full
++            } else {
++                YuvRange::Limited
++            };
+             match self.config.seq_profile {
+                 0 => {
+                     self.config.chroma_subsampling_x = 1;
+@@ -473,7 +484,11 @@
+                     MatrixCoefficients::Unspecified,      // 2
+                 ),
+             };
+-            self.yuv_range = if stream.read_bool()? { YuvRange::Full } else { YuvRange::Limited };
++            self.yuv_range = if stream.read_bool()? {
++                YuvRange::Full
++            } else {
++                YuvRange::Limited
++            };
+         // color_range
+         } else {
+             // Keep the default CICP values.
+--- a/src/reformat/alpha.rs
++++ b/src/reformat/alpha.rs
+@@ -674,8 +674,11 @@
+                 assert_eq!(rgb_row.len(), (width * 4) as usize);
+                 for x in 0..width as usize {
+                     for idx in 0..4usize {
+-                        let expected_value =
+-                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
++                        let expected_value = if idx == alpha_offset {
++                            expected_values.next().unwrap()
++                        } else {
++                            0
++                        };
+                         assert_eq!(rgb_row[x * 4 + idx], expected_value as u8);
+                     }
+                 }
+@@ -686,8 +689,11 @@
+                 assert_eq!(rgb_row.len(), (width * 4) as usize);
+                 for x in 0..width as usize {
+                     for idx in 0..4usize {
+-                        let expected_value =
+-                            if idx == alpha_offset { expected_values.next().unwrap() } else { 0 };
++                        let expected_value = if idx == alpha_offset {
++                            expected_values.next().unwrap()
++                        } else {
++                            0
++                        };
+                         assert_eq!(rgb_row[x * 4 + idx], expected_value);
+                     }
+                 }
+--- a/src/reformat/rgb.rs
++++ b/src/reformat/rgb.rs
+@@ -373,8 +373,11 @@
+             if image.yuv_range == YuvRange::Limited {
+                 return AvifError::not_implemented();
+             }
+-            let bit_offset =
+-                if image.matrix_coefficients == MatrixCoefficients::YcgcoRe { 2 } else { 1 };
++            let bit_offset = if image.matrix_coefficients == MatrixCoefficients::YcgcoRe {
++                2
++            } else {
++                1
++            };
+             if image.depth - bit_offset != self.depth {
+                 return AvifError::not_implemented();
+             }
+--- a/src/reformat/scale.rs
++++ b/src/reformat/scale.rs
+@@ -394,8 +394,11 @@
+             });
+             yuv.row_bytes[plane.as_usize()] = 2;
+         }
+-        let categories: &[Category] =
+-            if use_alpha { &[Category::Color, Category::Alpha] } else { &[Category::Color] };
++        let categories: &[Category] = if use_alpha {
++            &[Category::Color, Category::Alpha]
++        } else {
++            &[Category::Color]
++        };
+         for category in categories {
+             // Scale will update the width and height when scaling YUV planes. Reset it back before
+             // calling it again.
+--- a/src/utils/mod.rs
++++ b/src/utils/mod.rs
+@@ -61,7 +61,11 @@
+         if v.is_nan() || v < 0.0 || v > max_n as f64 {
+             return None;
+         }
+-        let max_d = if v <= 1.0 { u32::MAX } else { (max_n as f64 / v).floor() as u32 };
++        let max_d = if v <= 1.0 {
++            u32::MAX
++        } else {
++            (max_n as f64 / v).floor() as u32
++        };
+ 
+         // Find the best approximation of v as a fraction using continued fractions:
+         // https://en.wikipedia.org/wiki/Continued_fraction
+--- a/src/utils/writer/y4m.rs
++++ b/src/utils/writer/y4m.rs
+@@ -114,7 +114,11 @@
+             file.write_all(frame_marker.as_bytes())
+                 .map_err(AvifError::map_io_error)?;
+         }
+-        let planes: &[Plane] = if self.write_alpha { &ALL_PLANES } else { &YUV_PLANES };
++        let planes: &[Plane] = if self.write_alpha {
++            &ALL_PLANES
++        } else {
++            &YUV_PLANES
++        };
+         for plane in planes {
+             let plane = *plane;
+             if !image.has_plane(plane) {

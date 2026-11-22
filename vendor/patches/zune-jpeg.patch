@@ -1,0 +1,1137 @@
+# vendor/zune-jpeg against pristine upstream
+# upstream: https://static.crates.io/crates/zune-jpeg/zune-jpeg-0.5.15.crate
+# sha256:   27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296
+# Regenerate with tools/vendor_patches.sh; see vendor/DECISIONS.md for why it is kept.
+#
+# Upstream files not vendored:
+#   .gitignore
+#   Benches.md
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -41,6 +41,7 @@
+ repository = "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg"
+ 
+ [features]
++source_compat = []
+ default = [
+     "x86",
+     "neon",
+--- /dev/null
++++ b/source-compat-licenses/LICENSE.md
+@@ -0,0 +1,135 @@
++libjpeg-turbo Licenses
++======================
++
++libjpeg-turbo is covered by two compatible BSD-style open source licenses:
++
++- The IJG (Independent JPEG Group) License, which is listed in
++  [README.ijg](README.ijg)
++
++  This license applies to the libjpeg API library and associated programs,
++  including any code inherited from libjpeg and any modifications to that
++  code.  Note that the libjpeg-turbo SIMD source code bears the
++  [zlib License](https://opensource.org/licenses/Zlib), but in the context of
++  the overall libjpeg API library, the terms of the zlib License are subsumed
++  by the terms of the IJG License.
++
++- The Modified (3-clause) BSD License, which is listed below
++
++  This license applies to the TurboJPEG API library and associated programs, as
++  well as the build system.  Note that the TurboJPEG API library wraps the
++  libjpeg API library, so in the context of the overall TurboJPEG API library,
++  both the terms of the IJG License and the terms of the Modified (3-clause)
++  BSD License apply.
++
++
++Complying with the libjpeg-turbo Licenses
++=========================================
++
++This section provides a roll-up of the libjpeg-turbo licensing terms, to the
++best of our understanding.  This is not a license in and of itself.  It is
++intended solely for clarification.
++
++1.  If you are distributing a modified version of the libjpeg-turbo source,
++    then:
++
++    1.  You cannot alter or remove any existing copyright or license notices
++        from the source.
++
++        **Origin**
++        - Clause 1 of the IJG License
++        - Clause 1 of the Modified BSD License
++        - Clauses 1 and 3 of the zlib License
++
++    2.  You must add your own copyright notice to the header of each source
++        file you modified, so others can tell that you modified that file.  (If
++        there is not an existing copyright header in that file, then you can
++        simply add a notice stating that you modified the file.)
++
++        **Origin**
++        - Clause 1 of the IJG License
++        - Clause 2 of the zlib License
++
++    3.  You must include the IJG README file, and you must not alter any of the
++        copyright or license text in that file.
++
++        **Origin**
++        - Clause 1 of the IJG License
++
++2.  If you are distributing only libjpeg-turbo binaries without the source, or
++    if you are distributing an application that statically links with
++    libjpeg-turbo, then:
++
++    1.  Your product documentation must include a message stating:
++
++        This software is based in part on the work of the Independent JPEG
++        Group.
++
++        **Origin**
++        - Clause 2 of the IJG license
++
++    2.  If your binary distribution includes or uses the TurboJPEG API, then
++        your product documentation must include the text of the Modified BSD
++        License (see below.)
++
++        **Origin**
++        - Clause 2 of the Modified BSD License
++
++3.  You cannot use the name of the IJG or The libjpeg-turbo Project or the
++    contributors thereof in advertising, publicity, etc.
++
++    **Origin**
++    - IJG License
++    - Clause 3 of the Modified BSD License
++
++4.  The IJG and The libjpeg-turbo Project do not warrant libjpeg-turbo to be
++    free of defects, nor do we accept any liability for undesirable
++    consequences resulting from your use of the software.
++
++    **Origin**
++    - IJG License
++    - Modified BSD License
++    - zlib License
++
++
++The Modified (3-clause) BSD License
++===================================
++
++Copyright (C)2009-2024 D. R. Commander.  All Rights Reserved.<br>
++Copyright (C)2015 Viktor Szathmáry.  All Rights Reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++- Redistributions of source code must retain the above copyright notice,
++  this list of conditions and the following disclaimer.
++- Redistributions in binary form must reproduce the above copyright notice,
++  this list of conditions and the following disclaimer in the documentation
++  and/or other materials provided with the distribution.
++- Neither the name of the libjpeg-turbo Project nor the names of its
++  contributors may be used to endorse or promote products derived from this
++  software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS",
++AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
++LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++POSSIBILITY OF SUCH DAMAGE.
++
++
++Why Two Licenses?
++=================
++
++The zlib License could have been used instead of the Modified (3-clause) BSD
++License, and since the IJG License effectively subsumes the distribution
++conditions of the zlib License, this would have effectively placed
++libjpeg-turbo binary distributions under the IJG License.  However, the IJG
++License specifically refers to the Independent JPEG Group and does not extend
++attribution and endorsement protections to other entities.  Thus, it was
++desirable to choose a license that granted us the same protections for new code
++that were granted to the IJG for code derived from their software.
+--- /dev/null
++++ b/source-compat-licenses/README.ijg
+@@ -0,0 +1,260 @@
++libjpeg-turbo note:  This file has been modified by The libjpeg-turbo Project
++to include only information relevant to libjpeg-turbo, to wordsmith certain
++sections, and to remove impolitic language that existed in the libjpeg v8
++README.  It is included only for reference.  Please see README.md for
++information specific to libjpeg-turbo.
++
++
++The Independent JPEG Group's JPEG software
++==========================================
++
++This distribution contains a release of the Independent JPEG Group's free JPEG
++software.  You are welcome to redistribute this software and to use it for any
++purpose, subject to the conditions under LEGAL ISSUES, below.
++
++This software is the work of Tom Lane, Guido Vollbeding, Philip Gladstone,
++Bill Allombert, Jim Boucher, Lee Crocker, Bob Friesenhahn, Ben Jackson,
++Julian Minguillon, Luis Ortiz, George Phillips, Davide Rossi, Ge' Weijers,
++and other members of the Independent JPEG Group.
++
++IJG is not affiliated with the ISO/IEC JTC1/SC29/WG1 standards committee
++(also known as JPEG, together with ITU-T SG16).
++
++
++DOCUMENTATION ROADMAP
++=====================
++
++This file contains the following sections:
++
++OVERVIEW            General description of JPEG and the IJG software.
++LEGAL ISSUES        Copyright, lack of warranty, terms of distribution.
++REFERENCES          Where to learn more about JPEG.
++ARCHIVE LOCATIONS   Where to find newer versions of this software.
++FILE FORMAT WARS    Software *not* to get.
++TO DO               Plans for future IJG releases.
++
++Other documentation files in the distribution are:
++
++User documentation:
++  doc/usage.txt         Usage instructions for cjpeg, djpeg, jpegtran,
++                        rdjpgcom, and wrjpgcom.
++  doc/*.1               Unix-style man pages for programs (same info as
++                        usage.txt).
++  doc/wizard.txt        Advanced usage instructions for JPEG wizards only.
++  doc/change.log        Version-to-version change highlights.
++Programmer and internal documentation:
++  doc/libjpeg.txt       How to use the JPEG library in your own programs.
++  src/example.c         Sample code for calling the JPEG library.
++  doc/structure.txt     Overview of the JPEG library's internal structure.
++  doc/coderules.txt     Coding style rules --- please read if you contribute
++                        code.
++
++Please read at least usage.txt.  Some information can also be found in the JPEG
++FAQ (Frequently Asked Questions) article.  See ARCHIVE LOCATIONS below to find
++out where to obtain the FAQ article.
++
++If you want to understand how the JPEG code works, we suggest reading one or
++more of the REFERENCES, then looking at the documentation files (in roughly
++the order listed) before diving into the code.
++
++
++OVERVIEW
++========
++
++This package contains C software to implement JPEG image encoding, decoding,
++and transcoding.  JPEG (pronounced "jay-peg") is a standardized compression
++method for full-color and grayscale images.  JPEG's strong suit is compressing
++photographic images or other types of images that have smooth color and
++brightness transitions between neighboring pixels.  Images with sharp lines or
++other abrupt features may not compress well with JPEG, and a higher JPEG
++quality may have to be used to avoid visible compression artifacts with such
++images.
++
++JPEG is normally lossy, meaning that the output pixels are not necessarily
++identical to the input pixels.  However, on photographic content and other
++"smooth" images, very good compression ratios can be obtained with no visible
++compression artifacts, and extremely high compression ratios are possible if
++you are willing to sacrifice image quality (by reducing the "quality" setting
++in the compressor.)
++
++This software implements JPEG baseline, extended-sequential, progressive, and
++lossless compression processes.  Provision is made for supporting all variants
++of these processes, although some uncommon parameter settings aren't
++implemented yet.  We have made no provision for supporting the hierarchical
++processes defined in the standard.
++
++We provide a set of library routines for reading and writing JPEG image files,
++plus two sample applications "cjpeg" and "djpeg", which use the library to
++perform conversion between JPEG and some other popular image file formats.
++The library is intended to be reused in other applications.
++
++In order to support file conversion and viewing software, we have included
++considerable functionality beyond the bare JPEG coding/decoding capability;
++for example, the color quantization modules are not strictly part of JPEG
++decoding, but they are essential for output to colormapped file formats.  These
++extra functions can be compiled out of the library if not required for a
++particular application.
++
++We have also included "jpegtran", a utility for lossless transcoding between
++different JPEG processes, and "rdjpgcom" and "wrjpgcom", two simple
++applications for inserting and extracting textual comments in JFIF files.
++
++The emphasis in designing this software has been on achieving portability and
++flexibility, while also making it fast enough to be useful.  In particular,
++the software is not intended to be read as a tutorial on JPEG.  (See the
++REFERENCES section for introductory material.)  Rather, it is intended to
++be reliable, portable, industrial-strength code.  We do not claim to have
++achieved that goal in every aspect of the software, but we strive for it.
++
++We welcome the use of this software as a component of commercial products.
++No royalty is required, but we do ask for an acknowledgement in product
++documentation, as described under LEGAL ISSUES.
++
++
++LEGAL ISSUES
++============
++
++In plain English:
++
++1. We don't promise that this software works.  (But if you find any bugs,
++   please let us know!)
++2. You can use this software for whatever you want.  You don't have to pay us.
++3. You may not pretend that you wrote this software.  If you use it in a
++   program, you must acknowledge somewhere in your documentation that
++   you've used the IJG code.
++
++In legalese:
++
++The authors make NO WARRANTY or representation, either express or implied,
++with respect to this software, its quality, accuracy, merchantability, or
++fitness for a particular purpose.  This software is provided "AS IS", and you,
++its user, assume the entire risk as to its quality and accuracy.
++
++This software is copyright (C) 1991-2020, Thomas G. Lane, Guido Vollbeding.
++All Rights Reserved except as specified below.
++
++Permission is hereby granted to use, copy, modify, and distribute this
++software (or portions thereof) for any purpose, without fee, subject to these
++conditions:
++(1) If any part of the source code for this software is distributed, then this
++README file must be included, with this copyright and no-warranty notice
++unaltered; and any additions, deletions, or changes to the original files
++must be clearly indicated in accompanying documentation.
++(2) If only executable code is distributed, then the accompanying
++documentation must state that "this software is based in part on the work of
++the Independent JPEG Group".
++(3) Permission for use of this software is granted only if the user accepts
++full responsibility for any undesirable consequences; the authors accept
++NO LIABILITY for damages of any kind.
++
++These conditions apply to any software derived from or based on the IJG code,
++not just to the unmodified library.  If you use our work, you ought to
++acknowledge us.
++
++Permission is NOT granted for the use of any IJG author's name or company name
++in advertising or publicity relating to this software or products derived from
++it.  This software may be referred to only as "the Independent JPEG Group's
++software".
++
++We specifically permit and encourage the use of this software as the basis of
++commercial products, provided that all warranty or liability claims are
++assumed by the product vendor.
++
++
++REFERENCES
++==========
++
++We recommend reading one or more of these references before trying to
++understand the innards of the JPEG software.
++
++The best short technical introduction to the JPEG compression algorithm is
++        Wallace, Gregory K.  "The JPEG Still Picture Compression Standard",
++        Communications of the ACM, April 1991 (vol. 34 no. 4), pp. 30-44.
++(Adjacent articles in that issue discuss MPEG motion picture compression,
++applications of JPEG, and related topics.)  If you don't have the CACM issue
++handy, a PDF file containing a revised version of Wallace's article is
++available at http://www.ijg.org/files/Wallace.JPEG.pdf.  The file (actually
++a preprint for an article that appeared in IEEE Trans. Consumer Electronics)
++omits the sample images that appeared in CACM, but it includes corrections
++and some added material.  Note: the Wallace article is copyright ACM and IEEE,
++and it may not be used for commercial purposes.
++
++A somewhat less technical, more leisurely introduction to JPEG can be found in
++"The Data Compression Book" by Mark Nelson and Jean-loup Gailly, published by
++M&T Books (New York), 2nd ed. 1996, ISBN 1-55851-434-1.  This book provides
++good explanations and example C code for a multitude of compression methods
++including JPEG.  It is an excellent source if you are comfortable reading C
++code but don't know much about data compression in general.  The book's JPEG
++sample code is far from industrial-strength, but when you are ready to look
++at a full implementation, you've got one here...
++
++The best currently available description of JPEG is the textbook "JPEG Still
++Image Data Compression Standard" by William B. Pennebaker and Joan L.
++Mitchell, published by Van Nostrand Reinhold, 1993, ISBN 0-442-01272-1.
++Price US$59.95, 638 pp.  The book includes the complete text of the ISO JPEG
++standards (DIS 10918-1 and draft DIS 10918-2).
++
++The original JPEG standard is divided into two parts, Part 1 being the actual
++specification, while Part 2 covers compliance testing methods.  Part 1 is
++titled "Digital Compression and Coding of Continuous-tone Still Images,
++Part 1: Requirements and guidelines" and has document numbers ISO/IEC IS
++10918-1, ITU-T T.81.  Part 2 is titled "Digital Compression and Coding of
++Continuous-tone Still Images, Part 2: Compliance testing" and has document
++numbers ISO/IEC IS 10918-2, ITU-T T.83.
++
++The JPEG standard does not specify all details of an interchangeable file
++format.  For the omitted details, we follow the "JFIF" conventions, revision
++1.02.  JFIF version 1 has been adopted as ISO/IEC 10918-5 (05/2013) and
++Recommendation ITU-T T.871 (05/2011): Information technology - Digital
++compression and coding of continuous-tone still images: JPEG File Interchange
++Format (JFIF).  It is available as a free download in PDF file format from
++https://www.iso.org/standard/54989.html and http://www.itu.int/rec/T-REC-T.871.
++A PDF file of the older JFIF 1.02 specification is available at
++http://www.w3.org/Graphics/JPEG/jfif3.pdf.
++
++The TIFF 6.0 file format specification can be obtained from
++http://mirrors.ctan.org/graphics/tiff/TIFF6.ps.gz.  The JPEG incorporation
++scheme found in the TIFF 6.0 spec of 3-June-92 has a number of serious
++problems.  IJG does not recommend use of the TIFF 6.0 design (TIFF Compression
++tag 6).  Instead, we recommend the JPEG design proposed by TIFF Technical Note
++#2 (Compression tag 7).  Copies of this Note can be obtained from
++http://www.ijg.org/files/.  It is expected that the next revision
++of the TIFF spec will replace the 6.0 JPEG design with the Note's design.
++Although IJG's own code does not support TIFF/JPEG, the free libtiff library
++uses our library to implement TIFF/JPEG per the Note.
++
++
++ARCHIVE LOCATIONS
++=================
++
++The "official" archive site for this software is www.ijg.org.
++The most recent released version can always be found there in
++directory "files".
++
++The JPEG FAQ (Frequently Asked Questions) article is a source of some
++general information about JPEG.  It is available at
++http://www.faqs.org/faqs/jpeg-faq.
++
++
++FILE FORMAT COMPATIBILITY
++=========================
++
++This software implements ITU T.81 | ISO/IEC 10918 with some extensions from
++ITU T.871 | ISO/IEC 10918-5 (JPEG File Interchange Format-- see REFERENCES).
++Informally, the term "JPEG image" or "JPEG file" most often refers to JFIF or
++a subset thereof, but there are other formats containing the name "JPEG" that
++are incompatible with the original JPEG standard or with JFIF (for instance,
++JPEG 2000 and JPEG XR).  This software therefore does not support these
++formats.  Indeed, one of the original reasons for developing this free software
++was to help force convergence on a common, interoperable format standard for
++JPEG files.
++
++JFIF is a minimal or "low end" representation.  TIFF/JPEG (TIFF revision 6.0 as
++modified by TIFF Technical Note #2) can be used for "high end" applications
++that need to record a lot of additional data about an image.
++
++
++TO DO
++=====
++
++Please send bug reports, offers of help, etc. to jpeg-info@jpegclub.org.
+--- a/src/color_convert.rs
++++ b/src/color_convert.rs
+@@ -59,11 +59,22 @@
+ mod avx;
+ mod neon64;
+ mod scalar;
++#[cfg(feature = "source_compat")]
++mod source_compat;
+ 
+ #[allow(unused_variables)]
++#[allow(unreachable_code)]
+ pub fn choose_ycbcr_to_rgb_convert_func(
+     type_need: ColorSpace, options: &DecoderOptions
+ ) -> Option<ColorConvert16Ptr> {
++    #[cfg(feature = "source_compat")]
++    return match type_need {
++        ColorSpace::RGB => Some(source_compat::ycbcr_to_rgb_inner_16_scalar::<false>),
++        ColorSpace::RGBA => Some(source_compat::ycbcr_to_rgba_inner_16_scalar::<false>),
++        ColorSpace::BGRA => Some(source_compat::ycbcr_to_rgba_inner_16_scalar::<true>),
++        ColorSpace::BGR => Some(source_compat::ycbcr_to_rgb_inner_16_scalar::<true>),
++        _ => None,
++    };
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     {
+--- /dev/null
++++ b/src/color_convert/source_compat.rs
+@@ -0,0 +1,157 @@
++/*
++ * jdcolor.c
++ *
++ * This file was part of the Independent JPEG Group's software:
++ * Copyright (C) 1991-1997, Thomas G. Lane.
++ * Modified 2011 by Guido Vollbeding.
++ * libjpeg-turbo Modifications:
++ * Copyright 2009 Pierre Ossman <ossman@cendio.se> for Cendio AB
++ * Copyright (C) 2009, 2011-2012, 2014-2015, 2022, 2024, D. R. Commander.
++ * Copyright (C) 2013, Linaro Limited.
++ * For conditions of distribution and use, see the accompanying README.ijg
++ * file.
++ *
++ * This file contains output colorspace conversion routines.
++ */
++// Modified Rust implementation for the opt-in source_compat feature.
++// libjpeg-turbo terms: source-compat-licenses/README.ijg.
++// libjpeg-turbo/src/jdcolor.c, build_ycc_rgb_table (16-bit coefficients).
++/*
++ * Copyright (c) 2023.
++ *
++ * This software is free software;
++ *
++ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
++ */
++
++use core::convert::TryInto;
++
++// Bt.601 Full Range inverse coefficients computed with 14 bits of precision with MPFR.
++// This is important to keep them in i16.
++// In most cases LLVM will detect what we're doing i16 widening to i32 math and will use
++// appropriate optimizations.
++pub(crate) const Y_CF: i32 = 65536;
++pub(crate) const CR_CF: i32 = 91881;
++pub(crate) const CB_CF: i32 = 116130;
++pub(crate) const C_G_CR_COEF_1: i32 = -46802;
++pub(crate) const C_G_CB_COEF_2: i32 = -22554;
++pub(crate) const YUV_PREC: i32 = 16;
++// Rounding const for YUV -> RGB conversion: floating equivalent 0.499(9).
++pub(crate) const YUV_RND: i32 = 1 << (YUV_PREC - 1);
++
++/// Limit values to 0 and 255
++#[inline]
++#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, dead_code)]
++fn clamp(a: i32) -> u8 {
++    a.clamp(0, 255) as u8
++}
++
++/// YCbCr to RGBA color conversion
++
++/// Convert YCbCr to RGB/BGR
++///
++/// Converts to RGB if const BGRA is false
++///
++/// Converts to BGR if const BGRA is true
++pub fn ycbcr_to_rgba_inner_16_scalar<const BGRA: bool>(
++    y: &[i16; 16], cb: &[i16; 16], cr: &[i16; 16], output: &mut [u8], pos: &mut usize
++) {
++    let (_, output_position) = output.split_at_mut(*pos);
++
++    // Convert into a slice with 64 elements for Rust to see we won't go out of bounds.
++    let opt: &mut [u8; 64] = output_position
++        .get_mut(0..64)
++        .expect("Slice to small cannot write")
++        .try_into()
++        .unwrap();
++    for ((&y, (cb, cr)), out) in y
++        .iter()
++        .zip(cb.iter().zip(cr.iter()))
++        .zip(opt.chunks_exact_mut(4))
++    {
++        let cr = cr - 128;
++        let cb = cb - 128;
++
++        let y0 = i32::from(y) * i32::from(Y_CF) + i32::from(YUV_RND);
++
++        let r = (y0 + i32::from(cr) * i32::from(CR_CF)) >> YUV_PREC;
++        let g = (y0
++            + i32::from(cr) * i32::from(C_G_CR_COEF_1)
++            + i32::from(cb) * i32::from(C_G_CB_COEF_2))
++            >> YUV_PREC;
++        let b = (y0 + i32::from(cb) * i32::from(CB_CF)) >> YUV_PREC;
++
++        if BGRA {
++            out[0] = clamp(b);
++            out[1] = clamp(g);
++            out[2] = clamp(r);
++            out[3] = 255;
++        } else {
++            out[0] = clamp(r);
++            out[1] = clamp(g);
++            out[2] = clamp(b);
++            out[3] = 255;
++        }
++    }
++    *pos += 64;
++}
++
++/// Convert YCbCr to RGB/BGR
++///
++/// Converts to RGB if const BGRA is false
++///
++/// Converts to BGR if const BGRA is true
++pub fn ycbcr_to_rgb_inner_16_scalar<const BGRA: bool>(
++    y: &[i16; 16], cb: &[i16; 16], cr: &[i16; 16], output: &mut [u8], pos: &mut usize
++) {
++    let (_, output_position) = output.split_at_mut(*pos);
++
++    // Convert into a slice with 48 elements
++    let opt: &mut [u8; 48] = output_position
++        .get_mut(0..48)
++        .expect("Slice to small cannot write")
++        .try_into()
++        .unwrap();
++
++    for ((&y, (cb, cr)), out) in y
++        .iter()
++        .zip(cb.iter().zip(cr.iter()))
++        .zip(opt.chunks_exact_mut(3))
++    {
++        let cr = cr - 128;
++        let cb = cb - 128;
++
++        let y0 = i32::from(y) * i32::from(Y_CF) + i32::from(YUV_RND);
++
++        let r = (y0 + i32::from(cr) * i32::from(CR_CF)) >> YUV_PREC;
++        let g = (y0
++            + i32::from(cr) * i32::from(C_G_CR_COEF_1)
++            + i32::from(cb) * i32::from(C_G_CB_COEF_2))
++            >> YUV_PREC;
++        let b = (y0 + i32::from(cb) * i32::from(CB_CF)) >> YUV_PREC;
++
++        if BGRA {
++            out[0] = clamp(b);
++            out[1] = clamp(g);
++            out[2] = clamp(r);
++        } else {
++            out[0] = clamp(r);
++            out[1] = clamp(g);
++            out[2] = clamp(b);
++        }
++    }
++
++    // Increment pos
++    *pos += 48;
++}
++
++pub fn ycbcr_to_grayscale(y: &[i16], width: usize, padded_width: usize, output: &mut [u8]) {
++    for (y_in, out) in y
++        .chunks_exact(padded_width)
++        .zip(output.chunks_exact_mut(width))
++    {
++        for (y, out) in y_in.iter().zip(out.iter_mut()) {
++            *out = *y as u8;
++        }
++    }
++}
+--- a/src/components.rs
++++ b/src/components.rs
+@@ -57,6 +57,10 @@
+     pub up_sampler: UpSampler,
+     /// How pixels do we need to go to get to the next line?
+     pub width_stride: usize,
++    #[cfg(feature = "source_compat")]
++    pub sampled_height: usize,
++    #[cfg(feature = "source_compat")]
++    pub sampled_width: usize,
+     /// Component ID for progressive
+     pub id: u8,
+     /// Whether we need to decode this image component.
+@@ -163,6 +167,10 @@
+             up_sampler: upsample_no_op,
+             // set later
+             width_stride: horizontal_sample,
++            #[cfg(feature = "source_compat")]
++            sampled_height: 0,
++            #[cfg(feature = "source_compat")]
++            sampled_width: 0,
+             id: a[0],
+             needed: true,
+             raw_coeff: vec![],
+--- a/src/decoder.rs
++++ b/src/decoder.rs
+@@ -890,6 +890,11 @@
+         for comp in &mut self.components {
+             let hs = self.h_max / comp.horizontal_sample;
+             let vs = self.v_max / comp.vertical_sample;
++            #[cfg(feature = "source_compat")]
++            {
++                comp.sampled_height = usize::from(self.info.height).div_ceil(vs);
++                comp.sampled_width = usize::from(self.info.width).div_ceil(hs);
++            }
+ 
+             let samp_factor = match (hs, vs) {
+                 (1, 1) => {
+--- a/src/idct.rs
++++ b/src/idct.rs
+@@ -45,10 +45,15 @@
+ pub mod neon;
+ 
+ pub mod scalar;
++#[cfg(feature = "source_compat")]
++mod source_compat;
+ 
+ /// Choose an appropriate IDCT function
+ #[allow(unused_variables)]
++#[allow(unreachable_code)]
+ pub fn choose_idct_func(options: &DecoderOptions) -> IDCTPtr {
++    #[cfg(feature = "source_compat")]
++    return source_compat::idct_int;
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     {
+@@ -82,7 +87,10 @@
+ /// coefficients are non-zero. All other entries are zeroed.
+ ///
+ /// **The callee must uphold that contract on return**
++#[allow(unreachable_code)]
+ pub fn choose_idct_4x4_func(_options: &DecoderOptions) -> IDCTPtr {
++    #[cfg(feature = "source_compat")]
++    return source_compat::idct4x4;
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     {
+--- /dev/null
++++ b/src/idct/source_compat.rs
+@@ -0,0 +1,261 @@
++/*
++ * jidctint.c
++ *
++ * This file was part of the Independent JPEG Group's software:
++ * Copyright (C) 1991-1998, Thomas G. Lane.
++ * Modification developed 2002-2018 by Guido Vollbeding.
++ * libjpeg-turbo Modifications:
++ * Copyright (C) 2015, 2020, 2022, D. R. Commander.
++ * For conditions of distribution and use, see the accompanying README.ijg
++ * file.
++ *
++ * This file contains a slower but more accurate integer implementation of the
++ * inverse DCT (Discrete Cosine Transform).  In the IJG code, this routine
++ * must also perform dequantization of the input coefficients.
++ *
++ * A 2-D IDCT can be done by 1-D IDCT on each column followed by 1-D IDCT
++ * on each row (or vice versa, but it's more convenient to emit a row at
++ * a time).  Direct algorithms are also available, but they are much more
++ * complex and seem not to be any faster when reduced to code.
++ *
++ * This implementation is based on an algorithm described in
++ *   C. Loeffler, A. Ligtenberg and G. Moschytz, "Practical Fast 1-D DCT
++ *   Algorithms with 11 Multiplications", Proc. Int'l. Conf. on Acoustics,
++ *   Speech, and Signal Processing 1989 (ICASSP '89), pp. 988-991.
++ * The primary algorithm described there uses 11 multiplies and 29 adds.
++ * We use their alternate method with 12 multiplies and 32 adds.
++ * The advantage of this method is that no data path contains more than one
++ * multiplication; this allows a very simple and accurate implementation in
++ * scaled fixed-point arithmetic, with a minimal number of shifts.
++ *
++ * We also provide IDCT routines with various output sample block sizes for
++ * direct resolution reduction or enlargement without additional resampling:
++ * NxN (N=1...16) pixels for one 8x8 input DCT block.
++ *
++ * For N<8 we simply take the corresponding low-frequency coefficients of
++ * the 8x8 input DCT block and apply an NxN point IDCT on the sub-block
++ * to yield the downscaled outputs.
++ * This can be seen as direct low-pass downsampling from the DCT domain
++ * point of view rather than the usual spatial domain point of view,
++ * yielding significant computational savings and results at least
++ * as good as common bilinear (averaging) spatial downsampling.
++ *
++ * For N>8 we apply a partial NxN IDCT on the 8 input coefficients as
++ * lower frequencies and higher frequencies assumed to be zero.
++ * It turns out that the computational effort is similar to the 8x8 IDCT
++ * regarding the output size.
++ * Furthermore, the scaling and descaling is the same for all IDCT sizes.
++ *
++ * CAUTION: We rely on the FIX() macro except for the N=1,2,4,8 cases
++ * since there would be too many additional constants to pre-calculate.
++ */
++// Modified Rust implementation for the opt-in source_compat feature.
++// libjpeg-turbo terms: source-compat-licenses/README.ijg.
++// libjpeg-turbo/src/jidctint.c, JDCT_ISLOW (CONST_BITS=13, PASS1_BITS=2).
++/*
++ * Copyright (c) 2023.
++ *
++ * This software is free software;
++ *
++ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
++ */
++
++//! Platform independent IDCT algorithm
++//!
++//! Not as fast as AVX one.
++
++const SCALE_BITS: i32 = 131072 + (128 << 18);
++
++#[inline(always)]
++fn wa(a: i32, b: i32) -> i32 {
++    a.wrapping_add(b)
++}
++
++#[inline(always)]
++fn ws(a: i32, b: i32) -> i32 {
++    a.wrapping_sub(b)
++}
++
++#[inline(always)]
++fn wm(a: i32, b: i32) -> i32 {
++    a.wrapping_mul(b)
++}
++
++#[inline]
++pub fn idct_int_1x1(in_vector: &mut [i32; 64], mut out_vector: &mut [i16], stride: usize) {
++    let coeff = ((wa(wa(in_vector[0], 4), 1024) >> 3).clamp(0, 255)) as i16;
++
++    out_vector[..8].fill(coeff);
++    for _ in 0..7 {
++        out_vector = &mut out_vector[stride..];
++        out_vector[..8].fill(coeff);
++
++    }
++}
++
++#[allow(unused_assignments)]
++#[allow(
++    clippy::too_many_lines,
++    clippy::op_ref,
++    clippy::cast_possible_truncation
++)]
++pub fn idct_int(in_vector: &mut [i32; 64], out_vector: &mut [i16], stride: usize) {
++    let mut pos = 0;
++    let mut i = 0;
++
++    if &in_vector[1..] == &[0_i32; 63] {
++        return idct_int_1x1(in_vector, out_vector, stride);
++    }
++
++    // vertical pass
++    for ptr in 0..8 {
++        let p2 = in_vector[ptr + 16];
++        let p3 = in_vector[ptr + 48];
++
++        let p1 = wm(wa(p2, p3), 4433);
++
++        let t2 = wa(p1, wm(p3, -15137));
++        let t3 = wa(p1, wm(p2, 6270));
++
++        let p2 = in_vector[ptr];
++        let p3 = in_vector[32 + ptr];
++
++        let t0 = fsh(wa(p2, p3));
++        let t1 = fsh(ws(p2, p3));
++
++        let x0 = wa(wa(t0, t3), 1024);
++        let x3 = wa(ws(t0, t3), 1024);
++        let x1 = wa(wa(t1, t2), 1024);
++        let x2 = wa(ws(t1, t2), 1024);
++
++        let mut t0 = in_vector[ptr + 56];
++        let mut t1 = in_vector[ptr + 40];
++        let mut t2 = in_vector[ptr + 24];
++        let mut t3 = in_vector[ptr + 8];
++
++        let p3 = wa(t0, t2);
++        let p4 = wa(t1, t3);
++        let p1 = wa(t0, t3);
++        let p2 = wa(t1, t2);
++        let p5 = wm(wa(p3, p4), 9633);
++
++        t0 = wm(t0, 2446);
++        t1 = wm(t1, 16819);
++        t2 = wm(t2, 25172);
++        t3 = wm(t3, 12299);
++
++        let p1 = wa(p5, wm(p1, -7373));
++        let p2 = wa(p5, wm(p2, -20995));
++        let p3 = wm(p3, -16069);
++        let p4 = wm(p4, -3196);
++
++        t3 = wa(t3, wa(p1, p4));
++        t2 = wa(t2, wa(p2, p3));
++        t1 = wa(t1, wa(p2, p4));
++        t0 = wa(t0, wa(p1, p3));
++
++        in_vector[ptr] = ws(wa(x0, t3), 0) >> 11;
++        in_vector[ptr + 8] = ws(wa(x1, t2), 0) >> 11;
++        in_vector[ptr + 16] = ws(wa(x2, t1), 0) >> 11;
++        in_vector[ptr + 24] = ws(wa(x3, t0), 0) >> 11;
++        in_vector[ptr + 32] = ws(ws(x3, t0), 0) >> 11;
++        in_vector[ptr + 40] = ws(ws(x2, t1), 0) >> 11;
++        in_vector[ptr + 48] = ws(ws(x1, t2), 0) >> 11;
++        in_vector[ptr + 56] = ws(ws(x0, t3), 0) >> 11;
++    }
++
++    // horizontal pass
++    while i < 64 {
++        let p2 = in_vector[i + 2];
++        let p3 = in_vector[i + 6];
++
++        let p1 = wm(wa(p2, p3), 4433);
++        let t2 = wa(p1, wm(p3, -15137));
++        let t3 = wa(p1, wm(p2, 6270));
++
++        let p2 = in_vector[i];
++        let p3 = in_vector[i + 4];
++
++        let t0 = fsh(wa(p2, p3));
++        let t1 = fsh(ws(p2, p3));
++
++        let x0 = wa(wa(t0, t3), SCALE_BITS);
++        let x3 = wa(ws(t0, t3), SCALE_BITS);
++        let x1 = wa(wa(t1, t2), SCALE_BITS);
++        let x2 = wa(ws(t1, t2), SCALE_BITS);
++
++        let mut t0 = in_vector[i + 7];
++        let mut t1 = in_vector[i + 5];
++        let mut t2 = in_vector[i + 3];
++        let mut t3 = in_vector[i + 1];
++
++        let p3 = wa(t0, t2);
++        let p4 = wa(t1, t3);
++        let p1 = wa(t0, t3);
++        let p2 = wa(t1, t2);
++        let p5 = wm(wa(p3, p4), f2f(1.175875602));
++
++        t0 = wm(t0, 2446);
++        t1 = wm(t1, 16819);
++        t2 = wm(t2, 25172);
++        t3 = wm(t3, 12299);
++
++        let p1 = wa(p5, wm(p1, -7373));
++        let p2 = wa(p5, wm(p2, -20995));
++        let p3 = wm(p3, -16069);
++        let p4 = wm(p4, -3196);
++
++        t3 = wa(t3, wa(p1, p4));
++        t2 = wa(t2, wa(p2, p3));
++        t1 = wa(t1, wa(p2, p4));
++        t0 = wa(t0, wa(p1, p3));
++
++        // to prevent some bad images from crashing
++        let mut tmp = [0; 8];
++
++        let out: &mut [i16; 8] = out_vector
++            .get_mut(pos..pos + 8)
++            .unwrap_or(&mut tmp)
++            .try_into()
++            .unwrap();
++
++        out[0] = clamp(wa(x0, t3) >> 18);
++        out[1] = clamp(wa(x1, t2) >> 18);
++        out[2] = clamp(wa(x2, t1) >> 18);
++        out[3] = clamp(wa(x3, t0) >> 18);
++        out[4] = clamp(ws(x3, t0) >> 18);
++        out[5] = clamp(ws(x2, t1) >> 18);
++        out[6] = clamp(ws(x1, t2) >> 18);
++        out[7] = clamp(ws(x0, t3) >> 18);
++
++        i += 8;
++        pos += stride;
++    }
++}
++
++#[inline]
++#[allow(clippy::cast_possible_truncation)]
++/// Multiply a number by 8192
++fn f2f(x: f32) -> i32 {
++    (x * 8192.0 + 0.5) as i32
++}
++
++#[inline]
++/// Multiply a number by 8192
++fn fsh(x: i32) -> i32 {
++    x << 13
++}
++
++/// Clamp values between 0 and 255
++#[inline]
++#[allow(clippy::cast_possible_truncation)]
++fn clamp(a: i32) -> i16 {
++    a.clamp(0, 255) as i16
++}
++
++/// Preserve the zero-coefficient contract across the sparse-block shortcut.
++/// The complete ISLOW kernel is exact for a sparse 4x4 coefficient block.
++pub fn idct4x4(in_vector: &mut [i32; 64], out_vector: &mut [i16], stride: usize) {
++    let mut coefficients = *in_vector;
++    idct_int(&mut coefficients, out_vector, stride);
++}
+--- a/src/upsampler.rs
++++ b/src/upsampler.rs
+@@ -89,10 +89,14 @@
+ #[cfg(feature = "portable_simd")]
+ mod portable_simd;
+ mod scalar;
++#[cfg(feature = "source_compat")]
++mod source_compat;
+ 
+ // choose the best possible implementation for this platform
+ #[allow(unused_variables)]
+ pub fn choose_horizontal_samp_function(options: &DecoderOptions) -> UpSampler {
++    #[cfg(feature = "source_compat")]
++    return source_compat::upsample_horizontal;
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     if options.use_avx2() {
+@@ -116,6 +120,8 @@
+ 
+ #[allow(unused_variables)]
+ pub fn choose_hv_samp_function(options: &DecoderOptions) -> UpSampler {
++    #[cfg(feature = "source_compat")]
++    return source_compat::upsample_hv;
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     if options.use_avx2() {
+@@ -139,6 +145,8 @@
+ 
+ #[allow(unused_variables)]
+ pub fn choose_v_samp_function(options: &DecoderOptions) -> UpSampler {
++    #[cfg(feature = "source_compat")]
++    return source_compat::upsample_vertical;
+     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+     #[cfg(feature = "x86")]
+     if options.use_avx2() {
+--- /dev/null
++++ b/src/upsampler/source_compat.rs
+@@ -0,0 +1,132 @@
++/*
++ * jdsample.c
++ *
++ * This file was part of the Independent JPEG Group's software:
++ * Copyright (C) 1991-1996, Thomas G. Lane.
++ * libjpeg-turbo Modifications:
++ * Copyright 2009 Pierre Ossman <ossman@cendio.se> for Cendio AB
++ * Copyright (C) 2010, 2015-2016, 2022, 2024, D. R. Commander.
++ * Copyright (C) 2014, MIPS Technologies, Inc., California.
++ * Copyright (C) 2015, Google, Inc.
++ * Copyright (C) 2019-2020, Arm Limited.
++ * For conditions of distribution and use, see the accompanying README.ijg
++ * file.
++ *
++ * This file contains upsampling routines.
++ *
++ * Upsampling input data is counted in "row groups".  A row group
++ * is defined to be (v_samp_factor * DCT_scaled_size / min_DCT_scaled_size)
++ * sample rows of each component.  Upsampling will normally produce
++ * max_v_samp_factor pixel rows from each row group (but this could vary
++ * if the upsampler is applying a scale factor of its own).
++ *
++ * An excellent reference for image resampling is
++ *   Digital Image Warping, George Wolberg, 1990.
++ *   Pub. by IEEE Computer Society Press, Los Alamitos, CA. ISBN 0-8186-8944-7.
++ */
++// Modified Rust implementation for the opt-in source_compat feature.
++// libjpeg-turbo terms: source-compat-licenses/README.ijg.
++/*
++ * Copyright (c) 2023.
++ *
++ * This software is free software;
++ *
++ * You can redistribute it or modify it under terms of the MIT, Apache License or Zlib license
++ */
++
++pub fn upsample_horizontal(
++    input: &[i16], _ref: &[i16], _in_near: &[i16], _scratch: &mut [i16], output: &mut [i16]
++) {
++    assert_eq!(
++        input.len() * 2,
++        output.len(),
++        "Input length is not half the size of the output length"
++    );
++    assert!(
++        output.len() > 4 && input.len() > 2,
++        "Too Short of a vector, cannot upsample"
++    );
++
++    output[0] = input[0];
++    output[1] = (input[0] * 3 + input[1] + 2) >> 2;
++
++    // This code is written for speed and not readability
++    //
++    // The readable code is
++    //
++    //      for i in 1..input.len() - 1{
++    //         let sample = 3 * input[i] + 2;
++    //         out[i * 2] = (sample + input[i - 1]) >> 2;
++    //         out[i * 2 + 1] = (sample + input[i + 1]) >> 2;
++    //     }
++    //
++    // The output of a pixel is determined by it's surrounding neighbours but we attach more weight to it's nearest
++    // neighbour (input[i]) than to the next nearest neighbour.
++
++    for (output_window, input_window) in output[2..].chunks_exact_mut(2).zip(input.windows(3)) {
++        let sample = 3 * input_window[1] + 2;
++
++        output_window[0] = (sample + input_window[0] - 1) >> 2;
++        output_window[1] = (sample + input_window[2]) >> 2;
++    }
++    // Get lengths
++    let out_len = output.len() - 2;
++    let input_len = input.len() - 2;
++
++    // slice the output vector
++    let f_out = &mut output[out_len..];
++    let i_last = &input[input_len..];
++
++    // write out manually..
++    f_out[0] = (3 * i_last[1] + i_last[0] + 1) >> 2;
++    f_out[1] = i_last[1];
++}
++pub fn upsample_vertical(
++    input: &[i16], in_near: &[i16], in_far: &[i16], _scratch_space: &mut [i16], output: &mut [i16]
++) {
++    assert_eq!(input.len() * 2, output.len());
++    assert_eq!(in_near.len(), input.len());
++    assert_eq!(in_far.len(), input.len());
++
++    let middle = output.len() / 2;
++
++    let (out_top, out_bottom) = output.split_at_mut(middle);
++
++    // for the first row, closest row is in_near
++    for ((near, far), x) in input.iter().zip(in_near.iter()).zip(out_top) {
++        *x = (((3 * near) + 1) + far) >> 2;
++    }
++    // for the second row, the closest row to input is in_far
++    for ((near, far), x) in input.iter().zip(in_far.iter()).zip(out_bottom) {
++        *x = (((3 * near) + 2) + far) >> 2;
++    }
++}
++
++// libjpeg-turbo/src/jdsample.c::h2v2_fancy_upsample. Keep vertical
++// sums unrounded until the joint two-dimensional 16-weight filter.
++pub fn upsample_hv(input: &[i16], in_near: &[i16], in_far: &[i16],
++    _scratch_space: &mut [i16], output: &mut [i16]) {
++    assert_eq!(input.len() * 4, output.len());
++    for (far, row) in [in_near, in_far].into_iter().zip(output.chunks_exact_mut(input.len() * 2)) {
++        let sum = |x: usize| 3 * i32::from(input[x]) + i32::from(far[x]);
++        for x in 0..input.len() {
++            let c = sum(x);
++            row[x * 2] = ((3 * c + sum(x.saturating_sub(1)) + 8) >> 4) as i16;
++            row[x * 2 + 1] = ((3 * c + sum((x + 1).min(input.len() - 1)) + 7) >> 4) as i16;
++        }
++    }
++}
++
++pub fn upsample_generic(
++    input: &[i16], _in_near: &[i16], _in_far: &[i16], _scratch_space: &mut [i16],
++    output: &mut [i16]
++) {
++    // use nearest sample
++    let difference = output.len() / input.len();
++    if difference > 0 {
++        // nearest neighbour
++        for (input, chunk_output) in input.iter().zip(output.chunks_exact_mut(difference)) {
++            chunk_output.iter_mut().for_each(|x| *x = *input);
++        }
++    }
++}
+--- a/src/worker.rs
++++ b/src/worker.rs
+@@ -376,6 +376,16 @@
+     component: &mut Components, mcu_height: usize, i: usize, upsampler_scratch_space: &mut [i16],
+     has_vertical_sample: bool
+ ) -> Result<(), DecodeErrors> {
++    #[cfg(feature = "source_compat")]
++    if component.sampled_width > 0 && component.sampled_width < component.width_stride {
++        // jdsample.c filters only downsampled_width samples. Replicate the
++        // true right edge before filtering padded MCU storage so IDCT padding
++        // cannot become a neighbour of the final visible chroma sample.
++        for row in component.raw_coeff.chunks_exact_mut(component.width_stride) {
++            let edge = row[component.sampled_width - 1];
++            row[component.sampled_width..].fill(edge);
++        }
++    }
+     match component.sample_ratio {
+         SampleRatios::V | SampleRatios::HV => {
+             /*
+@@ -490,6 +500,12 @@
+                     dest_start += stride_bytes_written;
+                 }
+ 
++                #[cfg(feature = "source_compat")]
++                if i * component.vertical_sample * 8 + pos + 1 >= component.sampled_height {
++                    // libjpeg replicates the actual last image sample, not
++                    // the padded rows in its final MCU.
++                    row_down = curr_row;
++                }
+                 if upsample {
+                     // upsample
+                     (component.up_sampler)(

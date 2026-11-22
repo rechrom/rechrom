@@ -1,0 +1,48 @@
+# vendor/rav1d against pristine upstream
+# upstream: https://static.crates.io/crates/rav1d/rav1d-1.1.0.crate
+# sha256:   1932f060d5e7bd49dc9f8b272c1dc5e9ce0ffe141c28be900265d3989b36c9ed
+# Regenerate with tools/vendor_patches.sh; see vendor/DECISIONS.md for why it is kept.
+#
+# Upstream files not vendored:
+#   .github/workflows/arm7/envsetup.sh
+#   .github/workflows/build-and-benchmark-x86.yml
+#   .github/workflows/build-and-test-aarch64-android.yml
+#   .github/workflows/build-and-test-aarch64-darwin.yml
+#   .github/workflows/build-and-test-qemu.yml
+#   .github/workflows/build-and-test-x86-extra.yml
+#   .github/workflows/build-and-test-x86.yml
+#   .github/workflows/cargo-fmt.yml
+#   .github/workflows/test.sh
+#   .gitignore
+#   .gitlab-ci.yml
+--- a/src/decode.rs
++++ b/src/decode.rs
+@@ -4994,7 +4994,7 @@
+     ) {
+         fc.task_thread.error.store(1, Ordering::Relaxed);
+         let _ = mem::take(&mut *fc.in_cdf.try_write().unwrap());
+-        if f.frame_hdr.as_ref().unwrap().refresh_context != 0 {
++        if f.frame_hdr.as_ref().is_some_and(|h| h.refresh_context != 0) {
+             let _ = mem::take(&mut f.out_cdf);
+         }
+         for i in 0..7 {
+--- a/src/obu.rs
++++ b/src/obu.rs
+@@ -2420,7 +2420,7 @@
+                     })); // TODO(kkysen) fallible allocation
+                 }
+                 Some(ObuMetaType::ItutT35) => {
+-                    let mut payload_size = gb.remaining_len();
++                    let mut payload_size = gb.remaining_len() as isize;
+                     // Don't take into account all the trailing bits for `payload_size`.
+                     while payload_size > 0 && gb[payload_size as usize - 1] == 0 {
+                         payload_size -= 1; // trailing_zero_bit x 8
+@@ -2435,7 +2435,7 @@
+                         payload_size -= 1;
+                     }
+ 
+-                    if payload_size <= 0 || gb[payload_size] != 0x80 {
++                    if payload_size <= 0 || gb[payload_size as usize] != 0x80 {
+                         writeln!(c.logger, "Malformed ITU-T T.35 metadata message format");
+                     } else {
+                         let country_code = country_code as u8;

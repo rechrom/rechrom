@@ -1,0 +1,1569 @@
+# vendor/softbuffer against pristine upstream
+# upstream: https://static.crates.io/crates/softbuffer/softbuffer-0.4.8.crate
+# sha256:   aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3
+# Regenerate with tools/vendor_patches.sh; see vendor/DECISIONS.md for why it is kept.
+#
+# Upstream files not vendored:
+#   .cargo/config.toml
+#   .github/CODEOWNERS
+#   .github/dependabot.yml
+#   .github/workflows/ci.yml
+#   .github/workflows/release.yml
+#   .gitignore
+#   Cargo.lock
+#   benches/buffer_mut.rs
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -53,6 +53,7 @@
+ ]
+ 
+ [features]
++native-iosurface = ["dep:objc2-io-surface", "dep:block2"]
+ default = [
+     "kms",
+     "x11",
+@@ -91,11 +92,6 @@
+ name = "softbuffer"
+ path = "src/lib.rs"
+ 
+-[[bench]]
+-name = "buffer_mut"
+-path = "benches/buffer_mut.rs"
+-harness = false
+-
+ [dependencies.raw_window_handle]
+ version = "0.6"
+ features = ["std"]
+@@ -105,25 +101,6 @@
+ version = "0.1.41"
+ default-features = false
+ 
+-[dev-dependencies.colorous]
+-version = "1.0.12"
+-
+-[dev-dependencies.criterion]
+-version = "0.8.1"
+-features = ["cargo_bench_support"]
+-default-features = false
+-
+-[dev-dependencies.image]
+-version = "0.25.0"
+-features = ["jpeg"]
+-default-features = false
+-
+-[dev-dependencies.web-time]
+-version = "1.0.0"
+-
+-[dev-dependencies.winit]
+-version = "0.30.0"
+-
+ [target.'cfg(not(any(target_os = "android", target_vendor = "apple", target_os = "redox", target_family = "wasm", target_os = "windows")))'.dependencies.as-raw-xcb-connection]
+ version = "1.0.0"
+ optional = true
+@@ -181,13 +158,6 @@
+ ]
+ optional = true
+ 
+-[target.'cfg(not(any(target_os = "android", target_vendor = "apple", target_os = "redox", target_family = "wasm", target_os = "windows")))'.dev-dependencies.rustix]
+-version = "1.0.1"
+-features = ["event"]
+-
+-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies.rayon]
+-version = "1.5.1"
+-
+ [target.'cfg(target_family = "wasm")'.dependencies.js-sys]
+ version = "0.3.63"
+ 
+@@ -207,22 +177,12 @@
+     "Window",
+ ]
+ 
+-[target.'cfg(target_family = "wasm")'.dev-dependencies.wasm-bindgen-test]
+-version = "0.3"
+-
+ [target.'cfg(target_os = "android")'.dependencies.bytemuck]
+ version = "1.12.3"
+ 
+ [target.'cfg(target_os = "android")'.dependencies.ndk]
+ version = "0.9.0"
+ 
+-[target.'cfg(target_os = "android")'.dev-dependencies.android-activity]
+-version = "0.6"
+-
+-[target.'cfg(target_os = "android")'.dev-dependencies.winit]
+-version = "0.30.0"
+-features = ["android-native-activity"]
+-
+ [target.'cfg(target_os = "redox")'.dependencies.redox_syscall]
+ version = "0.5"
+ 
+@@ -243,6 +203,9 @@
+ features = [
+     "std",
+     "CFCGTypes",
++    "CFDictionary",
++    "CFNumber",
++    "CFString",
+ ]
+ default-features = false
+ 
+@@ -251,6 +214,7 @@
+ features = [
+     "std",
+     "objc2",
++    "CGColor",
+     "CGColorSpace",
+     "CGDataProvider",
+     "CGImage",
+@@ -276,7 +240,19 @@
+ features = [
+     "std",
+     "objc2-core-foundation",
++    "objc2-core-graphics",
+     "CALayer",
+     "CATransaction",
++    "block2",
+ ]
+ default-features = false
++
++[target.'cfg(target_os = "macos")'.dependencies.objc2-io-surface]
++version = "0.3.2"
++optional = true
++features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "IOSurfaceAPI", "objc2-core-foundation", "libc"]
++default-features = false
++
++[target.'cfg(target_os = "macos")'.dependencies.block2]
++version = "0.6"
++optional = true
+--- a/src/backend_dispatch.rs
++++ b/src/backend_dispatch.rs
+@@ -186,6 +186,12 @@
+                 }
+             }
+ 
++            fn pixel_format(&self) -> crate::BufferFormat {
++                match self { $( $(#[$attr])* Self::$name(inner) => inner.pixel_format(), )* }
++            }
++            fn row_stride(&self) -> usize {
++                match self { $( $(#[$attr])* Self::$name(inner) => inner.row_stride(), )* }
++            }
+             fn age(&self) -> u8 {
+                 match self {
+                     $(
+@@ -203,6 +209,19 @@
+                     )*
+                 }
+             }
++
++            fn present_with_feedback(self,swap_ack:crate::PresentCallback,presentation:crate::PresentationCallback,observer:Option<crate::NativeTransactionObserver>)->Result<(),SoftBufferError>{
++                match self { $( $(#[$attr])* Self::$name(s)=>s.present_with_feedback(swap_ack,presentation,observer), )* }
++            }
++            fn present_with_callback(self, callback: crate::PresentCallback,
++                observer: Option<crate::NativeTransactionObserver>) -> Result<(), SoftBufferError> {
++                match self {
++                    $(
++                        $(#[$attr])*
++                        Self::$name(inner) => inner.present_with_callback(callback, observer),
++                    )*
++                }
++            }
+ 
+             fn present_with_damage(self, damage: &[Rect]) -> Result<(), SoftBufferError> {
+                 match self {
+--- a/src/backend_interface.rs
++++ b/src/backend_interface.rs
+@@ -37,9 +37,47 @@
+ pub(crate) trait BufferInterface {
+     fn width(&self) -> NonZeroU32;
+     fn height(&self) -> NonZeroU32;
++    fn row_stride(&self) -> usize {
++        self.width().get() as usize
++    }
+     fn pixels(&self) -> &[u32];
+     fn pixels_mut(&mut self) -> &mut [u32];
++    fn pixel_format(&self) -> crate::BufferFormat {
++        crate::BufferFormat::Xrgb8888
++    }
+     fn age(&self) -> u8;
+     fn present_with_damage(self, damage: &[Rect]) -> Result<(), SoftBufferError>;
+     fn present(self) -> Result<(), SoftBufferError>;
++    fn present_with_feedback(
++        self,
++        swap_ack: crate::PresentCallback,
++        presentation: crate::PresentationCallback,
++        observer: Option<crate::NativeTransactionObserver>,
++    ) -> Result<(), SoftBufferError>
++    where
++        Self: Sized,
++    {
++        self.present_with_callback(
++            Box::new(move |start, end| {
++                swap_ack(start, end);
++                presentation(crate::PresentationFeedback::Unavailable(
++                    crate::PresentationUnavailableReason::BackendHasNoTimestamp,
++                ));
++            }),
++            observer,
++        )
++    }
++    fn present_with_callback(
++        self,
++        callback: crate::PresentCallback,
++        _observer: Option<crate::NativeTransactionObserver>,
++    ) -> Result<(), SoftBufferError>
++    where
++        Self: Sized,
++    {
++        let started = std::time::Instant::now();
++        self.present()?;
++        callback(started, std::time::Instant::now());
++        Ok(())
++    }
+ }
+--- a/src/backends/cg.rs
++++ b/src/backends/cg.rs
+@@ -1,11 +1,21 @@
+ //! Softbuffer implementation using CoreGraphics.
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++#[path = "cg_iosurface.rs"]
++mod iosurface;
+ use crate::backend_interface::*;
+ use crate::error::InitError;
+-use crate::{util, Rect, SoftBufferError};
++#[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
++use crate::util;
++use crate::{Rect, SoftBufferError};
+ use objc2::rc::Retained;
+ use objc2::runtime::{AnyObject, Bool};
+ use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, MainThreadMarker, Message};
+-use objc2_core_foundation::{CFRetained, CGPoint};
++#[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
++use objc2_core_foundation::CFRetained;
++use objc2_core_foundation::CGPoint;
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++use objc2_core_graphics::CGColor;
++#[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+ use objc2_core_graphics::{
+     CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
+     CGImageByteOrderInfo, CGImageComponentInfo, CGImagePixelFormatInfo,
+@@ -20,10 +30,13 @@
+ 
+ use std::ffi::c_void;
+ use std::marker::PhantomData;
++#[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+ use std::mem::size_of;
+ use std::num::NonZeroU32;
+ use std::ops::Deref;
+-use std::ptr::{self, slice_from_raw_parts_mut, NonNull};
++use std::ptr;
++#[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
++use std::ptr::{slice_from_raw_parts_mut, NonNull};
+ 
+ define_class!(
+     #[unsafe(super(NSObject))]
+@@ -98,11 +111,16 @@
+ pub struct CGImpl<D, W> {
+     /// Our layer.
+     layer: SendCALayer,
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    targets: iosurface::TargetPool,
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    presentation: std::sync::Arc<NativePresentationState>,
+     /// The layer that our layer was created from.
+     ///
+     /// Can also be retrieved from `layer.superlayer()`.
+     root_layer: SendCALayer,
+     observer: Retained<Observer>,
++    #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+     color_space: CFRetained<CGColorSpace>,
+     /// The width of the underlying buffer.
+     width: usize,
+@@ -172,6 +190,13 @@
+         let layer = CALayer::new();
+         root_layer.addSublayer(&layer);
+ 
++        // The view layer can grow before the next IOSurface is committed
++        // during a live resize. Chromium exposes its opaque browser fallback
++        // in that interval; a transparent CALayer exposes AppKit's black
++        // backing around the preceding top-left IOSurface instead.
++        #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++        layer.setBackgroundColor(Some(&CGColor::new_generic_rgb(1.0, 1.0, 1.0, 1.0)));
++
+         // Set the anchor point and geometry. Softbuffer's uses a coordinate system with the origin
+         // in the top-left corner.
+         //
+@@ -226,6 +251,7 @@
+         layer.setContentsGravity(unsafe { kCAGravityTopLeft });
+ 
+         // Initialize color space here, to reduce work later on.
++        #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+         let color_space = CGColorSpace::new_device_rgb().unwrap();
+ 
+         // Grab initial width and height from the layer (whose properties have just been initialized
+@@ -237,8 +263,13 @@
+ 
+         Ok(Self {
+             layer: SendCALayer(layer),
++            #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++            targets: iosurface::TargetPool::default(),
++            #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++            presentation: std::sync::Arc::new(NativePresentationState::default()),
+             root_layer: SendCALayer(root_layer),
+             observer,
++            #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+             color_space,
+             width,
+             height,
+@@ -260,16 +291,133 @@
+ 
+     fn buffer_mut(&mut self) -> Result<BufferImpl<'_, D, W>, SoftBufferError> {
+         Ok(BufferImpl {
++            #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+             buffer: util::PixelBuffer(vec![0; self.width * self.height]),
++            #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++            native: self.targets.acquire(self.width, self.height)?,
+             imp: self,
+         })
+     }
+ }
+ 
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++impl<D, W> CGImpl<D, W> {
++    pub(crate) fn invalidate_pending_prepared_presentations(&mut self) {
++        self.presentation
++            .generation
++            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
++    }
++
++    fn next_presentation_generation(&self) -> u64 {
++        self.presentation
++            .generation
++            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
++            .wrapping_add(1)
++    }
++
++    pub(crate) fn prepared_buffer(&mut self) -> Result<PreparedBuffer, SoftBufferError> {
++        self.prepared_buffer_with_damage(&[crate::Rect {
++            x: 0,
++            y: 0,
++            width: NonZeroU32::new(self.width as u32).expect("non-empty CoreGraphics surface"),
++            height: NonZeroU32::new(self.height as u32).expect("non-empty CoreGraphics surface"),
++        }])
++    }
++
++    pub(crate) fn prepared_buffer_with_damage(
++        &mut self,
++        damage: &[crate::Rect],
++    ) -> Result<PreparedBuffer, SoftBufferError> {
++        let damage: Vec<_> = damage
++            .iter()
++            .map(|rect| iosurface::DamageRect {
++                x: rect.x as usize,
++                y: rect.y as usize,
++                width: rect.width.get() as usize,
++                height: rect.height.get() as usize,
++            })
++            .collect();
++        Ok(PreparedBuffer {
++            native: self
++                .targets
++                .acquire_with_damage_rects(self.width, self.height, &damage)?,
++            width: NonZeroU32::new(self.width as u32).expect("non-empty CoreGraphics surface"),
++            height: NonZeroU32::new(self.height as u32).expect("non-empty CoreGraphics surface"),
++        })
++    }
++
++    pub(crate) fn present_prepared(
++        &mut self,
++        prepared: PreparedBuffer,
++        callback: crate::PresentCallback,
++        observer: Option<crate::NativeTransactionObserver>,
++        presentation_callback: Option<crate::PresentationCallback>,
++    ) -> Result<(), SoftBufferError> {
++        let (surface, lease) = prepared.native.finish_with_lease()?;
++        let generation = self.next_presentation_generation();
++        let pending = Box::new(MainThreadPresent {
++            layer: SendCALayer(self.layer.0.clone()),
++            surface,
++            _lease: lease,
++            callback,
++            presentation_callback,
++            observer,
++            presentation: self.presentation.clone(),
++            generation,
++        });
++        if MainThreadMarker::new().is_some() {
++            pending.commit();
++        } else {
++            unsafe {
++                dispatch_async_f(
++                    std::ptr::addr_of!(_dispatch_main_q).cast_mut(),
++                    Box::into_raw(pending).cast(),
++                    commit_on_main_thread,
++                );
++            }
++        }
++        Ok(())
++    }
++}
++
++/// CPU-complete IOSurface retained until the display scheduler submits it.
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++#[derive(Debug)]
++pub(crate) struct PreparedBuffer {
++    native: iosurface::Mapping,
++    width: NonZeroU32,
++    height: NonZeroU32,
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++impl PreparedBuffer {
++    pub(crate) fn width(&self) -> NonZeroU32 {
++        self.width
++    }
++    pub(crate) fn height(&self) -> NonZeroU32 {
++        self.height
++    }
++    pub(crate) fn row_stride(&self) -> usize {
++        self.native.row_stride()
++    }
++    pub(crate) fn pixels(&self) -> &[u32] {
++        self.native.pixels()
++    }
++    pub(crate) fn pixels_mut(&mut self) -> &mut [u32] {
++        self.native.pixels_mut()
++    }
++    pub(crate) fn retained(&self) -> bool {
++        self.native.retained()
++    }
++}
++
+ #[derive(Debug)]
+ pub struct BufferImpl<'a, D, W> {
+     imp: &'a mut CGImpl<D, W>,
++    #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+     buffer: util::PixelBuffer,
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    native: iosurface::Mapping,
+ }
+ 
+ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_, D, W> {
+@@ -283,18 +431,43 @@
+ 
+     #[inline]
+     fn pixels(&self) -> &[u32] {
+-        &self.buffer
++        #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
++        {
++            &self.buffer
++        }
++        #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++        {
++            self.native.pixels()
++        }
+     }
+ 
+     #[inline]
+     fn pixels_mut(&mut self) -> &mut [u32] {
+-        &mut self.buffer
++        #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
++        {
++            &mut self.buffer
++        }
++        #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++        {
++            self.native.pixels_mut()
++        }
++    }
++
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    fn pixel_format(&self) -> crate::BufferFormat {
++        crate::BufferFormat::Argb8888
+     }
+ 
+     fn age(&self) -> u8 {
+         0
+     }
+ 
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    fn row_stride(&self) -> usize {
++        self.native.row_stride()
++    }
++
++    #[cfg(not(all(target_os = "macos", feature = "native-iosurface")))]
+     fn present(self) -> Result<(), SoftBufferError> {
+         unsafe extern "C-unwind" fn release(
+             _info: *mut c_void,
+@@ -307,6 +480,8 @@
+             drop(unsafe { Box::from_raw(slice) })
+         }
+ 
++        let timing = std::env::var_os("BROWSER_APP_PROFILE_PRESENT").is_some();
++        let start = std::time::Instant::now();
+         let data_provider = {
+             let len = self.buffer.len() * size_of::<u32>();
+             let buffer: *mut [u32] = Box::into_raw(self.buffer.0.into_boxed_slice());
+@@ -320,6 +495,7 @@
+             }
+         };
+ 
++        let provider_done = std::time::Instant::now();
+         // `CGBitmapInfo` consists of a combination of `CGImageAlphaInfo`, `CGImageComponentInfo`
+         // `CGImageByteOrderInfo` and `CGImagePixelFormatInfo` (see e.g. `CGBitmapInfoMake`).
+         //
+@@ -348,16 +524,97 @@
+         }
+         .unwrap();
+ 
++        let image_done = std::time::Instant::now();
+         // The CALayer has a default action associated with a change in the layer contents, causing
+         // a quarter second fade transition to happen every time a new buffer is applied. This can
+         // be avoided by wrapping the operation in a transaction and disabling all actions.
+         CATransaction::begin();
+         CATransaction::setDisableActions(true);
++        let transaction_done = std::time::Instant::now();
+ 
+         // SAFETY: The contents is `CGImage`, which is a valid class for `contents`.
+         unsafe { self.imp.layer.setContents(Some(image.as_ref())) };
+ 
++        let contents_done = std::time::Instant::now();
++        CATransaction::commit();
++        if timing {
++            println!("cg-present provider_ms={:.3} image_ms={:.3} transaction_ms={:.3} contents_ms={:.3} commit_ms={:.3}",(provider_done-start).as_secs_f64()*1000.0,(image_done-provider_done).as_secs_f64()*1000.0,(transaction_done-image_done).as_secs_f64()*1000.0,(contents_done-transaction_done).as_secs_f64()*1000.0,contents_done.elapsed().as_secs_f64()*1000.0);
++        }
++        Ok(())
++    }
++
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    fn present(self) -> Result<(), SoftBufferError> {
++        let start = std::time::Instant::now();
++        let surface = self.native.finish()?;
++        let unlocked = std::time::Instant::now();
++        CATransaction::begin();
++        CATransaction::setDisableActions(true);
++        self.imp.layer.setOpaque(true);
++        // SAFETY: Chromium bridges IOSurfaceRef to id for CALayer.contents.
++        // Core Animation retains the IOSurface; CPU mapping is already unlocked.
++        self.imp.next_presentation_generation();
++        let contents_unchanged = self
++            .imp
++            .presentation
++            .committed_surface
++            .swap(surface.0.id(), std::sync::atomic::Ordering::AcqRel)
++            == surface.0.id();
++        if contents_unchanged {
++            unsafe {
++                let _: () = msg_send![&*self.imp.layer, setContentsChanged];
++            }
++        } else {
++            unsafe {
++                self.imp.layer.setContents(Some(
++                    &*(&*surface.0 as *const objc2_io_surface::IOSurfaceRef).cast::<AnyObject>(),
++                ));
++            }
++        }
+         CATransaction::commit();
++        if std::env::var_os("BROWSER_APP_PROFILE_PRESENT").is_some() {
++            println!(
++                "iosurface-present unlock_ms={:.3} commit_ms={:.3} total_ms={:.3}",
++                (unlocked - start).as_secs_f64() * 1000.0,
++                unlocked.elapsed().as_secs_f64() * 1000.0,
++                start.elapsed().as_secs_f64() * 1000.0
++            );
++        }
++        Ok(())
++    }
++
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    fn present_with_callback(
++        self,
++        callback: crate::PresentCallback,
++        observer: Option<crate::NativeTransactionObserver>,
++    ) -> Result<(), SoftBufferError> {
++        let (surface, lease) = self.native.finish_with_lease()?;
++        let generation = self.imp.next_presentation_generation();
++        let pending = Box::new(MainThreadPresent {
++            layer: SendCALayer(self.imp.layer.0.clone()),
++            surface,
++            _lease: lease,
++            callback,
++            presentation_callback: None,
++            observer,
++            presentation: self.imp.presentation.clone(),
++            generation,
++        });
++        if MainThreadMarker::new().is_some() {
++            pending.commit();
++        } else {
++            // SoftwareOutputDeviceMac -> HostDisplayClient ->
++            // DisplayCALayerTree::GotIOSurfaceFrame: native view/layer updates
++            // belong to the window main thread, independently of CPU painting.
++            unsafe {
++                dispatch_async_f(
++                    std::ptr::addr_of!(_dispatch_main_q).cast_mut(),
++                    Box::into_raw(pending).cast(),
++                    commit_on_main_thread,
++                );
++            }
++        }
+         Ok(())
+     }
+ 
+@@ -366,6 +623,155 @@
+     }
+ }
+ 
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++#[derive(Debug, Default)]
++struct NativePresentationState {
++    generation: std::sync::atomic::AtomicU64,
++    committed_surface: std::sync::atomic::AtomicU32,
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++struct MainThreadPresent {
++    layer: SendCALayer,
++    surface: iosurface::SendSurface,
++    _lease: std::sync::Arc<()>,
++    callback: crate::PresentCallback,
++    presentation_callback: Option<crate::PresentationCallback>,
++    observer: Option<crate::NativeTransactionObserver>,
++    presentation: std::sync::Arc<NativePresentationState>,
++    generation: u64,
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++impl MainThreadPresent {
++    fn commit(self: Box<Self>) {
++        let _main =
++            MainThreadMarker::new().expect("IOSurface layer commit requires the main thread");
++        let started = std::time::Instant::now();
++        if self
++            .presentation
++            .generation
++            .load(std::sync::atomic::Ordering::Acquire)
++            != self.generation
++        {
++            // The browser root changed after this IOSurface was queued for the
++            // AppKit thread. Acknowledging the skipped update releases the
++            // scheduler and its pool lease without letting an obsolete root
++            // transaction land after the input that replaced it.
++            (self.callback)(started, std::time::Instant::now());
++            if let Some(presentation) = self.presentation_callback {
++                presentation(crate::PresentationFeedback::Unavailable(
++                    crate::PresentationUnavailableReason::DiscardedBeforePresentation,
++                ));
++            }
++            return;
++        }
++        if let Some(observer) = &self.observer {
++            register_transaction_observer(observer.clone(), self.surface.0.id());
++        }
++        CATransaction::begin();
++        CATransaction::setDisableActions(true);
++        // Chromium keeps the software buffer alive across the host/display
++        // handoff.  Rechrom installs it on the CALayer directly, so retain the
++        // pool lease until Core Animation has consumed this transaction.  The
++        // swap acknowledgement below remains immediate; this only prevents a
++        // following CPU paint from reusing the IOSurface in the short interval
++        // before IOSurfaceIsInUse becomes the WindowServer reuse fence.
++        let lease = self._lease.clone();
++        let completion = block2::RcBlock::new(move || {
++            let _ = &lease;
++        });
++        unsafe {
++            CATransaction::setCompletionBlock(Some(&completion));
++        }
++        self.layer.setOpaque(true);
++        // SAFETY: IOSurface is a supported CALayer.contents object. The queued
++        // lease remains live through this update and the native transaction.
++        let contents_unchanged = self
++            .presentation
++            .committed_surface
++            .swap(self.surface.0.id(), std::sync::atomic::Ordering::AcqRel)
++            == self.surface.0.id();
++        if contents_unchanged {
++            // DisplayCALayerTree::GotIOSurfaceFrame uses the same private CA
++            // notification when software compositing reuses an IOSurface.
++            unsafe {
++                let _: () = msg_send![&*self.layer, setContentsChanged];
++            }
++        } else {
++            unsafe {
++                self.layer.setContents(Some(
++                    &*(&*self.surface.0 as *const objc2_io_surface::IOSurfaceRef)
++                        .cast::<AnyObject>(),
++                ));
++            }
++        }
++        CATransaction::commit();
++        // SoftwareOutputDevice::OnSwapBuffers posts its acknowledgement as
++        // soon as EndPaint has handed the IOSurface to the platform client;
++        // it does not wait for a Core Animation transaction completion.
++        // IOSurfaceIsInUse is the reuse fence, matching
++        // SoftwareOutputDeviceMac::BeginPaint.  Keeping the display scheduler
++        // swap pending until the CA completion skips the following VSync and
++        // turns adjacent trackpad deltas into one visible 33 ms step.
++        (self.callback)(started, std::time::Instant::now());
++        if let Some(presentation) = self.presentation_callback {
++            presentation(crate::PresentationFeedback::Unavailable(
++                crate::PresentationUnavailableReason::BackendHasNoTimestamp,
++            ));
++        }
++    }
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++fn register_transaction_observer(observer: crate::NativeTransactionObserver, surface_id: u32) {
++    use objc2::{sel, ClassType};
++    // Chromium's CATransactionCoordinator uses this SPI. Registration observes
++    // CA phases; it does not establish an implicit root or confirm presentation.
++    // Register before opening our explicit update without changing its structure.
++    // Each block owns immutable update identity; later presents cannot change it.
++    let transaction_class = CATransaction::class();
++    let supported: bool = unsafe {
++        msg_send![transaction_class, respondsToSelector: sel!(addCommitHandler:forPhase:)]
++    };
++    if !supported {
++        return;
++    }
++    for (phase, native_phase) in [
++        (crate::NativeTransactionPhase::PreCommit, 1u32),
++        (crate::NativeTransactionPhase::PostCommit, 2u32),
++    ] {
++        let observer = observer.clone();
++        let handler = block2::RcBlock::new(move || {
++            observer(phase, surface_id, std::time::Instant::now());
++        });
++        // Core Animation copies and retains the block for its transaction.
++        // The undocumented handler is best-effort diagnostic feedback only.
++        unsafe {
++            let _: () = msg_send![transaction_class, addCommitHandler: &*handler,
++            forPhase: native_phase];
++        }
++    }
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++unsafe extern "C" {
++    // dispatch_get_main_queue() is a header macro for this global object.
++    static _dispatch_main_q: c_void;
++    fn dispatch_async_f(
++        queue: *mut c_void,
++        context: *mut c_void,
++        work: unsafe extern "C" fn(*mut c_void),
++    );
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++unsafe extern "C" fn commit_on_main_thread(context: *mut c_void) {
++    // SAFETY: dispatch_async_f invokes this exactly once for our owned Box.
++    let pending = unsafe { Box::from_raw(context.cast::<MainThreadPresent>()) };
++    pending.commit();
++}
++
+ #[derive(Debug)]
+ struct SendCALayer(Retained<CALayer>);
+ 
+--- /dev/null
++++ b/src/backends/cg_iosurface.rs
+@@ -0,0 +1,515 @@
++//! Opt-in macOS IOSurface storage for the existing Core Animation backend.
++//! Ownership follows Chromium SoftwareOutputDeviceMac: at most four retained
++//! buffers, server-in-use check, lock -> full CPU paint -> unlock -> contents.
++use crate::SoftBufferError;
++use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained};
++use objc2_core_graphics::kCGColorSpaceSRGB;
++use objc2_io_surface::{
++    kIOSurfaceAllocSize, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceColorSpace,
++    kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceLockOptions, IOSurfaceRef,
++};
++use std::{ptr::NonNull, slice, sync::Arc};
++
++#[derive(Debug, Clone)]
++pub(super) struct SendSurface(pub CFRetained<IOSurfaceRef>);
++// SAFETY: IOSurface lifetime, queries and lock/unlock are thread-safe. Mutable
++// CPU access is only exposed by the unique Surface buffer borrow after checking
++// WindowServer use and retaining queued mappings through their native commit;
++// no writable aliases exist.
++unsafe impl Send for SendSurface {}
++
++#[derive(Debug)]
++struct Slot {
++    surface: SendSurface,
++    lease: Arc<()>,
++    /// Damage produced since this IOSurface last became the submitted buffer.
++    /// Chromium keeps this as an SkRegion on each SoftwareOutputDeviceMac
++    /// buffer. The queue is at most four entries, so retaining the source
++    /// rectangles directly keeps the same semantics without another graphics
++    /// type at this platform boundary.
++    accumulated_damage: Vec<DamageRect>,
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(super) struct DamageRect {
++    pub x: usize,
++    pub y: usize,
++    pub width: usize,
++    pub height: usize,
++}
++
++impl DamageRect {
++    fn full(width: usize, height: usize) -> Self {
++        Self {
++            x: 0,
++            y: 0,
++            width,
++            height,
++        }
++    }
++
++    fn right(self) -> usize {
++        self.x.saturating_add(self.width)
++    }
++
++    fn bottom(self) -> usize {
++        self.y.saturating_add(self.height)
++    }
++
++    fn clipped(self, width: usize, height: usize) -> Self {
++        let right = self.right().min(width);
++        let bottom = self.bottom().min(height);
++        let x = self.x.min(right);
++        let y = self.y.min(bottom);
++        Self {
++            x,
++            y,
++            width: right - x,
++            height: bottom - y,
++        }
++    }
++
++    fn is_empty(self) -> bool {
++        self.width == 0 || self.height == 0
++    }
++
++    /// Return `self - cut` as the same at-most-four rectangles used by an
++    /// SkRegion difference for one rectangular damage input.
++    fn subtract(self, cut: Self) -> Vec<Self> {
++        let left = self.x.max(cut.x);
++        let top = self.y.max(cut.y);
++        let right = self.right().min(cut.right());
++        let bottom = self.bottom().min(cut.bottom());
++        if left >= right || top >= bottom {
++            return (!self.is_empty()).then_some(self).into_iter().collect();
++        }
++        let mut result = Vec::with_capacity(4);
++        let mut push = |x, y, width, height| {
++            if width != 0 && height != 0 {
++                result.push(Self {
++                    x,
++                    y,
++                    width,
++                    height,
++                });
++            }
++        };
++        push(self.x, self.y, self.width, top - self.y);
++        push(self.x, bottom, self.width, self.bottom() - bottom);
++        push(self.x, top, left - self.x, bottom - top);
++        push(right, top, self.right() - right, bottom - top);
++        result
++    }
++}
++
++#[derive(Debug, Default)]
++pub(super) struct TargetPool {
++    buffers: Vec<Slot>,
++    last_submitted: Option<u32>,
++}
++fn error(message: &str) -> SoftBufferError {
++    SoftBufferError::PlatformError(Some(message.into()), None)
++}
++impl TargetPool {
++    pub fn acquire(&mut self, width: usize, height: usize) -> Result<Mapping, SoftBufferError> {
++        self.acquire_with_damage_rects(width, height, &[DamageRect::full(width, height)])
++    }
++
++    pub fn acquire_with_damage(
++        &mut self,
++        width: usize,
++        height: usize,
++        damage: DamageRect,
++    ) -> Result<Mapping, SoftBufferError> {
++        self.acquire_with_damage_rects(width, height, &[damage])
++    }
++
++    pub fn acquire_with_damage_rects(
++        &mut self,
++        width: usize,
++        height: usize,
++        damage: &[DamageRect],
++    ) -> Result<Mapping, SoftBufferError> {
++        // Chromium gfx::CreateIOSurface reserves even width/height, then asks
++        // IOSurface to align row pitch and allocation size. Visible size stays
++        // unchanged. CPU mappings expose only the visible rows plus padding.
++        let allocation_width = width
++            .checked_add(1)
++            .ok_or_else(|| error("IOSurface width overflow"))?
++            & !1;
++        let allocation_height = height
++            .checked_add(1)
++            .ok_or_else(|| error("IOSurface height overflow"))?
++            & !1;
++        let minimum_stride = allocation_width
++            .checked_mul(4)
++            .ok_or_else(|| error("IOSurface stride overflow"))?;
++        let stride = IOSurfaceRef::align_property(unsafe { kIOSurfaceBytesPerRow }, minimum_stride);
++        let len = (stride / 4)
++            .checked_mul(height)
++            .filter(|&n| n > 0 && n <= isize::MAX as usize / 4)
++            .ok_or_else(|| error("IOSurface dimensions overflow"))?;
++        if width == 0 || stride < minimum_stride || stride % 4 != 0 {
++            return Err(error("invalid IOSurface row alignment"));
++        }
++        let minimum_alloc_size = stride
++            .checked_mul(allocation_height)
++            .filter(|&n| n <= isize::MAX as usize)
++            .ok_or_else(|| error("IOSurface allocation overflow"))?;
++        let alloc_size =
++            IOSurfaceRef::align_property(unsafe { kIOSurfaceAllocSize }, minimum_alloc_size);
++        if alloc_size < minimum_alloc_size || alloc_size > isize::MAX as usize {
++            return Err(error("IOSurface allocation overflow"));
++        }
++        self.buffers
++            .retain(|s| s.surface.0.width() == width && s.surface.0.height() == height);
++        let previous = self.buffers.last().map(|slot| slot.surface.clone());
++        let reusable = self
++            .buffers
++            .iter()
++            .position(|s| Arc::strong_count(&s.lease) == 1 && !s.surface.0.is_in_use());
++        if let Some(index) = reusable {
++            let slot = self.buffers.remove(index);
++            self.buffers.push(slot);
++        } else {
++            let values = [
++                width as i64,
++                height as i64,
++                4,
++                stride as i64,
++                alloc_size as i64,
++                u32::from_be_bytes(*b"BGRA") as i64,
++            ];
++            let numbers = values.map(CFNumber::new_i64);
++            let keys = unsafe {
++                [
++                    kIOSurfaceWidth,
++                    kIOSurfaceHeight,
++                    kIOSurfaceBytesPerElement,
++                    kIOSurfaceBytesPerRow,
++                    kIOSurfaceAllocSize,
++                    kIOSurfacePixelFormat,
++                ]
++            };
++            let refs = numbers.each_ref().map(|n| &**n);
++            let props = CFDictionary::from_slices(&keys, &refs);
++            // SAFETY: dictionary keys match initialized numeric property types.
++            let surface = SendSurface(
++                unsafe { IOSurfaceRef::new(props.as_opaque()) }
++                    .ok_or_else(|| error("IOSurfaceCreate failed"))?,
++            );
++            // Match Chromium's gfx::IOSurfaceSetColorSpace(CreateSRGB()).
++            // Untagged bytes are otherwise treated as display-native RGB, so
++            // CSS sRGB colors bypass the display transform on wide-gamut Macs.
++            unsafe {
++                surface
++                    .0
++                    .set_value(kIOSurfaceColorSpace, kCGColorSpaceSRGB.as_ref());
++            }
++            if surface.0.width() != width
++                || surface.0.height() != height
++                || surface.0.bytes_per_row() != stride
++                || surface.0.alloc_size() < minimum_alloc_size
++            {
++                return Err(error("unsupported IOSurface pitch"));
++            }
++            if self.buffers.len() >= 4 {
++                self.buffers.remove(0);
++            }
++            let lease = Arc::new(());
++            self.buffers.push(Slot {
++                surface: surface.clone(),
++                lease: lease.clone(),
++                accumulated_damage: vec![DamageRect::full(width, height)],
++            });
++        }
++        let damage: Vec<_> = damage
++            .iter()
++            .map(|damage| damage.clipped(width, height))
++            .filter(|damage| !damage.is_empty())
++            .collect();
++        if !damage.is_empty() {
++            for slot in &mut self.buffers {
++                slot.accumulated_damage.extend(damage.iter().copied());
++            }
++        }
++        let current = self.buffers.last_mut().expect("acquired IOSurface slot");
++        let accumulated = std::mem::take(&mut current.accumulated_damage);
++        let surface = current.surface.clone();
++        let lease = current.lease.clone();
++        let mut copy_rects = accumulated;
++        for damage in &damage {
++            copy_rects = copy_rects
++                .into_iter()
++                .flat_map(|rect| rect.subtract(*damage))
++                .collect();
++        }
++        // SAFETY: no external CPU/GPU accesses to this not-in-use mapping. A
++        // queued target retains an extra lease until its CA transaction commits.
++        if unsafe {
++            surface
++                .0
++                .lock(IOSurfaceLockOptions::AvoidSync, std::ptr::null_mut())
++        } != 0
++        {
++            return Err(error("IOSurfaceLock failed"));
++        }
++        let ptr = surface.0.base_address().cast::<u32>();
++        if ptr.as_ptr() as usize % std::mem::align_of::<u32>() != 0 {
++            unsafe {
++                surface
++                    .0
++                    .unlock(IOSurfaceLockOptions::AvoidSync, std::ptr::null_mut());
++            }
++            return Err(error("unaligned IOSurface mapping"));
++        }
++        let mut mapping = Mapping {
++            surface,
++            _lease: lease,
++            ptr,
++            len,
++            row_stride: stride / 4,
++            locked: true,
++            retained: previous.is_some(),
++        };
++        if !copy_rects.is_empty() && previous.is_some() {
++            let previous = previous.expect("checked previous IOSurface");
++            if previous.0.id() == mapping.surface.0.id() {
++                return Err(error(
++                    "reused IOSurface unexpectedly requires a damage copy",
++                ));
++            }
++            mapping.copy_from(&previous, &copy_rects)?;
++        }
++        Ok(mapping)
++    }
++    /// Record the surface installed in the CALayer and report whether the
++    /// layer already names this IOSurface. Chromium uses this distinction to
++    /// call `setContentsChanged` when reusing the same software buffer.
++    pub fn submitted(&mut self, id: u32) -> bool {
++        let unchanged = self.last_submitted == Some(id);
++        self.last_submitted = Some(id);
++        unchanged
++    }
++}
++#[derive(Debug)]
++pub(super) struct Mapping {
++    surface: SendSurface,
++    _lease: Arc<()>,
++    ptr: NonNull<u32>,
++    len: usize,
++    row_stride: usize,
++    locked: bool,
++    retained: bool,
++}
++// SAFETY: same exclusive mapping contract as SendSurface, retained through Drop.
++unsafe impl Send for Mapping {}
++impl Mapping {
++    pub fn row_stride(&self) -> usize {
++        self.row_stride
++    }
++    pub fn pixels(&self) -> &[u32] {
++        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
++    }
++    pub fn pixels_mut(&mut self) -> &mut [u32] {
++        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
++    }
++    pub fn retained(&self) -> bool {
++        self.retained
++    }
++    fn copy_from(
++        &mut self,
++        previous: &SendSurface,
++        rects: &[DamageRect],
++    ) -> Result<(), SoftBufferError> {
++        if unsafe {
++            previous.0.lock(
++                IOSurfaceLockOptions::ReadOnly | IOSurfaceLockOptions::AvoidSync,
++                std::ptr::null_mut(),
++            )
++        } != 0
++        {
++            return Err(error("previous IOSurface read lock failed"));
++        }
++        let source = previous.0.base_address().cast::<u32>();
++        let source_stride = previous.0.bytes_per_row() / 4;
++        for rect in rects {
++            for row in 0..rect.height {
++                let source =
++                    unsafe { source.as_ptr().add((rect.y + row) * source_stride + rect.x) };
++                let target = unsafe {
++                    self.ptr
++                        .as_ptr()
++                        .add((rect.y + row) * self.row_stride + rect.x)
++                };
++                unsafe { std::ptr::copy_nonoverlapping(source, target, rect.width) };
++            }
++        }
++        if unsafe {
++            previous.0.unlock(
++                IOSurfaceLockOptions::ReadOnly | IOSurfaceLockOptions::AvoidSync,
++                std::ptr::null_mut(),
++            )
++        } != 0
++        {
++            return Err(error("previous IOSurface read unlock failed"));
++        }
++        Ok(())
++    }
++    pub fn finish(mut self) -> Result<SendSurface, SoftBufferError> {
++        self.unlock()?;
++        Ok(self.surface.clone())
++    }
++    /// Keep CPU ownership until the queued window-thread transaction consumes
++    /// the buffer. WindowServer's in-use flag alone cannot protect a buffer
++    /// that has not reached Core Animation yet.
++    pub fn finish_with_lease(mut self) -> Result<(SendSurface, Arc<()>), SoftBufferError> {
++        self.unlock()?;
++        Ok((self.surface.clone(), self._lease.clone()))
++    }
++    fn unlock(&mut self) -> Result<(), SoftBufferError> {
++        if self.locked {
++            if unsafe {
++                self.surface
++                    .0
++                    .unlock(IOSurfaceLockOptions::AvoidSync, std::ptr::null_mut())
++            } != 0
++            {
++                return Err(error("IOSurfaceUnlock failed"));
++            }
++            self.locked = false;
++        }
++        Ok(())
++    }
++}
++impl Drop for Mapping {
++    fn drop(&mut self) {
++        let _ = self.unlock();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn odd_pitch_and_simultaneous_mapping_ownership() {
++        for (width, height) in [(1, 1), (319, 17), (1281, 9), (1602, 3), (1654, 5)] {
++            let mut pool = TargetPool::default();
++            let mut first = pool.acquire(width, height).unwrap();
++            let mut second = pool.acquire(width, height).unwrap();
++            assert_ne!(first.surface.0.id(), second.surface.0.id());
++            assert_eq!(first.pixels().len(), first.row_stride() * height);
++            assert_eq!(
++                first.row_stride() * 4,
++                IOSurfaceRef::align_property(
++                    unsafe { kIOSurfaceBytesPerRow },
++                    ((width + 1) & !1) * 4
++                )
++            );
++            assert!(first.surface.0.alloc_size() >= first.row_stride() * 4 * ((height + 1) & !1));
++            assert!(first.row_stride() >= width);
++            first.pixels_mut().fill(0xff112233);
++            second.pixels_mut().fill(0xffabcdef);
++            assert!(first.pixels().iter().all(|&p| p == 0xff112233));
++            let first_id = first.surface.0.id();
++            drop(first);
++            let reused = pool.acquire(width, height).unwrap();
++            assert_eq!(reused.surface.0.id(), first_id);
++            assert!(reused.pixels().iter().all(|&p| p == 0xff112233));
++        }
++    }
++    #[test]
++    fn queued_surface_stays_unavailable_until_native_commit() {
++        let mut pool = TargetPool::default();
++        let (queued, lease) = pool.acquire(319, 7).unwrap().finish_with_lease().unwrap();
++        let id = queued.0.id();
++        // A queued surface is not yet in WindowServer use. Its lease must
++        // prevent reuse even if newer frames have been submitted already.
++        let other = pool.acquire(319, 7).unwrap().finish().unwrap();
++        pool.submitted(other.0.id());
++        assert_ne!(other.0.id(), id);
++        let third = pool.acquire(319, 7).unwrap().finish().unwrap();
++        assert_ne!(third.0.id(), id);
++        drop(lease);
++        let reusable = pool.acquire(319, 7).unwrap();
++        assert_eq!(reusable.surface.0.id(), id);
++    }
++
++    #[test]
++    fn rotating_target_preserves_pixels_outside_current_damage() {
++        let mut pool = TargetPool::default();
++        let mut first = pool.acquire(8, 6).unwrap();
++        first.pixels_mut().fill(0xff11_2233);
++        let (_submitted, queued_lease) = first.finish_with_lease().unwrap();
++
++        let damage = DamageRect {
++            x: 2,
++            y: 1,
++            width: 3,
++            height: 2,
++        };
++        let second = pool.acquire_with_damage(8, 6, damage).unwrap();
++        assert!(second.retained());
++        for y in 0..6 {
++            for x in 0..8 {
++                if x < 2 || x >= 5 || y < 1 || y >= 3 {
++                    assert_eq!(second.pixels()[y * second.row_stride() + x], 0xff11_2233);
++                }
++            }
++        }
++        drop(queued_lease);
++    }
++
++    #[test]
++    fn first_partial_frame_after_resize_is_unretained() {
++        let mut pool = TargetPool::default();
++        let old = pool.acquire(8, 6).unwrap().finish().unwrap();
++        pool.submitted(old.0.id());
++        let resized = pool
++            .acquire_with_damage(
++                10,
++                7,
++                DamageRect {
++                    x: 2,
++                    y: 1,
++                    width: 3,
++                    height: 2,
++                },
++            )
++            .unwrap();
++        assert!(!resized.retained());
++    }
++
++    #[test]
++    fn submitted_target_can_be_reused_after_native_release() {
++        let mut pool = TargetPool::default();
++        let submitted = pool.acquire(319, 7).unwrap().finish().unwrap();
++        assert!(!pool.submitted(submitted.0.id()));
++        let next = pool.acquire(319, 7).unwrap();
++        assert_eq!(next.surface.0.id(), submitted.0.id());
++        drop(next);
++        assert!(pool.submitted(submitted.0.id()));
++        let mappings: Vec<_> = (0..6).map(|_| pool.acquire(319, 7).unwrap()).collect();
++        assert_eq!(pool.buffers.len(), 4);
++        let mut ids: Vec<_> = mappings.iter().map(|m| m.surface.0.id()).collect();
++        ids.sort();
++        ids.dedup();
++        assert_eq!(ids.len(), 6);
++        drop(mappings);
++        let resized = pool.acquire(321, 9).unwrap();
++        assert_eq!(resized.pixels().len(), resized.row_stride() * 9);
++        assert_eq!(pool.buffers.len(), 1);
++        assert_eq!(
++            submitted.0.width(),
++            319,
++            "retained old resource survives resize"
++        );
++    }
++    #[test]
++    fn invalid_dimensions_are_rejected_before_allocation() {
++        let mut pool = TargetPool::default();
++        for (w, h) in [(0, 1), (1, 0), (usize::MAX, 2), (1, usize::MAX)] {
++            assert!(pool.acquire(w, h).is_err());
++        }
++    }
++}
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -23,6 +23,45 @@
+ use error::InitError;
+ pub use error::SoftBufferError;
+ 
++/// Notification of the native layer transaction's start and return times.
++/// On macOS IOSurface presentation runs on the window main thread. This is
++/// transaction feedback, not physical display/scanout feedback.
++pub type PresentCallback = Box<dyn FnOnce(std::time::Instant, std::time::Instant) + Send>;
++/// Actual presentation feedback is independent of the transaction callback.
++/// A backend without a timestamp must report Unavailable, never synthesize one
++/// from its commit return or an unrelated display-link pulse.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum PresentationUnavailableReason {
++    BackendHasNoTimestamp,
++    DiscardedBeforePresentation,
++    OffscreenTarget,
++}
++#[derive(Clone, Copy, Debug)]
++pub enum PresentationFeedback {
++    Presented {
++        timestamp: std::time::Instant,
++        interval: std::time::Duration,
++        flags: u32,
++    },
++    Unavailable(PresentationUnavailableReason),
++}
++pub type PresentationCallback = Box<dyn FnOnce(PresentationFeedback) + Send>;
++
++/// Diagnostic stages of a native Core Animation root transaction.
++/// These stages do not indicate physical display or scanout completion.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum NativeTransactionPhase {
++    /// Layout has finished, before the layer tree is sent to WindowServer.
++    PreCommit,
++    /// The layer tree has been sent, before the transaction is finalized.
++    PostCommit,
++}
++
++/// Optional native transaction diagnostic, receiving phase, IOSurface ID and time.
++/// Core Animation may not invoke its handlers. Other backends ignore this observer.
++pub type NativeTransactionObserver =
++    Arc<dyn Fn(NativeTransactionPhase, u32, std::time::Instant) + Send + Sync>;
++
+ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+ 
+ #[cfg(target_family = "wasm")]
+@@ -80,6 +119,46 @@
+     _marker: PhantomData<Cell<()>>,
+ }
+ 
++/// A CPU-painted IOSurface that has not yet been submitted to Core Animation.
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++#[derive(Debug)]
++pub struct PreparedBuffer {
++    inner: backends::cg::PreparedBuffer,
++}
++
++#[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++impl PreparedBuffer {
++    /// Visible width of the prepared target.
++    pub fn width(&self) -> NonZeroU32 {
++        self.inner.width()
++    }
++    /// Visible height of the prepared target.
++    pub fn height(&self) -> NonZeroU32 {
++        self.inner.height()
++    }
++    /// Number of `u32` entries between rows.
++    pub fn row_stride(&self) -> usize {
++        self.inner.row_stride()
++    }
++    /// Pixel storage for inspection.
++    pub fn pixels(&self) -> &[u32] {
++        self.inner.pixels()
++    }
++    /// Pixel storage for CPU drawing.
++    pub fn pixels_mut(&mut self) -> &mut [u32] {
++        self.inner.pixels_mut()
++    }
++    /// Prepared macOS surfaces use premultiplied BGRA storage.
++    pub fn pixel_format(&self) -> BufferFormat {
++        BufferFormat::Argb8888
++    }
++    /// The target contains the previous submitted frame outside the damage
++    /// supplied when it was acquired.
++    pub fn retained(&self) -> bool {
++        self.inner.retained()
++    }
++}
++
+ impl<D: HasDisplayHandle, W: HasWindowHandle> Surface<D, W> {
+     /// Creates a new surface for the context for the provided window.
+     pub fn new(context: &Context<D>, window: W) -> Result<Self, SoftBufferError> {
+@@ -142,6 +221,72 @@
+             _marker: PhantomData,
+         })
+     }
++
++    /// Acquire a native IOSurface that can be painted now and submitted later.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn prepared_buffer(&mut self) -> Result<PreparedBuffer, SoftBufferError> {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        Ok(PreparedBuffer {
++            inner: surface.prepared_buffer()?,
++        })
++    }
++
++    /// Acquire a native IOSurface and preserve the previous submitted pixels
++    /// outside `damage`, matching Chromium SoftwareOutputDeviceMac's rotating
++    /// buffer damage accumulation.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn prepared_buffer_with_damage(
++        &mut self,
++        damage: &[Rect],
++    ) -> Result<PreparedBuffer, SoftBufferError> {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        Ok(PreparedBuffer {
++            inner: surface.prepared_buffer_with_damage(damage)?,
++        })
++    }
++
++    /// Invalidate native IOSurface updates that were queued for the window
++    /// thread but have not entered a Core Animation transaction yet.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn invalidate_pending_prepared_presentations(&mut self) {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        surface.invalidate_pending_prepared_presentations();
++    }
++
++    /// Submit a previously prepared IOSurface without copying its pixels.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn present_prepared_with_callback(
++        &mut self,
++        prepared: PreparedBuffer,
++        callback: PresentCallback,
++    ) -> Result<(), SoftBufferError> {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        surface.present_prepared(prepared.inner, callback, None, None)
++    }
++
++    /// Submit an IOSurface with separate swap and presentation feedback.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn present_prepared_with_presentation_feedback(
++        &mut self,
++        prepared: PreparedBuffer,
++        swap_ack: PresentCallback,
++        presentation: PresentationCallback,
++        observer: Option<NativeTransactionObserver>,
++    ) -> Result<(), SoftBufferError> {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        surface.present_prepared(prepared.inner, swap_ack, observer, Some(presentation))
++    }
++    /// Submit a prepared IOSurface and register Core Animation diagnostics.
++    #[cfg(all(target_os = "macos", feature = "native-iosurface"))]
++    pub fn present_prepared_with_transaction_observer(
++        &mut self,
++        prepared: PreparedBuffer,
++        callback: PresentCallback,
++        observer: NativeTransactionObserver,
++    ) -> Result<(), SoftBufferError> {
++        let SurfaceDispatch::CoreGraphics(surface) = self.surface_impl.as_mut();
++        surface.present_prepared(prepared.inner, callback, Some(observer), None)
++    }
+ }
+ 
+ impl<D: HasDisplayHandle, W: HasWindowHandle> AsRef<W> for Surface<D, W> {
+@@ -170,9 +315,12 @@
+ /// # Data representation
+ ///
+ /// The format of the buffer is as follows. There is one `u32` in the buffer for each pixel in
+-/// the area to draw. The first entry is the upper-left most pixel. The second is one to the right
+-/// etc. (Row-major top to bottom left to right one `u32` per pixel). Within each `u32` the highest
+-/// order 8 bits are to be set to 0. The next highest order 8 bits are the red channel, then the
++/// the area to draw, plus any native row padding. The first entry is the upper-left most pixel.
++/// Use [`Buffer::row_stride`] to advance between rows; only the first [`Buffer::width`]
++/// entries of each row are visible. Within each `u32` the highest
++/// order 8 bits are zero for the default [`BufferFormat::Xrgb8888`]. With the opt-in macOS
++/// `native-iosurface` feature they are premultiplied alpha (`Argb8888`); callers must check
++/// [`Buffer::pixel_format`]. The next highest order 8 bits are the red channel, then the
+ /// green channel, and then the blue channel in the lowest-order 8 bits. See the examples for
+ /// one way to build this format using bitwise operations.
+ ///
+@@ -191,12 +339,13 @@
+ /// No-copy presentation is currently supported on:
+ /// - Wayland
+ /// - X, when XShm is available
++/// - macOS with `native-iosurface` enabled
+ /// - Win32
+ /// - Orbital, when buffer size matches window size
+ ///
+ /// Currently [`Buffer::present`] must block copying image data on:
+ /// - Web
+-/// - AppKit
++/// - AppKit without `native-iosurface`
+ /// - UIKit
+ ///
+ /// Buffer copies an channel swizzling happen on:
+@@ -207,12 +356,31 @@
+     _marker: PhantomData<(Arc<D>, Cell<()>)>,
+ }
+ 
++/// Numeric u32 encoding of an acquired buffer. Native IOSurface is opt-in.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum BufferFormat {
++    /// 0x00RRGGBB; unused byte is zero, matching upstream softbuffer.
++    Xrgb8888,
++    /// 0xAARRGGBB premultiplied; little-endian bytes are BGRA.
++    Argb8888,
++}
++
+ impl<D: HasDisplayHandle, W: HasWindowHandle> Buffer<'_, D, W> {
++    /// Storage format required by this acquired target. Native IOSurface needs
++    /// alpha; the default upstream backends retain zero unused byte semantics.
++    pub fn pixel_format(&self) -> BufferFormat {
++        self.buffer_impl.pixel_format()
++    }
++    /// Number of u32 entries between consecutive rows. Native IOSurface rows
++    /// include platform-required padding; visible width remains `width()`.
++    pub fn row_stride(&self) -> usize {
++        self.buffer_impl.row_stride()
++    }
+     /// The amount of pixels wide the buffer is.
+     pub fn width(&self) -> NonZeroU32 {
+         let width = self.buffer_impl.width();
+         debug_assert_eq!(
+-            width.get() as usize * self.buffer_impl.height().get() as usize,
++            self.row_stride() * self.buffer_impl.height().get() as usize,
+             self.len(),
+             "buffer must be sized correctly"
+         );
+@@ -223,7 +391,7 @@
+     pub fn height(&self) -> NonZeroU32 {
+         let height = self.buffer_impl.height();
+         debug_assert_eq!(
+-            height.get() as usize * self.buffer_impl.width().get() as usize,
++            height.get() as usize * self.row_stride(),
+             self.len(),
+             "buffer must be sized correctly"
+         );
+@@ -256,6 +424,34 @@
+         self.buffer_impl.present()
+     }
+ 
++    /// Present and report native transaction timing. The macOS IOSurface
++    /// backend transfers the unlocked buffer to the main queue without waiting.
++    /// Other backends report the synchronous present call's timing.
++    pub fn present_with_callback(self, callback: PresentCallback) -> Result<(), SoftBufferError> {
++        self.buffer_impl.present_with_callback(callback, None)
++    }
++
++    /// Independently acknowledge the swap and report backend presentation.
++    pub fn present_with_presentation_feedback(
++        self,
++        swap_ack: PresentCallback,
++        presentation: PresentationCallback,
++    ) -> Result<(), SoftBufferError> {
++        self.buffer_impl
++            .present_with_feedback(swap_ack, presentation, None)
++    }
++    /// Present with transaction timing and optional Core Animation phase diagnostics.
++    /// Phase callbacks identify the submitted surface update, not a displayed frame.
++    /// This does not flush transactions or change presentation scheduling.
++    pub fn present_with_transaction_observer(
++        self,
++        callback: PresentCallback,
++        observer: NativeTransactionObserver,
++    ) -> Result<(), SoftBufferError> {
++        self.buffer_impl
++            .present_with_callback(callback, Some(observer))
++    }
++
+     /// Presents buffer to the window, with damage regions.
+     ///
+     /// # Platform dependent behavior
+@@ -263,6 +459,7 @@
+     /// Supported on:
+     /// - Wayland
+     /// - X, when XShm is available
++    /// - macOS with `native-iosurface` enabled
+     /// - Win32
+     /// - Web
+     ///
